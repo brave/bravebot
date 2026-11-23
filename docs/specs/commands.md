@@ -54,7 +54,8 @@ and starts no turn, which is CMD-28. `/request` shows the request a turn built, 
 [TRACE-9](trace.md#TRACE-9)'s, and `/context` divides what it measured, which is CMD-19. `/open` is
 the keyboard's way to what a click on a link in a reply does, and what it lists is CMD-30. `/issues` and `/prs` list the issues and pull requests the session has met,
 which is CMD-31. `/sidebar` opens the checklist that turns the sections of the info panel on or off, and
-starts no turn, which is CMD-32.
+starts no turn, which is CMD-32. The desktop window's menu items that stand in for `/compact`,
+`/handoff`, `/bg`, `/clear`, `/branch` and `/resume` are CMD-34.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
 starting now would advertise to the planner, beneath the commands at the start of a line and alone
@@ -318,6 +319,11 @@ exactly those characters have to arrive.
 `verified-by: bravebot_tui::app::tests::dropping::a_picture_dropped_onto_a_question_goes_with_it`
 `verified-by: bravebot_tui::app::tests::dropping::a_file_dropped_onto_a_command_line_is_carried_out_as_its_name`
 `verified-by: bravebot_tui::app::btw_with_a_dropped_file_beside_a_turn_is_refused`
+`verified-by: bravebot_ui_bridge::asking_aside::a_picture_pasted_on_a_btw_at_rest_goes_with_the_question_and_not_into_the_exchange`
+`verified-by: bravebot_ui_bridge::asking_aside::a_picture_dropped_on_a_btw_at_rest_goes_with_the_question`
+`verified-by: bravebot_ui_bridge::asking_aside::a_text_file_dropped_on_a_btw_is_its_name_in_the_question`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_with_a_dropped_file_beside_a_turn_is_refused`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/aside-command.test.mjs asserts that a /btw sends the pictures pasted and the pictures or PDFs dropped on its line as grant ids and a dropped text file as its marker and name, and ui/scripts/drops.test.mjs asserts that the main process forwards a session.btw with only the paths its grants name and no picture or path the window named; make check-ui runs both)`
 
 
 <a id="CMD-6"></a>
@@ -397,11 +403,11 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/redraw`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model` and `/model session`, `/theme`, `/effort` and `/effort session`, and `/variant` in every form; `/config`; `/language` in every form; `/crash-reports` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/redraw`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
 | everything else | every other command, `/loop <interval> <prompt>`, `/goal <condition>`, every other form of `/schedule` and every other form of `/mcp` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
-box edits in or what a later start reads (`/theme`, `/config` and `/language`), goes ahead of every line already waiting, and a line behind
+box edits in or what a later start reads (`/theme`, `/config`, `/language` and `/crash-reports`), goes ahead of every line already waiting, and a line behind
 it stays where it was. The exception is a line of the same command already waiting, which it waits
 behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
 and the loop would start after it, so two lines of one command are carried out in the order they
@@ -421,6 +427,9 @@ typed unless a line waiting ahead of it could change what it acts on, and otherw
 that line, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
 session `/clear` leaves, `/forget-trust` ahead of a waiting `/cd` would forget the directory `/cd`
 leaves, and `/effort` ahead of a waiting prompt would change the level that prompt was typed under.
+`/effort session` and `/effort session <level>` are `/effort` for this: each waits behind the lines
+`/effort <level>` waits behind and is carried out as it is typed behind any other line, and a line
+that waited is read by the parse a line typed at rest is read by ([CMD-35](#CMD-35)).
 Which lines could change what a command acts on depends on the command. A `/sandbox` line in any
 form waits only behind a line typed before it, and it sets nothing but the sandbox mode
 ([SANDBOX-22](sandboxing.md#SANDBOX-22)), so it holds back no command but another `/sandbox`:
@@ -521,6 +530,18 @@ were. Only a `/btw` already waiting holds a later one back, as a waiting line of
 does for any command. A click on a row of the info panel that
 stands for one of these commands is carried out by the same rule ([MOUSE-29](mouse.md#MOUSE-29)).
 
+**`/btw` in the desktop app.** The desktop composer takes `/btw <question>` typed on Enter, on the
+key that queues a line and on the key that interjects one, and sends it to the bridge as
+`session.btw`, never as a prompt or an interjection. At rest it is asked over the session's exchange
+as the terminal asks it. While a turn runs it is asked at once, beside the turn, over the exchange
+the turn published with its latest request and the turn's own file authority, and lines already
+queued stay where they were. The bridge refuses it in the terminal's cases: an empty question, a
+second question while one is out, a file dropped on it beside a turn, and a turn that has not sent a
+request yet. The window draws each refusal as an error note in the bridge's words and puts the line
+back in the composer. Stopping the turn stops the question. A turn that ends any other way leaves it
+out, and its answer is kept and the record written again once the turn has released the session.
+Where the answer is read in the window is [WATCH-19](watching.md#WATCH-19)'s.
+
 **The commands that rewrite the conversation or the workspace wait.** `/clear`, `/compact`,
 `/undo`, `/rewind`, `/cd`, `/add-dir` and `/exit` are not carried out while the turn runs, and do
 not stop it: stopping a turn costs the work it has done, and a person who typed a command did not
@@ -561,21 +582,28 @@ does not read:
   ([TRUST-24](trust-map.md#TRUST-24)). The turn runs under the map this session opened with, which
   the command leaves alone.
 - **`/model`.** A turn is sent with the model in force when it begins and does not read the choice
-  again, so a model picked mid-turn is the next turn's. The turn is still compared with the model
+  again, so a model picked mid-turn is the next turn's, whether it was picked with the bare word or
+  with `/model session`. The turn is still compared with the model
   it was sent with when it ends, and not with the one picked meanwhile. What `/status` and the
   footer name, and the window the context gauge is read against, are the model picked from the
   moment it is picked, since the next request is the one that has to fit.
 - **`/theme` and `/effort`.** A theme changes only how the screen is drawn. A turn is sent with the
   level in force when it begins and does not read it again, so a level set mid-turn is the next
-  turn's. A ChatGPT account is sent the level its session began with, so a level set there applies
-  from the next session ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)).
+  turn's, whether it was set with `/effort <level>` or with `/effort session <level>`. A ChatGPT
+  account is sent the level its session began with, so a level recorded there applies from the next
+  session and one set with `/effort session` applies from `/clear`
+  ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)).
 - **`/language`.** It saves the language the interface is read in from the next start, and the
   catalog is chosen once, so nothing the turn holds or the screen draws changes
   ([LOCALE-8](localization.md#LOCALE-8)).
+- **`/crash-reports`.** It reads whether crash reports are on, and `on` or `off` writes
+  `crashReports` in the person's own settings file, which only a later start reads. The turn holds
+  nothing that reads the key, and the crash hook is installed once at start, so nothing the turn
+  holds changes ([CRASH-13](crash-reports.md#CRASH-13)).
 - **`/config`.** It picks the style the box edits in. The turn does not read it. The keys that stop
   the turn do, so with vi's style chosen Escape reaches the turn only once the box has no use for
   it ([INPUT-24](terminal-input.md#INPUT-24)).
-- **The pickers.** The bare word of `/model`, `/theme`, `/effort` and `/config` opens a list. While a turn
+- **The pickers.** The bare word of `/model`, `/theme`, `/effort` and `/config`, and `/model session` and `/effort session`, opens a list. While a turn
   runs the list is a mode of the session and not a loop of its own, so the turn goes on being drawn
   and asked about. The list takes every key the box would have taken, is drawn over the frame with
   the turn still drawn behind it, and is left with Escape or Ctrl-C, which stop nothing. A question
@@ -590,6 +618,10 @@ does not read:
   was and says why.
 
   `verified-by: bravebot_tui::app::the_model_command_opens_its_picker_before_the_listing_has_arrived`
+  `verified-by: bravebot_tui::app::model_session_typed_mid_turn_opens_its_list_in_the_this_session_scope`
+  `verified-by: bravebot_tui::app::a_session_only_model_picked_mid_turn_applies_from_the_next_turn`
+  `verified-by: bravebot_tui::app::effort_session_typed_mid_turn_opens_its_list_in_the_this_session_scope`
+  `verified-by: bravebot_tui::app::a_session_only_level_picked_mid_turn_applies_from_the_next_turn`
   `verified-by: bravebot_tui::app::a_listing_that_fails_after_the_picker_opened_closes_it_and_says_why`
 - **`/sandbox`.** It sets the mode the programs `run` starts are held to
   ([SANDBOX-22](sandboxing.md#SANDBOX-22)). A turn reads the mode again when each call begins, so a
@@ -625,7 +657,8 @@ does not read:
   typed, so a reply the turn is still writing is not in it, and neither is a prompt waiting behind
   the turn. The prompt the turn is working on is marked as still running. A waiting `/cd` or
   `/clear` has not happened yet, so the file goes where the turn is working and holds what the
-  transcript holds now, as `/copy` copies the reply it holds now.
+  transcript holds now, as `/copy` copies the reply it holds now. The file holds what the planner was
+  given and nothing a screen alone was shown ([SESSION-17](sessions.md#SESSION-17)).
 
 - **`/btw`.** It asks over a copy of the exchange the turn published with its latest request, on a
   thread of its own, so the turn's conversation, record and rewind point are neither read nor
@@ -641,13 +674,15 @@ does not read:
 
 - **`/mcp` and `/mcp list`.** They say which servers the session runs with how their tools stand and
   which requested servers are not running, as `/status` reads the same facts
-  ([SERVERS-19](mcp-servers.md#SERVERS-19)). They read the session and the settings, and start,
+  ([SERVERS-19](mcp-servers.md#SERVERS-19)). They read the session, the settings and the plugins installed
+  under the state directory, and start,
   stop and ask nothing, so the turn does not hold what they read. `reconnect` puts questions to the
   person and takes the terminal, and `disable` and `remove` change the tools the turn offers, so
   those and any other word after `/mcp` wait. The line says so under the turn, naming `/mcp`, as for
   every command that waits for the turn to end.
-- **`/plugin`, in every form.** `add <path>` installs after a question put to the person and takes
-  the terminal, and `list`, `remove`, `enable` and `disable` change what the next turn is offered
+- **`/plugin`, in every form.** `add <path or git url[#ref]>` installs after a question put to the person and takes
+  the terminal, `update <name>` fetches the recorded source again and puts the difference to the
+  person, so it takes the terminal too, and `list`, `remove`, `enable` and `disable` change what the next turn is offered
   ([PLUGIN-1](plugins.md#PLUGIN-1)), so every form waits. The line says so under the turn, naming
   `/plugin`. The command is typed: no tool installs a plugin, and a line that arrives by paste is
   text in the box.
@@ -656,6 +691,15 @@ does not read:
   answers into both as it runs, so a copy taken when it began would state "every run is asked" about
   an earlier moment. The report says they are held by the running turn and states neither, and shows
   them once the turn has ended.
+
+  The desktop window's Chat › Session Status… shows the same report through the bridge's
+  `session.report.status`, in the Notice dialog, and is offered while a turn runs. The bridge
+  answers it from the session it keeps open and the session's report store, not from the state the
+  turn holds. While a turn runs the answer sets `rulesHeldByTurn` and carries no rules, and the
+  dialog says the trust and the programs are held by the running turn. Between turns it lists the
+  rules as `permissions.list` gives them. The desktop report covers the project, the folders open
+  beside it, the model, the agent definition, the permission and sandbox modes, the session's id and
+  title, its turns and tokens, and the rules. It does not cover the rest of the terminal's report.
 
 **Why `/jobs stop` is in the first kind.** A job is the turn's, and stopping one changes what the
 turn is running. The command does it only by setting a token the driver made for that job, which the
@@ -685,6 +729,7 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_command_that_would_start_a_loop_or_a_goal_waits_for_the_turn`
 `verified-by: bravebot_tui::app::a_command_typed_behind_a_waiting_one_of_its_own_waits_with_it`
 `verified-by: bravebot_tui::app::the_mcp_list_is_carried_out_beside_a_turn_as_it_is_typed`
+`verified-by: bravebot_tui::app::the_mcp_list_beside_a_turn_names_the_servers_an_installed_plugin_carries_and_writes_nothing`
 `verified-by: bravebot_tui::app::the_mcp_forms_that_start_or_change_a_server_wait_for_the_turn_in_flight`
 `verified-by: bravebot_tui::app::a_list_waits_behind_a_waiting_mcp_start_and_not_behind_a_waiting_prompt`
 `verified-by: bravebot_tui::app::status_asked_mid_turn_answers_now_and_leaves_the_turns_rules_unstated`
@@ -733,6 +778,10 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::ctrl_enter_on_a_rename_mid_turn_hurries_nothing`
 `verified-by: bravebot_tui::app::trust_forgotten_mid_turn_is_forgotten_as_it_is_typed`
 `verified-by: bravebot_tui::app::an_effort_named_mid_turn_is_set_as_it_is_typed`
+`verified-by: bravebot_tui::app::effort_session_with_a_level_typed_mid_turn_is_carried_out_as_typed_and_recorded_nowhere`
+`verified-by: bravebot_tui::app::a_level_set_mid_turn_is_the_next_turns_and_the_running_turn_keeps_its_own`
+`verified-by: bravebot_tui::app::a_queued_effort_line_is_dispatched_by_the_parse_a_line_typed_at_rest_gets`
+`verified-by: bravebot_tui::app::effort_session_with_a_level_waits_behind_what_could_change_the_choice_and_not_behind_the_rest`
 `verified-by: bravebot_tui::app::a_language_named_mid_turn_is_saved_as_it_is_typed`
 `verified-by: bravebot_tui::app::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_follows_it`
 `verified-by: bravebot_tui::app::the_sandbox_report_is_given_mid_turn`
@@ -769,6 +818,7 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::tab_finishes_text_after_the_copy_command`
 `verified-by: bravebot_tui::app::tests::menu::copy_as_text_and_the_typed_command_put_the_same_words_on_the_clipboard`
 `verified-by: bravebot_tui::render::each_command_row_says_whether_it_runs_now_or_waits_while_a_turn_runs`
+`verified-by: bravebot_tui::render::every_command_row_reads_the_label_the_spec_table_gives_it`
 `verified-by: bravebot_tui::render::every_row_is_queued_during_an_aside`
 `verified-by: bravebot_tui::app::btw_typed_mid_turn_goes_out_beside_the_turn_and_is_not_queued`
 `verified-by: bravebot_tui::app::btw_typed_before_the_first_request_says_there_is_nothing_to_read`
@@ -796,6 +846,22 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_schedule_read_waits_behind_a_schedule_write_typed_before_it`
 `verified-by: bravebot_schedule::words::only_the_three_readers_and_the_bare_word_are_carried_out_while_a_turn_runs`
 `verified-by: bravebot_tui::app::every_schedule_subcommand_reaches_the_shared_function_as_words_and_answers_in_a_note`
+`verified-by: bravebot_ui_bridge::reports_tests::the_status_report_leaves_out_the_rules_a_running_turn_holds`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles, so ui/scripts/commands.test.mjs asserts that Chat › Session Status… is offered on an open chat during a turn and after it and is routed to its own action, and ui/scripts/reports.test.mjs that the status says the rules are held by the running turn when the bridge sets rulesHeldByTurn and lists them otherwise; make check-ui runs both)`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_at_rest_is_answered_over_the_exchange_with_no_tools`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_is_not_added_to_the_exchange`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_is_in_the_record_when_the_session_is_opened_again`
+`verified-by: bravebot_ui_bridge::asking_aside::an_empty_btw_is_refused`
+`verified-by: bravebot_ui_bridge::asking_aside::a_second_btw_while_one_is_out_is_refused`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_before_the_turn_has_sent_anything_is_refused`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_beside_a_turn_is_asked_over_the_turns_exchange_and_answered_while_it_runs`
+`verified-by: bravebot_ui_bridge::asking_aside::a_second_btw_beside_a_turn_is_refused`
+`verified-by: bravebot_ui_bridge::asking_aside::stopping_the_turn_stops_the_btw_beside_it`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_still_out_when_the_turn_ends_is_answered_and_recorded`
+`verified-by: bravebot_ui_bridge::aside::an_empty_question_is_refused`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/aside-command.test.mjs asserts that only /btw and /btw <question> are the command, that the composer asks it from the typed line in submit, the queue key and the interject key before anything is sent or queued, that it goes to session.btw while a turn runs without reading the queue, and that its aside.done answer becomes a narration row and never a prompt; make check-ui runs it)`
+`verified-by: by-construction (ui/scripts/aside-command.test.mjs asserts that a /btw the bridge answers besideTurn:true draws one line saying it is out and naming the Asides panel, that the bridge's refusals are drawn as error notes in its own words, and that an aside.done arriving while a turn runs adds one line and leaves running, the queue and awaitingOrdinal unchanged; make check-ui runs it)`
+`verified-by: by-construction (ui/scripts/aside-command.test.mjs asserts that an answered aside.done is added to the window's asides, that a session opened or resumed seeds them from the asides the bridge returns, and that the Asides panel draws each question and answer as plain text; make check-ui runs it)`
 
 ## What a slash word is offered
 
@@ -879,12 +945,20 @@ is drawn. The skills are held while the line holds a slash word, and not only wh
 typed, because a finished word's name is what is checked. A turn running holds none, so a skill
 is not drawn as recognised then, while a command is.
 
+A space typed after `/model` offers the one word it takes, `session`, as the row `/model session`
+with a one-line description saying that it chooses a model for this session only and records
+nothing. Tab, or a click, finishes a started word to it, and a model name or another word offers
+nothing. Enter on `/model ` with nothing after the space opens the picker as the bare word does,
+and Enter on a started word takes the offered row. The hint drawn after the space is `[session]`,
+and `--help` lists `/model [session]`.
+
 `verified-by: bravebot_tui::render::a_word_that_names_a_command_or_skill_is_drawn_in_its_own_colour`
 `verified-by: bravebot_tui::render::nothing_is_drawn_as_recognised_in_shell_mode`
 `verified-by: bravebot_tui::render::a_command_shows_what_it_takes_once_it_is_typed`
 `verified-by: bravebot_tui::render::a_skill_shows_the_hint_its_file_gave`
 `verified-by: bravebot_tui::render::a_turn_running_draws_no_skill_as_recognised`
 `verified-by: bravebot_tui::render::a_hint_is_cut_to_the_row_and_holds_no_escape`
+`verified-by: bravebot_tui::command_table::typing_model_and_a_space_offers_the_session_word`
 `verified-by: bravebot_tui::app::the_skills_are_resolved_once_a_line_and_let_go_after_it`
 
 ## Copying a reply
@@ -1167,6 +1241,8 @@ decide, so the command only says which one the person meant.
 `verified-by: bravebot_tui::sessions::resume_by_id_reads_the_record_named_and_refuses_what_it_cannot_continue`
 `verified-by: bravebot_tui::sessions::resume_refuses_a_record_a_running_background_session_holds`
 `verified-by: bravebot_tui::sessions::resume_by_id_does_not_follow_an_id_out_of_the_sessions_directory`
+`verified-by: bravebot_tui::app::resuming_ends_the_session_and_leaves_its_record_resumable`
+`verified-by: bravebot_tui::app::resume_where_the_directory_holds_no_other_session_stays_and_does_not_echo_the_id`
 
 <a id="CMD-15"></a>
 ### CMD-15: `/request` opens the last request built, and takes no argument
@@ -1178,6 +1254,11 @@ prompt (CMD-2). It reads what the session already holds in memory, so it is carr
 typed while a turn runs (CMD-8), and it starts no turn and sends nothing. It is a command, so only a
 line a person typed reaches it (CMD-1).
 
+The desktop window's Chat › Last Request… shows the same request through the bridge's
+`session.report.request`, in a read-only dialog. The bridge answers it from the session's report
+store, which the turn writes the request into, and not from the state the turn holds, so the item is
+offered and answered while a turn runs. Before any turn has sent a request the dialog says so.
+
 **Why.** The view answers what the planner was just sent, which is most worth asking while a turn is
 running.
 
@@ -1185,6 +1266,9 @@ running.
 `verified-by: bravebot_tui::app::words_after_the_request_command_make_a_prompt`
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 `verified-by: bravebot_tui::remote_confirm::the_request_a_turn_built_travels_to_the_thread_that_draws_it`
+`verified-by: bravebot_ui_bridge::reports_tests::the_request_report_is_none_before_a_turn`
+`verified-by: bravebot_ui_bridge::reports_tests::the_reports_are_answered_while_a_turn_holds_the_session`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles, so ui/scripts/commands.test.mjs asserts that Chat › Last Request… is offered on an open chat during a turn and after it and is routed to its own action, and ui/scripts/reports.test.mjs that the dialog says no request has been sent before any turn; make check-ui runs both)`
 
 <a id="CMD-16"></a>
 ### CMD-16: `/recap` asks for a short account of the session, in the way `/btw` asks a question
@@ -1199,6 +1283,13 @@ for cannot exceed it. It is answered and recorded as an aside is: a row in the m
 written down only where the exchange had met nothing untrusted ([SESSION-20](sessions.md#SESSION-20)). It is
 not a turn. Typed during a turn it waits for the turn to end (CMD-8).
 
+The desktop composer takes the bare `/recap` and sends it to the bridge as `session.recap`, never as
+a prompt. The bridge asks the same fixed question with the same limit and keeps the answer as an
+aside labelled `/recap`. While a turn runs the bridge refuses it as `turn_in_flight`, and the window
+puts the line in the queue as a recap, asked again when the turn ends rather than sent. Its answer is
+read where a `/btw` answer is ([WATCH-19](watching.md#WATCH-19)). The recap the terminal makes on its
+own for a person who has been away is the terminal's alone (CMD-20).
+
 **Why.** A person returning to a long session needs to know where it stands, and reading the
 transcript back to find out is the cost the command removes. Sending it as a prompt would put the
 question and the account into the conversation the planner reads for the rest of the session.
@@ -1211,6 +1302,13 @@ question and the account into the conversation the planner reads for the rest of
 `verified-by: bravebot_agent::aside::a_recap_within_the_limit_is_not_cut`
 `verified-by: bravebot_agent::aside::the_recap_limit_counts_characters_rather_than_bytes`
 `verified-by: bravebot_agent::aside::a_recap_asks_its_own_question_with_a_limit_and_leaves_the_exchange_alone`
+`verified-by: bravebot_ui_bridge::asking_aside::a_recap_at_rest_asks_the_recap_question_with_no_tools`
+`verified-by: bravebot_ui_bridge::asking_aside::a_recap_is_cut_to_its_limit`
+`verified-by: bravebot_ui_bridge::asking_aside::a_recap_is_not_added_to_the_exchange`
+`verified-by: bravebot_ui_bridge::asking_aside::a_recap_is_in_the_record_when_the_session_is_opened_again`
+`verified-by: bravebot_ui_bridge::asking_aside::a_recap_while_a_turn_runs_is_refused_as_turn_in_flight`
+`verified-by: bravebot_ui_bridge::aside::an_answer_is_shown_kept_and_charged`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/aside-command.test.mjs asserts that only the bare /recap is the command, that a /recap the bridge refuses with turn_in_flight waits in the queue as a recap and is asked again when the turn ends rather than sent as a prompt, and that its aside.done answer becomes a narration row and never a prompt; make check-ui runs it)`
 
 <a id="CMD-17"></a>
 ### CMD-17: a line starting with the name of a prompt file is replaced by the file's text, and sends nothing
@@ -1248,11 +1346,30 @@ keys, are refused as a file that cannot be used is, since the box holds one form
 that has a `model` key is held to the same rule as one that has none: it may not begin with a
 command word.
 
-`/model <name>` is not a command. It stays a prompt (CMD-2), and the row under the box says so while
-the turn it begins runs, as it does for any command typed with words after it where it takes none.
-The picker is where a name is checked against the roster and where the person sees the row, and a
-command that took the name would apply it without that look. The box also keeps the file's text to
-send after the choice, which a `/model <name>` line has no room for.
+`/model` takes one word, `session`, and no model name. `/model session` opens the same picker as the
+bare word, with the same roster, search and rows, in the scope that records nothing: Enter puts the
+row in force for this session only and writes nothing to `~/.bravebot/model`, so the next session
+opens on the model it would have had without this one. The bare word opens the picker in the scope
+that records the pick for every session, and Tab in the open picker switches
+between the two scopes in both directions ([VIEW-14](terminal-transcript.md#VIEW-14)). The word is
+matched whole and in lower case, so `/model sessions`, `/model Session` and `/model session now` are
+prompts. In a session started under a definition that fixes the model, `/model session` opens no
+picker and says so, as the bare word does. An incognito session takes either pick and records
+nothing. A `model` key in a prompt file opens the picker in the scope of the bare word.
+
+A pick made with `/model session` belongs to the session that made it. `/clear` and `/handoff` begin
+a new conversation in the same session and keep the pick. `/branch` goes on in the same session and
+keeps it, and writes it into neither the copy's record nor `~/.bravebot/model`. `/resume` opens
+another session, which opens on the model a new session would have, the recorded pick, so it does
+not carry the pick. A session's record names the model that answered, not the model chosen, so a
+resume does not take a pick from it.
+
+Any other word after `/model`, a model name included, is not a command. `/model <name>` stays a
+prompt (CMD-2), and the row under the box says so while the turn it begins runs, as it does for any
+command typed with words after it where it takes none. The picker is where a name is checked against
+the roster and where the person sees the row, and a command that took the name would apply it
+without that look. A prompt file's `model` key also leaves the file's text in the box to send after
+the choice, which a `/model <name>` line has no room for.
 
 **Why.** A prompt used often should be a word, and the file is the person's own, so it is as trusted
 as their typing. Putting the text in the box before it is sent keeps what reaches the planner a line
@@ -1285,6 +1402,17 @@ put in force by a file, and `!` commands and `@` includes are not read from a fi
 `verified-by: bravebot_tui::prompt_files::a_name_a_command_claims_is_never_a_file`
 `verified-by: bravebot_tui::prompt_files::a_body_that_opens_with_a_command_is_refused`
 `verified-by: bravebot_tui::prompt_files::a_file_that_cannot_be_used_is_refused_rather_than_ignored`
+`verified-by: bravebot_tui::command_table::model_takes_exactly_the_word_session_and_nothing_else`
+`verified-by: bravebot_tui::app::model_session_asks_for_the_picker_in_the_this_session_scope`
+`verified-by: bravebot_tui::app::the_bare_model_command_opens_the_picker_and_marks_nothing`
+`verified-by: bravebot_tui::app::a_model_taken_in_the_this_session_scope_is_not_recorded`
+`verified-by: bravebot_tui::app::a_model_taken_in_the_every_session_scope_is_recorded`
+`verified-by: bravebot_tui::app::model_session_under_a_definition_naming_a_model_is_refused_as_model_is`
+`verified-by: bravebot_tui::app::an_incognito_session_takes_a_session_only_pick_and_writes_nothing`
+`verified-by: bravebot_tui::app::a_prompt_file_naming_a_model_opens_the_picker_in_the_every_session_scope`
+`verified-by: bravebot_tui::app::a_resume_after_a_session_only_pick_opens_on_the_recorded_pick`
+`verified-by: bravebot_tui::app::a_branch_keeps_a_session_only_pick_and_records_it_nowhere`
+`verified-by: bravebot_tui::app::a_session_only_pick_survives_a_clear_and_a_handoff`
 
 <a id="CMD-19"></a>
 ### CMD-19: `/context` divides the measured count of the last request into fixed sections
@@ -1305,6 +1433,13 @@ compacted, since the request on hand is of the conversation that was shortened; 
 is known but this session has built no request, it says that. None of these is drawn as a row of
 zeros or as nothing. The figures are marked approximate, because bytes are not tokens.
 
+The desktop window's Chat › Context Breakdown… shows the same breakdown through the bridge's
+`session.report.context`, in the Notice dialog, and its Chat › Token Spend… shows what `/cost`
+reports through `session.report.cost`. Both are offered while a turn runs. The bridge answers them
+from the session's report store, which the turn writes its count, its spend and its request into,
+and not from the state the turn holds. The sections are the ones this command uses, divided by the
+same function, and each empty state is named in words, as here.
+
 **Why.** One percentage cannot tell a person whether tool definitions, instructions or a few large
 results fill the window, and so whether to compact, clear or trim what is loaded. Every input here is
 a length the driver already holds, so nothing branches on untrusted content.
@@ -1314,8 +1449,17 @@ a length the driver already holds, so nothing branches on untrusted content.
 `verified-by: bravebot_tui::app::the_context_command_does_not_describe_a_conversation_it_has_no_request_for`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_context_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
-`verified-by: bravebot_tui::state::a_count_is_apportioned_in_whole_numbers_that_add_up_to_it`
+`verified-by: bravebot_agent::request_view::a_count_is_apportioned_in_whole_numbers_that_add_up_to_it`
+`verified-by: bravebot_agent::request_view::each_span_is_counted_in_the_section_its_role_and_provenance_name`
+`verified-by: bravebot_agent::request_view::a_section_with_nothing_in_it_is_left_out`
 `verified-by: bravebot_agent::request_view::the_size_of_the_tool_definitions_is_what_was_sent`
+`verified-by: bravebot_ui_bridge::reports_tests::the_context_report_divides_the_measured_count_by_section`
+`verified-by: bravebot_ui_bridge::reports_tests::the_context_report_says_when_nothing_was_measured`
+`verified-by: bravebot_ui_bridge::reports_tests::the_context_report_says_when_the_conversation_was_compacted`
+`verified-by: bravebot_ui_bridge::reports_tests::the_context_report_does_not_divide_a_count_it_has_no_request_for`
+`verified-by: bravebot_ui_bridge::reports_tests::the_cost_report_counts_the_running_turn_and_what_no_turn_accounts_for`
+`verified-by: bravebot_ui_bridge::reports_tests::the_reports_are_answered_while_a_turn_holds_the_session`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles, so ui/scripts/commands.test.mjs asserts that Chat › Token Spend… and Chat › Context Breakdown… are offered on an open chat during a turn and after it and are routed to their own actions, ui/scripts/reports.test.mjs that a measured context is broken down by section and called approximate and that each empty state is named, and ui/scripts/drive-reports.mjs opens every report from the real menu before, during and after a turn; make check-ui runs all three)`
 
 <a id="CMD-20"></a>
 ### CMD-20: a person who has been away is given a recap, once, without asking
@@ -1355,28 +1499,49 @@ least likely to remember what it was doing, and the first thing they would do is
 `verified-by: bravebot_tui::app::a_checkouts_away_recap_does_not_turn_the_recap_on`
 
 <a id="CMD-21"></a>
-### CMD-21: `/effort` spells out its levels after the word, and Tab finishes one
+### CMD-21: `/effort` spells out `session` and its levels after the word, and Tab finishes one
 
-Once `/effort ` is typed, the box draws the five levels it takes, `low`, `medium`, `high`, `xhigh`
-and `max`, after the caret in place of `[level]`. The completion list keeps `[level]` in the table,
-because every row's description starts after the longest word in the list and a spelled-out hint
-would push all of them to the right. `--help` prints the spelled-out form. Both are built from the
-set of levels the program accepts, so a level added there appears in both.
+Once `/effort ` is typed, the box draws the word `session` and the five levels it takes, `low`,
+`medium`, `high`, `xhigh` and `max`, as `[session | low | medium | high | xhigh | max]` after the
+caret in place of `[level]`. Once `/effort session ` is typed, with the caret at the end of the line
+and outside shell mode, it draws the five levels alone, `[low | medium | high | xhigh | max]`. That
+hint is drawn after the exact lower-case word `session` and after no other word: `/effort sessions `,
+`/effort Session `, `/effort high ` and `/model session ` have none, and neither has a line where a
+level is already being typed. The completion list keeps `[level]` in the table, because every row's
+description starts after the longest word in the list and a spelled-out hint would push all of them
+to the right, and it has no row for `/effort ` or `/effort s`: the word and the levels are offered by
+the hint and by Tab. `--help` prints the spelled-out form,
+`/effort [session | low | medium | high | xhigh | max]`. The hint, Tab and `--help` are built from
+the set of levels the program accepts and the one word `session`, so a level added there appears in
+all of them. The hint is cut at the edge of the row where the terminal is narrower than it.
 
-Tab after `/effort ` and the start of a level, with the caret at the end of the line, replaces the
-start with the level it fits, so `/effort h` becomes `/effort high`. A start that fits several
-levels is carried as far as they agree and no further, so `m`, which fits `medium` and `max`, is left
-as typed. A finished level, a word that fits none, a bare `/effort `, another command, a prompt that
-only mentions `/effort`, and a line in shell mode are left as typed. Tab never submits the line.
+Tab after `/effort ` and the start of a word, with the caret at the end of the line, replaces the
+start with the word `session` or the level it fits, so `/effort s` becomes `/effort session` and
+`/effort h` becomes `/effort high`. Tab after `/effort session ` and the start of a level replaces
+the start with the level it fits, so `/effort session h` becomes `/effort session high`, and `session`
+is not offered as a level there. A start that fits several words is carried as far as they agree and
+no further, so `m`, which fits `medium` and `max`, is left as typed after `/effort ` and after
+`/effort session `. A finished word or level, a word that fits none, a bare `/effort `,
+`/effort session` with nothing after it, `/effort sessions`, a level after `/effort Session`,
+another command, a prompt that only mentions `/effort`, a line in shell mode and a line whose caret
+is not at its end are left as typed. Tab never submits the line.
 
-Nothing from the conversation reaches either. They read the typed line and the fixed set of levels.
+Nothing from the conversation reaches either. They read the typed line, the word `session` and the
+fixed set of levels.
 
 **Why.** The words a command takes are what a person cannot guess, and `[level]` did not say them.
 Completing a start from the same set the command accepts keeps the hint, the completion and the
 refusal for an unknown word in step.
 
 `verified-by: bravebot_tui::render::the_effort_command_offers_its_levels_after_its_word`
+`verified-by: bravebot_tui::render::after_effort_session_the_box_draws_the_levels_alone`
+`verified-by: bravebot_tui::render::the_effort_hint_with_session_in_it_fits_eighty_columns_and_is_cut_below_that`
 `verified-by: bravebot_tui::app::the_effort_hint_lists_every_level_and_the_list_stays_short`
+`verified-by: bravebot_tui::command_table::typing_effort_and_a_space_offers_the_session_word_and_the_levels`
+`verified-by: bravebot_tui::command_table::a_start_fitting_session_and_a_level_is_carried_as_far_as_they_agree`
+`verified-by: bravebot_tui::command_table::the_effort_hints_and_tab_and_the_levels_the_command_accepts_are_one_set`
+`verified-by: bravebot_tui::command_table::the_effort_and_sandbox_hints_and_completions_offer_the_same_words`
+`verified-by: bravebot_cli::running::help_lists_the_effort_command_with_the_session_word_and_the_levels`
 `verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
 `verified-by: bravebot_tui::app::tab_finishes_a_level_started_after_the_effort_command`
 `verified-by: bravebot_tui::app::tab_leaves_alone_a_start_it_cannot_finish`
@@ -1454,26 +1619,28 @@ being asked for one, through `run`, with the person asked about it as for any pr
 
 Nothing is drafted, and the line says which of these held, where the repository is not one
 `read_git` opens ([GIT-2](tools/read-git.md#GIT-2)), where the reader shows no file, where the diff
+names a path nobody has vouched for ([LABEL-8](labels.md#LABEL-8)), where the diff of vouched paths
 holds what looks like a credential ([CRED-15](credential-protection.md#CRED-15)), where the model
 could not be used ([PROC-13](processors.md#PROC-13)) or where the answer marks no message. A diff cut
 at the reader's cap is drafted from what was read and the line says so. Typed during a turn the
 line waits for the turn to end (CMD-8).
 
 A draft is put in the box only where every path the diff names is one the trust map vouches for
-([LABEL-8](labels.md#LABEL-8)). Where one is not, a model still writes the message, since the
-read that reaches it is the one the planner's own read would have kept back the same way, but the
-box is left as it was and a note says so instead: the box is sendable, and the next Enter would
-send a model's words about an unvouched path to the planner as the person's own typed line, which
-is not a line the person wrote. The same holds `/handoff`'s brief and an enhancement's rewrite to
+([LABEL-8](labels.md#LABEL-8)). Where one is not, the diff is not given to a model: the driver reads
+the label the read gave the diff, which is fixed by the paths shown and not by what they hold, and
+stops before the diff is scanned or any request is made. No usage is charged, the box is left as it
+was and a note says no draft was written. The box is sendable, and the next Enter would send a
+model's words about an unvouched path to the planner as the person's own typed line, which is not a
+line the person wrote. The same holds `/handoff`'s brief and an enhancement's rewrite to
 ([SESSION-34](sessions.md#SESSION-34), [INPUT-48](terminal-input.md#INPUT-48)).
 
 **Why.** A message is written from a diff the planner may not be allowed to read, and the answer to
 that elsewhere is a processor. The draft is derived from that diff, so its integrity is the diff's,
-and the one place it is released is a surface the person edits and a key the person presses, which
-is why that surface gets nothing where the diff's is not trusted: a processor's own output carries
-no provenance of its own that vouching could promote it by, so reading the diff's label is the only
-way to tell whether the draft may go where a press sends it. A credential in a diff is refused
-where the planner's own read would ask, because nobody is at a prompt to agree.
+and the one place it is released is a surface the person edits and a key the person presses. A
+draft that would be discarded for that reason is not requested, so the bytes of a file nobody
+vouched for decide neither whether a request is made nor which note is shown. A credential in a
+diff of vouched paths is refused where the planner's own read would ask, because nobody is at a
+prompt to agree.
 
 `verified-by: bravebot_agent::commit_message::a_range_is_two_written_out_revisions`
 `verified-by: bravebot_tui::app::the_commit_message_command_carries_its_source_and_is_not_sent_as_a_prompt`
@@ -1498,8 +1665,8 @@ where the planner's own read would ask, because nobody is at a prompt to agree.
 `verified-by: bravebot_agent::commit_message::a_repository_the_map_does_not_trust_is_not_read_or_sent`
 `verified-by: bravebot_agent::commit_message::a_diff_holding_a_credential_is_not_sent`
 `verified-by: bravebot_agent::commit_message::an_answer_with_no_marker_is_no_draft`
-`verified-by: bravebot_agent::commit_message::a_diff_of_an_unvouched_path_gives_no_sendable_draft`
-`verified-by: bravebot_tui::app::a_draft_that_met_something_untrusted_is_held_back_with_a_note`
+`verified-by: bravebot_agent::commit_message::an_unvouched_diff_gives_no_draft_and_no_request_whatever_its_text_holds`
+`verified-by: bravebot_tui::app::an_answer_with_no_message_leaves_the_box_alone_and_says_no_draft_was_written`
 
 ## Answering from what this program carries
 
@@ -1973,3 +2140,166 @@ slash offers, repairs only the rows it covers.
 `verified-by: bravebot_tui::app::redraw_is_a_command_only_as_the_whole_line`
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 `verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+
+## The desktop window's conversation commands
+
+<a id="CMD-34"></a>
+### CMD-34: the desktop's Chat menu compacts, hands off and continues in the background as `/compact`, `/handoff` and `/bg` do
+
+The desktop window has no line for commands, so the commands of this spec that act on a
+conversation are items of its Chat menu, beside Undo Last Turn… and Add Note…. Each item is enabled
+only while a chat is open and no turn runs in it, and each asks before it acts, so none has a
+shortcut.
+
+- **Compact Conversation…** asks for an optional focus and sends the request `/compact [focus]`
+  sends ([COMPACT](compaction.md)), through the bridge's `session.compact`. The chat shows the
+  compacting phase while the request runs, and the `compacted` hooks run as they do in the terminal
+  ([HOOK-2](hooks.md#HOOK-2)). It ends with a notice that says how many turns were summarised and how
+  many were kept, that there was nothing to shorten, that it was stopped, or that it failed and why.
+  While it runs, a message, a fork, an undo and a note in that chat are refused as they are while a
+  turn runs, and Cancel Turn stops it. A conversation that has gone untrusted is not shortened
+  ([COMPACT-1](compaction.md#COMPACT-1)).
+- **Hand Off to New Chat…** asks for the next goal and has the brief written as `/handoff <next goal>`
+  has it written ([SESSION-34](sessions.md#SESSION-34)), through `session.handoff`. It is refused,
+  with a sentence saying why and nothing requested, with no goal and before a turn of the chat has
+  ended. A brief from an exchange that met something untrusted is not offered, and a stopped or
+  failed request says so. In each of those cases the message box is left as it was.
+- **Continue in Background…** asks to confirm, hands the chat to a background session as `/bg` does
+  ([BG-2](background-sessions.md#BG-2)), through `session.background`, and closes the chat in the
+  window. It is refused, and the chat stays open, in each case where `/bg` is refused that a chat can
+  be in, on a system where background sessions do not run, and where the `bravebot` program is not
+  installed beside the bridge.
+- **Stop Background Session**, on the right-click menu of a chat in the list that a background
+  process holds, stops that session as `bravebot sessions stop` does, through
+  `session.background.stop`, without asking to confirm, and keeps the record
+  ([BG-11](background-sessions.md#BG-11)). The chat then opens again from the list.
+
+Three terminal commands already have a desktop equivalent, and the desktop adds no item for them.
+New Chat stands in for `/clear`. Fork From Here… on an entry of the transcript stands in for
+`/branch` ([SESSION-31](sessions.md#SESSION-31)), and copies the record up to that entry
+([SESSION-18](sessions.md#SESSION-18)). Opening a chat from the list stands in for `/resume`
+(CMD-14), and is refused for a record a running background session holds
+([BG-9](background-sessions.md#BG-9)).
+
+**Why.** A person who uses the desktop needs to shorten a long chat, start the next piece of work
+from a brief, and leave a chat running, as a person in the terminal can. Each item calls the shared
+code the terminal calls, so both front ends send the same requests and refuse the same cases.
+
+`verified-by: bravebot_ui_bridge::compacting::a_compaction_asks_with_no_tools_and_reports_what_it_summarised_and_kept`
+`verified-by: bravebot_ui_bridge::compacting::a_compaction_with_nothing_to_shorten_says_so`
+`verified-by: bravebot_ui_bridge::compacting::a_message_or_a_fork_sent_while_compacting_is_refused_as_a_turn_in_flight`
+`verified-by: bravebot_ui_bridge::compacting::a_cancelled_compaction_reports_stopped_and_keeps_the_conversation`
+`verified-by: bravebot_ui_bridge::compacting::compacting_an_untrusted_conversation_is_refused`
+`verified-by: bravebot_ui_bridge::compaction::each_ending_of_a_compaction_settles_into_its_own_status`
+`verified-by: bravebot_ui_bridge::handing_off::a_handoff_with_no_goal_or_before_a_turn_ended_is_refused_and_asks_nothing`
+`verified-by: bravebot_ui_bridge::handing_off::a_brief_from_an_exchange_that_met_something_untrusted_is_withheld`
+`verified-by: bravebot_ui_bridge::handoff::the_refusals_are_the_terminals`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_with_no_record_is_not_handed_to_the_background`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_in_bypass_or_auto_is_not_handed_to_the_background`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_with_a_turn_running_is_not_handed_to_the_background`
+`verified-by: bravebot_ui_bridge::background::each_refusal_of_bg_is_made_from_what_the_bridge_holds`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_handed_to_the_background_runs_there_and_is_refused_when_opened`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_handed_to_the_background_is_stopped_from_the_window_and_keeps_its_record`
+`verified-by: by-construction (the desktop menu and router are not a crate this workspace compiles, so ui/scripts/commands.test.mjs asserts the Compact Conversation…, Hand Off to New Chat… and Continue in Background… rows, that each requires an open idle chat and that the router handles each, that a chat a background process holds offers Stop Background Session and not Open and that the router sends its id to stopBackground, and ui/scripts/compacting.test.mjs asserts the notice each ending of a compaction gives; make check-ui runs both)`
+
+## Setting the effort level for one session
+
+<a id="CMD-35"></a>
+### CMD-35: `/effort session` sets the effort level for this session only and records nothing
+
+`/effort` takes one word of its own, `session`, besides the five levels `low`, `medium`, `high`,
+`xhigh` and `max`. `/effort session <level>` puts the level in force for the running session and
+writes nothing to `~/.bravebot/effort`: the next session opens on the level it would have had
+without this one. `/effort <level>` records the level for the sessions after this one, as it does
+without the word, and the bare `/effort` opens the picker in the scope that records the pick for
+every session. `/effort session` with nothing after it opens the same picker in the scope that
+records nothing, and Tab in the open picker switches between the two scopes
+([VIEW-46](terminal-transcript.md#VIEW-46)). A row taken in the picker is carried out in the scope
+the picker is in when it is taken, whichever scope it was opened in.
+
+The word is matched whole and in lower case. The level after it is read in any case, as `/effort
+<level>` reads it, so `/effort session HIGH` is the level `high`. A word after `session` that is no
+level, such as `highest`, `none` or `high now`, changes nothing, writes nothing and is refused naming
+that word, in the sentence `/effort <word>` is refused with. `/effort sessions`,
+`/effort sessionhigh`, `/effort Session high` and `/effort sess high` are not the form: each is read
+as a level to record that is none, and is refused naming everything typed after `/effort`.
+
+The session says the level it holds in the transcript, in the words it uses for a recorded one.
+The row of the picker that asks for no level, taken in the scope that records nothing, puts no level
+in force for this session and leaves the recorded level in the file. Typed while a turn runs,
+`/effort session <level>` is carried out as it is typed, said under the turn, and `/effort session`
+opens its picker as a mode of the session ([CMD-8](#CMD-8)). A line that waited in the queue is
+read by the parse a line typed at rest is read by. A turn is sent with the level in force when it
+begins, so a level set with `/effort session`, mid-turn or not, is the next turn's.
+
+A level chosen with `/effort session` ranks as a level chosen in the running session
+([BACKEND-43](backends.md#BACKEND-43)): it outranks the level `--effort` named, the recorded level
+and every settings file for this session. `--effort` is not marked as a session-only choice, and a
+level recorded afterwards replaces the session-only level and ends its mark. An incognito session
+takes the level and records nothing, as it records nothing for a recorded one.
+
+The level belongs to the session that chose it. `/clear` and `/handoff` begin a new conversation in
+the same session and keep the level. `/branch` goes on in the same session and keeps it, and writes
+nothing to the effort file. `/resume` opens another session, which opens on the level a new session
+would have, the recorded one or the settings file's, so it does not carry the level. A session's
+record keeps the level in force when its last turn finished, whichever command set that level. A turn
+that finished while a level chosen with `/effort session` was in force leaves that level in the record
+and in the copy `/branch` writes from it, as it does for a level recorded with `/effort`, and a level
+chosen after the last turn finished is in neither. On a ChatGPT account the record holds the level
+the account's session began with. Nothing reads a level back out of a record into a running session,
+so a resume takes none from it, and `/effort session` never writes the effort file
+([SESSION-11](sessions.md#SESSION-11)).
+
+On a ChatGPT account the session is sent the level it began with, so a level chosen with
+`/effort session` is not sent until `/clear` begins the next ChatGPT session, which begins at it.
+The session says so where the level chosen is not the one the account is sent, in a sentence that
+names both levels and says the chosen level applies from `/clear` and is not recorded
+([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)). The info panel and `/status` say the level is for this
+session only ([PANEL-9](info-panel.md#PANEL-9)). A click on the panel's effort row stands for the
+bare `/effort` ([MOUSE-11](mouse.md#MOUSE-11)).
+
+Nothing from the conversation reaches the command. It reads the typed line, the fixed set of
+levels and the person's pick in a list.
+
+**Why.** A level recorded with `/effort` changes every later session, so trying a level for one
+conversation means changing it back afterwards. The scope is a word the person types or a choice
+they make in the list, and nothing about it is inferred. The word is matched exactly so that a
+sentence mentioning a level is never read as a scope, and a refusal names what was typed so that a
+mistyped word is visible.
+
+`verified-by: bravebot_tui::command_table::effort_takes_session_and_a_level_and_reads_the_rest_as_a_level_to_record`
+`verified-by: bravebot_tui::app::effort_session_asks_for_the_picker_in_the_this_session_scope`
+`verified-by: bravebot_tui::app::typing_the_effort_command_opens_the_picker`
+`verified-by: bravebot_tui::app::the_effort_command_carries_its_level`
+`verified-by: bravebot_tui::app::effort_session_and_a_level_reach_the_action_with_the_level_and_the_scope`
+`verified-by: bravebot_tui::app::a_level_named_with_effort_session_is_in_force_and_recorded_nowhere`
+`verified-by: bravebot_tui::app::a_word_after_effort_session_that_is_no_level_changes_nothing_and_says_so`
+`verified-by: bravebot_tui::app::a_level_this_program_does_not_know_changes_nothing_and_says_so`
+`verified-by: bravebot_tui::app::a_level_named_without_session_is_recorded_and_ends_a_session_only_mark`
+`verified-by: bravebot_tui::app::a_level_picked_in_the_this_session_scope_is_not_recorded`
+`verified-by: bravebot_tui::app::a_level_picked_in_the_every_session_scope_is_recorded`
+`verified-by: bravebot_tui::app::the_effort_picker_opened_at_rest_records_by_the_scope_tab_left_it_in`
+`verified-by: bravebot_tui::app::the_effort_picker_opened_at_rest_takes_a_second_press_in_the_scope_tab_left_it_in`
+`verified-by: bravebot_tui::app::tab_in_an_open_effort_picker_switches_the_scope_at_rest_and_under_a_turn`
+`verified-by: bravebot_tui::app::a_turn_begun_after_effort_session_is_asked_for_that_level`
+`verified-by: bravebot_tui::app::effort_session_typed_mid_turn_opens_its_list_in_the_this_session_scope`
+`verified-by: bravebot_tui::app::a_session_only_level_picked_mid_turn_applies_from_the_next_turn`
+`verified-by: bravebot_tui::app::effort_session_with_a_level_typed_mid_turn_is_carried_out_as_typed_and_recorded_nowhere`
+`verified-by: bravebot_tui::app::a_queued_effort_line_is_dispatched_by_the_parse_a_line_typed_at_rest_gets`
+`verified-by: bravebot_tui::app::effort_session_with_a_level_waits_behind_what_could_change_the_choice_and_not_behind_the_rest`
+`verified-by: bravebot_tui::app::a_level_set_mid_turn_is_the_next_turns_and_the_running_turn_keeps_its_own`
+`verified-by: bravebot_tui::app::a_level_chosen_for_this_session_is_held_and_recorded_nowhere`
+`verified-by: bravebot_tui::app::a_recorded_level_replaces_a_session_only_one_and_ends_the_mark`
+`verified-by: bravebot_tui::app::a_level_the_command_line_named_or_the_files_settled_is_not_marked_as_this_sessions`
+`verified-by: bravebot_tui::app::a_session_only_level_is_asked_for_over_the_record_and_the_files_and_the_next_session_ignores_it`
+`verified-by: bravebot_tui::app::an_incognito_session_takes_a_session_only_level_and_writes_nothing`
+`verified-by: bravebot_tui::app::a_session_only_level_survives_a_clear_and_a_handoff`
+`verified-by: bravebot_tui::app::a_branch_keeps_a_session_only_level_chosen_after_the_last_turn_and_records_it_nowhere`
+`verified-by: bravebot_tui::app::the_record_and_a_branch_hold_the_level_in_force_when_the_last_turn_finished`
+`verified-by: bravebot_tui::app::a_resume_after_a_session_only_level_opens_on_the_recorded_level`
+`verified-by: bravebot_tui::app::the_effort_a_turn_was_sent_with_is_what_the_record_is_given`
+`verified-by: bravebot_tui::persist::a_level_chosen_for_this_session_is_recorded_nowhere_and_the_next_session_ignores_it`
+`verified-by: bravebot_tui::app::a_chatgpt_account_is_sent_the_level_its_session_began_with_when_another_is_chosen_for_this_session_only`
+`verified-by: bravebot_tui::app::a_clear_begins_the_account_session_at_a_session_only_level`
+`verified-by: bravebot_tui::app::a_session_only_level_on_a_chatgpt_account_is_said_to_apply_from_clear_and_not_to_be_recorded`
+`verified-by: bravebot_tui::app::a_level_picked_on_a_chatgpt_account_says_the_sentence_of_the_scope_it_was_picked_in`

@@ -59,8 +59,10 @@ impl Session {
     /// the key leaves bypass (MODE-5).
     pub fn starting_in_bypass(mut self) -> Self {
         self.began_in_bypass = true;
-        self.permission_mode
-            .set(bravebot_agent::PermissionMode::Bypass);
+        self.permission_mode.starting_in(
+            bravebot_agent::PermissionMode::Bypass,
+            bravebot_agent::ModeCause::Flag,
+        );
         self
     }
 
@@ -70,9 +72,9 @@ impl Session {
     /// Unlike [`Session::starting_in_bypass`] it records nothing about where the session began: the
     /// line under the box names auto for as long as the session is in it, and names nothing once the
     /// key has left it, which is what it does for a session that reached auto by the key.
-    pub fn starting_in_auto(self) -> Self {
+    pub fn starting_in_auto(self, cause: bravebot_agent::ModeCause) -> Self {
         self.permission_mode
-            .set(bravebot_agent::PermissionMode::Auto);
+            .starting_in(bravebot_agent::PermissionMode::Auto, cause);
         self
     }
 
@@ -84,8 +86,10 @@ impl Session {
     pub fn make_bypass_unreachable(&mut self) {
         self.bypass_reachable = false;
         if self.permission_mode.get() == bravebot_agent::PermissionMode::Bypass {
-            self.permission_mode
-                .set(bravebot_agent::PermissionMode::Ask);
+            self.permission_mode.set_by(
+                bravebot_agent::PermissionMode::Ask,
+                bravebot_agent::ModeCause::BypassUnreachable,
+            );
             self.note(t!(session_bypass_made_unreachable));
         }
     }
@@ -117,7 +121,8 @@ impl Session {
     pub fn cycle_permission_mode(&mut self) {
         let was = self.permission_mode.get();
         let next = was.cycle(self.bypass_reachable);
-        self.permission_mode.set(next);
+        self.permission_mode
+            .set_by(next, bravebot_agent::ModeCause::Key);
         self.say_bypass_screens(was, next);
     }
 
@@ -160,7 +165,8 @@ impl Session {
             PermissionMode::Auto => next.cycle(false),
             _ => next,
         };
-        self.permission_mode.set(next);
+        self.permission_mode
+            .set_by(next, bravebot_agent::ModeCause::Click);
     }
 
     /// Set plan mode, from whichever mode the session is in, and say nothing for the reason
@@ -169,8 +175,10 @@ impl Session {
     /// Plan mode only narrows what is permitted, so this grants nothing the key would not, and no
     /// word reaches bypassing (MODE-5).
     pub fn enter_plan_mode(&mut self) {
-        self.permission_mode
-            .set(bravebot_agent::PermissionMode::Plan);
+        self.permission_mode.set_by(
+            bravebot_agent::PermissionMode::Plan,
+            bravebot_agent::ModeCause::Command,
+        );
     }
 
     /// Start a turn on a person's task, after [`Session::enter_plan_mode`] (MODE-12).
@@ -243,6 +251,23 @@ impl Session {
             bravebot_session::store::record_model(config, &model);
         }
         self.model = Some(model);
+        self.model_is_for_this_session = false;
+    }
+
+    /// Put `model` in force for this session only, over every saved pick and file, and record
+    /// nothing: `/model session` and Tab in the picker (CMD-17).
+    ///
+    /// Like [`Session::name_model`] it leaves the pick the next session opens on alone. It also
+    /// notes that the model in force is not the recorded one, for the info panel to say so.
+    pub fn choose_model_for_this_session(&mut self, model: impl Into<String>) {
+        self.model = Some(model.into());
+        self.model_is_for_this_session = true;
+    }
+
+    /// Whether the model in force was picked for this session only, and so is not the one the
+    /// next session opens on.
+    pub fn model_is_for_this_session(&self) -> bool {
+        self.model_is_for_this_session
     }
 
     /// Put `model` in force for this session, over every saved pick and file, and record nothing.
@@ -428,12 +453,42 @@ impl Session {
     ///
     /// `None` is a choice too: it puts the session back to sending no level at all, which is what
     /// somebody who has never picked one is already doing. Written through to disk only for a
-    /// session that persists, the same rule the model follows and for the same reason.
+    /// session that persists, the same rule the model follows and for the same reason. A recorded
+    /// choice ends the mark a level chosen for this session only left.
     pub fn choose_effort(&mut self, effort: Option<Effort>) {
         if self.persist {
             bravebot_session::store::save_effort(effort);
         }
         self.effort = effort;
+        self.effort_is_for_this_session = false;
+    }
+
+    /// Put `effort` in force for this session only, over every saved pick and file, and record
+    /// nothing: `/effort session` and Tab in the effort picker (CMD-35).
+    ///
+    /// Like [`Session::name_effort`] it leaves the level the next session opens on alone, and
+    /// `None` is a choice too: this session sends no level and the recorded one stays. It also
+    /// notes that the level in force is not the recorded one, for the info panel and `/status`
+    /// to say so.
+    pub fn choose_effort_for_this_session(&mut self, effort: Option<Effort>) {
+        self.effort = effort;
+        self.effort_is_for_this_session = true;
+    }
+
+    /// Whether the level in force was chosen for this session only, and so is not the one the
+    /// next session opens on.
+    pub fn effort_is_for_this_session(&self) -> bool {
+        self.effort_is_for_this_session
+    }
+
+    /// Whether the level [`Session::effort_in_force`] names is the one chosen for this session
+    /// only, which is what a row under that level in the info panel says (PANEL-9).
+    ///
+    /// A model of the ChatGPT account is sent the level its session began with, so after
+    /// `/effort session` the level in force can be another one. That level is the account's and
+    /// is not the session-only one, so it is not marked.
+    pub fn effort_in_force_is_for_this_session(&self) -> bool {
+        self.effort_is_for_this_session && self.effort_in_force() == self.effort
     }
 
     /// The language `/language` last saved, for saying so.
@@ -458,8 +513,12 @@ impl Session {
 
     /// Put `effort` in force for this session over every saved pick and file, and record nothing,
     /// for the reason [`Session::name_model`] records no model.
+    ///
+    /// The command line's own choice (CLI-31), so unlike [`Session::choose_effort_for_this_session`]
+    /// it is not marked: the info panel says nothing of a level `--effort` named.
     pub fn name_effort(&mut self, effort: Effort) {
         self.effort = Some(effort);
+        self.effort_is_for_this_session = false;
     }
 
     /// Settle the style of editing for this session, given what a settings file said.
@@ -538,7 +597,8 @@ impl Session {
     /// [`Session::effort_in_force`], and is still not forgotten.
     ///
     /// Nothing is written: a level a file named is not a pick, and recording one would make reading
-    /// a settings file once enough to outlive it.
+    /// a settings file once enough to outlive it. The level settled is the one a new session opens
+    /// on, so it is not a level chosen for this session only.
     ///
     /// The recorded pick is read only for a session that persists, the rule
     /// [`Session::adopt_editing`] follows: a test must not be handed the developer's own choice, or
@@ -549,6 +609,7 @@ impl Session {
             .then(bravebot_session::store::load_effort)
             .flatten();
         self.effort = bravebot_session::store::effort(recorded, settings);
+        self.effort_is_for_this_session = false;
     }
 
     /// Settle whether a check that finds nothing may promote a slot without anybody being asked.
@@ -590,9 +651,27 @@ impl Session {
         self.vetting = auto;
     }
 
-    /// Adopt configured keybindings from settings.
+    /// Adopt configured keybindings from settings. A chord this terminal cannot send is kept, to be
+    /// said at startup (INPUT-32).
     pub fn adopt_keybindings(&mut self, configured: &std::collections::BTreeMap<String, String>) {
-        self.bindings = crate::keybindings::Keybindings::from_map(configured);
+        let (bindings, undeliverable) =
+            crate::keybindings::Keybindings::from_map(configured, self.keys_disambiguated);
+        self.bindings = bindings;
+        self.undeliverable_chords = undeliverable;
+    }
+
+    /// Record whether this terminal reports keys the disambiguation protocol's way (INPUT-48).
+    ///
+    /// Answered at startup and set before the chords are read, because a chord on Escape arrives
+    /// only from a terminal that does. Taken as an answer rather than asked for here: asking costs a
+    /// round trip to the terminal, which a session that has none cannot make.
+    pub fn adopt_keys_disambiguated(&mut self, disambiguated: bool) {
+        self.keys_disambiguated = disambiguated;
+    }
+
+    /// The chords a settings file asked for that this terminal cannot send.
+    pub fn undeliverable_chords(&self) -> &[crate::keybindings::Undeliverable] {
+        &self.undeliverable_chords
     }
 
     /// Adopt the keys of the Sessions screen from settings (SCREEN-14). What a settings file asked

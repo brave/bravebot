@@ -368,6 +368,7 @@ impl Acp {
             if let Some(note) = held.opening_note.take() {
                 say(&mut shared, &session, &note);
             }
+            say_crash_reports_once(&mut shared, &session);
             shared
                 .unasked
                 .remove(&session)
@@ -885,6 +886,22 @@ fn say(shared: &mut Shared, session: &str, text: &str) {
     );
 }
 
+/// Tell the editor's person that crash reports are sent, once (CRASH-12).
+///
+/// A message in the session, because this program has no screen and its standard output is the
+/// protocol: the words reach the editor as a string inside a notification and are never written
+/// outside one. Whether it is due is the answer the terminal and the window ask, which is yes only
+/// for a launch that is reporting and has not said it in any front end, so a person told in one is
+/// not told here. Recorded as it is sent, as the terminal records it, because nothing here learns
+/// whether the editor drew it and the alternative is a line said on every prompt.
+fn say_crash_reports_once(shared: &mut Shared, session: &str) {
+    if !bravebot_backtrace::notice_due() {
+        return;
+    }
+    bravebot_backtrace::notice_given();
+    say(shared, session, bravebot_i18n::t!(crash_reports_notice));
+}
+
 /// Put a bridge question to the editor, or refuse it where it cannot be put.
 fn question(shared: &mut Shared, session: &str, name: &str, data: &Value) {
     let Some(request) = data["request"].as_u64() else {
@@ -1048,6 +1065,7 @@ fn run_text(data: &Value) -> Option<String> {
             summary: text_of(data, "summary"),
             steps: &steps,
             writes: &strings(&data["shownWrites"]),
+            stdin: data["stdin"].as_str(),
             confinement: confinement.as_ref(),
             ambient: &ambient_of(data)?,
             releases_private: data["releasesPrivate"].as_bool() == Some(true),
@@ -1074,11 +1092,31 @@ fn vet_text(data: &Value) -> String {
 }
 
 fn tools_text(data: &Value) -> String {
-    let arguments: Vec<Vec<String>> = data["tools"]
+    let choices: Vec<Vec<(String, Vec<String>)>> = data["tools"]
         .as_array()
         .into_iter()
         .flatten()
-        .map(|tool| strings(&tool["arguments"]))
+        .map(|tool| {
+            tool["arguments"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|argument| {
+                    (
+                        text_of(argument, "text").to_string(),
+                        strings(&argument["choices"]),
+                    )
+                })
+                .collect()
+        })
+        .collect();
+    let arguments: Vec<Vec<bravebot_approval::Argument<'_>>> = choices
+        .iter()
+        .map(|tool| {
+            tool.iter()
+                .map(|(text, choices)| bravebot_approval::Argument { text, choices })
+                .collect()
+        })
         .collect();
     let tools: Vec<bravebot_approval::Tool<'_>> = data["tools"]
         .as_array()
@@ -1187,6 +1225,7 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
                 text("rule"),
                 check_of(data),
                 text("preview"),
+                hidden_of(data),
             )
             .join("\n"),
         ),
@@ -1510,6 +1549,7 @@ mod tests {
                 summary: &run.summary(),
                 steps: &steps,
                 writes: &writes,
+                stdin: run.stdin.as_deref(),
                 confinement: confinement.as_ref(),
                 ambient: &ambient,
                 releases_private: run.releases_private(),
@@ -1560,6 +1600,20 @@ mod tests {
         assert_eq!(
             run_text(&crate::wire::run_request(1, &run)).as_deref(),
             Some(confined.as_str())
+        );
+
+        // PROMPT-1: a reference the first program is fed is read to the editor as the terminal
+        // reads it, so a field the wire drops from the request shows as a difference.
+        run.stdin = Some("ref:1".to_string());
+        run.plan.stdin = Some(bravebot_core::label::Label::untrusted_public());
+        let fed = as_the_terminal_draws(&run);
+        assert!(
+            fed.contains("it is fed the contents of") && fed.contains("ref:1"),
+            "the fed fixture shows no reference: {fed}"
+        );
+        assert_eq!(
+            run_text(&crate::wire::run_request(1, &run)).as_deref(),
+            Some(fed.as_str())
         );
 
         let mut unknown = data.clone();
@@ -1929,7 +1983,7 @@ mod tests {
                 json!({"plan": "ls", "directory": "/w", "summary": "list", "stages": [
                     {"display": "ls", "resolved": "/bin/ls", "binary": "/bin/ls",
                      "shownBinary": "/bin/ls"}],
-                    "writes": ["raw-out"], "shownWrites": ["out"], "stdin": "file",
+                    "writes": ["raw-out"], "shownWrites": ["out"], "stdin": "ref:1",
                     "releasesPrivate": true,
                     "requestedScopes": ["aws"], "confinement": {"heading": "confined",
                     "directories": ["/raw"], "shownDirectories": ["/w"],
@@ -1971,7 +2025,8 @@ mod tests {
             ),
             (
                 "mcp-tools",
-                json!({"alias": "a", "tools": [{"name": "a:t", "arguments": ["q: string"],
+                json!({"alias": "a", "tools": [{"name": "a:t",
+                    "arguments": [{"text": "q (string)", "choices": ["x", "y"]}],
                     "description": "does it"}], "refused": 1,
                     "vetting": vetting}),
             ),
@@ -2033,6 +2088,36 @@ mod tests {
         );
     }
 
+    /// PROMPT-1, ACP-3, RUN-3: the editor is told the reference the first program is fed, in the
+    /// words the terminal uses and after the files the line writes, and a run fed none is told
+    /// nothing of one. The regression it rejects is a `run_text` that never reads `stdin` from the
+    /// request the wire sends, so a yes to `sh -s` runs a page the editor never named.
+    #[test]
+    fn the_editor_is_told_the_reference_a_run_is_fed() {
+        use bravebot_agent::confirm::RunRequest;
+        use bravebot_core::command::{Pipeline, Stage};
+        let pipeline = Pipeline::new(vec![Stage::new("sh", vec!["-s".into()])]);
+        let mut run = RunRequest::from_pipeline(&pipeline, &["/bin/sh".into()], "/w");
+        run.plan.writes = vec!["/w/out.txt".into()];
+        let unfed = run_text(&crate::wire::run_request(1, &run)).expect("a run reads");
+        assert!(!unfed.contains("it is fed the contents of"), "{unfed}");
+
+        run.stdin = Some("ref:1".to_string());
+        run.plan.stdin = Some(bravebot_core::label::Label::untrusted_public());
+        let fed = run_text(&crate::wire::run_request(1, &run)).expect("a run reads");
+        let rows: Vec<&str> = fed.lines().collect();
+        let sentence = rows
+            .iter()
+            .position(|row| *row == "it is fed the contents of:")
+            .unwrap_or_else(|| panic!("no sentence saying what it is fed: {fed}"));
+        assert_eq!(rows[sentence + 1], "  ref:1", "{fed}");
+        let written = rows
+            .iter()
+            .position(|row| row.contains("out.txt"))
+            .unwrap_or_else(|| panic!("no row for the file: {fed}"));
+        assert!(written < sentence, "{fed}");
+    }
+
     /// PROMPT-1: an editor is shown a question's title and body as words. The title names the file
     /// for a write, a vouch and a credential read, and a name that would draw as nothing, or as
     /// another name, is spelled in it, as it is in the terminal.
@@ -2068,6 +2153,7 @@ mod tests {
                     preview: "a".into(),
                     label: "(U,priv)".into(),
                     truncated: false,
+                    hidden: 0,
                     verdict: bravebot_core::vetting::Verdict::Safe,
                     reason: None,
                     reason_label: None,
@@ -2291,6 +2377,27 @@ mod tests {
         assert!(text.contains(&format!("{bar} ignore this")), "{text}");
     }
 
+    /// SERVERS-8 over ACP: each value an argument takes is a row of its own behind the margin,
+    /// directly under the argument's text, which has none.
+    ///
+    /// A wrong implementation reads the values from the wrong key of the wire form, so the rows
+    /// are not drawn, or draws them without the margin.
+    #[test]
+    fn the_values_an_argument_takes_are_drawn_behind_the_margin_for_an_editor() {
+        let bar = bravebot_approval::QUARANTINE_BAR;
+        let (_, _, text) = shown("mcp-tools", every_question()[9].1.clone());
+        let rows: Vec<&str> = text.lines().collect();
+        let at = rows
+            .iter()
+            .position(|row| *row == "    q (string)")
+            .unwrap_or_else(|| panic!("the argument has no row of its own: {text}"));
+        assert_eq!(
+            rows[at + 1..at + 3],
+            [format!("{bar} x"), format!("{bar} y")],
+            "{text}"
+        );
+    }
+
     /// OUTPUT-1: an editor's yes releases every byte of the output to the planner, so the
     /// question it is shown holds every line of it. A question showing the head and counting the
     /// rest would have the person vouch for lines that never reached their screen.
@@ -2376,9 +2483,21 @@ mod tests {
                 label: None,
                 reason_label: None,
             };
+            let vouch = bravebot_agent::confirm::VouchRequest {
+                path: "notes.md".to_string(),
+                rule: "/work/notes.md".to_string(),
+                preview: text.to_string(),
+                label: String::new(),
+                truncated: false,
+                hidden,
+                verdict: bravebot_core::vetting::Verdict::Safe,
+                reason: None,
+                reason_label: None,
+            };
             for (stem, wire) in [
                 ("output", crate::wire::output_request(4, &output)),
                 ("vet", crate::wire::vet_request(5, &vet)),
+                ("vouch", crate::wire::vouch_request(6, &vouch)),
             ] {
                 let (_, _, shown) = shown(stem, wire);
                 let rows: Vec<&str> = shown.lines().collect();

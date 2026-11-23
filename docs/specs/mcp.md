@@ -181,6 +181,13 @@ server-sent events is unwrapped with the last payload winning.
 
 The text of every failure a server can cause is structure this process chose or the protocol
 numbered: the tool a call was made to, the method that was put, and the code a rejection carries.
+Where a failure is reported outside a call, such as a handshake or a listing, that text is shown
+to the person watching. The diagnostic log records only which kind of failure it was. The sentence
+a planner is told when a server replied and the reply is not a result is one of two sentences this
+process wrote, chosen by which kind of reply it was (a JSON-RPC rejection, or a reply this client
+cannot use), and it holds the name of the tool the planner called and nothing else. A code a server
+chose, an HTTP status it answered with and a byte count of its reply are numbers the server
+picked, so none of them is in it.
 
 A tool that ran and reported failure also carries the server's account of why, as labelled
 content, and reading that account takes the release that puts content on a screen, so it reaches
@@ -203,12 +210,14 @@ where the caller launching the server sends it. Every front end sends it nowhere
 is never read by this process, so it reaches no message the planner is sent. The two streams the
 protocol runs over are pipes whatever the caller chose.
 
-**A known cost.** A server that fails for a reason only its own sentence gives reports a code and
-a method and nothing else, and a reply this client rejects reports which kind of malformed it was
-and not where. Carrying either under a label instead would put it behind the release a tool
-result's account is behind, where nobody is watching a handshake or a tool listing. A server's own
-diagnostics are discarded as well, so a server that fails says only what its failure's code and
-method say.
+**A known cost.** A server that fails for a reason only its own sentence gives reports, outside a
+call, a code and a method and nothing else, and a reply this client rejects reports which kind of
+malformed it was and not where. Carrying either under a label instead would put it behind the
+release a tool result's account is behind, where nobody is watching a handshake or a tool listing.
+A server's own diagnostics are discarded as well, so a server that fails outside a call says only
+what its failure's code and method say. The sentence a call's failure puts in front of the planner
+leaves the code out, so a code a server chose is read only where a failure is reported before any
+call, such as a handshake or a listing.
 
 `verified-by: bravebot_mcp::lib::a_failing_tools_detail_stays_out_of_the_error_message`
 `verified-by: bravebot_mcp::lib::a_server_failure_reports_the_method_and_the_code`
@@ -219,7 +228,15 @@ method say.
 `verified-by: bravebot_mcp::http::a_tool_level_error_is_reported_as_a_failure`
 `verified-by: bravebot_mcp::http::a_server_failure_names_the_method_and_not_the_servers_words`
 `verified-by: bravebot_mcp::http::a_rejected_reply_names_what_was_read_and_not_the_servers_words`
+`verified-by: bravebot_agent::mcp::a_reply_that_is_not_a_result_is_told_in_one_of_two_fixed_sentences`
+`verified-by: bravebot_agent::mcp::a_code_or_a_status_a_server_chose_never_reaches_the_planner_over_http`
+`verified-by: bravebot_agent::mcp::a_code_a_server_chose_never_reaches_the_planner_over_stdio`
+`verified-by: bravebot_agent::mcp::a_byte_count_a_server_chose_never_reaches_the_planner_over_http`
+`verified-by: bravebot_agent::mcp::a_line_a_local_server_wrote_that_cannot_be_read_is_told_in_the_fixed_sentence`
 `verified-by: bravebot_mcp::stdio::a_servers_diagnostics_go_where_its_caller_sent_them`
+`verified-by: bravebot_cli::running::a_session_in_lines_shows_nothing_a_servers_stderr_writes`
+`verified-by: bravebot_cli::running::a_one_shot_run_shows_nothing_a_servers_stderr_writes`
+`verified-by: bravebot_sandbox::openshell::a_discarded_stderr_is_the_null_device_for_the_program_in_the_sandbox`
 
 <a id="MCP-9"></a>
 ### MCP-9: a stdio server is started with none of this process's environment
@@ -307,7 +324,7 @@ content is taken, joined in order as a tool result's text is (MCP-6), and a pict
 not taken. A result with no text content, one
 of pictures and embedded resources alone, is a failure and not an empty prompt (MCP-5). A rejection
 is reported as the method and the code, and a reply this client will not parse as what was being
-read (MCP-8).
+read (MCP-8). The planner is not told that code (MCP-8).
 
 Nobody is asked before the request. The line that runs the prompt is the person's own and holds the
 arguments, which are what the server is sent. Choosing to run a prompt does not vouch for what it

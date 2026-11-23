@@ -39,8 +39,6 @@ use entry::JOB_ROW_LINES;
 use vi::{Change, Inserting, Marked, TypedOver, Yanked};
 
 #[cfg(test)]
-use accounts::apportion;
-#[cfg(test)]
 use attachments::preview_of_dropped;
 #[cfg(test)]
 use entry::DELEGATE_KEPT;
@@ -420,6 +418,16 @@ pub struct Session {
     /// The keys the Sessions screen answers (SCREEN-14), and what was refused when they were read.
     sessions_keys: crate::sessions_keys::SessionsKeys,
     sessions_keys_refused: Vec<crate::sessions_keys::Refused>,
+    /// Whether this terminal reports keys the disambiguation protocol's way (INPUT-48), which
+    /// decides whether a chord on Escape can arrive at all.
+    ///
+    /// A fact about the terminal rather than about the session, answered once at startup the way
+    /// [`Self::ctrl_enter_arrives`] is, and set before a settings file's chords are read. True on a
+    /// session nobody asked, so a test reads the chords it wrote without a terminal to ask.
+    keys_disambiguated: bool,
+    /// The chords a settings file asked for that this terminal cannot send, kept to be said at
+    /// startup (INPUT-32).
+    undeliverable_chords: Vec<crate::keybindings::Undeliverable>,
     /// How many rows one mouse wheel event moves the view by.
     ///
     /// A preference about the person's terminal rather than about the session, read once at startup
@@ -1205,6 +1213,9 @@ pub struct Session {
     /// Read from `~/.bravebot` at startup and rewritten when `/model` picks one, so the choice outlives
     /// the session that made it and applies in every directory.
     model: Option<String>,
+    /// Whether `model` was picked for this session only (`/model session`), so it is not the one
+    /// the next session opens on. Set by that pick and cleared by a pick that is recorded.
+    model_is_for_this_session: bool,
     /// The model the turn in flight was begun with.
     ///
     /// `/model` is carried out while a turn runs and changes `model` for the turn after, so what the
@@ -1217,8 +1228,12 @@ pub struct Session {
     ///
     /// Read from `~/.bravebot` at startup and rewritten when `/effort` picks one, the same as the
     /// model: how hard to think is a preference about the work rather than a property of a
-    /// checkout.
+    /// checkout. A level chosen with `/effort session` is held here and written nowhere.
     effort: Option<Effort>,
+    /// Whether `effort` was chosen for this session only (`/effort session`), so it is not the
+    /// level the next session opens on. Set by that choice and cleared by a choice that is
+    /// recorded, by `--effort` and by settling the level from the files.
+    effort_is_for_this_session: bool,
     /// Whether the model in force reads the effort level, as its roster row stated.
     ///
     /// True until a listing says otherwise, so a session that has never reached one sends what the
@@ -1416,6 +1431,8 @@ impl Session {
             bindings: crate::keybindings::Keybindings::default(),
             sessions_keys: crate::sessions_keys::SessionsKeys::default(),
             sessions_keys_refused: Vec::new(),
+            keys_disambiguated: true,
+            undeliverable_chords: Vec::new(),
             wheel_rows: WHEEL_ROWS,
             mouse: true,
             context_menu: true,
@@ -1592,9 +1609,11 @@ impl Session {
             said: Vec::new(),
             started: None,
             model: None,
+            model_is_for_this_session: false,
             turn_model: None,
             model_labels: Vec::new(),
             effort: None,
+            effort_is_for_this_session: false,
             model_reads_effort: true,
             breakpoints_given_up: false,
             awaited_listing: None,
@@ -2252,6 +2271,18 @@ impl Session {
         self.transcript.push(Entry::assistant(text, Vec::new()));
     }
 
+    /// Record an answer released for the screen alone, as [`Session::narrate`] records a reply,
+    /// and mark the entry so an export does not carry what it said (SESSION-17).
+    pub fn narrate_displayed_only(&mut self, text: impl Into<String>) {
+        let before = self.transcript.len();
+        self.narrate(text);
+        if self.transcript.len() > before
+            && let Some(entry) = self.transcript.last_mut()
+        {
+            entry.displayed_only = true;
+        }
+    }
+
     /// What a command printed, kept for the view.
     ///
     /// Appended rather than attached to a line, so the third command is where the view expects it
@@ -2355,6 +2386,34 @@ impl Session {
                 });
             }
         }
+    }
+
+    /// Show the answer a manifest run ended with, behind the quarantine bar, as an entry of its
+    /// own.
+    ///
+    /// Not [`Session::show`], which attaches to the last call's line and would put the answer
+    /// under a step; and not an assistant entry, which draws markdown, link marks and copy words,
+    /// and which `/copy`, `/open` and an export take for the assistant's own words. The entry is
+    /// `Entry::system("")` with `shown` set: its text is empty, so an export writes only the
+    /// quarantine note for the block and none of the answer. The whole text is held: the block is
+    /// the only place the person can read it, so nothing is left out. A text with no lines gives a
+    /// block with a heading and no body.
+    ///
+    /// The origin is a sentence of the catalog and the label is the answer's own, so the heading
+    /// and an export's note hold nothing the text wrote.
+    pub fn show_a_runs_answer(&mut self, label: String, text: &str) {
+        let preview: Vec<String> = text.lines().map(str::to_string).collect();
+        self.hold(Entry {
+            shown: Some(Shown {
+                origin: t!(manifest_run_result).to_string(),
+                as_the_planner_had_it: None,
+                reach: bravebot_agent::report::Reach::NotThePlanner,
+                label,
+                lines: preview.len(),
+                preview,
+            }),
+            ..Entry::system("")
+        });
     }
 
     /// Replace the call in flight with how it turned out.
@@ -3322,7 +3381,8 @@ impl Session {
             0 => text,
             count => format!("{}\n{text}", t!(transcript_earlier_lines, count = count)),
         };
-        self.transcript.push(Entry::output(text));
+        self.transcript
+            .push(Entry::output_for_the_screen_alone(text));
         self.back_to_the_tail();
         true
     }
@@ -3390,18 +3450,25 @@ impl Session {
     /// command captured lands when it finishes rather than when anybody asks to see it, and a person
     /// who opened a view while it ran is reading that view.
     pub fn printed(&mut self, text: &str) {
-        if text.trim().is_empty() {
-            self.transcript.push(Entry::system(t!(session_no_output)));
-        } else {
-            self.transcript.push(Entry::output(text.trim_end()));
-        }
-        self.back_to_the_tail();
+        self.print(text, Entry::output);
     }
 
     /// Show what a command run privately printed, with a line saying it went no further.
+    ///
+    /// The output is for the screen alone, so an export does not write it (SESSION-17).
     pub fn printed_privately(&mut self, text: &str) {
-        self.printed(text);
+        self.print(text, Entry::output_for_the_screen_alone);
         self.transcript.push(Entry::system(t!(shell_kept_private)));
+        self.back_to_the_tail();
+    }
+
+    /// What a command printed as an entry made by `output`, or the note that it printed nothing.
+    fn print(&mut self, text: &str, output: fn(String) -> Entry) {
+        if text.trim().is_empty() {
+            self.transcript.push(Entry::system(t!(session_no_output)));
+        } else {
+            self.transcript.push(output(text.trim_end().to_string()));
+        }
         self.back_to_the_tail();
     }
 
@@ -7054,6 +7121,7 @@ mod tests {
         /// it lands.
         fn quarantined(origin: &str) -> Shown {
             Shown {
+                as_the_planner_had_it: None,
                 origin: origin.to_string(),
                 reach: bravebot_agent::report::Reach::NoModel,
                 label: "(U,priv)".to_string(),
@@ -12597,22 +12665,6 @@ mod tests {
         );
     }
 
-    /// The `/context` rows must add up to the measured total, so each share is a whole number
-    /// and the rounding remainders are handed out rather than dropped.
-    #[test]
-    fn a_count_is_apportioned_in_whole_numbers_that_add_up_to_it() {
-        assert_eq!(apportion(10, &[1, 1, 1]), vec![4, 3, 3]);
-        assert_eq!(apportion(777, &[0, 300, 0, 700]).iter().sum::<u64>(), 777);
-        assert_eq!(apportion(100, &[0, 0]), vec![0, 0]);
-        assert_eq!(apportion(0, &[5, 5]), vec![0, 0]);
-        assert_eq!(
-            apportion(u64::MAX, &[u64::MAX, u64::MAX])
-                .iter()
-                .sum::<u64>(),
-            u64::MAX
-        );
-    }
-
     /// The count is for the session, not the last turn: the question it answers is what the
     /// whole conversation has cost.
     #[test]
@@ -14185,6 +14237,7 @@ mod tests {
             );
             s.landed(Landing::Reserved);
             s.show(Shown {
+                as_the_planner_had_it: None,
                 origin: "task.txt".into(),
                 reach: Reach::NotThePlanner,
                 label: "L1".into(),
@@ -14213,6 +14266,7 @@ mod tests {
 
             s.landed(Landing::Reserved);
             s.show(Shown {
+                as_the_planner_had_it: None,
                 origin: "quarantine.txt".into(),
                 reach: Reach::NotThePlanner,
                 label: "L1".into(),
@@ -14262,6 +14316,42 @@ mod tests {
                 "the bound did not cut the last call"
             );
             assert_eq!(last.total, 500);
+        }
+
+        /// SCROLL-10: a session holds 20000 lines across all calls and no more. The test above sizes
+        /// its loop from the constant, so it passes for any bound; this one fixes the number.
+        #[test]
+        fn a_session_holds_twenty_thousand_lines_for_expansion_and_no_more() {
+            let mut s = Session::new("kernel-enforced");
+            let mut call = |lines: usize| {
+                s.finish_activity(Activity::running("Read", "f").done("lines"));
+                s.returned(Returned {
+                    lines: vec!["glimpse".to_string()],
+                    total: lines,
+                    from_the_end: false,
+                    whole: vec!["a".to_string(); lines],
+                });
+                s.transcript.last().unwrap().returned.clone().unwrap()
+            };
+
+            // Forty calls of 500 lines fill the bound exactly, and the one that reaches 20000 is
+            // still held in full.
+            for number in 1..=40 {
+                let held = call(500);
+                assert_eq!(
+                    held.whole.len(),
+                    500,
+                    "call {number} of 500 lines was cut before the session held 20000"
+                );
+            }
+
+            // One more call is past the bound: it keeps the glimpse and still counts its lines.
+            let past = call(2);
+            assert_eq!(
+                past.whole, past.lines,
+                "a call past 20000 lines kept its whole result"
+            );
+            assert_eq!(past.total, 2);
         }
 
         /// VIEW-24: a glimpse is of the call that just finished, so it goes under that call and
@@ -14444,6 +14534,19 @@ mod tests {
             );
         }
 
+        /// A reply that ran out of words mid-thought is drawn whole once it is finished, where the
+        /// same text arriving draws nothing (VIEW-18). A finished reply read as one still being
+        /// written would leave a blank entry where the answer should be.
+        #[test]
+        fn a_finished_reply_that_stopped_mid_thought_is_drawn_whole() {
+            let mut s = working();
+            s.complete("<think>the user wants the config", Vec::new(), 0);
+            assert_eq!(
+                s.transcript.last().expect("an entry").text,
+                "<think>the user wants the config"
+            );
+        }
+
         /// And the same for what a round says on its way to the next call.
         #[test]
         fn a_round_that_thought_before_speaking_records_only_what_it_said() {
@@ -14463,6 +14566,21 @@ mod tests {
             let before = s.transcript.len();
             s.narrate("<think>nothing worth saying yet</think>");
             assert_eq!(s.transcript.len(), before);
+        }
+
+        /// A round that ran out of words mid-thought before its call is drawn whole, as a finished
+        /// reply is (VIEW-18). A round's narration read as one still being written would be
+        /// dropped as empty, and the turn would read as having said nothing before the call.
+        #[test]
+        fn a_round_that_stopped_mid_thought_is_drawn_whole() {
+            let mut s = working();
+            let before = s.transcript.len();
+            s.narrate("<think>the user wants the config");
+            assert_eq!(s.transcript.len(), before + 1, "the round left no entry");
+            assert_eq!(
+                s.transcript.last().expect("an entry").text,
+                "<think>the user wants the config"
+            );
         }
 
         /// What a request that was thrown away had written is not part of the reply that
@@ -15219,6 +15337,52 @@ mod tests {
             s.replay(&conversation, "a title", &recalled);
             assert!(s.transcript.iter().any(|e| e.text == "The answer"));
             assert!(!s.transcript.iter().any(|e| e.text.contains("weighing")));
+        }
+
+        /// A reply the record holds that ran out of words mid-thought is drawn whole on a resume,
+        /// as it was when it finished (VIEW-18). A resume that read it as a reply still being
+        /// written would drop it as empty.
+        #[test]
+        fn a_resumed_reply_that_stopped_mid_thought_is_drawn_whole() {
+            let transcript = resumed(
+                vec![
+                    Message::user("question"),
+                    Message::assistant("<think>weighing it up"),
+                ],
+                &BTreeMap::new(),
+            );
+            let said: Vec<&str> = transcript
+                .iter()
+                .filter(|entry| entry.speaker == Speaker::Assistant)
+                .map(|entry| entry.text.as_str())
+                .collect();
+            assert_eq!(said, vec!["<think>weighing it up"]);
+        }
+
+        /// The record with no turn history is replayed on a path of its own, and a reply that ran
+        /// out of words mid-thought is drawn whole there too (VIEW-18).
+        #[test]
+        fn a_legacy_resumed_reply_that_stopped_mid_thought_is_drawn_whole() {
+            let mut conversation = Conversation::new();
+            conversation.push(Message::user("question"));
+            conversation.push(Message::assistant("<think>weighing it up"));
+            let recalled = bravebot_session::sessions::Recalled {
+                history: None,
+                turns: None,
+                trails: BTreeMap::new(),
+                todos: BTreeMap::new(),
+                asides: Vec::new(),
+                started: None,
+            };
+            let mut s = session();
+            s.replay(&conversation, "a title", &recalled);
+            let said: Vec<&str> = s
+                .transcript
+                .iter()
+                .filter(|entry| entry.speaker == Speaker::Assistant)
+                .map(|entry| entry.text.as_str())
+                .collect();
+            assert_eq!(said, vec!["<think>weighing it up"]);
         }
 
         /// The audit is written beside the record, so what a gate decided two sessions ago is on

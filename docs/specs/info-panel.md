@@ -9,25 +9,29 @@ governs:
   - crates/tui/src/pointer.rs
   - crates/tui/src/state/references.rs
   - crates/agent/src/links.rs
+  - crates/agent/src/title.rs
+  - crates/ui-bridge/src/window_title.rs
+  - ui/src/shared/window-title.ts
+  - ui/src/renderer/window-title.ts
 documented-by: docs/website/docs/using/sessions.md
 ---
 
 ## Scope
 
 What lets somebody running many sessions at once tell which terminal holds which: the terminal's
-title, and the info panel beside the transcript, which holds the session's name, its goal, the
+title, the desktop app's window title ([PANEL-19](#PANEL-19)), and the info panel beside the transcript, which holds the session's name, its goal, the
 issues and pull requests it is for and has met, the model and effort it runs on, its context and
 cache, its token total, the language servers and MCP servers it has started, and its plan, and the
 checklist `/sidebar` opens that turns each section on or off ([PANEL-17](#PANEL-17)). A session
 gets its own links from `/issue` and `/pr`, from `--issue` and `--pr`, and from the planner's
-[`set_link`](tools/set-link.md) for an address the person typed. It lists the other issues and pull
+[`set_link`](tools/set-link.md) for an address the person typed, and, where it has none, from the
+planner's own commands ([PANEL-18](#PANEL-18)). It lists the other issues and pull
 requests it has met, which [PANEL-16](#PANEL-16) collects from the lines the person typed and from the
 planner's own tool-call arguments. A session does not get its
 links from what `gh pr create` prints. That needs a reader that branches on untrusted run output
 ([RUN-4](tools/run.md#RUN-4)), which is an exception no maintainer has accepted, so it is
-not built ([brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267)). The sections of
-met items are collected without it, and an issue the agent creates with `gh issue create` is listed
-only once a later argument or typed line names its number. How a session
+not built ([brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267)). PANEL-18 reads
+the command the planner wrote and the exit status, and never the output. How a session
 gets its name is [sessions.md](sessions.md), and the keys a settings file can move are
 [INPUT-32](terminal-input.md#INPUT-32). Listing the sessions that keep running after their terminal
 is closed is proposed in [background-sessions.md](background-sessions.md) and not built.
@@ -114,6 +118,7 @@ is back on its default until the file moves the panel too.
 `verified-by: bravebot_tui::persist::the_dragged_width_is_read_back_next_session_and_a_corrupt_one_leaves_36`
 `verified-by: bravebot_tui::persist::a_press_that_closes_the_panel_is_read_back_next_session`
 `verified-by: bravebot_tui::persist::the_sections_turned_off_are_read_back_next_session_and_turning_them_on_replaces_them`
+`verified-by: bravebot_tui::app::a_resumed_session_opens_the_panel_as_the_files_say_and_not_as_the_record_does`
 `verified-by: bravebot_session::store::the_sidebar_file_is_its_trimmed_nonblank_lines_and_nothing_else`
 `verified-by: bravebot_session::store::an_oversize_sidebar_file_is_no_choice_and_one_at_the_bound_is_read`
 `verified-by: bravebot_session::store::a_pipe_where_the_sidebar_file_should_be_is_no_choice_and_holds_nothing_up`
@@ -242,7 +247,18 @@ and the hit rate, and the token total and the two cache rows are not drawn.
    name, as `Sonnet (Bedrock)`, and not by the request name, which for a tier is an inference-profile
    ARN. `/status` draws it the same way and keeps the request name on the line beneath, since an
    error from the service quotes that. A model the configuration does not name is drawn by its
-   request name. The model is the person's
+   request name. A pick made with `/model session` is drawn with a row under the model that says
+   `this session only`, and no other pick, nor the model `--model` named, has that row. The row goes
+   when a later pick is recorded. The effort level in force is drawn the same way: a level chosen with
+   `/effort session` has a row under the effort that says `this session only`, and a level that was
+   recorded, a level `--effort` named and a level the settings file named have none. `/status` says
+   `chosen with /effort session, for this session only` beside such a level, except where a ChatGPT
+   account is sent another level, which `/status` says in the words of
+   [CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10). The row goes when a later level is recorded, and it
+   is not drawn where the level drawn is not the one chosen,
+   which is where a ChatGPT account is sent the level its session began with and not the level
+   chosen. The row is not a click target ([MOUSE-11](mouse.md#MOUSE-11)). A session-only choice of no
+   level draws no effort row, so it has no such row either. The model is the person's
    choice, never the name an endpoint replied with, so a reply
    that names another model changes nothing here. The effort row is left out where the model reads
    none. Both come from the session's settings, so the section is left out while the person has
@@ -286,17 +302,29 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::select::a_link_is_copied_as_the_text_it_shows`
 `verified-by: bravebot_tui::panel::control_characters_in_the_session_section_are_drawn_as_pictures`
 `verified-by: bravebot_tui::panel::a_long_directory_and_branch_keep_their_ends`
+`verified-by: bravebot_session::sessions::the_branch_is_read_when_a_session_starts_resumes_and_moves_and_not_between`
 `verified-by: bravebot_tui::panel::the_session_id_is_drawn_whole_over_two_rows`
 `verified-by: bravebot_tui::panel::the_id_row_follows_whether_the_session_has_a_record`
 `verified-by: bravebot_tui::panel::the_id_rows_count_toward_where_the_context_section_fits`
 `verified-by: bravebot_tui::panel::the_model_section_shows_the_choice_and_the_effort_in_force_and_ignores_a_reply`
 `verified-by: bravebot_tui::panel::the_model_section_names_a_tier_rather_than_the_tail_of_its_arn`
+`verified-by: bravebot_tui::panel::the_info_panel_marks_a_session_only_pick_and_names_the_model_either_way`
+`verified-by: bravebot_tui::panel::the_info_panel_marks_a_session_only_level_and_names_it_either_way`
+`verified-by: bravebot_tui::app::a_level_the_command_line_named_or_the_files_settled_is_not_marked_as_this_sessions`
+`verified-by: bravebot_tui::panel::only_the_drawn_model_and_effort_rows_are_click_targets`
+`verified-by: bravebot_tui::status::the_status_line_names_a_session_only_pick_as_it_names_a_recorded_one`
+`verified-by: bravebot_tui::status::the_status_line_says_a_session_only_level_is_for_this_session_only`
+`verified-by: bravebot_tui::status::on_the_account_a_session_only_level_is_said_to_apply_from_clear_and_not_the_next_session`
+`verified-by: bravebot_tui::app::the_status_of_a_session_names_the_scope_of_a_level_chosen_with_effort_session`
 `verified-by: bravebot_tui::status::the_model_line_names_a_tier_and_keeps_its_arn_beneath`
 `verified-by: bravebot_tui::status::a_name_a_provider_block_chose_is_shown_without_a_service_added`
 `verified-by: bravebot_config::lib::a_request_name_finds_its_entry_in_either_kind_of_account`
 `verified-by: bravebot_tui::panel::the_token_total_is_a_context_row_that_sums_the_session`
 `verified-by: bravebot_agent::turn::the_token_total_moves_while_a_delegate_works_and_counts_it_once`
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
+`verified-by: bravebot_tui::app::a_new_name_reaches_an_open_panel_on_the_next_pass_with_no_key`
+`verified-by: bravebot_tui::app::the_id_on_an_open_panel_follows_a_branch_and_a_clear_on_the_next_pass`
+`verified-by: bravebot_tui::app::the_directory_on_an_open_panel_is_written_from_the_home_directory`
 `verified-by: bravebot_tui::panel::the_files_section_has_the_totals_and_leaves_the_plan_its_rows`
 `verified-by: bravebot_tui::app::tests::herdr::sending_the_first_prompt_gives_the_panel_an_id_before_the_turn_ends`
 `verified-by: bravebot_tui::panel::a_section_turned_off_is_not_drawn_and_no_other_section_goes_with_it`
@@ -397,7 +425,8 @@ says the work is finished reads as work still going.
 Every row the panel draws comes from text the person typed (the session's name, which comes from a
 prompt or a `/rename` ([SESSION-4](sessions.md#SESSION-4)), a goal's condition, and the links given
 with `/issue` and `/pr`, or `--issue` and `--pr`, or recorded by `set_link` for an address the person
-typed ([SETLINK-1](tools/set-link.md#SETLINK-1))), the planner's own `todo_write` rows, the rows of the
+typed ([SETLINK-1](tools/set-link.md#SETLINK-1)), or inferred from the planner's own commands
+([PANEL-18](#PANEL-18))), the planner's own `todo_write` rows, the rows of the
 Pull requests and Issues sections, which are the items [PANEL-16](#PANEL-16) collects from the lines
 the person typed and from the planner's own tool-call arguments once the gate that reads them has said the
 context is trusted; the driver's own counters (the context
@@ -427,6 +456,7 @@ own sentence, and it would be in front of the person on every frame.
 No click on the panel changes this ([MOUSE-33](mouse.md#MOUSE-33)).
 
 `verified-by: bravebot_tui::panel::nothing_a_turn_returned_reaches_the_panel`
+`verified-by: bravebot_tui::panel::nothing_the_session_holds_from_outside_reaches_the_panel`
 `verified-by: bravebot_tui::panel::control_characters_in_a_link_row_are_drawn_as_pictures`
 `verified-by: bravebot_tui::app::a_click_on_any_target_of_the_panel_never_draws_what_a_tool_returned`
 `verified-by: bravebot_tui::panel::a_line_of_the_file_that_names_no_section_is_never_drawn`
@@ -453,7 +483,8 @@ starts none) is refused with them rather than dropping them.
 
 The planner's [`set_link`](tools/set-link.md) gives the session a link under the same check, and
 only for an address that is a whole word of a line the person typed ([SETLINK-1](tools/set-link.md#SETLINK-1)). It
-replaces the link of that kind and is written to the record as `/issue` is.
+replaces the link of that kind and is written to the record as `/issue` is. A link inferred from
+the planner's commands ([PANEL-18](#PANEL-18)) is recorded only while the slot is empty.
 
 `verified-by: bravebot_agent::turn::an_address_the_person_typed_reaches_set_link_and_leaves_the_turn`
 
@@ -475,6 +506,7 @@ the session met opens the address built from the item's validated parts.
 `verified-by: bravebot_tui::app::a_link_with_a_newline_an_escape_or_another_scheme_sets_nothing`
 `verified-by: bravebot_tui::app::a_link_set_mid_turn_is_set_as_it_is_typed`
 `verified-by: bravebot_session::sessions::setting_a_link_neither_makes_nor_gives_up_a_rewind_point`
+`verified-by: bravebot_tui::app::a_link_set_cleared_or_refused_gives_up_no_rewind_point_during_a_turn_or_at_rest`
 `verified-by: bravebot_tui::app::links_from_the_command_line_replace_what_it_names_and_leave_the_other`
 `verified-by: bravebot_tui::app::the_command_line_links_and_prompt_reach_the_session_once_its_record_is_open`
 `verified-by: bravebot_cli::main::issue_and_pr_flags_are_taken_out_and_set_their_own_link`
@@ -510,6 +542,8 @@ A click on a row says which language servers the session has started, as `/lsp` 
 `verified-by: bravebot_tui::panel::each_started_language_server_has_a_row_and_none_leaves_no_heading`
 `verified-by: bravebot_tui::panel::the_plan_gets_the_rows_the_server_sections_leave`
 `verified-by: bravebot_agent::lsp::the_roster_names_the_program_a_turn_started_until_the_set_is_dropped`
+`verified-by: bravebot_lsp::server::the_roster_names_the_servers_in_name_order_whatever_order_they_started_in`
+`verified-by: bravebot_lsp::server::the_roster_keeps_naming_the_running_servers_while_a_question_waits_on_an_approval`
 
 <a id="PANEL-14"></a>
 ### PANEL-14: the MCP servers the session started
@@ -751,6 +785,69 @@ migration.
 `verified-by: bravebot_session::store::the_sidebar_file_is_its_trimmed_nonblank_lines_and_nothing_else`
 `verified-by: bravebot_tui::state_directory::a_recorded_choice_is_readable_only_by_its_owner`
 
+<a id="PANEL-18"></a>
+### PANEL-18: a link is inferred from the command that created the item
+
+A session whose pull request or issue link is empty takes one from the planner's own commands. A
+`run` call whose line is `gh pr create`, `gh issue create` or `pr-fix.py open`, that ran and exited
+with status 0, makes the session wait for an item of that kind. The script is read by its file name,
+so `pr-fix.py` named by a relative path or by an absolute one, which the scripts print, is the same
+step. The first later call whose arguments
+name an item of that kind by its words, with the kind stated and not assumed ([PANEL-16](#PANEL-16)),
+is the session's link of that kind, as the address of that item. A `--help` or `-h` in the same
+command segment is not a creation. A call is read against the creations before it and then, if it
+creates, noted, so the item a creating call names itself (a `Part of` line in its body) is not
+taken. The `pr-fix.py` steps `start`, `continue`, `ci`, `comments`, `check`, `push`, `review` and
+`reply` name the pull request they work on, in `brave/bravebot`, and `open` and `issue` name none,
+since their number is an issue.
+
+An inferred link fills an empty slot and nothing else. It never replaces a link the person gave or
+`set_link` recorded, and it is written to the record as they are. It is read only where
+[PANEL-16](#PANEL-16) reads, so a context that has met something untrusted infers none, and a
+front end that keeps no links infers none.
+
+**Why.** A session that opens a pull request by command leaves the session with no link, though the
+planner wrote the number in every later command. The inference reads the planner's own words and the
+exit status, which the driver made. It reads no output, so what a program printed cannot choose a
+link ([RUN-4](tools/run.md#RUN-4), [PANEL-11](#PANEL-11)).
+
+`verified-by: bravebot_agent::links::a_line_that_creates_an_item_is_read_from_its_words_and_help_creates_nothing`
+`verified-by: bravebot_agent::links::a_pr_fix_step_names_the_pull_request_it_works_on_and_open_names_none`
+`verified-by: bravebot_agent::links::the_first_item_of_the_created_kind_a_later_call_names_is_the_link_and_only_once`
+`verified-by: bravebot_agent::links::a_reference_named_before_any_creation_is_not_kept_for_later`
+`verified-by: bravebot_agent::references::the_pull_request_a_clean_creation_is_followed_by_becomes_the_sessions_link`
+`verified-by: bravebot_session::sessions::an_inferred_link_fills_an_empty_slot_and_never_replaces_one`
+
+<a id="PANEL-19"></a>
+### PANEL-19: the desktop window's title names the session on screen and says what it is doing
+
+The desktop app's main window is titled `Bravebot · {name}` for the session on screen, and the bare
+`Bravebot` when that session has no name or no session is open. The markers of
+[PANEL-15](#PANEL-15) stand in front of it: `✦` while a turn runs, `[!]` while a question or an
+approval in the transcript waits for the person, and none otherwise, a failed turn included. The
+state is the same one the sessions list draws as the row's dot, taken from the session's running
+flag and its open prompts and never from what the turn produced. As in [PANEL-2](#PANEL-2), control
+characters in the name are replaced by visible ones and the title is cut to 60 characters, marker
+included, with an ellipsis where it was cut; the desktop counts characters, not terminal columns.
+The text is built by the same Rust code that builds the terminal's title (`bravebot_agent::title`),
+which the window reaches through the bridge's `window.title`; the window decides only the state.
+The title follows the session on screen: switching sessions in the sidebar rewrites it, and a
+session in the background does not change it. It is written when its text changes and not again
+while the text stays the same, and an answer for a session no longer on screen is not written. The
+window owns its title, so nothing is pushed or popped as in [PANEL-3](#PANEL-3), and the
+`terminalTitle` setting of [PANEL-4](#PANEL-4) does not apply to it.
+
+**Why.** Several app windows, Mission Control and the Linux taskbar show only the window title, so
+a fixed title cannot tell the windows apart. The tests of the state rule and of when the title is
+written are node tests in `ui/scripts/window-title.test.mjs`, which this check cannot cite.
+
+`verified-by: bravebot_ui_bridge::window_title::the_window_is_titled_bravebot_and_the_session_with_its_marker`
+`verified-by: bravebot_ui_bridge::window_title::a_window_with_no_session_name_is_the_bare_prefix`
+`verified-by: bravebot_ui_bridge::window_title::a_long_title_is_cut_to_sixty_characters_marker_included`
+`verified-by: bravebot_ui_bridge::window_title::a_name_outside_the_basic_plane_is_cut_by_character`
+`verified-by: bravebot_ui_bridge::window_title::control_characters_in_a_name_do_not_reach_the_window`
+`verified-by: bravebot_agent::title::control_and_invisible_characters_in_a_name_are_made_visible`
+
 ## Known costs
 
 - **A terminal that is not asked shows no resize pointer.** Over the border it draws its own pointer,
@@ -766,9 +863,11 @@ migration.
   and pickers read their own events and none of them reads the pointer, so a pointer on the border
   when one opens keeps its shape until the prompt closes and the pointer next moves.
 
-- **An issue the agent creates appears only when a later argument or typed line names its number
+- **An issue the agent creates is listed only when a later argument or typed line names its number
   ([PANEL-16](#PANEL-16)).** The address `gh issue create` prints is a program's output and is never
   read, so the list does not hold it until something the person or the planner wrote names it.
+  The session's own link is inferred the same way ([PANEL-18](#PANEL-18)), from the first later
+  call that names an item of the created kind, which may be an item other than the created one.
 
 - **A command a rule then refuses still counts ([PANEL-16](#PANEL-16)).** The command is read where
   the planner's argument is read, before the checks that refuse it, so the items it names are listed

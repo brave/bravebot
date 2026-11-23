@@ -299,6 +299,7 @@ pub const CODE_SELECTORS: &[(&str, Names)] = &[
     selectors::PYTHONUSERBASE,
     selectors::PYTHONPYCACHEPREFIX,
     selectors::PYTHONHOME,
+    selectors::PYTHONEXECUTABLE,
     // Python joins this to `sys.prefix`, so a real value is a relative name such as `lib64` and a
     // relative path that climbs out of the prefix selects a standard library elsewhere.
     ("PYTHONPLATLIBDIR", Names::Options),
@@ -890,12 +891,24 @@ pub mod selectors {
     pub const PYTHONUSERBASE: (&str, Names) = ("PYTHONUSERBASE", Names::Directory);
     /// The tree Python reads compiled modules from, which can hold an unchecked `.pyc`.
     pub const PYTHONPYCACHEPREFIX: (&str, Names) = ("PYTHONPYCACHEPREFIX", Names::Directory);
+    /// `sys.executable`. CPython reads a `pyvenv.cfg` beside or above this path and runs the
+    /// `.pth` files of the venv it names, so a bare name is kept (the reduced `PATH` resolves
+    /// it to no venv) and an absolute or relative path is judged as [`Names::Program`] judges
+    /// one: kept only outside every directory a stage may write.
+    pub const PYTHONEXECUTABLE: (&str, Names) = ("PYTHONEXECUTABLE", Names::Program);
     /// Directories GLib scans for modules and loads each library of, in `gio open` and `gio info`.
     pub const GIO_EXTRA_MODULES: (&str, Names) = ("GIO_EXTRA_MODULES", Names::Directories);
     /// The one directory GLib scans for modules in addition to its compiled-in one.
     pub const GIO_MODULE_DIR: (&str, Names) = ("GIO_MODULE_DIR", Names::Directory);
     /// Directories Qt loads plug-ins from.
     pub const QT_PLUGIN_PATH: (&str, Names) = ("QT_PLUGIN_PATH", Names::Directories);
+    /// The directory `gio open` finds the session bus in (`$XDG_RUNTIME_DIR/bus`) when
+    /// `DBUS_SESSION_BUS_ADDRESS` is not set. A service a stage runs on a socket it can create
+    /// answers as the bus, so the directory is judged by where it is.
+    pub const XDG_RUNTIME_DIR: (&str, Names) = ("XDG_RUNTIME_DIR", Names::Directory);
+    /// The address `gio open` connects to for the session bus, judged as a bus address.
+    pub const DBUS_SESSION_BUS_ADDRESS: (&str, Names) =
+        ("DBUS_SESSION_BUS_ADDRESS", Names::BusAddress);
 }
 
 /// Take each variable in `selectors` off `command` unless [`may_be_run`] accepts the value `held`
@@ -2694,6 +2707,7 @@ mod tests {
             "PYTHONUSERBASE",
             "PYTHONPYCACHEPREFIX",
             "PYTHONHOME",
+            "PYTHONEXECUTABLE",
             "BASH_ENV",
             "DEVELOPER_DIR",
             "GIT_EXEC_PATH",
@@ -3082,24 +3096,32 @@ mod tests {
         ));
     }
 
-    /// The regression it rejects: a table row typed as a program, whose bare name is kept because
-    /// the reduced `PATH` resolves it, so `LD_PRELOAD=x.so` reaches a program that the loader then
-    /// searches for the library. A relative path, a bare name, an empty value and a path that names
-    /// nothing yet are each read from, or made in, a directory a stage writes, so every row of the
-    /// table is tried with each.
+    /// The regression it rejects: a relative path, an empty value and a path that names nothing
+    /// yet are each read from, or made in, a directory a stage writes, so every row of the table
+    /// is tried with each. A bare name is the same for every row but one: `PYTHONEXECUTABLE` is
+    /// [`Names::Program`], whose bare name the reduced `PATH` resolves, leaving out the
+    /// directories a stage may write, so that row's bare name is kept rather than removed.
     #[cfg(unix)]
     #[test]
     fn a_checked_start_removes_each_generic_name_whose_value_is_relative_empty_or_missing() {
         let (session, safe, _planted, _genuine) = planted_and_genuine("t2r");
         let missing = safe.join("not-made-yet");
 
-        for (name, _) in CODE_SELECTORS {
+        for (name, names) in CODE_SELECTORS {
             for value in [
                 Path::new("lib/x.so"),
                 Path::new("x.so"),
                 Path::new(""),
                 missing.as_path(),
             ] {
+                if *names == Names::Program && value == Path::new("x.so") {
+                    assert!(
+                        !checked(name, value, &session),
+                        "{name}={} was removed",
+                        value.display()
+                    );
+                    continue;
+                }
                 assert!(
                     checked(name, value, &session),
                     "{name}={} was kept",

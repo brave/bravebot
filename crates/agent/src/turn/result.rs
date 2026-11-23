@@ -312,6 +312,10 @@ pub struct Outcome {
     /// A turn is several requests when the model calls tools, and each re-sends the whole
     /// history, so one round's count understates what the turn actually cost.
     pub tokens: u64,
+    /// Of [`Outcome::tokens`], what a delegate's token budget counts: the total less the checks
+    /// made over content nobody vouched for and the processors' calls, which were never added to it
+    /// (DELEGATE-29).
+    pub budgeted_tokens: u64,
     /// Of those, the ones the model wrote.
     ///
     /// Kept apart from the total because it answers a different question: the total is dominated by

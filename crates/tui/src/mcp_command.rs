@@ -5,7 +5,8 @@
 //! the alias, and what is started is what the person's own declarations say it is, through the road
 //! a session takes as it opens, so a question that road asks is asked here and by the same asker.
 
-use bravebot_agent::mcp::Offering;
+use bravebot_agent::mcp::{Offering, shown};
+use bravebot_agent::plugin_servers::PluginServers;
 use bravebot_agent::servers::{self, Asker, Asking, Machine};
 use bravebot_config::Settings;
 use bravebot_i18n::t;
@@ -109,9 +110,10 @@ fn run_with<A: Asker + ?Sized>(
     ways: &Ways<'_>,
 ) {
     let machine = ways.machine;
+    let state = machine.home.directory.as_deref();
     let words: Vec<&str> = argument.split_whitespace().collect();
     match words.as_slice() {
-        words if lists(words) => list(session, settings),
+        words if lists(words) => list(session, settings, state),
         [word] if *word == MCP_RECONNECT => {
             reconnect(session, settings, root, None, asking, asker, machine)
         }
@@ -124,14 +126,16 @@ fn run_with<A: Asker + ?Sized>(
         [word, pattern]
             if *word == MCP_DISABLE && bravebot_config::mcp::is_alias_pattern(pattern) =>
         {
-            disable_matching(session, settings, pattern)
+            disable_matching(session, settings, state, pattern)
         }
         [word, pattern]
             if *word == MCP_REMOVE && bravebot_config::mcp::is_alias_pattern(pattern) =>
         {
             remove_matching(session, settings, root, pattern, ways)
         }
-        [word, alias] if *word == MCP_DISABLE => disable(session, settings, alias),
+        [word, alias] if *word == MCP_DISABLE => {
+            disable(session, &requested(settings, state), alias)
+        }
         [word, alias] if *word == MCP_REMOVE => remove(session, root, alias, ways),
         _ => session.note(t!(mcp_command_usage)),
     }
@@ -151,15 +155,61 @@ pub(crate) fn only_lists(argument: &str) -> bool {
     lists(&argument.split_whitespace().collect::<Vec<_>>())
 }
 
-/// The aliases this session requests, each once.
-fn requested(settings: &Settings) -> Vec<String> {
+/// What the settings and the installed plugins request, read once.
+struct Wanted {
+    /// The aliases the settings request, each once.
+    settings: Vec<String>,
+    /// The aliases of the servers the enabled plugins carry that the settings do not request, each
+    /// once. A session requests them as it requests its own (PLUGIN-7), so `reconnect` and `disable`
+    /// accept them and `list` names them.
+    plugins: Vec<String>,
+    /// The installed plugins that are turned off. Nothing of them was read (PLUGIN-11), so no server
+    /// of theirs is among `plugins`.
+    off: Vec<String>,
+}
+
+impl Wanted {
+    /// The settings' requests, and the plugins under the state directory `state` read once.
+    ///
+    /// Only the state directory is read for the plugins, so no checkout adds to them, and nothing is
+    /// read where there is none or in a safe session, as at a session's opening.
+    fn read(settings: &Settings, state: Option<&Path>) -> Self {
+        let asked = servers::requested_by(settings);
+        let carried = state.map(PluginServers::read).unwrap_or_default();
+        Self {
+            settings: once(&asked),
+            plugins: once(&carried.requested(&asked)),
+            off: carried.disabled().to_vec(),
+        }
+    }
+
+    /// Every alias requested, each once.
+    fn aliases(&self) -> Vec<String> {
+        self.settings.iter().chain(&self.plugins).cloned().collect()
+    }
+}
+
+/// The aliases among `asked`, each once, in the order they were asked.
+fn once(asked: &[(std::path::PathBuf, String)]) -> Vec<String> {
     let mut aliases: Vec<String> = Vec::new();
-    for (_, alias) in servers::requested_by(settings) {
-        if !aliases.contains(&alias) {
-            aliases.push(alias);
+    for (_, alias) in asked {
+        if !aliases.contains(alias) {
+            aliases.push(alias.clone());
         }
     }
     aliases
+}
+
+/// The aliases this session requests, each once: those the settings request and then those of the
+/// servers the enabled plugins carry.
+fn requested(settings: &Settings, state: Option<&Path>) -> Vec<String> {
+    Wanted::read(settings, state).aliases()
+}
+
+/// The aliases the settings request, each once, which a removal is limited to: a plugin's server is
+/// not declared in `mcp.json`, and `/plugin remove` is what takes it away.
+fn requested_in_settings(settings: &Settings) -> Vec<String> {
+    once(&servers::requested_by(settings))
 }
 
 /// What the session holds now, by alias.
@@ -185,22 +235,31 @@ fn refresh(servers: &mut Servers) {
         .is_some_and(bravebot_agent::mcp::Session::confined);
 }
 
-/// Say which servers are running and how their tools stand, and which are requested and are not.
+/// Say which servers are running and how their tools stand, which are requested and are not, and
+/// which installed plugins are turned off.
 ///
-/// Reads the session and the settings and starts, stops and asks nothing, so it can be carried out
-/// beside a running turn (CMD-8).
-pub(crate) fn list(session: &mut Session, settings: &Settings) {
+/// The servers the enabled plugins carry are requested as the settings' are, so one that is not
+/// running is named with the others: its alias and whether it was turned off for this session, and
+/// nothing a plugin wrote besides the alias. A plugin turned off by `/plugin disable` is named on
+/// one line, since none of its files was read (PLUGIN-11). `state` is the state directory, where
+/// the plugins are read from.
+///
+/// Reads the session, the settings and the state directory and starts, stops, asks and writes
+/// nothing, so it can be carried out beside a running turn (CMD-8).
+pub(crate) fn list(session: &mut Session, settings: &Settings, state: Option<&Path>) {
     let running: Vec<(String, Offering)> = session
         .servers
         .session
         .as_ref()
         .map(bravebot_agent::mcp::Session::offering)
         .unwrap_or_default();
-    let others: Vec<String> = requested(settings)
+    let wanted = Wanted::read(settings, state);
+    let others: Vec<String> = wanted
+        .aliases()
         .into_iter()
         .filter(|alias| running.iter().all(|(held, _)| held != alias))
         .collect();
-    if running.is_empty() && others.is_empty() {
+    if running.is_empty() && others.is_empty() && wanted.off.is_empty() {
         session.note(t!(mcp_command_none));
         return;
     }
@@ -222,12 +281,16 @@ pub(crate) fn list(session: &mut Session, settings: &Settings) {
     if !others.is_empty() {
         session.note(t!(mcp_command_not_running));
         for alias in others {
+            let drawn = shown(&alias);
             let row = match session.servers.disabled.contains(&alias) {
-                true => t!(mcp_command_off, alias = alias.as_str()),
-                false => t!(mcp_command_not_connected, alias = alias.as_str()),
+                true => t!(mcp_command_off, alias = drawn.as_str()),
+                false => t!(mcp_command_not_connected, alias = drawn.as_str()),
             };
             session.note(format!("  {row}"));
         }
+    }
+    for plugin in &wanted.off {
+        session.note(t!(mcp_command_plugin_off, plugin = shown(plugin).as_str()));
     }
     session.note(t!(mcp_command_remove_hint));
 }
@@ -242,14 +305,17 @@ fn reconnect<A: Asker + ?Sized>(
     machine: &Machine,
 ) {
     let running = held(session);
-    let wanted = requested(settings);
+    let wanted = requested(settings, machine.home.directory.as_deref());
     let targets: Vec<String> = match named {
         Some(alias) if running.iter().any(|held| held == alias) => {
-            session.note(t!(mcp_command_already_running, alias = alias));
+            session.note(t!(
+                mcp_command_already_running,
+                alias = shown(alias).as_str()
+            ));
             return;
         }
         Some(alias) if !wanted.iter().any(|requested| requested == alias) => {
-            session.note(t!(mcp_command_not_requested, alias = alias));
+            session.note(t!(mcp_command_not_requested, alias = shown(alias).as_str()));
             return;
         }
         Some(alias) => vec![alias.to_string()],
@@ -294,11 +360,17 @@ fn reconnect<A: Asker + ?Sized>(
 
 /// Turn off each server the session holds or requests whose alias `pattern` names, as `disable`
 /// does for one, in alphabetical order.
-fn disable_matching(session: &mut Session, settings: &Settings, pattern: &str) {
+fn disable_matching(
+    session: &mut Session,
+    settings: &Settings,
+    state: Option<&Path>,
+    pattern: &str,
+) {
+    let wanted = requested(settings, state);
     let mut named: Vec<String> = held(session);
-    for alias in requested(settings) {
-        if !named.contains(&alias) {
-            named.push(alias);
+    for alias in &wanted {
+        if !named.contains(alias) {
+            named.push(alias.clone());
         }
     }
     named.retain(|alias| bravebot_config::mcp::alias_matches(pattern, alias));
@@ -311,22 +383,23 @@ fn disable_matching(session: &mut Session, settings: &Settings, pattern: &str) {
         return;
     }
     for alias in named {
-        disable(session, settings, &alias);
+        disable(session, &wanted, &alias);
     }
 }
 
-fn disable(session: &mut Session, settings: &Settings, alias: &str) {
+/// Turn `alias` off for this session where it is running or among `wanted`, the aliases requested.
+///
+/// The notes draw `alias` through `shown`: a plugin chose the alias of its own server, and it may
+/// hold a control character.
+fn disable(session: &mut Session, wanted: &[String], alias: &str) {
+    let drawn = shown(alias);
     if session.servers.disabled.iter().any(|off| off == alias) {
-        session.note(t!(mcp_command_already_off, alias = alias));
+        session.note(t!(mcp_command_already_off, alias = drawn.as_str()));
         return;
     }
     let running = held(session).iter().any(|held| held == alias);
-    if !running
-        && !requested(settings)
-            .iter()
-            .any(|requested| requested == alias)
-    {
-        session.note(t!(mcp_command_not_requested, alias = alias));
+    if !running && !wanted.iter().any(|requested| requested == alias) {
+        session.note(t!(mcp_command_not_requested, alias = drawn.as_str()));
         return;
     }
     if let Some(kept) = session.servers.session.take() {
@@ -334,7 +407,7 @@ fn disable(session: &mut Session, settings: &Settings, alias: &str) {
     }
     session.servers.disabled.push(alias.to_string());
     refresh(&mut session.servers);
-    session.note(t!(mcp_command_disabled, alias = alias));
+    session.note(t!(mcp_command_disabled, alias = drawn.as_str()));
 }
 
 /// Take `alias` out of every settings file that asks for it and delete its declaration and approval,
@@ -404,7 +477,9 @@ fn remove_matching(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    for alias in requested(settings).into_iter().chain(declared) {
+    // Only what the settings request and `mcp.json` declares: a plugin's server is declared in the
+    // plugin, which `/plugin remove` takes away, and the program would answer that nobody declared it.
+    for alias in requested_in_settings(settings).into_iter().chain(declared) {
         if !named.contains(&alias) {
             named.push(alias);
         }
@@ -537,14 +612,27 @@ pub(crate) mod tests {
             .collect()
     }
 
+    /// A machine with no state directory, so no plugin is installed and no declaration or approval
+    /// is read: what a test says does not depend on the plugins of whoever runs it.
+    fn bare_machine() -> Machine {
+        Machine {
+            managed: bravebot_config::Managed::default(),
+            home: servers::Home {
+                directory: None,
+                writable: false,
+            },
+        }
+    }
+
     fn typed(session: &mut Session, settings: &Settings, root: &Path, argument: &str) {
-        run(
+        run_on(
             session,
             settings,
             root,
             argument,
             Asking::Person,
             &mut Never,
+            &bare_machine(),
         );
     }
 
@@ -1237,6 +1325,493 @@ pub(crate) mod tests {
             assert!(calls.is_empty(), "{argument}: {calls:?}");
             assert_eq!(said(&session), [reply], "{argument}");
             assert_eq!(session.servers.started, ["weather"], "{argument}");
+        }
+    }
+
+    pub(crate) const WEATHER: &str =
+        r#"{"servers":{"weather":{"transport":"http","url":"http://127.0.0.1:1/mcp"}}}"#;
+
+    /// The state directory of `machine`.
+    pub(crate) fn state(machine: &Machine) -> &Path {
+        machine
+            .home
+            .directory
+            .as_deref()
+            .expect("a state directory")
+    }
+
+    /// Installs the plugin `name`, whose servers file holds `servers`, into the state directory of
+    /// `machine`, with the call a front end makes after the person says yes to its listing.
+    fn install_plugin(machine: &Machine, name: &str, servers: &str) {
+        let source = tempfile::Builder::new()
+            .prefix("mcp-plugin-source")
+            .tempdir()
+            .expect("source");
+        std::fs::write(
+            source.path().join("plugin.toml"),
+            format!(
+                "name = \"{name}\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nservers = \"servers.json\"\n"
+            ),
+        )
+        .expect("manifest");
+        std::fs::write(source.path().join("servers.json"), servers).expect("servers");
+        bravebot_agent::plugins::install(source.path(), state(machine))
+            .expect("install the plugin");
+    }
+
+    /// A machine whose state directory declares nothing and holds the plugin `demo` with `servers`.
+    pub(crate) fn carrying(prefix: &str, servers: &str) -> Machine {
+        let machine = declaring(prefix, &[]);
+        install_plugin(&machine, "demo", servers);
+        machine
+    }
+
+    /// Every file and directory under `directory` with the file's bytes, to compare before and after.
+    pub(crate) fn tree(
+        directory: &Path,
+    ) -> std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>> {
+        let mut found = std::collections::BTreeMap::new();
+        let mut pending = vec![directory.to_path_buf()];
+        while let Some(next) = pending.pop() {
+            for entry in std::fs::read_dir(&next).expect("a readable directory") {
+                let path = entry.expect("an entry").path();
+                let inside = path.strip_prefix(directory).expect("inside").to_path_buf();
+                match path.is_dir() {
+                    true => {
+                        found.insert(inside, None);
+                        pending.push(path);
+                    }
+                    false => {
+                        found.insert(inside, Some(std::fs::read(&path).expect("a readable file")));
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    /// What a start put to the person, kept, and answered `answer` each time.
+    struct Recording {
+        answer: servers::Answer,
+        questions: Vec<Vec<String>>,
+    }
+
+    impl Asker for Recording {
+        fn anybody_there(&self) -> bool {
+            true
+        }
+        fn ask_to_start(&mut self, question: &servers::Question<'_>) -> servers::Answer {
+            self.questions.push(question.lines());
+            self.answer
+        }
+        fn ask_to_move(&mut self, _: &bravebot_agent::confirm::MoveRequest) -> bool {
+            false
+        }
+    }
+
+    /// SERVERS-19, PLUGIN-7. `/mcp list` names a server an installed plugin carries that is not
+    /// running, among the servers requested here and not running, by its joined alias and the state
+    /// word the settings' own servers get, and by nothing the plugin wrote besides the alias. Where
+    /// the settings also request the alias it is named once, and a plugin's other server follows the
+    /// settings' own. The list starts nothing, asks nothing (an asker that panics is given) and
+    /// writes nothing under the state directory.
+    ///
+    /// Rejects a `requested` that reads the settings only, which leaves the plugin's server out of
+    /// the list as it was, one that adds the alias a second time where a settings file also
+    /// requests it, and a row that draws the plugin's url.
+    #[test]
+    fn the_list_names_a_plugins_server_that_is_not_running_by_its_alias_and_state_alone() {
+        let servers = r#"{"servers":{"weather":{"transport":"http","url":"http://127.0.0.1:1/mcp"},"extra":{"transport":"http","url":"http://127.0.0.1:2/mcp"}}}"#;
+        let machine = carrying("mcp-list-plugin", servers);
+        let before = tree(state(&machine));
+        for (requests, expected) in [
+            (vec![], vec!["demo_extra", "demo_weather"]),
+            (vec!["demo_weather"], vec!["demo_weather", "demo_extra"]),
+        ] {
+            let (settings, root) = requesting("mcp-list-plugin-settings", &requests);
+            let mut session = Session::new("none");
+
+            run_on(
+                &mut session,
+                &settings,
+                &root,
+                "list",
+                Asking::Person,
+                &mut Never,
+                &machine,
+            );
+
+            let mut rows = vec![t!(mcp_command_not_running).to_string()];
+            rows.extend(
+                expected
+                    .iter()
+                    .map(|alias| format!("  {}", t!(mcp_command_not_connected, alias = *alias))),
+            );
+            rows.push(t!(mcp_command_remove_hint).to_string());
+            assert_eq!(said(&session), rows, "{requests:?}");
+            assert!(
+                said(&session).iter().all(|row| !row.contains("127.0.0.1")),
+                "a url a plugin wrote was drawn"
+            );
+            assert!(
+                session.servers.session.is_none(),
+                "the list started a server"
+            );
+        }
+        assert_eq!(tree(state(&machine)), before, "the list wrote a file");
+    }
+
+    /// SERVERS-19. A plugin's server turned off with `/mcp disable` is accepted, written nowhere,
+    /// and then listed as turned off for this session with the way to start it again, as a server
+    /// the settings request is.
+    ///
+    /// Rejects a `disable` that answers `not requested` for a plugin's alias, and a list that says
+    /// `not connected` for a server that was turned off.
+    #[test]
+    fn a_plugins_server_turned_off_with_mcp_disable_is_accepted_and_listed_as_off() {
+        let machine = carrying("mcp-disable-plugin", WEATHER);
+        let (settings, root) = requesting("mcp-disable-plugin-settings", &[]);
+        let mut session = Session::new("none");
+        let before = tree(state(&machine));
+        let on = |session: &mut Session, argument: &str| {
+            run_on(
+                session,
+                &settings,
+                &root,
+                argument,
+                Asking::Person,
+                &mut Never,
+                &machine,
+            );
+        };
+
+        on(&mut session, "disable demo_weather");
+        on(&mut session, "list");
+
+        assert_eq!(
+            said(&session),
+            vec![
+                t!(mcp_command_disabled, alias = "demo_weather").to_string(),
+                t!(mcp_command_not_running).to_string(),
+                format!("  {}", t!(mcp_command_off, alias = "demo_weather")),
+                t!(mcp_command_remove_hint).to_string(),
+            ]
+        );
+        assert_eq!(session.servers.disabled, vec!["demo_weather".to_string()]);
+        assert_eq!(tree(state(&machine)), before, "turning it off wrote a file");
+    }
+
+    /// PLUGIN-11. A plugin turned off with `/plugin disable` is named on one line, in words that say
+    /// the plugin is turned off and how to turn it on, and its servers are not listed, since none of
+    /// its files was read. A server of another plugin turned off for the session with `/mcp disable`
+    /// is still listed in its own words, so the two are not taken for one another, and a server of
+    /// the plugin that is off is not requested.
+    ///
+    /// Rejects a list that reads a turned-off plugin's servers, one that says nothing of the plugin,
+    /// and one that calls it `turned off for this session`.
+    #[test]
+    fn a_plugin_turned_off_is_named_on_one_line_and_its_servers_are_not_listed() {
+        let machine = carrying("mcp-list-plugin-off", WEATHER);
+        install_plugin(&machine, "other", WEATHER);
+        bravebot_agent::plugins::set_enabled(state(&machine), "demo", false).expect("disable");
+        let (settings, root) = requesting("mcp-list-plugin-off-settings", &[]);
+        let mut session = Session::new("none");
+        let on = |session: &mut Session, argument: &str| {
+            run_on(
+                session,
+                &settings,
+                &root,
+                argument,
+                Asking::Person,
+                &mut Never,
+                &machine,
+            );
+        };
+
+        on(&mut session, "disable other_weather");
+        on(&mut session, "list");
+        on(&mut session, "disable demo_weather");
+
+        assert_eq!(
+            said(&session),
+            vec![
+                t!(mcp_command_disabled, alias = "other_weather").to_string(),
+                t!(mcp_command_not_running).to_string(),
+                format!("  {}", t!(mcp_command_off, alias = "other_weather")),
+                t!(mcp_command_plugin_off, plugin = "demo").to_string(),
+                t!(mcp_command_remove_hint).to_string(),
+                t!(mcp_command_not_requested, alias = "demo_weather").to_string(),
+            ]
+        );
+    }
+
+    /// SERVERS-27, PLUGIN-7. `/mcp reconnect <alias>` no longer answers `not requested` for the
+    /// alias of a plugin's server: it takes the road a session takes and puts the first-use question,
+    /// which names the plugin that carries the server, to the asker. A no starts nothing, says it
+    /// was declined and records nothing under the state directory.
+    ///
+    /// Rejects a `reconnect` that still checks the settings only, one that starts a plugin's server
+    /// without the question, and one that records a no.
+    #[test]
+    fn reconnecting_a_plugins_server_puts_the_first_use_question_naming_the_plugin() {
+        let machine = carrying("mcp-reconnect-plugin", WEATHER);
+        let (settings, root) = requesting("mcp-reconnect-plugin-settings", &[]);
+        let mut session = Session::new("none");
+        let mut asker = Recording {
+            answer: servers::Answer::No,
+            questions: Vec::new(),
+        };
+        let before = tree(state(&machine));
+
+        run_on(
+            &mut session,
+            &settings,
+            &root,
+            "reconnect demo_weather",
+            Asking::Person,
+            &mut asker,
+            &machine,
+        );
+
+        assert_eq!(
+            said(&session),
+            vec![t!(servers_declined, alias = "demo_weather").to_string()]
+        );
+        let [question] = asker.questions.as_slice() else {
+            panic!("one question was put: {:?}", asker.questions);
+        };
+        assert!(
+            question
+                .iter()
+                .any(|line| line.trim() == t!(servers_carried_by, plugin = "demo")),
+            "the question names the plugin: {question:?}"
+        );
+        assert!(session.servers.session.is_none());
+        assert!(session.servers.started.is_empty());
+        assert_eq!(tree(state(&machine)), before, "a no was recorded");
+    }
+
+    /// SERVERS-27. Neither a mode that skips questions nor a run that cannot ask starts a plugin's
+    /// server, and a project recorded as answered does not approve it: `reconnect` says nobody can
+    /// say yes to it and starts nothing, and with a person present the question is put all the same.
+    ///
+    /// Rejects a `reconnect` that passes `Asking::Person` whatever mode the session is in (the asker
+    /// that panics fails it), and one that lets a recorded project stand in for the question.
+    #[test]
+    fn reconnecting_a_plugins_server_without_a_person_or_with_a_recorded_project_starts_it_unasked_never()
+     {
+        let machine = carrying("mcp-reconnect-plugin-nobody", WEATHER);
+        let (settings, root) = requesting("mcp-reconnect-plugin-nobody-settings", &[]);
+        let mut projects = bravebot_config::mcp::Projects::default();
+        assert!(projects.add(&root.canonicalize().expect("canonical")));
+        std::fs::write(
+            bravebot_config::mcp::projects_file(state(&machine)),
+            projects.to_text(),
+        )
+        .expect("projects");
+        let before = tree(state(&machine));
+
+        for asking in [Asking::Bypass, Asking::OneShot] {
+            let mut session = Session::new("none");
+
+            run_on(
+                &mut session,
+                &settings,
+                &root,
+                "reconnect demo_weather",
+                asking,
+                &mut Never,
+                &machine,
+            );
+
+            assert_eq!(
+                said(&session),
+                vec![
+                    t!(
+                        servers_plugin_nobody,
+                        alias = "demo_weather",
+                        plugin = "demo"
+                    )
+                    .to_string()
+                ]
+            );
+            assert!(session.servers.session.is_none());
+        }
+
+        let mut session = Session::new("none");
+        let mut asker = Recording {
+            answer: servers::Answer::No,
+            questions: Vec::new(),
+        };
+        run_on(
+            &mut session,
+            &settings,
+            &root,
+            "reconnect demo_weather",
+            Asking::Person,
+            &mut asker,
+            &machine,
+        );
+        assert_eq!(asker.questions.len(), 1, "a recorded project was an answer");
+        assert!(session.servers.session.is_none());
+        assert_eq!(tree(state(&machine)), before);
+    }
+
+    /// LAYER-3, PLUGIN-7. The alias a plugin's servers file chose is drawn in the list with its control
+    /// characters written out, so an escape sequence or a line break a plugin wrote does not reach
+    /// the transcript. The entry cannot be used, which the list does not decide: it is requested
+    /// and named as any other.
+    ///
+    /// Rejects a row built from the raw alias, which carries the plugin's escape to the screen.
+    #[test]
+    fn a_plugin_authored_alias_with_a_control_character_is_written_out_in_the_list() {
+        let servers = r#"{"servers":{"x\u001b[2J\nsecond":{"transport":"http","url":"http://127.0.0.1:1/mcp"}}}"#;
+        let machine = carrying("mcp-list-plugin-escape", servers);
+        let (settings, root) = requesting("mcp-list-plugin-escape-settings", &[]);
+        let mut session = Session::new("none");
+
+        run_on(
+            &mut session,
+            &settings,
+            &root,
+            "list",
+            Asking::Person,
+            &mut Never,
+            &machine,
+        );
+
+        let lines = said(&session);
+        let row = lines
+            .iter()
+            .find(|line| line.contains("demo_"))
+            .unwrap_or_else(|| panic!("the plugin's server is named: {lines:?}"));
+        assert!(
+            row.contains("demo_x\\u{1b}[2J\\nsecond"),
+            "the alias is written out: {row:?}"
+        );
+        for line in &lines {
+            assert!(!line.chars().any(char::is_control), "{line:?}");
+        }
+    }
+
+    /// A servers file whose one server has the alias `x` and an escape sequence, so the joined alias
+    /// of the plugin `demo` is `demo_x\u{1b}[2J`, which can be typed as one word.
+    const ESCAPE_ALIAS: &str =
+        r#"{"servers":{"x\u001b[2J":{"transport":"http","url":"http://127.0.0.1:1/mcp"}}}"#;
+
+    /// The joined alias of the server in [`ESCAPE_ALIAS`], as a session names it.
+    const ESCAPED: &str = "demo_x\u{1b}[2J";
+
+    /// SERVERS-19, LAYER-3, PLUGIN-7. `/mcp disable` of a plugin's server whose alias holds a control
+    /// character, named by a pattern and by the alias itself, writes the alias out in the note it
+    /// says, as the list does: turned off, already off, and not requested. The text of each note
+    /// holds no control character, so a consumer of the transcript that does not draw it through the
+    /// renderer is not given the escape a plugin wrote. A pattern names the alias although it is not
+    /// one, and the server is turned off once.
+    ///
+    /// Rejects a `disable` that puts the raw alias into `mcp_command_disabled`,
+    /// `mcp_command_already_off` or `mcp_command_not_requested`.
+    #[test]
+    fn disabling_a_plugins_server_whose_alias_has_a_control_character_writes_the_alias_out() {
+        let machine = carrying("mcp-disable-plugin-escape", ESCAPE_ALIAS);
+        let (settings, root) = requesting("mcp-disable-plugin-escape-settings", &[]);
+        let mut session = Session::new("none");
+        let before = tree(state(&machine));
+        let drawn = shown(ESCAPED);
+        let elsewhere = shown("demo_y\u{1b}[2J");
+
+        for argument in [
+            "disable demo_x*",
+            "disable demo_x*",
+            "disable demo_x\u{1b}[2J",
+            "disable demo_y\u{1b}[2J",
+        ] {
+            run_on(
+                &mut session,
+                &settings,
+                &root,
+                argument,
+                Asking::Person,
+                &mut Never,
+                &machine,
+            );
+        }
+
+        let notes = said(&session);
+        assert_eq!(
+            notes,
+            vec![
+                t!(mcp_command_disabled, alias = drawn.as_str()).to_string(),
+                t!(mcp_command_already_off, alias = drawn.as_str()).to_string(),
+                t!(mcp_command_already_off, alias = drawn.as_str()).to_string(),
+                t!(mcp_command_not_requested, alias = elsewhere.as_str()).to_string(),
+            ]
+        );
+        for note in &notes {
+            assert!(!note.chars().any(char::is_control), "{note:?}");
+        }
+        assert!(
+            notes[0].contains("demo_x\\u{1b}[2J"),
+            "the alias is written out: {:?}",
+            notes[0]
+        );
+        assert_eq!(session.servers.disabled, vec![ESCAPED.to_string()]);
+        assert_eq!(tree(state(&machine)), before, "turning it off wrote a file");
+    }
+
+    /// SERVERS-19, LAYER-3, PLUGIN-7. `/mcp reconnect` of an alias with a control character, which a
+    /// session holds or no setting and no plugin requests, writes the alias out in the note it says
+    /// (`already running`, `not requested`), and the text of each holds no control character. Where
+    /// the plugin does request it, the start's own notes hold none either.
+    ///
+    /// Rejects a `reconnect` that puts the raw alias into `mcp_command_already_running` or
+    /// `mcp_command_not_requested`.
+    #[test]
+    fn reconnecting_an_alias_with_a_control_character_writes_the_alias_out() {
+        let machine = carrying("mcp-reconnect-plugin-escape", ESCAPE_ALIAS);
+        let (settings, root) = requesting("mcp-reconnect-plugin-escape-settings", &[]);
+        let drawn = shown(ESCAPED);
+        let elsewhere = shown("demo_y\u{1b}[2J");
+
+        for (mut session, argument, expected) in [
+            (
+                holding(&[ESCAPED]),
+                "reconnect demo_x\u{1b}[2J",
+                Some(t!(mcp_command_already_running, alias = drawn.as_str()).to_string()),
+            ),
+            (
+                Session::new("none"),
+                "reconnect demo_y\u{1b}[2J",
+                Some(t!(mcp_command_not_requested, alias = elsewhere.as_str()).to_string()),
+            ),
+            (Session::new("none"), "reconnect demo_x\u{1b}[2J", None),
+        ] {
+            let mut asker = Recording {
+                answer: servers::Answer::No,
+                questions: Vec::new(),
+            };
+            run_on(
+                &mut session,
+                &settings,
+                &root,
+                argument,
+                Asking::Person,
+                &mut asker,
+                &machine,
+            );
+
+            let notes = said(&session);
+            assert!(!notes.is_empty(), "{argument:?} said nothing");
+            if let Some(expected) = expected {
+                assert_eq!(notes, vec![expected], "{argument:?}");
+                assert!(notes[0].contains("\\u{1b}[2J"), "{:?}", notes[0]);
+            }
+            for note in &notes {
+                assert!(
+                    !note.chars().any(char::is_control),
+                    "{argument:?}: {note:?}"
+                );
+            }
         }
     }
 

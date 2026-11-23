@@ -558,9 +558,10 @@ pub(super) fn commit_message_animated(
 /// Take what the request for a commit message came back with.
 ///
 /// CMD-23: a draft is put in the box and nowhere else, for the person to read and edit, and a
-/// refusal or a stop leaves the box as it was. Only a draft the planner could have held is
-/// offered; one that met something untrusted is a note instead, the gate [`handoff_answered`] and
-/// [`enhance_answered`] put their own answers through (LABEL-8). Apart from
+/// refusal or a stop leaves the box as it was. An answer with no message is a diff of a path
+/// nobody vouched for, which was never sent to a model: the box is left alone and a note says no
+/// draft was written (LABEL-8). [`handoff_answered`] and [`enhance_answered`] instead hold back an
+/// answer that was made and then found to have met something untrusted. Apart from
 /// [`commit_message_animated`] so a test can call it without a backend.
 pub(super) fn commit_message_answered(
     session: &mut Session,
@@ -595,18 +596,14 @@ pub(super) fn commit_message_answered(
 
 /// Why `/handoff` asks for nothing, as the line to tell the person, where it does not.
 ///
-/// SESSION-34: with no goal there is nothing for the brief to be written for, and before a turn
-/// has ended the session has no record for the new one to link back to. `recorded` is whether the
-/// session has one. Nothing here reads the conversation, so a refusal is decided before any
-/// request is made.
+/// SESSION-34: the decision is [`bravebot_agent::aside::handoff_refusal`], the one the desktop's
+/// Hand Off item makes; only the words are the terminal's.
 pub(super) fn handoff_refusal(goal: &str, turns: usize, recorded: bool) -> Option<&'static str> {
-    if goal.is_empty() {
-        Some(t!(handoff_needs_a_goal))
-    } else if turns == 0 || !recorded {
-        Some(t!(handoff_nothing_to_hand_off))
-    } else {
-        None
-    }
+    use bravebot_agent::aside::HandoffRefusal;
+    bravebot_agent::aside::handoff_refusal(goal, turns, recorded).map(|refusal| match refusal {
+        HandoffRefusal::NoGoal => t!(handoff_needs_a_goal),
+        HandoffRefusal::NothingToHandOff => t!(handoff_nothing_to_hand_off),
+    })
 }
 
 /// Take what the request for a `/handoff` brief came back with.

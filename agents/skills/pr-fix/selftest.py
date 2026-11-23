@@ -4,6 +4,7 @@
 import contextlib
 import importlib.util
 import json
+import shlex
 import shutil
 import subprocess
 import sys
@@ -70,6 +71,11 @@ def world(root, signed=False):
     return lambda here=clone: pr_fix.pull(9, view, here, remotes), seed, fork
 
 
+# The command a person or a session runs next names the file that is running, by its absolute path, so a
+# session whose directory is a pull request's worktree does not run that worktree's copy of the script.
+RUNNING = f"python3 {shlex.quote(str(HERE / 'pr-fix.py'))}"
+
+
 def test_a_conflict_is_reported_resolved_and_pushed_from_a_worktree_of_its_own():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp).resolve()
@@ -77,6 +83,7 @@ def test_a_conflict_is_reported_resolved_and_pushed_from_a_worktree_of_its_own()
         code, out = quietly(pr_fix.start, pr())
         assert code == 1, out
         assert "  a.txt:1-5" in out and "main moves" in out, out
+        assert f"resolve each range, then: {RUNNING} continue 9\n" in out, out
         tree = pr().tree
         assert tree == root / "bravebot" / ".worktrees" / "pr-9", tree
 
@@ -85,7 +92,7 @@ def test_a_conflict_is_reported_resolved_and_pushed_from_a_worktree_of_its_own()
 
         (tree / "a.txt").write_text("from main and the pull request\n")
         code, out = quietly(pr_fix.resume, pr())
-        assert code == 0 and "push 9" in out, out
+        assert code == 0 and f"next: {RUNNING} push 9\n" in out, out
         assert pr_fix.resolved(tree) == ["a.txt"], "a resolved file is what a check is chosen from"
 
         code, out = quietly(pr_fix.check, pr(), [])
@@ -98,6 +105,71 @@ def test_a_conflict_is_reported_resolved_and_pushed_from_a_worktree_of_its_own()
 
         code, out = quietly(pr_fix.start, pr())
         assert code == 0 and "nothing to push" in out, out
+
+
+def test_every_command_a_step_prints_names_the_running_file_by_absolute_path():
+    assert pr_fix.SCRIPT == RUNNING, pr_fix.SCRIPT
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, seed, _ = world(root)
+        quietly(pr_fix.start, pr())
+        for step in (lambda: pr_fix.check(pr(), []), lambda: pr_fix.push(pr())):
+            code, out = quietly(step)
+            assert code == 1 and f"finish the rebase first: `{RUNNING} continue 9`" in out, out
+
+        (pr().tree / "a.txt").write_text("resolved\n")
+        quietly(pr_fix.resume, pr())
+        (seed / "c.txt").write_text("later\n")
+        git("add", "c.txt", cwd=seed)
+        git("commit", "-q", "-m", "main moves again", cwd=seed)
+        git("push", "-q", "origin", "main", cwd=seed)
+        git("fetch", "-q", "upstream", cwd=root / "bravebot")
+        code, out = quietly(pr_fix.push, pr())
+        assert code == 1 and f"`{RUNNING} start 9`" in out, out
+
+
+def test_a_pull_request_whose_fork_has_no_remote_names_the_running_file_to_add_one():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        view = {
+            "url": "https://github.com/brave/bravebot/pull/9", "state": "OPEN", "baseRefName": "main",
+            "headRefName": "feature", "headRepository": {"name": "bravebot"},
+            "headRepositoryOwner": {"login": "someone"},
+        }
+        remotes = {"brave/bravebot": ("upstream", str(root / "brave.git"))}
+        code, out = quietly(pr_fix.pull, 9, view, root / "bravebot", remotes)
+        assert code == 1 and f"`{RUNNING} start 9` adds one" in out, out
+
+
+def test_the_issue_steps_name_the_running_file_in_what_they_tell_the_session_to_run_next():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        world(root)
+        clone, remotes = root / "bravebot", ISSUE_REMOTES(root)
+        body = root / "body.md"
+        body.write_text(GOOD_BODY)
+        _, patched = gh_calls(lambda args: json.dumps({"pull_request": {}}) if args[1] == "api" else "[]")
+        with patched:
+            code, out = quietly(pr_fix.issue_report, 5, remotes)
+            assert code == 1 and f"use `{RUNNING} start 5`" in out, out
+
+            code, out = quietly(pr_fix.open_pull, 5, None, "t", body, clone, remotes)
+            assert code == 1 and f"`{RUNNING} issue 5 --branch fix-<name>` makes one" in out, out
+
+            code, out = quietly(pr_fix.open_pull, 5, "fix-nowhere", "t", body, clone, remotes)
+            assert code == 1 and f"`{RUNNING} issue 5 --branch fix-nowhere`" in out, out
+
+
+def test_a_wait_that_ends_on_a_review_names_the_running_file_that_prints_it():
+    looks = []
+
+    def feedback():
+        looks.append(1)
+        return feedback_answer(500, 501) if len(looks) >= 3 else feedback_answer(500)
+
+    code, out, _, _ = wait_on(still_open(), feedback=feedback)
+    assert code == 3 and f"`{RUNNING} comments 7` prints them" in out, out
 
 
 def test_a_push_made_since_start_is_refused_rather_than_overwritten():
@@ -719,6 +791,37 @@ class Clock:
 
 
 PENDING = [{"__typename": "CheckRun", "name": "test", "workflowName": "CI", "status": "IN_PROGRESS", "detailsUrl": "u"}]
+PASSING = [{"__typename": "CheckRun", "name": "test", "workflowName": "CI", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+
+
+def feedback_answer(*started, review=None):
+    """What the GraphQL query answers when each id in `started` begins an unresolved thread, and `review`, if given, is
+    the id of a reviewer's latest change-asking review."""
+    reviews = [] if review is None else [
+        {"databaseId": review, "author": {"login": "ann"}, "authorAssociation": "MEMBER", "state": "CHANGES_REQUESTED", "body": "split this"}
+    ]
+    threads = [
+        {
+            "isResolved": False, "isOutdated": False, "path": "a.rs", "line": 1, "originalLine": 1,
+            "comments": {"nodes": [{"databaseId": one, "author": {"login": "ann"}, "authorAssociation": "MEMBER", "body": "fix"}]},
+        }
+        for one in started
+    ]
+    data = {"data": {"repository": {"pullRequest": {
+        "reviewThreads": {"pageInfo": {"hasNextPage": False}, "nodes": threads}, "reviews": {"nodes": reviews},
+    }}}}
+    return SimpleNamespace(stdout=json.dumps(data), returncode=0)
+
+
+def gh(view, feedback=lambda: feedback_answer()):
+    """A stand-in for `run` that answers the GraphQL review query with `feedback()` and everything else with `view`."""
+
+    def answer(*args, **kwargs):
+        if "graphql" in args:
+            return feedback()
+        return view(*args, **kwargs)
+
+    return answer
 
 
 def test_a_wait_ends_at_its_deadline_counting_the_start_up_and_every_poll():
@@ -736,19 +839,20 @@ def test_a_wait_ends_at_its_deadline_counting_the_start_up_and_every_poll():
     argv = ["pr-fix.py", "ci", "7", "--wait", "--wait-seconds", "95"]
     with mock.patch.object(sys, "argv", argv), mock.patch.object(pr_fix, "time", clock.time), \
             mock.patch.object(pr_fix, "git", lambda *a, **k: "/tmp"), \
-            mock.patch.object(pr_fix, "lookup", look), mock.patch.object(pr_fix, "run", poll):
+            mock.patch.object(pr_fix, "lookup", look), mock.patch.object(pr_fix, "run", gh(poll)):
         code, out = quietly(pr_fix.main)
     assert code == 2 and "0 passed, 0 failed, 1 pending" in out, out
     assert 95 <= clock.now <= 95 + 4, f"stopped at {clock.now}s: the deadline plus the poll that was under way"
     assert len(polls) == 3, polls
 
 
-def wait_on(polls, wait_seconds=540):
-    """Run `ci 7 --wait` against a pull request whose checks are pending, answering each poll with `polls`."""
+def wait_on(polls, wait_seconds=540, feedback=lambda: feedback_answer(), rollup=PENDING):
+    """Run `ci 7 --wait` against a pull request whose checks are `rollup`, answering each poll of the pull request
+    with `polls` and each look at its review comments with `feedback`."""
     clock, asked = Clock(), []
 
     def look(number, create):
-        return SimpleNamespace(number=number, tree=Path("/nonexistent"), head_sha="abc", rollup=PENDING)
+        return SimpleNamespace(number=number, tree=Path("/nonexistent"), head_sha="abc", rollup=rollup)
 
     def poll(*args, **kwargs):
         asked.append(kwargs)
@@ -757,9 +861,70 @@ def wait_on(polls, wait_seconds=540):
     argv = ["pr-fix.py", "ci", "7", "--wait", "--wait-seconds", str(wait_seconds)]
     with mock.patch.object(sys, "argv", argv), mock.patch.object(pr_fix, "time", clock.time), \
             mock.patch.object(pr_fix, "git", lambda *a, **k: "/tmp"), \
-            mock.patch.object(pr_fix, "lookup", look), mock.patch.object(pr_fix, "run", poll):
+            mock.patch.object(pr_fix, "lookup", look), mock.patch.object(pr_fix, "run", gh(poll, feedback)):
         code, out = quietly(pr_fix.main)
     return code, out, asked, clock.now
+
+
+def still_open(rollup=PENDING):
+    def polls(clock, kwargs):
+        view = {"state": "OPEN", "url": "https://github.com/brave/bravebot/pull/7", "statusCheckRollup": rollup}
+        return SimpleNamespace(stdout=json.dumps(view), returncode=0)
+
+    return polls
+
+
+def test_a_wait_ends_when_a_reviewer_writes_while_the_checks_are_still_pending():
+    looks = []
+
+    def feedback():
+        looks.append(1)
+        return feedback_answer(500, 501) if len(looks) >= 3 else feedback_answer(500)
+
+    code, out, _, elapsed = wait_on(still_open(), feedback=feedback)
+    assert code == 3 and "1 new comment(s) or review(s)" in out and "comments 7" in out, (code, out)
+    assert "0 passed, 0 failed, 1 pending" in out, "the checks are still reported"
+    assert len(looks) == 3 and elapsed < 540, f"{len(looks)} looks over {elapsed}s: the wait ran on past the comment"
+
+
+def test_a_new_review_that_asks_for_a_change_ends_the_wait_after_the_checks_have_passed():
+    looks = []
+
+    def feedback():
+        looks.append(1)
+        return feedback_answer(review=900) if len(looks) >= 2 else feedback_answer()
+
+    code, out, _, _ = wait_on(still_open(PASSING), feedback=feedback, rollup=PENDING)
+    assert code == 3 and "1 passed, 0 failed, 0 pending" in out, "a pull request that is green still has review feedback to answer\n" + out
+
+
+def test_feedback_that_was_there_when_the_wait_began_does_not_end_it():
+    code, out, _, elapsed = wait_on(still_open(), wait_seconds=100, feedback=lambda: feedback_answer(500, review=900))
+    assert code == 2 and "review feedback arrived" not in out, (code, out)
+    assert elapsed >= 100, f"the wait ended at {elapsed}s on comments the caller has already read"
+
+
+def test_a_failing_check_outranks_review_feedback_in_the_exit_code():
+    failing = [{"__typename": "StatusContext", "context": "bad", "state": "FAILURE", "targetUrl": "u"}]
+    looks = []
+
+    def feedback():
+        looks.append(1)
+        return feedback_answer(500) if len(looks) >= 2 else feedback_answer()
+
+    code, out, _, _ = wait_on(still_open(failing), feedback=feedback)
+    assert code == 1 and "failed (failure): bad u" in out, (code, out)
+
+
+def test_feedback_is_the_unresolved_comments_and_the_latest_change_asking_review_of_each_reviewer():
+    data = json.loads(feedback_answer(500, review=900).stdout)
+    assert pr_fix.feedback_ids(data) == {("comment", 500), ("review", 900)}
+    request = data["data"]["repository"]["pullRequest"]
+    request["reviewThreads"]["nodes"][0]["isResolved"] = True
+    request["reviews"]["nodes"].append({
+        "databaseId": 901, "author": {"login": "ann"}, "authorAssociation": "MEMBER", "state": "APPROVED", "body": "ok",
+    })
+    assert pr_fix.feedback_ids(data) == set(), "a resolved thread and a review since approved are not waiting on a change"
 
 
 def test_a_wait_ends_when_the_pull_request_is_merged_while_its_checks_are_still_pending():

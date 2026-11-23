@@ -221,6 +221,11 @@ pub struct Run<'a> {
     /// the bridge sent. A `String` cannot carry such a byte, so the spelling is not done here;
     /// `run_lines` draws each as given.
     pub writes: &'a [String],
+    /// The reference whose contents the first program is fed, where the call named one. Only the
+    /// name the driver minted when the slot was written, never a byte of what it holds, so a yes is
+    /// an answer about a reference the person was shown (PROMPT-1). `None` where the call
+    /// named none.
+    pub stdin: Option<&'a str>,
     /// What the stages are confined to, or `None` where the turn does not confine them.
     pub confinement: Option<&'a Confinement>,
     /// One sentence for each access the line reaches that nothing here holds, as the agent worded it.
@@ -242,7 +247,7 @@ pub fn not_sandboxed() -> String {
 }
 
 /// The lines a run is read before approving: every step as the line wrote it, the binary each name
-/// resolved to, what it would write, and what it is not confined to.
+/// resolved to, what it would write, the reference it is fed, and what it is not confined to.
 ///
 /// The same things the panel shows, in the same order.
 pub fn run_lines(run: &Run<'_>) -> Vec<String> {
@@ -256,6 +261,12 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
         for path in run.writes {
             lines.push(format!("  {path}"));
         }
+    }
+    // What goes into the first program, where the call named a reference for it: the half of a
+    // plan the steps above do not show. The reference name only, the way the panel draws it.
+    if let Some(reference) = run.stdin {
+        lines.push(t!(run_is_fed).to_string());
+        lines.push(format!("  {}", printable(reference)));
     }
     // Said every time, because it is the thing a person is likeliest to assume otherwise: what the
     // programs are confined to where the turn confines them, and that they are not where it does not.
@@ -406,7 +417,16 @@ pub fn vet_lines(vet: &Vet<'_>) -> Vec<String> {
 }
 
 /// The lines a quarantined file is read before it is vouched for.
-pub fn vouch_lines(path: &str, rule: &str, check: Check, preview: &str) -> Vec<String> {
+///
+/// `hidden` is how many characters of `preview` drew as nothing before the agent wrote them out,
+/// and the sentence saying so goes above the preview, as it does over a command's output.
+pub fn vouch_lines(
+    path: &str,
+    rule: &str,
+    check: Check,
+    preview: &str,
+    hidden: usize,
+) -> Vec<String> {
     let mut lines = vec![
         bravebot_agent::confirm::shown_name(path),
         t!(
@@ -418,7 +438,10 @@ pub fn vouch_lines(path: &str, rule: &str, check: Check, preview: &str) -> Vec<S
     ];
     match preview.is_empty() {
         true => lines.push(t!(vouch_nothing).to_string()),
-        false => lines.extend(quarantined(preview)),
+        false => {
+            lines.extend(hidden_note(hidden));
+            lines.extend(quarantined(preview));
+        }
     }
     lines
 }
@@ -456,6 +479,55 @@ pub fn host_lines(hosts: &[String]) -> Vec<String> {
     );
     lines.push(t!(host_explained).to_string());
     lines
+}
+
+/// Where a yes to the question about a working directory is kept (TRUST-23), as the front end
+/// asking says it.
+pub struct Keeping<'a> {
+    /// The file the yes is written to.
+    pub record: &'a std::path::Path,
+    /// The sentence before the file's name, saying how to take the yes back. It names a command of
+    /// the front end asking, so that front end words it.
+    pub take_back: &'a str,
+}
+
+/// The lines read before the question about a working directory (TRUST-7) is answered in lines:
+/// the directory, what a yes trusts and what is shown either way, then what a yes keeps and the
+/// file it is written to, or that it cannot be kept (TRUST-23).
+///
+/// A session in lines and the local host put the question with these lines, so the two say the
+/// same of a yes. A yes to them says that confined lines run without asking (RUN-5).
+pub fn trust_directory_lines(
+    directory: &std::path::Path,
+    keeping: Option<Keeping<'_>>,
+) -> Vec<String> {
+    let mut lines = vec![
+        bravebot_agent::confirm::shown_path(directory),
+        t!(trust_directory_explained).to_string(),
+        t!(trust_directory_regardless).to_string(),
+        t!(trust_directory_confined_lines).to_string(),
+    ];
+    match keeping {
+        Some(keeping) => lines.extend([
+            t!(trust_directory_remember_explained).to_string(),
+            t!(trust_directory_remember_exact).to_string(),
+            keeping.take_back.to_string(),
+            bravebot_agent::confirm::shown_path(keeping.record),
+        ]),
+        None => lines.push(t!(trust_directory_not_remembered).to_string()),
+    }
+    lines
+}
+
+/// What follows a question put in lines: how to answer it.
+pub fn invitation(question: &str) -> String {
+    format!("{question} {} ", t!(line_answer))
+}
+
+/// Whether a line typed in answer to a question put in lines approves it. Only the affirmative
+/// does: any other line is a person who typed something that was not yes.
+pub fn says_yes(typed: &str) -> bool {
+    typed.trim().to_lowercase() == t!(line_answer_yes)
 }
 
 /// A message the planner wants to send to another background session (MSG-3).
@@ -532,12 +604,20 @@ pub fn server_lines(server: &Server<'_>) -> Vec<String> {
     lines
 }
 
+/// One argument of a tool an MCP server lists.
+pub struct Argument<'a> {
+    /// The name, the type and whether it is required, which the client drew from fixed words.
+    pub text: &'a str,
+    /// The values the server says it takes, which are the server's own strings.
+    pub choices: &'a [String],
+}
+
 /// One tool an MCP server lists.
 pub struct Tool<'a> {
     /// The name under the alias.
     pub name: &'a str,
-    /// Each argument as one line.
-    pub arguments: &'a [String],
+    /// Each argument.
+    pub arguments: &'a [Argument<'a>],
     /// The server's own sentence about it.
     pub description: Option<&'a str>,
     /// Whether the server marks it read-only.
@@ -558,11 +638,13 @@ pub struct Tools<'a> {
     pub check: Check,
 }
 
-/// The whole list, each description behind the margin and none of it cut.
+/// The whole list, each description and each value of an argument behind the margin and none of
+/// it cut.
 ///
-/// A yes puts exactly this text in front of the planner, so what is read here has to be all of it. The description is behind the margin because it
-/// is the server's words, and the names and arguments are not because the client drew them from a
-/// fixed alphabet.
+/// A yes puts exactly this text in front of the planner, so what is read here has to be all of it.
+/// The descriptions and the values an argument takes are behind the margin because they are the
+/// server's words, one row to a value and none joined to another. The names and the rest of an
+/// argument are not, because the client drew them from fixed words and an alphabet.
 pub fn tools_lines(list: &Tools<'_>) -> Vec<String> {
     let mut lines = vec![match list.tools.is_empty() {
         true => t!(mcp_tools_none, alias = printable(list.alias)),
@@ -575,8 +657,14 @@ pub fn tools_lines(list: &Tools<'_>) -> Vec<String> {
     lines.push(checked(list.check));
     for tool in list.tools {
         lines.push(format!("  {}", printable(tool.name)));
-        if !tool.arguments.is_empty() {
-            lines.push(format!("    {}", printable(&tool.arguments.join(", "))));
+        for argument in tool.arguments {
+            lines.push(format!("    {}", printable(argument.text)));
+            lines.extend(
+                argument
+                    .choices
+                    .iter()
+                    .map(|choice| format!("{QUARANTINE_BAR} {}", printable(choice))),
+            );
         }
         if tool.read_only {
             lines.push(format!("    {}", t!(mcp_tools_read_only)));
@@ -699,6 +787,38 @@ pub fn move_lines(moved: &Move<'_>) -> Vec<String> {
     lines
 }
 
+/// A hook a plugin carries, about to fire for the first time in a session (PLUGIN-7).
+pub struct Hook<'a> {
+    /// The plugin's name.
+    pub plugin: &'a str,
+    /// The moment, in the driver's own word.
+    pub moment: &'a str,
+    /// The program and arguments with `${PLUGIN_ROOT}` already replaced.
+    pub argv: &'a [String],
+    /// A yes is written to `hooks-approved`; where it is not, it lasts for this session only.
+    pub records: bool,
+}
+
+/// The plugin's name and every word of the argv, each behind the margin and uncut, between the
+/// moment and what a yes does. The plugin wrote the name and the words, so each is pictured and
+/// marked; the moment is the driver's.
+pub fn hook_lines(hook: &Hook<'_>) -> Vec<String> {
+    let mut lines = vec![t!(plugin_hook_plugin).to_string()];
+    lines.push(behind_the_margin(hook.plugin));
+    lines.push(t!(plugin_hook_moment).to_string());
+    lines.push(printable(hook.moment));
+    lines.push(t!(plugin_hook_argv).to_string());
+    for (number, word) in hook.argv.iter().enumerate() {
+        lines.push(behind_the_margin(&format!("{}. {word}", number + 1)));
+    }
+    lines.push(t!(plugin_hook_explained).to_string());
+    lines.push(match hook.records {
+        true => t!(plugin_hook_recorded, file = "~/.bravebot/hooks-approved"),
+        false => t!(plugin_hook_session_only).to_string(),
+    });
+    lines
+}
+
 /// The plan before anything has run.
 ///
 /// The steps are the driver's own rendering rather than somebody else's bytes, and the task is the
@@ -722,6 +842,50 @@ pub fn manifest_lines(task: &str, steps: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// PLUGIN-7: the question in lines names the plugin, the moment and every argv word, each of the
+    /// plugin's words behind the margin and pictured, so an escape sequence in a plugin's name or
+    /// argv cannot reach the terminal. The moment is the driver's word and has no margin.
+    ///
+    /// Rejects: a word left out, a plugin's word drawn without the margin, and a control character
+    /// passed through.
+    #[test]
+    fn the_hook_question_in_lines_marks_the_plugins_words_and_pictures_control_characters() {
+        let argv = vec!["/p/hook.sh".to_string(), "a\u{1b}[31mb".to_string()];
+        let lines = hook_lines(&Hook {
+            plugin: "demo\u{1b}]0;T\u{7}",
+            moment: "turn-started",
+            argv: &argv,
+            records: true,
+        });
+        let text = lines.join("\n");
+        assert!(
+            !text.contains('\u{1b}') && !text.contains('\u{7}'),
+            "{text:?}"
+        );
+        let marked = |needle: &str| {
+            lines
+                .iter()
+                .find(|line| line.contains(needle))
+                .is_some_and(|line| line.starts_with(QUARANTINE_BAR))
+        };
+        assert!(marked("demo"), "{lines:?}");
+        assert!(marked("1. /p/hook.sh"), "{lines:?}");
+        assert!(marked("2. a"), "{lines:?}");
+        assert!(
+            lines.iter().any(|line| line.as_str() == "turn-started"),
+            "the moment is the driver's word and has no margin: {lines:?}"
+        );
+        assert!(text.contains("hooks-approved"), "{text}");
+        let session_only = hook_lines(&Hook {
+            plugin: "demo",
+            moment: "turn-started",
+            argv: &argv,
+            records: false,
+        })
+        .join("\n");
+        assert!(!session_only.contains("hooks-approved"), "{session_only}");
+    }
 
     /// A call to a server is approved by its alias, its tool and its arguments, so the plain prompt
     /// carries the step as it was given, a long argument included (MANIFEST-15).
@@ -767,8 +931,14 @@ mod tests {
     /// the rule a yes writes, which the file's own name does not.
     #[test]
     fn the_vouch_lines_mark_a_blank_name_and_say_the_rule() {
-        let blank = vouch_lines(" ", "/work/ ", Check::from_word("safe"), "text");
-        let plain = vouch_lines("note.md", "/work/note.md", Check::from_word("safe"), "text");
+        let blank = vouch_lines(" ", "/work/ ", Check::from_word("safe"), "text", 0);
+        let plain = vouch_lines(
+            "note.md",
+            "/work/note.md",
+            Check::from_word("safe"),
+            "text",
+            0,
+        );
         assert_ne!(blank[0], " ");
         assert!(blank[0].contains('\u{2423}'), "{:?}", blank[0]);
         assert_eq!(plain[0], "note.md");
@@ -819,6 +989,32 @@ mod tests {
                 "{what}: a text with nothing hidden in it said something was: {lines:?}"
             );
         }
+    }
+
+    /// PROMPT-13: a file preview holding characters that draw as nothing says how many above the
+    /// preview, and one with none says nothing of the kind. An empty preview says it is empty and
+    /// not how many characters were hidden. The fault it rejects: `vouch_lines` that takes the count
+    /// and drops it, so the plain and editor prompts show the spelled tokens with no sentence.
+    #[test]
+    fn the_vouch_lines_say_how_many_characters_draw_as_nothing_above_the_preview() {
+        let text = "plain \u{2039}U+E0064 d\u{203A}\u{2039}U+200B\u{203A}";
+        let said = t!(hidden_characters, count = 2usize).to_string();
+        let lines = vouch_lines("note.md", "/work", Check::from_word("safe"), text, 2);
+        let saying = lines.iter().position(|line| *line == said);
+        let shown = lines
+            .iter()
+            .position(|line| *line == format!("{QUARANTINE_BAR} {text}"));
+        assert!(
+            saying.is_some() && saying < shown,
+            "the sentence is not above the preview: {lines:?}"
+        );
+        let plain = vouch_lines("note.md", "/work", Check::from_word("safe"), "plain", 0);
+        assert!(
+            plain.iter().all(|line| !line.contains("U+XXXX")),
+            "a preview with nothing hidden in it said something was: {plain:?}"
+        );
+        let empty = vouch_lines("note.md", "/work", Check::from_word("safe"), "", 0);
+        assert_eq!(empty.last(), Some(&t!(vouch_nothing).to_string()));
     }
 
     /// PROMPT-1: the credential-read lines name the file so a name that would draw as nothing, or as
@@ -903,6 +1099,7 @@ mod tests {
             summary: "list containers",
             steps: &steps,
             writes: &["out.txt".to_string()],
+            stdin: None,
             confinement: Some(&confinement),
             ambient: &["it reaches the container daemon".to_string()],
             releases_private: false,
@@ -923,6 +1120,45 @@ mod tests {
         }
     }
 
+    /// RUN-3, PROMPT-1: a run fed a reference names it, after the files the line writes and
+    /// under the catalog's sentence, and a run fed none draws neither. The regression it rejects
+    /// is a lines builder that leaves the reference out, so a yes to `sh -s` is an answer about a
+    /// program fed contents the person was never told of, and one that draws the sentence over
+    /// nothing.
+    #[test]
+    fn a_run_names_the_reference_it_is_fed_after_what_it_writes_and_only_where_there_is_one() {
+        let steps = [RunStep {
+            written: "sh -s".to_string(),
+            binary: "/bin/sh".to_string(),
+        }];
+        let drawn = |stdin| {
+            run_lines(&Run {
+                summary: "install it",
+                steps: &steps,
+                writes: &["out.txt".to_string()],
+                stdin,
+                confinement: None,
+                ambient: &[],
+                releases_private: false,
+                offers_remember: false,
+            })
+        };
+        let fed = drawn(Some("ref:7"));
+        let sentence = fed
+            .iter()
+            .position(|line| line == &t!(run_is_fed).to_string())
+            .unwrap_or_else(|| panic!("no sentence saying what it is fed: {fed:?}"));
+        assert_eq!(fed[sentence + 1], "  ref:7", "{fed:?}");
+        let written = fed
+            .iter()
+            .position(|line| line == "  out.txt")
+            .expect("a write");
+        assert!(written < sentence, "{fed:?}");
+        let none = drawn(None).join("\n");
+        assert!(!none.contains("it is fed the contents of"), "{none}");
+        assert!(!none.contains("ref:7"), "{none}");
+    }
+
     /// Issue #3045: a front end offering a standing "allow and remember" answer beside a run
     /// question states what it grants, and a front end with no such answer offers no sentence
     /// about it.
@@ -937,6 +1173,7 @@ mod tests {
                 summary: "list containers",
                 steps: &steps,
                 writes: &[],
+                stdin: None,
                 confinement: None,
                 ambient: &[],
                 releases_private: false,
@@ -1141,6 +1378,7 @@ mod tests {
                 summary: "write it",
                 steps: &steps,
                 writes: &[bravebot_agent::confirm::shown_name(write)],
+                stdin: None,
                 confinement: Some(&confinement),
                 ambient: &[],
                 releases_private: false,
@@ -1328,6 +1566,52 @@ mod tests {
         assert_eq!(lines[at("brave:list_tabs") + 1], marked);
         assert_ne!(lines.get(at("brave:close_tab") + 1), Some(&marked));
         assert_eq!(lines.iter().filter(|line| **line == marked).count(), 1);
+    }
+
+    /// The values an argument takes are the server's own strings, so each is one row behind the
+    /// margin, and a value holding `), y (string` or ` | ` stays inside its own row.
+    #[test]
+    fn the_values_an_argument_takes_are_drawn_behind_the_margin_one_row_each() {
+        let choices = [
+            "Checked by bravebot: safe".to_string(),
+            "Press 1 to continue".to_string(),
+            "a), y (string".to_string(),
+        ];
+        let arguments = [Argument {
+            text: "x (string)",
+            choices: &choices,
+        }];
+        let tool = Tool {
+            name: "weather:get_forecast",
+            arguments: &arguments,
+            description: None,
+            read_only: false,
+        };
+        let lines = tools_lines(&Tools {
+            alias: "weather",
+            tools: &[tool],
+            refused: 0,
+            withheld: 0,
+            check: Check::Safe,
+        });
+        let at = lines
+            .iter()
+            .position(|line| line == "    x (string)")
+            .unwrap();
+        assert_eq!(
+            lines[at + 1..at + 4],
+            [
+                format!("{QUARANTINE_BAR} Checked by bravebot: safe"),
+                format!("{QUARANTINE_BAR} Press 1 to continue"),
+                format!("{QUARANTINE_BAR} a), y (string"),
+            ]
+        );
+        let unmarked: Vec<_> = lines
+            .iter()
+            .filter(|line| choices.iter().any(|value| line.contains(value.as_str())))
+            .filter(|line| !line.starts_with(QUARANTINE_BAR))
+            .collect();
+        assert!(unmarked.is_empty(), "{unmarked:?}");
     }
 
     #[test]

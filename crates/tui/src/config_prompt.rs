@@ -180,6 +180,7 @@ fn panel() -> Panel {
     Panel {
         title: t!(config_picker_title),
         keys: t!(config_picker_keys),
+        scope_line: None,
         width: 64,
     }
 }
@@ -233,6 +234,32 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    /// VIEW-46. The panel of preferences has no scope: no scope line is drawn for it, and Tab leaves it
+    /// with none, so it is a picker with no scope.
+    ///
+    /// Rejects: a panel given a scope line, which draws an Enter and Tab row that does nothing here,
+    /// and a Tab that gives the picker a scope.
+    #[test]
+    fn the_panel_of_preferences_has_no_scope_and_ignores_tab() {
+        use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+        let mut picker = Picker::new(Editing::Vi, UsagePing::On);
+        assert_eq!(panel().scope_line, None);
+        assert_eq!(picker.scope(), None);
+        for (code, modifiers) in [
+            (KeyCode::Tab, KeyModifiers::NONE),
+            (KeyCode::BackTab, KeyModifiers::SHIFT),
+        ] {
+            list_picker::handle_key(&mut picker, code, modifiers);
+            assert_eq!(picker.scope(), None, "{code:?}");
+            assert_eq!(
+                picker.chosen(),
+                Some(&Row::Editing(Editing::Vi)),
+                "{code:?}"
+            );
+        }
+        assert!(!rendered(&picker).contains("Tab:"), "{}", rendered(&picker));
     }
 
     /// The words drawn are the words the setting is spelled with, so somebody comparing what they

@@ -140,8 +140,11 @@ fn show(session: &mut Session, workspace: &Workspace, listing: &Listing, turn: u
                     removed = removed
                 ),
             };
+            // A hunk's file can be one the planner was given as a reference and never by name, so
+            // the form a later turn may read is the number alone (SESSION-17).
             session.transcript.push(Entry::tool(
                 Activity::running("Hunk", format!("{number} {}", named(workspace, &file.path)))
+                    .as_the_planner_had_it(Some(number.to_string()))
                     .done(row)
                     .with_changes(hunk.drawn()),
             ));

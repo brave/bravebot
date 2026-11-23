@@ -884,6 +884,93 @@ fn a_configured_wheel_still_stops_at_the_ends_and_still_drops_a_count() {
     }
 }
 
+/// SCROLL-3: the count `tui.wheelRows` names in the settings files is the one the session
+/// moves by, through the call that puts the settings into force when the session opens. A
+/// build that read the key from the settings and never handed it to the session would keep
+/// the built-in three for every figure, and the tests that give the session a count
+/// directly would not notice. The layers combine per name, so a checkout naming another key
+/// of the `tui` block leaves the person's figure in force and a checkout naming this one
+/// overrides it.
+#[test]
+fn a_wheel_count_the_settings_name_reaches_the_session_and_moves_the_view() {
+    let root = crate::testutil::scratch_dir("bravebot-app-wheel-rows-layers");
+    let _ = std::fs::remove_dir_all(&root);
+    let home = root.join("home");
+    let cwd = root.join("cwd");
+    std::fs::create_dir_all(&home).expect("scratch home");
+    std::fs::create_dir_all(cwd.join(".bravebot")).expect("scratch project");
+    std::fs::create_dir_all(cwd.join(".git")).expect("scratch checkout");
+
+    // A scroller that has been opened over a session the settings were adopted into, so
+    // the first wheel event is what shows how far the session moves.
+    let moved_by_one_event = |settings: &bravebot_config::Settings| {
+        let mut session = opened();
+        adopt_settings(&mut session, settings, None);
+        let held = session.wheel_rows();
+        handle_mouse(&mut session, drag(MouseEventKind::ScrollUp, 0, 0));
+        (held, session.scroll)
+    };
+    let layered = |home_text: &str, project_text: &str| {
+        std::fs::write(home.join("settings.json"), home_text).expect("write the home layer");
+        std::fs::write(cwd.join(".bravebot").join("settings.json"), project_text)
+            .expect("write the project layer");
+        bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None)
+    };
+
+    assert_eq!(
+        moved_by_one_event(&bravebot_config::Settings::parse(
+            r#"{"tui": {"wheelRows": 5}}"#
+        )),
+        (5, 5),
+        "a figure in the settings did not reach the session"
+    );
+    assert_eq!(
+        moved_by_one_event(&bravebot_config::Settings::parse("{}")),
+        (3, 3),
+        "settings naming nothing moved a different distance from the built-in three"
+    );
+    assert_eq!(
+        moved_by_one_event(&layered(r#"{"tui": {"wheelRows": 5}}"#, "{}")),
+        (5, 5),
+        "the home layer's figure did not reach the session"
+    );
+    assert_eq!(
+        moved_by_one_event(&layered(
+            r#"{"tui": {"wheelRows": 5}}"#,
+            r#"{"tui": {"mouse": true}}"#
+        )),
+        (5, 5),
+        "a checkout naming another key of the block took the figure away"
+    );
+    assert_eq!(
+        moved_by_one_event(&layered(
+            r#"{"tui": {"wheelRows": 5}}"#,
+            r#"{"tui": {"wheelRows": 8}}"#
+        )),
+        (8, 8),
+        "a checkout's figure did not override the person's"
+    );
+
+    // The range the settings reader holds a figure to survives the trip to the session:
+    // one past the ceiling is held to it and the things read as absence leave the three.
+    assert_eq!(
+        moved_by_one_event(&bravebot_config::Settings::parse(
+            r#"{"tui": {"wheelRows": 100000}}"#
+        ))
+        .0,
+        crate::state::WHEEL_ROWS_CEILING,
+        "a figure past the range was not held to the ceiling"
+    );
+    for absent in ["0", r#""5""#, "1.5"] {
+        let text = format!(r#"{{"tui": {{"wheelRows": {absent}}}}}"#);
+        assert_eq!(
+            moved_by_one_event(&bravebot_config::Settings::parse(&text)).0,
+            3,
+            "{absent} was read as a figure and not as absence"
+        );
+    }
+}
+
 /// The keys go into the needle while one is being typed, because that is what typing
 /// means. Abandoning it leaves the view where it was rather than where a half-typed
 /// search had reached.

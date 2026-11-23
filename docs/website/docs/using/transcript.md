@@ -258,7 +258,7 @@ and how to write one of your own.
 
 ## The model picker
 
-[`/model`](../reference/commands.md#model) draws a bordered panel over the session with a search box
+[`/model`](../reference/commands.md#model-session) draws a bordered panel over the session with a search box
 above the list. **Typing narrows the list rather than walking it**, matching without regard to case
 anywhere in the name shown, in the name a request would carry, and in the service that answers, and
 every word you type has to match something. A roster from a gateway runs to hundreds of models, so

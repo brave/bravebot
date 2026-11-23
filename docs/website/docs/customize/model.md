@@ -8,6 +8,7 @@ description: Choose a model with /model, understand the offered model roster and
 
 ```
 /model
+/model session
 ```
 
 opens a picker on the model currently in use, as a panel in the middle of the screen. The panel opens
@@ -16,13 +17,24 @@ answered. What you type meanwhile narrows them when they arrive, and Enter choos
 then. A listing that fails closes the picker, leaves the model as it was and says why. The list comes
 from the endpoint rather than from a set compiled in, so it is whatever the backend actually offers
 today. Google Vertex AI is the exception, having no listing to ask (see [Reaching an
-OpenAI-compatible gateway](providers/openai-compatible.md#google-vertex-ai)). The choice is written to
+OpenAI-compatible gateway](providers/openai-compatible.md#google-vertex-ai)). The choice made with `/model` is written to
 `~/.bravebot/model`, so it outlives the session that made it and applies in every directory, except
 where the file `--settings` names has a [`model`](configuration.md#model) key. A checkout's own settings cannot name a
 model. A one-shot run reads the same record, so a script uses the model you picked
 unless [`--model`](../reference/cli.md#--model-name) names another. A model your AWS account named
 for a tier is written as that tier's word, `opus`, `sonnet` or `haiku`, so the record names whatever
 the tier variable names when the ARN is replaced.
+
+**`/model session` picks a model for this session only.** It opens the same picker, and Enter puts
+the model in force for the running session without writing `~/.bravebot/model`, so the next session
+opens on the model it would have had. The title says `this session only` and the first footer row
+says what Enter and Tab do. Tab switches between this scope and the one `/model` opens, which records
+the pick for every session, so you can change your mind before you press Enter. The info panel
+marks a session-only pick with a row `this session only` under the model. `/clear`, `/handoff` and
+`/branch` keep the pick, and `/resume` opens another session, which opens on the recorded pick. A
+model named by a definition under `--agent` or by a skill for plan mode still outranks the pick, and
+`/model session` opens no picker under a definition that names a model. A session started with
+[`--model`](../reference/cli.md#--model-name) opens on that model, and a pick replaces it.
 
 **Type to narrow the list rather than arrowing through it.** A search matches the name shown, the name
 a request would carry and the service that answers, ignoring case and anywhere in any of them, and
@@ -57,7 +69,8 @@ The list is drawn for a person, and the names in it never reach a model. What yo
 **A prompt file can open the picker on a model.** A file in `~/.bravebot/prompts` whose front matter
 has `model: <name>` puts its text in the box and opens this picker with the cursor on the row whose
 key or name is that model. Nothing changes until you press Enter on a row, and Escape keeps the model
-in use. A name the list lacks is said. Under `--agent` with a definition that names a model the
+in use. The picker is the one `/model` opens, so Enter records the pick for every session, and Tab
+switches it to this session only. A name the list lacks is said. Under `--agent` with a definition that names a model the
 picker does not open. See [Prompt files](../reference/commands.md#prompt-files).
 
 With an AWS account or a gateway configured the picker offers those models alongside this list rather

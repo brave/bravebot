@@ -369,7 +369,8 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
     /// Declined rather than answered, as everywhere nobody can be asked: a reply invented here would
     /// be reported to the planner as the person's own words. Where lines are being read the question
     /// is put to the program sending them, and what comes back is a pick among the choices the
-    /// planner offered (CLI-36).
+    /// planner offered (CLI-36). Questions other than the planner's own (such as a rule proposal or
+    /// a plan) stay refused for want of anybody to ask (RULE-3, CLI-36).
     fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
         if let Some(cancel) = &self.stop_at_a_question {
             cancel.cancel();
@@ -384,8 +385,8 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
             return self.refusing.ask_user(asking);
         }
         match &self.lines {
-            Some(lines) => lines.ask(asking),
-            None => self.refusing.ask_user(asking),
+            Some(lines) if asking.closes_when_idle => lines.ask(asking),
+            _ => self.refusing.ask_user(asking),
         }
     }
 
@@ -433,6 +434,14 @@ mod tests {
                 .lines()
                 .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
                 .filter(|event| event["event"] == "permission")
+                .collect()
+        }
+
+        fn questions(&self) -> Vec<serde_json::Value> {
+            String::from_utf8_lossy(&self.0.lock().unwrap_or_else(PoisonError::into_inner))
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .filter(|event| event["event"] == "question")
                 .collect()
         }
     }
@@ -489,6 +498,17 @@ mod tests {
             .approving_over_lines();
         let program = Program::picking(position, channel, said.clone());
         (one_shot, said, program)
+    }
+
+    /// CLI-8. A one-shot cannot put an apply step's list, typed at a terminal, piped, or answering
+    /// a program over lines, so a plan whose step would put one is refused before it runs.
+    #[test]
+    fn a_one_shot_cannot_put_an_apply_steps_list() {
+        for attended in [true, false] {
+            assert!(!OneShot::new(&b""[..], Vec::new(), attended).can_put_apply_lists());
+        }
+        let (mut over_lines, _said, _program) = approving_over_lines(0);
+        assert!(!over_lines.can_put_apply_lists());
     }
 
     fn keys(value: &serde_json::Value) -> Vec<String> {
@@ -710,6 +730,56 @@ mod tests {
         assert_eq!(gates, ["run", "run"]);
     }
 
+    /// CLI-36, SANDBOX-27: a run lent a credential scope a person kept at an earlier prompt is
+    /// never put to the program either, though the planner asked for nothing, so its approving
+    /// answer cannot run the line with a credential nobody was shown for it. A plain run is put
+    /// first as the control, and a line holding a kept directory, which is not a credential scope,
+    /// is put as a second control. A fault that read only what the planner asked for
+    /// (`asks_for_scopes`) would put the line to the program.
+    #[test]
+    fn a_run_lent_a_kept_scope_is_not_put_to_a_program_that_approves_everything() {
+        let carrying = |reached| {
+            let mut request = a_run();
+            let mut confined = confined_asking_for(Vec::new());
+            confined.carried = vec![bravebot_agent::confirm::Carried {
+                program: "git".to_string(),
+                toolchain: None,
+                scope: None,
+                reaches: Vec::new(),
+                identity: None,
+                network: false,
+                remembered: vec![bravebot_agent::confirm::Remembered {
+                    reached,
+                    write: false,
+                    allowed: "2026-10-07".to_string(),
+                }],
+            }];
+            request.confined = Some(confined);
+            request
+        };
+        let kept_directory = carrying(bravebot_agent::reach::Reached::Directory(
+            "/tmp/data".into(),
+        ));
+        let kept_scope = carrying(bravebot_agent::reach::Reached::Scope(Scope::Aws));
+        assert!(!kept_directory.asks_for_scopes());
+        assert!(kept_scope.asks_for_scopes());
+        assert!(kept_scope.requested_scopes().is_empty());
+
+        let (mut one_shot, said, program) = approving_over_lines(1);
+        let control = one_shot.confirm_run(&a_run());
+        let directory = one_shot.confirm_run(&kept_directory);
+        let scoped = one_shot.confirm_run(&kept_scope);
+        program.leaves();
+
+        assert!(control.approved(), "the control was not approved");
+        assert!(directory.approved(), "a kept directory was refused");
+        assert!(!scoped.approved(), "a run lent a kept scope proceeded");
+        let asked = said.permissions();
+        assert_eq!(asked.len(), 2, "{asked:?}");
+        let gates: Vec<_> = one_shot.declined().iter().map(|d| d.gate).collect();
+        assert_eq!(gates, ["run"]);
+    }
+
     /// CLI-36, MODE-2, PERM-9: a run that redirects into a protected path is never put to the
     /// program, so an approving answer cannot let it through. A plain run is put first as the
     /// control. A fault that put every run, as `confirm_run` did before it read `protected`, would
@@ -744,6 +814,7 @@ mod tests {
             rule: "notes.md".to_string(),
             preview: "text".to_string(),
             truncated: false,
+            hidden: 0,
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
             label: String::new(),
@@ -756,6 +827,47 @@ mod tests {
         assert!(
             asked.is_empty(),
             "the vouch was put to the program: {asked:?}"
+        );
+    }
+
+    /// RULE-3, CLI-36: a question that proposes a rule is never put to a program over lines,
+    /// because only a turn a person is watching can propose and a lines program gets no rule write.
+    /// It stays refused unasked for want of anybody to ask.
+    #[test]
+    fn a_program_over_lines_cannot_answer_a_question_that_proposes_a_rule() {
+        let (mut one_shot, said, program) = approving_over_lines(0);
+        let asking = bravebot_core::ask::Asking {
+            prompts: vec![bravebot_core::ask::Prompt {
+                key: "rule approval 0".to_string(),
+                header: "Rule".to_string(),
+                question: "Keep this rule?".to_string(),
+                rows: vec![
+                    bravebot_core::ask::Row {
+                        index: 0,
+                        label: "Keep this rule".to_string(),
+                        detail: None,
+                    },
+                    bravebot_core::ask::Row {
+                        index: 1,
+                        label: "Do not keep".to_string(),
+                        detail: None,
+                    },
+                ],
+                multiple: false,
+            }],
+            closes_when_idle: false,
+        };
+        let answers = one_shot.ask_user(&asking);
+        program.leaves();
+
+        assert!(
+            answers.is_empty(),
+            "a rule proposal was answered by a program: {answers:?}"
+        );
+        let asked = said.questions();
+        assert!(
+            asked.is_empty(),
+            "the rule proposal was put to the program: {asked:?}"
         );
     }
 }

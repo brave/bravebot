@@ -828,7 +828,11 @@ fn run(
     // first prompt is not yet read (HOOK-10). Run before the stderr lock is taken: the lock is for
     // writing the sentences, not for the length of a hook.
     if let Some(moments) = &mut moments {
-        let said = moments.started();
+        // The lines session can put a question to the person, so a plugin's hook on this moment is
+        // asked about first, through the decision every moment of a plugin's hook goes through. The
+        // answers are the session's, so the same ones count at its end (PLUGIN-7).
+        moments.keep_answers(running.account.clone());
+        let said = moments.started_asking(&mut asking);
         crate::finish::say_notices(&mut std::io::stderr().lock(), &said);
     }
     // The streams themselves rather than a lock on each. A lock held for the length of the session
@@ -892,6 +896,7 @@ fn lines<R: BufRead + Send, W: Write + Send, T: Turns<Prompting<R, W>>>(
                     said.not_served.is_some(),
                 ),
                 not_served: said.not_served.as_deref(),
+                draw_the_reply: false,
             },
         );
     }
@@ -1434,21 +1439,16 @@ fn opening_trust<R: BufRead, W: Write>(
     // person reading a line at a time, or hearing one, has read the detail by the time they are
     // asked to answer it. That includes what a yes keeps and where.
     let keeping = keeping(root);
-    let mut lines = vec![
-        bravebot_agent::confirm::shown_path(root),
-        t!(trust_directory_explained).to_string(),
-        t!(trust_directory_regardless).to_string(),
-        t!(trust_directory_confined_lines).to_string(),
-    ];
-    match &keeping {
-        Some((store, _)) => lines.extend([
-            t!(trust_directory_remember_explained).to_string(),
-            t!(trust_directory_remember_exact).to_string(),
-            t!(cli_plain_trust_remember_where).to_string(),
-            bravebot_agent::confirm::shown_path(store.path()),
-        ]),
-        None => lines.push(t!(trust_directory_not_remembered).to_string()),
-    }
+    let take_back = t!(cli_plain_trust_remember_where);
+    let lines = bravebot_approval::trust_directory_lines(
+        root,
+        keeping
+            .as_ref()
+            .map(|(store, _)| bravebot_approval::Keeping {
+                record: store.path(),
+                take_back,
+            }),
+    );
     let answer = match asking.put(&lines, t!(trust_directory_title)) {
         Some(Decision::Approve) => bravebot_tui::trust_prompt::Answer::Trust,
         Some(Decision::Reject) => bravebot_tui::trust_prompt::Answer::Decline,
@@ -1676,8 +1676,8 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
         // Only the affirmative approves. Any other line is a person who typed something that was
         // not yes, and the end of the input is nobody answering at all.
         let on = self.answering();
-        let typed = self.line(on, &format!("{question} {} ", t!(line_answer)))?;
-        Some(match typed.trim().to_lowercase() == t!(line_answer_yes) {
+        let typed = self.line(on, &bravebot_approval::invitation(question))?;
+        Some(match bravebot_approval::says_yes(&typed) {
             true => Decision::Approve,
             false => Decision::Reject,
         })
@@ -1775,6 +1775,7 @@ fn program(request: &RunRequest) -> Vec<String> {
         summary: &request.summary(),
         steps: &steps,
         writes: &writes,
+        stdin: request.stdin.as_deref(),
         confinement: confinement.as_ref(),
         ambient: &ambient,
         releases_private: request.releases_private(),
@@ -1868,6 +1869,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             &request.rule,
             checked(request.verdict),
             &request.preview,
+            request.hidden,
         );
         self.about(Held::Vouch);
         self.ask(&lines, t!(vouch_title))
@@ -1880,14 +1882,29 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         self.ask(&lines, t!(expose_title))
     }
 
-    /// The whole list, each description behind the margin and none of it cut.
+    /// The whole list, each description and each value of an argument behind the margin and none
+    /// of it cut.
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
+        let arguments: Vec<Vec<bravebot_approval::Argument<'_>>> = request
+            .tools
+            .iter()
+            .map(|tool| {
+                tool.arguments
+                    .iter()
+                    .map(|argument| bravebot_approval::Argument {
+                        text: &argument.text,
+                        choices: &argument.choices,
+                    })
+                    .collect()
+            })
+            .collect();
         let tools: Vec<bravebot_approval::Tool<'_>> = request
             .tools
             .iter()
-            .map(|tool| bravebot_approval::Tool {
+            .zip(&arguments)
+            .map(|(tool, arguments)| bravebot_approval::Tool {
                 name: &tool.name,
-                arguments: &tool.arguments,
+                arguments,
                 description: tool.description.as_deref(),
                 read_only: tool.read_only,
             })
@@ -1992,6 +2009,23 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         });
         self.about(Held::Move);
         self.ask(&lines, t!(mcp_move_title))
+    }
+
+    /// A line session has somebody at it, so the question is put in lines (PLUGIN-7). The end of the
+    /// input is a refusal, as at every question here.
+    fn can_ask_about_a_hook(&self) -> bool {
+        true
+    }
+
+    fn confirm_hook(&mut self, request: &bravebot_agent::confirm::HookRequest) -> Decision {
+        let lines = bravebot_approval::hook_lines(&bravebot_approval::Hook {
+            plugin: &request.plugin,
+            moment: request.moment,
+            argv: &request.argv,
+            records: request.records,
+        });
+        self.about(Held::Question);
+        self.ask(&lines, t!(plugin_hook_title))
     }
 
     /// The plan, before anything has run.
@@ -2284,6 +2318,42 @@ mod tests {
         );
         assert_eq!(ended, None, "a hosted start on an allowed model was ended");
         assert!(allowed.output.is_empty());
+    }
+
+    /// LABEL-8: a start on a model that searches the web over chat completions is ended with no file
+    /// named, whether the model is the configured default or a recorded pick, and a model beside it
+    /// that does not search is not ended. The regression it rejects is a refusal that needs a managed
+    /// file, which would leave a `model` setting naming the search model as the one route open.
+    #[test]
+    fn a_start_on_a_model_that_searches_the_web_is_ended_without_a_file() {
+        let mut config = Config::from_lookup(|name| match name {
+            bravebot_config::env_var::ENDPOINT => Some("https://example.invalid".into()),
+            bravebot_config::env_var::KEY_ID => Some("a-key-id".into()),
+            bravebot_config::env_var::SIGNING_KEY => Some("a-signing-key".into()),
+            _ => None,
+        })
+        .expect("a configured gateway");
+        let serde_json::Value::Object(root) = serde_json::from_str(
+            r#"{"provider": {"openai": {"npm": "@ai-sdk/openai-compatible",
+                "options": {"apiKey": "test-token"},
+                "models": {"gpt-5-search-api": {}, "gpt-5.5": {}}}}}"#,
+        )
+        .expect("json") else {
+            panic!("not an object");
+        };
+        config.providers = bravebot_config::provider::Provider::all(&root);
+
+        let said = refused_model(&config, Some("openai/gpt-5-search-api"))
+            .expect("the search model ended the start");
+        assert!(said.contains("openai/gpt-5-search-api"), "{said}");
+        assert!(said.contains("searches the web"), "{said}");
+        assert_eq!(refused_model(&config, Some("openai/gpt-5.5")), None);
+
+        config.default_model = "openai/gpt-5-search-api".to_string();
+        assert!(
+            refused_model(&config, None).is_some(),
+            "the configured default was not asked"
+        );
     }
 
     /// BG-8: a recorded choice or a settings key for automatic vetting answers a foreground session's
@@ -2595,6 +2665,102 @@ mod tests {
                 asking.put(&["something".to_string()], "do it?"),
                 expected,
                 "{answer:?} was not read as {expected:?}"
+            );
+        }
+    }
+
+    /// PLUGIN-7, S11, S15 in lines: a session in lines has somebody at it, so it says so, puts the
+    /// hook question, and only the affirmative approves. A line that is anything else and the end of
+    /// the input refuse. The question carries the plugin's argv behind the margin.
+    ///
+    /// Rejects: a lines session that cannot be asked (it would fire no hook for a person who is
+    /// there), a yes taken from anything but yes, and an end of input read as a yes.
+    #[test]
+    fn a_plugin_hook_is_asked_in_lines_and_only_a_yes_approves() {
+        use bravebot_agent::confirm::{Confirmer, HookRequest};
+        let request = HookRequest {
+            plugin: "demo".to_string(),
+            moment: "turn-started",
+            argv: vec!["/h/hook.sh".to_string()],
+            records: true,
+        };
+        for (typed, expected) in [
+            ("y\n", Decision::Approve),
+            ("Y\n", Decision::Approve),
+            ("n\n", Decision::Reject),
+            ("yes please\n", Decision::Reject),
+            ("\n", Decision::Reject),
+            ("", Decision::Reject),
+        ] {
+            let mut asking = Prompting::new(
+                std::io::BufReader::new(std::io::Cursor::new(typed.as_bytes().to_vec())),
+                Vec::new(),
+            );
+            assert!(asking.can_ask_about_a_hook());
+            assert_eq!(asking.confirm_hook(&request), expected, "{typed:?}");
+            let said = String::from_utf8(asking.output).expect("utf-8");
+            assert!(
+                said.contains("demo") && said.contains("1. /h/hook.sh"),
+                "{said}"
+            );
+        }
+    }
+
+    /// PLUGIN-7, S10, S11 at `session-started` in lines: the start of the session asks through the
+    /// lines confirmer, and the hook runs after a typed yes and not after a no or the end of the
+    /// input. The question was printed with the plugin's name, and a no is not recorded.
+    ///
+    /// Rejects: a lines session whose start fires a plugin's hook without the question, one that
+    /// fires after a no or an end of input, and one that records a no.
+    #[cfg(unix)]
+    #[test]
+    fn a_plugin_hook_at_the_start_of_a_lines_session_is_asked_and_runs_only_after_a_yes() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = crate::test_support::Scratch::new("plain-plugin-hook-session-started");
+        let marker = scratch.path.join("marker");
+        let source = scratch.path.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join("plugin.toml"),
+            "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nhooks = \"hooks.json\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            source.join("hooks.json"),
+            r#"{"hooks":[{"on":"session-started","run":["${PLUGIN_ROOT}/hook.sh"]}]}"#,
+        )
+        .unwrap();
+        let script = source.join("hook.sh");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let home = scratch.path.join("state");
+        bravebot_agent::plugins::install(&source, &home).unwrap();
+
+        for (typed, fires) in [("n\n", false), ("", false), ("y\n", true)] {
+            let _ = std::fs::remove_file(&marker);
+            let _ = std::fs::remove_file(home.join("hooks-approved"));
+            let mut moments =
+                bravebot_agent::hooks::SessionMoments::read(Some(&home), &scratch.path);
+            moments.keep_answers(bravebot_agent::chatgpt::AccountSession::begin());
+            let mut asking = Prompting::new(
+                std::io::BufReader::new(std::io::Cursor::new(typed.as_bytes().to_vec())),
+                Vec::new(),
+            );
+            moments.started_asking(&mut asking);
+            assert_eq!(marker.exists(), fires, "{typed:?}");
+            assert_eq!(
+                home.join("hooks-approved").exists(),
+                fires,
+                "{typed:?} left a record"
+            );
+            let said = String::from_utf8(asking.output).expect("utf-8");
+            assert!(
+                said.contains("demo") && said.contains("session-started"),
+                "{said}"
             );
         }
     }
@@ -3829,6 +3995,36 @@ mod tests {
         );
     }
 
+    /// A run fed a reference names it in the question, and the sentence over it is the
+    /// catalog's. A background session puts the same lines to whoever attaches, so this is the
+    /// question both read (PROMPT-1, RUN-3). The regression it rejects is a `program` that builds
+    /// the lines without reading `request.stdin`, so a yes to `sh -s` runs a page nobody named.
+    #[test]
+    fn a_run_fed_a_reference_is_asked_about_with_the_reference_named() {
+        let pipeline =
+            bravebot_core::command::Pipeline::new(vec![bravebot_core::command::Stage::new(
+                "sh",
+                vec!["-s".to_string()],
+            )]);
+        let mut request = RunRequest::from_pipeline(&pipeline, &["/bin/sh".to_string()], "/work");
+        let unfed = program(&request);
+        assert!(
+            !unfed.iter().any(|line| line == t!(run_is_fed)),
+            "{unfed:?}"
+        );
+
+        request.stdin = Some("ref:1".to_string());
+        request.plan.stdin = Some(bravebot_core::label::Label::untrusted_public());
+        let lines = program(&request);
+        let sentence = lines
+            .iter()
+            .position(|line| line == t!(run_is_fed))
+            .unwrap_or_else(|| {
+                panic!("the question does not say it is fed a reference: {lines:?}")
+            });
+        assert_eq!(lines[sentence + 1], "  ref:1", "{lines:?}");
+    }
+
     /// A name that reached its file through a link is asked about with the link beside the file,
     /// since the link is what starts and an entry for the line is keyed on both.
     #[test]
@@ -4310,6 +4506,7 @@ mod tests {
                 declaration: &declaration,
                 program: None,
                 changed: false,
+                plugin: None,
             });
 
             assert_eq!(answer, expected, "{typed:?}");
@@ -4795,6 +4992,7 @@ mod tests {
                     rule: "scripts/a.sh".to_string(),
                     preview: "echo".to_string(),
                     truncated: false,
+                    hidden: 0,
                     verdict,
                     reason: None,
                     label: String::new(),
@@ -5004,6 +5202,89 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// PROMPT-13: the plain question for a vouch says how many characters of the preview drew as
+    /// nothing, above the preview, and says nothing of them for a preview with none. The regression
+    /// it rejects is a `confirm_vouch` that does not pass the count on to the lines it draws.
+    #[test]
+    fn the_plain_vouch_question_says_how_many_characters_of_the_preview_draw_as_nothing() {
+        let preview = "here.\u{2039}U+E0041 A\u{203A}\u{2039}U+202E\u{203A}";
+        let said = t!(hidden_characters, count = 2usize).to_string();
+        for hidden in [2, 0] {
+            let mut asking = Prompting::new(
+                std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
+                Vec::new(),
+            );
+            let decision = asking.confirm_vouch(&VouchRequest {
+                path: "notes.md".to_string(),
+                rule: "notes.md".to_string(),
+                preview: preview.to_string(),
+                truncated: false,
+                hidden,
+                verdict: Verdict::Safe,
+                reason: None,
+                label: String::new(),
+                reason_label: None,
+            });
+            assert_eq!(decision, Decision::Approve);
+            let screen = String::from_utf8(asking.output).expect("text");
+            let rows: Vec<&str> = screen.lines().collect();
+            let saying = rows.iter().position(|row| row.contains(&said));
+            let preview_at = rows.iter().position(|row| row.ends_with(preview));
+            assert!(preview_at.is_some(), "{screen}");
+            match hidden {
+                0 => assert!(saying.is_none(), "{screen}"),
+                _ => assert!(
+                    saying.is_some() && saying < preview_at,
+                    "the vouch question did not say {hidden} characters drew as nothing above the preview: {screen}"
+                ),
+            }
+        }
+    }
+
+    /// SERVERS-8 in lines: each value an argument takes is on a row of its own behind the margin,
+    /// directly under that argument, and the argument's own text is not.
+    ///
+    /// A wrong implementation reads the wrong field of the argument, or leaves the values out, so
+    /// a value is drawn on no row at all or beside the argument with no margin.
+    #[test]
+    fn the_values_an_argument_takes_are_asked_about_behind_the_margin_in_lines() {
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"n\n".to_vec())),
+            Vec::new(),
+        );
+        asking.confirm_tool_list(&ToolListRequest {
+            alias: "weather".to_string(),
+            tools: vec![bravebot_agent::confirm::ListedTool {
+                name: "weather:get_forecast".to_string(),
+                arguments: vec![bravebot_agent::confirm::ListedToolArgument {
+                    text: "unit (string)".to_string(),
+                    choices: vec!["metric".to_string(), "a), y (string".to_string()],
+                }],
+                description: None,
+                read_only: false,
+            }],
+            refused: 0,
+            withheld: 0,
+            verdict: Verdict::Safe,
+            reason: None,
+        });
+        let drawn = String::from_utf8(asking.output).expect("text");
+        assert_eq!(
+            behind_the_margin(&drawn),
+            vec!["metric", "a), y (string"],
+            "{drawn}"
+        );
+        let rows: Vec<&str> = drawn.lines().collect();
+        let at = rows
+            .iter()
+            .position(|row| *row == "    unit (string)")
+            .unwrap_or_else(|| panic!("the argument has no row of its own: {drawn}"));
+        assert!(
+            rows[at + 1].ends_with(" metric") && rows[at + 2].ends_with(" a), y (string"),
+            "the values are not directly under the argument: {drawn}"
+        );
     }
 
     /// A hundred lines with an instruction on the seventieth, past the head a prompt might show.

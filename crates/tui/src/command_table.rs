@@ -7,15 +7,23 @@ use crate::state::{Bound, Session, Status};
 
 /// The line that opens the model picker instead of starting a turn.
 pub(crate) const MODEL_COMMAND: &str = "/model";
+/// The one word `/model` takes: it opens the picker in the scope that records nothing. No model
+/// name is accepted, so `/model <name>` stays a prompt (CMD-17).
+pub(crate) const MODEL_SESSION_WORD: &str = "session";
+/// The line the one word makes with the command, which the completion list offers once `/model `
+/// is typed (CMD-10).
+pub(crate) const MODEL_SESSION_LINE: &str = "/model session";
 
 /// The line that opens the theme picker, or applies a theme named after the word.
 pub(crate) const THEME_COMMAND: &str = "/theme";
 
 /// The line that opens the effort picker, or takes a level named after the word.
 pub(crate) const EFFORT_COMMAND: &str = "/effort";
+/// The word `/effort` takes to mean the scope that records nothing, the same word `/model` takes.
+/// Alone it opens the picker in that scope, and it is matched whole and in lower case.
+pub(crate) const EFFORT_SESSION_WORD: &str = MODEL_SESSION_WORD;
 /// Picks one of the named option sets the model in force carries (BACKEND-45).
 pub(crate) const VARIANT_COMMAND: &str = "/variant";
-pub(crate) const VARIANT_OFF: &str = "off";
 
 /// The line that names the model the planner may consult, says which it may, or drops the choice.
 pub(crate) const ADVISOR_COMMAND: &str = "/advisor";
@@ -47,6 +55,16 @@ pub(crate) const CONFIG_COMMAND: &str = "/config";
 /// The line that says which language the interface is in, saves a choice for the next start, or
 /// gives the choice back to the settings file and the environment (LOCALE-8).
 pub(crate) const LANGUAGE_COMMAND: &str = "/language";
+
+/// The line that says whether crash reports are on and what holds them off, or saves the person's
+/// own choice for the next start (CRASH-11).
+pub(crate) const CRASH_REPORTS_COMMAND: &str = "/crash-reports";
+
+/// The word after `/crash-reports` that turns reports on. Matched whole and in lower case.
+pub(crate) const CRASH_REPORTS_ON: &str = "on";
+
+/// The word after `/crash-reports` that turns reports off. Matched whole and in lower case.
+pub(crate) const CRASH_REPORTS_OFF: &str = "off";
 
 /// The line that opens another directory, taking the path to open as its argument.
 pub(crate) const ADD_DIR_COMMAND: &str = "/add-dir";
@@ -86,6 +104,10 @@ pub(crate) const PLUGIN_ENABLE: &str = "enable";
 
 /// The word after `/plugin` that turns the installed plugin named after it off and keeps it.
 pub(crate) const PLUGIN_DISABLE: &str = "disable";
+
+/// The word after `/plugin` that fetches the installed plugin named after it again from its
+/// recorded source.
+pub(crate) const PLUGIN_UPDATE: &str = "update";
 
 /// The line that says which language servers the session has started (CMD-29).
 pub(crate) const LSP_COMMAND: &str = "/lsp";
@@ -369,7 +391,8 @@ impl Command {
     /// stays narrow.
     pub fn typed_hint(&self) -> String {
         match self.name {
-            EFFORT_COMMAND => format!("[{}]", effort_words().join(" | ")),
+            MODEL_COMMAND => format!("[{MODEL_SESSION_WORD}]"),
+            EFFORT_COMMAND => format!("[{}]", effort_first_words().join(" | ")),
             SANDBOX_COMMAND => format!("[{}]", sandbox_words().join(" | ")),
             LIMIT_COMMAND => format!("[<n>[k|m] | <n> credits | {LIMIT_OFF}]"),
             REVIEW_COMMAND => {
@@ -378,7 +401,7 @@ impl Command {
             }
             MCP_COMMAND => format!("[{MCP_LIST} | {MCP_RECONNECT} | {MCP_DISABLE} | {MCP_REMOVE}]"),
             PLUGIN_COMMAND => format!(
-                "[{PLUGIN_ADD} <path> | {PLUGIN_LIST} | {PLUGIN_REMOVE} <name> | {PLUGIN_ENABLE} <name> | {PLUGIN_DISABLE} <name>]"
+                "[{PLUGIN_ADD} <path> | {PLUGIN_LIST} | {PLUGIN_UPDATE} <name> | {PLUGIN_REMOVE} <name> | {PLUGIN_ENABLE} <name> | {PLUGIN_DISABLE} <name>]"
             ),
             COMMIT_MESSAGE_COMMAND => {
                 use crate::commit_message_command::{RANGE, STAGED};
@@ -405,6 +428,31 @@ fn effort_words() -> Vec<&'static str> {
         .iter()
         .map(|level| level.as_str())
         .collect()
+}
+
+/// The words `/effort` takes first: [`EFFORT_SESSION_WORD`], then the levels. The hint drawn after
+/// `/effort ` and Tab on the first word read this one list, so a level added to the type appears
+/// in both (CMD-21).
+fn effort_first_words() -> Vec<&'static str> {
+    with_the_session_word(&effort_words())
+}
+
+/// [`EFFORT_SESSION_WORD`] followed by `levels`: the one place the first word's list is made.
+fn with_the_session_word<'a>(levels: &[&'a str]) -> Vec<&'a str> {
+    std::iter::once(EFFORT_SESSION_WORD)
+        .chain(levels.iter().copied())
+        .collect()
+}
+
+/// What is drawn after `/effort session ` once the space is typed, or `None` for any other line
+/// of two words. `typed` is the line without the spaces at its end.
+///
+/// The levels, which are the words Tab finishes after `session`, from the one list
+/// [`effort_words`] gives (CMD-21).
+pub(crate) fn typed_hint_after_word(typed: &str) -> Option<String> {
+    let (command, word) = typed.split_once(' ')?;
+    (command == EFFORT_COMMAND && word == EFFORT_SESSION_WORD)
+        .then(|| format!("[{}]", effort_words().join(" | ")))
 }
 
 /// The modes `/sandbox` takes, in the order the picker lists them.
@@ -549,6 +597,12 @@ pub fn commands() -> Vec<Command> {
             name: LANGUAGE_COMMAND,
             argument: "[tag | auto]",
             description: t!(command_language),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: CRASH_REPORTS_COMMAND,
+            argument: "[on | off]",
+            description: t!(command_crash_reports),
             mid_turn: MidTurn::Runs,
         },
         Command {
@@ -883,6 +937,19 @@ pub fn commands() -> Vec<Command> {
 /// line that is not a command at all completes to nothing, which is what closes the list.
 pub fn completions(line: &str) -> Vec<Command> {
     let trimmed = line.trim_start();
+    // The one word `/model` takes, offered as a row of its own once the command is settled by a
+    // space, with its own description. Only while what follows the space is the start of the word,
+    // so `/model gpt-5`, which is a prompt, is offered nothing.
+    if let Some(typed) = trimmed
+        .strip_prefix(MODEL_COMMAND)
+        .and_then(|rest| rest.strip_prefix(' '))
+    {
+        return if MODEL_SESSION_WORD.starts_with(typed) {
+            vec![model_session_row()]
+        } else {
+            Vec::new()
+        };
+    }
     if !trimmed.starts_with('/') || trimmed.contains(char::is_whitespace) {
         return Vec::new();
     }
@@ -896,15 +963,39 @@ pub fn completions(line: &str) -> Vec<Command> {
     offered
 }
 
+/// The row the list offers after `/model `: the line `/model session` and what it does. It is not
+/// a command of the table, which has `/model` once, but it is carried out as `/model` is.
+fn model_session_row() -> Command {
+    Command {
+        name: MODEL_SESSION_LINE,
+        argument: "",
+        description: t!(command_model_session),
+        mid_turn: MidTurn::Changes,
+    }
+}
+
+/// Whether Enter on `line`, with `offered` the row the list has under the cursor, takes the row
+/// before doing what the line says. Not for `/model ` with nothing after the space, which is still
+/// the bare command and opens the picker; Tab and a click take the row there.
+pub(crate) fn enter_takes_the_row(line: &str, offered: &Command) -> bool {
+    let line = line.trim();
+    offered.name != line && line != MODEL_COMMAND
+}
+
 /// The line `/effort `, `/sandbox ` or `/mode ` plus the start of one of its words becomes, or
 /// `None` where Tab has nothing to add.
 ///
 /// The words are this program's own, or for `/mode` the names of the skills the box already offers,
 /// so completing one reads nothing a person did not type. A
 /// start that fits one word becomes that word, and a start that fits several is carried as far as
-/// they agree.
+/// they agree. After `/effort` the first word is completed from [`EFFORT_SESSION_WORD`] and the
+/// levels together, and after `/effort session` from the levels alone.
 pub(crate) fn complete_argument(line: &str, skills: &[&str]) -> Option<String> {
     let line = line.trim_start();
+    // Before `/mode`, which is a prefix of `/model`.
+    if let Some(typed) = line.strip_prefix(MODEL_COMMAND) {
+        return complete_word(MODEL_COMMAND, typed, &[MODEL_SESSION_WORD]);
+    }
     if let Some(typed) = line.strip_prefix(MODE_COMMAND) {
         return complete_exact_word(MODE_COMMAND, typed, skills);
     }
@@ -915,7 +1006,14 @@ pub(crate) fn complete_argument(line: &str, skills: &[&str]) -> Option<String> {
         return complete_word(OPEN_COMMAND, typed, &[OPEN_EDIT]);
     }
     if let Some(typed) = line.strip_prefix(EFFORT_COMMAND) {
-        return complete_word(EFFORT_COMMAND, typed, &effort_words());
+        return complete_effort(typed);
+    }
+    if let Some(typed) = line.strip_prefix(CRASH_REPORTS_COMMAND) {
+        return complete_exact_word(
+            CRASH_REPORTS_COMMAND,
+            typed,
+            &[CRASH_REPORTS_ON, CRASH_REPORTS_OFF],
+        );
     }
     if let Some(typed) = line.strip_prefix(SCHEDULE_COMMAND) {
         return complete_word(
@@ -930,6 +1028,27 @@ pub(crate) fn complete_argument(line: &str, skills: &[&str]) -> Option<String> {
 
 fn complete_word(command: &str, after: &str, words: &[&str]) -> Option<String> {
     complete(command, after, words, str::to_ascii_lowercase)
+}
+
+/// [`complete_word`] for what follows `/effort`: the first word from the scope word and the levels
+/// together, and the word after [`EFFORT_SESSION_WORD`] from the levels alone, so `session` is not
+/// offered as a level.
+fn complete_effort(after: &str) -> Option<String> {
+    complete_effort_among(after, &effort_words())
+}
+
+/// [`complete_effort`] over `levels`, so the first word is completed from the scope word and the
+/// levels as one list: a start that fits `session` and a level is carried as far as they agree.
+fn complete_effort_among(after: &str, levels: &[&str]) -> Option<String> {
+    let first = after.strip_prefix(' ')?;
+    match first.strip_prefix(EFFORT_SESSION_WORD) {
+        Some(level) if level.starts_with(' ') => complete_word(
+            &format!("{EFFORT_COMMAND} {EFFORT_SESSION_WORD}"),
+            level,
+            levels,
+        ),
+        _ => complete_word(EFFORT_COMMAND, after, &with_the_session_word(levels)),
+    }
 }
 
 /// [`complete_word`] for names that are matched as typed, because `/mode` takes a skill's name
@@ -976,6 +1095,43 @@ pub(crate) fn argument_to<'a>(line: &'a str, command: &str) -> Option<&'a str> {
     rest.strip_prefix(' ').map(str::trim)
 }
 
+/// What the words typed after `/effort` ask for (CMD-35).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EffortAsk<'a> {
+    /// The effort picker, opened in the scope given.
+    Picker(crate::model_prompt::Scope),
+    /// The level named, taken in the scope given. The text is not yet known to be a level: a word
+    /// that is not one is refused where the level is taken, naming this text.
+    Level(&'a str, crate::model_prompt::Scope),
+}
+
+/// Read what `argument`, the text after `/effort`, asks for.
+///
+/// The one parse of those words: a line typed at rest, a line typed while a turn runs, a line
+/// that waited in the queue and a click all reach it through `dispatch_command`, so they cannot
+/// disagree about what a line means. Nothing after `/effort` is a prompt, so every text has an
+/// answer.
+///
+/// No words opens the picker for every session. [`EFFORT_SESSION_WORD`] alone opens it for this
+/// session only, and followed by more text it names a level for this session only. The word is
+/// matched whole and in lower case, as [`MODEL_SESSION_WORD`] is, so `sessions`, `sessionhigh`,
+/// `Session high` and `sess high` are texts that name a level, none of which is one. Any other
+/// text names a level to record. The level is read as `/effort <level>` reads it, in any case.
+pub(crate) fn effort_request(argument: &str) -> EffortAsk<'_> {
+    use crate::model_prompt::Scope;
+    let argument = argument.trim();
+    if argument.is_empty() {
+        return EffortAsk::Picker(Scope::EverySession);
+    }
+    if argument == EFFORT_SESSION_WORD {
+        return EffortAsk::Picker(Scope::ThisSession);
+    }
+    match argument.split_once(char::is_whitespace) {
+        Some((EFFORT_SESSION_WORD, level)) => EffortAsk::Level(level.trim(), Scope::ThisSession),
+        _ => EffortAsk::Level(argument, Scope::EverySession),
+    }
+}
+
 /// The command word the line is, or `None` where the line is a prompt.
 ///
 /// Read off the table rather than word by word, because the question is only which command was
@@ -996,9 +1152,19 @@ fn row_typed(line: &str) -> Option<Command> {
     commands()
         .into_iter()
         .find(|command| match argument_to(line, command.name) {
-            Some(argument) => !command.argument.is_empty() || argument.is_empty(),
+            Some(argument) => {
+                !command.argument.is_empty()
+                    || argument.is_empty()
+                    || is_the_word_a_command_takes(command.name, argument)
+            }
             None => false,
         })
+}
+
+/// Whether `argument` is the one fixed word a command that takes no argument accepts: `/model
+/// session`. Only that exact word, so `/model <name>` and `/model session now` are prompts.
+fn is_the_word_a_command_takes(command: &str, argument: &str) -> bool {
+    command == MODEL_COMMAND && argument == MODEL_SESSION_WORD
 }
 
 /// Whether the line is a command that takes no argument, followed by words.
@@ -1011,7 +1177,9 @@ fn row_typed(line: &str) -> Option<Command> {
 pub(crate) fn is_a_command_given_words(line: &str) -> bool {
     commands().into_iter().any(|command| {
         command.argument.is_empty()
-            && argument_to(line, command.name).is_some_and(|words| !words.is_empty())
+            && argument_to(line, command.name).is_some_and(|words| {
+                !words.is_empty() && !is_the_word_a_command_takes(command.name, words)
+            })
     })
 }
 
@@ -1410,22 +1578,27 @@ mod tests {
     use super::*;
 
     /// The hint drawn after `/effort ` and `/sandbox `, and the words Tab completes there, both
-    /// offer the levels and modes the types list, in their order. The regression it rejects is a
-    /// word list that is written out again at one of the two sites and drifts from the other: a
-    /// level left out of the hint, or a mode Tab cannot finish.
+    /// offer the words the types list, in their order: for `/effort` the word `session` and then
+    /// the levels, for `/sandbox` the modes. The regression it rejects is a word list that is
+    /// written out again at one of the two sites and drifts from the other: a level or the word
+    /// `session` left out of the hint, or a mode, level or `session` that Tab cannot finish.
     #[test]
     fn the_effort_and_sandbox_hints_and_completions_offer_the_same_words() {
         let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
             .iter()
             .map(|level| level.as_str())
             .collect();
+        let first_words: Vec<&str> = std::iter::once(EFFORT_SESSION_WORD)
+            .chain(levels.iter().copied())
+            .collect();
         let modes: Vec<&str> = bravebot_sandbox::SandboxMode::ALL
             .iter()
             .map(|mode| mode.name())
             .collect();
         assert_eq!(effort_words(), levels);
+        assert_eq!(effort_first_words(), first_words);
         assert_eq!(sandbox_words(), modes);
-        for (command, words) in [(EFFORT_COMMAND, levels), (SANDBOX_COMMAND, modes)] {
+        for (command, words) in [(EFFORT_COMMAND, first_words), (SANDBOX_COMMAND, modes)] {
             let hint = commands()
                 .iter()
                 .find(|candidate| candidate.name == command)
@@ -1442,6 +1615,311 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// R6. `/model` takes exactly one fixed word, `session`, and no model name. `/model session`
+    /// is the command and is carried out at once; every other line with words after `/model` is a
+    /// prompt, so `/model gpt-5`, `/model sessions`, `/model session now`, `/model Session` and
+    /// `/models` stay sent to the model. The faults it rejects are a prefix match on the word, a
+    /// case-insensitive one, trailing words ignored, and any word accepted as a model name.
+    #[test]
+    fn model_takes_exactly_the_word_session_and_nothing_else() {
+        for line in ["/model", "/model session", "/model   session  "] {
+            assert!(command_typed(line).is_some(), "{line:?} is not a command");
+            assert!(!is_a_command_given_words(line), "{line:?} is a prompt");
+        }
+        for line in [
+            "/model gpt-5",
+            "/model sessions",
+            "/model sess",
+            "/model Session",
+            "/model session now",
+            "/model now session",
+            "/models",
+            "/modelsession",
+        ] {
+            assert!(command_typed(line).is_none(), "{line:?} is a command");
+        }
+        for line in [
+            "/model gpt-5",
+            "/model sessions",
+            "/model Session",
+            "/model session now",
+        ] {
+            assert!(is_a_command_given_words(line), "{line:?} is not a prompt");
+        }
+        assert!(!is_a_command_given_words("/models"));
+        assert!(command_typed("/models").is_none());
+    }
+
+    /// CMD-35. The one parse of the text after `/effort`: no words asks for
+    /// the every-session picker, `session` alone for the this-session picker, `session <text>` for
+    /// the text taken for this session only, and every other text for the text taken and recorded.
+    /// The word is matched whole and in lower case, and the level that follows it is left as typed
+    /// so it is read as `/effort <level>` reads it. The faults it rejects are a prefix match on the
+    /// word (`sessions`, `sessionhigh`, `sess high`), a case-insensitive one (`Session high`), the
+    /// scope lost so that `session high` records, the whole text kept as the level so that the
+    /// refusal names `session highest`, and the level lower-cased or checked here so that
+    /// `session HIGH` is read differently from `HIGH`.
+    #[test]
+    fn effort_takes_session_and_a_level_and_reads_the_rest_as_a_level_to_record() {
+        use crate::model_prompt::Scope::{EverySession, ThisSession};
+        for (argument, asked) in [
+            ("", EffortAsk::Picker(EverySession)),
+            ("session", EffortAsk::Picker(ThisSession)),
+            ("session ", EffortAsk::Picker(ThisSession)),
+            ("session high", EffortAsk::Level("high", ThisSession)),
+            ("session   high  ", EffortAsk::Level("high", ThisSession)),
+            ("session\thigh", EffortAsk::Level("high", ThisSession)),
+            ("session HIGH", EffortAsk::Level("HIGH", ThisSession)),
+            ("session highest", EffortAsk::Level("highest", ThisSession)),
+            (
+                "session high now",
+                EffortAsk::Level("high now", ThisSession),
+            ),
+            ("high", EffortAsk::Level("high", EverySession)),
+            ("HIGH", EffortAsk::Level("HIGH", EverySession)),
+            ("highest", EffortAsk::Level("highest", EverySession)),
+            ("sessions", EffortAsk::Level("sessions", EverySession)),
+            ("sessionhigh", EffortAsk::Level("sessionhigh", EverySession)),
+            ("sess high", EffortAsk::Level("sess high", EverySession)),
+            ("sess", EffortAsk::Level("sess", EverySession)),
+            ("Session", EffortAsk::Level("Session", EverySession)),
+            (
+                "Session high",
+                EffortAsk::Level("Session high", EverySession),
+            ),
+            (
+                "SESSION high",
+                EffortAsk::Level("SESSION high", EverySession),
+            ),
+            (
+                "high session",
+                EffortAsk::Level("high session", EverySession),
+            ),
+        ] {
+            assert_eq!(effort_request(argument), asked, "{argument:?}");
+        }
+    }
+
+    /// R17, R18, R53. Typing `/model ` offers `session` as a row with its own description, Tab
+    /// finishes a start of the word, the hint after the word is `[session]`, and a model name
+    /// after the space is offered nothing. Enter on the bare `/model ` keeps opening the picker,
+    /// while Enter on the offered row of a longer line takes the row. The faults it rejects are
+    /// no row offered, a row offered for any word after `/model`, a missing description, no Tab
+    /// completion (or `/mode` swallowing `/model`), and Enter on `/model ` taking the row.
+    #[test]
+    fn typing_model_and_a_space_offers_the_session_word() {
+        let rows = completions("/model ");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].name, MODEL_SESSION_LINE);
+        assert_eq!(rows[0].description, t!(command_model_session));
+        assert!(!rows[0].description.is_empty());
+        assert_eq!(rows[0].mid_turn, MidTurn::Changes);
+        assert_eq!(completions("/model ses").len(), 1);
+        assert!(completions("/model gpt-5").is_empty());
+        assert!(completions("/model sessions").is_empty());
+
+        assert_eq!(
+            complete_argument("/model s", &[]),
+            Some("/model session".to_string())
+        );
+        assert_eq!(complete_argument("/model session", &[]), None);
+        assert_eq!(complete_argument("/model x", &[]), None);
+
+        let model = commands()
+            .iter()
+            .find(|command| command.name == MODEL_COMMAND)
+            .copied()
+            .expect("/model is in the table");
+        assert_eq!(model.typed_hint(), "[session]");
+
+        assert!(!enter_takes_the_row("/model ", &rows[0]));
+        assert!(enter_takes_the_row("/model ses", &rows[0]));
+        assert!(!enter_takes_the_row("/model session", &rows[0]));
+    }
+
+    /// CMD-21. Typing `/effort ` offers the word `session` and the
+    /// five levels as the hint, and `session ` then offers the levels alone. The completion list
+    /// keeps the short `[level]` and offers no row for `/effort `, as it does for the levels. Tab
+    /// finishes `s` to `session`, leaves `/effort ` and `/effort session` as typed, and after
+    /// `session` finishes a level by the same rule as the levels. The faults it rejects
+    /// are the word `session` left out of the hint, the levels left out of the second hint or the
+    /// word repeated there, a row offered for `/effort ` that Enter would take, `s` finished to a
+    /// level or not at all, `session` finished from `/effort session`, the first word's list used
+    /// for the second word so `session` completes there, and the second word completed from the
+    /// wrong list so `m` becomes `medium` or `max`.
+    #[test]
+    fn typing_effort_and_a_space_offers_the_session_word_and_the_levels() {
+        let effort = commands()
+            .iter()
+            .find(|command| command.name == EFFORT_COMMAND)
+            .copied()
+            .expect("/effort is in the table");
+        assert_eq!(
+            effort.typed_hint(),
+            "[session | low | medium | high | xhigh | max]"
+        );
+        assert_eq!(effort.argument, "[level]");
+        assert_eq!(
+            typed_hint_after_word("/effort session").as_deref(),
+            Some("[low | medium | high | xhigh | max]")
+        );
+        for line in [
+            "/effort",
+            "/effort sessions",
+            "/effort Session",
+            "/effort high",
+            "/effort session high",
+            "/model session",
+            "/loop session",
+            "session",
+        ] {
+            assert_eq!(typed_hint_after_word(line), None, "{line:?}");
+        }
+        assert!(completions("/effort ").is_empty());
+        assert!(completions("/effort s").is_empty());
+        assert!(completions("/effort session ").is_empty());
+
+        for (line, finished) in [
+            ("/effort s", Some("/effort session")),
+            ("/effort se", Some("/effort session")),
+            ("/effort sessio", Some("/effort session")),
+            ("/effort S", Some("/effort session")),
+            ("/effort ", None),
+            ("/effort session", None),
+            ("/effort session ", None),
+            ("/effort sessions", None),
+            ("/effort x", Some("/effort xhigh")),
+            ("/effort h", Some("/effort high")),
+            ("/effort m", None),
+            ("/effort session h", Some("/effort session high")),
+            ("/effort session x", Some("/effort session xhigh")),
+            ("/effort session L", Some("/effort session low")),
+            ("/effort session me", Some("/effort session medium")),
+            ("/effort session ma", Some("/effort session max")),
+            ("/effort session m", None),
+            ("/effort session s", None),
+            ("/effort session se", None),
+            ("/effort session high", None),
+            ("/effort session nope", None),
+            ("/effort session high now", None),
+            ("/effort Session h", None),
+        ] {
+            assert_eq!(
+                complete_argument(line, &[]),
+                finished.map(str::to_string),
+                "{line:?}"
+            );
+        }
+    }
+
+    /// CMD-21. The first word is completed from the word `session` and the levels as one
+    /// list, so a start that fits both the word and a level is carried as far as they agree and no
+    /// further, as `m` is for `medium` and `max`, and the word after `session` is completed from
+    /// the levels alone. Run over a list that has a level starting with `s`, which no level does
+    /// today, so a level added later is handled as `m` is. The faults it rejects are `session`
+    /// taking priority over a level that begins with the same letter, the levels alone used for the
+    /// first word so `s` finishes to nothing, and `session` offered as a level after `session`.
+    #[test]
+    fn a_start_fitting_session_and_a_level_is_carried_as_far_as_they_agree() {
+        let levels = ["low", "medium", "sessile", "standard", "max"];
+        let complete = |line: &str| complete_effort_among(&line[EFFORT_COMMAND.len()..], &levels);
+        // `session`, `sessile` and `standard` share `s`, which is typed, so Tab adds nothing.
+        assert_eq!(complete("/effort s"), None);
+        // `session` and `sessile` share `sessi` but not `sessio`.
+        assert_eq!(
+            complete("/effort ses"),
+            Some("/effort sessi".to_string()),
+            "carried as far as `session` and `sessile` agree"
+        );
+        assert_eq!(
+            complete("/effort sessio"),
+            Some("/effort session".to_string())
+        );
+        assert_eq!(complete("/effort st"), Some("/effort standard".to_string()));
+        assert_eq!(
+            complete("/effort sessil"),
+            Some("/effort sessile".to_string())
+        );
+        // The word after `session` is a level, from the levels alone.
+        assert_eq!(
+            complete("/effort session sess"),
+            Some("/effort session sessile".to_string())
+        );
+        assert_eq!(complete("/effort session s"), None);
+        assert_eq!(
+            complete("/effort session st"),
+            Some("/effort session standard".to_string())
+        );
+        assert_eq!(complete("/effort session m"), None);
+        assert_eq!(
+            complete("/effort session ma"),
+            Some("/effort session max".to_string())
+        );
+    }
+
+    /// CMD-21. The hint after `/effort `, Tab on the first word and the second word's hint
+    /// all read the one list of levels, so a level the type gains appears in each and `session` is
+    /// in the first two only. The fault it rejects is a word written out again at one site, which
+    /// leaves the hint, Tab and the refusal naming different sets: every word the first hint
+    /// shows is finished by Tab from one letter shorter, and every word the second hint shows is
+    /// one `Effort::named` accepts.
+    #[test]
+    fn the_effort_hints_and_tab_and_the_levels_the_command_accepts_are_one_set() {
+        let first = commands()
+            .iter()
+            .find(|command| command.name == EFFORT_COMMAND)
+            .map(Command::typed_hint)
+            .unwrap_or_default();
+        let second = typed_hint_after_word("/effort session").unwrap_or_default();
+        let words = |hint: &str| -> Vec<String> {
+            hint.trim_matches(['[', ']'])
+                .split(" | ")
+                .map(str::to_string)
+                .collect()
+        };
+        let levels: Vec<String> = bravebot_aichat::protocol::Effort::ALL
+            .iter()
+            .map(|level| level.as_str().to_string())
+            .collect();
+        assert_eq!(words(&second), levels, "the second hint");
+        let mut with_session = vec![EFFORT_SESSION_WORD.to_string()];
+        with_session.extend(levels.clone());
+        assert_eq!(words(&first), with_session, "the first hint");
+        for word in &with_session {
+            let started = &word[..word.len() - 1];
+            let line = format!("{EFFORT_COMMAND} {started}");
+            let finished = complete_argument(&line, &[]);
+            if with_session
+                .iter()
+                .filter(|w| w.starts_with(started))
+                .count()
+                == 1
+            {
+                assert_eq!(
+                    finished,
+                    Some(format!("{EFFORT_COMMAND} {word}")),
+                    "Tab finishes {word}"
+                );
+            }
+        }
+        for word in &levels {
+            assert!(
+                bravebot_aichat::protocol::Effort::named(word).is_some(),
+                "the command refuses {word}, which the hint shows"
+            );
+            let started = &word[..word.len() - 1];
+            let line = format!("{EFFORT_COMMAND} {EFFORT_SESSION_WORD} {started}");
+            if levels.iter().filter(|w| w.starts_with(started)).count() == 1 {
+                assert_eq!(
+                    complete_argument(&line, &[]),
+                    Some(format!("{EFFORT_COMMAND} {EFFORT_SESSION_WORD} {word}")),
+                    "Tab finishes {word} after session"
+                );
+            }
+        }
+        assert!(bravebot_aichat::protocol::Effort::named(EFFORT_SESSION_WORD).is_none());
     }
 
     /// The hint drawn for `/mcp` after its word names every subcommand the command takes, in the

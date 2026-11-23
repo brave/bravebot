@@ -308,6 +308,38 @@
 .context-meter.full { --leo-progressring-color: var(--status-error); }
 .meter-ring { display: grid; }
 
+/* ---- spend limit */
+
+.spend-limit { flex: none; }
+.spend-limit-figures { font: var(--type-caption); font-variant-numeric: tabular-nums; }
+.spend-limit.reached { --leo-icon-color: var(--status-warning); }
+.spend-limit-refused {
+  margin: var(--leo-spacing-m) 0 0;
+  font: var(--type-meta);
+  color: var(--status-error);
+}
+
+/* ---- options variant */
+
+/* The refusal floats above the trigger, so the toolbar keeps its height. */
+.variant-picker { position: relative; flex: none; display: inline-flex; }
+.variant-current { max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.variant-refused {
+  position: absolute;
+  inset-inline-end: 0;
+  bottom: calc(100% + var(--leo-spacing-s));
+  z-index: 1;
+  width: max-content;
+  max-width: 320px;
+  padding: var(--leo-spacing-s) var(--leo-spacing-m);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-control);
+  background: var(--surface-panel);
+  font: var(--type-meta);
+  color: var(--status-error);
+  text-wrap: pretty;
+}
+
 /* ---- attachments */
 
 .attachment-chips {
@@ -433,10 +465,10 @@
 .composer-notice .notice-actions { display: flex; gap: var(--leo-spacing-xs); margin-left: auto; }
 /* Information rather than a warning, and a paragraph long, so the icon is plain ink and stays by
    the first line. */
-.usage-ping-notice { flex-wrap: nowrap; align-items: flex-start; --leo-icon-color: var(--ink-tertiary); }
-.usage-ping-notice > leo-icon { flex: none; margin-top: 3px; }
-.usage-ping-notice .notice-text { padding-top: 2px; line-height: 1.6; color: var(--ink-secondary); text-wrap: pretty; }
-.usage-ping-notice .notice-actions { flex: none; align-items: center; margin-top: -3px; }
+.usage-ping-notice, .crash-reports-notice { flex-wrap: nowrap; align-items: flex-start; --leo-icon-color: var(--ink-tertiary); }
+.usage-ping-notice > leo-icon, .crash-reports-notice > leo-icon { flex: none; margin-top: 3px; }
+.usage-ping-notice .notice-text, .crash-reports-notice .notice-text { padding-top: 2px; line-height: 1.6; color: var(--ink-secondary); text-wrap: pretty; }
+.usage-ping-notice .notice-actions, .crash-reports-notice .notice-actions { flex: none; align-items: center; margin-top: -3px; }
 .notice-more {
   display: inline;
   margin: 0 0 0 2px;

@@ -27,7 +27,7 @@ sending your key somewhere else. A stated `baseURL` still wins.
 
 The key is read from the variable `env` names and sent in the `x-goog-api-key` header, which is the
 only place Google reads it from. Export it as `GOOGLE_API_KEY=<your key>`, or name another variable in
-`env`. A block naming no `env` and no `options.apiKey` sends no key, and Vertex AI refuses it.
+`env`. A block naming no `env`, no `options.apiKey` and no `options.keyFile` sends no key, and Vertex AI refuses it.
 
 With no block, exporting `GOOGLE_API_KEY` and `GOOGLE_CLOUD_PROJECT` is enough, and `VERTEX_LOCATION`
 sets a location other than `global`. A block replaces this. The service is only asked once a model
@@ -60,7 +60,8 @@ gcloud auth application-default login
 
 With no block, exporting `GOOGLE_CLOUD_PROJECT` and no `GOOGLE_API_KEY` is the same. Where no key is
 found, bravebot runs `gcloud auth application-default print-access-token` and sends the result as a
-bearer token. If `gcloud` gives no token, bravebot runs `gcloud auth application-default login` before
+bearer token. A file `options.keyFile` names that gives no key counts as no key found, as an unset
+variable does. If `gcloud` gives no token, bravebot runs `gcloud auth application-default login` before
 the first request of a turn and shows the address and code it prints. `GOOGLE_APPLICATION_CREDENTIALS`
 and impersonation are read by `gcloud` and not by bravebot. bravebot does not pass `gcloud` a
 `GOOGLE_APPLICATION_CREDENTIALS` that names a file in a directory a stage may write, or a relative

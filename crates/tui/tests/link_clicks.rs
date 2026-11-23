@@ -319,6 +319,7 @@ fn an_address_wrapped_over_rows_opens_whole_from_any_of_them() {
 #[test]
 fn an_address_outside_the_assistants_words_is_not_a_link() {
     let shown = Shown {
+        as_the_planner_had_it: None,
         origin: "notes.md".to_string(),
         reach: Reach::NotThePlanner,
         label: "(U,priv)".to_string(),
@@ -912,9 +913,12 @@ fn a_click_on_a_path_waits_for_a_second_press_and_then_asks_for_the_file() {
         "carried out at once"
     );
 
-    let asked = session.take_the_click_due(now + WAIT + std::time::Duration::from_millis(1));
+    // Measured from after the click, which recorded its own time when it was made: a time taken
+    // before it can be earlier than the click's by however long the press took to handle.
+    let after = std::time::Instant::now();
+    let asked = session.take_the_click_due(after + WAIT + std::time::Duration::from_millis(1));
     assert_eq!(asked, Some(path("src/main.rs", Some(3))));
-    assert_eq!(session.take_the_click_due(now + WAIT * 2), None, "twice");
+    assert_eq!(session.take_the_click_due(after + WAIT * 2), None, "twice");
     assert_eq!(session.the_click_due_in(now), None);
 }
 
@@ -1283,6 +1287,35 @@ fn the_file_is_shown_under_a_call_in_a_quarantined_block() {
             .unwrap_or_else(|| panic!("{expected} is not on the screen"));
         assert!(row.trim_start().starts_with('\u{2503}'), "no bar: {row}");
     }
+}
+
+/// SESSION-17: a previewed file is released for the screen alone, and its name can be one the
+/// planner was never given, so `/export` names neither the file nor its lines. It says that the
+/// person chose a file to preview.
+///
+/// Rejects an export that writes the call's target or the block's origin as the heading, or any
+/// row of the preview.
+#[test]
+fn a_previewed_file_is_exported_without_its_name_or_its_lines() {
+    let project = Project::new();
+    let (mut session, _) = drawn(vec![], 100, 24);
+    project.show(&mut session, "src/main.rs", Some(3));
+
+    let exported = render::as_markdown(&session, "test");
+
+    assert!(!exported.contains("main.rs"), "{exported}");
+    assert!(!exported.contains("let a = 1"), "{exported}");
+    assert!(
+        exported.contains("*Ran: `Preview`*"),
+        "the call is not written: {exported}"
+    );
+    assert!(
+        exported.contains(&format!(
+            "> *Quarantined: {} (",
+            bravebot_tui::file_preview::PREVIEW_IN_AN_EXPORT
+        )),
+        "{exported}"
+    );
 }
 
 /// A file with an escape sequence in it cannot draw on the screen: each control character is a

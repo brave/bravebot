@@ -223,19 +223,31 @@ fn origin_command(program: &Path) -> std::process::Command {
 ///   it names can be a login flow that does. The names and kinds are those of the browser opener
 ///   (`crates/tui/src/opener.rs`). `XDG_DATA_DIRS` is also in the generic list and is repeated here
 ///   so this list reads as complete.
+/// - `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` are where `gio open`, which `xdg-open` runs
+///   under a GNOME session, finds the session bus (`$XDG_RUNTIME_DIR/bus` when the address is not
+///   set). The three commands are not shown to read them. A `credential.helper` or
+///   `core.sshCommand` that opens a page starts `xdg-open`, which does. A service a stage runs on a
+///   socket it can create answers as the bus. They are judged as the opener judges them: the
+///   directory as one directory and the address as a [`Names::BusAddress`]. Whether a service on
+///   such a socket can make `gio open` run code or choose a handler was not shown.
+/// - `SSH_PKCS11_HELPER` is the helper program `ssh-pkcs11-client` execs for a PKCS#11 provider,
+///   read the same way `SSH_SK_HELPER` is for a hardware key.
 ///
 /// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
-const CODE_SELECTORS: [(&str, Names); 10] = [
+const CODE_SELECTORS: [(&str, Names); 13] = [
     ("SSH_ASKPASS", Names::Options),
     ("SSH_ASKPASS_REQUIRE", Names::Options),
     ("SSH_SK_PROVIDER", Names::Options),
     ("SSH_SK_HELPER", Names::Options),
+    ("SSH_PKCS11_HELPER", Names::Options),
     ("DEVELOPER_DIR", Names::Directory),
     selectors::BROWSER,
     ("XDG_DATA_HOME", Names::Directory),
     ("XDG_DATA_DIRS", Names::Directories),
     ("XDG_CONFIG_HOME", Names::Directory),
     ("XDG_CONFIG_DIRS", Names::Directories),
+    selectors::XDG_RUNTIME_DIR,
+    selectors::DBUS_SESSION_BUS_ADDRESS,
 ];
 
 /// The shell `ssh` runs a `ProxyCommand` or a `LocalCommand` with when `SHELL` names one.
@@ -652,10 +664,109 @@ mod tests {
     /// configuration.
     #[test]
     fn the_variables_the_programs_started_here_are_run_to_read_are_kept() {
-        for name in ["HOME", "SSH_AUTH_SOCK", "XDG_RUNTIME_DIR", "DISPLAY"] {
+        for name in ["HOME", "SSH_AUTH_SOCK", "DISPLAY"] {
             assert!(
                 !withheld_value(name, "/stage/anything"),
                 "{name} was removed"
+            );
+        }
+    }
+
+    /// SANDBOX-30, `xdg-open` under a `credential.helper` that opens a page: the session bus `gio
+    /// open` connects to. The regressions it rejects: neither name in the list (a start that keeps
+    /// both whatever they hold), a name removed whatever it holds, which takes
+    /// the person's own bus, and `DBUS_SESSION_BUS_ADDRESS` judged as a path, which no address is.
+    #[test]
+    fn a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write_is_not_handed_to_the_programs_started_here()
+     {
+        assert!(withheld_value("XDG_RUNTIME_DIR", "/stage/run"));
+        assert!(withheld_value("XDG_RUNTIME_DIR", "run"));
+        assert!(!withheld_value("XDG_RUNTIME_DIR", "/safe/run"));
+
+        assert!(withheld_value(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/stage/run/bus"
+        ));
+        assert!(withheld_value(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/safe/run/bus;unix:path=/stage/run/bus"
+        ));
+        assert!(withheld_value(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:abstract=/tmp/dbus-x"
+        ));
+        assert!(!withheld_value(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/safe/run/bus"
+        ));
+        assert!(!withheld_value(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:runtime=yes"
+        ));
+    }
+
+    /// A runtime directory or bus address that is not text is judged as the bytes it is. The
+    /// regressions it rejects: `unix:path=/safe/run/bus` followed by a byte that is not UTF-8 read
+    /// as the path under `/safe` and kept, and a value judged by its lossy rendering: the only path
+    /// judged outside is the one spelled with `U+FFFD`, which the bytes `\xff` render as but are
+    /// not.
+    #[cfg(unix)]
+    #[test]
+    fn a_runtime_directory_or_bus_address_that_is_not_text_is_judged_by_its_bytes_here() {
+        use std::os::unix::ffi::OsStrExt;
+        let removed = |name: &str, value: &std::ffi::OsStr| {
+            started_with(
+                Path::new("/usr/bin/git"),
+                [(std::ffi::OsString::from(name), value.to_os_string())],
+                &|path: &Path| path.starts_with("/safe"),
+            )
+            .get_envs()
+            .any(|(set, now)| set == std::ffi::OsStr::new(name) && now.is_none())
+        };
+
+        assert!(removed(
+            "DBUS_SESSION_BUS_ADDRESS",
+            std::ffi::OsStr::from_bytes(b"unix:path=/safe/run/bus\xff")
+        ));
+        assert!(removed(
+            "XDG_RUNTIME_DIR",
+            std::ffi::OsStr::from_bytes(b"/stage/run\xff")
+        ));
+
+        let removed_where_only_the_lookalike_is_outside = |name: &str, value: &std::ffi::OsStr| {
+            started_with(
+                Path::new("/usr/bin/git"),
+                [(std::ffi::OsString::from(name), value.to_os_string())],
+                &|path: &Path| {
+                    path == Path::new("/safe/run\u{FFFD}")
+                        || path == Path::new("/safe/run/bus\u{FFFD}")
+                },
+            )
+            .get_envs()
+            .any(|(set, now)| set == std::ffi::OsStr::new(name) && now.is_none())
+        };
+        for (name, bytes, text) in [
+            (
+                "XDG_RUNTIME_DIR",
+                &b"/safe/run\xff"[..],
+                "/safe/run\u{FFFD}",
+            ),
+            (
+                "DBUS_SESSION_BUS_ADDRESS",
+                &b"unix:path=/safe/run/bus\xff"[..],
+                "unix:path=/safe/run/bus\u{FFFD}",
+            ),
+        ] {
+            assert!(
+                removed_where_only_the_lookalike_is_outside(
+                    name,
+                    std::ffi::OsStr::from_bytes(bytes)
+                ),
+                "{name}: bytes were judged by their lossy rendering"
+            );
+            assert!(
+                !removed_where_only_the_lookalike_is_outside(name, std::ffi::OsStr::new(text)),
+                "{name}: the genuine lookalike was removed"
             );
         }
     }
@@ -892,6 +1003,17 @@ mod tests {
 
         assert!(withheld("SSH_SK_HELPER", &planted, &session.path));
         assert!(withheld("SSH_SK_HELPER", &genuine, &session.path));
+    }
+
+    /// The regression it rejects: starting `ssh` with `SSH_PKCS11_HELPER` naming a program a
+    /// stage wrote, which `ssh-pkcs11-client` execs for a PKCS#11 provider.
+    #[cfg(unix)]
+    #[test]
+    fn a_pkcs11_helper_is_never_handed_to_the_start() {
+        let (session, _safe, planted, genuine) = planted_and_genuine("pkcs11-helper");
+
+        assert!(withheld("SSH_PKCS11_HELPER", &planted, &session.path));
+        assert!(withheld("SSH_PKCS11_HELPER", &genuine, &session.path));
     }
 
     /// The regression it rejects: leaving `SHELL` as the person's environment has it. `ssh` runs a

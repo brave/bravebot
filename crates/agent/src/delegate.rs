@@ -504,6 +504,10 @@ pub struct Delegated {
     pub kind: String,
     /// What it cost, so the turn can report the whole of what it spent.
     pub usage: Usage,
+    /// Of that cost, what the parent counts against its own token budget: the delegate's total
+    /// less the checks and processor calls it made, which its parent's budget does not count
+    /// either (DELEGATE-29).
+    pub budgeted_tokens: u64,
     /// How many model requests made that cost, so the turn counts them with its own.
     pub requests: u64,
 }
@@ -873,6 +877,7 @@ pub fn run(
                 // turn whose cache never hit.
                 cached: outcome.cached,
             },
+            budgeted_tokens: outcome.budgeted_tokens,
             requests: outcome.timing.activity.requests,
         }),
         vouched,

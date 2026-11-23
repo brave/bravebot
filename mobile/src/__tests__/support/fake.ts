@@ -24,6 +24,7 @@ export interface ViewPatch {
   pending?: Pending | null
   rows?: readonly Row[]
   omitted?: number
+  actor?: string | null
 }
 
 export interface Call {
@@ -68,6 +69,7 @@ export class FakeSession implements AgentSession {
       pending: initial.pending ?? null,
       rows: [...(initial.rows ?? [])],
       omitted: initial.omitted ?? 0,
+      actor: initial.actor ?? null,
       resyncing: false,
       ended: null,
     }
@@ -105,6 +107,7 @@ export class FakeSession implements AgentSession {
       pending: patch.pending === undefined ? this.current.pending : patch.pending,
       rows,
       omitted: patch.omitted ?? this.current.omitted,
+      actor: patch.actor === undefined ? this.current.actor : patch.actor,
       resyncing: this.current.resyncing,
       ended: this.current.ended,
     }
@@ -246,10 +249,6 @@ export class FakeClient implements AgentClient {
   }
 
   async attach(): Promise<never> {
-    throw new Error('not used')
-  }
-
-  async unsupported(): Promise<never> {
     throw new Error('not used')
   }
 }

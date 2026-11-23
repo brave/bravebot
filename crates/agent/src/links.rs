@@ -17,6 +17,10 @@ pub enum LinkKind {
 pub struct LinkSet {
     pub kind: LinkKind,
     pub url: String,
+    /// Whether the session worked this link out from the commands the planner ran (PANEL-18), and
+    /// not from an address the person typed. The record keeps one only where it holds no link of
+    /// that kind, so it never replaces one the person gave.
+    pub inferred: bool,
 }
 
 /// The characters a sentence puts around an address: brackets, quotes and punctuation.
@@ -275,6 +279,15 @@ const NUMBERED: [&str; 17] = [
     "ready", "develop", "lock", "unlock", "pin", "unpin", "transfer",
 ];
 
+/// The `pr-fix.py` steps that take the number of the pull request they work on. `open` is not one:
+/// its number is the issue the pull request closes.
+const PR_FIX_NUMBERED: [&str; 8] = [
+    "start", "continue", "ci", "comments", "check", "push", "review", "reply",
+];
+
+/// The repository `pr-fix.py` works in, which it does not take as an argument.
+const PR_FIX_REPOSITORY: (&str, &str) = ("brave", "bravebot");
+
 /// The words that make the item that follows them an issue the text closes.
 const CLOSING: [&str; 9] = [
     "close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved",
@@ -341,7 +354,10 @@ fn number_after(words: &[&str]) -> Option<u64> {
 /// repository from the segment it is in: `--repo`, `--repo=`, `-R` or `GH_REPO=`, else
 /// `default_repository`, else the number names nothing. A prose `#12` with no `gh` word or closing
 /// keyword before it is not read. Quoting is not parsed beyond taking a quote off the ends of a
-/// word, so a quoted `;` cuts a segment short.
+/// word, so a quoted `;` cuts a segment short. A `pr-fix.py` or `gh` word is matched on the part
+/// after its last `/`, so the script named by a relative path, an absolute path or an absolute path
+/// quoted for a space (`'/a b/pr-fix.py'`, whose last word ends in the file name once its quote is
+/// taken off) is the same word.
 ///
 /// This reads the string and returns what it found. It decides nothing about the command: whether
 /// it runs, what it is asked about or what the planner is told is settled without it. It reads the
@@ -363,6 +379,15 @@ pub fn references_in_command(
         };
         let mut segment_found = Vec::new();
         for (at, word) in words.iter().enumerate() {
+            if word.rsplit('/').next() == Some("pr-fix.py")
+                && words
+                    .get(at + 1)
+                    .is_some_and(|step| PR_FIX_NUMBERED.contains(step))
+                && let Some(number) = number_after(&words[at + 2..])
+            {
+                let (owner, repo) = PR_FIX_REPOSITORY;
+                segment_found.extend(Reference::new(owner, repo, number, LinkKind::PullRequest));
+            }
             if word.rsplit('/').next() != Some("gh") {
                 continue;
             }
@@ -402,6 +427,73 @@ pub fn references_in_command(
         merge(&mut found, &segment_found, PER_STRING);
     }
     found
+}
+
+/// The kind of item a command line the planner wrote creates: `gh pr create`, `gh issue create`,
+/// or the `open` step of `pr-fix.py`, which opens a pull request (PANEL-18).
+///
+/// The first creation in the line, read from the words of the command and from nothing a program
+/// printed. It decides nothing about the command: whether it runs is settled without it. A line
+/// that asks for `--help` creates nothing.
+pub fn creation_in_command(line: &str) -> Option<LinkKind> {
+    for segment in bounded(line).split(['\n', ';', '|', '&']) {
+        let words: Vec<&str> = segment
+            .split_whitespace()
+            .map(|word| word.trim_matches(['"', '\'']))
+            .collect();
+        if words.iter().any(|word| matches!(*word, "--help" | "-h")) {
+            continue;
+        }
+        for (at, word) in words.iter().enumerate() {
+            match word.rsplit('/').next() {
+                Some("gh") if words.get(at + 2) == Some(&"create") => match words.get(at + 1) {
+                    Some(&"pr") => return Some(LinkKind::PullRequest),
+                    Some(&"issue") => return Some(LinkKind::Issue),
+                    _ => {}
+                },
+                Some("pr-fix.py") if words.get(at + 1) == Some(&"open") => {
+                    return Some(LinkKind::PullRequest);
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// What a turn has seen of the items its own commands created, from which it works out the session's
+/// links (PANEL-18).
+///
+/// A command that created an item does not hold its number, since the number is in what the program
+/// printed and that is never read. The first later call whose arguments name an item of that kind,
+/// by a reader that says which kind it is, is taken as the one created.
+#[derive(Debug, Default)]
+pub struct Inferring {
+    awaiting: Option<LinkKind>,
+}
+
+impl Inferring {
+    /// Take the references a call's own arguments named, and say which link they set, where an
+    /// earlier call created an item of the kind one of them names. A call that creates an item is
+    /// told of with [`Inferring::created`] after this, so what its own arguments name, such as a
+    /// `Part of` line in a body, is not taken for the item it creates.
+    pub fn named(&mut self, found: &[Reference]) -> Option<LinkSet> {
+        let kind = self.awaiting?;
+        let item = found
+            .iter()
+            .find(|item| item.kind() == kind && item.kind_named())?;
+        self.awaiting = None;
+        Some(LinkSet {
+            kind,
+            url: item.address(),
+            inferred: true,
+        })
+    }
+
+    /// Note that a call that ran and exited cleanly created an item of `kind`.
+    pub fn created(&mut self, kind: LinkKind) {
+        self.awaiting = Some(kind);
+    }
 }
 
 #[cfg(test)]
@@ -909,5 +1001,142 @@ mod tests {
             command("gh pr view 5 --repo o/r \"unterminated ( ) $(", None),
             ["o/r#5 PullRequest named=true"]
         );
+    }
+
+    /// PANEL-18. The regression it rejects: a reader that takes the `pr-fix.py` steps as another
+    /// repository's, that reads the number of `open` (the issue it closes) as the pull request, or
+    /// that reads a number that follows a flag.
+    #[test]
+    fn a_pr_fix_step_names_the_pull_request_it_works_on_and_open_names_none() {
+        for step in [
+            "start", "continue", "ci", "comments", "check", "push", "review", "reply",
+        ] {
+            assert_eq!(
+                command(
+                    &format!("python3 agents/skills/pr-fix/pr-fix.py {step} 4376"),
+                    None
+                ),
+                ["brave/bravebot#4376 PullRequest named=true"],
+                "{step}"
+            );
+        }
+        assert_eq!(
+            command("pr-fix.py ci 4376 --wait", None),
+            ["brave/bravebot#4376 PullRequest named=true"]
+        );
+        // Coverage of reader code that did not change: the words are split at whitespace and the
+        // script is matched on the part after its last `/`, so an absolute path reads like a
+        // relative one. The reader does not parse quoting. A path with a space quoted for a shell
+        // ends in a word whose trailing quote is trimmed, and that word is the file name.
+        for line in [
+            "python3 /home/a/bravebot/agents/skills/pr-fix/pr-fix.py ci 4376",
+            "python3 '/home/a b/bravebot/agents/skills/pr-fix/pr-fix.py' ci 4376",
+        ] {
+            assert_eq!(
+                command(line, None),
+                ["brave/bravebot#4376 PullRequest named=true"],
+                "{line}"
+            );
+        }
+        assert!(
+            command(
+                "python3 /home/a/bravebot/agents/skills/pr-fix/pr-fix.py open 3628 --title t",
+                None
+            )
+            .is_empty()
+        );
+        for line in [
+            "python3 agents/skills/pr-fix/pr-fix.py open 3628 --branch fix-x --title t",
+            "python3 agents/skills/pr-fix/pr-fix.py issue 3628",
+            "python3 agents/skills/pr-fix/pr-fix.py ci --wait 4376",
+        ] {
+            assert!(command(line, None).is_empty(), "{line}");
+        }
+    }
+
+    /// PANEL-18. The regression it rejects: a reader that takes any `create` word, that misses the
+    /// `open` step, that reads a help request as a creation, or that reads a quoted body.
+    #[test]
+    fn a_line_that_creates_an_item_is_read_from_its_words_and_help_creates_nothing() {
+        assert_eq!(
+            creation_in_command("gh pr create --repo o/r --title x"),
+            Some(LinkKind::PullRequest)
+        );
+        assert_eq!(
+            creation_in_command("cd x && /usr/bin/gh issue create --title y"),
+            Some(LinkKind::Issue)
+        );
+        assert_eq!(
+            creation_in_command("python3 agents/skills/pr-fix/pr-fix.py open 3628 --title t"),
+            Some(LinkKind::PullRequest)
+        );
+        // The same coverage for `open`: an absolute path creates a pull request as a relative one
+        // does, since the script is matched on the part after its last `/`.
+        assert_eq!(
+            creation_in_command(
+                "python3 /home/a/bravebot/agents/skills/pr-fix/pr-fix.py open 3628 --title t"
+            ),
+            Some(LinkKind::PullRequest)
+        );
+        for line in [
+            "gh pr create --help",
+            "gh issue create -h",
+            "gh pr view 5 --repo o/r",
+            "gh pr list",
+            "gh repo create x",
+            "gh release create v1",
+            "python3 agents/skills/pr-fix/pr-fix.py ci 5",
+            "git commit -m 'create'",
+            "",
+        ] {
+            assert_eq!(creation_in_command(line), None, "{line:?}");
+        }
+    }
+
+    fn named(line: &str) -> Vec<Reference> {
+        references_in_command(line, Some(("brave", "bravebot")))
+    }
+
+    /// PANEL-18. The regression it rejects: an inference that takes the first item of the creating
+    /// call itself (a `Part of` line), that takes an item of the other kind, that takes an item
+    /// whose kind was only assumed, or that goes on setting a link after the first.
+    #[test]
+    fn the_first_item_of_the_created_kind_a_later_call_names_is_the_link_and_only_once() {
+        let mut inferring = Inferring::default();
+        // Nothing was created, so nothing is taken.
+        assert!(inferring.named(&named("gh pr view 5")).is_none());
+
+        inferring.created(LinkKind::PullRequest);
+        // An issue is not a pull request, and an assumed kind is not named.
+        assert!(inferring.named(&named("gh issue view 9")).is_none());
+        let assumed: Vec<Reference> = named("gh pr view 6")
+            .into_iter()
+            .map(Reference::assumed)
+            .collect();
+        assert!(inferring.named(&assumed).is_none());
+        // The first pull request a call names is the link, as an address.
+        let link = inferring.named(&named("gh pr checks 4376")).unwrap();
+        assert_eq!(link.kind, LinkKind::PullRequest);
+        assert_eq!(link.url, "https://github.com/brave/bravebot/pull/4376");
+        assert!(link.inferred);
+        // It is taken once.
+        assert!(inferring.named(&named("gh pr view 4377")).is_none());
+
+        inferring.created(LinkKind::Issue);
+        let link = inferring.named(&named("gh issue view 12")).unwrap();
+        assert_eq!(link.kind, LinkKind::Issue);
+        assert_eq!(link.url, "https://github.com/brave/bravebot/issues/12");
+    }
+
+    /// PANEL-18. The regression it rejects: an `Inferring` that holds on to a reference read before
+    /// any creation, which would link an item the session only looked at.
+    #[test]
+    fn a_reference_named_before_any_creation_is_not_kept_for_later() {
+        let mut inferring = Inferring::default();
+        let creating = named("gh pr create --body 'see https://github.com/brave/bravebot/pull/7'");
+        assert!(inferring.named(&creating).is_none());
+        inferring.created(LinkKind::PullRequest);
+        let link = inferring.named(&named("gh pr view 8")).unwrap();
+        assert_eq!(link.url, "https://github.com/brave/bravebot/pull/8");
     }
 }

@@ -26,6 +26,11 @@ name it has, as a read of it is ([TRUST-2](../trust-map.md#TRUST-2)): a hard lin
 distrusts is left out, and so is a file whose other names could not be looked up. The map is
 therefore trusted whenever it is returned. What it says of the files it left out is a number.
 
+A file nobody vouched for is set aside as the walk meets it and is not charged to the cap on files
+([MAP-5](#MAP-5)), as a file a deny rule covers is not ([MAP-4](#MAP-4)). The files a map shows are
+therefore the same whatever a distrusted directory holds, and the count of files left out is of the
+ones the walk met before it stopped.
+
 **Why.** A map is text the planner reads, built from many files. Opening an unvouched file to decide
 whether to show it lets that file choose what the planner sees, and a name or a declaration is
 enough to carry an instruction. [LIST-1](list-files.md#LIST-1) quarantines a listing for the same
@@ -36,6 +41,7 @@ are left out instead.
 `verified-by: bravebot_agent::workspace::a_repo_map_never_opens_a_file_nobody_vouched_for`
 `verified-by: bravebot_agent::turn::a_repo_map_shows_vouched_declarations_and_none_from_an_unvouched_file`
 `verified-by: bravebot_agent::workspace::a_repo_map_does_not_open_a_hard_link_to_a_distrusted_file`
+`verified-by: bravebot_agent::workspace::a_repo_map_does_not_charge_files_nobody_vouched_for_to_the_file_cap`
 
 <a id="MAP-2"></a>
 ### MAP-2: a declaration is ranked by how many other vouched files mention its name
@@ -61,19 +67,24 @@ nobody vouched for could raise its own declaration to the top of the map by ment
 
 A declaration can be a binding with its value on the same line, so the file is scanned as any read
 is ([CRED-15](../credential-protection.md#CRED-15)) and dropped whole on a finding. It is counted
-together with the files that could not be read or were too large, in one number, so the result does
-not say which file held a credential ([CRED-19](../credential-protection.md#CRED-19)).
+together with the files that could not be read or were too large (more than 512 KiB), in one number,
+so the result does not say which file held a credential
+([CRED-19](../credential-protection.md#CRED-19)).
 
 `verified-by: bravebot_agent::workspace::a_repo_map_leaves_out_a_file_holding_a_credential`
+`verified-by: bravebot_agent::workspace::a_repo_map_leaves_out_a_file_past_the_per_file_size_limit`
 
 <a id="MAP-4"></a>
 ### MAP-4: a file a deny rule covers, or that sits in a vendored or generated tree, is not mapped
 
 Mapping a tree is reading it, so a rule that keeps a file from being read keeps it from the map, and
 the file is not counted as left out, since a count would say it exists. The directories a listing
-does not walk ([LIST-3](list-files.md#LIST-3)) are not walked here.
+does not walk ([LIST-3](list-files.md#LIST-3)) are not walked here. A file a rule covers is not
+charged to the cap on files either, so what the rules cover does not decide which of the other
+files a map reaches.
 
 `verified-by: bravebot_agent::workspace::a_repo_map_does_not_open_a_file_a_deny_rule_covers`
+`verified-by: bravebot_agent::workspace::a_repo_map_does_not_charge_a_file_a_deny_rule_covers_to_the_file_cap`
 `verified-by: bravebot_agent::workspace::a_repo_map_skips_noise_directories`
 
 <a id="MAP-5"></a>
@@ -81,9 +92,12 @@ does not walk ([LIST-3](list-files.md#LIST-3)) are not walked here.
 
 `budget` is in tokens, clamped to a range, and the declarations kept are the highest ranked that fit,
 not the first in the file. A map that shows fewer declarations than it found, stopped at a cap on
-files or bytes, or could not open a directory says so to the planner, and so does one that left out
-files nobody vouched for. A directory named where a file is expected, and a file named where a
-directory is, are refused.
+files or on 32 MiB of source, or could not open a directory says so to the planner, and so does one
+that left out files nobody vouched for. A file nobody vouched for is not charged to the cap on files,
+so the map reports the cap as reached only when files it may open reach it ([MAP-1](#MAP-1)). The
+cap bounds the files the walk collects and the budget bounds what is shown. It does not bound how many files
+the walk meets and sets aside as unvouched ([Known costs](#known-costs)). A directory named where a
+file is expected, and a file named where a directory is, are refused.
 
 **Why.** Silence reads as the whole tree, and a planner told nothing concludes a symbol does not
 exist when the map was cut off.
@@ -92,10 +106,23 @@ exist when the map was cut off.
 `verified-by: bravebot_agent::repo_map::a_tight_budget_keeps_the_declaration_that_ranks_first_not_the_first_in_the_file`
 `verified-by: bravebot_agent::repo_map::a_path_too_long_for_the_budget_does_not_empty_the_map`
 `verified-by: bravebot_agent::workspace::a_repo_map_says_when_the_file_cap_stopped_it`
+`verified-by: bravebot_agent::workspace::a_repo_map_says_when_the_byte_cap_stopped_it`
+`verified-by: bravebot_agent::workspace::a_repo_map_still_says_when_vouched_files_reach_the_file_cap_beside_unvouched_ones`
+`verified-by: bravebot_agent::workspace::a_repo_map_does_not_charge_files_nobody_vouched_for_to_the_file_cap`
 `verified-by: bravebot_agent::workspace::a_repo_map_of_a_file_is_refused`
 `verified-by: bravebot_agent::repo_map::a_budget_outside_the_range_gives_the_map_of_the_nearest_end`
 `verified-by: bravebot_agent::tools::a_map_says_each_way_it_fell_short_and_a_whole_one_says_nothing`
 `verified-by: bravebot_agent::workspace::a_repo_map_says_when_a_directory_could_not_be_opened`
+
+## Known costs
+
+- **The walk of a distrusted tree is not bounded by the cap on files.** Each file nobody vouched
+  for costs a trust-map question and a lookup of its other names, and it spends none of the cap
+  ([MAP-5](#MAP-5)), so a distrusted directory of a million files is walked to its end. What stops
+  the walk is the end of the tree and the cap on the files it may open. The directories it does not
+  walk ([MAP-4](#MAP-4)) and the links it does not enter ([LIST-6](list-files.md#LIST-6)) are left
+  out of the walk. There is no second cap on the files set aside, since a second cap would let a
+  distrusted directory decide which vouched files a map reaches.
 
 ## Not covered
 

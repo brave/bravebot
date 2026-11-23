@@ -33,22 +33,33 @@ a message to the model *is* the planner's context.
 records that bytes moved somewhere they were already allowed to go: a filesystem write, an HTTP
 body, or a person's screen. Each of those has a gate of its own, `Policy::present`,
 `Policy::render_in_place` and `Policy::read_trusted_content`, and the planner's own arguments
-have `Policy::read_planner_argument`. A processor's answer that a crate outside the driver reads for
+have `Policy::read_planner_argument`. The planner's own path for a read has
+`Policy::promote_confined_read` and the reference name it types has `Policy::accept_reference`:
+each assumes the argument it is handed is the planner's own and cannot tell it from bytes a server
+sent. A processor's answer that a crate outside the driver reads for
 one number has `Policy::read_a_number`. A reshape that reads two pieces of content at once, which
 a diff is, goes through `Policy::render_pair_in_place`: the same gate, taking the taint of both
-rather than one side's label. A `declassify` anywhere else is almost certainly a
+rather than one side's label. The planner's own strings that go to a model or a check have
+`Policy::before_advice`, `Policy::before_processor`, `Policy::before_chooser` and
+`Policy::before_vetting`: each releases the string whatever its label and decides nothing from it.
+A `declassify` anywhere else is almost certainly a
 violation, and it can only be written inside the policy layer: `Declassification::authorise` is
 `pub(in crate::policy)`, so no other module and no other crate can mint one at all. Every file
 that declassifies is pinned with a count in [specs/labels.md](../specs/labels.md), so
 `make check-spec` fails on a new one until somebody records it there, which is where a reviewer
 is asked whether it belongs. The gates themselves are pinned the same way, because a reshape
 releases content to a closure the driver wrote and hands back a value that is still labelled, so
-a new call site needs no `declassify` of its own and would otherwise move nothing. The eight
+a new call site needs no `declassify` of its own and would otherwise move nothing. The ten
 functions that lower confidentiality for a write into the workspace or give bytes a trusted label
 (`declassify_into_workspace`, `declassify_written_into_workspace`,
 `declassify_checkout_into_workspace`, `promote_a_tool_list`, `promote_a_server_move`,
-`adopt_edited_body`, `promote_vetted` and `promote_vetted_picture`) are counted per file in
+`adopt_edited_body`, `promote_vetted`, `promote_vetted_picture`, `promote_confined_read` and
+`promote_reference_for_read`) are counted per file in
 [specs/labels.md](../specs/labels.md) as well, so a new caller of one fails `make check-spec`.
+`accept_reference` builds no label and is counted the same way, because it turns the planner's
+argument into a slot name. A new caller of any of them is read for what it passes in: an
+argument the planner wrote is the only thing that may reach `promote_confined_read` or
+`accept_reference`.
 Nothing checks the destination or the grant a caller passes, so a reviewer reads the new caller.
 `note_for` in `crates/agent/src/tools.rs` is pinned the same way. It is the one function that takes
 a closure from its caller and forwards it to a gate: a new caller of it writes such a closure
@@ -69,8 +80,8 @@ the counts a server computed, in `crates/agent/src/lsp.rs`, the sixth is `read_g
 `bravebot-agent`, the seventh is the text-or-binary sniff and decoding of a read of an unvouched
 file, in `Workspace::survey`, `Workspace::read` and `Workspace::page`, the eighth is the
 choice of which parts of a tool result are taken, in `ToolResult::output` and `ContentBlock::picture`
-in `crates/mcp/src/protocol.rs`, the ninth is the read of a processor's answer for one number,
-in `bravebot_choice::number_in` in `crates/choice/src/number.rs`, and the tenth is the trigger
+in `crates/mcp/src/protocol.rs`, the ninth is the read of a processor's answer for one number or
+for an `apply` step's rows, in `crates/choice/src/number.rs` and `rows.rs`, and the tenth is the trigger
 listener's reading of a request's framing, path, signature and body length, in
 `crates/cli/src/trigger.rs`. All ten are named under
 Known costs in [specs/labels.md](../specs/labels.md), because an unlisted exception is
@@ -99,10 +110,13 @@ The crate also sorts how a call ended from what the server wrote. `isError`, an 
 reply it cannot use and a line past 16 MiB are replies, and a connection closed with no reply and
 a bound that passed are not. Whether a plan run goes on is decided by one thing in that sorting,
 which is whether a reply arrived, so a branch in a plan run on which kind of reply arrived is a
-violation of shape 1.
+violation of shape 1, except in an `apply` step, where a call the server reported failed (`isError`,
+an error reply or a reply the client cannot use, never the reply's text) skips the calls of that step
+that depend on it ([MANIFEST-16](../specs/manifest.md#MANIFEST-16)).
 The ninth is the same shape in `bravebot-choice`, which is not the driver: it holds no
 `declassify` and no `Labelled::new`, and the text reaches it only through `Policy::read_a_number`,
-whose uses are pinned and which gives back one byte labelled as the answer was. A second comparison
+`Policy::number_a_list` and `Policy::resolve_proposal`, whose uses are pinned; the first gives back
+one byte labelled as the answer was. A second comparison
 of an answer's text anywhere else in that crate is found by reading the diff. What the driver does
 with the byte is carry it: as a `Labelled<u8>` in the slot store, as an opaque `Carried` into
 `bravebot_mcp::protocol::with_choice`, and as digits for the person's screen from
@@ -111,6 +125,16 @@ the planner for any value of it, or a reader whose failure depends on what the a
 violation of shape 1. A second function that releases an answer's text to another crate's function
 is one of shape 3 and moves a pinned count. A `Carried` turned into a number in `bravebot-core` or
 `bravebot-agent` is one of shape 3 as well, and moves the count of `Carried::into_wire`.
+The crate reads an `apply` step's lists and rows the same way, through two more pinned gates:
+`Policy::number_a_list` hands it a read's reply to number the entries that hold the fields the plan
+takes, and `Policy::resolve_proposal` hands it the processor's answer, which it resolves against the
+plan's shape and those entries, typing each value as the server's list declares and dropping and
+counting each row that does not fit. `Policy::keep_applied` works out which calls the person's
+ticks keep and which a failed call takes with it, and `Policy::proposes_nothing` whether there is
+any call. The driver carries the resolved list to the server and the call numbers it is handed, and
+reads it only through `Policy::proposal_for_display` to draw it for the person (the question, the
+outcome list and the count of dropped rows on the step's line), which no effect and no model reads.
+A branch in the driver on a resolved value for anything else is a violation of shape 1.
 The tenth is the trigger listener in `crates/cli/src/trigger.rs`, which is not the driver and holds
 no `declassify`. It decides from the request line and headers only: the framing refusals of
 `parse_head` (method, version, `Transfer-Encoding`, `Content-Length`, a path that is not a name),
@@ -128,33 +152,58 @@ the other shape facts of the result (the cap, the unreadable-directory flag) thr
 name or target in that sentence, or that read the target to decide what to say, would be a violation
 of shape 1 or 3 and is not covered by this paragraph.
 
-The same holds for the count of files a bounded listing left out of each directory it cut (LIST-5).
-In `walk_filtered` in `crates/agent/src/workspace.rs` the walk sorts a directory's files by name,
-drops each file the include pattern does not match or a permission rule covers, and keeps the first
-200 of the rest. Which 200 are kept is decided by that name order, which is the order that already
-decides what the cap over the whole walk keeps. The count of files left out is taken after the
-include pattern and the rules, which the walk applies to every file it reports whether or not a cap
-applies. A cut directory is recorded under the name its caller passes to `walk_filtered`.
+The same holds for the counts of files and subdirectories a bounded listing left out of each
+directory it cut (LIST-5). In `walk_filtered` in `crates/agent/src/workspace.rs` the walk sorts a
+directory's files by name, drops each file the include pattern does not match or a permission rule
+covers, and keeps the first 200 of the rest. Which 200 are kept is decided by that name order, which
+is the order that already decides what the cap over the whole walk keeps. It then sorts the
+directory's subdirectories by name and keeps the first 200 of those the walk's existing filters
+leave (ignored directory names, links, the stores and the permission rules), whether it goes into
+them or stops at them, from a budget the files do not spend. The count of files left out is taken
+after the include pattern and the rules, which the walk applies to every file it reports whether or
+not a cap applies. The count of subdirectories left out is taken after the rules, so a subdirectory
+a rule covers is not counted, and the include pattern does not apply to directories. A walk made
+for `repo_map` also sets aside each file the trust map does not vouch for and counts it as
+unvouched, without adding it to the files held against the cap. That is decided from
+the trust map's answer for the file's path alone and no byte of the file is read. A cut directory is
+recorded under the name its caller passes to `walk_filtered`.
 `Workspace::list` passes the walk root's name once, `.` when the resolved directory argument is the
 workspace root and its relative name otherwise, and each recursive call passes the relative name it
 built for the subdirectory. No name read from a directory entry is tested to tell the root from a
-subdirectory. Each cut directory counts as one entry against the cap over the whole walk, in
-`Collected::len` during the walk and in `at_the_cap` after it. `Workspace::list` sets `at_the_cap`
-when the files, the directories stopped at and the cut directories together pass that cap, and sets
+subdirectory. A directory has one record in `partly_listed` however it was cut: the pass over its
+files adds the record when files were left out, and the pass over its subdirectories adds it when
+none exists and otherwise adds to the subdirectory count of the one that does. Each cut directory
+counts as one entry against the cap over the whole walk, in `Collected::len` during the walk and in
+`at_the_cap` after it. `Workspace::list` sets `at_the_cap` when the files, the directories stopped
+at and the cut directories together pass that cap, and sets
 `truncated` to `at_the_cap || !partly_listed.is_empty()`. It sorts the cut directories by name and
 truncates them to what the cap leaves after the files and the directories stopped at, the same sort
-by name and truncation it applies to those two lists. Each count and `at_the_cap` are released
-inside the existing release in `list_files`, and each count reaches the planner as a number beside
-the directory's reference. The driver branches on them in these places: the comparison of the
-files taken from a directory with 200, and whether its count is above zero, in the walk; whether
-any directory was cut and `at_the_cap`, which together choose the sentences in `list_files`
+by name and truncation it applies to those two lists. Each pair of counts and `at_the_cap` are
+released inside the existing release in `list_files`, as a pair of numbers for each directory, and
+each pair reaches the planner as numbers beside the directory's reference. The driver branches on
+them in these places: the comparison of the files taken from a directory with 200, whether the
+count of files left out is above zero, the comparison of the subdirectories taken from it with 200
+(`taken_directories >= most`, a count of directory entries kept by the filters above, no name
+read), and whether the directory already has a record, in the walk; whether any directory was cut,
+whether any cut left files out, whether any left
+subdirectories out and `at_the_cap`, which together choose the sentences in `list_files`
 (`listing.at_the_cap || !cut_per_directory`) and in `listing_capped_note` in
 `crates/agent/src/turn/sentences.rs` (`cut.is_empty() || at_the_cap`); and each count's value,
-which `tally` compares with 1 to write "file" or "files". Apart from the include pattern, the
-rules, the resolved directory argument and the name order above, no name is in any of these
-conditions. A change that put the directory's name in the sentence, or chose which directories to
-cut or how to word the sentence from a name, would be a violation of shape 1 or 3 and is not
-covered by this paragraph.
+which `left_out_clause` compares with zero to decide whether to say it and `tally` compares with 1
+to write "file" or "files" and "subdirectory" or "subdirectories". Apart from the include pattern,
+the rules, the fixed list of ignored directory names, the resolved directory argument and the name
+order above, no name is in any of these conditions. A change that put the directory's name in the
+sentence, or chose which directories to cut or how to word the sentence from a name, would be a
+violation of shape 1 or 3 and is not covered by this paragraph.
+
+The reason in the sentence for a checkout's refused filesystem entry (SANDBOX-25) is chosen from
+the entry's spelling by `resolve` in `bravebot-sandbox`, which already decides from that spelling
+whether the entry is refused. It is a branch on bytes a checkout wrote whose result reaches the
+planner. It is one of five sentences the driver wrote, it carries no byte of the entry, and it
+changes no effect, so it is recorded under Known costs in
+[specs/labels.md](../specs/labels.md) and is not counted among the ten. A sentence that put any part of the
+spelling in it, a reason outside the closed set, or a choice made from the spelling for another
+purpose is a violation of shape 1.
 
 Whether a session directory's `.git` is a file or a directory is file-type metadata, like the link
 count above. The failure sentence for a git step (`crates/agent/src/confine.rs`, SANDBOX-19) reads it with
@@ -162,6 +211,15 @@ count above. The failure sentence for a git step (`crates/agent/src/confine.rs`,
 or a submodule. It never opens the `.git` file: the `gitdir:` line it holds is the checkout's
 content, and a change that read it, or named the directory it points to, would be a violation of
 shape 1.
+
+The same holds for whether a `run` line is refused for standing for more than 100 names, or for
+reading more than 4,096 directories (CMDLINE-4). The compile compares how many names the patterns
+matched with the bound, and the refusal states the cap and no count taken from the directory, so
+no number out of a directory nobody vouched for is spelled into a sentence the driver writes. What
+remains is one bit per call, whether the count passed the bound, which
+[specs/labels.md](../specs/labels.md) lists under Known costs. A change that spelled the count, or
+chose the sentence from a name, would be a violation of shape 1 or 3 and is not covered by this
+paragraph.
 
 A measurement of file names, lengths and modification times that the driver compares and reduces to
 one bool is not a branch on untrusted content, for the same reason an exit status is not. The work

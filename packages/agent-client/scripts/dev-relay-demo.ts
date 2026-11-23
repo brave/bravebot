@@ -7,14 +7,19 @@
  * It makes a scratch directory with an empty home, a workspace and a sessions root, starts a stub
  * model service on 127.0.0.1, and runs the host with the relay as its client in an environment
  * that holds only what the stub needs. Nothing reads or writes a real home, credential or session.
- * The host's standard input is this terminal, so `launch` and `quit` work as they do for the host.
+ * The host's standard input is this terminal, so `launch relay` and `quit` work as they do for the host.
+ * Before it starts the relay, the host asks here whether to trust the workspace. A yes is kept in the
+ * scratch home, and the phone is then not asked about trust there. A no leaves the question for the
+ * host test client (`host-client.ts`), the host's second client, which may answer trust where the
+ * relay may not. Its commands are typed into the named pipe the demo prints, from another terminal:
+ * `attach SESSION` joins the phone's session, and `yes` or `no` answers the trust question it shows.
  * The scratch directory is removed when the host stops.
  *
  * The stub answers by the plan named in a prompt: `plan:hello` replies, and `plan:write` asks to
  * write `hello.txt` in the workspace. Any other prompt gets the reply `done`.
  */
 
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
@@ -41,10 +46,21 @@ const stub = await ModelStub.start({
 })
 
 const relay = join(dirname(fileURLToPath(import.meta.url)), 'dev-relay.js')
+const hostClient = join(dirname(fileURLToPath(import.meta.url)), 'host-client.js')
+const deskInput = join(scratch, 'desk.input')
+execFileSync('mkfifo', [deskInput])
 process.stderr.write(`dev-relay-demo: workspace ${workspace}; try the prompts plan:hello and plan:write\n`)
+process.stderr.write(`dev-relay-demo: type host test client commands into ${deskInput}, for example: echo 'attach s1' > ${deskInput}\n`)
 const host = spawn(
   values.host,
-  ['--sessions-root', join(scratch, 'sessions'), '--workspace', workspace, '--', process.execPath, relay, '--workspace', workspace],
+  [
+    '--sessions-root', join(scratch, 'sessions'), '--workspace', workspace,
+    // The relay may not answer trust. The host test client may, as the person at the computer would.
+    '--client', 'relay', '--answers', 'confirm,run,fetch,ask', '--program', process.execPath,
+    '--arg', relay, '--arg', '--workspace', '--arg', workspace,
+    '--client', 'desk', '--answers', 'confirm,run,fetch,ask,trust', '--program', process.execPath,
+    '--arg', hostClient, '--arg', '--name', '--arg', 'desk', '--arg', '--workspace', '--arg', workspace, '--arg', '--input', '--arg', deskInput,
+  ],
   { env: isolatedEnvironment(home, stub.endpoint), stdio: 'inherit' },
 )
 host.on('exit', async (code) => {

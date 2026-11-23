@@ -418,6 +418,7 @@ pub(super) fn draw_saying(
         let block = loop {
             let block = quarantined_rows(
                 &Shown {
+                    as_the_planner_had_it: None,
                     origin: t!(write_remark).to_string(),
                     reach: Reach::NoModel,
                     label: remark.label.clone(),

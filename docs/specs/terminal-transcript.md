@@ -30,6 +30,7 @@ governs:
   - crates/tui/src/theme_prompt.rs
   - crates/tui/src/list_picker.rs
   - crates/tui/src/model_prompt.rs
+  - crates/tui/src/effort_prompt.rs
   - ui/src/renderer/components/Transcript.tsx
   - ui/src/renderer/components/ThinkingTail.tsx
   - ui/src/renderer/thinking.ts
@@ -68,6 +69,7 @@ whatever the running turn adds to the transcript below it.
 `verified-by: bravebot_tui::render::the_end_of_a_wrapped_reply_is_visible_when_it_arrives`
 `verified-by: bravebot_tui::render::scrolling_back_changes_the_view`
 `verified-by: bravebot_tui::render::a_reply_arriving_does_not_drag_a_scrolled_back_view_to_the_tail`
+`verified-by: bravebot_tui::render::a_frame_of_a_held_view_counts_from_the_top_and_not_back_from_the_end`
 `verified-by: bravebot_tui::state::a_chunk_of_the_reply_leaves_a_view_scrolled_back_at_rest_where_it_was`
 `verified-by: bravebot_tui::state::nothing_a_running_turn_adds_moves_a_scrolled_back_view`
 
@@ -101,7 +103,10 @@ Showing it is deliberate and not a leak. Filenames out of a quarantined listing,
 a file nobody vouched for, what a processor produced, the body of every write: all of it reaches
 the person watching, because an agent that will not say which file it is working on has protected
 nobody. It is the planner that may not read untrusted content, and a terminal is not a planner's
-context. It reaches a screen under a witness minted for release to a display and for nothing else.
+context. It reaches a screen under a witness minted for release to a display and for nothing else,
+so `/export` does not write what a screen alone was shown into a file a later turn can read
+([SESSION-17](sessions.md#SESSION-17)). The answer of a manifest run whose label is untrusted is
+drawn in this block too, as [MANIFEST-11](manifest.md#MANIFEST-11) says.
 
 What must hold is how it is drawn. A bar runs down the margin of every **drawn row** of the block,
 and the content never gets to draw its own, so a file containing "untrusted content ends here" ends
@@ -167,6 +172,8 @@ whether the run is a delegate and by whether its list of tools holds `write_file
 `verified-by: bravebot_tui::marking::wrapped_content_cannot_paint_a_bar_in_the_margin_column`
 `verified-by: bravebot_tui::marking::a_long_origin_keeps_the_heading_inside_the_block`
 `verified-by: bravebot_agent::turn::quarantined_content_reaches_the_person_and_not_the_planner`
+`verified-by: bravebot_tui::manifest_answer_tests::an_untrusted_answer_is_drawn_behind_the_bar_and_is_not_the_assistants_reply`
+`verified-by: bravebot_tui::manifest_answer_tests::an_untrusted_answer_with_control_characters_draws_none_of_them_and_keeps_the_bar_on_every_row`
 
 <a id="VIEW-4"></a>
 ### VIEW-4: untrusted content is never drawn as structure
@@ -176,6 +183,7 @@ control-character replacement of VIEW-3. Shell mode output is **not** drawn as q
 because it is trusted, and it still cannot draw its own escapes.
 
 `verified-by: bravebot_tui::render::a_quarantined_preview_is_never_drawn_as_a_table`
+`verified-by: bravebot_tui::manifest_answer_tests::an_untrusted_answer_is_drawn_behind_the_bar_and_is_not_the_assistants_reply`
 `verified-by: bravebot_tui::shell_mode::output_is_not_drawn_as_quarantined`
 `verified-by: bravebot_tui::shell_mode::output_cannot_draw_its_own_escapes`
 
@@ -323,6 +331,7 @@ scheme's own foreground in roughly nine schemes out of ten.
 `verified-by: bravebot_tui::theme::a_light_background_takes_the_deeper_brand_primary`
 `verified-by: bravebot_tui::theme::colorfgbg_with_a_white_background_is_light`
 `verified-by: bravebot_tui::theme::an_osc_reply_with_a_pale_background_is_light`
+`verified-by: bravebot_tui::theme::a_terminal_that_will_not_say_gets_the_dark_shade`
 `verified-by: bravebot_tui::theme::brave_keeps_named_slots_for_the_terminals_own_meanings`
 `verified-by: bravebot_tui::theme::an_aside_is_a_shade_picked_for_the_background_rather_than_a_slot`
 `verified-by: bravebot_tui::theme::an_accent_is_a_shade_picked_for_the_background_rather_than_a_slot`
@@ -440,6 +449,17 @@ that answers; every word typed has to match something. The cursor stays on the m
 where that model still matches, and falls to the first match where it does not. A search matching
 nothing says so, and there is nothing to select while it does.
 
+The picker is opened in one of two scopes, and says which in its title and footer. `/model` opens it
+in the scope that records the pick for every session, titled `Select model · every session`.
+`/model session` opens it in the scope that records nothing, titled `Select model · this session
+only`. The footer has two rows: the scope line, `Enter: every session  ·  Tab: this session only` or
+`Enter: this session only  ·  Tab: every session`, and under it the keys, `↑↓ PgUp PgDn choose  ·  ←→
+fold  ·  Esc keep current`. Tab switches the scope in both directions, in the picker at rest and
+while a turn runs, and changes the title and the scope line with it. Tab moves nothing else: the
+search text, the cursor and the folded sections stay as they are. A scope line wider than the panel
+is drawn on a second row, never cut, and the panel is made one row taller for it, so no model is
+hidden behind the footer. A list that fits takes no row from the extra footer row.
+
 **Why.** A gateway's roster runs to hundreds of models, and the picker offers it alongside Brave's
 own and whatever a settings file configured. No arrangement of a list that long makes arrowing to
 one row reasonable, and a name is remembered by a word out of the middle of it, or by the service
@@ -461,6 +481,17 @@ need searching.
 `verified-by: bravebot_tui::model_prompt::an_openai_roster_of_mixed_models_is_one_section_with_every_row_reachable`
 `verified-by: bravebot_tui::model_prompt::the_picker_is_drawn_as_a_centred_panel`
 `verified-by: bravebot_tui::model_prompt::the_panel_stays_inside_a_tiny_terminal`
+`verified-by: bravebot_tui::model_prompt::tab_switches_the_scope_in_both_directions_and_touches_nothing_else`
+`verified-by: bravebot_tui::model_prompt::a_picker_opens_in_the_every_session_scope_unless_told_otherwise`
+`verified-by: bravebot_tui::model_prompt::a_picker_opened_by_bare_model_draws_the_every_session_scope_in_title_and_footer`
+`verified-by: bravebot_tui::model_prompt::a_picker_opened_by_model_session_draws_the_this_session_scope_in_title_and_footer`
+`verified-by: bravebot_tui::model_prompt::tab_changes_what_the_title_and_footer_say_in_both_directions`
+`verified-by: bravebot_tui::model_prompt::the_key_line_is_drawn_whole_in_the_widest_panel`
+`verified-by: bravebot_tui::model_prompt::the_scope_line_is_drawn_whole_at_sixty_columns`
+`verified-by: bravebot_tui::model_prompt::the_scope_line_stays_on_one_row_at_sixty_columns`
+`verified-by: bravebot_tui::model_prompt::the_scope_line_wraps_whole_at_forty_columns`
+`verified-by: bravebot_tui::model_prompt::the_second_footer_row_takes_no_row_from_a_list_that_fits`
+`verified-by: bravebot_tui::app::tab_in_an_open_model_picker_switches_the_scope_at_rest_and_under_a_turn`
 
 <a id="VIEW-15"></a>
 ### VIEW-15: every model is drawn under the service that will answer it
@@ -570,10 +601,14 @@ that has observed untrusted content those are untrusted bytes and it may not bra
 `verified-by: bravebot_tui::render::a_thought_the_model_wrote_into_the_reply_is_not_drawn`
 `verified-by: bravebot_tui::state::a_thought_arriving_is_not_drawn_at_the_tail`
 `verified-by: bravebot_tui::state::a_finished_reply_keeps_the_answer_and_not_the_thought`
+`verified-by: bravebot_tui::state::a_finished_reply_that_stopped_mid_thought_is_drawn_whole`
 `verified-by: bravebot_tui::state::a_round_that_thought_before_speaking_records_only_what_it_said`
 `verified-by: bravebot_tui::state::a_round_that_only_thought_leaves_no_entry`
+`verified-by: bravebot_tui::state::a_round_that_stopped_mid_thought_is_drawn_whole`
 `verified-by: bravebot_tui::state::a_resumed_reply_leaves_off_its_leading_reasoning_block`
 `verified-by: bravebot_tui::state::a_legacy_resumed_reply_leaves_off_its_leading_reasoning_block`
+`verified-by: bravebot_tui::state::a_resumed_reply_that_stopped_mid_thought_is_drawn_whole`
+`verified-by: bravebot_tui::state::a_legacy_resumed_reply_that_stopped_mid_thought_is_drawn_whole`
 
 
 <a id="VIEW-19"></a>
@@ -633,6 +668,7 @@ than cleared, which is what makes the variable a switch rather than an edit.
 `verified-by: bravebot_tui::logo::the_wordmark_takes_no_colour_where_none_was_asked_for`
 `verified-by: bravebot_tui::logo::the_face_takes_no_colour_where_none_was_asked_for`
 `verified-by: bravebot_tui::lib::a_presentation_variable_says_nothing_beyond_being_set`
+`verified-by: bravebot_tui::theme::the_live_path_reads_no_color_from_the_environment_by_presence`
 
 
 <a id="VIEW-21"></a>
@@ -662,6 +698,7 @@ which is drawn before any file this program reads has been looked for.
 `verified-by: bravebot_tui::indicator::motion_nobody_declined_still_moves`
 `verified-by: bravebot_tui::avatar::the_face_stays_at_rest_where_no_motion_is_asked_for`
 `verified-by: bravebot_tui::lib::a_presentation_variable_says_nothing_beyond_being_set`
+`verified-by: bravebot_tui::indicator::the_live_path_reads_no_motion_from_the_environment_by_presence`
 
 
 <a id="VIEW-22"></a>
@@ -1612,6 +1649,62 @@ what the rows contain and the rule is kept ([SCROLL-5](scroller.md#SCROLL-5)).
 `verified-by: bravebot_tui::app::tests::jump::the_hint_under_the_box_stays_while_the_button_is_drawn`
 `verified-by: bravebot_tui::app::tests::jump::a_copy_never_takes_the_words_of_the_button`
 `verified-by: bravebot_tui::render::drawing_the_visible_slice_matches_wrapping_the_whole_transcript`
+
+<a id="VIEW-46"></a>
+### VIEW-46: the effort picker names its scope in the title and the footer, and Tab switches it
+
+`/effort` draws a bordered panel in the middle of the screen, over the session it was opened from,
+with a row for each level and a row for no level, and opens in one of two scopes. The scope is named
+and switched as the model picker's is ([VIEW-14](#VIEW-14)). `/effort` opens it in the scope that
+records the pick for every session, titled `effort · every session`. `/effort session` opens it in
+the scope that records nothing, titled `effort · this session only`. A picker opened with no scope
+named is in the every-session scope. The footer has two rows: the scope line, `Enter: every session
+·  Tab: this session only` or `Enter: this session only  ·  Tab: every session`, and under it the
+keys, `↑↓ choose  ·  Esc keep current`. The keys do not say that Enter selects, because the scope
+line says what Enter does.
+
+Tab and Shift-Tab each switch the scope in both directions, in the picker at rest and while a turn
+runs, and the title and the scope line change with it. They move nothing else: the cursor, the row
+marked `current` and the rows stay as they are, and nothing is typed into the box. Enter takes the row
+under the cursor in the scope the picker is in when it is pressed, and so does a second press on a
+row ([MOUSE-15](mouse.md#MOUSE-15)).
+
+A scope line wider than the panel is drawn whole on a second row, split before the Tab half, and the
+panel is made one row taller for it, so no level is hidden behind the footer. The effort panel is 52
+columns wide, which leaves 49 for the line. At 80 columns the English line, which is 47 columns wide,
+is drawn on one row, and the French line, which is 50 columns wide, is drawn on two. The five levels
+and the row for no level keep their rows in a 24-row terminal in both scopes.
+
+The pickers of `/config`, `/theme` and `/sidebar` have no scope: they draw no scope line and no extra
+footer row, and Tab changes nothing in them.
+
+**Why.** A level that applies to one session and a level that applies to every later session are
+different choices, and a person pressing Enter has to see which one the picker is making. The title
+and the footer both name the scope, and the footer says what Enter does, so no key has to be learned
+from the documentation. One set of rules for the model picker and the effort picker means a person
+who has used one has used both.
+
+`verified-by: bravebot_tui::effort_prompt::a_picker_opens_in_the_every_session_scope_unless_told_otherwise`
+`verified-by: bravebot_tui::effort_prompt::tab_switches_the_scope_in_both_directions_and_touches_nothing_else`
+`verified-by: bravebot_tui::effort_prompt::a_picker_opened_by_bare_effort_draws_the_every_session_scope_in_title_and_footer`
+`verified-by: bravebot_tui::effort_prompt::a_picker_opened_by_effort_session_draws_the_this_session_scope_in_title_and_footer`
+`verified-by: bravebot_tui::effort_prompt::tab_changes_what_the_title_and_footer_say_in_both_directions`
+`verified-by: bravebot_tui::effort_prompt::the_keys_row_does_not_say_enter_selects`
+`verified-by: bravebot_tui::effort_prompt::the_scope_line_wraps_whole_at_forty_columns`
+`verified-by: bravebot_tui::effort_prompt::the_scope_line_stays_on_one_row_at_eighty_columns`
+`verified-by: bravebot_tui::effort_prompt::the_extra_footer_row_takes_no_row_from_a_list_that_fits`
+`verified-by: bravebot_tui::effort_prompt::the_picker_is_drawn_as_a_centred_panel`
+`verified-by: bravebot_tui::effort_prompt::the_panel_stays_inside_a_tiny_terminal`
+`verified-by: bravebot_tui::list_picker::the_row_is_handed_back_with_the_scope_in_force`
+`verified-by: bravebot_tui::list_picker::a_scope_line_wider_than_the_room_is_split_whole_at_its_separator`
+`verified-by: bravebot_tui::list_picker::the_panel_grows_by_the_rows_the_scope_line_takes`
+`verified-by: bravebot_tui::list_picker::a_picker_with_no_scope_has_none_and_ignores_tab`
+`verified-by: bravebot_tui::list_picker::a_panel_with_no_scope_line_draws_no_footer_row`
+`verified-by: bravebot_tui::config_prompt::the_panel_of_preferences_has_no_scope_and_ignores_tab`
+`verified-by: bravebot_tui::theme_prompt::the_theme_picker_has_no_scope_and_ignores_tab`
+`verified-by: bravebot_tui::sidebar_prompt::the_sidebar_checklist_has_no_scope_and_ignores_tab`
+`verified-by: bravebot_tui::app::tab_in_an_open_effort_picker_switches_the_scope_at_rest_and_under_a_turn`
+`verified-by: bravebot_tui::app::the_effort_picker_opened_at_rest_records_by_the_scope_tab_left_it_in`
 
 ## Known costs
 

@@ -74,6 +74,7 @@ pub struct ProcessorSpec {
     out_label: Label,
     about: Option<SlotId>,
     choose_upto: Option<u8>,
+    proposes_rows: bool,
 }
 
 impl ProcessorSpec {
@@ -93,7 +94,14 @@ impl ProcessorSpec {
             out_label,
             about,
             choose_upto,
+            proposes_rows: false,
         }
+    }
+
+    /// The same spec, for a processor whose whole answer is rows for an `apply` step.
+    pub(crate) fn proposing_rows(mut self) -> Self {
+        self.proposes_rows = true;
+        self
     }
 
     /// The largest limit a processor can be asked to choose up to.
@@ -110,6 +118,15 @@ impl ProcessorSpec {
     /// nothing the processor wrote has any say in it.
     pub fn choose_upto(&self) -> Option<u8> {
         self.choose_upto
+    }
+
+    /// Whether this processor was asked for rows of an `apply` step, and nothing else.
+    ///
+    /// Fixed by the gate that built the spec, from the plan, before the processor existed. Its
+    /// answer is read only by [`crate::policy::Policy::resolve_proposal`], and a spec built by any
+    /// other gate is refused there.
+    pub fn proposes_rows(&self) -> bool {
+        self.proposes_rows
     }
 
     /// Which document this call is about.
@@ -155,9 +172,11 @@ impl ProcessorSpec {
 
     /// What it was asked to do.
     ///
-    /// The planner's own words, checked public before the spec was built. Readable because it
-    /// is not workspace content: it is the instruction the driver is about to send, and a
-    /// driver that could not hold it could not send it.
+    /// The planner's own words, released by [`crate::policy::Policy::before_processor`] whatever
+    /// label they carry. Nothing checks the label before the spec is built: it is folded into
+    /// [`ProcessorSpec::out_label`], so a private instruction gives a private answer. Readable
+    /// because it is not workspace content: it is the instruction the driver is about to send,
+    /// and a driver that could not hold it could not send it.
     pub fn instruction(&self) -> &str {
         &self.instruction
     }

@@ -47,7 +47,7 @@ mod task;
 
 pub use hooked::Hooked;
 pub(crate) use hooked::trouble_sentences;
-use hooked::{fire_checkout_made, fire_hooks, say_prompt_notices};
+use hooked::{fire_checkout_made, fire_hooks, say_prompt_notices, say_stopped_plugins};
 pub(crate) use prompts::PLANNING;
 use prompts::{FOR_A_PERSON, KEPT_FACTS, KEPT_FACTS_END, OPENING};
 pub use result::*;
@@ -1567,6 +1567,7 @@ fn take_session_messages<S: Sink, R: Reporter>(
                 (
                     frame(&from, &name, given, Body::Kept(&reference.describe())),
                     crate::report::Reported::Kept(crate::report::Shown {
+                        as_the_planner_had_it: None,
                         origin: "a message from another session".to_string(),
                         reach: crate::report::Reach::NotThePlanner,
                         label: given.to_string(),
@@ -1741,7 +1742,10 @@ fn collect_delegates<S: Sink, R: Reporter>(
 
         let (mut note, mut body, failed, reported, from) = match delegated {
             Ok(delegated) => {
-                account.add_usage(delegated.usage);
+                // The whole of what the delegate cost is the turn's spend. Only what its own budget
+                // counted is added to what this run's budget counts (DELEGATE-29).
+                account.add_unbudgeted(delegated.usage);
+                account.budgeted_tokens += delegated.budgeted_tokens;
                 account.requests += delegated.requests;
 
                 let kind = delegated.kind;
@@ -1816,6 +1820,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
                                 reference.describe()
                             ),
                             crate::report::Reported::Kept(crate::report::Shown {
+                                as_the_planner_had_it: None,
                                 origin: format!("a {kind} delegate"),
                                 reach: crate::report::Reach::NotThePlanner,
                                 label: reference.label.to_string(),
@@ -2235,6 +2240,7 @@ fn reads_that_run_together(
     confined_to: Option<&[String]>,
     offered: Option<&[bravebot_aichat::protocol::Tool]>,
     hooks: &bravebot_config::hooks::Hooks,
+    plugin_hooks: &crate::plugin_hooks::PluginHooks,
 ) -> usize {
     let mut counting = repeats.clone();
     let mut together = 0;
@@ -2249,6 +2255,10 @@ fn reads_that_run_together(
                 )
                 .next()
                 .is_some()
+            || plugin_hooks.declares(
+                bravebot_config::hooks::Moment::ToolFinished,
+                Some(&call.function.name),
+            )
             || counting.is_held(call)
         {
             break;
@@ -2322,6 +2332,11 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     //
     // Not read at all in a safe session, which is what leaves no hook to fire.
     let hooks = crate::hooks::in_force(task.home.as_deref());
+    // The hooks enabled plugins carry. Never merged into `hooks`: each moment joins them with the
+    // person's own through `PluginHooks::joined_with`, which asks before one fires (PLUGIN-7).
+    let plugin_hooks = crate::plugin_hooks::PluginHooks::read(task.home.as_deref());
+    let hook_answers = task.account_session().plugin_hook_answers();
+    let can_ask_about_hooks = confirmer.can_ask_about_a_hook();
 
     // The turn moments belong to the turn a person asked for. A delegate is a run inside this one,
     // started by a call the person did not make, so firing "the turn began" for each of them would
@@ -2334,10 +2349,12 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // spawned it armed, so only a turn a person asked for arms it (HOOK-2).
     let prompt_notices = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let prompts_hooked = own
-        && hooks
+        && (hooks
             .firing(bravebot_config::hooks::Moment::PromptShown, None)
             .next()
-            .is_some();
+            .is_some()
+            || (can_ask_about_hooks
+                && plugin_hooks.declares(bravebot_config::hooks::Moment::PromptShown, None)));
     if prompts_hooked {
         // Hook programs can write files outside the backup journal, regardless of their outcome.
         workspace.mark_rewind_gap(crate::rewind::CoverageGap::Hook);
@@ -2345,11 +2362,20 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
             checkout.mark_worked_in();
         }
         let hooks = hooks.clone();
+        let plugin_hooks = plugin_hooks.clone();
+        let session = task.account_session().clone();
         let directory = workspace.root().to_path_buf();
         let notices = std::sync::Arc::clone(&prompt_notices);
         confirmer.alert_when_asking(Some(std::sync::Arc::new(move || {
-            let fired = crate::hooks::fire(
+            // Only a plugin hook already answered yes: this fires with a question on screen.
+            let joined = plugin_hooks.joined_without_asking(
                 &hooks,
+                bravebot_config::hooks::Moment::PromptShown,
+                session.plugin_hook_answers(),
+                can_ask_about_hooks,
+            );
+            let fired = crate::hooks::fire(
+                &joined,
                 bravebot_config::hooks::Moment::PromptShown,
                 None,
                 &directory,
@@ -2362,7 +2388,13 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     }
     let began = match own {
         true => fire_hooks(
-            &hooks,
+            &plugin_hooks.joined_with(
+                &hooks,
+                bravebot_config::hooks::Moment::TurnStarted,
+                None,
+                hook_answers,
+                &mut *confirmer,
+            ),
             bravebot_config::hooks::Moment::TurnStarted,
             None,
             workspace,
@@ -2370,6 +2402,9 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         ),
         false => Vec::new(),
     };
+    // A plugin whose directory no longer matches its record, found while the hooks above were
+    // considered, is named once in a session (PLUGIN-7).
+    let began = [began, say_stopped_plugins(hook_answers, reporter)].concat();
 
     // The driver has written a checkout for this delegate and nothing has run in it: the moment a
     // person's setup command is for (HOOK-2). A delegate that shares its parent's checkout is not
@@ -2381,9 +2416,20 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
             .is_some_and(|checkout| checkout.made_for() == spec.id())
     });
     let set_up = match given {
-        true => fire_checkout_made(&hooks, workspace, reporter),
+        true => fire_checkout_made(
+            &plugin_hooks.joined_with(
+                &hooks,
+                bravebot_config::hooks::Moment::CheckoutMade,
+                None,
+                hook_answers,
+                &mut *confirmer,
+            ),
+            workspace,
+            reporter,
+        ),
         false => Vec::new(),
     };
+    let set_up = [set_up, say_stopped_plugins(hook_answers, reporter)].concat();
 
     // Where the rounds' own hook sentences land. Held here rather than inside the rounds so that
     // a turn which failed part way through still has them: the outcome that would have carried
@@ -2401,6 +2447,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
             task,
             cancel,
             hooks: &hooks,
+            plugin_hooks: &plugin_hooks,
             prompt_notices: &prompt_notices,
             advisor: advisor.as_deref(),
             lent_premium_key,
@@ -2424,7 +2471,13 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
 
     let ended = match own {
         true => fire_hooks(
-            &hooks,
+            &plugin_hooks.joined_with(
+                &hooks,
+                bravebot_config::hooks::Moment::TurnFinished,
+                None,
+                hook_answers,
+                &mut *confirmer,
+            ),
             bravebot_config::hooks::Moment::TurnFinished,
             None,
             workspace,
@@ -2432,6 +2485,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         ),
         false => Vec::new(),
     };
+    let ended = [ended, say_stopped_plugins(hook_answers, reporter)].concat();
 
     // The rounds' sentences alone, for the caller that asked: the two ends of the turn never fire
     // for a delegate, so what its calls fired and what its checkout's setup said are the whole of
@@ -2479,6 +2533,9 @@ struct Inputs<'a> {
     task: &'a Task,
     cancel: &'a Cancel,
     hooks: &'a bravebot_config::hooks::Hooks,
+    /// The hooks enabled plugins carry, asked about before one fires (PLUGIN-7). Kept apart from
+    /// `hooks`, which holds only what the person wrote.
+    plugin_hooks: &'a crate::plugin_hooks::PluginHooks,
     /// What `prompt-shown` hooks said went wrong since the turn last drained it. See [`run_inner`].
     prompt_notices: &'a std::sync::Mutex<Vec<String>>,
     /// The model the planner may consult, where it may consult one. See [`advisor_for`].
@@ -2579,6 +2636,8 @@ struct State<'s> {
     wakeup: Option<Wakeup>,
     watches: Vec<crate::watch::Armed>,
     links: Vec<crate::links::LinkSet>,
+    /// What the turn's own commands created, from which the session's links are inferred (PANEL-18).
+    inferring: crate::links::Inferring,
     /// The issues and pull requests this turn has named, which each is reported once from
     /// (PANEL-16).
     references: Vec<crate::links::Reference>,
@@ -2701,6 +2760,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // the turn's own and the kernel gives it to no run that is a delegate (DELEGATE-7).
     policy = policy.with_delegate_bound(inputs.config.max_running_delegates);
 
+    // The mode the session opened in and each change since the last turn, before the line that
+    // names the mode this turn began in. A delegate shares its parent's handle and leaves the
+    // parent's changes to the parent's trail (TRACE-12).
+    if task.delegate.is_none() {
+        task.permission_mode.record_into(&mut policy);
+    }
     let started_in = task.began_in.unwrap_or_else(|| task.permission_mode.get());
     policy.record_permission_mode(started_in.name());
     // The opening a style takes the place of is the one a person's own turn gets, and
@@ -2831,6 +2896,7 @@ where
         task,
         cancel: _,
         hooks: _,
+        plugin_hooks: _,
         prompt_notices: _,
         advisor,
         lent_premium_key,
@@ -2893,7 +2959,14 @@ where
     let delegates = policy.delegates().clone();
 
     let resolved = setup::offered_tools(
-        task, workspace, &delegates, advisor, scheduling, arming, policy,
+        task,
+        workspace,
+        &delegates,
+        advisor,
+        scheduling,
+        arming,
+        policy,
+        config.offers_web_search(),
     );
     // What the list holds, read before the skills are shown so the words around a skill's files name
     // only tools it holds. The list is not changed after this except by adding a server's tools.
@@ -3502,7 +3575,7 @@ where
         ..Default::default()
     };
     if let Some((_, usage)) = &mcp {
-        account.add_usage(*usage);
+        account.add_unbudgeted(*usage);
     }
     // Reported before the rounds begin, so a turn stopped or failed at the question, before any
     // round closes, still carries the wait in its record.
@@ -3614,6 +3687,7 @@ where
         // about several files.
         watches: Vec::new(),
         links: Vec::new(),
+        inferring: crate::links::Inferring::default(),
         references: Vec::new(),
         armed: 0,
         // How many questions the planner has put to its advisor this turn, which the bound on them
@@ -3693,6 +3767,10 @@ where
     });
     let conversation = &mut *channels.conversation;
     let reporter = &mut channels.reporter;
+    // A change made during the last round, which no later request is there to read (TRACE-12).
+    if task.delegate.is_none() {
+        task.permission_mode.record_into(policy);
+    }
     round_steps::close_the_rounds(
         policy,
         reporter,
@@ -3747,6 +3825,7 @@ where
         asked_about,
         exposed,
         tokens: state.account.tokens,
+        budgeted_tokens: state.account.budgeted_tokens,
         output_tokens: state.account.output_tokens,
         context_tokens: state.account.context_tokens,
         cached: state.account.cached,
@@ -3823,6 +3902,7 @@ where
         task,
         cancel,
         hooks,
+        plugin_hooks,
         prompt_notices: _,
         advisor: _,
         lent_premium_key: _,
@@ -4039,7 +4119,7 @@ where
             &mut state.may_call_tools,
             task,
             state.steps,
-            state.account.tokens,
+            state.account.budgeted_tokens,
             reporter,
             conversation,
         );
@@ -4151,6 +4231,7 @@ where
                     addressed.as_ref().map(|addressed| addressed.tools()),
                     Some(&state.offered),
                     hooks,
+                    plugin_hooks,
                 );
                 examined = index + reads.max(1);
                 if reads > 0 {
@@ -4322,6 +4403,7 @@ where
             if let Some(said) = &output.said {
                 let shown = preview_for(policy, &output.tool, said);
                 reporter.quarantined(crate::report::Shown {
+                    as_the_planner_had_it: None,
                     origin: "what the isolated processor said".to_string(),
                     reach: crate::report::Reach::NoModel,
                     label: said.label().to_string(),
@@ -4398,6 +4480,7 @@ where
                         .collect();
                 reporter.landed(output.reported_as, crate::report::Landing::Quarantined);
                 reporter.quarantined(crate::report::Shown {
+                    as_the_planner_had_it: None,
                     origin: entries.origin.clone(),
                     reach: crate::report::Reach::NotThePlanner,
                     // Entries in one listing carry different labels, so the preview
@@ -4418,13 +4501,14 @@ where
                 // and the planner is not being given the body: it gets the references, and a
                 // capped sample of a tree read as the whole of it is how a planner concludes a
                 // file it cannot find does not exist.
-                // The directories the per-directory cap cut are the last references, so each is
-                // paired with its count by position and never by a name.
-                let cut: Vec<(String, usize)> = ids
+                // The directories a per-directory cap cut are the last references, so each is
+                // paired with its counts by position and never by a name.
+                let cut: Vec<(String, usize, usize)> = ids
                     [ids.len().saturating_sub(entries.left_out.len())..]
                     .iter()
                     .map(ToString::to_string)
                     .zip(entries.left_out.iter().copied())
+                    .map(|(reference, (files, directories))| (reference, files, directories))
                     .collect();
                 let capped =
                     sentences::listing_capped_note(output.incomplete, entries.at_the_cap, &cut);
@@ -4474,6 +4558,7 @@ where
                 if let Presentation::Quarantined(reference) = &text {
                     let shown = preview_for(policy, &output.tool, &output.text);
                     reporter.quarantined(crate::report::Shown {
+                        as_the_planner_had_it: None,
                         origin: origin.clone(),
                         reach: crate::report::Reach::NotThePlanner,
                         label: reference.label.to_string(),
@@ -4510,6 +4595,7 @@ where
                             holder_of_a_picture(task, &state.offered),
                         );
                         reporter.quarantined(crate::report::Shown {
+                            as_the_planner_had_it: None,
                             origin: origin.clone(),
                             reach: crate::report::Reach::NotThePlanner,
                             label: reference.label.to_string(),
@@ -4712,7 +4798,9 @@ where
                             reporter.inference_interval(interval);
                             state.spent.inference += interval.duration();
                         }
-                        state.account.add_call(released.usage, released.completed);
+                        state
+                            .account
+                            .add_unbudgeted_call(released.usage, released.completed);
                         // A stop during the check ends the turn once this run's result is
                         // recorded. The slot stays quarantined and unrefused, so the next turn
                         // can ask for it again.
@@ -4820,6 +4908,7 @@ where
                         if let Presentation::Quarantined(reference) = &kept {
                             let shown = preview_for(policy, &output.tool, &apart.text);
                             reporter.quarantined(crate::report::Shown {
+                                as_the_planner_had_it: None,
                                 origin: apart.origin.clone(),
                                 reach: crate::report::Reach::NotThePlanner,
                                 label: reference.label.to_string(),
@@ -5044,6 +5133,7 @@ where
                                 &policy.names_for_display(conversation.quarantine()),
                             );
                             reporter.quarantined(crate::report::Shown {
+                                as_the_planner_had_it: Some(reference.origin.clone()),
                                 origin,
                                 reach: crate::report::Reach::NotThePlanner,
                                 label: reference.label.to_string(),
@@ -5872,6 +5962,7 @@ mod tests {
                         report,
                         kind: "one-round".to_string(),
                         usage: Default::default(),
+                        budgeted_tokens: 0,
                         requests: 0,
                     }),
                 };
@@ -6088,6 +6179,7 @@ mod tests {
                             report,
                             kind: "one-round".to_string(),
                             usage: Default::default(),
+                            budgeted_tokens: 0,
                             requests: 0,
                         }),
                         vouched: handed,
@@ -6185,6 +6277,7 @@ mod tests {
                                 completion_tokens: 200,
                                 cached: Default::default(),
                             },
+                            budgeted_tokens: 1100,
                             requests: 1,
                         }),
                         vouched: handed,
@@ -6285,6 +6378,7 @@ mod tests {
                                     report,
                                     kind: "one-round".to_string(),
                                     usage: Default::default(),
+                                    budgeted_tokens: 0,
                                     requests: 0,
                                 }),
                                 vouched: handed,
@@ -6404,6 +6498,7 @@ mod tests {
                                         report,
                                         kind: "one-round".to_string(),
                                         usage: Default::default(),
+                                        budgeted_tokens: 0,
                                         requests: 0,
                                     }),
                                     vouched: handed,
@@ -6565,6 +6660,7 @@ mod tests {
                                 report,
                                 kind: "one-round".to_string(),
                                 usage: Default::default(),
+                                budgeted_tokens: 0,
                                 requests: 0,
                             }),
                             vouched: handed,
@@ -6733,6 +6829,7 @@ mod tests {
                                     completion_tokens: 100,
                                     ..Default::default()
                                 },
+                                budgeted_tokens: 500,
                                 requests: 1,
                             }),
                             vouched: handed,
@@ -6851,6 +6948,7 @@ mod tests {
                                     ..Default::default()
                                 },
                             },
+                            budgeted_tokens: 1230,
                             requests: 1,
                         }),
                         vouched: handed,
@@ -7009,6 +7107,94 @@ mod tests {
             matches!(stopped.as_slice(), [detail] if detail.starts_with("job:2 stopped by the user")),
             "the person's stop was not recorded before the failure: {stopped:?}"
         );
+    }
+
+    /// RUN-15. A delegate never borrows the session's jobs, even from a task that was handed
+    /// them: what it starts ends with its own turn and the session's list stays empty. The same
+    /// line in a person's turn is left running in the session's list, so the delegate's empty
+    /// list is the rule and not a line that never started a job. A delegate that took the
+    /// session's jobs would leave its program running after the turn that spawned it ended.
+    #[test]
+    fn a_delegate_handed_the_sessions_jobs_ends_what_it_starts_with_its_own_turn() {
+        use crate::report::JobEvent;
+
+        let config = Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("http://127.0.0.1:9/never-asked".into()),
+            _ => None,
+        })
+        .unwrap();
+        for (tag, delegated, in_the_session, dropped) in
+            [("delegate", true, 0, 1), ("person", false, 1, 0)]
+        {
+            let scratch = crate::testutil::scratch_dir(&format!("delegate-borrows-no-jobs-{tag}"));
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let mut trust = TrustStore::new("/work");
+            trust.trust(".");
+            let jobs = tools::SessionJobs::new();
+            let task = if delegated {
+                Task::delegated(a_delegate_spec("worker", held(&Task::new(""))))
+            } else {
+                Task::new("start it")
+            }
+            .keeping_jobs(jobs.clone());
+            let mut reporter = crate::report::RecordingReporter::default();
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            crate::backend::scripted::script(vec![
+                ceiling::said(
+                    "",
+                    &[("run", r#"{"command":"sleep 30","background":true}"#)],
+                    None,
+                ),
+                ceiling::said("done", &[], None),
+            ]);
+            let outcome = resume(
+                &config,
+                &Egress::new(),
+                &workspace,
+                &task,
+                &mut Conversation::new(),
+                &mut crate::confirm::ApproveRuns,
+                &mut reporter,
+                &mut sink,
+                trust,
+                TrustedPrograms::new(),
+                None,
+                &Cancel::new(),
+            )
+            .outcome;
+            crate::backend::scripted::clear();
+            outcome.expect("the turn runs");
+
+            let started = reporter
+                .jobs
+                .iter()
+                .filter(|event| matches!(event, JobEvent::Started { .. }))
+                .count();
+            assert_eq!(
+                started, 1,
+                "{tag}: the job did not start: {:?}",
+                reporter.jobs
+            );
+            assert_eq!(
+                jobs.lock().len(),
+                in_the_session,
+                "{tag}: the session's jobs after the turn"
+            );
+            let ended_with_the_turn = reporter
+                .jobs
+                .iter()
+                .filter(|event| matches!(event, JobEvent::Dropped { .. }))
+                .count();
+            assert_eq!(
+                ended_with_the_turn, dropped,
+                "{tag}: jobs the turn ended: {:?}",
+                reporter.jobs
+            );
+        }
     }
 
     /// A turn holds a grant for each server the session reached and for no other. A worker it
@@ -10409,7 +10595,14 @@ mod tests {
             let none = bravebot_config::hooks::Hooks::default();
             let repeats = crate::repeated_call::Repeats::default();
             let run = |names: &[&str], hooks: &bravebot_config::hooks::Hooks| {
-                reads_that_run_together(&calls(names), &repeats, None, None, hooks)
+                reads_that_run_together(
+                    &calls(names),
+                    &repeats,
+                    None,
+                    None,
+                    hooks,
+                    &crate::plugin_hooks::PluginHooks::default(),
+                )
             };
 
             assert_eq!(run(&["search", "list_files", "search"], &none), 3);
@@ -10441,14 +10634,28 @@ mod tests {
                     .collect()
             };
             assert_eq!(
-                reads_that_run_together(&same(4), &repeats, None, None, &none),
+                reads_that_run_together(
+                    &same(4),
+                    &repeats,
+                    None,
+                    None,
+                    &none,
+                    &crate::plugin_hooks::PluginHooks::default(),
+                ),
                 2
             );
             let mut after_two = crate::repeated_call::Repeats::default();
             after_two.is_held(&same(1)[0]);
             after_two.is_held(&same(1)[0]);
             assert_eq!(
-                reads_that_run_together(&same(3), &after_two, None, None, &none),
+                reads_that_run_together(
+                    &same(3),
+                    &after_two,
+                    None,
+                    None,
+                    &none,
+                    &crate::plugin_hooks::PluginHooks::default(),
+                ),
                 0
             );
         }

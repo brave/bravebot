@@ -32,6 +32,15 @@ because an editor is always asked.
 A build of the workspace also makes `bravebot-acp`, which runs the same server and takes the same
 `--settings` option. Use `"command": "bravebot-acp"` with `"args": []` to start it instead.
 
+## Crash reports
+
+Both programs send a crash report to Brave the next time they start after a panic, unless you turned
+reports off. At your first prompt in a launch that is reporting, they say so once as a message in
+the session: what a report holds and how to turn reports off. The message is the same one the
+terminal and the desktop app show, and the three share one record, so a person told in one is not
+told in another. Nothing is written to standard output outside the protocol, and a launch that is
+not reporting says nothing. See [`crashReports`](../customize/configuration.md#crashreports).
+
 ## What the editor can send
 
 Text you type is a prompt, exactly as in the terminal, and a `/` word in it is text for the model,

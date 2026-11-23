@@ -315,7 +315,7 @@ definition's name is only ever the argument of `/agent`, so a row for one would 
 line that starts a run.
 
 `verified-by: bravebot_tui::app::the_bare_word_says_what_this_session_resolved`
-`verified-by: by-construction (the completion list reads the command table and the resolved skills and nothing else, nothing is offered after the word of a command line except that Tab finishes a level typed after /effort from the fixed set of levels, which no definition name is part of, and the resolved set of definitions exists only in the event loop after a line is submitted, so nothing drawn while a person types can hold a definition name)`
+`verified-by: by-construction (the completion list reads the command table and the resolved skills and nothing else, nothing is offered after the word of a command line except that Tab finishes the word session or a level typed after /effort from the fixed words session and the levels, which no definition name is part of, and the resolved set of definitions exists only in the event loop after a line is submitted, so nothing drawn while a person types can hold a definition name)`
 
 ## What it may do
 
@@ -551,8 +551,10 @@ so a name that matches nothing is said and survived. A refused model is not surv
 reason in [ADDRESS-11](#ADDRESS-11).
 
 `verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_agent`
+`verified-by: bravebot_config::settings::an_agent_that_is_blank_or_not_a_string_names_nothing`
 `verified-by: bravebot_cli::running::a_run_with_no_agent_flag_works_under_the_agent_setting`
 `verified-by: bravebot_cli::running::the_agent_flag_outranks_the_agent_setting`
+`verified-by: bravebot_cli::running::a_recorded_definition_outranks_the_agent_setting_on_a_continued_run`
 `verified-by: bravebot_cli::running::a_checkouts_agent_setting_does_not_address_a_run`
 `verified-by: bravebot_cli::running::an_agent_setting_naming_nothing_is_said_and_the_run_goes_on`
 `verified-by: bravebot_cli::running::doctor_says_a_checkouts_agent_is_not_obeyed`

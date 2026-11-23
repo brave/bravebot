@@ -115,6 +115,9 @@ pub struct Facts<'a> {
     /// How hard the model is asked to think, or `None` where nothing is asked and the service
     /// applies its own default.
     pub effort: Option<bravebot_aichat::protocol::Effort>,
+    /// Whether `effort` was chosen with `/effort session`, so it is for this session only and no
+    /// later session opens on it.
+    pub effort_for_this_session: bool,
     /// Whether the model in force reads that level, as its roster row stated.
     pub model_reads_effort: bool,
     /// The level the session began with, where the model in force is one of the ChatGPT account's:
@@ -711,11 +714,20 @@ fn choice_lines(facts: &Facts<'_>) -> Vec<Line> {
     lines.push(match (facts.effort, facts.model_reads_effort) {
         // A model of the account is sent the level its session began with, which is the level a
         // request carries and so the one named, with the level chosen since beside it. Where the
-        // two are the same the line is the ordinary one.
+        // two are the same the line is the ordinary one. A level chosen with `/effort session` is
+        // recorded nowhere, so it is not the level of the next session and the note says where it
+        // applies instead.
         (chosen, true) if facts.account_effort.is_some_and(|began| began != chosen) => {
             let began = facts.account_effort.flatten();
-            Line::new(t!(status_effort), word(began))
-                .with_note(t!(status_effort_kept_for_account, chosen = word(chosen)))
+            let note = match facts.effort_for_this_session {
+                true => t!(
+                    status_effort_kept_for_account_this_session,
+                    chosen = word(chosen)
+                )
+                .to_string(),
+                false => t!(status_effort_kept_for_account, chosen = word(chosen)).to_string(),
+            };
+            Line::new(t!(status_effort), word(began)).with_note(note)
         }
         // A level the model will not read is still the level somebody chose, so it is named rather
         // than hidden. What changes is the note: reporting it as in force would be this panel
@@ -724,8 +736,14 @@ fn choice_lines(facts: &Facts<'_>) -> Vec<Line> {
             Line::new(t!(status_effort), level.as_str()).with_note(t!(status_effort_not_read))
         }
         (Some(level), true) => {
-            Line::new(t!(status_effort), level.as_str()).with_note(t!(status_effort_chosen))
+            let note = match facts.effort_for_this_session {
+                true => t!(status_effort_chosen_this_session).to_string(),
+                false => t!(status_effort_chosen).to_string(),
+            };
+            Line::new(t!(status_effort), level.as_str()).with_note(note)
         }
+        // No level chosen for this session only is the same line as no level chosen: the note says
+        // the service decides, and no level is there for a scope to qualify.
         (None, _) => {
             Line::new(t!(status_effort), t!(effort_unset)).with_note(t!(status_effort_default))
         }
@@ -1306,11 +1324,11 @@ fn environment(endpoint: &str) -> &'static str {
 /// person opened by name is not under the root and has no relative spelling, so it keeps its
 /// absolute one.
 fn within(root: &Path, path: &Path) -> String {
-    match path.strip_prefix(root) {
-        Ok(rest) if rest.as_os_str().is_empty() => ".".to_string(),
-        Ok(rest) => rest.display().to_string(),
-        Err(_) => abbreviate(path),
-    }
+    bravebot_agent::confirm::shown_tree(
+        path,
+        &[root],
+        std::env::var_os("HOME").as_deref().map(Path::new),
+    )
 }
 
 /// A path with the home directory written as `~`, which is shorter and less personal.
@@ -1525,6 +1543,7 @@ mod tests {
             agent: None,
             agent_by_setting: false,
             effort: None,
+            effort_for_this_session: false,
             model_reads_effort: true,
             breakpoints_given_up: false,
             account_effort: None,
@@ -1950,6 +1969,41 @@ mod tests {
             below.value,
             t!(status_model_id, id = "claude-3-sonnet"),
             "a model no account offers has no second name to quote"
+        );
+    }
+
+    /// BACKEND-11 (R29). `/status` names the model in force for a session-only pick as it does for
+    /// a recorded one: the model, noted as the one chosen, with no word about the scope. Rejects: a
+    /// report that reads the recorded pick and not the model in force, and one that falls back to
+    /// the default for a session-only pick.
+    #[test]
+    fn the_status_line_names_a_session_only_pick_as_it_names_a_recorded_one() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut recorded = crate::state::Session::new("none");
+        recorded.choose_model("the-recorded-pick".to_string(), &config);
+        let mut session_only = crate::state::Session::new("none");
+        session_only.choose_model_for_this_session("the-session-pick");
+        let model_line = |session: &crate::state::Session| {
+            let mut facts = facts(&config, &trust);
+            as_of(&mut facts, session);
+            let report = report(&facts);
+            let at = report
+                .lines
+                .iter()
+                .position(|line| line.label.trim() == t!(status_model))
+                .expect("a model line");
+            (
+                report.lines[at].value.clone(),
+                report.lines[at].note.clone(),
+            )
+        };
+        let (value, note) = model_line(&session_only);
+        assert_eq!(value, "the-session-pick");
+        assert_eq!(note, t!(status_model_chosen));
+        assert_eq!(
+            model_line(&recorded),
+            ("the-recorded-pick".to_string(), note)
         );
     }
 
@@ -3069,6 +3123,7 @@ mod tests {
             path: path.into(),
             by: by.map(Into::into),
             pinned: false,
+            from_a_checkout: false,
         };
         let settled = |lists| bravebot_config::Filesystem {
             lists,
@@ -3144,6 +3199,7 @@ mod tests {
             path: "~/p".into(),
             by: Some(by.into()),
             pinned: false,
+            from_a_checkout: false,
         };
         let line = filesystem_line(Some(&bravebot_config::Filesystem {
             lists: Lists {
@@ -3406,6 +3462,133 @@ mod tests {
         assert!(shown.contains("chosen with /effort"), "{shown}");
     }
 
+    /// BACKEND-43, PANEL-9. The Effort line says a level chosen with `/effort session`
+    /// is for this session only, and a recorded level keeps the note it always had, which says
+    /// nothing of a scope. A session-only choice of no level is the line for no level, since no level
+    /// is there for a scope to qualify, and a level the model reads none of keeps its own note.
+    /// Rejects: a report that says nothing of the scope for a session-only level, one that adds the
+    /// scope to a recorded level, one that reads the flag and not the level for no level, and one
+    /// that lets the scope replace the note that a model reads none of the level.
+    #[test]
+    fn the_status_line_says_a_session_only_level_is_for_this_session_only() {
+        use bravebot_aichat::protocol::Effort;
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let effort_line = |facts: &Facts<'_>| {
+            let report = report(facts);
+            let line = report
+                .lines
+                .iter()
+                .find(|line| line.label.trim() == t!(status_effort))
+                .expect("an Effort line");
+            (line.value.clone(), line.note.clone())
+        };
+
+        let mut recorded = facts(&config, &trust);
+        recorded.effort = Some(Effort::High);
+        let (value, note) = effort_line(&recorded);
+        assert_eq!(value, "high");
+        assert_eq!(note, t!(status_effort_chosen));
+        assert!(!note.contains("session"), "{note}");
+
+        let mut session_only = facts(&config, &trust);
+        session_only.effort = Some(Effort::High);
+        session_only.effort_for_this_session = true;
+        let (value, note) = effort_line(&session_only);
+        assert_eq!(value, "high");
+        assert_eq!(note, t!(status_effort_chosen_this_session));
+        assert!(note.contains("this session only"), "{note}");
+
+        let mut none = facts(&config, &trust);
+        none.effort_for_this_session = true;
+        assert_eq!(
+            effort_line(&none),
+            (
+                t!(effort_unset).to_string(),
+                t!(status_effort_default).to_string()
+            ),
+            "a session-only choice of no level was given a scope note"
+        );
+
+        let mut unread = facts(&config, &trust);
+        unread.effort = Some(Effort::Max);
+        unread.effort_for_this_session = true;
+        unread.model_reads_effort = false;
+        assert_eq!(effort_line(&unread).1, t!(status_effort_not_read));
+    }
+
+    /// CHATGPT-10, BACKEND-43. On a model of the account a level chosen with `/effort session`
+    /// names the level sent and the level chosen, and says the chosen one applies from `/clear` and
+    /// is not recorded. The sentence for a recorded level, that it applies from the next session, is
+    /// not said for it, and a recorded level still gets that sentence. Rejects: the next-session
+    /// sentence for a session-only level, the session-only sentence for a recorded level, a note
+    /// for a session whose levels agree, and a level sent that is the session-only one.
+    #[test]
+    fn on_the_account_a_session_only_level_is_said_to_apply_from_clear_and_not_the_next_session() {
+        use bravebot_aichat::protocol::Effort;
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let effort_line = |facts: &Facts<'_>| {
+            let report = report(facts);
+            let line = report
+                .lines
+                .iter()
+                .find(|line| line.label.trim() == t!(status_effort))
+                .expect("an Effort line");
+            (line.value.clone(), line.note.clone())
+        };
+
+        let mut session_only = facts(&config, &trust);
+        session_only.effort = Some(Effort::High);
+        session_only.account_effort = Some(Some(Effort::Low));
+        session_only.effort_for_this_session = true;
+        let (value, note) = effort_line(&session_only);
+        assert_eq!(value, "low", "the level sent was not named");
+        assert_eq!(
+            note,
+            t!(status_effort_kept_for_account_this_session, chosen = "high")
+        );
+        assert!(
+            note.contains("high was chosen with /effort session")
+                && note.contains("is not recorded")
+                && note.contains("applies from /clear"),
+            "{note}"
+        );
+        assert!(!note.contains("next session"), "{note}");
+
+        let mut recorded = facts(&config, &trust);
+        recorded.effort = Some(Effort::High);
+        recorded.account_effort = Some(Some(Effort::Low));
+        let (value, note) = effort_line(&recorded);
+        assert_eq!(value, "low");
+        assert_eq!(note, t!(status_effort_kept_for_account, chosen = "high"));
+        assert!(note.contains("applies from the next session"), "{note}");
+
+        let mut began_with_none = facts(&config, &trust);
+        began_with_none.effort = Some(Effort::High);
+        began_with_none.account_effort = Some(None);
+        began_with_none.effort_for_this_session = true;
+        let (value, note) = effort_line(&began_with_none);
+        assert_eq!(value, t!(effort_unset));
+        assert_eq!(
+            note,
+            t!(status_effort_kept_for_account_this_session, chosen = "high")
+        );
+
+        let mut agrees = facts(&config, &trust);
+        agrees.effort = Some(Effort::Low);
+        agrees.account_effort = Some(Some(Effort::Low));
+        agrees.effort_for_this_session = true;
+        assert_eq!(
+            effort_line(&agrees),
+            (
+                "low".to_string(),
+                t!(status_effort_chosen_this_session).to_string()
+            ),
+            "a session whose levels agree was given the account sentence"
+        );
+    }
+
     /// CHATGPT-10: on a model of the account the line names the level a request carries, which is the
     /// one the session began with, and says which level was chosen since, where the two differ. The
     /// regressions it rejects are the chosen level shown as the one in force, a note for a session
@@ -3613,6 +3796,46 @@ mod tests {
                 t!(status_mcp_servers_unread, alias = "docs"),
             ]
             .join("; ")
+        );
+    }
+
+    /// SERVERS-14: the servers line of a report built from a session that holds a server takes its
+    /// note from that session, so a list nobody has read, one the person accepted and one the
+    /// person declined each read differently. A line that named the started aliases and left the
+    /// note empty would pass every test that hands the report no session.
+    #[test]
+    fn the_servers_line_of_a_report_says_how_the_held_servers_tools_stand() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let note_of = |servers: &crate::state::Servers| {
+            report(&Facts {
+                servers,
+                ..facts(&config, &trust)
+            })
+            .lines
+            .into_iter()
+            .find(|line| line.label.trim() == t!(status_mcp_servers))
+            .expect("the servers line is on the report")
+            .note
+        };
+
+        let unread =
+            crate::mcp_command::tests::holding_started_under("weather", a_policy_for_the_report());
+        assert_eq!(
+            note_of(&unread.servers),
+            t!(status_mcp_servers_unread, alias = "weather")
+        );
+
+        let accepted = crate::mcp_command::tests::holding_a_list_answered(true);
+        assert_eq!(
+            note_of(&accepted.servers),
+            t!(status_mcp_servers_tools, alias = "weather", count = 1)
+        );
+
+        let declined = crate::mcp_command::tests::holding_a_list_answered(false);
+        assert_eq!(
+            note_of(&declined.servers),
+            t!(status_mcp_servers_declined, alias = "weather")
         );
     }
 
@@ -4278,6 +4501,27 @@ mod tests {
         assert_eq!(tokens(940), "940 tokens");
         assert_eq!(tokens(1), "1 token");
         assert_eq!(tokens(12_400), "12.4k tokens");
+    }
+
+    /// RUN-9: a tree that is not text is spelled in `/status` as the window spells it, with the byte
+    /// written out, and not as the replacement character it would otherwise draw as.
+    #[cfg(unix)]
+    #[test]
+    fn the_report_spells_a_tree_that_is_not_text_with_its_byte() {
+        use std::os::unix::ffi::OsStrExt;
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let vouched = TrustedPrograms::from_iter([bravebot_core::programs::Command::new(
+            "/usr/bin/make",
+            vec!["check".to_string()],
+            std::ffi::OsStr::from_bytes(b"/tmp/project/t\xff"),
+        )]);
+        let mut facts = facts(&config, &trust);
+        facts.programs = &vouched;
+
+        let shown = rendered(&report(&facts));
+        assert!(shown.contains("\"t\\xff\""), "{shown}");
+        assert!(!shown.contains('\u{fffd}'), "{shown}");
     }
 
     /// The home directory is both longer and more personal than `~`, and a status panel is pasted

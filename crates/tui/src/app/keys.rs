@@ -53,16 +53,20 @@ pub enum Action {
     /// the terminal, which the loop gives back before the stop and takes again after it.
     #[cfg(unix)]
     Suspend,
-    /// Ask which model to use. Needs the network and the terminal, so the loop runs it.
-    ChooseModel,
+    /// Ask which model to use, and for how long the pick lasts: the picker opens in the scope the
+    /// person typed (`/model` or `/model session`). Needs the network and the terminal, so the loop
+    /// runs it.
+    ChooseModel(crate::model_prompt::Scope),
     /// Ask which theme to paint in. Needs the terminal, so the loop runs it.
     ChooseTheme,
     /// Apply a theme by name without opening the picker.
     SetTheme(String),
-    /// Ask how hard to think. Needs the terminal, so the loop runs it.
-    ChooseEffort,
-    /// Take a level by name without opening the picker.
-    SetEffort(String),
+    /// Ask how hard to think, and for how long the pick lasts: the picker opens in the scope the
+    /// person typed (`/effort` or `/effort session`). Needs the terminal, so the loop runs it.
+    ChooseEffort(crate::model_prompt::Scope),
+    /// Take a level by name without opening the picker, recorded or for this session only
+    /// according to the scope (`/effort <level>` or `/effort session <level>`).
+    SetEffort(String, crate::model_prompt::Scope),
     Variant(String),
     /// Say which model the planner may consult, take one by name, or drop the choice. Empty says.
     /// Needs the configuration to resolve the name against, which the loop owns.
@@ -75,6 +79,9 @@ pub enum Action {
     /// Say which language the interface is in, choose one for the next start, or give the choice
     /// back. Empty says.
     Language(String),
+    /// Say whether crash reports are on and what holds them off, or save the person's own choice
+    /// for the next start. Empty says.
+    CrashReports(String),
     /// Ask how the box should edit. Needs the terminal, so the loop runs it.
     ChooseEditing,
     /// Open another directory. Needs the workspace and the trust map, which the loop owns.
@@ -1292,13 +1299,23 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // ending the session as soon as the thought was short enough. Ctrl-C is the way out.
         //
         // Over an enhancement it puts back the line the person wrote and clears nothing (INPUT-48).
+        //
+        // Excluded where a settings file has moved stash, undo, trail, panel, watch or suspend
+        // onto this exact chord: `alt-esc` and `ctrl-esc` carry a modifier, which nothing above
+        // reads, so without this guard they matched here before the ladder further down ever
+        // read the chord the action was moved to, and the action never fired (#2924).
         KeyCode::Esc
-            if session.editing() == crate::vim::Editing::Ordinary && session.enhanced_pending() =>
+            if session.editing() == crate::vim::Editing::Ordinary
+                && session.enhanced_pending()
+                && !session.bindings().claims(&key) =>
         {
             session.restore_unenhanced();
             Action::Redraw
         }
-        KeyCode::Esc if session.editing() == crate::vim::Editing::Ordinary => {
+        KeyCode::Esc
+            if session.editing() == crate::vim::Editing::Ordinary
+                && !session.bindings().claims(&key) =>
+        {
             session.clear_input();
             Action::Redraw
         }
@@ -1428,7 +1445,7 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
 /// (CLI-17). The picker chooses nothing until Enter is pressed on a row (CMD-17).
 fn offering_a_model(session: &mut Session) -> Action {
     if session.has_model_to_offer() {
-        super::ask_which_model(session)
+        super::ask_which_model(session, crate::model_prompt::Scope::EverySession)
     } else {
         Action::Redraw
     }

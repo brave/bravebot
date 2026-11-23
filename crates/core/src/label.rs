@@ -90,14 +90,26 @@ pub struct Label {
     pub confidentiality: Confidentiality,
 }
 
+// In a block of its own, which Verus reads, so a gate's contract can state the label it builds. The
+// rest of `Label`'s functions are in the block below, which Verus does not read.
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 impl Label {
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r.integrity == integrity,
+            r.confidentiality == confidentiality,
+    ))]
     pub const fn new(integrity: Integrity, confidentiality: Confidentiality) -> Self {
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let integrity_given = integrity;
         Self {
-            integrity,
+            integrity: integrity_given,
             confidentiality,
         }
     }
+}
 
+impl Label {
     /// `(T,pub)`, the only label routing fields accept.
     pub const fn trusted_public() -> Self {
         Self::new(Integrity::Trusted, Confidentiality::Public)

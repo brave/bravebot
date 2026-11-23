@@ -46,7 +46,7 @@ use bravebot_agent::conversation::Snapshot;
 use bravebot_agent::links::{LinkKind, Reference};
 use bravebot_agent::workspace::Workspace;
 use bravebot_aichat::protocol::{Cached, Effort};
-use bravebot_core::command::Spelling;
+use bravebot_core::command::{Route, Spelling};
 use bravebot_core::label::Integrity;
 use bravebot_core::programs::TrustedPrograms;
 use bravebot_core::todo::{self, Item, List, Row, Status};
@@ -1574,18 +1574,24 @@ fn drop_checkouts(record: &mut Record) {
 
 /// Load weaker decisions last so equivalent path spellings cannot hide them.
 fn restored_rules(root: &Path, rules: &[StoredRule]) -> TrustStore {
+    restored_rules_with(root, rules, bravebot_agent::workspace::BACKSLASH_SEPARATES)
+}
+
+/// [`restored_rules`], with the host's answer about what separates supplied, so the Windows one
+/// can be asked for where the tests run.
+fn restored_rules_with(root: &Path, rules: &[StoredRule], backslash_separates: bool) -> TrustStore {
     let mut trust = bravebot_agent::workspace::trust_store(root);
     for rule in rules.iter().filter(|rule| rule.integrity == TRUSTED) {
-        trust.trust(&replayed(&rule.path));
+        trust.trust(&replayed(&rule.path, backslash_separates));
     }
     for rule in rules.iter().filter(|rule| rule.integrity == "undecided") {
-        trust.undecide(&replayed(&rule.path));
+        trust.undecide(&replayed(&rule.path, backslash_separates));
     }
     for rule in rules
         .iter()
         .filter(|rule| rule.integrity != TRUSTED && rule.integrity != "undecided")
     {
-        trust.distrust(&replayed(&rule.path));
+        trust.distrust(&replayed(&rule.path, backslash_separates));
     }
     trust
 }
@@ -1618,6 +1624,7 @@ fn stored_programs(programs: &TrustedPrograms, project: &Path) -> Vec<StoredComm
             directory: Some(StoredPath::of(
                 c.directory.strip_prefix(project).unwrap_or(&c.directory),
             )),
+            routes: c.routes.iter().map(StoredRoute::of).collect(),
         })
         .collect()
 }
@@ -1649,9 +1656,15 @@ fn restored_programs(programs: &[StoredCommand], root: &Path) -> TrustedPrograms
             Some(written) => written.to_path()?,
             None => program.clone(),
         };
+        let routes = c
+            .routes
+            .iter()
+            .map(StoredRoute::to_route)
+            .collect::<Option<Vec<_>>>()?;
         Some(
             bravebot_core::programs::Command::new(program, c.args.clone(), directory)
-                .started_as(started_as),
+                .started_as(started_as)
+                .routed(routes),
         )
     }))
 }
@@ -1741,6 +1754,7 @@ pub fn manifest_usage(
         .ok()
         .map(|done| bravebot_agent::Spent {
             tokens: done.tokens,
+            budgeted_tokens: done.budgeted_tokens,
             output_tokens: done.output_tokens,
             context_tokens: done.context_tokens,
             cached: done.cached,
@@ -1858,9 +1872,8 @@ pub struct StoredRule {
 /// the rule keyed under a name nothing asks about, so a file somebody recorded as untrusted comes
 /// back decided by the answer given about the project, which is the direction that fails open
 /// (TRUST-18).
-fn replayed(path: &str) -> String {
-    bravebot_core::spelling::to_key(path, bravebot_agent::workspace::BACKSLASH_SEPARATES)
-        .into_owned()
+fn replayed(path: &str, backslash_separates: bool) -> String {
+    bravebot_core::spelling::to_key(path, backslash_separates).into_owned()
 }
 
 /// The word for a trusted rule. Anything else reads as untrusted.
@@ -1898,6 +1911,65 @@ pub struct StoredCommand {
     /// session with exactly the grant it recorded rather than a wider one.
     #[serde(default)]
     pub directory: Option<StoredPath>,
+    /// Where the command's streams went, for an entry made at a line that sent one to the null
+    /// device or merged its streams. Absent in a record written before entries held routes, which
+    /// reads as no routes: the entry such a record held was the line with its streams as they were.
+    /// Written only where there are some, so an entry with none is spelled as it was.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<StoredRoute>,
+}
+
+/// One route of a vouched command as it is written down, the paths spelled as [`StoredPath`] does.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum StoredRoute {
+    Stdout { path: StoredPath, append: bool },
+    Stdin { path: StoredPath },
+    Stderr { path: StoredPath, append: bool },
+    Both { path: StoredPath },
+    StderrToStdout,
+}
+
+impl StoredRoute {
+    fn of(route: &Route) -> Self {
+        match route {
+            Route::Stdout { path, append } => Self::Stdout {
+                path: StoredPath::of(path),
+                append: *append,
+            },
+            Route::Stdin { path } => Self::Stdin {
+                path: StoredPath::of(path),
+            },
+            Route::Stderr { path, append } => Self::Stderr {
+                path: StoredPath::of(path),
+                append: *append,
+            },
+            Route::Both { path } => Self::Both {
+                path: StoredPath::of(path),
+            },
+            Route::StderrToStdout => Self::StderrToStdout,
+        }
+    }
+
+    /// The route read back, or `None` where a path has no spelling, which drops the whole entry.
+    fn to_route(&self) -> Option<Route> {
+        Some(match self {
+            Self::Stdout { path, append } => Route::Stdout {
+                path: path.to_path()?,
+                append: *append,
+            },
+            Self::Stdin { path } => Route::Stdin {
+                path: path.to_path()?,
+            },
+            Self::Stderr { path, append } => Route::Stderr {
+                path: path.to_path()?,
+                append: *append,
+            },
+            Self::Both { path } => Route::Both {
+                path: path.to_path()?,
+            },
+            Self::StderrToStdout => Route::StderrToStdout,
+        })
+    }
 }
 
 /// A path as the record spells it.
@@ -1945,6 +2017,11 @@ impl StoredPath {
 pub struct StoredTask {
     pub content: String,
     pub status: String,
+    /// The task as the model wrote it, beside `content`, which is the form the person read.
+    /// A record written before this field existed has none, and its tasks resume with `content`
+    /// as their only form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_the_planner_had_it: Option<String>,
 }
 
 impl StoredTask {
@@ -1952,6 +2029,7 @@ impl StoredTask {
         Self {
             content: row.content.clone(),
             status: row.status.to_string(),
+            as_the_planner_had_it: Some(row.as_the_planner_had_it.clone()),
         }
     }
 }
@@ -2119,7 +2197,13 @@ impl Record {
                     .iter()
                     .map(|task| Item::new(task.content.clone(), Status::parse(&task.status)))
                     .collect();
-                (*turn, todo::rows(&List::new(items)))
+                let mut rows = todo::rows(&List::new(items));
+                for (row, task) in rows.iter_mut().zip(tasks) {
+                    if let Some(planner) = &task.as_the_planner_had_it {
+                        row.as_the_planner_had_it = planner.clone();
+                    }
+                }
+                (*turn, rows)
             })
             .collect()
     }
@@ -2818,18 +2902,25 @@ impl Handle {
     /// Keep each link a turn recorded with `set_link`, the later of two of one kind winning.
     ///
     /// Each address is read as a link again by [`Url::read`] before it is kept, so one that fails
-    /// the check of `/issue` and `/pr` sets nothing. Returns whether the turn recorded any, so a
-    /// front end knows to show the links the record now holds.
+    /// the check of `/issue` and `/pr` sets nothing. A link the turn inferred from the commands it
+    /// ran (PANEL-18) is kept only where the record holds none of that kind, so it never replaces one
+    /// the person gave or `set_link` recorded. Returns whether the record changed or a link was
+    /// recorded, so a front end knows to show the links the record now holds.
     pub fn apply_links(&mut self, links: &[bravebot_agent::links::LinkSet]) -> bool {
         use bravebot_agent::links::LinkKind;
+        let mut kept = false;
         for set in links {
             let kind = match set.kind {
                 LinkKind::Issue => Link::Issue,
                 LinkKind::PullRequest => Link::PullRequest,
             };
+            if set.inferred && self.link(kind).is_some() {
+                continue;
+            }
             self.set_link(kind, Url::read(&set.url));
+            kept = true;
         }
-        !links.is_empty()
+        kept
     }
 
     /// The notes a person has typed on this session, oldest first.
@@ -5580,12 +5671,14 @@ mod tests {
                 started_as: None,
                 args: vec!["log".to_string()],
                 directory: Some(StoredPath::Text("/work".to_string())),
+                routes: Vec::new(),
             },
             StoredCommand {
                 program: StoredPath::Text("/bin/ls".to_string()),
                 started_as: None,
                 args: Vec::new(),
                 directory: Some(StoredPath::Text("/work/sub".to_string())),
+                routes: Vec::new(),
             },
         ];
         let vouched = record.trusted_programs(Path::new("/work"));
@@ -5705,18 +5798,21 @@ mod tests {
                 started_as: None,
                 args: vec!["check".to_string()],
                 directory: Some(StoredPath::Text("sub".to_string())),
+                routes: Vec::new(),
             },
             StoredCommand {
                 program: StoredPath::Text("/usr/bin/git".to_string()),
                 started_as: None,
                 args: vec!["log".to_string()],
                 directory: Some(StoredPath::Text(String::new())),
+                routes: Vec::new(),
             },
             StoredCommand {
                 program: StoredPath::Text("/bin/ls".to_string()),
                 started_as: None,
                 args: Vec::new(),
                 directory: Some(StoredPath::Text("/elsewhere".to_string())),
+                routes: Vec::new(),
             },
         ];
 
@@ -5818,6 +5914,60 @@ mod tests {
         ));
     }
 
+    /// The routes of a vouched command come back with it (RUN-8), so a resumed session covers
+    /// `sh check.sh > /dev/null` and not the bare line. An entry with no route is written with no
+    /// such field, and a record from before entries held routes reads back as entries with none.
+    /// Rejects a record that drops the routes on the way out or on the way back, which would
+    /// restore an entry covering the bare line.
+    #[test]
+    fn the_routes_of_a_command_come_back_with_it() {
+        let root = Path::new("/work");
+        let program = Path::new("/bin/sh");
+        let args = ["check.sh".to_string()];
+        let discard = vec![bravebot_core::command::Route::Stdout {
+            path: "/dev/null".into(),
+            append: false,
+        }];
+        let written = stored_programs(
+            &TrustedPrograms::from_iter([
+                bravebot_core::programs::Command::new(program, args.to_vec(), root)
+                    .routed(discard.clone()),
+                bravebot_core::programs::Command::new("/usr/bin/git", vec!["log".into()], root),
+            ]),
+            root,
+        );
+
+        let json = serde_json::to_string(&written).expect("a record is written as JSON");
+        assert_eq!(
+            json.matches("routes").count(),
+            1,
+            "the route of the entry made at a line that discarded its output was not written, or an entry with no route was written with a routes field: {json}"
+        );
+        let read: Vec<StoredCommand> = serde_json::from_str(&json).expect("and read back");
+        let vouched = restored_programs(&read, root);
+        assert!(
+            vouched.contains_routed(program, program, &args, &discard, root),
+            "the entry made at the line that discarded its output did not come back"
+        );
+        assert!(
+            !vouched.contains(program, program, &args, root),
+            "the resumed session covers the bare line"
+        );
+
+        let earlier: Vec<StoredCommand> =
+            serde_json::from_str(r#"[{"program":"/bin/sh","args":["check.sh"],"directory":""}]"#)
+                .expect("a record from an earlier build reads");
+        let vouched = restored_programs(&earlier, root);
+        assert!(
+            vouched.contains(program, program, &args, root),
+            "an entry written before routes were kept did not read as one with none"
+        );
+        assert!(
+            !vouched.contains_routed(program, program, &args, &discard, root),
+            "an entry written before routes were kept covers the line that discards its output"
+        );
+    }
+
     /// A binary and a tree are written as bytes wherever they have no text spelling, so a resumed
     /// session vouches for the file its user vouched for and no other. `to_string_lossy` maps every
     /// byte it cannot read onto one replacement character, so a record holding a rendering came back
@@ -5870,12 +6020,14 @@ mod tests {
                 started_as: None,
                 args: vec!["check".to_string()],
                 directory: Some(StoredPath::Text(String::new())),
+                routes: Vec::new(),
             },
             StoredCommand {
                 program: StoredPath::Text("/usr/bin/git".to_string()),
                 started_as: None,
                 args: vec!["log".to_string()],
                 directory: Some(StoredPath::Text(String::new())),
+                routes: Vec::new(),
             },
         ];
 
@@ -6127,6 +6279,61 @@ mod tests {
         );
     }
 
+    /// A rule recorded under the host's own spelling of a drive-letter name is replayed under the
+    /// key spelled from `/` where a backslash separates, and under the name it was written with
+    /// where it does not (TRUST-18).
+    ///
+    /// A trusted, an undecided and an untrusted rule each decide a different name below the same
+    /// directory, so a replay that leaves any one of the three under the spelling it was recorded
+    /// in changes that name's answer: an untrusted rule left as `C:\fetched` reads as a file under
+    /// the project, and the file below it is decided by the answer given about the project.
+    #[test]
+    fn a_rule_recorded_under_a_drive_letter_is_replayed_under_the_key_spelled_from_slash() {
+        let rule = |path: &str, integrity: &str| StoredRule {
+            path: path.to_string(),
+            integrity: integrity.to_string(),
+        };
+        let rules = [
+            rule(r"C:\work\notes", TRUSTED),
+            rule(r"C:\work\notes\draft", "undecided"),
+            rule(r"\\?\C:\fetched", UNTRUSTED),
+        ];
+        let root = tempfile::tempdir().expect("a directory to stand for the project");
+
+        let spelled_from_slash = restored_rules_with(root.path(), &rules, true);
+
+        assert_eq!(
+            spelled_from_slash.integrity_of("/C:/work/notes/x"),
+            Some(Integrity::Trusted),
+            "a trusted drive-letter rule did not reach the file below it"
+        );
+        assert_eq!(
+            spelled_from_slash.integrity_of("/C:/work/notes/draft/y"),
+            None,
+            "an undecided drive-letter rule did not hold back what the trusted one above it vouches for"
+        );
+        assert_eq!(
+            spelled_from_slash.integrity_of("/C:/fetched/page.html"),
+            Some(Integrity::Untrusted),
+            "an untrusted drive-letter rule did not reach the file below it"
+        );
+
+        // Where a backslash does not separate, `\\?\C:\fetched` is one file name in the project, and
+        // the rule about it reaches that name and nothing on a drive.
+        let a_file_name = restored_rules_with(root.path(), &rules, false);
+
+        assert_eq!(
+            a_file_name.integrity_of(r"\\?\C:\fetched"),
+            Some(Integrity::Untrusted),
+            "a name with a backslash in it was not kept as a name in the project"
+        );
+        assert_eq!(
+            a_file_name.integrity_of("/C:/fetched/page.html"),
+            None,
+            "a rule about a file name was read as one about a directory on a drive"
+        );
+    }
+
     /// A resumed session asks about writes, whatever the session that wrote the record was doing when
     /// it ended. The trust map and the vouched commands come back because the person resuming is the
     /// person who granted them; a mode is a standing answer somebody gave while watching one piece of
@@ -6365,6 +6572,7 @@ mod tests {
         let set = |kind, url: &str| LinkSet {
             kind,
             url: url.to_string(),
+            inferred: false,
         };
         assert!(handle.apply_links(&[
             set(LinkKind::Issue, ISSUE),
@@ -6380,6 +6588,48 @@ mod tests {
             None,
             "an address the check refuses was kept"
         );
+    }
+
+    /// PANEL-18: a link a turn worked out from the commands it ran is kept only where the record
+    /// holds none of that kind, and one a person gave or `set_link` recorded is never replaced.
+    ///
+    /// The faults it rejects: an inferred link replacing an existing one, an inferred link not
+    /// being kept where the record holds none, and an inferred link of one kind setting the other.
+    #[test]
+    fn an_inferred_link_fills_an_empty_slot_and_never_replaces_one() {
+        use bravebot_agent::links::{LinkKind, LinkSet};
+        const PULL: &str = "https://github.com/brave/bravebot/pull/4376";
+        const TYPED: &str = "https://github.com/brave/bravebot/pull/1270";
+
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-apply-inferred-links");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+        let inferred = |kind, url: &str| LinkSet {
+            kind,
+            url: url.to_string(),
+            inferred: true,
+        };
+
+        assert!(handle.apply_links(&[inferred(LinkKind::PullRequest, PULL)]));
+        assert_eq!(handle.link(Link::PullRequest), Some(PULL));
+        assert_eq!(handle.link(Link::Issue), None, "the other kind was set");
+
+        handle.apply_links(&[inferred(
+            LinkKind::PullRequest,
+            "https://github.com/brave/bravebot/pull/9999",
+        )]);
+        assert_eq!(
+            handle.link(Link::PullRequest),
+            Some(PULL),
+            "an inferred link replaced the link the record held"
+        );
+
+        handle.set_link(Link::PullRequest, Url::read(TYPED));
+        assert!(!handle.apply_links(&[inferred(LinkKind::PullRequest, PULL)]));
+        assert_eq!(handle.link(Link::PullRequest), Some(TYPED));
     }
 
     /// PANEL-12: setting a link, which `set_link` and `/issue` both do through [`Handle::set_link`],
@@ -7941,6 +8191,79 @@ mod tests {
         let root = fake_checkout("detached", "9fceb02d0ae598e95dc970b74767f19372d61af8\n");
         assert_eq!(branch_of(&root), None);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// PANEL-9. The branch of a session is read from the checkout when the session starts, when it
+    /// resumes and when it moves to another directory, and it is not read again between those, so
+    /// a checkout made during a turn shows from the next of them. The faults it rejects are a
+    /// session that starts with no branch, a resume that keeps the branch the record holds, and a
+    /// move that keeps the branch of the directory it left.
+    #[test]
+    fn the_branch_is_read_when_a_session_starts_resumes_and_moves_and_not_between() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let first = fake_checkout("branch-first", "ref: refs/heads/main\n");
+        let second = fake_checkout("branch-second", "ref: refs/heads/other\n");
+        let mut session = Handle::begin(&first, Front::Terminal, A_BUILD);
+        assert_eq!(
+            session.branch(),
+            Some("main"),
+            "a new session has no branch"
+        );
+
+        std::fs::write(first.join(".git").join("HEAD"), "ref: refs/heads/later\n")
+            .expect("write HEAD");
+        assert_eq!(
+            session.branch(),
+            Some("main"),
+            "the branch was read again between a start and the next resume or move"
+        );
+
+        let mut record =
+            a_record_left_by_a_session(&an_empty_project("bravebot-session-branch-resume"));
+        record.branch = Some("recorded".to_string());
+        let resumed = Handle::resuming(&first, &record, Front::Terminal, A_BUILD)
+            .expect("nothing holds a record that is not on disk under the checkout");
+        assert_eq!(
+            resumed.branch(),
+            Some("later"),
+            "a resumed session shows the branch its record holds, not the one checked out now"
+        );
+
+        let snapshot = bravebot_agent::Conversation::new().snapshot();
+        let trust = a_vouched_root(&second);
+        session.move_to(
+            &second,
+            Standing {
+                history: None,
+                conversation: &snapshot,
+                turns: 0,
+                tokens: 0,
+                split: Default::default(),
+                spend: &BTreeMap::new(),
+                timing: &BTreeMap::new(),
+                model: None,
+                todos: &BTreeMap::new(),
+                asides: &[],
+                trust: &trust,
+                programs: &TrustedPrograms::default(),
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts: &[],
+                touched: None,
+                answered_by_mode: false,
+            },
+        );
+        assert_eq!(
+            session.branch(),
+            Some("other"),
+            "a session that moved shows the branch of the directory it left"
+        );
+
+        let _ = std::fs::remove_dir_all(&first);
+        let _ = std::fs::remove_dir_all(&second);
     }
 
     /// Not every directory is a checkout, and that is not a failure to report.

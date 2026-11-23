@@ -193,6 +193,7 @@ fn problem(reason: Unreadable) -> &'static str {
         Unreadable::NoDomainNamed => t!(permission_rule_no_domain_named),
         Unreadable::NotAHost => t!(permission_rule_not_a_host),
         Unreadable::NotAToolRule => t!(permission_rule_not_a_tool_rule),
+        Unreadable::NotASearchRule => t!(permission_rule_not_a_search_rule),
         Unreadable::NotAList => t!(permission_rule_not_a_list),
     }
 }
@@ -218,7 +219,7 @@ pub fn for_an_unattended_run(
     let anchors = anchors(
         profile,
         Some(workspace),
-        crate::workspace::volume_folds_case(workspace),
+        crate::workspace::case_answer(workspace),
     );
     let (mut permissions, mut rejected) =
         Permissions::parse(&lists.deny, &lists.ask, &[], &anchors);
@@ -261,7 +262,7 @@ fn explain(permissions: &mut Permissions, settings: &Settings) {
 fn anchors(
     profile: Option<&std::path::Path>,
     workspace: Option<&std::path::Path>,
-    folds_case: bool,
+    folds_case: Option<bool>,
 ) -> Anchors {
     let home = profile.map(|profile| profile.display().to_string());
     Anchors {
@@ -276,9 +277,11 @@ fn anchors(
         // The host's answer, which this crate is the lowest one that may ask for: the kernel has
         // no filesystem and takes it as data (PERM-3).
         backslash_separates: crate::workspace::BACKSLASH_SEPARATES,
-        // Asked of the workspace's volume by the caller and false where that could not be told, so
-        // a failed probe compares bytes and never widens a rule.
-        folds_case,
+        // Asked of the workspace's volume by the caller. Where that could not be told a rule that
+        // grants compares bytes, so a failed probe never widens a grant, and a rule that restricts
+        // folds, so it never leaves open a file a folding volume opens under another spelling.
+        folds_case: folds_case == Some(true),
+        case_unknown: folds_case.is_none(),
     }
 }
 
@@ -291,7 +294,13 @@ fn anchors(
 /// the file tools ask about a project file by that name.
 fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
     let root = workspace.canonicalize().ok();
-    let folds_case = crate::workspace::volume_folds_case(workspace);
+    // A rule's full path is spelled `C:/..`, and Windows canonicalizes the root to `\\?\C:\..`,
+    // whose first component never equals the rule's, so the two are compared without the prefix.
+    let ordinary_root = root
+        .clone()
+        .map(bravebot_sandbox::rules::without_verbatim_prefix);
+    // Only rules that restrict are followed, so the answer that could not be had is read as yes.
+    let folds_case = crate::workspace::case_answer(workspace).unwrap_or(true);
     permissions.follow_links(|prefix| {
         let named = match bravebot_core::trust::is_absolute_key(prefix) {
             true => std::path::PathBuf::from(
@@ -308,7 +317,10 @@ fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
             // A full path to a place inside the project is also that place under the name the
             // file tools ask by, so a rule about `~/.ssh` covers `.ssh` in a session opened in
             // the home directory.
-            return match (&root, bravebot_core::trust::is_absolute_key(prefix)) {
+            return match (
+                &ordinary_root,
+                bravebot_core::trust::is_absolute_key(prefix),
+            ) {
                 (Some(root), true) => beneath(&named, root, folds_case),
                 _ => None,
             };
@@ -428,7 +440,7 @@ pub fn with_granted(
     let anchors = anchors(
         profile,
         Some(workspace),
-        crate::workspace::volume_folds_case(workspace),
+        crate::workspace::case_answer(workspace),
     );
     let (mut permissions, mut rejected) =
         Permissions::parse(&lists.deny, &lists.ask, &allow, &anchors);
@@ -482,7 +494,7 @@ fn dropped_allow_entries(settings: &Settings, anchors: &Anchors) -> (Vec<Propose
 /// [PERM-14]: ../../../docs/specs/permissions.md
 /// [PERM-15]: ../../../docs/specs/permissions.md
 pub fn proposed(settings: &Settings, profile: Option<&std::path::Path>) -> Vec<Proposed> {
-    dropped_allow_entries(settings, &anchors(profile, None, false)).0
+    dropped_allow_entries(settings, &anchors(profile, None, Some(false))).0
 }
 
 /// The rules `proposed` holds as an `allow` list of their own, read as [`with_granted`] reads one.
@@ -500,7 +512,7 @@ pub fn as_allow_list(
     let anchors = anchors(
         profile,
         Some(workspace),
-        crate::workspace::volume_folds_case(workspace),
+        crate::workspace::case_answer(workspace),
     );
     Permissions::parse(&[], &[], &allow, &anchors).0
 }
@@ -535,6 +547,57 @@ mod tests {
         }
     }
 
+    /// Every reason an entry is refused is told to the planner as a sentence of the catalog's, since
+    /// a refused `denyRead` or `denyWrite` entry of a checkout is named by its reason and not by its
+    /// spelling (SANDBOX-25). A reason with no sentence, or one that gave the same sentence as
+    /// another, would leave the planner told nothing about why. The match has no wildcard arm, so a
+    /// reason added to the sandbox crate stops this test compiling until it is listed.
+    #[test]
+    fn every_reason_an_entry_is_refused_for_has_its_own_sentence() {
+        use bravebot_sandbox::rules::Reason;
+        let all = [
+            Reason::NoHome,
+            Reason::Climbs,
+            Reason::GlobOnAWrite,
+            Reason::ConfinesNothing,
+            Reason::PrivateKey,
+            Reason::StateDirectory,
+            Reason::HoldsCredentials,
+            Reason::TooBroad,
+            Reason::NamesAVariable,
+            Reason::Overridden,
+        ];
+        for reason in all {
+            match reason {
+                Reason::NoHome
+                | Reason::Climbs
+                | Reason::GlobOnAWrite
+                | Reason::ConfinesNothing
+                | Reason::PrivateKey
+                | Reason::StateDirectory
+                | Reason::HoldsCredentials
+                | Reason::TooBroad
+                | Reason::NamesAVariable
+                | Reason::Overridden => {}
+            }
+        }
+        let sentences: Vec<&str> = all
+            .iter()
+            .map(|reason| filesystem_reason(*reason))
+            .collect();
+        for (reason, sentence) in all.iter().zip(&sentences) {
+            assert!(
+                !sentence.trim().is_empty(),
+                "{reason:?} has no sentence: {sentence:?}"
+            );
+            assert_eq!(
+                sentences.iter().filter(|other| *other == sentence).count(),
+                1,
+                "{reason:?} shares its sentence with another reason: {sentence}"
+            );
+        }
+    }
+
     /// A denial inside the session directory is not in force where the backend cannot hold it
     /// back, since every stage there is refused. Where it can, and for every entry the backend
     /// has no part in, the answer is what the entry resolved to.
@@ -551,6 +614,7 @@ mod tests {
             path: path.to_string(),
             by: None,
             pinned: false,
+            from_a_checkout: false,
         };
         let beside = root.join("beside").join("secret.env");
         let beside = beside.to_str().unwrap();
@@ -611,6 +675,7 @@ mod tests {
             path: path.to_str().unwrap().to_string(),
             by: None,
             pinned: false,
+            from_a_checkout: false,
         };
         let lists = Lists {
             allow_write: vec![entry(&shared)],
@@ -637,8 +702,10 @@ mod tests {
         );
     }
 
-    /// The rules take the answer of the volume the workspace is on, and a workspace that cannot be
-    /// read gets byte comparison: a rule about `Docs` covers `docs` only where the two are one file.
+    /// The rules take the answer of the volume the workspace is on. A workspace that could not be
+    /// read gets the narrower reading in each list (PERM-3): a rule that restricts folds, so a rule
+    /// about `Docs` refuses `docs`, and a rule that grants compares bytes, so a grant for `Docs`
+    /// does not reach `docs`.
     #[test]
     fn rules_take_the_case_answer_of_the_volume_the_workspace_is_on() {
         let root = crate::testutil::scratch_dir("Permissions-Volume-Case");
@@ -648,7 +715,9 @@ mod tests {
         std::fs::write(root.join("probe-file"), b"").unwrap();
         let folds = root.join("PROBE-FILE").exists();
 
-        let settings = Settings::parse(r#"{"permissions": {"deny": ["Read(Docs/**)"]}}"#);
+        let settings = Settings::parse(
+            r#"{"permissions": {"deny": ["Read(Docs/**)"], "allow": ["Edit(Docs/**)"]}}"#,
+        );
         let (on_it, _) = from_settings(&settings, None, &root);
         let (nowhere, _) = from_settings(&settings, None, &root.join("does-not-exist"));
 
@@ -659,8 +728,13 @@ mod tests {
         assert_eq!(on_it.for_path(Subject::Read, "docs/a.md"), expected);
         assert_eq!(
             nowhere.for_path(Subject::Read, "docs/a.md"),
+            Decision::Ruled(Ruling::Deny),
+            "a workspace that could not be read left a refusal comparing bytes"
+        );
+        assert_eq!(
+            nowhere.for_path(Subject::Edit, "docs/a.md"),
             Decision::Unmatched,
-            "a workspace that could not be read folded case"
+            "a workspace that could not be read folded a grant"
         );
         assert_eq!(
             on_it.for_path(Subject::Read, "Docs/a.md"),
@@ -977,6 +1051,7 @@ mod tests {
             Unreadable::NoDomainNamed,
             Unreadable::NotAHost,
             Unreadable::NotAToolRule,
+            Unreadable::NotASearchRule,
             Unreadable::NotAList,
         ]
         .map(problem);
@@ -1878,6 +1953,97 @@ mod tests {
                         "a spelling was counted as a rule of its own"
                     );
                 }
+            }
+        }
+    }
+
+    /// PERM-7: a rule on an ancestor of the workspace covers it by its relative names where the
+    /// workspace's volume could not be asked about case. The answer is handed to the rules as
+    /// `None`, as [`crate::workspace::case_answer`] gives it for a workspace at a mount root, so a
+    /// refusal is stored folded and the workspace is read the same way when `follow_links` covers
+    /// it. The name the file tools ask by is refused for `Read` and asked about for `Edit`.
+    #[cfg(unix)]
+    #[test]
+    fn a_rule_on_an_ancestor_covers_the_workspace_where_the_volume_could_not_be_asked() {
+        let scratch = crate::testutil::scratch_dir("Permissions-Ancestor-Case-Unknown");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let home = scratch.join("Home");
+        let root = home.join("Proj");
+        std::fs::create_dir_all(root.join("secrets")).unwrap();
+        let (home, root) = (home.canonicalize().unwrap(), root.canonicalize().unwrap());
+        for (subject, family, list, ruling) in [
+            (Subject::Read, "Read", "deny", Ruling::Deny),
+            (Subject::Edit, "Edit", "ask", Ruling::Ask),
+        ] {
+            let settings = Settings::parse(&format!(
+                r#"{{"permissions": {{"{list}": ["{family}(~/**)"]}}}}"#
+            ));
+            let lists = settings.permissions();
+            let anchors = anchors(Some(&home), Some(&root), None);
+            assert!(anchors.case_unknown && !anchors.folds_case);
+            let (mut permissions, rejected) =
+                Permissions::parse(&lists.deny, &lists.ask, &[], &anchors);
+            assert!(rejected.is_empty(), "{rejected:?}");
+            follow_links(&mut permissions, &root);
+            let absolute = root.join("secrets").join(".env");
+            assert_eq!(
+                permissions.for_path(subject, &absolute.display().to_string()),
+                Decision::Ruled(ruling),
+                "{family}(~/**) in {list} stopped covering the absolute name"
+            );
+            assert_eq!(
+                permissions.for_path(subject, "secrets/.env"),
+                Decision::Ruled(ruling),
+                "{family}(~/**) in {list} did not cover the relative name where the volume could not be asked"
+            );
+        }
+    }
+
+    /// PERM-7: a `deny` or `ask` rule written as `C:/..` about a place inside the workspace covers
+    /// the relative name the file tools ask by, though Windows canonicalizes the workspace to
+    /// `\\?\C:\..`. A rule beside it and a file it does not name stay unmatched, so the rule is
+    /// neither inert nor wider than written.
+    #[cfg(windows)]
+    #[test]
+    fn a_full_path_rule_inside_the_workspace_covers_its_relative_names_on_windows() {
+        let scratch = crate::testutil::scratch_dir("Permissions-Windows-Full-Path");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(scratch.join("secrets")).unwrap();
+        std::fs::create_dir_all(scratch.join("secrets-other")).unwrap();
+        let root = scratch.canonicalize().unwrap();
+        assert!(
+            root.to_string_lossy().starts_with(r"\\?\"),
+            "the workspace did not canonicalize to the verbatim form this test is about: {root:?}"
+        );
+        let ordinary = bravebot_sandbox::rules::without_verbatim_prefix(root.clone())
+            .to_string_lossy()
+            .replace('\\', "/");
+        for (subject, family, list, ruling) in [
+            (Subject::Read, "Read", "deny", Ruling::Deny),
+            (Subject::Edit, "Edit", "deny", Ruling::Deny),
+            (Subject::Edit, "Edit", "ask", Ruling::Ask),
+        ] {
+            let settings = Settings::parse(&format!(
+                r#"{{"permissions": {{"{list}": ["{family}({ordinary}/secrets/**)"]}}}}"#
+            ));
+            let (permissions, rejected) = from_settings(&settings, None, &root);
+            assert!(rejected.is_empty(), "{rejected:?}");
+            assert_eq!(
+                permissions.for_path(subject, &format!("{ordinary}/secrets/.env")),
+                Decision::Ruled(ruling),
+                "{family} in {list} stopped covering the full path"
+            );
+            assert_eq!(
+                permissions.for_path(subject, "secrets/.env"),
+                Decision::Ruled(ruling),
+                "{family} in {list} did not cover the relative name the file tools ask by"
+            );
+            for beside in ["secrets-other/.env", "control.txt"] {
+                assert_eq!(
+                    permissions.for_path(subject, beside),
+                    Decision::Unmatched,
+                    "{family} in {list} covered '{beside}', which it does not name"
+                );
             }
         }
     }

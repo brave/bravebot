@@ -122,12 +122,10 @@ export interface AgentClient {
   /** The host's run and the sessions it holds. A runtime that is not a host refuses it. */
   instance(): Promise<InstanceInfo>
   /**
-   * Take over a session the host holds whose controller's connection has ended, and start its view
-   * from the snapshot the host sends. A session this client holds is refused without sending.
+   * Join a session the host holds, whether or not another client is attached to it, and start its
+   * view from the snapshot the host sends. A session this client holds is refused without sending.
    */
   attach(session: string): Promise<AgentSession>
-  /** Operations a later stage adds. They fail locally and send nothing. */
-  unsupported(operation: 'takeControl'): Promise<never>
 }
 
 /** One session a host holds, as `instance.info` lists it. */
@@ -135,12 +133,17 @@ export interface HeldSession {
   session: string
   state: 'open' | 'closing' | 'closed'
   working: boolean
-  /** Whether this connection controls it. */
-  controlled: boolean
+  /** Whether this connection is attached to it. */
+  attached: boolean
 }
 
 export interface InstanceInfo {
   /** Names this run of the host. A different value means the host restarted and its sessions are gone. */
   instance: string
   sessions: readonly HeldSession[]
+  /** The answers the person allowed this connection to give. They grant nothing. */
+  answers: readonly AnswerKind[]
 }
+
+/** A kind of answer a connection may be allowed to give. */
+export type AnswerKind = 'confirm' | 'run' | 'fetch' | 'ask' | 'trust'

@@ -12,7 +12,7 @@ description:
   Triggers on: /implement-issues <issues or query>, work through this label, one pull request for
   these issues, implement all of these.'
 argument-hint: '<issue numbers, links or search queries, separated by commas, or the batch branch of an unfinished run, or the number of a pull request this skill opened>, then optionally a line that starts with Notes:'
-allowed-tools: Bash(python3 agents/skills/pr-fix/pr-fix.py *), Bash(git *), Bash(GIT_SEQUENCE_EDITOR=true git rebase *), Bash(gh api -X GET search/issues *), Bash(gh issue view *), Bash(gh pr view *), Bash(gh pr diff *), Bash(gh pr edit *), Bash(make *), Bash(cargo *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo *), Bash(python3 contrib/*), Bash(python3 -I */scripts/check-untranslated.py *), Bash(python3 -I */scripts/check-pr-body.py *), Bash(echo *), Read, Edit, Write
+allowed-tools: Bash(git *), Bash(GIT_SEQUENCE_EDITOR=true git rebase *), Bash(gh api -X GET search/issues *), Bash(gh issue view *), Bash(gh pr view *), Bash(gh pr diff *), Bash(gh pr edit *), Bash(make *), Bash(cargo *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo *), Bash(python3 contrib/*), Bash(python3 -I */scripts/check-untranslated.py *), Bash(python3 -I */scripts/check-pr-body.py *), Bash(echo *), Read, Edit, Write
 ---
 
 # Implement a list of issues in one pull request
@@ -23,7 +23,8 @@ request that holds the commits for all of them. It uses `pr-fix.py` for everythi
 already does (reading an issue, making worktrees, opening and pushing the pull request, CI, review
 threads), so read [the pr-fix skill](../pr-fix/SKILL.md) first. Its rules about worktrees, hooks,
 signing and refused `run` arguments apply here unchanged. Below, `...` stands for
-`python3 agents/skills/pr-fix/pr-fix.py`.
+`python3 <clone>/agents/skills/pr-fix/pr-fix.py`, where `<clone>` is the main clone, as
+[the pr-fix skill](../pr-fix/SKILL.md) says.
 
 `make implement-issues ISSUES="<argument>" NOTES="<notes>"` starts this skill in the terminal client
 with the argument unchanged, then a `Claimed:` line, then `NOTES`, where it is given, on a line that
@@ -514,7 +515,9 @@ netzenbot-reviewer has reviewed the current head and asks for nothing, or a limi
 wait. A review fix is a push, so each one starts this step again.
 
 **Checks.** `... review <pr>` asks netzenbot-reviewer for a review, then `... ci <pr> --wait` with
-`deadline_seconds: 600`. On a failure, fix it as steps 3 and 5 of the pr-fix skill say, in the
+`deadline_seconds: 600`. The wait also ends, with exit 3, when a reviewer writes a thread comment or
+a review that asks for a change while it runs. Then do not wait out the checks: run the fix round
+below for that feedback, and wait again after its push. On a failure, fix it as steps 3 and 5 of the pr-fix skill say, in the
 integration worktree, push with `... push <pr>`, ask for the review again (`... review <pr>`, since
 GitHub drops the reviewer from the request once it has reviewed) and wait again. Stop after three
 rounds and report what is left. A failure that passes alone is load and is reported. One that also
@@ -561,7 +564,8 @@ for the changes:
 4. `... push <pr>`, then post each reply with `... reply <pr> --thread <id> --body-file <file>`, naming
    a commit the pull request holds. Never resolve a thread. Update the body (the item list, the
    decisions and the test plan) when the state is open.
-5. `... review <pr>` to ask for the review of the new head, then `... ci <pr> --wait`, then read the
+5. `... review <pr>` to ask for the review of the new head, then `... ci <pr> --wait` (exit 3 means
+   new review feedback, which starts another fix round), then read the
    verdict again.
 
 **Limits.** Stop the loop, leaving the pull request as it is, and report what is left, when:

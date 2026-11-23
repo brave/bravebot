@@ -255,22 +255,35 @@ impl Workspace {
         if resolved.to_str().is_none() {
             return Remedy::Nothing;
         }
+        if self.written_in_reach(path) != Some(false) {
+            return Remedy::Nothing;
+        }
+        self.remedy_outside(resolved)
+    }
+
+    /// Whether `path`, with each `..` taken out of the text, is written inside the root or an
+    /// opened directory, whatever it lands on. `None` where a `..` climbs off the top of the file
+    /// system, which the kernel reads as the top itself.
+    ///
+    /// The one test of what a path says, as opposed to where it lands, that a refusal for a link
+    /// reads: the redirection route ([`Workspace::remedy_for_destination`]) and the file tools'
+    /// absolute route ([`Workspace::remedy_for_absolute`]) both ask it, so the two cannot disagree
+    /// about which paths a link carried out. Decided from the text of the path and the directories
+    /// that are open, never from the file system below them or from what a file holds.
+    fn written_in_reach(&self, path: &Path) -> Option<bool> {
         let mut written = PathBuf::new();
         for component in path.components() {
             match component {
                 Component::ParentDir => {
                     if !written.pop() {
-                        return Remedy::Nothing;
+                        return None;
                     }
                 }
                 Component::CurDir => {}
                 other => written.push(other),
             }
         }
-        if self.lands_in_reach(&written) {
-            return Remedy::Nothing;
-        }
-        self.remedy_outside(resolved)
+        Some(self.lands_in_reach(&written))
     }
 
     /// Other names of the file something else opens at the absolute `path`, spelled as
@@ -569,6 +582,10 @@ impl Workspace {
     /// The containment test is against where the path lands, so a symlink inside an added
     /// directory pointing elsewhere is refused exactly as one in the primary root is, whether or
     /// not the file it names exists yet.
+    ///
+    /// The remedy is chosen from the path as written as well as from where it lands
+    /// ([`Workspace::remedy_for_absolute`]): a path written inside the root or an opened directory
+    /// that a link carries out is refused with [`Remedy::Nothing`] whatever the link leads to.
     fn resolve_added(&self, candidate: &Path, named: &str) -> Result<PathBuf, WorkspaceError> {
         if candidate
             .components()
@@ -585,7 +602,7 @@ impl Workspace {
         };
         let resolved = destination(candidate).ok_or_else(|| escapes(Remedy::Nothing))?;
         if !self.is_opened(&resolved) && !self.bypass_reaches(&resolved, None) {
-            return Err(escapes(self.remedy_outside(&resolved)));
+            return Err(escapes(self.remedy_for_absolute(candidate, &resolved)));
         }
         if let Some(below) = self
             .landed_in(&resolved)
@@ -680,8 +697,35 @@ impl Workspace {
             })
     }
 
+    /// The remedy for an absolute `candidate`, with no `..` in it, that lands on `resolved`, which no
+    /// opened directory holds (TRUST-10).
+    ///
+    /// [`Remedy::Nothing`] where the path is written inside the root or an opened directory and
+    /// still lands outside the opened ones: a link carries it out, and the directory a sentence
+    /// would name is not the one the path is written in, so opening it would not make this path
+    /// work. That holds whatever the link leads to, so no sentence is chosen from the landing for
+    /// such a path, and a link planted in a directory cannot pick the advice the planner reads. A
+    /// path written inside the root that lands inside it is the exception, since it is told so
+    /// ([`Remedy::Inside`]) and the relative path reaches the file.
+    ///
+    /// Every other path is written outside every directory that is reached, and is given
+    /// [`Workspace::remedy_outside`]. Decided from the path as written and from where the file
+    /// system says it leads, never from what a file holds.
+    fn remedy_for_absolute(&self, candidate: &Path, resolved: &Path) -> Remedy {
+        let written_in_reach = self.written_in_reach(candidate) == Some(true);
+        let stays_in_root = candidate.starts_with(&self.root) && resolved.starts_with(&self.root);
+        if written_in_reach && !stays_in_root {
+            return Remedy::Nothing;
+        }
+        self.remedy_outside(resolved)
+    }
+
     /// What a person can do so that `resolved`, which no opened directory holds, is reached.
     /// Inside the root a directory cannot be opened, and the relative path reaches the file.
+    ///
+    /// For a path written outside every directory that is reached, so that the directory it lands
+    /// in is the one it names. A path a link carries out of one is given
+    /// [`Workspace::remedy_for_absolute`] instead, which offers nothing.
     ///
     /// The directory to open is `resolved` itself where it is a directory, and the directory it is
     /// in for a file or for a name nothing is at yet. A directory that is or lies inside a credential

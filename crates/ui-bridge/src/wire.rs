@@ -797,6 +797,11 @@ pub fn output_request(id: u64, request: &OutputRequest) -> Value {
 /// `truncated` is load-bearing: a preview that stops without saying so reads as the whole
 /// file, and a person vouching for a path on the strength of its first few lines should
 /// know that is what they are doing.
+///
+/// `preview` has each character that draws as nothing written out, and `hidden` is how many
+/// there were in it, as `hidden` is on an output request. `hiddenNote` is the sentence saying so,
+/// in the catalog's words, so a front end that draws it carries no copy of its own. The planner's
+/// copy of the file is the file's own bytes.
 pub fn vouch_request(id: u64, request: &VouchRequest) -> Value {
     json!({
         "request": id,
@@ -808,6 +813,8 @@ pub fn vouch_request(id: u64, request: &VouchRequest) -> Value {
         "label": request.label,
         "labelAxes": label_axes(&request.label),
         "truncated": request.truncated,
+        "hidden": request.hidden,
+        "hiddenNote": bravebot_approval::hidden_note(request.hidden),
         "vetting": vetting(request.verdict, request.reason.as_deref(), request.reason_label.as_deref()),
     })
 }
@@ -941,7 +948,7 @@ pub fn mcp_server_request(id: u64, question: &Question<'_>) -> Value {
         "variables": variables,
         "reads": declaration.reads(),
         "directory": directory,
-        "digest": declaration.digest().short(),
+        "digest": question.digest().short(),
         "requestedBy": question.file,
         "changed": question.changed,
         // Every line the terminal draws above the answers, worded once in the agent.
@@ -956,18 +963,25 @@ pub fn mcp_server_request(id: u64, question: &Question<'_>) -> Value {
 /// The tools an MCP server lists, put to the person before any of them is offered to the model
 /// (SERVERS-8).
 ///
-/// Each tool as the client drew it: its name under the alias, each argument as one line, and the
-/// server's own sentence about it. That sentence is the server's text, and a front end draws it
-/// as text and nowhere a reader would take it for the application's own words. `refused` counts
-/// the tools the client would not draw.
+/// Each tool as the client drew it: its name under the alias, each argument as `{ text, choices }`
+/// and the server's own sentence about it. `text` is the client's own words for the argument.
+/// `choices` holds the values the server says the argument takes, one string each, which are the
+/// server's text like the sentence. A front end draws both as text behind a marker and nowhere a
+/// reader would take them for the application's own words. `refused` counts the tools the client
+/// would not draw.
 pub fn mcp_tools_request(id: u64, request: &ToolListRequest) -> Value {
     let tools: Vec<Value> = request
         .tools
         .iter()
         .map(|tool| {
+            let arguments: Vec<Value> = tool
+                .arguments
+                .iter()
+                .map(|argument| json!({ "text": argument.text, "choices": argument.choices }))
+                .collect();
             json!({
                 "name": tool.name,
-                "arguments": tool.arguments,
+                "arguments": arguments,
                 "description": tool.description,
                 "read_only": tool.read_only,
             })

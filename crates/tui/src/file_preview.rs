@@ -19,6 +19,14 @@ use bravebot_core::trust::TrustStore;
 use bravebot_i18n::t;
 use bravebot_session::audit::Trail;
 
+/// What an export says in place of a previewed file's name (SESSION-17).
+///
+/// The name is the workspace's spelling of a path taken from the assistant's words or typed by the
+/// person, after links were followed, so it can be a name the planner was never given. The lines
+/// are released for the screen alone. An export is a file a later turn may read, so it carries
+/// neither.
+pub const PREVIEW_IN_AN_EXPORT: &str = "a file the person chose to preview";
+
 /// Show the lines of the file `target` names, or say why there are none, and hand back what the
 /// gates recorded, for the session's audit.
 ///
@@ -44,11 +52,15 @@ pub fn show(
     );
     match shown {
         Ok(found) => {
+            // The planner's form of the call and of the block name no file: this is not a call the
+            // planner made, and what the screen drew is not what it was given.
             let heading = Activity::running("Preview", found.named.clone())
                 .naming_a_file(true)
+                .as_the_planner_had_it(Some(String::new()))
                 .done(t!(session_preview_lines, count = found.total).to_string());
             let mut entry = Entry::tool(heading);
             entry.shown = Some(Shown {
+                as_the_planner_had_it: Some(PREVIEW_IN_AN_EXPORT.to_string()),
                 origin: found.named,
                 reach: Reach::NoModel,
                 label: found.label,

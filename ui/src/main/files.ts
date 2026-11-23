@@ -398,7 +398,7 @@ export async function open(handle: string, subpath: string, parent?: BrowserWind
     }
     const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
     if (options.buttons[response] === SHOW_IN_FOLDER) {
-      showItemInFolder(target)
+      await showItemInFolder(target)
       return { status: 'revealed' }
     }
     if (options.buttons[response] !== OPEN) return { status: 'cancelled' }

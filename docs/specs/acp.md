@@ -37,6 +37,10 @@ The agent advertises `loadSession: false`, no authentication methods, and prompt
 text, links and images. It does not call the editor's file or terminal methods, so bytes an editor
 holds reach the agent only as a prompt or an attachment.
 
+The first prompt of a launch that is reporting crashes is preceded by one message of the session
+saying so, as [CRASH-12](crash-reports.md#CRASH-12) has it. It is a notification like any other
+text, so it is subject to [ACP-6](#ACP-6), and the program writes nothing about it outside one.
+
 ## Clauses
 
 <a id="ACP-1"></a>
@@ -96,6 +100,7 @@ unreadable has the same effect as no answer.
 `verified-by: bravebot_ui_bridge::acp::every_question_the_bridge_raises_is_shown_in_words`
 `verified-by: bravebot_ui_bridge::acp::a_write_question_reads_to_the_editor_as_it_reads_in_the_terminal`
 `verified-by: bravebot_ui_bridge::acp::the_other_questions_read_to_the_editor_as_they_read_in_the_terminal`
+`verified-by: bravebot_ui_bridge::acp::the_editor_is_told_the_reference_a_run_is_fed`
 `verified-by: bravebot_ui_bridge::acp::content_nobody_vouched_for_is_drawn_behind_the_margin_with_its_escapes_pictured`
 `verified-by: bravebot_ui_bridge::acp::a_question_it_cannot_show_is_refused_and_not_put_to_the_editor`
 `verified-by: bravebot_ui_bridge::acp::a_fence_is_longer_than_any_run_of_backticks_in_what_it_holds`

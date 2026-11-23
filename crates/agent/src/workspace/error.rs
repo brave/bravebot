@@ -82,6 +82,9 @@ pub enum WorkspaceError {
     Stale { path: String },
     /// Another effect already holds the path, so this write was refused rather than interleaved.
     Contended { path: String },
+    /// The destination leads to a different file now than when the person was asked, or a rule
+    /// refuses the file it leads to now, so the write was refused (TRUST-10, PERM-7).
+    Redirected { path: String },
     /// The file is not text, so there is nothing useful to return.
     Binary { path: String },
     /// The file is text in an encoding other than UTF-8. [`Workspace::read_page`] shows it
@@ -248,6 +251,11 @@ impl WorkspaceError {
             Self::Contended { .. } => {
                 format!("another write to '{named}' is still in progress, so nothing was written")
             }
+            Self::Redirected { .. } => format!(
+                "'{named}' leads to a different file than it did when the user was asked about it, \
+                 so nothing was written. Do not retry, and do not look for another way to the same \
+                 file: work without it, or say in your reply what you needed it for"
+            ),
             Self::Protected { .. } => format!(
                 "'{named}' is a protected path and the restore was not approved, so nothing was written"
             ),
@@ -289,6 +297,10 @@ impl WorkspaceError {
     /// reads is worded through [`WorkspaceError::describe`] instead, for the reason written
     /// there.
     /// This refusal as a call that reads the file reports it, which may also name a drop.
+    ///
+    /// Only a remedy that opens a directory or keeps reads inside the workspace gains a drop.
+    /// [`Remedy::Nothing`] is kept as it is, so a path a link carries out is told the same for a
+    /// read as for a write, and a link cannot make a read name a drop.
     pub(super) fn for_a_read(self) -> Self {
         let Self::Escapes { path, remedy } = self else {
             return self;
@@ -312,6 +324,7 @@ impl WorkspaceError {
             | Self::Unreadable { path, .. }
             | Self::Stale { path }
             | Self::Contended { path }
+            | Self::Redirected { path }
             | Self::Protected { path }
             | Self::Binary { path }
             | Self::NotUtf8 { path }
@@ -333,13 +346,19 @@ pub(super) const ENDS_CHECKOUTS: &str = "while one is open no delegate is given 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Remedy {
     /// None is offered: the path climbs with `..` through a link, off the top of the file system
-    /// or onto a name that is not UTF-8; a link carries it out; it names a credential location,
-    /// which cannot be opened; it is in the stores; or what was refused is a rewind. A command's
+    /// or onto a name that is not UTF-8; it is written inside the root or an opened directory and a
+    /// link carries it out, whatever the link leads to; it names a credential location, which
+    /// cannot be opened; it is in the stores; or what was refused is a rewind. A command's
     /// redirection is given the remedy a file tool's write to the same path is given.
+    ///
+    /// For a path a link carries out the remedy never follows where the link leads, since a link
+    /// planted in a directory would then choose the sentence the planner reads.
     Nothing,
     /// The path lands inside the root and in no opened directory, where a directory cannot be
-    /// opened. It is named in some other way than relative to the root: from the top of the file
-    /// system, through a link to the root or through `~`. The relative spelling reaches the file,
+    /// opened, and is not written inside the root or an opened directory in a way a link carries
+    /// it out of. It is named in some other way than relative to the root: from the top of the
+    /// file system, through a link to the root that is written outside every directory that is
+    /// reached, or through `~`. The relative spelling reaches the file,
     /// so the planner is told that and not that the path leaves the workspace, which it does not.
     Inside,
     /// The path has a `..` and lands inside the root. It does not leave the workspace, and the

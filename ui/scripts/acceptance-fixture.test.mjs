@@ -141,7 +141,11 @@ test('revoking a path leaves the command grant and revoking a command leaves the
   const afterPath = (await request('permissions.revoke', { kind: 'path', path: 'private' })).ok
   assert.deepEqual(afterPath.paths.map((grant) => grant.path), [''])
   assert.equal(afterPath.commands.length, 1)
-  const afterCommand = (await request('permissions.revoke', { kind: 'command' })).ok
+  const held = afterPath.commands[0]
+  const naming = (directory) => ({ kind: 'command', command: { program: held.program, startedAs: held.startedAs, args: held.args, directory } })
+  const elsewhere = (await request('permissions.revoke', naming('/elsewhere'))).ok
+  assert.equal(elsewhere.commands.length, 1, 'a revoke naming another tree removed the entry')
+  const afterCommand = (await request('permissions.revoke', naming(held.directory))).ok
   assert.deepEqual(afterCommand.commands, [])
   assert.deepEqual(afterCommand.paths.map((grant) => grant.path), [''])
   assert.deepEqual((await request('permissions.list')).ok, afterCommand)

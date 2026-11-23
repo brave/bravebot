@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { APPEARANCES, type Appearance } from '../../shared/theme'
-import type { LanguageReport, LanguageSaved, UsagePingReport, UsagePingSaved } from '../../shared/protocol'
+import type { CrashReportsReport, LanguageReport, LanguageSaved, UsagePingReport } from '../../shared/protocol'
 import { t } from '../i18n'
 import { Alert, Button, Dropdown, Toggle } from '../nala'
-import { changeUsagePing, lockedLine, reportIn } from '../usage-ping'
+import { changeUsagePing, lockedLine, reportIn, type Switch } from '../usage-ping'
+import { crashReportsLockedLine } from '../crash-reports'
 import { SettingsGroup } from './SettingsGroup'
 
 const LABELS: Record<Appearance, () => string> = {
@@ -125,20 +126,47 @@ function LanguageGroup({ running }: { running: boolean }): React.JSX.Element {
   )
 }
 
-/** The daily usage ping, kept where `/config` keeps it. Locked where something stronger decides. */
+/** The two switches that say what this program sends. Each is kept where the terminal keeps it. */
 function PrivacyGroup(): React.JSX.Element {
-  const [report, setReport] = useState<UsagePingReport | null>(null)
+  return (
+    <SettingsGroup title={t.uiSettingsPrivacy()}>
+      <PrivacySwitch id="usage-ping" method="usage_ping" title={t.uiSettingsUsagePing()}
+        explained={t.uiSettingsUsagePingExplained()} unread={t.uiSettingsUsagePingUnread()}
+        unsaved={t.uiSettingsUsagePingUnsaved()}
+        locked={(reason) => lockedLine(reason as UsagePingReport['reason'])} />
+      <PrivacySwitch id="crash-reports" method="crash_reports" title={t.uiSettingsCrashReports()}
+        explained={t.uiSettingsCrashReportsExplained()} unread={t.uiSettingsCrashReportsUnread()}
+        unsaved={t.uiSettingsCrashReportsUnsaved()}
+        locked={(reason) => crashReportsLockedLine(reason as CrashReportsReport['reason'])} />
+    </SettingsGroup>
+  )
+}
+
+/**
+ * One privacy switch: on or off, read with `<method>.get` and kept with `<method>.set`. Locked, with
+ * the line the bridge's reason gives, where something stronger than the switch decides.
+ */
+function PrivacySwitch({ id, method, title, explained, unread: unreadLine, unsaved: unsavedLine, locked: lockedFor }: {
+  id: string
+  method: string
+  title: string
+  explained: string
+  unread: string
+  unsaved: string
+  locked: (reason: unknown) => string | null
+}): React.JSX.Element {
+  const [report, setReport] = useState<Switch<unknown> | null>(null)
   const [unread, setUnread] = useState(false)
   const [unsaved, setUnsaved] = useState(false)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    void window.bravebot.request<UsagePingReport>('usage_ping.get').then((answer) => {
+    void window.bravebot.request<Switch<unknown>>(`${method}.get`).then((answer) => {
       const read = reportIn(answer)
       if (!read) return setUnread(true)
       setReport(read)
     }, () => setUnread(true))
-  }, [])
+  }, [method])
 
   const change = async (enabled: boolean): Promise<void> => {
     if (!report) return
@@ -146,32 +174,30 @@ function PrivacyGroup(): React.JSX.Element {
     setUnsaved(false)
     setReport({ ...report, enabled })
     const next = await changeUsagePing(
-      (on) => window.bravebot.request<UsagePingSaved>('usage_ping.set', { enabled: on }), report, enabled)
+      (on) => window.bravebot.request<Switch<unknown> & { saved: boolean }>(`${method}.set`, { enabled: on }), report, enabled)
     setReport(next.report)
     setUnsaved(next.unsaved)
     setBusy(false)
   }
 
-  const locked = report && !report.changeable ? lockedLine(report.reason) : null
+  const lockedText = report && !report.changeable ? lockedFor(report.reason) : null
   return (
-    <SettingsGroup title={t.uiSettingsPrivacy()}>
-      <div className="settings-row" data-test="usage-ping-row">
-        <div className="settings-row-text">
-          <h3>{t.uiSettingsUsagePing()}</h3>
-          <p>{t.uiSettingsUsagePingExplained()}</p>
-          {locked && <p data-test="usage-ping-locked">{locked}</p>}
-        </div>
-        <div className="settings-row-control">
-          <Toggle size="small" data-test="usage-ping-control" aria-label={t.uiSettingsUsagePing()}
-            checked={report?.enabled ?? false} disabled={!report || !report.changeable || busy}
-            onChange={({ checked }) => { if (checked !== report?.enabled) void change(checked) }} />
-        </div>
-        {(unread || unsaved) && (
-          <Alert type="error" role="alert" className="settings-row-alert" data-test="usage-ping-error">
-            {unread ? t.uiSettingsUsagePingUnread() : t.uiSettingsUsagePingUnsaved()}
-          </Alert>
-        )}
+    <div className="settings-row" data-test={`${id}-row`}>
+      <div className="settings-row-text">
+        <h3>{title}</h3>
+        <p>{explained}</p>
+        {lockedText && <p data-test={`${id}-locked`}>{lockedText}</p>}
       </div>
-    </SettingsGroup>
+      <div className="settings-row-control">
+        <Toggle size="small" data-test={`${id}-control`} aria-label={title}
+          checked={report?.enabled ?? false} disabled={!report || !report.changeable || busy}
+          onChange={({ checked }) => { if (checked !== report?.enabled) void change(checked) }} />
+      </div>
+      {(unread || unsaved) && (
+        <Alert type="error" role="alert" className="settings-row-alert" data-test={`${id}-error`}>
+          {unread ? unreadLine : unsavedLine}
+        </Alert>
+      )}
+    </div>
   )
 }

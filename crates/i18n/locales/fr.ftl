@@ -57,7 +57,7 @@ cli-usage-mcp = Déclarer, lister et approuver des serveurs MCP
 cli-usage-completion = Afficher un script de complétion pour le shell
 cli-usage-shell-init = Afficher le hook de shell qui donne à @bravebot les commandes que vous avez lancées
 cli-usage-permissions = Indiquer quelle règle de permission décide d'un appel d'outil
-permissions-check-usage = permissions check attend une famille et ce sur quoi s'informer : Read <chemin>, Edit <chemin>, Bash <programme> [arguments], WebFetch <hôte ou URL>, ou Mcp <serveur:outil>
+permissions-check-usage = permissions check attend une famille et ce sur quoi s'informer : Read <chemin>, Edit <chemin>, Bash <programme> [arguments], WebFetch <hôte ou URL>, WebSearch, ou Mcp <serveur:outil>
 permissions-check-decision = décision
 permissions-check-deny = refuser
 permissions-check-ask = demander
@@ -133,6 +133,9 @@ cli-plain-trust-kept =
     lignes qui le nomment
 cli-plain-trust-remember-where =
     Pour revenir dessus, lancez /forget-trust dans bravebot sans --plain, ou supprimez de ce
+    fichier les lignes qui nomment ce répertoire :
+local-host-trust-remember-where =
+    Pour revenir dessus, lancez /forget-trust dans bravebot dans ce répertoire, ou supprimez de ce
     fichier les lignes qui nomment ce répertoire :
 # Dit quand une session en arrière-plan est relancée et que sa conversation précédente a été relue
 # depuis son enregistrement (BG-1).
@@ -439,6 +442,11 @@ cli-resume-heading = Reprenez cette session avec :
 # Quand /cd a déplacé la session, le shell où ceci s'affiche n'est pas là où se trouve
 # l'enregistrement, et --resume cherche un identifiant sous le répertoire où il est lancé.
 cli-resume-moved = Cette session s'est déplacée vers { $directory }. Reprenez-la depuis là avec :
+# Après la ligne, une pour chaque entrée --sandbox-* que la ligne ne reprend pas. Une entrée relative
+# se lit depuis le répertoire où la session a commencé, et lorsqu'un nom de ce répertoire contient
+# un * ou un ?, le même chemin écrit en entier lit ce caractère comme un joker, ce qu'aucune écriture
+# ne peut empêcher.
+cli-resume-entry-not-carried = Non reprise : { $flag } { $value }, car le répertoire où cette session a commencé contient un * ou un ? dans son nom, et aucune écriture de l'entrée ne désigne le même endroit depuis un autre répertoire.
 
 
 ## L'état de la configuration et du confinement
@@ -470,7 +478,7 @@ doctor-ends-aws-session =
 doctor-ends-premium-key =
     la clé premium : émise par le service premium de Brave, qui est aussi la seule surface qui la révoque ; `bravebot auth logout brave` met fin à la garde de cette machine et laisse la clé active là-bas
 doctor-ends-gateway-token =
-    un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages, effacer la variable ou lancer `bravebot auth logout gateway` met fin à la garde de cette machine et laisse le jeton actif là-bas
+    un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages, supprimer le fichier que nomme le réglage `options.keyFile`, effacer la variable ou lancer `bravebot auth logout gateway` met fin à la garde de cette machine et laisse le jeton actif là-bas
 doctor-ends-chatgpt-account =
     une connexion ChatGPT : émise par OpenAI pour le compte qui s'est connecté, et le jeton d'actualisation remplace le jeton d'accès sans rien demander à personne, de sorte que l'expiration du jeton d'accès met fin à cette copie et non à l'accès de ce programme ; on y met fin chez OpenAI en se déconnectant du compte ou en retirant l'accès de ce programme dans ses réglages, car `bravebot auth logout chatgpt` met fin à la garde de cette machine et laisse les jetons actifs là-bas
 doctor-ends-xai-account =
@@ -765,6 +773,9 @@ doctor-sandbox-filesystem = système de fichiers du bac à sable
 doctor-sandbox-filesystem-entry = { $key } { $path } ({ $source })
 doctor-sandbox-filesystem-refused = { $key } { $path } n'est pas appliqué : { $reason } ({ $source })
 doctor-sandbox-filesystem-source-flag = une option de la ligne de commande
+doctor-sandbox-hosts = réseau du bac à sable
+doctor-sandbox-hosts-denied-not-a-host =
+    sandbox.network.deniedHosts { $entry } ({ $source }) n'est pas un nom d'hôte, donc une étape avec accès au réseau est refusée tant qu'il n'est pas retiré
 doctor-settings-sandbox-filesystem-ignored =
     sandbox.filesystem.{ $key } dans { $path } n'est pas suivi : une copie de travail peut refuser un accès, jamais en ajouter, donc il est lu seulement dans ~/.bravebot/settings.json, le fichier nommé par --settings et le fichier géré
 doctor-settings-sandbox-misshapen =
@@ -900,7 +911,7 @@ permission-rule-unreadable-in = '{ $rule }' dans { $path } { $problem }
 permission-rule-not-a-line = n'est pas une règle ; une règle est une ligne de texte
 permission-rule-empty = est vide
 permission-rule-unclosed-bracket = n'a pas sa parenthèse fermante
-permission-rule-unknown-family = ne nomme aucune famille d'outils de cet agent ; utilisez Read, Edit, Bash, WebFetch ou Mcp
+permission-rule-unknown-family = ne nomme aucune famille d'outils de cet agent ; utilisez Read, Edit, Bash, WebFetch, WebSearch ou Mcp
 permission-rule-empty-brackets = a des parenthèses vides ; enlevez-les pour viser toute utilisation
 permission-rule-empty-quoted-name = a des guillemets doubles autour de rien, et aucun fichier n'a un nom vide ; enlevez les parenthèses pour viser toute utilisation, ou mettez le nom du fichier entre les guillemets
 permission-rule-whitespace-at-an-end = a un caractère blanc au début ou à la fin de son chemin, qui ferait partie du nom d'un fichier ; enlevez-le, ou mettez tout le chemin entre guillemets doubles pour viser le nom tel qu'il est écrit
@@ -1389,6 +1400,8 @@ mcp-tools-needs-a-list = --tools a besoin d'un nom d'outil ou d'une liste de nom
 mcp-exclude-tools-needs-a-list = --exclude-tools a besoin d'un nom d'outil ou d'une liste de noms d'outils séparés par des virgules
 mcp-allowed-hosts-needs-a-list = --allowed-hosts a besoin d'un nom d'hôte ou d'une liste de noms d'hôtes séparés par des virgules
 mcp-choice-needs-a-pair = --choice a besoin d'un outil et d'un argument, écrits <OUTIL>:<ARGUMENT>
+mcp-apply-needs-a-kind = --apply a besoin d'un outil, d'un argument et d'un type, écrits <OUTIL>:<ARGUMENT>=<entry|entries|new|row>, plusieurs types séparés par des virgules
+mcp-plan-covers-needs-a-tool = --plan-covers a besoin de l'outil dont les appels peuvent s'exécuter sur l'approbation d'un plan
 mcp-dir-not-a-directory = { $path } n'est pas un répertoire
 mcp-dir-not-a-directory-unshown =
     le mot après --dir n'est pas un répertoire, et n'est pas répété car il peut être une valeur
@@ -1428,6 +1441,10 @@ mcp-problem-ask-every-call = ask_every_call n'est ni true ni false
 mcp-problem-choice =
     choice_arguments n'est pas un objet de noms d'outils, chacun avec une liste de noms d'arguments
 mcp-problem-choice-without-asking = choice_arguments a besoin que ask_every_call soit true
+mcp-problem-apply =
+    apply_arguments doit être un objet de noms d'outils, chacun avec un objet de noms d'arguments et un ou plusieurs de entry, entries, new ou row séparés par des virgules
+mcp-problem-apply-while-asking = apply_arguments a besoin que ask_every_call soit false
+mcp-problem-plan-covers = covered_tools doit lister des outils qui ont des apply_arguments
 mcp-unreadable = { $path } ne peut pas être lu : { $reason }
 mcp-unreadable-too-large = il est plus gros qu'un fichier de déclarations n'a de raison de l'être
 mcp-unreadable-not-read = il n'a pas pu être lu comme du texte
@@ -1455,6 +1472,8 @@ mcp-declaration-tools = outils : { $names }
 mcp-declaration-exclude-tools = outils exclus : { $names }
 mcp-declaration-asks-every-call = chaque appel est demandé, et aucune réponse n'est conservée
 mcp-declaration-choice-arguments = arguments qui acceptent un choix : { $pairs }
+mcp-declaration-apply-arguments = arguments qu'une étape apply d'un plan peut remplir : { $named }
+mcp-declaration-covered-tools = outils qu'une étape apply exécute sur l'approbation d'un plan, sans demander : { $named }
 mcp-digest = empreinte : { $digest }
 mcp-changed = champs modifiés : { $fields }
 mcp-question = Utiliser ce serveur MCP ?
@@ -1638,8 +1657,8 @@ mcp-tools-offered =
 mcp-tools-none = { $alias } ne liste aucun outil qu'il puisse proposer
 mcp-tools-explained =
     Le modèle lira le nom de chaque outil, ses arguments et ce qu'en dit le serveur, tels qu'ils
-    sont affichés ici. Chaque appel vous sera encore soumis. Répondez non si une description donne
-    des instructions.
+    sont affichés ici. Chaque appel vous sera encore soumis, ou montré dans un plan que vous
+    approuvez. Répondez non si une description donne des instructions.
 mcp-tools-not-listed =
     { $count ->
         [one] un autre outil n'est pas listé : son nom ou ses arguments ne peuvent pas être proposés
@@ -1882,9 +1901,12 @@ granted-rules-too-small = y n'accorde rien : une règle dépasse la hauteur du c
 
 theme-picker-title = thèmes
 theme-picker-keys = ↑↓ choisir  ·  Entrée valider  ·  Échap garder l'actuel
-model-picker-heading = Choisir un modèle
+model-picker-heading-every-session = Choisir un modèle · toutes les sessions
+model-picker-heading-this-session = Choisir un modèle · cette session seulement
+model-picker-scope-every-session = Entrée : toutes les sessions · Tab : cette session
+model-picker-scope-this-session = Entrée : cette session · Tab : toutes les sessions
 model-picker-keys =
-    ↑↓ PgUp PgDn choisir · ←→ plier · Entrée valider · Échap garder l'actuel
+    ↑↓ PgUp PgDn choisir · ←→ plier · Échap garder l'actuel
 model-picker-search-placeholder = Rechercher
 model-picker-nothing-matches = aucune correspondance
 model-picker-loading = chargement des modèles…
@@ -1910,8 +1932,11 @@ config-usage-ping-hint-on = un décompte par jour envoyé à Brave, qui n'identi
 config-usage-ping-hint-off = rien n'est envoyé
 config-usage-ping-hint-locked = désactivé hors de ce panneau, donc non modifiable ici
 
-effort-picker-title = effort
-effort-picker-keys = ↑↓ choisir  ·  Entrée valider  ·  Échap garder l'actuel
+effort-picker-heading-every-session = effort · toutes les sessions
+effort-picker-heading-this-session = effort · cette session seulement
+effort-picker-scope-every-session = Entrée : toutes les sessions · Tab : cette session
+effort-picker-scope-this-session = Entrée : cette session · Tab : toutes les sessions
+effort-picker-keys = ↑↓ choisir  ·  Échap garder l'actuel
 effort-unset = par défaut
 effort-hint-unset = laissé au service qui répond
 effort-hint-low = réflexion minimale, pour le travail simple
@@ -2344,11 +2369,34 @@ plan-explained =
     une étape, en retirer une, ni envoyer quoi que ce soit ailleurs que là où ce plan le dit
     déjà.
 plan-not-its-writes =
-    approuver le plan n'approuve ni ses écritures ni ses appels aux outils d'un serveur.
-    chacun vous sera encore soumis le moment venu.
+    approuver le plan répond aux appels aux outils d'un serveur qu'il montre, et n'approuve pas
+    ses écritures. chaque écriture vous sera encore soumise le moment venu, comme un appel
+    que quelque chose d'autre demande de soumettre, comme une règle ou la déclaration d'un serveur.
 plan-nothing-yet =
     rien n'a encore été lu ni écrit, donc refuser laisse tout en l'état.
 plan-yes = l'exécuter
+apply-title = faire ces appels à { $server } ?
+apply-verb = Faire
+apply-calls = { $count ->
+    [one] { $count } appel à { $server }
+   *[other] { $count } appels à { $server }
+    }
+apply-after = après l'appel { $call }
+apply-hidden = { $count ->
+    [one] (et un caractère qui ne s'affiche pas)
+   *[other] (et { $count } caractères qui ne s'affichent pas)
+    }
+apply-dropped = { $count ->
+    [one] une ligne proposée a été écartée : elle { $why }
+   *[other] { $count } lignes proposées ont été écartées : elles { $why }
+    }
+apply-explained =
+    un processeur isolé a proposé ces appels à partir de ce qui a été lu. chaque valeur derrière la barre
+    vient de cette liste ou de ce processeur, et est envoyée telle qu'elle est affichée. rien d'autre n'est appelé.
+apply-nothing-yet =
+    aucun n'a encore été fait, donc refuser laisse tout tel quel.
+apply-yes = les faire tous
+apply-no = non
 plan-no = ne pas l'exécuter
 # Là où une question est une ligne sur un terminal plutôt qu'un panneau : à quoi ressemble un oui,
 # et la seule réponse qui approuve. Toute autre ligne, et la fin de l'entrée, refuse. Partagé par
@@ -2451,9 +2499,11 @@ status-agent-every-turn = chaque tour lui est adressé, désigné avec --agent
 status-agent-by-setting = chaque tour lui est adressé, choisi par le réglage agent
 status-effort = Effort
 status-effort-chosen = choisi avec /effort
+status-effort-chosen-this-session = choisi avec /effort session, pour cette session seulement
 status-effort-default = ce que le service fait de lui-même
 status-effort-not-read = choisi avec /effort, mais ce modèle n'en lit aucun
 status-effort-kept-for-account = le niveau avec lequel cette session ChatGPT a commencé ; { $chosen }, choisi avec /effort, s'applique à partir de la session suivante
+status-effort-kept-for-account-this-session = le niveau avec lequel cette session ChatGPT a commencé ; { $chosen }, choisi avec /effort session, n'est pas enregistré et s'applique à partir de /clear
 status-theme = Thème
 status-theme-chosen = choisi avec /theme
 status-served = Répondu par
@@ -2836,6 +2886,7 @@ command-context = Montrer ce qui remplit la fenêtre de contexte, par catégorie
 command-limit = Montrer la limite de dépense de la session, la fixer en jetons ou en crédits, ou la retirer
 command-request = Montrer la dernière requête envoyée au modèle, et l'origine de chacune de ses parties
 command-model = Choisir avec quel modèle réfléchir
+command-model-session = Choisir un modèle pour cette session seulement, sans rien enregistrer
 command-theme = Choisir quel thème habille l'interface
 command-effort = Choisir l'effort de réflexion avant de répondre
 command-variant = Choisir un jeu d'options nommé que le modèle propose, les lister, ou abandonner le choix
@@ -2851,6 +2902,7 @@ session-mode-resumed = cette session était dans le mode { $skill }, qui est de 
 input-skill-mode = mode : { $skill }
 command-config = Choisir le mode d'édition de la zone de saisie
 command-language = Choisir la langue de l'interface au prochain démarrage, ou abandonner le choix
+command-crash-reports = Dire si les rapports de plantage sont activés et pourquoi, ou les changer au prochain démarrage
 command-add-dir = Ouvrir un autre répertoire et l'approuver pour cette session, ou en fermer un
 command-reach = Retenir un répertoire ou un identifiant pour une commande, ou les lister et les retirer
 command-sandbox = Afficher le mode du bac à sable, ou le changer
@@ -3204,9 +3256,25 @@ session-language-set = l'interface sera en { $language } à partir du prochain d
 session-language-auto = l'interface suivra le fichier de réglages et l'environnement à partir du prochain démarrage
 session-language-not-saved = cette session ne peut pas conserver de choix, la langue reste donc inchangée
 session-no-such-language = aucun catalogue pour { $language } ; les catalogues sont { $available }
+session-crash-reports-on = les rapports de plantage sont activés : si bravebot plante, un rapport est envoyé à Brave au démarrage suivant ; /crash-reports off les désactive à partir du prochain démarrage
+session-crash-reports-off-by-person = les rapports de plantage sont désactivés dans votre fichier de réglages ; /crash-reports on les active à partir du prochain démarrage
+session-crash-reports-off-by-environment = les rapports de plantage sont désactivés par { $variable } dans l'environnement, qui répond avant votre fichier de réglages
+session-crash-reports-off-by-admin = les rapports de plantage sont désactivés par les réglages gérés de votre administrateur, qui répondent avant votre fichier de réglages
+session-crash-reports-incognito = les rapports de plantage sont désactivés : cette session n'a pas de répertoire d'état (session privée) où garder un rapport
+session-crash-reports-refused-environment = rien n'a été enregistré : { $variable } dans l'environnement désactive les rapports de plantage et répond avant votre fichier de réglages
+session-crash-reports-refused-admin = rien n'a été enregistré : les réglages gérés de votre administrateur désactivent les rapports de plantage et répondent avant votre fichier de réglages
+session-crash-reports-refused-incognito = rien n'a été enregistré : cette session n'a pas de répertoire d'état (session privée) où garder un choix
+session-crash-reports-saved-on = enregistré : les rapports de plantage sont activés à partir du prochain démarrage
+session-crash-reports-saved-off = enregistré : les rapports de plantage sont désactivés à partir du prochain démarrage ; cette session peut encore écrire un rapport jusqu'à sa fin
+session-crash-reports-unsaved = rien n'a été conservé : votre fichier de réglages n'est pas un document de réglages, crashReports n'a donc pas été écrit
+session-crash-reports-no-directory = rien n'a été conservé : il n'y a pas de répertoire où garder votre fichier de réglages
+session-crash-reports-usage = /crash-reports prend on ou off, ou rien pour dire si les rapports sont activés ; { $word } ne change rien
+session-crash-reports-sending = cette session envoie des rapports de plantage
+session-crash-reports-not-sending = cette session n'envoie aucun rapport de plantage : cette version n'a pas d'adresse où les envoyer, ou ils étaient désactivés à son démarrage
 session-no-such-effort = aucun niveau d'effort nommé { $effort } ; essayez /effort pour la liste
 session-effort-not-read = ce modèle ne lit aucun niveau d'effort ; les requêtes n'en portent pas
 session-effort-kept-for-account = une session ChatGPT garde le niveau d'effort avec lequel elle a commencé, { $began }, donc { $chosen } s'applique à partir de la session suivante, que /clear commence
+session-effort-kept-for-account-this-session = une session ChatGPT garde le niveau d'effort avec lequel elle a commencé, { $began }, donc { $chosen } s'applique à partir de /clear, qui commence la session ChatGPT suivante, et n'est pas enregistré
 session-variant-set = les requêtes vers ce modèle portent la variante { $variant } dès le prochain tour
 session-variant-dropped = aucune variante ; les requêtes ne portent que les options propres du modèle
 session-variant-in-force = la variante { $variant } est active ; ce modèle propose { $names }
@@ -3270,8 +3338,8 @@ update-not-installed-by-us =
 crash-reports-notice =
     si bravebot plante, un rapport est envoyé à Brave au lancement suivant. Il contient la version,
     votre système d'exploitation et la ligne du code source de bravebot qui a échoué, jamais vos
-    invites, vos fichiers ni vos clés. Pour l'éviter, mettez crashReports à false dans votre
-    fichier de réglages, ou définissez BRAVEBOT_CRASH_REPORTS=0.
+    invites, vos fichiers ni vos clés. Pour l'éviter, lancez /crash-reports off, mettez crashReports
+    à false dans votre fichier de réglages, ou définissez BRAVEBOT_CRASH_REPORTS=0.
 usage-ping-notice =
     une fois par jour, bravebot envoie à Brave un signal d'utilisation anonyme : la version, votre
     système d'exploitation, la façon dont bravebot a été installé, l'interface et le type de service
@@ -3865,6 +3933,7 @@ manifest-needs-a-task = /manifest prend la tâche à planifier, comme /manifest 
 manifest-began = la tâche entière est planifiée d'abord ; la session attend ici jusqu'à la fin de l'exécution
 manifest-ended-unexpectedly = l'exécution s'est terminée de façon inattendue
 manifest-failed = l'exécution s'est arrêtée : { $problem }
+manifest-run-result = le résultat de l'exécution
 manifest-recorded = enregistré sous { $id } ; à relire avec bravebot --resume { $id }
 # Ce que /init dit quand le projet a déjà le fichier qu'il écrirait.
 init-already-there = { $file } existe déjà ici, donc /init n'y touche pas
@@ -3988,12 +4057,12 @@ delegate-model-needs-sign-in =
     { $definition } a demandé { $model }, qui exige d'abord une connexion : il n'a pas été lancé
 delegate-model-substituted = { $definition } a demandé { $model } et un autre modèle a répondu
 plan-model-unavailable =
-    { $model } est défini comme modèle de planification mais ne peut pas être utilisé ici (aucun service configuré n'y répond, il exige une connexion, ou les paramètres gérés de cette machine l'interdisent) : ce tour utilise le modèle de la session
+    { $model } est défini comme modèle de planification mais ne peut pas être utilisé ici (aucun service configuré n'y répond, il exige une connexion, les paramètres gérés de cette machine l'interdisent, ou il cherche sur le web avant de répondre) : ce tour utilise le modèle de la session
 summary-model-needs-sign-in =
     { $model } est défini comme modèle de résumé et exige d'abord une connexion : rien n'a été envoyé
 summary-model-refused =
     { $model } est défini comme modèle de résumé et les réglages gérés de cette machine ne
-    l'autorisent pas : rien n'a été envoyé
+    l'autorisent pas, ou il cherche sur le web avant de répondre : rien n'a été envoyé
 summary-model-not-served =
     { $model } est défini comme modèle de résumé et aucun service configuré ne le sert : rien n'a
     été envoyé
@@ -4233,6 +4302,7 @@ panel-pull-requests = Pull requests
 panel-issues = Tickets
 # La dernière ligne d'une section du panneau d'informations coupée à la place disponible : le nombre de lignes laissées de côté.
 panel-more-references = +{ $count } de plus
+panel-model-this-session = cette session seulement
 panel-effort = effort { $level }
 panel-spent = { $tokens } cette session
 panel-cache-read = cache lu { $tokens }
@@ -4551,6 +4621,7 @@ commit-message-ready = le brouillon est dans la zone de saisie. Modifiez-le, pui
 commit-message-partial = les changements dépassaient ce qu'une lecture prend, donc le brouillon décrit la partie lue
 commit-message-failed = le message de commit n'a pas pu être rédigé : { $problem }
 commit-message-stopped = la rédaction du message de commit a été arrêtée
+commit-message-untrusted = aucun brouillon n'a été rédigé : le diff touchait un chemin que personne n'a approuvé, donc il n'a pas été envoyé à un modèle
 handoff-started = transmis : ceci est une nouvelle session, et la précédente est restée telle quelle. Pour y revenir, lancez `bravebot --resume { $id }`
 
 enhance-ready = la ligne améliorée est dans la zone de saisie. Modifiez-la, puis Entrée l'envoie, ou Échap remet ce que vous aviez écrit
@@ -4772,6 +4843,19 @@ ui-usage-ping-notice-more = Plus…
 ui-usage-ping-notice-less = Moins
 ui-usage-ping-notice-settings = Ouvrir les réglages
 ui-usage-ping-notice-dismiss = Fermer l'avis sur le signal d'utilisation
+ui-crash-reports-notice = Si BraveBot plante, il envoie à Brave un rapport au démarrage suivant. Le rapport contient la version, votre système d'exploitation et la ligne du code source de BraveBot qui a échoué. Il ne contient jamais vos invites, vos fichiers ni vos clés. Vous pouvez le désactiver dans les réglages, sous Général, ou en définissant BRAVEBOT_CRASH_REPORTS=0 dans l'environnement.
+ui-crash-reports-notice-short = Si BraveBot plante, il envoie à Brave un rapport au démarrage suivant. Il ne contient jamais vos invites, vos fichiers ni vos clés.
+ui-crash-reports-notice-more = Plus…
+ui-crash-reports-notice-less = Moins
+ui-crash-reports-notice-settings = Ouvrir les réglages
+ui-crash-reports-notice-dismiss = Fermer l'avis sur les rapports de plantage
+ui-settings-crash-reports = Envoyer les rapports de plantage à Brave
+ui-settings-crash-reports-explained = Si BraveBot plante, un rapport avec la version, votre système d'exploitation et la ligne de code source qui a échoué est envoyé au démarrage suivant. Rien n'est envoyé tant que cette option est désactivée.
+ui-settings-crash-reports-locked-environment = Désactivé par { $variable } dans l'environnement.
+ui-settings-crash-reports-locked-admin = Désactivé par votre administrateur.
+ui-settings-crash-reports-locked-incognito = Désactivé dans une session privée, qui ne garde aucun rapport.
+ui-settings-crash-reports-unread = Impossible de lire le réglage des rapports de plantage.
+ui-settings-crash-reports-unsaved = Impossible d'enregistrer le réglage des rapports de plantage. Réessayez.
 ui-folders-heading = Dossiers
 ui-folders-about = Dossiers ouverts à côté du projet dans cette conversation. L'agent peut lire et modifier leurs fichiers jusqu'à ce que vous les fermiez.
 ui-folders-empty = Seul le projet est ouvert.

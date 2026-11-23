@@ -45,6 +45,9 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// A path as a key made of text can hold it.
 ///
 /// A path is bytes on Unix and UTF-16 on Windows, and neither is guaranteed to have a text
@@ -166,6 +169,31 @@ impl Stage {
     }
 }
 
+/// The routes of a command spelled as a line writes them, each after a space, so that an entry
+/// made at `sh check.sh > /dev/null` is drawn with its redirection and not as the bare line.
+pub fn spelled_routes(routes: &[Route]) -> String {
+    let mut out = String::new();
+    for route in routes {
+        out.push(' ');
+        out.push_str(&match route {
+            Route::Stdout { path, append } => format!(
+                "{} {}",
+                if *append { ">>" } else { ">" },
+                quoted(&path.to_string_lossy())
+            ),
+            Route::Stdin { path } => format!("< {}", quoted(&path.to_string_lossy())),
+            Route::Stderr { path, append } => format!(
+                "{} {}",
+                if *append { "2>>" } else { "2>" },
+                quoted(&path.to_string_lossy())
+            ),
+            Route::Both { path } => format!("&> {}", quoted(&path.to_string_lossy())),
+            Route::StderrToStdout => "2>&1".to_string(),
+        });
+    }
+    out
+}
+
 /// A path a program starts by and the file it leads to, drawn as `ls -l` draws a link.
 ///
 /// The file alone where the two are one path.
@@ -178,6 +206,33 @@ pub(crate) fn started_through(started_as: &Path, file: &Path) -> String {
             started_as.to_string_lossy(),
             file.to_string_lossy()
         )
+    }
+}
+
+/// The program word a sentence addressed to the planner names `started_as` by.
+///
+/// `started_as` was built by joining a name the line used onto `landing`, the directory the line
+/// actually ran in, which is where a link in a tree nobody vouched for led. Under that directory,
+/// the word is respelled as `told_directory`, the planner's own spelling of it, followed by the
+/// rest of `started_as`, exactly as a redirection's target is respelled for the same sentence: the
+/// landing is never shown to the planner, because the name whoever wrote the tree chose for it is
+/// not the planner's own word (LABEL-3, TOOL-4). `told_directory` is `None` for a line run at the
+/// root, and then, like a path elsewhere, `started_as` is shown as it is. Both halves are strings
+/// the planner wrote or paths the driver resolved: nothing is read from a file to build the word.
+fn told_started_as(started_as: &Path, landing: &Path, told_directory: Option<&str>) -> String {
+    match (told_directory, started_as.strip_prefix(landing)) {
+        (Some(told_directory), Ok(rest)) => {
+            let rest: Vec<std::borrow::Cow<'_, str>> = rest
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect();
+            format!(
+                "{}/{}",
+                told_directory.trim_end_matches('/'),
+                rest.join("/")
+            )
+        }
+        _ => started_as.to_string_lossy().into_owned(),
     }
 }
 
@@ -263,6 +318,7 @@ impl Pipeline {
 
 /// How two parts of a plan are joined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify, derive(Structural))]
 pub enum Joiner {
     /// `&&`: the right side runs only if the left side succeeded.
     And,
@@ -276,7 +332,12 @@ pub enum Joiner {
 ///
 /// The paths are absolute and are not tidied. What is recorded is what will be opened, and
 /// rewriting a `..` away would make the two differ wherever a symlink is involved.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub enum Route {
     Stdout {
         path: PathBuf,
@@ -308,12 +369,50 @@ pub fn is_the_null_device(path: &Path) -> bool {
     path.as_os_str() == NULL_DEVICE
 }
 
+/// [`is_the_null_device`] for a route's own path, in the form a contract can name.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::null_device(*path),
+))]
+#[expect(
+    clippy::ptr_arg,
+    reason = "Verus models the PathBuf a route holds, and has no type for the Path it derefs to"
+)]
+fn discards(path: &PathBuf) -> bool {
+    is_the_null_device(path)
+}
+
+impl Route {
+    /// Whether this route opens no file: standard error joined to standard output, or a stream
+    /// sent to [`NULL_DEVICE`].
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::opens_no_file(*self),
+    ))]
+    fn opens_no_file(&self) -> bool {
+        match self {
+            Route::Stdout { path, .. } | Route::Stderr { path, .. } | Route::Both { path } => {
+                discards(path)
+            }
+            // A file read in place of what the step was shown to read.
+            Route::Stdin { .. } => false,
+            Route::StderrToStdout => true,
+        }
+    }
+}
+
 /// One piece of the value of an assignment that is worked out when the step's pipeline starts.
 ///
 /// Only ever the *source*: the name of a variable, or the line of a command. What either comes to
 /// is resolved at spawn time, held by the spawn alone, and never stored in a plan, a key, a trail or
 /// a result, because it may be a secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub enum ValuePart {
     /// Text taken as written.
     Text(String),
@@ -325,6 +424,11 @@ pub enum ValuePart {
 
 /// `NAME=value` in front of a program where the value is not all literal text.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub struct Expansion {
     pub name: String,
     pub parts: Vec<ValuePart>,
@@ -367,6 +471,11 @@ impl Expansion {
 
 /// One program in a plan, resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub struct Step {
     /// The name the line used, which is what a reader recognises.
     pub program: String,
@@ -391,10 +500,12 @@ pub struct Step {
     /// The argument vector, literal and final.
     pub args: Vec<String>,
     /// Which arguments a filename pattern produced: one entry per entry of [`Step::args`], `true`
-    /// where the word is a name the pattern matched on disk ([CMDLINE-4]).
+    /// where the word came from an unquoted pattern, whether it is a name the pattern matched on
+    /// disk or the pattern itself, passed through as written because nothing matched ([CMDLINE-4]).
     ///
-    /// Set by the compiler from whether the pattern matched, never from the name's bytes. Empty
-    /// where no argument came from a pattern. A list of another length than [`Step::args`]
+    /// Set by the compiler from the shape of the word, never from whether the pattern matched or
+    /// from the name's bytes. Empty where no argument came from a pattern. A list of another
+    /// length than [`Step::args`]
     /// answers for no argument, and [`Step::from_a_pattern`] reads every argument of such a step
     /// as produced by one. Not part of any key: the person is shown and endorses the expanded
     /// arguments either way.
@@ -414,7 +525,8 @@ pub struct Step {
 }
 
 impl Step {
-    /// Whether the argument at `index` is a name a filename pattern matched.
+    /// Whether the argument at `index` came from a filename pattern, matched or passed through as
+    /// written.
     ///
     /// `true` for every argument where [`Step::matched`] is neither empty nor one entry per
     /// argument, since such a list says nothing about which argument is which.
@@ -424,6 +536,26 @@ impl Step {
             n if n == self.args.len() => self.matched.get(index).copied().unwrap_or(true),
             _ => true,
         }
+    }
+
+    /// Whether an entry holds everything about this step that decides what it does.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::step_is_its_entry(*self),
+    ))]
+    fn is_its_entry(&self) -> bool {
+        // Destructured so that a field added to `Step` stops the build here, as in every key.
+        let Step {
+            program: _,
+            resolved: _,
+            started_as: _,
+            args: _,
+            matched: _,
+            environment,
+            expansions,
+            routes,
+        } = self;
+        environment.is_empty() && expansions.is_empty() && every_route_opens_no_file(routes)
     }
 
     /// Whether an assignment is written in front of this step's program, literal or not.
@@ -485,9 +617,19 @@ impl Step {
     ///
     /// `targets` holds the file each redirection of the step names, as the line wrote it and
     /// already quoted, in the order of the routes that name a file. A route's own path was joined
-    /// onto the directory the line landed in, which is where a link led.
-    pub(crate) fn told_args(&self, args: Vec<String>, targets: &[String]) -> String {
-        self.render_args(&self.started_as.to_string_lossy(), args, Some(targets))
+    /// onto the directory the line landed in, which is where a link led. `landing` is that same
+    /// directory and `told_directory` is the planner's own spelling of it, `None` at the root: a
+    /// program found by a relative path is, like a redirection's target, respelled under the
+    /// directory as typed rather than shown by the landing (LABEL-3, TOOL-4).
+    pub(crate) fn told_args(
+        &self,
+        args: Vec<String>,
+        targets: &[String],
+        landing: &Path,
+        told_directory: Option<&str>,
+    ) -> String {
+        let program = told_started_as(&self.started_as, landing, told_directory);
+        self.render_args(&program, args, Some(targets))
     }
 
     fn render_args(&self, program: &str, args: Vec<String>, targets: Option<&[String]>) -> String {
@@ -532,8 +674,10 @@ impl Step {
     /// directory and that is the one the prompt showed. An entry covers that tree and no other, so
     /// passing a tree the person was not shown would record a grant nobody gave.
     pub fn command(&self, directory: &Path) -> crate::programs::Command {
-        // Left out for the reasons `Policy::every_step_vouched` gives: an assignment is refused
-        // before an entry is offered, and a route is the write question's.
+        // An assignment is left out because `Plan::carries_an_assignment` refuses it before an
+        // entry is offered. The routes are in the entry: a line that sends a stream to the null
+        // device or merges its streams is not the line without them, and an entry made for one
+        // must not cover the other.
         let Step {
             program: _,
             resolved,
@@ -543,15 +687,17 @@ impl Step {
             matched: _,
             environment: _,
             expansions: _,
-            routes: _,
+            routes,
         } = self;
         crate::programs::Command::new(resolved.clone(), args.clone(), directory)
             .started_as(started_as.clone())
+            .routed(routes.clone())
     }
 }
 
 /// What a plan runs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub enum Steps {
     /// Steps feeding one another, and a single step where the line had no pipe.
     Pipeline(Vec<Step>),
@@ -563,6 +709,27 @@ pub enum Steps {
     },
     /// `( … )`, which groups and starts nothing of its own.
     Group(Box<Steps>),
+}
+
+// Written out rather than derived, because a derived `Clone` calls itself through `Box<Steps>`,
+// which Verus refuses as a cycle. No contract reads a clone, so Verus skips this one.
+impl Clone for Steps {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn clone(&self) -> Self {
+        match self {
+            Self::Pipeline(steps) => Self::Pipeline(steps.clone()),
+            Self::Join {
+                left,
+                joiner,
+                right,
+            } => Self::Join {
+                left: left.clone(),
+                joiner: *joiner,
+                right: right.clone(),
+            },
+            Self::Group(inner) => Self::Group(inner.clone()),
+        }
+    }
 }
 
 impl Steps {
@@ -591,6 +758,27 @@ impl Steps {
                 Some(steps)
             }
             _ => None,
+        }
+    }
+
+    /// Whether an entry holds everything that decides what each step does.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::steps_are_their_entries(*self),
+        decreases self,
+    ))]
+    fn are_their_entries(&self) -> bool {
+        match self {
+            Self::Pipeline(steps) => every_step_is_its_entry(steps),
+            Self::Join {
+                left,
+                joiner: _,
+                right,
+            } => {
+                let left = left.are_their_entries();
+                left && right.are_their_entries()
+            }
+            Self::Group(inner) => inner.are_their_entries(),
         }
     }
 
@@ -649,18 +837,23 @@ impl Steps {
     /// step are what a pattern matched, which is a listing of a directory, and a sentence the
     /// planner is shown cannot hold one. The caller owns the quoting of the words, as for
     /// [`Step::told_args`], and passes the file each redirection names, as the line wrote it, in
-    /// `targets`: one list per step, in the order of the routes that name a file.
+    /// `targets`: one list per step, in the order of the routes that name a file. `landing` and
+    /// `told_directory` are [`Step::told_args`]'s own: the directory every step ran in and the
+    /// planner's spelling of it, so a program found by a relative path is respelled the same way
+    /// a redirection's target is.
     /// `None` where `written` or `targets` does not hold exactly one list per step.
     pub fn display_with_operands(
         &self,
         written: &[Vec<String>],
         targets: &[Vec<String>],
+        landing: &Path,
+        told_directory: Option<&str>,
     ) -> Option<String> {
         if written.len() != targets.len() {
             return None;
         }
         let mut rest = written.iter().zip(targets.iter());
-        let shown = self.draw_with_operands(&mut rest)?;
+        let shown = self.draw_with_operands(&mut rest, landing, told_directory)?;
         rest.next().is_none().then_some(shown)
     }
 
@@ -716,13 +909,15 @@ impl Steps {
             std::slice::Iter<'_, Vec<String>>,
             std::slice::Iter<'_, Vec<String>>,
         >,
+        landing: &Path,
+        told_directory: Option<&str>,
     ) -> Option<String> {
         Some(match self {
             Self::Pipeline(steps) => {
                 let mut drawn = Vec::with_capacity(steps.len());
                 for step in steps {
                     let (args, targets) = written.next()?;
-                    drawn.push(step.told_args(args.clone(), targets));
+                    drawn.push(step.told_args(args.clone(), targets, landing, told_directory));
                 }
                 drawn.join(" | ")
             }
@@ -736,13 +931,92 @@ impl Steps {
                     Joiner::Or => "||",
                     Joiner::Then => ";",
                 };
-                let left = left.draw_with_operands(written)?;
-                let right = right.draw_with_operands(written)?;
+                let left = left.draw_with_operands(written, landing, told_directory)?;
+                let right = right.draw_with_operands(written, landing, told_directory)?;
                 format!("{left} {joiner} {right}")
             }
-            Self::Group(inner) => format!("( {} )", inner.draw_with_operands(written)?),
+            Self::Group(inner) => {
+                format!(
+                    "( {} )",
+                    inner.draw_with_operands(written, landing, told_directory)?
+                )
+            }
         })
     }
+}
+
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == (forall|i: int|
+            0 <= i < routes@.len() ==> crate::spec::opens_no_file(#[trigger] routes@[i])),
+))]
+fn every_route_opens_no_file(routes: &[Route]) -> bool {
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= routes.len(),
+            forall|i: int| 0 <= i < at ==> crate::spec::opens_no_file(#[trigger] routes@[i]),
+        decreases routes.len() - at,
+    ))]
+    while at < routes.len() {
+        if !routes[at].opens_no_file() {
+            return false;
+        }
+        at += 1;
+    }
+    true
+}
+
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == (forall|i: int|
+            0 <= i < steps@.len() ==> crate::spec::step_is_its_entry(#[trigger] steps@[i])),
+))]
+fn every_step_is_its_entry(steps: &[Step]) -> bool {
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= steps.len(),
+            forall|i: int| 0 <= i < at ==> crate::spec::step_is_its_entry(#[trigger] steps@[i]),
+        decreases steps.len() - at,
+    ))]
+    while at < steps.len() {
+        if !steps[at].is_its_entry() {
+            return false;
+        }
+        at += 1;
+    }
+    true
+}
+
+/// The entries a person's `a` adds for one line, made only by [`Plan::vouch`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Vouch {
+    entries: Vec<crate::programs::Command>,
+}
+
+impl Vouch {
+    /// The entries, in stage order.
+    pub fn entries(&self) -> &[crate::programs::Command] {
+        &self.entries
+    }
+
+    pub(crate) fn into_entries(self) -> Vec<crate::programs::Command> {
+        self.entries
+    }
+}
+
+/// What a run's request adds to its plan that no entry holds.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub struct Asked {
+    /// The planner asked the line to carry a credential scope, a toolchain list, loopback or an
+    /// ssh key (SANDBOX-26).
+    pub scopes: bool,
+    /// The planner asked the line to start with no profile (SANDBOX-29).
+    pub unconfined: bool,
+    /// A file the line redirects into is a protected path (PERM-9).
+    pub protected: bool,
 }
 
 /// A command line, compiled.
@@ -752,6 +1026,11 @@ impl Steps {
 /// directory it runs in. A person endorses this rather than the text the planner sent, because
 /// after compilation this is what decides where an effect lands.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub struct Plan {
     /// The line as the planner spelled it.
     ///
@@ -825,11 +1104,15 @@ impl Plan {
     /// the entry records the tree, so a line running outside the workspace root is a line an entry
     /// can hold exactly as written.
     ///
-    /// A redirection is among them, in both directions. An entry holds no destination any more than
-    /// it holds a source, so an entry made while output was redirected would cover the same program
-    /// with the redirection gone, which is a line nobody read. A line that writes is asked about
-    /// every time whatever is recorded, so the key stops no prompt for the line it was pressed on:
-    /// the only thing it could ever grant is the bare one.
+    /// A redirection that opens a file is among them, in both directions. An entry holds no file
+    /// to write or read, so an entry made while output was redirected to a file would cover the
+    /// same program with the redirection gone, which is a line nobody read. A line that writes is
+    /// asked about every time whatever is recorded, so the key stops no prompt for the line it was
+    /// pressed on: the only thing it could ever grant is the bare one.
+    ///
+    /// A route that opens no file, which is a stream sent to the null device or `2>&1`, can be
+    /// remembered, because the entry holds the routes: it covers that line and not the same
+    /// program without them.
     ///
     /// Nor is standard input fed from a reference, whatever the reference's label. An entry holds a
     /// program and its arguments and not the bytes it reads, so one made for `python3 -` fed one
@@ -838,11 +1121,63 @@ impl Plan {
     /// Which reason it is belongs to whoever explains the refusal, not here.
     ///
     /// [RUN-8]: ../../../docs/specs/tools/run.md
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::plan_is_its_entries(*self),
+    ))]
     pub fn can_be_remembered(&self) -> bool {
-        !self.releases_private()
-            && !self.carries_an_assignment()
+        self.steps.are_their_entries()
             && self.writes.is_empty()
+            && self.reads.is_empty()
             && self.stdin.is_none()
+    }
+
+    /// Whether an entry could record this line as it was asked for: the plan can be remembered,
+    /// and the request adds nothing an entry cannot hold.
+    ///
+    /// One question rather than a list of reasons repeated at each place that asks, so a reason
+    /// added later cannot reach the drawing and miss the layer that acts on the answer.
+    ///
+    /// A line redirecting into a protected path is never one, whatever else is true of its plan:
+    /// the mark is read here as well as the plan's destinations, so an answer to it is kept by
+    /// neither ([PERM-9]).
+    ///
+    /// [PERM-9]: ../../../docs/specs/permissions.md
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::request_is_its_entries(*self, asked),
+    ))]
+    pub fn can_be_remembered_as(&self, asked: Asked) -> bool {
+        let Asked {
+            scopes,
+            unconfined,
+            protected,
+        } = asked;
+        self.can_be_remembered() && !scopes && !unconfined && !protected
+    }
+
+    /// The vouch a person's `a` for this line makes, or `None` where an entry could not record it
+    /// ([`Plan::can_be_remembered_as`]). The one way to make a [`Vouch`], so the policy records
+    /// only an answer that passed that question.
+    pub fn vouch(&self, asked: Asked) -> Option<Vouch> {
+        if !self.can_be_remembered_as(asked) {
+            return None;
+        }
+        Some(Vouch {
+            entries: self.entries(),
+        })
+    }
+
+    /// The entries vouching for this plan would add, without repeats and in stage order.
+    pub fn entries(&self) -> Vec<crate::programs::Command> {
+        let mut named: Vec<crate::programs::Command> = Vec::new();
+        for step in self.steps() {
+            let command = step.command(&self.directory);
+            if !named.contains(&command) {
+                named.push(command);
+            }
+        }
+        named
     }
 
     /// The plan as a person should read it, in a prompt, in a result and in a job's line.
@@ -1285,6 +1620,106 @@ mod tests {
         );
     }
 
+    /// A vouch is made only where `can_be_remembered_as` allows the line, so the policy can record
+    /// no entry for a request that asked for a scope, to run with no profile, or to write a
+    /// protected path. The control is the same plan asked for plainly, whose vouch holds one entry
+    /// per distinct stage. Rejects a `vouch` that asks only `can_be_remembered`, which ignores the
+    /// request, and one that returns the entries without asking at all.
+    #[test]
+    fn a_vouch_is_made_only_for_a_request_an_entry_can_hold() {
+        let line = plan(Steps::Pipeline(vec![
+            step("git", &["log"]),
+            step("wc", &["-l"]),
+            step("git", &["log"]),
+        ]));
+        let plain = line
+            .vouch(Asked::default())
+            .expect("the control was refused");
+        assert_eq!(
+            plain.entries().len(),
+            2,
+            "a vouch did not hold one entry per stage"
+        );
+
+        for asked in [
+            Asked {
+                scopes: true,
+                ..Asked::default()
+            },
+            Asked {
+                unconfined: true,
+                ..Asked::default()
+            },
+            Asked {
+                protected: true,
+                ..Asked::default()
+            },
+        ] {
+            assert!(
+                line.can_be_remembered(),
+                "the plan alone stopped being rememberable"
+            );
+            assert!(line.vouch(asked).is_none(), "{asked:?} made a vouch");
+        }
+    }
+
+    /// A line that sends a stream to the null device can be remembered, and the entry it makes
+    /// holds the route: the plan of `sh check.sh > /dev/null` has entries unlike the plan of
+    /// `sh check.sh`, and an entry made at one covers only that one, in both directions, for a
+    /// discarded stream and for `2>&1` alike. Rejects an entry that ignores routes, which leaves
+    /// the bare line covered by an answer given at the line that discarded its output.
+    #[test]
+    fn an_entry_made_at_a_line_with_routes_does_not_cover_the_line_without_them() {
+        use crate::programs::TrustedPrograms;
+
+        let routed = |routes: Vec<Route>| {
+            let mut one = step("sh", &["check.sh"]);
+            one.routes = routes;
+            plan(Steps::Pipeline(vec![one]))
+        };
+        let discarding = || {
+            routed(vec![Route::Stdout {
+                path: PathBuf::from("/dev/null"),
+                append: false,
+            }])
+        };
+        let merging = || routed(vec![Route::StderrToStdout]);
+        let bare = || routed(Vec::new());
+
+        let line = discarding();
+        assert!(line.writes.is_empty(), "a discard line wrote a file");
+        assert!(
+            line.can_be_remembered(),
+            "a discard line was not rememberable"
+        );
+        assert!(line.vouch(Asked::default()).is_some());
+        assert_ne!(
+            line.entries(),
+            bare().entries(),
+            "the entry for a discard line is the entry for the bare line"
+        );
+        assert_ne!(merging().entries(), bare().entries());
+        assert_ne!(merging().entries(), discarding().entries());
+
+        for (made_at, other, said) in [
+            (discarding(), bare(), "a discard line covered the bare line"),
+            (bare(), discarding(), "the bare line covered a discard line"),
+            (merging(), bare(), "a merged line covered the bare line"),
+            (
+                discarding(),
+                merging(),
+                "a discard line covered a merged line",
+            ),
+        ] {
+            let programs: TrustedPrograms = made_at.entries().into_iter().collect();
+            assert!(
+                programs.covers_every_step(&made_at),
+                "an entry did not cover its own line"
+            );
+            assert!(!programs.covers_every_step(&other), "{said}");
+        }
+    }
+
     /// A step that takes `name` from `parts` in front of its program.
     fn expanding(program: &str, name: &str, parts: Vec<ValuePart>) -> Step {
         Step {
@@ -1352,7 +1787,7 @@ mod tests {
         let steps = Steps::Pipeline(vec![expanding]);
         assert_eq!(steps.display(), "TOKEN=$SECRET /usr/bin/prog");
         let told = steps
-            .display_with_operands(&[vec!["arg".into()]], &[vec![]])
+            .display_with_operands(&[vec!["arg".into()]], &[vec![]], Path::new("/work"), None)
             .expect("one list per step");
         assert_eq!(told, "TOKEN=$SECRET /usr/bin/prog arg");
         assert_eq!(plan(steps.clone()).display(), "TOKEN=$SECRET /usr/bin/prog");
@@ -1677,9 +2112,34 @@ mod tests {
             .display_with_operands(
                 &[vec!["test".into()], vec!["-n".into(), "5".into()]],
                 &[vec![], vec![]],
+                Path::new("/work"),
+                None,
             )
             .expect("one list per step");
         assert_eq!(told, "/home/me/.cargo/bin/cargo test | /usr/bin/tail -n 5");
+        assert!(steps.display().contains("HOSTILE-landed"));
+    }
+
+    /// A program found by a relative path under a directory a link led to is told to the planner
+    /// by the directory as it typed it, followed by the rest of the path, exactly as a
+    /// redirection's target is. The regression this rejects is the program word drawn from
+    /// `started_as` whole, which is `landing` joined onto the name the line used and so carries
+    /// the name whoever made the link chose (LABEL-3, TOOL-4).
+    #[test]
+    fn what_the_planner_is_told_names_a_relative_program_under_the_directory_as_typed() {
+        let mut build = step("./build.sh", &[]);
+        build.started_as = PathBuf::from("/work/HOSTILE-landed/build.sh");
+        build.resolved = PathBuf::from("/work/HOSTILE-landed/build.sh");
+        let steps = Steps::Pipeline(vec![build]);
+        let told = steps
+            .display_with_operands(
+                &[vec![]],
+                &[vec![]],
+                Path::new("/work/HOSTILE-landed"),
+                Some("docs"),
+            )
+            .expect("one list per step");
+        assert_eq!(told, "docs/build.sh");
         assert!(steps.display().contains("HOSTILE-landed"));
     }
 

@@ -125,7 +125,7 @@ describe('the development relay adapter', () => {
 
   it('says that a wrong code ended the relay and a new launch is needed', async () => {
     globalThis.WebSocket = refusingSocket(4001) as unknown as typeof WebSocket
-    await expect(connectDevRelayTarget(8080, '012345')).rejects.toThrow('That is not the code the relay showed, so the relay has ended. Type launch on the host for a new port and code.')
+    await expect(connectDevRelayTarget(8080, '012345')).rejects.toThrow('That is not the code the relay showed, so the relay has ended. On the host, type launch and the name the relay was given there for a new port and code.')
   })
 
   it('says that nothing took the connection when the relay could not be reached', async () => {

@@ -186,7 +186,10 @@ having seen part of.
 Progress, errors and the audit trail go to stderr, so a one-shot run is pipeable. `--trace` puts
 the trail on stderr beside it: which gate checked what, the label every value carried, and what
 was released. Each line is drawn with its control characters replaced, and so are the notices, the
-plan and the model line written beside the reply ([TRACE-11](trace.md#TRACE-11)). The one thing that
+plan and the model line written beside the reply ([TRACE-11](trace.md#TRACE-11)). A manifest run's
+answer is the text of a slot released as it came, so it is drawn the same way when stdout is a
+terminal, with its line breaks kept; written to a pipe or a file it is the exact bytes, and the
+result object of `--json` escapes its own text and is not drawn. The one thing that
 may take the reply's place on that stream is the result object in
 CLI-12, and it is still the only thing on it. The events of CLI-24 are the second exception: a run
 given `--json-stream` writes them ahead of that object, and nothing else is on the stream. A run
@@ -197,6 +200,10 @@ CLI-36 beside the others.
 
 `verified-by: bravebot_cli::main::stdout_carries_the_reply_and_nothing_else`
 `verified-by: bravebot_cli::main::an_untraced_run_writes_no_trail`
+`verified-by: bravebot_cli::main::a_manifest_answer_written_to_a_terminal_has_its_control_characters_drawn`
+`verified-by: bravebot_cli::main::a_manifest_answer_written_to_a_terminal_keeps_its_line_breaks`
+`verified-by: bravebot_cli::main::a_reply_not_written_to_a_terminal_keeps_its_exact_bytes`
+`verified-by: bravebot_cli::running::a_manifest_answer_piped_onward_keeps_the_bytes_the_slot_held`
 `verified-by: bravebot_cli::main::the_trail_renders_a_line_for_every_event`
 
 <a id="CLI-6"></a>
@@ -473,11 +480,15 @@ the case a directory listing calls healthy, and it is the one the reader cannot 
 <a id="CLI-8"></a>
 ### CLI-8: `--mode` chooses how a one-shot is run; the default is the turn loop
 
-`turn` observes and decides step by step, which is what an unqualified `bravebot "task"` has
-always been. `manifest` plans the whole run first, then executes it. An unknown name is refused
-rather than guessed. Both modes carry an empty trust map, and every prompt a step raises is refused
-unless the flag in CLI-1 says otherwise: those are due partway through a run, over a path or a
-program nobody undertook to watch for, and typing a command is no undertaking to still be there.
+`turn` observes and decides step by step, which is what an unqualified `bravebot "task"` has always
+been. `manifest` plans the whole run first, then executes it. An unknown name is refused rather than
+guessed. Both modes carry an empty trust map, and every prompt a step raises is refused unless the
+flag in CLI-1 says otherwise: those are due partway through a run, over a path or a program nobody
+undertook to watch for, and typing a command is no undertaking to still be there. A call or `apply`
+step the plan's approval covers puts no prompt at its step ([manifest.md](manifest.md#MANIFEST-15),
+[manifest.md](manifest.md#MANIFEST-17)), so it runs on that answer. An `apply` step that would put
+its list is refused with the plan, before anything runs, since a one-shot cannot put one
+([manifest.md](manifest.md#MANIFEST-16)).
 
 A plan is the one question a one-shot answers, because it is asked at a moment the others are not:
 once, before the first step, while nothing has been printed but this run's own progress. It is put
@@ -508,6 +519,9 @@ is all that remains of a document nobody can see. The plan never shares stdout w
 `verified-by: bravebot_cli::main::a_plan_is_put_only_where_stdin_and_stderr_are_both_a_terminal`
 `verified-by: bravebot_cli::main::anything_but_yes_declines_a_plan`
 `verified-by: bravebot_cli::main::a_one_shot_answers_the_plan_and_nothing_else`
+`verified-by: bravebot_cli::one_shot::a_one_shot_cannot_put_an_apply_steps_list`
+`verified-by: bravebot_agent::manifest_server_calls::a_client_that_cannot_put_the_list_refuses_its_step_before_anybody_is_asked`
+`verified-by: bravebot_agent::manifest_server_calls::a_step_whose_tools_are_all_marked_runs_on_the_plans_approval`
 
 <a id="CLI-9"></a>
 ### CLI-9: a one-shot run names its own model, or asks for the one a session would
@@ -943,12 +957,13 @@ a time, and only where a check completed and found nothing.
 `verified-by: bravebot_cli::progress::bypass_with_auto_vetting_says_what_bypass_refuses_after_the_flags_line`
 `verified-by: bravebot_cli::progress::bypass_without_auto_vetting_or_without_the_flag_says_nothing_extra`
 `verified-by: bravebot_cli::running::a_one_shot_run_in_bypass_says_what_bypass_refuses_only_with_auto_vetting_on`
+`verified-by: bravebot_cli::running::a_one_shot_run_given_the_vet_flag_lets_a_check_that_finds_nothing_release_the_bytes`
 
 <a id="CLI-16"></a>
 ### CLI-16: a one-shot run names its own effort level, or asks for the one a session would
 
 `--effort <level>` names how hard the model is asked to think for one run, and outranks every
-settings file and the level `/effort` recorded. The word is one `/effort` takes, in any case. Where
+settings file and the level `/effort` recorded. The word is a level `/effort` takes, in any case. Where
 no flag names one, the level is the one a session opening in the same directory would ask for, in
 the order [BACKEND-43](backends.md#BACKEND-43) gives. A `--effort` with no word after it, a blank
 one, or a word that is no level is refused before the run starts, and the refusal names the levels.
@@ -1546,7 +1561,11 @@ no block names is asked about where it is named, and where no id is named, where
 it. It is not signed in, since a session sends it nothing: the line says that no key is stored for
 it, or that a key is stored and no block names it, and names the command that signs in, which
 records the block ([CLI-18](#CLI-18)). With no id and nothing to ask about, the one line says that
-no gateway key is stored. A configuration
+no gateway key is stored. A gateway whose block names an `options.keyFile` that gives no key, where
+no variable and no stored key gives one, is not signed in, since a session refuses the request: the
+line says that the file the setting names gives no key and that storing a key with
+`bravebot auth login gateway <id>` makes the stored key win over the file, and it names no path and
+nothing the file holds. A configuration
 that cannot be read is reported as unusable on the lines it blocks.
 
 With no way named, brave, bedrock, gateway, chatgpt and xai are asked about. The command exits 0 if any sign-in is usable, since
@@ -1579,6 +1598,7 @@ particular sign-in worked.
 `verified-by: bravebot_cli::running::auth_status_brave_reports_a_stored_key_without_the_key`
 `verified-by: bravebot_agent::accounts::the_brave_key_stands_as_its_file_does`
 `verified-by: bravebot_cli::running::auth_status_gateway_says_where_a_key_is_found_and_never_what_it_is`
+`verified-by: bravebot_agent::accounts::a_key_file_that_gives_no_key_is_not_signed_in_and_one_that_does_is`
 `verified-by: bravebot_cli::running::auth_status_gateway_with_an_unreadable_file_of_keys_is_unusable`
 `verified-by: bravebot_cli::running::auth_status_gateway_naming_no_credential_is_signed_in`
 `verified-by: bravebot_cli::running::auth_status_gateway_asks_about_a_known_service_no_block_names`
@@ -1714,6 +1734,9 @@ resumed it, or a running background session ([BG-9](background-sessions.md#BG-9)
 `verified-by: bravebot_session::sessions::continuing_a_record_with_no_history_gives_it_none`
 `verified-by: bravebot_session::sessions::a_completed_turn_starts_over_when_the_conversation_got_shorter`
 `verified-by: bravebot_cli::running::a_continued_task_adds_a_rewind_point_behind_the_ones_its_record_held`
+`verified-by: bravebot_cli::running::a_continued_run_starts_from_the_trust_map_its_record_held`
+`verified-by: bravebot_cli::running::a_failed_run_writes_no_record_and_a_continuation_carries_on_the_last_completed_turn`
+`verified-by: bravebot_cli::running::a_continued_run_is_not_handed_the_commands_its_record_vouched_for_and_the_record_keeps_them`
 
 <a id="CLI-26"></a>
 ### CLI-26: `--tools` and `--no-shell` offer the planner fewer tools for one run
@@ -1880,9 +1903,10 @@ the startup notice already follows by saying nothing to such a copy
 this directory loads them, and prints which of deny, ask or allow decides the call, the rule that
 decides it as its file spelled it, with each control character drawn as its picture
 ([LAYER-3](layering.md#LAYER-3)), and the file that wrote it. The family is `Read`, `Edit`, `Bash`,
-`WebFetch` or `Mcp`. `Read` and `Edit` take one path, `Bash` takes a program and its arguments as
+`WebFetch`, `WebSearch` or `Mcp`. `Read` and `Edit` take one path, `Bash` takes a program and its arguments as
 separate words, as a stage is matched ([PERM-5](permissions.md#PERM-5)), `WebFetch` takes a host or a
-URL and is decided on the host alone, and `Mcp` takes `server:tool`. The rule named is the one
+URL and is decided on the host alone, `WebSearch` takes nothing more and is decided by the family's own
+rule, and `Mcp` takes `server:tool`. The rule named is the one
 [PERM-2](permissions.md#PERM-2)'s order picks: the first match in deny, then ask, then allow. Where
 no rule matches, the line says so and no rule is named, since the ordinary gates decide. A `Bash`
 call whose program, or whose program under a leading wrapper, is an 8.3 short name while a `deny` or
@@ -1919,6 +1943,7 @@ that is written down is still asking.
 `verified-by: bravebot_cli::running::permissions_check_reads_a_respelled_program_as_a_session_does`
 `verified-by: bravebot_cli::running::permissions_check_reports_an_8_3_short_name_as_a_session_refuses_it`
 `verified-by: bravebot_cli::running::permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names`
+`verified-by: bravebot_cli::running::permissions_check_decides_a_web_search_by_its_own_family`
 `verified-by: bravebot_cli::running::permissions_check_decides_a_host_in_any_spelling_as_a_session_does`
 `verified-by: bravebot_cli::running::permissions_check_does_not_count_a_checkouts_allow_rule_as_in_force`
 `verified-by: bravebot_cli::running::permissions_check_refuses_a_command_line_that_names_no_call`
@@ -1989,8 +2014,10 @@ Refused without a terminal rather than run as a one-shot, because the line asked
 watch the task and be able to stop it. A one-shot in its place, with `--dangerously-skip-permissions`,
 would make every change with nobody watching.
 
-**Known cost.** A bare `bravebot` has no way to name a model or a level: those are what `/model` and
-`/effort` recorded or a settings file names. Only `-i` takes them from the line.
+**Known cost.** A bare `bravebot` has no way to name a model or a level: those are what `/model`,
+`/model session`, `/effort` and `/effort session` set, or what a settings file names. `/model` and
+`/effort` record what they set, and the two `session` forms set it for the running session only and
+record nothing. Only `-i` takes them from the line.
 
 `verified-by: bravebot_cli::main::the_prompt_a_session_opens_on_is_the_argument_as_written`
 `verified-by: bravebot_cli::main::a_session_given_no_prompt_is_refused`
@@ -2497,6 +2524,8 @@ one the person chose to run with the flag.
 `verified-by: bravebot_cli::one_shot::a_write_the_credential_scan_found_a_value_in_is_not_put_to_a_program_that_approves_everything`
 `verified-by: bravebot_cli::one_shot::a_run_asking_for_scopes_or_to_run_unconfined_is_not_put_to_a_program_that_approves_everything`
 `verified-by: bravebot_cli::one_shot::an_approving_program_cannot_answer_the_question_that_vouches_for_a_path`
+`verified-by: bravebot_cli::one_shot::a_program_over_lines_cannot_answer_a_question_that_proposes_a_rule`
+`verified-by: bravebot_cli::running::a_lines_run_refuses_a_rule_proposal`
 `verified-by: bravebot_cli::running::a_vouched_channel_without_the_approval_flag_is_not_asked_about_a_write`
 `verified-by: bravebot_cli::running::words_answer_a_question_on_a_vouched_channel`
 `verified-by: bravebot_cli::running::words_are_refused_on_a_channel_nobody_vouched_for`
@@ -2554,6 +2583,23 @@ model was kept, one whose turns never reached a server, and one copied in from a
 record that holds no turns or tokens counts as a session with none. A record whose split names more
 than its own tokens is cut to the tokens, so a figure somebody edited cannot make the tokens left
 without a split wrap.
+
+The desktop app answers the same totals through the bridge method `session.stats`, which calls the
+same totalling and the same grouping into model rows as the command, and shows them in a "Token
+Spend Across Chats…" dialog, opened from the command list for every project or from a project
+heading's menu for that project. `directory` stands for `--project <dir>` and `days` for
+`--days <n>`, and the answer always carries the total and a row for each model, so the dialog's "by
+model" choice only changes which rows it draws. A model row with no name has `null` for its model,
+which the dialog shows as `unknown`, and the directory sent back is cleaned as the scope sentence's
+is. A directory that is not one is refused with `not_a_directory`, and a count of zero, a negative
+count, one above 9223372036854775807 and one that is not a whole number with `bad_request`, and a
+refusal carries no figures. The answer gives the count of entries that could not be read as
+`unreadable`, and the dialog says how many there were when there were any, and always says that an
+incognito session is not counted. The method writes nothing, needs no open session, and answers the
+same under incognito. The dialog shows tokens and no money, for the reason under Known costs. The
+window may ask about a directory only when the app offered it, as for `session.purge`
+([TRUST-20](trust-map.md#TRUST-20)), so a project never opened in the desktop app is counted there
+only in the total for every project.
 
 **Why.** `/cost` answers what one session spent, and nothing answers what a week of them spent,
 which models took it, or which project it went to without opening each record. The figures are the
@@ -2628,6 +2674,11 @@ reading the answer, so none of it goes to a planner.
 `verified-by: bravebot_cli::running::a_muddled_stats_request_is_refused_with_the_argument_status_and_no_figures`
 `verified-by: bravebot_cli::running::stats_runs_under_incognito_and_counts_the_records_written_before`
 `verified-by: bravebot_cli::running::stats_reports_how_the_tokens_of_one_shot_runs_divided`
+`verified-by: bravebot_ui_bridge::stats::no_parameters_total_every_project_with_a_row_for_each_model`
+`verified-by: bravebot_ui_bridge::stats::a_model_name_reaches_the_answer_cleaned_of_its_escape`
+`verified-by: bravebot_ui_bridge::stats::a_directory_keeps_only_the_records_that_ran_in_it`
+`verified-by: bravebot_ui_bridge::stats::days_leave_out_a_record_last_written_before_the_cut`
+`verified-by: bravebot_ui_bridge::stats::a_count_that_is_no_number_of_days_and_a_path_that_is_no_directory_are_refused`
 
 <a id="CLI-38"></a>
 ### CLI-38: `--max-rounds` and `--max-tokens` stop a one-shot run at a limit, on a status of their own
@@ -2650,8 +2701,9 @@ Each value is a whole number written in digits, 1 or more. A value that is not, 
 value, a `--max-rounds` of 200 or more, which is the bound a one-shot run carries
 ([TURN-2](turns.md#TURN-2)), and either flag given with `--mode manifest` or `--goal` are refused
 with status 2 before anything is sent, and the refusal names the flag. A flag given twice takes the
-last value. A session's own limit is the `limit` setting and `/limit`
-([TURN-8](turns.md#TURN-8)).
+last value. A session's own limit is the `limit` setting, changed with `/limit` in the terminal
+session and with `session.limit` in the desktop window. It applies in those two, which ask the
+person when it is reached ([TURN-8](turns.md#TURN-8)), and not in a one-shot run.
 
 **Why.** A CI job that runs the agent cannot say how much it is willing to spend. The only bound is
 a constant of 200 rounds, and the run that reaches it answers with what it has and exits 0

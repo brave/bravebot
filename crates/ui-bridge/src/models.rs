@@ -275,14 +275,21 @@ fn badges(advertised: &Advertised) -> Vec<&'static str> {
 ///
 /// `None` for the model means the configured one, which is what a request naming none asks for. In
 /// English here rather than through a catalog, as the warnings of `roster` for a gateway and for Brave
-/// are. The file is the only actionable thing in the sentence: nobody using this window can write it.
+/// are, except the refusal of a model that searches the web, which is the catalog message
+/// `desktop-model-retrieves` and names no file. The file is the only actionable thing in the other
+/// sentences: nobody using this window can write it.
 pub fn refused(config: &Config, model: Option<&str>) -> Option<String> {
     let asked = model.unwrap_or(&config.default_model);
     let (file, why) = config.model_refused(asked)?;
     let reason = match why {
         ModelRefusal::NotAllowed => "allows only the models its models.allow names",
         ModelRefusal::Denied => "denies it with a models.deny entry",
+        // No file refused it, so there is none to name: the sentence is a catalog message.
+        ModelRefusal::Retrieves => {
+            return Some(bravebot_i18n::t!(desktop_model_retrieves, model = asked));
+        }
     };
+    let file = file?;
     Some(format!(
         "{asked} is not requested on this machine: {}, which this machine's administrator \
          manages, {reason}.",
@@ -986,6 +993,90 @@ mod tests {
                 refused(&config, Some("denied-model")).expect("refused")
             );
         }
+    }
+
+    /// BACKEND-48, LABEL-8 in the window: a model that searches the web, reached over chat
+    /// completions, is refused with the catalog sentence that says so and names no file, a turn
+    /// naming it fails as a `bad_request` carrying that sentence, and the roster leaves its row out
+    /// and keeps the row of a neighbouring model that does not search.
+    ///
+    /// No file refused it, so `refused` has none to name. A build that read the file before matching
+    /// the reason (`let file = file?;` above the `match`) returns `None` for it, and `choose` then
+    /// lets a search model start a turn. A build that named a file would send somebody to a settings
+    /// file nobody wrote it in.
+    #[test]
+    fn the_window_refuses_a_model_that_searches_the_web_without_naming_a_file() {
+        let mut config = configured("openai/gpt-5.5", None);
+        config.providers = bravebot_config::Settings::parse(
+            r#"{"provider": {"openai": {"npm": "@ai-sdk/openai-compatible",
+                "options": {"apiKey": "test-token"},
+                "models": {"gpt-5-search-api": {}, "gpt-5.5": {}}}}}"#,
+        )
+        .providers()
+        .to_vec();
+        assert_eq!(config.providers.len(), 1, "the block configured no service");
+
+        let refusal = refused(&config, Some("openai/gpt-5-search-api"))
+            .expect("a model that searches the web was not refused");
+        assert!(
+            refusal.contains("searches the web before it replies"),
+            "the refusal did not say the model searches the web: {refusal}"
+        );
+        assert!(
+            refusal.contains("openai/gpt-5-search-api"),
+            "the refusal did not name the model: {refusal}"
+        );
+        for file_word in [
+            "models.deny",
+            "models.allow",
+            "managed",
+            ".json",
+            "administrator",
+        ] {
+            assert!(
+                !refusal.contains(file_word),
+                "the refusal names a file or its owner ({file_word}): {refusal}"
+            );
+        }
+        assert_eq!(refused(&config, Some("openai/gpt-5.5")), None);
+
+        // A turn naming it, by the request or by the session, is the `bad_request` of that sentence.
+        for (requested, session) in [
+            (Some("openai/gpt-5-search-api"), None),
+            (None, Some("openai/gpt-5-search-api")),
+        ] {
+            let failure = choose(&config, requested.map(str::to_string), session)
+                .expect_err("a model that searches the web was chosen");
+            assert_eq!(failure.code, crate::protocol::ErrorCode::BadRequest);
+            assert_eq!(failure.message, refusal);
+        }
+        assert_eq!(
+            choose(&config, Some("openai/gpt-5.5".into()), None).unwrap(),
+            Some("openai/gpt-5.5".to_string())
+        );
+
+        let listed = |key: &str| Model {
+            key: key.to_string(),
+            display_name: key.to_string(),
+            premium: false,
+            reads_effort: true,
+            provider: Some("openai".into()),
+            conversation_tokens: None,
+            advertised: Advertised::default(),
+        };
+        let result = catalogue(
+            &config,
+            vec![listed("openai/gpt-5-search-api"), listed("openai/gpt-5.5")],
+            Vec::new(),
+            &Origins::new(),
+        );
+        let offered: Vec<&str> = result["models"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| row["id"].as_str().expect("an id"))
+            .collect();
+        assert_eq!(offered, ["openai/gpt-5.5"]);
     }
 
     /// A configuration whose only service is a local gateway stating a window for its one model, and

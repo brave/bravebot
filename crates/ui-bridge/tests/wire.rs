@@ -134,6 +134,7 @@ fn a_call_carries_the_reason_it_was_made() {
 #[test]
 fn quarantined_content_says_how_much_it_left_out() {
     let value = wire::shown(&Shown {
+        as_the_planner_had_it: None,
         origin: "https://example.com/page".into(),
         reach: Reach::NotThePlanner,
         label: "(U,priv)".into(),
@@ -160,6 +161,7 @@ fn the_rows_about_a_picture_cross_as_the_agent_wrote_them_under_their_label() {
         },
     );
     let value = wire::shown(&Shown {
+        as_the_planner_had_it: None,
         origin: "weather:get_forecast returned".into(),
         reach: Reach::NotThePlanner,
         label: "(U,priv)".into(),
@@ -190,6 +192,7 @@ fn the_rows_about_a_picture_cross_as_the_agent_wrote_them_under_their_label() {
 fn released_content_crosses_the_transport_with_the_label_it_was_released_under() {
     let shown = |label: &str| {
         wire::shown(&Shown {
+            as_the_planner_had_it: None,
             origin: "https://example.com/page".into(),
             reach: Reach::NotThePlanner,
             label: label.into(),
@@ -307,6 +310,7 @@ fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_u
                 preview: "part".into(),
                 label: bytes.into(),
                 truncated: false,
+                hidden: 0,
                 verdict: Verdict::Safe,
                 reason: Some("advice".into()),
                 reason_label: Some(said.into()),
@@ -332,6 +336,7 @@ fn each_label_crosses_as_both_axes_named_and_an_unknown_one_as_the_bottom() {
     use bravebot_core::label::Label;
     let shown = |label: String| {
         wire::shown(&Shown {
+            as_the_planner_had_it: None,
             origin: "file.md".into(),
             reach: Reach::NotThePlanner,
             label,
@@ -440,6 +445,7 @@ fn a_vouch_request_carries_the_name_and_the_rule_spelled_for_a_person() {
             preview: "part".into(),
             label: "(U,priv)".into(),
             truncated: false,
+            hidden: 0,
             verdict: Verdict::Safe,
             reason: None,
             reason_label: None,
@@ -449,6 +455,42 @@ fn a_vouch_request_carries_the_name_and_the_rule_spelled_for_a_person() {
     assert_eq!(vouch["rule"], json!("/work/note.md "));
     assert_eq!(vouch["shownPath"], json!("\"note.md\u{2423}\""));
     assert_eq!(vouch["shownRule"], json!("\"/work/note.md\u{2423}\""));
+}
+
+/// PROMPT-13: the window is handed how many characters of a vouch preview drew as nothing, the
+/// sentence in the catalog's words, and the preview with each one already written out. A preview
+/// with none carries no sentence. The fault it rejects: a vouch request that leaves the count and
+/// the sentence out, so the card draws the spelled tokens with nothing to say what they are.
+#[test]
+fn a_vouch_request_carries_how_many_characters_drew_as_nothing() {
+    use bravebot_agent::confirm::VouchRequest;
+    use bravebot_core::vetting::Verdict;
+    let request = |preview: &str, hidden| VouchRequest {
+        path: "note.md".into(),
+        rule: "/work/note.md".into(),
+        preview: preview.into(),
+        label: "(U,priv)".into(),
+        truncated: false,
+        hidden,
+        verdict: Verdict::Safe,
+        reason: None,
+        reason_label: None,
+    };
+    let spelled = "a\u{2039}U+E0064 d\u{203A}b\u{2039}U+200B\u{203A}";
+    let some = wire::vouch_request(5, &request(spelled, 2));
+    assert_eq!(some["hidden"], json!(2));
+    assert_eq!(
+        some["hiddenNote"],
+        json!(bravebot_i18n::t!(hidden_characters, count = 2usize).to_string())
+    );
+    assert_eq!(some["preview"], json!(spelled));
+    let none = wire::vouch_request(6, &request("plain", 0));
+    assert_eq!(none["hidden"], json!(0));
+    assert_eq!(
+        none["hiddenNote"],
+        Value::Null,
+        "a preview with nothing hidden in it was sent a sentence about some"
+    );
 }
 
 #[test]
@@ -740,6 +782,7 @@ fn a_message_between_sessions_crosses_as_its_own_kind_without_the_frame() {
 fn a_todo_row_sends_its_status_not_its_glyph() {
     let value = wire::row(&Row {
         content: "fix the parser".into(),
+        as_the_planner_had_it: "fix the parser".into(),
         marker: "[x]",
         status: Status::Done,
     });
@@ -757,6 +800,7 @@ fn a_cancelled_task_crosses_as_cancelled() {
     assert_eq!(
         wire::row(&Row {
             content: "rewrite the parser".into(),
+            as_the_planner_had_it: "rewrite the parser".into(),
             marker: "✗",
             status: Status::Cancelled,
         }),
@@ -1660,6 +1704,126 @@ fn a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent() {
     assert_eq!(value["vouches"], json!([]));
 }
 
+/// SANDBOX-27, SANDBOX-26: a line whose stage is lent a credential scope a person kept at an
+/// earlier prompt is asked about every time, so the desktop is told no standing answer exists
+/// (`canBeRemembered` false, no `vouches`) though the planner asked for nothing, and
+/// `requestedScopes` still lists only what the planner asked for (empty here). The kept scope
+/// reaches the desktop through `confinement.sentences`, as a remembered row. The control is the
+/// same line with no kept scope, which can be remembered. The regressions it rejects:
+/// `asks_for_scopes` reading only what the planner asked for, which leaves `canBeRemembered` true
+/// and offers the desktop's "Trust command and output" for a line that is asked every time, and a
+/// kept scope reported under `requestedScopes`, which tells the desktop the planner asked for it.
+#[test]
+fn a_run_prompt_lent_a_kept_scope_has_no_standing_answer_and_names_nothing_the_planner_asked() {
+    use bravebot_agent::confirm::{Carried, Confined, Remembered, RunRequest};
+    use bravebot_agent::reach::Reached;
+    use bravebot_sandbox::scope::Scope;
+    let request = |remembered: Vec<Remembered>| {
+        let pipeline =
+            bravebot_core::command::Pipeline::new(vec![bravebot_core::command::Stage::new(
+                "sh",
+                vec!["deploy.sh".into()],
+            )]);
+        let mut request = RunRequest::from_pipeline(&pipeline, &["/bin/sh".into()], "/tmp");
+        request.confined = Some(Confined {
+            reads_the_machine: false,
+            directories: vec![],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested: vec![],
+            requested_reaches: vec![],
+            carried: vec![Carried {
+                program: "sh".into(),
+                toolchain: None,
+                scope: None,
+                reaches: vec![],
+                identity: None,
+                network: false,
+                remembered,
+            }],
+            writes_git_directories: false,
+        });
+        request
+    };
+    let kept = |reached| Remembered {
+        reached,
+        write: false,
+        allowed: "2026-10-07".into(),
+    };
+
+    let control = wire::run_request(1, &request(vec![]));
+    assert_eq!(control["canBeRemembered"], json!(true));
+    assert_eq!(control["requestedScopes"], json!([]));
+    assert_eq!(control["vouches"].as_array().expect("vouches").len(), 1);
+
+    // A directory kept with `/reach` is not a credential scope, so it leaves the answer as it was.
+    let directory = wire::run_request(
+        2,
+        &request(vec![kept(Reached::Directory("/tmp/data".into()))]),
+    );
+    assert_eq!(directory["canBeRemembered"], json!(true));
+
+    let value = wire::run_request(3, &request(vec![kept(Reached::Scope(Scope::Aws))]));
+    assert_eq!(value["canBeRemembered"], json!(false));
+    assert_eq!(value["requestedScopes"], json!([]));
+    assert_eq!(value["vouches"], json!([]));
+    let sentences = value["confinement"]["sentences"].to_string();
+    assert!(
+        sentences.contains("remembered for this command"),
+        "the kept scope did not reach the desktop as a confinement sentence: {sentences}"
+    );
+}
+
+/// RUN-8, PROMPT-11: the desktop draws `vouches[].display`, so the entry a yes would make for
+/// `sh check.sh > /dev/null` reaches it with its redirection. A display without the route would
+/// tell the person the grant is for the bare line, which the entry does not cover.
+#[test]
+fn a_run_prompt_draws_the_entry_for_a_discarding_line_with_its_route() {
+    use bravebot_agent::confirm::RunRequest;
+    use bravebot_core::command::{Plan, Route, Step, Steps};
+    let request = RunRequest {
+        reach_record: None,
+        unconfined: false,
+        key_choice: None,
+        confined: None,
+        record: None,
+        pattern: None,
+        stdin: None,
+        plan: Plan {
+            line: "sh check.sh > /dev/null".into(),
+            directory: "/tmp".into(),
+            steps: Steps::Pipeline(vec![Step {
+                program: "sh".into(),
+                resolved: "/bin/sh".into(),
+                started_as: "/bin/sh".into(),
+                args: vec!["check.sh".into()],
+                matched: Vec::new(),
+                environment: vec![],
+                expansions: vec![],
+                routes: vec![Route::Stdout {
+                    path: "/dev/null".into(),
+                    append: false,
+                }],
+            }]),
+            writes: vec![],
+            reads: vec![],
+            stdin: None,
+        },
+        classified: Default::default(),
+        protected: false,
+        destinations: Vec::new(),
+    };
+    let value = wire::run_request(3, &request);
+    assert_eq!(value["canBeRemembered"], json!(true));
+    let vouches = value["vouches"].as_array().expect("vouches");
+    assert_eq!(vouches.len(), 1);
+    assert_eq!(
+        vouches[0]["display"],
+        json!("/bin/sh check.sh > /dev/null"),
+        "the entry was drawn without its route: {vouches:?}"
+    );
+}
+
 /// A line with nothing that forces a question every time has a standing answer, so the front end
 /// is told it may offer one.
 #[test]
@@ -1900,6 +2064,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
             preview: "part".into(),
             label: "(U,priv)".into(),
             truncated: true,
+            hidden: 0,
             verdict: Verdict::Safe,
             reason: Some("advice".into()),
             reason_label: Some("(U,priv)".into()),
@@ -2140,6 +2305,7 @@ fn a_server_question_carries_the_declaration_and_no_stored_value() {
         declaration: &declaration,
         program: Some(&program),
         changed: true,
+        plugin: None,
     };
 
     let sent = wire::mcp_server_request(3, &question);
@@ -2227,14 +2393,25 @@ fn a_standing_mcp_answer_takes_an_approval_and_a_literal_true() {
 /// the authority the agent took out of the destination (SERVERS-7, SERVERS-8, SERVERS-11).
 #[test]
 fn the_mcp_questions_carry_what_a_card_draws() {
-    use bravebot_agent::confirm::{ListedTool, McpCallRequest, MoveRequest, ToolListRequest};
+    use bravebot_agent::confirm::{
+        ListedTool, ListedToolArgument, McpCallRequest, MoveRequest, ToolListRequest,
+    };
     let tools = wire::mcp_tools_request(
         1,
         &ToolListRequest {
             alias: "weather".into(),
             tools: vec![ListedTool {
                 name: "weather:get_forecast".into(),
-                arguments: vec!["city (string, required)".into()],
+                arguments: vec![
+                    ListedToolArgument {
+                        text: "city (string, required)".into(),
+                        choices: Vec::new(),
+                    },
+                    ListedToolArgument {
+                        text: "unit (string)".into(),
+                        choices: vec!["metric".into(), "a), y (string".into()],
+                    },
+                ],
                 description: Some("the forecast".into()),
                 read_only: true,
             }],
@@ -2246,7 +2423,11 @@ fn the_mcp_questions_carry_what_a_card_draws() {
     );
     assert_eq!(
         tools["tools"],
-        json!([{"name": "weather:get_forecast", "arguments": ["city (string, required)"],
+        json!([{"name": "weather:get_forecast",
+            "arguments": [
+                {"text": "city (string, required)", "choices": []},
+                {"text": "unit (string)", "choices": ["metric", "a), y (string"]},
+            ],
             "description": "the forecast", "read_only": true}])
     );
     assert_eq!(tools["refused"], 2);

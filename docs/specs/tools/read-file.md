@@ -36,6 +36,7 @@ bytes at another.
 `verified-by: bravebot_core::policy::a_read_from_an_unvouched_path_is_untrusted`
 `verified-by: bravebot_core::policy::a_read_from_a_trusted_path_is_trusted`
 `verified-by: bravebot_agent::turn::a_read_the_planner_may_not_see_still_says_when_no_file_is_there`
+`verified-by: bravebot_agent::turn::a_read_the_planner_may_not_see_still_says_when_the_file_is_binary`
 
 <a id="READ-2"></a>
 ### READ-2: a long file is paged, and says where to continue from
@@ -124,7 +125,7 @@ UTF-8 over a UTF-16 file.
 `verified-by: bravebot_agent::workspace::a_utf8_file_pages_without_a_decoding`
 `verified-by: bravebot_agent::workspace::nulls_without_a_byte_order_mark_are_still_binary`
 `verified-by: bravebot_agent::workspace::a_whole_read_of_a_file_that_is_not_utf8_is_refused_as_another_encoding`
-`verified-by: bravebot_agent::workspace::a_slot_is_never_filled_from_a_decoding_of_another_encoding`
+`verified-by: bravebot_agent::workspace::a_whole_page_and_a_plans_page_refuse_a_file_in_another_encoding`
 `verified-by: bravebot_agent::manifest::a_paged_read_in_a_plan_never_carries_a_decoding_of_another_encoding`
 `verified-by: bravebot_agent::workspace::a_deferred_read_of_a_file_in_another_encoding_is_reported_as_text`
 `verified-by: bravebot_agent::workspace::a_page_for_a_slot_decodes_a_file_in_another_encoding_without_a_note`
@@ -187,7 +188,12 @@ A file whose extension names a picture or a PDF is read as bytes, encoded into a
 handed back as a reference. The planner is shown one only where `vet_content` let it through, and a
 vouched-for directory does not change that: what the trust map answers is whether a file's **text**
 may be read, and a picture has none. Nothing offers to vouch for one either, because a yes would
-grant the reading of text there is none of.
+grant the reading of text there is none of. That holds for a name the planner typed. A `path_ref`
+is offered for a vouch whatever extension the name behind it has ([TRUST-8](../trust-map.md#TRUST-8)),
+since the name is not the planner's to learn. What the read hands back for a `path_ref` does not
+depend on that extension either: where the file may be read it is read as any file is, by what it
+holds ([READ-3](#READ-3)), so a `.png` and a `.txt` with the same bytes give the same result, and
+the picture handling below is for a name the planner typed.
 
 The reference says what kind of thing it is rather than how many lines it has, because a line count
 over base64 describes nothing a reader can act on. The person watching is shown rows saying the same
@@ -215,13 +221,15 @@ as it answers for text. It never passes through the gate a paste does, and the t
 offer and the read are untouched by it.
 
 **The media type is the driver's.** From a closed table of extensions, shared with the one a drop
-uses, never sniffed from the bytes. It ends up in the `data:` URI where it is routing, so deciding
+uses, applied to a name the planner typed and never sniffed from the bytes. It ends up in the
+`data:` URI where it is routing, so deciding
 it from content would be deciding a destination from content. A file cannot become a picture by
 holding something that looks like one, and a picture cannot become text by being called `.txt`:
 either way the extension is what was decided from, and it is part of a path a person can read.
 
 `verified-by: bravebot_agent::turn::a_picture_is_never_shown_to_the_planner`
 `verified-by: bravebot_agent::turn::a_picture_is_not_offered_for_vouching`
+`verified-by: bravebot_agent::turn::a_reference_is_offered_for_vouching_whatever_the_name_behind_it_is`
 `verified-by: bravebot_agent::turn::a_processor_is_given_a_picture_as_a_picture`
 `verified-by: bravebot_agent::turn::a_picture_a_person_opens_and_lets_through_is_attached_after_the_results`
 `verified-by: bravebot_agent::turn::a_picture_read_from_a_file_is_described_to_the_person_and_not_drawn_as_base64`
@@ -386,12 +394,22 @@ back each time. A conversation is re-sent whole on every round, so each copy is 
 the rounds after it, to tell the planner what it already had.
 
 `verified-by: bravebot_agent::turn::a_repeat_read_of_an_untouched_file_is_answered_with_a_notice`
+`verified-by: bravebot_agent::turn::a_repeat_read_notice_names_the_window_that_was_asked_for`
+`verified-by: bravebot_agent::turn::a_repeat_read_of_a_path_a_gate_now_refuses_is_refused_and_not_noticed`
+`verified-by: bravebot_agent::turn::a_read_refused_for_a_credential_is_not_a_window_the_planner_holds`
+`verified-by: bravebot_agent::turn::a_read_whose_result_carried_no_call_id_is_not_a_window_the_planner_holds`
+`verified-by: bravebot_agent::turn::a_read_that_failed_is_not_a_window_the_planner_holds`
 `verified-by: bravebot_agent::turn::a_file_written_since_it_was_shown_is_sent_again`
+`verified-by: bravebot_agent::turn::a_same_size_rewrite_that_leaves_the_modification_time_alone_is_answered_with_a_notice`
+`verified-by: bravebot_agent::turn::a_rewrite_of_the_same_bytes_is_answered_with_the_lines_again`
 `verified-by: bravebot_agent::turn::a_different_window_of_the_same_file_is_not_answered_with_a_notice`
 `verified-by: bravebot_agent::turn::a_repeat_read_of_a_file_the_planner_may_not_see_is_not_a_notice`
 `verified-by: bravebot_agent::conversation::compaction_forgets_the_reads_whose_rounds_it_removed_and_keeps_the_others`
 `verified-by: bravebot_agent::conversation::a_kept_read_follows_its_message_to_its_new_position`
 `verified-by: bravebot_agent::conversation::a_window_shown_again_is_recorded_under_its_latest_token`
+`verified-by: bravebot_agent::conversation::a_read_whose_result_was_dropped_is_forgotten`
+`verified-by: bravebot_agent::turn::a_read_repeated_after_its_result_was_dropped_sends_the_lines_again`
+`verified-by: bravebot_agent::turn::a_read_of_a_file_shown_before_a_resume_sends_the_lines_again`
 `verified-by: bravebot_agent::workspace::requests_that_come_to_the_same_lines_are_one_window`
 
 <a id="READ-9"></a>

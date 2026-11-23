@@ -12,7 +12,8 @@
 //! that list.
 
 use crate::confirm::{
-    CallDecision, Confirmer, Decision, ListedTool, McpCallRequest, MoveRequest, ToolListRequest,
+    CallDecision, Confirmer, Decision, ListedTool, ListedToolArgument, McpCallRequest, MoveRequest,
+    ToolListRequest,
 };
 use crate::processor::Chat;
 use crate::report::{IgnoreReports, Reporter};
@@ -37,7 +38,7 @@ use bravebot_mcp::{
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -114,6 +115,10 @@ pub struct Reached {
     ask_every_call: bool,
     /// The arguments of its tools the declaration says take a choice (SERVERS-22).
     choice_arguments: ChoiceArguments,
+    /// The arguments of its tools the declaration says a row of an `apply` step may fill.
+    apply_arguments: bravebot_config::mcp::ApplyArguments,
+    /// The tools the declaration marks plan-covered in an `apply` step (SERVERS-26).
+    covered_tools: bravebot_config::mcp::CoveredTools,
     /// The headers and bearer token the declaration names, as the environment gave them when the
     /// server was started, which a server moved during a turn is reached with (SERVERS-18).
     headers: Vec<(String, String)>,
@@ -123,6 +128,8 @@ pub struct Reached {
     /// The sandbox itself, where it runs in one bravebot made for it, held so the
     /// sandbox is removed once the server has stopped and not before.
     sandbox: Option<Box<dyn std::any::Any + Send + Sync>>,
+    /// The installed plugin that carries the server, where one does (PLUGIN-7).
+    plugin: Option<String>,
 }
 
 impl Reached {
@@ -142,9 +149,12 @@ impl Reached {
             exclude_tools: Vec::new(),
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
+            apply_arguments: Default::default(),
+            covered_tools: Default::default(),
             headers: Vec::new(),
             sandboxed: None,
             sandbox: None,
+            plugin: None,
         }
     }
 
@@ -182,6 +192,19 @@ impl Reached {
         self
     }
 
+    /// The same server, with the arguments of its tools its declaration says a row of an `apply`
+    /// step may fill.
+    pub fn applying(mut self, apply_arguments: bravebot_config::mcp::ApplyArguments) -> Self {
+        self.apply_arguments = apply_arguments;
+        self
+    }
+
+    /// The same server, with the tools its declaration marks plan-covered.
+    pub fn covered(mut self, tools: bravebot_config::mcp::CoveredTools) -> Self {
+        self.covered_tools = tools;
+        self
+    }
+
     /// The same server, with the filters its declaration put on its list, which a list read again
     /// after the server announced a change is held to as the first was (MCP-12).
     pub fn filtered_by(mut self, tools: &[String], exclude_tools: &[String]) -> Self {
@@ -200,6 +223,14 @@ impl Reached {
     #[cfg(test)]
     pub(crate) fn sent_headers(&self) -> &[(String, String)] {
         &self.headers
+    }
+
+    /// The same server, held as one the installed plugin called `plugin` carries (PLUGIN-7): a
+    /// turn hashes that plugin's directory again before it offers the server, and a call is refused
+    /// where the directory no longer matches the install's record.
+    pub(crate) fn of_plugin(mut self, plugin: &str) -> Self {
+        self.plugin = Some(plugin.to_string());
+        self
     }
 
     /// The same server, with the policy its process was started under (SERVERS-20). A server with
@@ -291,7 +322,8 @@ struct Argument {
 }
 
 impl Argument {
-    /// `city_name (string, required)`, as a list draws it.
+    /// `city_name (string, required)`, as a list draws it. The values of an `enum` are not in it:
+    /// they are the server's own strings and are drawn apart, behind the margin ([`Argument::listed`]).
     fn drawn(&self) -> String {
         let mut said: Vec<String> = Vec::new();
         match (&self.kind, &self.items) {
@@ -303,15 +335,21 @@ impl Argument {
             (Some(kind), None) => said.push(kind.clone()),
             (None, _) => {}
         }
-        if let Some(choices) = &self.choices {
-            said.push(choices.join(" | "));
-        }
         if self.required {
             said.push(t!(mcp_tools_argument_required).to_string());
         }
         match said.is_empty() {
             true => self.name.clone(),
             false => format!("{} ({})", self.name, said.join(", ")),
+        }
+    }
+
+    /// The argument as a person is asked about it: the client's text, and every value the server
+    /// lists kept as its own string, none cut and none joined to another.
+    fn listed(&self) -> ListedToolArgument {
+        ListedToolArgument {
+            text: self.drawn(),
+            choices: self.choices.clone().unwrap_or_default(),
         }
     }
 
@@ -362,6 +400,10 @@ struct Server {
     ask_every_call: bool,
     /// The arguments of its tools the declaration says take a choice (SERVERS-22).
     choice_arguments: ChoiceArguments,
+    /// The arguments of its tools the declaration says a row of an `apply` step may fill.
+    apply_arguments: bravebot_config::mcp::ApplyArguments,
+    /// The tools the declaration marks plan-covered in an `apply` step (SERVERS-26).
+    covered_tools: bravebot_config::mcp::CoveredTools,
     /// The headers and bearer token its first connection sent, which a move sends to the new
     /// destination as well (SERVERS-18).
     headers: Vec<(String, String)>,
@@ -372,6 +414,8 @@ struct Server {
     sandboxed: Option<Sandboxed>,
     /// After `connection` for the same reason: the sandbox is removed once the server has stopped.
     _sandbox: Option<Box<dyn std::any::Any + Send + Sync>>,
+    /// The installed plugin that carries the server, where one does (PLUGIN-7).
+    plugin: Option<String>,
 }
 
 struct Shared {
@@ -483,10 +527,13 @@ impl Session {
                     exclude_tools: reached.exclude_tools,
                     ask_every_call: reached.ask_every_call,
                     choice_arguments: reached.choice_arguments,
+                    apply_arguments: reached.apply_arguments,
+                    covered_tools: reached.covered_tools,
                     headers: reached.headers,
                     _home: reached.home,
                     sandboxed: reached.sandboxed,
                     _sandbox: reached.sandbox,
+                    plugin: reached.plugin,
                 })
             })
             .collect();
@@ -567,6 +614,39 @@ impl Session {
             held.revoke_mcp_call(&ServerAlias::new(server.alias.as_str()));
         }
         held
+    }
+
+    /// `held` less the grant for each server of an installed plugin that may not run now: the
+    /// plugin is turned off, or its directory, hashed again, is not the one the install recorded
+    /// (PLUGIN-7, PLUGIN-11). A plugin found changed is queued in `answers` to be named once in the
+    /// session. The hash is used only to refuse.
+    pub fn without_plugins_that_may_not_run(
+        &self,
+        mut held: CapabilitySet,
+        answers: &crate::plugin_hooks::Answers,
+    ) -> CapabilitySet {
+        for server in &self.0.servers {
+            if let Some(stop) = self.plugin_stop(server) {
+                held.revoke_mcp_call(&ServerAlias::new(server.alias.as_str()));
+                if stop == crate::plugin_servers::Stop::Changed
+                    && let Some(plugin) = &server.plugin
+                {
+                    answers.stop_server(plugin);
+                }
+            }
+        }
+        held
+    }
+
+    /// Why the server may not be used now, where it is a plugin's that may not: the plugin is turned
+    /// off, or its directory does not hash to the install's record. A session with no state
+    /// directory cannot hold a plugin's server to either, so it refuses one.
+    fn plugin_stop(&self, server: &Server) -> Option<crate::plugin_servers::Stop> {
+        let plugin = server.plugin.as_deref()?;
+        match self.0.directory.as_deref() {
+            Some(directory) => crate::plugin_servers::may_start(directory, plugin).err(),
+            None => Some(crate::plugin_servers::Stop::Changed),
+        }
     }
 
     /// One grant for each server reached, naming it and no other (SERVERS-9).
@@ -1046,6 +1126,23 @@ impl Session {
         server.choice_arguments.get(tool)
     }
 
+    /// The kind each argument of the tool `tool` of the server reached as `alias` may take in a
+    /// row of an `apply` step, as its declaration says.
+    fn apply_arguments(&self, alias: &str, tool: &str) -> Option<&BTreeMap<String, String>> {
+        let server = self.0.servers.iter().find(|server| server.alias == alias)?;
+        server.apply_arguments.get(tool)
+    }
+
+    /// Whether the declaration of the server reached as `alias` marks `tool` plan-covered in an
+    /// `apply` step (SERVERS-26).
+    fn covered(&self, alias: &str, tool: &str) -> bool {
+        self.0
+            .servers
+            .iter()
+            .find(|server| server.alias == alias)
+            .is_some_and(|server| server.covered_tools.contains(tool))
+    }
+
     /// Whether answer 2 was given about this tool in this project.
     fn stands(&self, alias: &str, tool: &str) -> bool {
         self.0.directory.as_deref().is_some_and(|directory| {
@@ -1090,6 +1187,11 @@ impl Session {
         arguments: Value,
     ) -> McpResult<ToolOutput> {
         let server = self.reached(alias)?;
+        if self.plugin_stop(server).is_some() {
+            return Err(McpError::Transport(format!(
+                "{alias} may not run now: its plugin is off or no longer matches its record"
+            )));
+        }
         match &mut *held(&server.connection) {
             Connection::Stdio(server) => server.call_tool(policy, tool, arguments),
             Connection::Http(server) => server.call_tool(policy, egress, tool, arguments),
@@ -1106,9 +1208,9 @@ impl Session {
         arguments: &[(String, String)],
     ) -> McpResult<Labelled<String>> {
         let server = self.reached(alias)?;
-        if server.sandboxed.is_some() {
+        if server.sandboxed.is_some() || self.plugin_stop(server).is_some() {
             return Err(McpError::Transport(format!(
-                "{alias} is called by manifest runs alone"
+                "{alias} is called by manifest runs alone, or its plugin may not run now"
             )));
         }
         match &mut *held(&server.connection) {
@@ -1418,7 +1520,7 @@ fn listed(alias: &str, text: &str) -> Vec<ListedTool> {
         .into_iter()
         .map(|drawn| ListedTool {
             name: format!("{alias}:{}", drawn.name),
-            arguments: drawn.arguments.iter().map(Argument::drawn).collect(),
+            arguments: drawn.arguments.iter().map(Argument::listed).collect(),
             description: drawn.description,
             read_only: drawn.read_only,
         })
@@ -1646,6 +1748,8 @@ pub struct Callable {
 pub struct CallableArgument {
     pub name: String,
     pub kind: Option<String>,
+    /// The type of each item, where the argument is an array and the list says.
+    pub items: Option<String>,
     pub required: bool,
 }
 
@@ -2001,6 +2105,17 @@ impl Offer {
         self.session.choice_arguments(alias, tool)
     }
 
+    /// The kind each argument of the tool `tool` of the server `alias` may take in a row of an
+    /// `apply` step, where its declaration names any.
+    pub fn apply_arguments(&self, alias: &str, tool: &str) -> Option<&BTreeMap<String, String>> {
+        self.session.apply_arguments(alias, tool)
+    }
+
+    /// Whether the declaration of the server `alias` marks `tool` plan-covered.
+    pub fn covered(&self, alias: &str, tool: &str) -> bool {
+        self.session.covered(alias, tool)
+    }
+
     /// The arguments of the tool `tool` of the server `alias` that are offered as a choice: those
     /// its declaration names, less those the server lists an argument `<argument>_ref` for itself
     /// (SERVERS-22). That argument is the server's, and a call that gives it is sent as written.
@@ -2039,6 +2154,7 @@ impl Offer {
                     .map(|argument| CallableArgument {
                         name: argument.name.clone(),
                         kind: argument.kind.clone(),
+                        items: argument.items.clone(),
                         required: argument.required,
                     })
                     .collect(),
@@ -2215,6 +2331,20 @@ fn fill_from_a_choice<'a, S: Sink>(
     }))
 }
 
+/// Whether any text in `value`, a name or a string, holds a character the call's question writes
+/// out because it would draw as nothing or as something else (PROMPT-13).
+fn holds_a_hidden_character(value: &Value) -> bool {
+    match value {
+        Value::String(text) => bravebot_core::invisible::spelled_code(text).hidden > 0,
+        Value::Array(items) => items.iter().any(holds_a_hidden_character),
+        Value::Object(pairs) => pairs.iter().any(|(name, item)| {
+            bravebot_core::invisible::spelled_code(name).hidden > 0
+                || holds_a_hidden_character(item)
+        }),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
+}
+
 /// Put one call to the person and make it (SERVERS-7).
 ///
 /// A `deny` rule refuses it before anybody is asked. Then it asks, unless a rule allows the tool or
@@ -2226,6 +2356,12 @@ fn fill_from_a_choice<'a, S: Sink>(
 /// declaration says takes one, always asks. The question draws the number, and the number is put
 /// into the argument only after the answer, by [`Policy::carry_a_choice`] (ROUTE-10, MCP-14).
 /// `slots` holds the choices of the turn making the call, and a plan has none to give.
+///
+/// `plan_approved` says the person approved the plan whose line showed this call with every
+/// argument it sends, which answers the default question (MANIFEST-15). A plan run in plan mode,
+/// or one bypassing approved, passes false, so the call is asked at its step there. A call whose
+/// arguments hold a character the plan's line draws as nothing is asked at its step too, where the
+/// question writes each one out.
 #[expect(
     clippy::too_many_arguments,
     reason = "the arguments are the policy, offer, egress, confirmer, reporter and the alias, tool and arguments of a call"
@@ -2244,6 +2380,7 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
     tool: &str,
     arguments: &Value,
     slots: Option<&mut SlotStore>,
+    plan_approved: bool,
 ) -> Called {
     let name = format!("{alias}:{tool}");
     if let Err(denial) = policy.before_mcp_call_rules(alias, tool) {
@@ -2281,6 +2418,8 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
     // An answer recorded for the tool before the declaration said so is not read.
     let standing = if every_call {
         McpStanding::AskedEveryCall
+    } else if plan_approved && !holds_a_hidden_character(arguments) {
+        McpStanding::PlanApproved
     } else if session.stands(alias, tool) {
         McpStanding::StoppedAsking
     } else {
@@ -2445,15 +2584,182 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
         Ok(result) => Called::Answered(result),
         Err(McpError::ToolFailed { detail, .. }) => Called::Failed(detail),
         Err(error @ (McpError::Server { .. } | McpError::Unusable(_))) => {
-            Called::Unusable(format!("error: calling {name} failed: {error}"))
+            Called::Unusable(reply_failure(&name, &error))
         }
         Err(error) => Called::Problem(format!("error: calling {name} failed: {error}")),
     }
 }
 
+/// A typed value as JSON. The resolver typed it as the tool's list declares, so this only carries
+/// it, and a number the resolver keeps finite always has a JSON form.
+fn wire(sent: bravebot_core::apply::Sent) -> Value {
+    use bravebot_core::apply::Sent;
+    match sent {
+        Sent::Text(text) => Value::String(text),
+        Sent::Integer(number) => Value::from(number),
+        Sent::Number(number) => {
+            serde_json::Number::from_f64(number).map_or(Value::Null, Value::Number)
+        }
+        Sent::Switch(on) => Value::Bool(on),
+        Sent::Array(values) => Value::Array(values.into_iter().map(wire).collect()),
+    }
+}
+
+/// Make call `index` of a list the person approved for an `apply` step, through the gate that
+/// spends the grant their answer minted for exactly that call (`docs/design/manifest-apply.md`).
+///
+/// Nobody is asked here: the list was the question, and it covered this call with every value
+/// shown, or `covered` says the person's approval of the plan did (MANIFEST-17), which is recorded
+/// once the rules let the call through and before it is sent, so a call with no reply is still
+/// credited to it. A `deny` rule is read again first, as for every call, and a move the server answers with
+/// is put to the person as [`call`] puts it. The reply is classified as [`call`] classifies it, so
+/// a failure the server reported is told apart by the protocol's `isError` and never by its text.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the call's policy, offer, egress, people to ask and the approved list, as `call` takes"
+)]
+pub(crate) fn call_applied<S: Sink, C: Confirmer, R: Reporter>(
+    policy: &mut Policy<'_, S>,
+    offer: &Offer,
+    egress: &bravebot_net::Egress,
+    confirmer: &mut C,
+    reporter: &mut R,
+    alias: &str,
+    index: usize,
+    resolved: &Labelled<bravebot_core::apply::Resolved>,
+    covered: bool,
+) -> Called {
+    let (tool, arguments) = match policy.carry_applied_call(alias, index, resolved) {
+        Ok(carried) => carried,
+        Err(denial) => return Called::Problem(format!("refused: {denial}")),
+    };
+    let name = format!("{alias}:{tool}");
+    if let Err(denial) = policy.before_mcp_call_rules(alias, &tool) {
+        return Called::Problem(format!("refused: {denial}"));
+    }
+    if covered {
+        policy.record_plan_covered_call(alias, &tool);
+    }
+    // Each value was typed by the resolver as the vouched list gives its argument.
+    let arguments = Value::Object(
+        arguments
+            .into_iter()
+            .map(|(key, sent)| (key, wire(sent)))
+            .collect(),
+    );
+    let session = &offer.session;
+    let answered = following_a_move(
+        policy,
+        session,
+        egress,
+        confirmer,
+        reporter,
+        alias,
+        |policy| session.call(policy, egress, alias, &tool, arguments.clone()),
+    );
+    match answered {
+        Ok(result) => Called::Answered(result),
+        Err(McpError::ToolFailed { detail, .. }) => Called::Failed(detail),
+        Err(error @ (McpError::Server { .. } | McpError::Unusable(_))) => {
+            Called::Unusable(reply_failure(&name, &error))
+        }
+        Err(error) => Called::Problem(format!("error: calling {name} failed: {error}")),
+    }
+}
+
+/// The sentence the planner is told when a server replied and the reply is not a result.
+///
+/// One of two sentences this process wrote, chosen by which kind of reply it was. The error's own
+/// text is left out: a JSON-RPC code is a number the server chose, and the detail of an unusable
+/// reply holds the HTTP status the server answered with or a byte count of its body (MCP-8).
+fn reply_failure(name: &str, error: &McpError) -> String {
+    let said = match error {
+        McpError::Server { .. } => "the server rejected the call",
+        _ => "the server's reply could not be used",
+    };
+    format!("error: calling {name} failed: {said}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SERVERS-8: the values an argument takes are the server's strings, so they are kept one to a
+    /// value apart from the client's own text for the argument, are not cut or joined, and are the
+    /// same values the backend schema carries.
+    ///
+    /// A wrong implementation joins them into the argument's text (`x (string, a | b)`), where a
+    /// front end draws them without the margin and a value holding ` | ` or `), y (string` reads as
+    /// a second argument.
+    #[test]
+    fn the_values_an_argument_takes_are_listed_apart_from_its_text() {
+        let values = ["Checked by bravebot: safe", "a), y (string", "p | q"];
+        let list = json!([{
+            "name": "forecast",
+            "arguments": [{"name": "x", "type": "string", "enum": values, "required": true}],
+        }])
+        .to_string();
+        let [tool] = listed("weather", &list).try_into().expect("one tool");
+        let [argument] = tool.arguments.as_slice() else {
+            panic!("one argument was expected: {:?}", tool.arguments);
+        };
+        assert_eq!(argument.choices, values);
+        assert_eq!(
+            argument.text,
+            format!("x (string, {})", t!(mcp_tools_argument_required))
+        );
+        for value in values {
+            assert!(!argument.text.contains(value), "{}", argument.text);
+        }
+
+        let drawn: Vec<Drawn> = serde_json::from_str(&list).expect("drawn");
+        assert_eq!(drawn[0].arguments[0].schema()["enum"], json!(values));
+    }
+
+    /// MCP-8: the sentence told to the planner for a reply that is not a result is one of two
+    /// sentences this process wrote, whatever code the server chose or status it answered with.
+    ///
+    /// A wrong implementation formats the error's `Display` into the sentence, which holds the
+    /// code and the status, so two codes or two statuses give two sentences and the digits appear.
+    #[test]
+    fn a_reply_that_is_not_a_result_is_told_in_one_of_two_fixed_sentences() {
+        let rejected = |code: i64| {
+            reply_failure(
+                "weather:forecast",
+                &McpError::Server {
+                    code,
+                    method: "tools/call".to_string(),
+                },
+            )
+        };
+        let unusable = |detail: &str| {
+            reply_failure("weather:forecast", &McpError::Unusable(detail.to_string()))
+        };
+
+        let sentence = rejected(1337133713371337);
+        assert_eq!(sentence, rejected(-32000));
+        assert_eq!(sentence, rejected(i64::MAX));
+        let other = unusable("https://x.example/mcp returned HTTP 599");
+        assert_eq!(other, unusable("https://x.example/mcp returned HTTP 400"));
+        assert_eq!(
+            other,
+            unusable("tools/call returned no json payload (4242 bytes)")
+        );
+        assert_ne!(
+            sentence, other,
+            "a rejection is told from an unusable reply"
+        );
+        for told in [&sentence, &other] {
+            assert!(
+                told.starts_with("error: calling weather:forecast failed: "),
+                "{told}"
+            );
+            assert!(
+                !told.chars().any(|c| c.is_ascii_digit()),
+                "a number a server chose reached the sentence: {told}"
+            );
+        }
+    }
 
     /// A server only a manifest run calls is never asked for a prompt by a turn: the request is
     /// refused before anything is sent. The server's address answers nothing, so a request that
@@ -2532,6 +2838,79 @@ mod tests {
             !failed.contains("no failure reported"),
             "a failed call was described as reporting no failure: {failed}"
         );
+    }
+
+    /// An offer of two tools, the first under a wire name `padding` characters longer than the
+    /// second tool's, so the length of its definitions changes by one character for each step.
+    fn two_tools_padded_by(padding: usize) -> Offer {
+        let first = format!("mcp__weather__get_forecast{}", "x".repeat(padding));
+        offer_for_test(&[
+            (first.as_str(), "weather", "get_forecast"),
+            ("mcp__weather__get_alerts", "weather", "get_alerts"),
+        ])
+    }
+
+    /// SERVERS-16: the weight of an offer is the length of the definitions a backend is sent for
+    /// all of its tools, at four characters a token, rounded up.
+    ///
+    /// A wrong implementation divides by three or five, rounds down, counts one tool only, or
+    /// weighs a deferred offer by the tools loaded so far, which are none, so an offer past the
+    /// size would weigh nothing once it was deferred.
+    #[test]
+    fn an_offers_weight_is_the_length_of_its_definitions_at_four_characters_a_token_rounded_up() {
+        let mut remainders = BTreeSet::new();
+        for padding in 0..4 {
+            let offer = two_tools_padded_by(padding);
+            let sent: usize = offer
+                .functions()
+                .iter()
+                .map(|tool| {
+                    serde_json::to_string(tool)
+                        .expect("a definition serialises")
+                        .len()
+                })
+                .sum();
+            remainders.insert(sent % 4);
+            assert_eq!(
+                offer.weight(),
+                sent.div_ceil(4) as u64,
+                "{sent} characters of definitions"
+            );
+
+            let deferred = offer.clone().deferring_above(0);
+            assert!(deferred.is_deferred());
+            assert_eq!(deferred.weight(), offer.weight());
+        }
+        assert_eq!(
+            remainders.len(),
+            4,
+            "the lengths tried must leave every remainder of four, or rounding up is not told from \
+             rounding down: {remainders:?}"
+        );
+    }
+
+    /// SERVERS-16: an offer is deferred where its weight is greater than the threshold, so a
+    /// threshold equal to the weight offers every tool in full.
+    ///
+    /// A wrong implementation defers at the threshold (`>=`), or defers below it.
+    #[test]
+    fn an_offer_is_deferred_only_where_its_weight_is_greater_than_the_threshold() {
+        let offer = two_tools_padded_by(0);
+        let weight = offer.weight();
+        assert!(
+            weight > 1,
+            "the fixture must weigh more than one token: {weight}"
+        );
+
+        let deferred_at = |threshold: u64| offer.clone().deferring_above(threshold).is_deferred();
+        assert!(deferred_at(0));
+        assert!(deferred_at(weight - 1));
+        assert!(
+            !deferred_at(weight),
+            "a threshold equal to the weight defers"
+        );
+        assert!(!deferred_at(weight + 1));
+        assert!(!deferred_at(u64::MAX));
     }
 
     fn pairs(typed: &str) -> Vec<(String, String)> {

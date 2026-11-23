@@ -14,6 +14,7 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+use bravebot_ui_bridge::allowlist::Answer;
 use bravebot_ui_bridge::host::{Ended, Host, MAX_LINE, Setup};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
@@ -47,7 +48,13 @@ struct Client {
 }
 
 impl Client {
-    fn attach(mut host: Host) -> Self {
+    /// A client that may give every answer.
+    fn attach(host: Host) -> Self {
+        Self::attach_giving(host, &Answer::ALL)
+    }
+
+    /// A client that may give only `answers`.
+    fn attach_giving(host: Host, answers: &'static [Answer]) -> Self {
         let (near, far) = UnixStream::pair().unwrap();
         // The reader ends by looking at `leaving` between reads. A read that waits for the
         // socket to be shut down can stay blocked on macOS.
@@ -77,7 +84,9 @@ impl Client {
             }
         });
         let served = std::thread::spawn(move || {
-            let ended = host.serve(far).expect("the channel serves");
+            let ended = host
+                .serve(far, "test", answers)
+                .expect("the channel serves");
             (host, ended)
         });
         Self {
@@ -99,6 +108,23 @@ impl Client {
             let message = self.said.recv_timeout(PATIENCE).expect("an answer");
             if message["id"] == id {
                 return message;
+            }
+        }
+    }
+
+    /// What the host said to this client before it answered a request, the answer last.
+    fn said_before_answering(&mut self, method: &str, params: Value) -> Vec<Value> {
+        self.next += 1;
+        let id = self.next;
+        let line = json!({"id": id, "method": method, "params": params});
+        writeln!(self.stream, "{line}").unwrap();
+        let mut said = Vec::new();
+        loop {
+            let message = self.said.recv_timeout(PATIENCE).expect("an answer");
+            let answered = message["id"] == id;
+            said.push(message);
+            if answered {
+                return said;
             }
         }
     }
@@ -182,6 +208,56 @@ fn a_method_the_host_does_not_offer_is_refused_and_does_nothing() {
         );
     }
     client.leave();
+}
+
+/// A reply that gives an answer the person did not let this client give is refused before the
+/// bridge sees it, whatever it names. One the client may give goes on to the bridge, which finds
+/// no such session. A host that checked only the method would let a client without `trust`
+/// answer the startup question.
+#[test]
+fn a_reply_the_client_may_not_give_is_refused_before_the_bridge_reads_it() {
+    let mut client = Client::attach_giving(a_host(Vec::new()), &[Answer::Confirm]);
+    for (method, params) in [
+        ("trust.reply", json!({"session": "s1", "trusted": true})),
+        (
+            "run.reply",
+            json!({"session": "s1", "request": 1, "decision": "approve"}),
+        ),
+        (
+            "fetch.reply",
+            json!({"session": "s1", "request": 1, "decision": "approve"}),
+        ),
+        (
+            "ask.reply",
+            json!({"session": "s1", "request": 1, "answers": []}),
+        ),
+    ] {
+        let answered = client.answered(method, params);
+        assert_eq!(
+            answered["error"]["code"], "not_allowed",
+            "{method}: {answered}"
+        );
+    }
+    let allowed = client.answered(
+        "confirm.reply",
+        json!({"session": "s1", "request": 1, "decision": "approve"}),
+    );
+    assert_eq!(allowed["error"]["code"], "no_such_session", "{allowed}");
+    client.leave();
+}
+
+/// `instance.info` tells a client which answers it may give, so it can show only the questions it
+/// can answer. Two clients of one host with different answers are told their own.
+#[test]
+fn instance_info_names_the_answers_of_the_client_that_asks() {
+    let mut first = Client::attach_giving(a_host(Vec::new()), &[Answer::Confirm, Answer::Trust]);
+    let said = first.answered("instance.info", json!({}));
+    assert_eq!(said["ok"]["answers"], json!(["confirm", "trust"]), "{said}");
+    let (host, _) = first.leave();
+    let mut second = Client::attach_giving(host, &[]);
+    let said = second.answered("instance.info", json!({}));
+    assert_eq!(said["ok"]["answers"], json!([]), "{said}");
+    second.leave();
 }
 
 #[test]
@@ -271,16 +347,59 @@ fn a_second_client_reaches_the_host_the_first_left() {
     second.leave();
 }
 
+/// Clients connected at once are each served, and each is told once that the host is ready: the
+/// ready event of a client that connects later does not reach one already connected.
+#[test]
+fn clients_connected_at_once_are_each_served_and_each_told_once_that_the_host_is_ready() {
+    let host = a_host(Vec::new());
+    let mut first = Client::attach_giving(host.clone(), &[Answer::Confirm]);
+    let before = first.said_before_answering("instance.info", json!({}));
+    assert!(
+        before
+            .iter()
+            .any(|message| message["event"] == "agent.ready"),
+        "{before:?}"
+    );
+    let mut second = Client::attach_giving(host.clone(), &[Answer::Trust]);
+    let said = second.answered("instance.info", json!({}));
+    assert_eq!(said["ok"]["answers"], json!(["trust"]), "{said}");
+    let before = first.said_before_answering("instance.info", json!({}));
+    assert!(
+        before
+            .iter()
+            .all(|message| message["event"] != "agent.ready"),
+        "the first client was told again that the host is ready: {before:?}"
+    );
+    first.leave();
+    second.leave();
+}
+
+/// A client that leaves takes none of the others with it.
+#[test]
+fn a_client_leaving_leaves_the_others_served() {
+    let host = a_host(Vec::new());
+    let first = Client::attach(host.clone());
+    let mut second = Client::attach(host.clone());
+    second.answered("instance.info", json!({}));
+    let (_, ended) = first.leave();
+    assert_eq!(ended, Ended::Closed);
+    let said = second.answered("instance.info", json!({}));
+    assert_eq!(said["ok"]["instance"], host.instance(), "{said}");
+    second.leave();
+}
+
 /// A client that stops reading must not stop the host: the host is blocked writing to it, so it
 /// would never read the client's end of the connection or see it go. Here the client sends more
 /// than the replies can fit in the socket, reads none of them, and closes its sending side.
 #[test]
 fn a_client_that_never_reads_does_not_wedge_the_host() {
     let (near, far) = UnixStream::pair().unwrap();
-    let mut host = a_host(Vec::new());
+    let host = a_host(Vec::new());
     let (ended, ending) = mpsc::channel();
     std::thread::spawn(move || {
-        let outcome = host.serve(far).expect("the channel serves");
+        let outcome = host
+            .serve(far, "test", &Answer::ALL)
+            .expect("the channel serves");
         let _ = ended.send(outcome);
     });
     let mut writer = near.try_clone().unwrap();
@@ -310,8 +429,11 @@ fn a_client_that_never_reads_does_not_wedge_the_host() {
 #[test]
 fn a_last_line_with_no_newline_is_not_run() {
     let (near, far) = UnixStream::pair().unwrap();
-    let mut host = a_host(Vec::new());
-    let served = std::thread::spawn(move || host.serve(far).expect("the channel serves"));
+    let host = a_host(Vec::new());
+    let served = std::thread::spawn(move || {
+        host.serve(far, "test", &Answer::ALL)
+            .expect("the channel serves")
+    });
     let mut writer = near.try_clone().unwrap();
     write!(
         writer,

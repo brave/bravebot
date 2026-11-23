@@ -26,16 +26,34 @@ use crate::value::Labelled;
 use std::collections::HashMap;
 use std::fmt;
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// Identifier for a slot. Trusted metadata: slot ids are chosen by the planner from
 /// trusted input, never derived from content.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(verus_keep_ghost, verus_verify, verifier::external_body)]
 pub struct SlotId(String);
+
+// Written out rather than derived, because Verus refuses a derived `Clone` on a type whose fields
+// it does not read.
+impl Clone for SlotId {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 impl SlotId {
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
 
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r@ == crate::policy::spec_slot_name(*self),
+    ))]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -101,11 +119,22 @@ impl std::error::Error for SlotError {}
 /// than a promise in its own right: [`crate::policy::Policy::materialise`] takes the meet with
 /// what the map says when the file is actually read, so a path that stopped being trusted in
 /// between cannot be read back as though it had not.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Deferred {
     path: String,
     label: Label,
     directory: bool,
+}
+
+/// Shows the label and whether the path is a directory, never the path: it is a filename out of a
+/// quarantined listing, and a formatted store must not carry it to a log line.
+impl fmt::Debug for Deferred {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Deferred")
+            .field("label", &format_args!("{}", self.label))
+            .field("directory", &self.directory)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Deferred {
@@ -132,7 +161,7 @@ impl Deferred {
 /// assumed the second answer was about the second file wrote eleven kilobytes of HTML into a
 /// Python script, and every gate passed: the destination was a path the planner named and a
 /// person approved, and the body was a slot it was entitled to use.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Home {
     /// No constraint. Content that a processor did not produce: a file read, a listing, the
     /// planner's own words.
@@ -154,6 +183,32 @@ pub enum Home {
     /// document, or a document beside something else. It may be written nowhere until something
     /// says which.
     Unsaid,
+    /// The document named is a decoding of another encoding, so the answer is for no file: the
+    /// document's own bytes may hold a byte order mark or bytes UTF-8 does not allow, and an
+    /// answer is always UTF-8, so writing it back would put UTF-8 where the file held something
+    /// else. Taken from the slot's own bit ([`SlotStore::is_decoded`]), never from the answer's
+    /// text, so it holds whatever a processor was told to do with a decoding.
+    Decoded { path: String, named_by: SlotId },
+}
+
+/// Shows which kind of home this is and, for [`Home::Only`] and [`Home::Decoded`], the slot that
+/// named it. Never the path, which is the filename of the one document the answer may replace.
+impl fmt::Debug for Home {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Anywhere => f.write_str("Anywhere"),
+            Self::Only { named_by, .. } => f
+                .debug_struct("Only")
+                .field("named_by", named_by)
+                .finish_non_exhaustive(),
+            Self::Scratch => f.write_str("Scratch"),
+            Self::Unsaid => f.write_str("Unsaid"),
+            Self::Decoded { named_by, .. } => f
+                .debug_struct("Decoded")
+                .field("named_by", named_by)
+                .finish_non_exhaustive(),
+        }
+    }
 }
 
 /// What a slot holds: the bytes, or the promise of them.
@@ -162,7 +217,7 @@ pub enum Home {
 /// address as well as a document: the planner can name the slot as somewhere to read from or
 /// write to without ever being told what the file is called, which is the only way to work in a
 /// directory whose filenames are themselves untrusted.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 enum Entry {
     Read {
         value: Labelled<String>,
@@ -234,6 +289,30 @@ enum Entry {
         decoded: bool,
     },
     Unread(Deferred),
+}
+
+/// Shows the kind of entry, its label, where an answer may go and whether the text is a decoding.
+/// Never the path, the verbatim path or the origin, which for a slot out of a quarantined listing
+/// are filenames chosen by whoever can create a file in the listed directory.
+impl fmt::Debug for Entry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Read {
+                value,
+                home,
+                picture,
+                decoded,
+                ..
+            } => f
+                .debug_struct("Read")
+                .field("value", value)
+                .field("home", home)
+                .field("picture", picture)
+                .field("decoded", decoded)
+                .finish_non_exhaustive(),
+            Self::Unread(deferred) => f.debug_tuple("Unread").field(deferred).finish(),
+        }
+    }
 }
 
 impl Entry {
@@ -344,7 +423,7 @@ impl From<String> for Fill {
 ///
 /// Holds `Labelled<String>` because slot content is always opaque text as far as the
 /// kernel is concerned; interpreting it is the job of whatever declassifies it.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct SlotStore {
     slots: HashMap<SlotId, Entry>,
     /// The numbers processors chose, each under a name of its own.
@@ -365,6 +444,38 @@ pub struct SlotStore {
 struct Choice {
     number: Labelled<u8>,
     spent: bool,
+}
+
+/// Shows each slot's id with its kind and label, and each choice's id with its label. Never a
+/// path, a verbatim path, a [`Home::Only`] path or an origin: a slot's address is untrusted
+/// content wherever the slot came out of a quarantined listing.
+impl fmt::Debug for SlotStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct Listed<'a, T>(Vec<(SlotId, &'a T)>);
+
+        impl<T: fmt::Debug> fmt::Debug for Listed<'_, T> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_map()
+                    .entries(self.0.iter().map(|(id, each)| (id, each)))
+                    .finish()
+            }
+        }
+
+        let slots = self
+            .text_names()
+            .into_iter()
+            .filter_map(|id| self.slots.get(&id).map(|entry| (id, entry)))
+            .collect();
+        let choices = self
+            .choice_names()
+            .into_iter()
+            .filter_map(|id| self.choices.get(&id).map(|choice| (id, choice)))
+            .collect();
+        f.debug_struct("SlotStore")
+            .field("slots", &Listed::<Entry>(slots))
+            .field("choices", &Listed::<Choice>(choices))
+            .finish()
+    }
 }
 
 impl SlotStore {
@@ -1322,5 +1433,165 @@ mod tests {
         );
         let rendered = format!("{inventory:?}");
         assert!(!rendered.contains("secret-content"));
+    }
+
+    /// A slot waiting on a file out of a quarantined listing is formatted by id, label and kind.
+    /// A derived `Debug` prints the filename, which whoever can create a file in the listed
+    /// directory chose.
+    #[test]
+    fn formatting_a_store_does_not_print_the_name_of_a_file_waiting_to_be_read() {
+        let mut store = SlotStore::new();
+        store
+            .defer(sid("ref:1"), "secret-plans.md", Label::untrusted_private())
+            .unwrap();
+        store
+            .defer_directory(sid("ref:2"), "secret-dir", Label::untrusted_private())
+            .unwrap();
+
+        let rendered = format!("{store:?}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+        assert!(!rendered.contains("secret-dir"), "{rendered}");
+        assert!(rendered.contains("ref:1"), "{rendered}");
+        assert!(rendered.contains("ref:2"), "{rendered}");
+        assert!(rendered.contains("Unread"), "{rendered}");
+        assert!(
+            rendered.contains(&Label::untrusted_private().to_string()),
+            "{rendered}"
+        );
+    }
+
+    /// Filling a slot copies the deferred name into `path`, `verbatim` and `origin`. None of the
+    /// three is printed, and the slot is still told apart by id, kind and label.
+    #[test]
+    fn formatting_a_store_does_not_print_the_name_a_read_slot_keeps() {
+        let mut store = SlotStore::new();
+        store
+            .defer(sid("ref:1"), "secret-plans.md", Label::untrusted_private())
+            .unwrap();
+        store
+            .fill(
+                &sid("ref:1"),
+                Labelled::new("body-text".to_string(), Label::untrusted_private()),
+                Default::default(),
+                false,
+            )
+            .unwrap();
+        store.set_origin(&sid("ref:1"), "from secret-origin.md");
+
+        let rendered = format!("{store:?}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+        assert!(!rendered.contains("secret-origin"), "{rendered}");
+        assert!(!rendered.contains("body-text"), "{rendered}");
+        assert!(rendered.contains("ref:1"), "{rendered}");
+        assert!(rendered.contains("Read"), "{rendered}");
+        assert!(
+            rendered.contains(&Label::untrusted_private().to_string()),
+            "{rendered}"
+        );
+    }
+
+    /// The file a processor's answer is for is a filename the planner was never shown, and is
+    /// printed by neither the home nor the store holding it. The slot that named it is printed.
+    #[test]
+    fn formatting_a_home_does_not_print_the_one_file_it_is_restricted_to() {
+        let home = Home::Only {
+            path: "secret-target.md".to_string(),
+            named_by: sid("ref:3"),
+        };
+        let rendered = format!("{home:?}");
+        assert!(!rendered.contains("secret-target"), "{rendered}");
+        assert!(rendered.contains("ref:3"), "{rendered}");
+        assert!(rendered.contains("Only"), "{rendered}");
+
+        let home = Home::Decoded {
+            path: "secret-target.md".to_string(),
+            named_by: sid("ref:3"),
+        };
+        let rendered = format!("{home:?}");
+        assert!(!rendered.contains("secret-target"), "{rendered}");
+        assert!(rendered.contains("ref:3"), "{rendered}");
+        assert!(rendered.contains("Decoded"), "{rendered}");
+
+        for (home, word) in [
+            (Home::Anywhere, "Anywhere"),
+            (Home::Scratch, "Scratch"),
+            (Home::Unsaid, "Unsaid"),
+        ] {
+            assert_eq!(format!("{home:?}"), word);
+        }
+
+        let mut store = SlotStore::new();
+        store
+            .writer_for(sid("ref:4"), Label::untrusted_private())
+            .unwrap()
+            .write("answer")
+            .unwrap();
+        store.set_home(&sid("ref:4"), home);
+        let rendered = format!("{store:?}");
+        assert!(!rendered.contains("secret-target"), "{rendered}");
+        assert!(rendered.contains("ref:3"), "{rendered}");
+        assert!(rendered.contains("ref:4"), "{rendered}");
+    }
+
+    /// A derived `Debug` lists the slots in the order the map holds them, which changes from one
+    /// store to the next. The hand-written one lists them in the order they were minted, so a log
+    /// line says the same thing every time and a field added to the store is not printed unless
+    /// somebody writes it into the impl.
+    #[test]
+    fn formatting_a_store_lists_its_slots_in_the_order_they_were_minted() {
+        let mut store = SlotStore::new();
+        for number in [7, 12, 3, 10, 1, 9, 2, 11, 5, 8, 4, 6] {
+            store
+                .defer(
+                    sid(&format!("ref:{number}")),
+                    "secret-plans.md",
+                    Label::untrusted_private(),
+                )
+                .unwrap();
+        }
+
+        let rendered = format!("{store:?}");
+        let mut last = 0;
+        for number in 1..=12 {
+            let at = rendered
+                .find(&format!("\"ref:{number}\""))
+                .unwrap_or_else(|| panic!("ref:{number} is listed: {rendered}"));
+            assert!(at > last, "ref:{number} is out of order: {rendered}");
+            last = at;
+        }
+    }
+
+    /// A choice is listed by name and label with its use, and the number is not printed.
+    #[test]
+    fn formatting_a_store_lists_a_choice_by_name_and_label_only() {
+        let mut store = SlotStore::new();
+        store
+            .store_choice(sid("ref:7"), Labelled::new(3u8, Label::untrusted_private()))
+            .unwrap();
+
+        let rendered = format!("{store:?}");
+        assert!(rendered.contains("ref:7"), "{rendered}");
+        assert!(
+            rendered.contains(&Label::untrusted_private().to_string()),
+            "{rendered}"
+        );
+        assert!(!rendered.contains('3'), "{rendered}");
+    }
+
+    /// A writer holds the store it writes into, so formatting one formats that store.
+    #[test]
+    fn formatting_a_writer_does_not_print_the_names_in_the_store_it_writes_into() {
+        let mut store = SlotStore::new();
+        store
+            .defer(sid("ref:1"), "secret-plans.md", Label::untrusted_private())
+            .unwrap();
+        let writer = store
+            .writer_for(sid("ref:2"), Label::untrusted_public())
+            .unwrap();
+
+        let rendered = format!("{writer:?}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+        assert!(rendered.contains("ref:1"), "{rendered}");
+        assert!(rendered.contains("ref:2"), "{rendered}");
     }
 }

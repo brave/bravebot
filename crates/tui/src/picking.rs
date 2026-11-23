@@ -32,7 +32,7 @@ pub enum Picking {
     Model(model_prompt::Picker),
     /// `/theme` alone. The theme under the cursor is in force while the picker is open.
     Theme(theme_prompt::Picker),
-    /// `/effort` alone.
+    /// `/effort` or `/effort session`, open in the scope the person typed.
     Effort(effort_prompt::Picker),
     /// `/config`.
     Editing(config_prompt::Picker),
@@ -43,9 +43,11 @@ pub enum Picking {
 /// What a person picked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Picked {
-    Model(Model),
+    /// The row, and how long the pick lasts.
+    Model(Model, model_prompt::Scope),
     Theme(Theme),
-    Effort(effort_prompt::Row),
+    /// The row, and how long the pick lasts.
+    Effort(effort_prompt::Row, model_prompt::Scope),
     Editing(config_prompt::Row),
 }
 
@@ -70,7 +72,10 @@ impl Picking {
                     model_prompt::Outcome::Cancel => Outcome::Cancel,
                     model_prompt::Outcome::Select => Outcome::Select,
                 };
-                step(outcome, picker.chosen().cloned(), Picked::Model)
+                let scope = picker.scope();
+                step(outcome, picker.chosen().cloned(), |model| {
+                    Picked::Model(model, scope)
+                })
             }
             Picking::Theme(picker) => {
                 let outcome = theme_prompt::press(picker, code, modifiers);
@@ -78,7 +83,10 @@ impl Picking {
             }
             Picking::Effort(picker) => {
                 let outcome = list_picker::handle_key(picker, code, modifiers);
-                step(outcome, picker.chosen().copied(), Picked::Effort)
+                let scope = picker.scope().unwrap_or_default();
+                step(outcome, picker.chosen().copied(), |row| {
+                    Picked::Effort(row, scope)
+                })
             }
             Picking::Editing(picker) => {
                 let outcome = list_picker::handle_key(picker, code, modifiers);
@@ -127,7 +135,10 @@ impl Picking {
                         model_prompt::Outcome::Cancel => Outcome::Cancel,
                         model_prompt::Outcome::Select => Outcome::Select,
                     };
-                step(outcome, picker.chosen().cloned(), Picked::Model)
+                let scope = picker.scope();
+                step(outcome, picker.chosen().cloned(), |model| {
+                    Picked::Model(model, scope)
+                })
             }
             Picking::Theme(picker) => {
                 let outcome = theme_prompt::click(picker, placed, mouse, last, now, wheel);
@@ -135,7 +146,10 @@ impl Picking {
             }
             Picking::Effort(picker) => {
                 let outcome = list_picker::handle_mouse(picker, placed, mouse, last, now, wheel);
-                step(outcome, picker.chosen().copied(), Picked::Effort)
+                let scope = picker.scope().unwrap_or_default();
+                step(outcome, picker.chosen().copied(), |row| {
+                    Picked::Effort(row, scope)
+                })
             }
             Picking::Editing(picker) => {
                 let outcome = list_picker::handle_mouse(picker, placed, mouse, last, now, wheel);

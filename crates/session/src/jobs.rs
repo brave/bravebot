@@ -365,6 +365,10 @@ pub struct Lease {
     _file: std::fs::File,
 }
 
+/// How long [`Roster::stop`] waits for a session to end before it is killed, for every client
+/// that stops one (BG-11).
+pub const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// The roster directory.
 #[derive(Debug, Clone)]
 pub struct Roster {
@@ -805,6 +809,260 @@ fn lock(_file: &std::fs::File, hold: Hold) -> bool {
     matches!(hold, Hold::Exclusive)
 }
 
+/// What [`refusal`] reads about a foreground session that is to be handed to a background one
+/// (BG-2).
+#[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each is a separate fact a refusal reads, and none is a state of another"
+)]
+pub struct Handing {
+    /// The mode the session's next turn runs in.
+    pub permission_mode: bravebot_agent::PermissionMode,
+    /// The sandbox mode the session's next turn runs its programs under.
+    pub sandbox: bravebot_sandbox::SandboxMode,
+    /// The sandbox mode the settings choose, which the background process runs in (SANDBOX-22).
+    pub settled: bravebot_sandbox::SandboxMode,
+    /// Whether a turn, a compaction, or a question beside the work is running. A front end that
+    /// waits for these before it decides passes `false`.
+    pub busy: bool,
+    /// Whether a loop, a goal or a watch is running, none of which the background session has.
+    pub keeps_running: bool,
+    /// Whether the session has a record on disk a background session can resume.
+    pub recorded: bool,
+    /// Whether this process leaves nothing behind (BG-1).
+    pub incognito: bool,
+}
+
+/// Why a foreground session may not be handed to a background one. Each front end says it in its
+/// own words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// Background sessions do not run on this system (BG-1).
+    Unsupported,
+    /// The session is in auto, and nobody would see what auto decided (BG-8).
+    Auto,
+    /// The session bypasses permissions (BG-8).
+    Bypass,
+    /// The session's sandbox mode is not the one the settings choose, which the background process
+    /// would run in instead.
+    SandboxMoved {
+        mode: bravebot_sandbox::SandboxMode,
+        settled: bravebot_sandbox::SandboxMode,
+    },
+    /// Something is running in the session.
+    Busy,
+    /// A loop, a goal or a watch would be dropped.
+    KeepsRunning,
+    /// The process is incognito and keeps no record.
+    Incognito,
+    /// No record has been written yet.
+    NothingRecorded,
+}
+
+impl Refusal {
+    /// Whether this refusal comes before a front end's own checks that follow the mode, such as the
+    /// terminal's refusal for a command-line option the background process would lose. Those are
+    /// said in [`refusal`]'s order only where this is false.
+    pub fn precedes_the_options(self) -> bool {
+        matches!(self, Self::Unsupported | Self::Auto | Self::Bypass)
+    }
+}
+
+/// The mode a foreground session goes on in once handed to a background one, or why it may not be
+/// (BG-2, BG-8).
+///
+/// The one decision both front ends make, in one order, so a session that fails several is told
+/// the same first reason by each.
+pub fn refusal(handing: &Handing) -> Result<Mode, Refusal> {
+    use bravebot_agent::PermissionMode;
+    if !cfg!(unix) {
+        return Err(Refusal::Unsupported);
+    }
+    let Some(mode) = Mode::of(handing.permission_mode) else {
+        return Err(match handing.permission_mode {
+            PermissionMode::Auto => Refusal::Auto,
+            _ => Refusal::Bypass,
+        });
+    };
+    if handing.sandbox != handing.settled {
+        return Err(Refusal::SandboxMoved {
+            mode: handing.sandbox,
+            settled: handing.settled,
+        });
+    }
+    if handing.busy {
+        return Err(Refusal::Busy);
+    }
+    if handing.keeps_running {
+        return Err(Refusal::KeepsRunning);
+    }
+    if handing.incognito {
+        return Err(Refusal::Incognito);
+    }
+    if !handing.recorded {
+        return Err(Refusal::NothingRecorded);
+    }
+    Ok(mode)
+}
+
+/// Why [`start_host`] started no background session. Each front end says it in its own words.
+#[derive(Debug)]
+pub enum StartError {
+    /// The line the session starts with could not be left for it, or the program could not be
+    /// started.
+    Spawn(std::io::Error),
+    /// The program started but did not come up and listen in time.
+    NotStarted,
+    /// Background sessions are not kept on this platform (BG-1).
+    Unsupported,
+}
+
+/// Start the background process for `id`, which is `program` run as the hidden `__bg-host`, and
+/// wait until it is live and listening (BG-2).
+///
+/// `first` is the line the process starts with, left where only it can take it; an empty one
+/// starts the session idle. A session started again runs in the directory it worked in, since its
+/// record is found from there. The process runs in `mode` for as long as it runs (BG-8). Once it is
+/// live a supervisor is made sure of (BG-11). The line is taken back on every failure.
+#[cfg(unix)]
+pub fn start_host(
+    program: &Path,
+    roster: &Roster,
+    id: &str,
+    first: &str,
+    directory: Option<&Path>,
+    mode: Mode,
+) -> Result<(), StartError> {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    roster
+        .leave_first_prompt(id, first)
+        .map_err(StartError::Spawn)?;
+    // The socket of the process that ended, which would otherwise be taken for the new one's. A
+    // live process's socket is its own, and another terminal may have started it a moment ago.
+    if !roster.get(id).is_some_and(|seen| seen.live)
+        && let Some(socket) = roster.socket_of(id)
+    {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a socket already gone is the state this wants"
+        )]
+        let _ = std::fs::remove_file(socket);
+    }
+    let mut command = host_command(program, id, directory, mode);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // Under the spawn gate, because the desktop bridge starts this too, and there a program started
+    // beside a control channel being made would hold both its ends (RPCVIEW-8).
+    if let Err(err) = bravebot_sandbox::process::starting_a_program(|| command.spawn()) {
+        let _ = roster.take_first_prompt(id);
+        return Err(StartError::Spawn(err));
+    }
+    let until = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < until {
+        if roster.get(id).is_some_and(|seen| seen.live)
+            && roster.socket_of(id).is_some_and(|s| s.exists())
+        {
+            ensure_supervisor(roster, program);
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = roster.take_first_prompt(id);
+    Err(StartError::NotStarted)
+}
+
+#[cfg(not(unix))]
+pub fn start_host(
+    _program: &Path,
+    _roster: &Roster,
+    _id: &str,
+    _first: &str,
+    _directory: Option<&Path>,
+    _mode: Mode,
+) -> Result<(), StartError> {
+    Err(StartError::Unsupported)
+}
+
+/// Make sure a supervisor is running, so the process just started is started again if it ends
+/// between turns (BG-11, BG-12).
+///
+/// Done once the process is alive, not before. A supervisor that is about to end lets go of its lock
+/// and then looks at the roster once more, so a process alive by the time this looks at the lock is
+/// one it finds; a lock this finds free belongs to no supervisor and a new one is started. That
+/// order is what leaves no moment in which a live process has neither.
+///
+/// The session is running whatever becomes of this, so it is not undone when the supervisor cannot
+/// be started.
+#[cfg(unix)]
+fn ensure_supervisor(roster: &Roster, program: &Path) {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    if roster.has_supervisor() {
+        return;
+    }
+    let mut command = supervisor_command(program);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let Ok(mut supervisor) = bravebot_sandbox::process::starting_a_program(|| command.spawn())
+    else {
+        return;
+    };
+    // Until it holds its lock, so that the next start finds it rather than starting another, or
+    // until it has ended: it does when nothing is alive for it to watch.
+    let until = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < until && !roster.has_supervisor() {
+        if !matches!(supervisor.try_wait(), Ok(None)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The command that runs the supervisor: the hidden `__bg-supervisor`, from a directory that no
+/// terminal holds open.
+#[cfg(unix)]
+pub fn supervisor_command(program: &Path) -> std::process::Command {
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Inherited,
+        // This program started again for the person; it keeps the environment they set (SANDBOX-30).
+        bravebot_sandbox::programs::CodeSelectors::Kept,
+    );
+    command.arg("__bg-supervisor").current_dir("/");
+    command
+}
+
+/// The command that runs the process for `id`: the hidden `__bg-host` with the mode word it runs in.
+#[cfg(unix)]
+pub fn host_command(
+    program: &Path,
+    id: &str,
+    directory: Option<&Path>,
+    mode: Mode,
+) -> std::process::Command {
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Inherited,
+        // This program started again for the person; it keeps the environment they set (SANDBOX-30).
+        bravebot_sandbox::programs::CodeSelectors::Kept,
+    );
+    command.arg("__bg-host").arg(id).arg(mode.word());
+    if let Some(directory) = directory {
+        command.current_dir(directory);
+    }
+    command
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -834,6 +1092,115 @@ mod tests {
             assert!(!label.is_empty(), "{held:?} has no word");
             assert!(said.insert(label), "{held:?} repeats the word {label}");
         }
+    }
+
+    fn idle() -> Handing {
+        Handing {
+            permission_mode: bravebot_agent::PermissionMode::Ask,
+            sandbox: bravebot_sandbox::SandboxMode::WorkspaceWrite,
+            settled: bravebot_sandbox::SandboxMode::WorkspaceWrite,
+            busy: false,
+            keeps_running: false,
+            recorded: true,
+            incognito: false,
+        }
+    }
+
+    /// BG-2, BG-8: an idle recorded session in a mode that carries over is handed over in that
+    /// mode, and each refusal is its own reason, given in one order whichever front end asks.
+    #[test]
+    fn each_refusal_of_a_hand_over_is_its_own_and_comes_in_one_order() {
+        use bravebot_agent::PermissionMode;
+        use bravebot_sandbox::SandboxMode;
+        if !cfg!(unix) {
+            assert_eq!(refusal(&idle()), Err(Refusal::Unsupported));
+            return;
+        }
+        for (mode, carried) in [
+            (PermissionMode::Ask, Mode::Ask),
+            (PermissionMode::AcceptEdits, Mode::AcceptEdits),
+            (PermissionMode::Plan, Mode::Plan),
+        ] {
+            let handing = Handing {
+                permission_mode: mode,
+                ..idle()
+            };
+            assert_eq!(refusal(&handing), Ok(carried));
+        }
+        let refused = [
+            (
+                Handing {
+                    permission_mode: PermissionMode::Auto,
+                    ..idle()
+                },
+                Refusal::Auto,
+            ),
+            (
+                Handing {
+                    permission_mode: PermissionMode::Bypass,
+                    ..idle()
+                },
+                Refusal::Bypass,
+            ),
+            (
+                Handing {
+                    sandbox: SandboxMode::Strict,
+                    ..idle()
+                },
+                Refusal::SandboxMoved {
+                    mode: SandboxMode::Strict,
+                    settled: SandboxMode::WorkspaceWrite,
+                },
+            ),
+            (
+                Handing {
+                    busy: true,
+                    ..idle()
+                },
+                Refusal::Busy,
+            ),
+            (
+                Handing {
+                    keeps_running: true,
+                    ..idle()
+                },
+                Refusal::KeepsRunning,
+            ),
+            (
+                Handing {
+                    incognito: true,
+                    recorded: false,
+                    ..idle()
+                },
+                Refusal::Incognito,
+            ),
+            (
+                Handing {
+                    recorded: false,
+                    ..idle()
+                },
+                Refusal::NothingRecorded,
+            ),
+        ];
+        for (handing, expected) in refused {
+            assert_eq!(refusal(&handing), Err(expected), "{handing:?}");
+        }
+        // Every reason at once is told the first one.
+        let everything = Handing {
+            permission_mode: PermissionMode::Auto,
+            sandbox: SandboxMode::Strict,
+            busy: true,
+            keeps_running: true,
+            recorded: false,
+            incognito: true,
+            ..idle()
+        };
+        assert_eq!(refusal(&everything), Err(Refusal::Auto));
+        let moved = Handing {
+            permission_mode: PermissionMode::Ask,
+            ..everything
+        };
+        assert!(matches!(refusal(&moved), Err(Refusal::SandboxMoved { .. })));
     }
 
     fn roster() -> (tempfile::TempDir, Roster) {
@@ -1223,5 +1590,24 @@ mod tests {
         assert_eq!(entry.last_turn, None);
         entry.is(State::Idle, None);
         assert!(entry.last_turn.is_some());
+    }
+
+    /// BG-2: a program that does not exist starts nothing, says the start failed, and takes back
+    /// the line it left for the session, so a later start does not run it.
+    #[cfg(unix)]
+    #[test]
+    fn a_host_program_that_does_not_exist_starts_nothing_and_takes_back_its_line() {
+        let (dir, roster) = roster();
+        let missing = dir.path().join("no-such-bravebot");
+        let started = start_host(&missing, &roster, A, "hello", None, Mode::Ask);
+        assert!(
+            matches!(
+                started,
+                Err(StartError::Spawn(ref err)) if err.kind() == std::io::ErrorKind::NotFound
+            ),
+            "{started:?}"
+        );
+        assert_eq!(roster.take_first_prompt(A), None);
+        assert!(!roster.has_supervisor());
     }
 }

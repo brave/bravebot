@@ -518,6 +518,7 @@ pub(crate) fn take_sandbox_filesystem(
             path: path.to_string(),
             by: None,
             pinned: false,
+            from_a_checkout: false,
         };
         Ok((list, entry))
     })?;

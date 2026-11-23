@@ -78,11 +78,12 @@ unusable, or the repository was refused), the directory a person opened where th
 and how many of the call's delegates were not started, the withdrawn one included. The delegate
 still takes no number and no place under the ceiling ([DELEGATE-7](delegation.md#DELEGATE-7)).
 
-A write, an edit, a fetch or a save (`write_file`, `edit_file`, `fetch_url` and `download_url`)
-that is put to a person who does not approve it is recorded as a refusal under `approval`, and so is
+A write, an edit, a fetch, a search or a save (`write_file`, `edit_file`, `fetch_url`, `web_search`
+and `download_url`) that is put to a person who does not approve it is recorded as a refusal under `approval`, and so is
 each file `apply_checkout` brings back and a write a manifest run plans. The entry names the tool, or
 the step and its tool, and says the write or the fetch was not approved and nothing was written or
-fetched. A no, a Ctrl-C and a question nobody could be asked are one answer to the policy, so the
+fetched. For a search it says the search was not approved and nothing was sent, and it carries
+nothing of the query ([WEBSEARCH-2](tools/web-search.md#WEBSEARCH-2)). A no, a Ctrl-C and a question nobody could be asked are one answer to the policy, so the
 entry does not tell them apart. A write the credential scan raised doubts about is recorded the same
 way when it is not approved. A `download_url` asks about its host and then about its file, and
 records the question that was answered no: a host that is refused as a fetch, and a file that is
@@ -100,7 +101,10 @@ server was not called.
 A call to a server's tool that an earlier question of the same round already answered, because that
 question listed it ([SERVERS-7](mcp-servers.md#SERVERS-7)), is not recorded as asking. A yes is one
 entry under `approval` naming the call as `alias:tool` and saying an earlier answer covered it and
-nobody was asked, and a no is the refusal above.
+nobody was asked, and a no is the refusal above. A planned call that approving its plan answered is
+recorded the same way, one entry under `approval` naming the call and saying the plan's approval
+covered it and nobody was asked at the step, and so is each call of an `apply` step whose tools are
+all marked plan-covered.
 
 Five questions that are not a tool call's own approval are recorded the same way, as a refusal under
 `approval`, when the person does not approve them. Each entry is fixed words and names the question
@@ -132,7 +136,9 @@ slot states for its reference.
 **Why.** A trail that logged only what happened would not answer "why did it not do the thing I
 asked", which is most of what anyone asks it.
 
+`verified-by: bravebot_agent::manifest_server_calls::a_plan_calls_a_vouched_tool_with_the_arguments_it_fixed`
 `verified-by: bravebot_core::policy::a_read_and_a_write_leave_different_trails`
+`verified-by: bravebot_core::policy::a_search_the_person_did_not_approve_is_a_refusal_under_approval`
 `verified-by: bravebot_core::policy::the_mode_reaching_a_directory_is_recorded_with_the_tool_and_the_field_and_trusts_nothing`
 `verified-by: bravebot_core::policy::promotion_appears_in_the_audit_trail`
 `verified-by: bravebot_core::policy::the_audit_trail_records_the_precommit_first`
@@ -191,6 +197,7 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_what_printed_nothing_makes_no_check_and_says_it_printed_nothing`
 `verified-by: bravebot_agent::turn::read_output_over_a_slot_that_holds_no_bytes_checks_nothing_and_asks_nobody`
 `verified-by: bravebot_agent::turn::a_fetch_that_asks_to_read_a_page_of_no_bytes_makes_no_check`
+`verified-by: bravebot_agent::manifest_server_calls::a_step_whose_tools_are_all_marked_runs_on_the_plans_approval`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content
@@ -388,6 +395,13 @@ The names are the modes' own text, so the entry holds no content (TRACE-2).
 `verified-by: bravebot_core::policy::deciding_to_offer_a_vouch_writes_nothing_and_asks_once`
 `verified-by: bravebot_core::policy::a_vouch_a_mode_answered_is_not_spent_on_a_version_nobody_was_shown`
 
+A turn that a host client acts on ([HOST-7](local-host.md#HOST-7)) also has one entry under `actor` for each send that began it, answer that landed on one of its questions and cancel that stopped it. A cancel counts only while the turn is still running, the first cancel is the one recorded, and an answer that arrives after a cancel is refused and not recorded. The entry names the client by the name the person gave it on the host's command line, as in `client phone answered question 4`, and holds nothing of what the client sent or the question said. It is written before the next entry the turn records, or at the end of the turn if none follows, and it is the turn's own entry even where a delegate is recording. A question refused because nobody who could answer it was left has no `actor` entry, and a trust answer, which is given before any turn, has none either; the view names its client ([RPCVIEW-14](session-view.md#RPCVIEW-14)). A manifest run is not offered to a host client, and a session not run by the host has no `actor` entries.
+
+`verified-by: bravebot_ui_bridge::host_process::the_trail_names_the_client_that_sent_and_the_client_that_answered`
+`verified-by: bravebot_ui_bridge::host_process::the_trail_names_the_client_that_cancelled`
+`verified-by: bravebot_ui_bridge::control_tests::an_answer_after_a_cancel_is_refused_and_credits_nobody`
+`verified-by: bravebot_ui_bridge::answering_tests::an_actor_note_is_recorded_for_the_turn_and_not_for_the_delegate_recording`
+
 <a id="TRACE-8"></a>
 ### TRACE-8: the trail says how each delegate ended and why
 
@@ -457,6 +471,14 @@ key that exports the transcript is inert in it, and an incognito session is unch
 closing it puts the transcript back where it was. Before any turn has sent a request the command
 says so.
 
+The desktop window's Chat › Last Request… ([CMD-15](commands.md#CMD-15)) shows the same view in a
+read-only dialog: the instruction files with their bytes, then each span under its role and label.
+The bridge's `session.report.request` draws every string with
+`bravebot_agent::confirm::printable_spelled`, a span's text line by line so its line breaks are
+kept, and the dialog shows those words as plain text, never as Markdown or HTML. A control character
+in a span is shown as its picture with the one definition above, and the window holds no list of
+the characters to picture.
+
 **Why.** What the planner was sent is the question behind every "why did it do that", and a view
 reconstructed from the transcript would answer it with what the transcript says was sent. The
 label is a claim about authority, so it comes from where the text was composed.
@@ -481,6 +503,10 @@ label is a claim about authority, so it comes from where the text was composed.
 `verified-by: bravebot_tui::render::the_request_view_says_so_when_no_instruction_file_loaded`
 `verified-by: bravebot_tui::state::the_request_view_opens_on_the_last_request_and_closing_restores_the_transcript`
 `verified-by: bravebot_tui::app::the_key_that_writes_the_transcript_out_does_nothing_in_the_request_view`
+`verified-by: bravebot_ui_bridge::reports_tests::the_request_report_names_the_instruction_files_and_labels_each_span`
+`verified-by: bravebot_ui_bridge::reports_tests::the_request_report_pictures_the_control_characters_in_a_span`
+`verified-by: bravebot_ui_bridge::reports_tests::a_reporter_keeps_the_turns_request_and_not_a_delegates`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles, so ui/scripts/reports.test.mjs renders the Last Request… dialog and asserts the instruction files with their bytes come before the spans, each span under its role and label, and a span holding the pictures of an escape and a bell shows them and its markup as text; make check-ui runs it)`
 
 <a id="TRACE-10"></a>
 ### TRACE-10: the trail names the model each processor call asked for
@@ -538,6 +564,14 @@ environment chose. A path
 the person's environment chose is drawn like one a checkout chose, so no site decides by where a
 path came from.
 
+A manifest run's answer is the text of a slot released as it came. When stdout is a terminal it is
+drawn like the words beside it, each line break kept, so an escape sequence in a file the plan read
+cannot set the window title or conceal the lines written after the answer. Written to a pipe or a
+file it is the exact bytes, and the `--json` result object escapes its own text. Whether to draw is
+decided from the stream and the mode, never from the text. Drawing writes out an emoji's joiner
+(U+200D) and variation selectors as `‹U+XXXX›`, as [LAYER-3](layering.md#LAYER-3) says, so a joined
+emoji in a terminal answer reads as its parts.
+
 The managed file's path is fixed for the platform when bravebot is built, so neither a checkout nor
 the environment chooses it. The `bravebot` command line draws it anyway where it names it
 (`auth.rs` `managed_path`, `doctor.rs` `managed_layer`, `import.rs` `pinned_lines`, and the
@@ -591,6 +625,9 @@ still branches on none of them ([TRACE-5](#TRACE-5)).
 `verified-by: bravebot_tui::render::transcript::the_trail_a_person_opens_writes_out_a_checkouts_bidirectional_and_hidden_characters`
 `verified-by: bravebot_cli::running::a_traced_run_draws_the_control_characters_of_a_checkouts_file_names_as_pictures`
 `verified-by: bravebot_cli::main::the_words_written_beside_the_reply_draw_a_checkouts_names_as_pictures`
+`verified-by: bravebot_cli::main::a_manifest_answer_written_to_a_terminal_has_its_control_characters_drawn`
+`verified-by: bravebot_cli::main::a_manifest_answer_written_to_a_terminal_keeps_its_line_breaks`
+`verified-by: bravebot_cli::main::only_a_manifest_answer_going_to_a_terminal_is_drawn`
 `verified-by: bravebot_cli::progress::the_lines_of_a_call_draw_a_checkouts_names_as_pictures`
 `verified-by: bravebot_cli::main::a_pick_set_aside_or_refused_draws_its_name_and_reason_as_pictures`
 `verified-by: bravebot_cli::main::a_stored_manifest_report_draws_its_text_as_pictures`
@@ -634,6 +671,47 @@ still branches on none of them ([TRACE-5](#TRACE-5)).
 `verified-by: bravebot_ui_bridge::audit::the_live_audit_event_carries_each_string_field_drawn_by_printable`
 `verified-by: bravebot_ui_bridge::audit::the_live_audit_event_writes_out_a_bidirectional_control_in_a_field`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/turn-details.test.mjs calls the inspector's own auditDescription with the words the bridge sent for a name holding an escape and a bell and asserts the sentence is those words, and that a field with no words is drawn as nothing; make check-ui runs it)`
+
+<a id="TRACE-12"></a>
+### TRACE-12: the trail names the mode a session opened in and each change of mode after it
+
+The first turn or manifest run a session takes after it opens or resumes writes one entry under
+`permission_mode_opened`, ahead of its `permission_mode` entry ([TRACE-7](#TRACE-7)). It reads `the
+session opened in <mode> mode <cause>`. A later turn does not repeat it. Each change of mode is one
+entry under `permission_mode_changed` that reads `the permission mode changed from <mode> to <mode>
+<cause>`. A change is written once, in the order the changes were made, by the turn that follows it,
+or by the next request of the turn that was running when it was made, so it comes before any
+refusal or prompt the new mode causes. Setting the mode a session is already in is not a change. A
+delegate writes none of these: the entries of its parent's session are the parent's.
+
+The cause is a fixed phrase the driver chose where it set the mode: `by default`, `by a
+command-line flag`, `by the startInAuto setting`, `by the mode key`, `by a click on the mode`, `by
+the /plan command`, `by approving a plan`, `because settings made bypass unreachable`, `by a request
+from the client`, or `without a cause being given` where a caller did not say. The modes are named as
+in [TRACE-7](#TRACE-7).
+
+A session that is kept out of the trail ([INCOG-4](incognito.md#INCOG-4)) writes none of these,
+since it writes no trail. A session that takes no turn writes nothing, so a mode opened in and
+changed before the first turn is written by that turn as the opening mode followed by each change.
+The mode is not saved in the session record ([MODE-10](permission-modes.md#MODE-10)); the trail is
+where a person reads it back.
+
+**Why.** The mode decides what a prompt asks and who answers it, and nothing else in the trail says
+which mode a session was in at a given decision: the entries of [TRACE-7](#TRACE-7) name it only
+for the turn and only where a prompt was drawn. A person asking why a session asked about a program
+while it was in auto has to be able to read what mode it opened in and when it left it. Every part
+of an entry is the driver's own static text, so it holds no content ([TRACE-2](#TRACE-2)).
+
+`verified-by: bravebot_agent::turn::a_session_records_the_mode_it_opened_in`
+`verified-by: bravebot_agent::turn::a_change_of_mode_between_turns_is_recorded`
+`verified-by: bravebot_agent::turn::a_change_of_mode_during_a_turn_is_recorded_once_and_in_order`
+`verified-by: bravebot_core::policy::a_permission_mode_opening_and_change_leave_a_trail`
+`verified-by: bravebot_cli::running::a_traced_run_names_the_mode_it_opened_in_and_what_chose_it`
+`verified-by: bravebot_tui::mode_trail_tests::the_key_a_click_and_the_plan_command_each_name_themselves_in_the_trail`
+`verified-by: bravebot_tui::mode_trail_tests::a_session_the_terminal_opens_names_what_chose_its_mode_in_the_trail`
+`verified-by: bravebot_tui::mode_trail_tests::bypass_made_unreachable_after_the_flag_is_an_opening_and_then_a_change`
+`verified-by: bravebot_ui_bridge::permission_mode::the_trail_of_a_window_session_names_what_opened_it_in_its_mode_and_each_request_to_change_it`
+`verified-by: bravebot_agent::turn::approving_a_plan_is_recorded_as_the_cause_of_leaving_plan_mode`
 
 ## Known costs
 
