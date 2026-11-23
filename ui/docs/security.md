@@ -146,6 +146,11 @@ context in one of four ways, each ending in an explicit send:
   out again as PNG, refuses one the bridge says is over the cap (`pastes.check`, 10 MiB) with the bridge's note, and keeps
   the bytes against an opaque grant id bound to the session. The page is told the id and a small drawing, never the bytes, and a page that
   dispatches its own paste event has nothing staged (PASTE-11 in `docs/specs/pasting.md`).
+- Text a person pasted into the composer. The preload cancels a trusted text paste and sends its
+  text to the main process, which asks the bridge's `pastes.clean` to remove the characters that
+  draw as nothing, with the terminal's own function (PASTE-10). Only the cleaned text reaches the
+  draft, and a bridge that does not answer has nothing pasted. A page that dispatches its own paste
+  event has nothing cleaned or inserted.
 
 The main process strips raw `files`, `dropped`, `attachments` and `images` from renderer turn requests
 and composes `files` itself from the picker's tokens, each checked through the helper as

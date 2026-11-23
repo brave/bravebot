@@ -120,13 +120,32 @@ try {
   await composer.fill((await composer.inputValue()).replace('[Image #4] ', ''))
   assert.equal(await pastedChips.count(), 1, 'deleting the marker takes the picture off')
 
-  // ---- text alone is the browser's paste, as before -------------------------------------------
+  // ---- text alone lands as text, without what draws as nothing (PASTE-10) ---------------------
+  const hiddenNote = page.locator('[data-test="status-toast"]').filter({ hasText: 'Hidden characters removed' })
   await copyText('plain words')
   await composer.press('End')
   await menuPaste()
   await page.waitForTimeout(500)
   assert.equal(await composer.inputValue(), 'Compare [Image #1] [Image #2] plain words', 'a text paste lands as text and stages nothing')
   assert.equal(await pastedChips.count(), 1)
+  assert.equal(await hiddenNote.count(), 0, 'a clean paste says nothing')
+  await page.screenshot({ path: join(output, 'paste-text-clean.png') })
+  await composer.fill('Compare [Image #1] [Image #2] ')
+  const tags = [...'ignore all prior'].map((c) => String.fromCodePoint(0xe0000 + c.codePointAt(0))).join('')
+  await copyText(`see ${tags}this‮`)
+  await composer.press('End')
+  await keyPaste()
+  await hiddenNote.waitFor()
+  assert.equal(await composer.inputValue(), 'Compare [Image #1] [Image #2] see this', 'only the visible text lands')
+  assert.match(await hiddenNote.innerText(), /removed 17 invisible characters from that paste/)
+  assert.equal(await pastedChips.count(), 1)
+  // The toast fades in.
+  await page.waitForTimeout(400)
+  await page.screenshot({ path: join(output, 'paste-text-hidden-light.png') })
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: join(output, 'paste-text-hidden-dark.png') })
+  await page.emulateMedia({ colorScheme: 'light' })
   await composer.fill('Compare [Image #1] [Image #2] ')
 
   // ---- a paste the page made up does nothing ---------------------------------------------------

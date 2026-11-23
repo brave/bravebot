@@ -52,6 +52,22 @@ test('a paste is numbered from the counter drops use, so a drop then a paste are
   assert.deepEqual(staging.grantsOf(staging.named(again.staging, again.draft)), { drops: ['d', 'e'], pastes: ['p'] })
 })
 
+test('pasted text replaces the selection and puts the caret after it', () => {
+  assert.deepEqual(staging.pasteText('see that now', 4, 8, 'this'), { draft: 'see this now', caret: 8 })
+  assert.deepEqual(staging.pasteText('see that now', 8, 4, 'this'), { draft: 'see this now', caret: 8 }, 'a backward selection is the same selection')
+})
+
+test('pasted text lands at a collapsed caret, and nothing past the end of the draft', () => {
+  assert.deepEqual(staging.pasteText('seethis', 3, 3, ' '), { draft: 'see this', caret: 4 })
+  assert.deepEqual(staging.pasteText('', 0, 0, 'see this'), { draft: 'see this', caret: 8 })
+  assert.deepEqual(staging.pasteText('see', 9, 9, ' this'), { draft: 'see this', caret: 8 })
+})
+
+test('a paste the bridge cleaned to nothing leaves the draft and its selection as they were', () => {
+  assert.deepEqual(staging.pasteText('see that now', 4, 8, ''), { draft: 'see that now', caret: 8 })
+  assert.deepEqual(staging.pasteText('see', 3, 3, ''), { draft: 'see', caret: 3 })
+})
+
 test('a paste lands at the caret, with a space before it when the word there would run into it', () => {
   const pasted = staging.stagePaste(staging.EMPTY_STAGING, picture('p'), 'what isthis', 7)
   assert.equal(pasted.draft, 'what is [Image #1] this')

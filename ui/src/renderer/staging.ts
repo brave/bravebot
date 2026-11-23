@@ -197,6 +197,18 @@ export function exitOf(staging: Staging | undefined, draft: string): Exit | null
   return { to: 'prompt', line, staged }
 }
 
+/**
+ * Write pasted `text`, already cleaned by the bridge (PASTE-10), over the selection from `start` to
+ * `end`, with the caret after it. Empty text leaves the draft as it was, selection and all, as the
+ * terminal writes nothing for a paste of nothing but hidden characters.
+ */
+export function pasteText(draft: string, start: number, end: number, text: string): { draft: string; caret: number } {
+  const from = Math.max(0, Math.min(start, end, draft.length))
+  const to = Math.max(from, Math.min(Math.max(start, end), draft.length))
+  if (text.length === 0) return { draft, caret: to }
+  return { draft: draft.slice(0, from) + text + draft.slice(to), caret: from + text.length }
+}
+
 function writtenAt(draft: string, caret: number, written: string[]): { draft: string; caret: number } {
   const at = Math.max(0, Math.min(caret, draft.length))
   const before = draft.slice(0, at)

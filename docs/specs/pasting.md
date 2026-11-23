@@ -327,7 +327,9 @@ whitespace, and one emoji or text selector stays after an emoji or before a keyc
 England, Scotland and Wales, which are tag characters behind a black flag, stay, and no other tags do. The notice
 `removed 3 invisible characters from that paste` follows the paste and gives the count. A paste
 that held none says nothing. It applies to a paste in shell mode, to one that folds, and to one
-that arrives while a turn runs, since all of them come through the same function.
+that arrives while a turn runs, since all of them come through the same function. A text paste into
+the desktop window's composer goes through that function too, in the bridge, and the window shows
+the same note ([PASTE-11](#PASTE-11)).
 
 **Why.** A paste lands in the person's own message with no label, so the words in it are taken as
 theirs. Text copied from a page can hold an instruction written in characters nothing draws, and
@@ -361,6 +363,9 @@ Persian, Indic and emoji text needs only the first of each, after a character th
 `verified-by: bravebot_tui::app::a_paste_loses_what_a_terminal_draws_as_nothing`
 `verified-by: bravebot_tui::app::text_read_off_the_clipboard_loses_what_a_terminal_draws_as_nothing`
 `verified-by: bravebot_tui::app::a_pasted_prompt_waits_in_the_box_without_what_a_terminal_draws_as_nothing`
+`verified-by: bravebot_ui_bridge::attaching::a_window_asks_the_bridge_to_clean_a_paste_and_is_told_the_terminals_note`
+`verified-by: bravebot_ui_bridge::english_notes::a_note_for_the_window_is_in_english_whatever_the_machine_says`
+`verified-by: by-construction (the preload and the renderer are not crates this workspace compiles, so ui/scripts/pastes.test.mjs pins pasteText, which writes the cleaned text over the composer's selection and writes nothing for empty text, and cleanPaste, which passes on the text, count and note a stub pastes.clean gives and has nothing pasted when the bridge does not answer or answers something else; make check-ui runs the tests)`
 
 <a id="PASTE-11"></a>
 ### PASTE-11: the desktop window takes a picture only from a trusted paste, off the clipboard itself
@@ -369,7 +374,12 @@ The window keeps [PASTE-2](#PASTE-2) by never letting the page supply the bytes.
 its isolated world, listens for the paste itself and looks only at an event the browser marks
 trusted, inside the composer. When the clipboard holds a picture, the picture wins over any text
 beside it, as in [PASTE-7](#PASTE-7): the browser's own paste is cancelled and the main process is
-asked to stage what is on the clipboard. A paste of text alone is left to the browser. The main
+asked to stage what is on the clipboard. A paste of text alone is cancelled as well, and the text
+on the trusted event goes to the main process, which asks the bridge's `pastes.clean` to remove the
+characters [PASTE-10](#PASTE-10) removes. The composer writes the cleaned text over its selection and
+shows the terminal's note when any were removed. A bridge that does not answer has nothing pasted,
+and the window says the paste could not be checked. A paste with neither a picture nor text is left
+to the browser. The main
 process reads the operating system's clipboard itself, decodes the picture and writes it out again
 as PNG, so the type is always `image/png`, never something the content claims
 ([PASTE-3](#PASTE-3)). The main process asks the bridge's `pastes.check` about the picture's

@@ -45,7 +45,7 @@ import { reconnectingWords, type RetryDue } from '../retry'
 import { pointForPrompt, undoRow } from '../rewind'
 import { Answers, Approve } from './Approval'
 import { showToast } from '../toasts'
-import { EMPTY_STAGING, named, stageDrop, stagePaste, stageSummon, stageText, withoutMarker, type Staging, type SummonedBot } from '../staging'
+import { EMPTY_STAGING, named, pasteText, stageDrop, stagePaste, stageSummon, stageText, withoutMarker, type Staging, type SummonedBot } from '../staging'
 import { placeCards, summonedIn, summonMarker, type Placement, type Summon } from '../../shared/summons'
 import type { Drop } from '../../shared/drops'
 import type { Paste, PastedText } from '../../shared/pastes'
@@ -550,7 +550,18 @@ export function Transcript({
       showToast('Too large to paste', paste.outcome.note, 'note')
       return
     }
-    if (paste.outcome.kind !== 'staged') return
+    if (paste.outcome.kind === 'unclean') {
+      showToast('Nothing was pasted', 'The paste could not be checked for hidden characters.', 'note')
+      return
+    }
+    if (paste.outcome.kind === 'text') {
+      // The text the bridge cleaned (PASTE-10), written over the selection as the browser's paste would be.
+      if (paste.outcome.note) showToast('Hidden characters removed', paste.outcome.note, 'note')
+      const area = input.current?.shadowRoot?.querySelector('textarea')
+      const next = pasteText(draft, area?.selectionStart ?? draft.length, area?.selectionEnd ?? draft.length, paste.outcome.text)
+      if (next.draft !== draft) restage(live.handle, { staging: live.staging ?? EMPTY_STAGING, ...next })
+      return
+    }
     restage(live.handle, stagePaste(live.staging ?? EMPTY_STAGING, paste.outcome.picture, draft, caret()))
   })
   useEffect(() => window.bravebot.onPaste(pasted), [pasted])
