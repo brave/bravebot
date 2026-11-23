@@ -52,6 +52,9 @@ pub(crate) struct Walk {
     /// The pictures and PDFs dropped onto the task, each checked as `turn.send` checks one
     /// (DROP-10). The agent's runner reads them before the planner's policy exists (DROP-4).
     pub attachments: Vec<bravebot_agent::turn::Attachment>,
+    /// The marker each attachment stands for in the task, in the same order: `[Image #1]` for the
+    /// first picture dropped. Empty where the client sent none, and the title keeps the markers.
+    pub markers: Vec<String>,
     pub run: usize,
     pub cancel: Cancel,
     pub pending: crate::turn::Pending,
@@ -73,47 +76,28 @@ fn attempt_json(attempt: &Attempt) -> Value {
     })
 }
 
-/// The words a run's record is titled by: the task, with the markers of the pictures and PDFs
-/// dropped onto it, such as `[Image #1]`, replaced by the files' names in the order they stand.
+/// The words a run is titled by, on its plan question and its record: the task, with the marker of
+/// each picture and PDF dropped onto it, such as `[Image #1]`, replaced by that file's name.
 ///
-/// The window lists the attachments in the order their markers stand in the task. The planner is
-/// still shown the task with its markers, each of which answers a `Dropped file:` part (DROP-11).
-/// A marker past the last attachment is left as it is.
-fn titled(task: &str, attachments: &[bravebot_agent::turn::Attachment]) -> String {
-    let mut names = attachments.iter().map(|dropped| {
-        std::path::Path::new(&dropped.path).file_name().map_or_else(
-            || dropped.path.clone(),
-            |name| name.to_string_lossy().into_owned(),
-        )
-    });
-    let mut out = String::with_capacity(task.len());
-    let mut rest = task;
-    while let Some((before, opened)) = rest.split_once('[') {
-        out.push_str(before);
-        let after = opened.split_once(']').and_then(|(inner, after)| {
-            inner
-                .split_once(" #")
-                .is_some_and(|(noun, number)| {
-                    !noun.is_empty()
-                        && noun.chars().all(char::is_alphabetic)
-                        && !number.is_empty()
-                        && number.chars().all(|c| c.is_ascii_digit())
-                })
-                .then_some(after)
-        });
-        match after.and_then(|after| names.next().map(|name| (after, name))) {
-            Some((after, name)) => {
-                out.push_str(&name);
-                rest = after;
-            }
-            None => {
-                out.push('[');
-                rest = opened;
-            }
-        }
-    }
-    out.push_str(rest);
-    out
+/// `markers` pairs with `attachments` by position, as the window sends them, so each file names
+/// only the marker it was staged under, and a bracket that is no drop's marker stays as typed. The
+/// planner is still shown the task with its markers, each of which answers a `Dropped file:` part
+/// (DROP-11).
+pub(crate) fn titled(
+    task: &str,
+    markers: &[String],
+    attachments: &[bravebot_agent::turn::Attachment],
+) -> String {
+    markers
+        .iter()
+        .zip(attachments)
+        .fold(task.to_string(), |title, (marker, dropped)| {
+            let name = std::path::Path::new(&dropped.path).file_name().map_or_else(
+                || dropped.path.clone(),
+                |name| name.to_string_lossy().into_owned(),
+            );
+            title.replace(marker.as_str(), &name)
+        })
 }
 
 /// Run one task as a manifest to its end, record it, and say what happened.
@@ -135,6 +119,7 @@ pub(crate) fn walk(walk: Walk) {
         workspace,
         task: asked,
         attachments,
+        markers,
         run,
         cancel,
         pending,
@@ -142,6 +127,7 @@ pub(crate) fn walk(walk: Walk) {
         answers,
         finished,
     } = walk;
+    let title = titled(&asked, &markers, &attachments);
 
     // Held for the length of the run, as a turn holds it. The session refuses a turn and a
     // second run while one is in flight, so nothing else contends for it.
@@ -160,7 +146,8 @@ pub(crate) fn walk(walk: Walk) {
         Arc::clone(&state.question_ids),
         cancel.clone(),
     )
-    .answerable_by(answerers);
+    .answerable_by(answerers)
+    .titling_plans(title.clone());
 
     // The servers the session started, so a plan may call a tool of a list that was vouched for.
     // Started here when no turn has, by the function the first turn starts them with, so the
@@ -198,7 +185,6 @@ pub(crate) fn walk(walk: Walk) {
         .with_permissions(state.answers.rules.permissions.clone())
         .with_permission_mode(permission_mode.clone())
         .with_mcp(mcp);
-    let title = titled(&asked, &attachments);
     let task = attachments.into_iter().fold(task, |task, dropped| {
         task.with_attachment(dropped.path, dropped.media)
     });
@@ -380,26 +366,35 @@ mod title_tests {
         }
     }
 
+    fn markers(markers: &[&str]) -> Vec<String> {
+        markers.iter().map(|marker| (*marker).to_string()).collect()
+    }
+
     #[test]
-    fn each_marker_takes_the_next_files_name() {
+    fn each_marker_takes_its_own_files_name_wherever_it_stands() {
         let attachments = [
             dropped("/d/a.png", "image/png"),
             dropped("/d/b.pdf", "application/pdf"),
         ];
         assert_eq!(
-            titled("compare [Image #1] with [PDF #3] [x]", &attachments),
-            "compare a.png with b.pdf [x]"
+            titled(
+                "compare [PDF #3] with [Image #1] [x]",
+                &markers(&["[Image #1]", "[PDF #3]"]),
+                &attachments
+            ),
+            "compare b.pdf with a.png [x]"
         );
     }
 
     #[test]
-    fn a_marker_with_no_file_and_brackets_that_are_no_marker_stay() {
+    fn a_bracket_that_is_no_drops_marker_stays_as_typed() {
         assert_eq!(
             titled(
-                "[Image #1] and [Image #2] [a #] [#1] [",
-                &[dropped("/d/a.png", "image/png")]
+                "do [Step #1] from [Image #2] and [Image #3]",
+                &markers(&["[Image #2]"]),
+                &[dropped("/d/sketch.png", "image/png")]
             ),
-            "a.png and [Image #2] [a #] [#1] ["
+            "do [Step #1] from sketch.png and [Image #3]"
         );
     }
 }

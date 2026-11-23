@@ -941,6 +941,8 @@ export interface ServerRequest {
 export interface ManifestRequest {
   request: number
   task: string
+  /** The task with each dropped file's marker replaced by its name, as the run's record is titled. */
+  title?: string
   steps: string[]
 }
 

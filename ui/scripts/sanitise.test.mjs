@@ -66,6 +66,12 @@ test('a manifest run forwards a task, a model and text-file markers, and no file
   assert.deepEqual(forwarded, { session: 's1', task: 'plan [File #1]', model: 'm', files: [{ marker: '[File #1]', name: 'notes.md' }] })
 })
 
+test("a manifest run forwards the drops' markers as words, and nothing else under that name", () => {
+  const forwarded = sanitised('manifest.run', { session: 's1', task: 'plan [Image #1]', markers: ['[Image #1]', { path: '/etc/hosts' }] })
+
+  assert.deepEqual(forwarded.markers, ['[Image #1]'])
+})
+
 test('a session list is always the whole one, whatever directory the window put in it', () => {
   const forwarded = sanitised('session.list', { directory: '/Users/me/my app', other: 1 })
 

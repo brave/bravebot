@@ -121,6 +121,7 @@ fn walk_a_run_at(
         workspace: workspace.clone(),
         task: "tidy the notes".into(),
         attachments: Vec::new(),
+        markers: Vec::new(),
         run,
         cancel: stopped(),
         pending: Arc::new(Mutex::new(None)),

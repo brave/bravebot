@@ -62,6 +62,8 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
     const session = typeof held.session === 'string' ? held.session : ''
     const forwarded: Record<string, unknown> = { session: held.session, task: held.task, model: held.model }
     if (files) forwarded.files = files
+    // Words of the task, one for each of `drops`, which the bridge titles the run by. Never a path.
+    if (Array.isArray(held.markers)) forwarded.markers = held.markers.filter((marker: unknown) => typeof marker === 'string')
     return withDrops(session, held.drops, forwarded)
   }
   // A list is the one thing the window asks for that the agent answers with directories, and the

@@ -2903,8 +2903,9 @@ impl Bridge {
     /// own record. The session is busy until the run ends, so a turn or a second run is refused.
     ///
     /// Pictures and PDFs dropped onto the task arrive as `attachments` and go to the planner with
-    /// it. A text file dropped onto it arrives in `files` as its marker and name, and the name is
-    /// put into the task in the marker's place (DROP-4).
+    /// it, and `markers` names the marker each stands for in the task, which the run's title puts
+    /// the file's name in place of. A text file dropped onto it arrives in `files` as its marker
+    /// and name, and the name is put into the task in the marker's place (DROP-4).
     ///
     /// `turn.cancel` stops a run, and the reply methods answer its questions, as for a turn.
     fn start_manifest(&mut self, request: &Request) -> Result<Value, Failure> {
@@ -2961,6 +2962,25 @@ impl Bridge {
                 media: media.to_string(),
             })
             .collect();
+        // The marker each of them stands for in the task, by position, so the run's title names
+        // each file where its own marker stands.
+        let markers: Vec<String> = match request.params.get("markers") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(given) => given
+                .as_array()
+                .filter(|markers| markers.len() == attachments.len())
+                .and_then(|markers| {
+                    markers
+                        .iter()
+                        .map(|marker| marker.as_str().map(str::to_string))
+                        .collect::<Option<Vec<_>>>()
+                })
+                .ok_or_else(|| {
+                    Failure::bad_request(
+                        "`markers` must be a list of strings, one for each of `attachments`",
+                    )
+                })?,
+        };
         let requested_model = crate::models::selection(request.params.get("model"))?;
 
         self.reap(&handle);
@@ -3055,6 +3075,7 @@ impl Bridge {
                 workspace,
                 task,
                 attachments,
+                markers,
                 run,
                 cancel,
                 pending,

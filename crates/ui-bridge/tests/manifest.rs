@@ -903,8 +903,10 @@ fn a_picture_dropped_onto_the_task_reaches_the_planner() {
     );
 }
 
-/// A run with a picture dropped onto its task is titled with the file's name where the marker
-/// stands, so the list of chats names the file and not a number. The planner was shown the marker.
+/// A run with a picture dropped onto its task is titled with the file's name where its own marker
+/// stands, on the plan question and on the record, so the card and the list of chats name the file
+/// and not a number. A bracket that is no drop's marker stays as typed. The planner was shown the
+/// marker.
 #[test]
 fn a_run_with_a_dropped_picture_is_titled_by_the_files_name() {
     let scratch = Scratch::new("bridge-manifest-dropped-picture-title");
@@ -917,7 +919,12 @@ fn a_run_with_a_dropped_picture_is_titled_by_the_files_name() {
 
     front.call(
         "manifest.run",
-        json!({"session": session, "task": "build the notes from [Image #2]", "attachments": [shot]}),
+        json!({
+            "session": session,
+            "task": "do [Step #1] from [Image #2]",
+            "attachments": [shot],
+            "markers": ["[Image #2]"],
+        }),
     );
     let events = front.answering(
         &session,
@@ -925,6 +932,18 @@ fn a_run_with_a_dropped_picture_is_titled_by_the_files_name() {
             ("manifest.request", "approve"),
             ("confirm.request", "approve"),
         ],
+    );
+    let asked = events
+        .iter()
+        .find(|event| event["event"] == "manifest.request")
+        .expect("a plan question");
+    assert_eq!(
+        asked["data"]["task"], "do [Step #1] from [Image #2]",
+        "{asked}"
+    );
+    assert_eq!(
+        asked["data"]["title"], "do [Step #1] from sketch.png",
+        "{asked}"
     );
     let ended = events.last().unwrap();
     assert_eq!(ended["event"], "manifest.done", "{ended}");
@@ -935,7 +954,7 @@ fn a_run_with_a_dropped_picture_is_titled_by_the_files_name() {
 
     let read = front.record("manifest.read", &scratch, &run);
     assert_eq!(
-        read["ok"]["record"]["title"], "build the notes from sketch.png",
+        read["ok"]["record"]["title"], "do [Step #1] from sketch.png",
         "{read}"
     );
 }
@@ -1047,6 +1066,14 @@ fn a_run_that_cannot_be_what_was_asked_for_is_refused() {
         (
             json!({"session": session, "task": TASK, "attachments": [missing]}),
             "names no file",
+        ),
+        (
+            json!({"session": session, "task": TASK, "markers": ["[Image #1]"]}),
+            "one for each of `attachments`",
+        ),
+        (
+            json!({"session": session, "task": TASK, "markers": "[Image #1]"}),
+            "one for each of `attachments`",
         ),
         (
             json!({"session": session, "task": TASK, "dropped": [text]}),
