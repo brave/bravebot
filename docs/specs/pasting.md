@@ -573,8 +573,8 @@ their numbers, so a reopened draft unfolds as it did before it was closed. A sav
 not a list is dropped, and so is an entry whose marker, text, number or line count is not of its
 type.
 
-A folded paste has a chip above the box with a text glyph, the label `Pasted text` and the marker.
-Removing the chip deletes the marker, and deleting the marker takes the chip off. The chip is not
+A folded paste has a chip above the box with a text glyph, the label `Pasted text #N` and its line
+count. The chip's controls name the marker for a screen reader. Removing the chip deletes the marker, and deleting the marker takes the chip off. The chip is not
 marked as trusted context, because pasted text holds no labels ([PASTE-7](#PASTE-7)).
 
 The window has no info panel, so its form of [PASTE-13](#PASTE-13) is a read-only modal. A click on

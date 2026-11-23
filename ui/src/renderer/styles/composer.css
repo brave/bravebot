@@ -398,7 +398,8 @@
 .attachment-name.words {
   font: var(--type-caption);
 }
-.attachment-marker {
+.attachment-marker,
+.attachment-meta {
   flex: none;
   font: var(--type-caption);
   font-variant-numeric: tabular-nums;

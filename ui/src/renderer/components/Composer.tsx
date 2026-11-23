@@ -392,10 +392,12 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                   return (
                     <span className="attachment-chip dropped" key={item.marker} data-test="pasted-text-chip">
                       <FileGlyph name="pasted.txt" />
-                      <button type="button" className="attachment-name words" data-tooltip={`View ${item.marker}`}
-                        data-tooltip-shortcut="⌥V" aria-keyshortcuts="Alt+V"
-                        data-test="pasted-text-peek" onClick={() => onPeek(item.marker)}>Pasted text</button>
-                      <span className="attachment-marker">{item.marker}</span>
+                      {/* The label names the paste once; the marker it stands for in the draft is in
+                          the controls' accessible names. */}
+                      <button type="button" className="attachment-name words" aria-label={`View ${item.marker}`}
+                        data-tooltip="View pasted text" data-tooltip-shortcut="⌥V" aria-keyshortcuts="Alt+V"
+                        data-test="pasted-text-peek" onClick={() => onPeek(item.marker)}>{`Pasted text #${item.pasted.number}`}</button>
+                      <span className="attachment-meta">{`${item.pasted.lines} ${item.pasted.lines === 1 ? 'line' : 'lines'}`}</span>
                       <IconButton icon="close" size="tiny" label={`Remove ${item.marker} Pasted text`} tooltip="Remove"
                         onClick={() => onRemoveStaged(item.marker)} />
                     </span>

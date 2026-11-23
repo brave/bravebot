@@ -266,7 +266,7 @@ running keeps its pictures, as it keeps dropped files.
 
 A text paste of more than a couple of lines folds in the desktop app as it does in the terminal: the
 box gets a marker such as `[Pasted text #3 +40 lines]` where the cursor is, numbered with the
-pictures and files in the same message, and a **Pasted text** chip above the box. A shorter paste
+pictures and files in the same message, and a **Pasted text #3** chip above the box that shows the line count. A shorter paste
 lands as text. Delete the marker, or remove the chip, to take the paste off.
 
 The words go in place of the marker wherever the message leaves the box: when you send it, queue it
