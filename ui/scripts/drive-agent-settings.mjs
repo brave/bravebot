@@ -42,6 +42,8 @@ try {
       if (method === 'session.open') return { ok: { session: `s-${params.id}`, model: 'local/test', record: { ...rows.find(r => r.id === params.id), turns: 0, tokens: 0 }, said: [], todos: {}, trust: { known: true, rules: [] }, archived: 0, contextTokens: 0 } }
       if (method === 'models.list') return { ok: { models: [{ id: 'local/test', name: 'Test model', provider: 'Local', premium: false, contextWindow: 32000 }], defaultModel: 'local/test', warnings: [] } }
       if (method === 'settings.inspect') return { ok: report }
+      if (method === 'session.limit') return { ok: { limit: null, spent: 0 } }
+      if (method === 'session.variant') return { ok: { model: 'local/test', offered: [], variant: null } }
       if (method === 'accounts.list') return { ok: { accounts: state.accounts } }
       if (method === 'accounts.signOut') {
         state.signOuts.push(params)
@@ -302,7 +304,8 @@ try {
   await page.keyboard.press('Escape')
   await dialog.waitFor({ state: 'detached' })
   // Focus is on the button Leo draws inside the host, which the page reports as the host itself.
-  assert.equal(await page.locator('.agent-settings-open').evaluate(el => el === document.activeElement || el.getRootNode().host === document.activeElement), true)
+  // The window moves focus after the dialog has gone, so this waits for it rather than looking once.
+  await page.waitForFunction(() => document.activeElement === document.querySelector('.agent-settings-open'), null, { timeout: 2000, polling: 100 })
   await page.locator('.session').filter({ hasText: 'Agent settings a' }).click()
   await page.getByText('Context not yet measured', { exact: true }).waitFor()
   await page.getByRole('button', { name: 'More', exact: true }).click(); await page.getByRole('menuitem', { name: 'File watches…', exact: true }).click()
@@ -361,7 +364,7 @@ try {
   // page used last.
   if (await page.locator('.app.left-folded').count()) await page.getByRole('button', { name: 'Chat list', exact: true }).click()
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
-  await dialog.getByText('Model service configured', { exact: true }).waitFor()
+  await dialog.getByRole('heading', { name: 'Diagnostics', exact: true }).waitFor()
   assert(await dialog.locator('.settings-main').evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'settings page fits narrow layout')
   await snap('06-narrow-settings')
   assert.deepEqual(errors, [])
