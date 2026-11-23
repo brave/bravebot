@@ -1758,8 +1758,10 @@ the status for an argument (CLI-6), when no list follows it, when the list is bl
 in it is not a tool, so a typo is not read as a smaller list than its author meant. If it is given
 twice, the last is used. Both are refused with `--mode manifest`, whose steps are planned and run
 from the plan, with `--bg`, which starts the session in another process that would not carry them,
-and with `doctor`, `auth`, `mcp`, `permissions`, `sessions`, `stats`, `attach`, `reply`, `import-leo-creds`,
+and with `doctor`, `update`, `auth`, `mcp`, `permissions`, `sessions`, `stats`, `schedule`, `skill`, `trigger`,
+`attach`, `reply`, `import-leo-creds`,
 `import-providers`, `completion`, `shell-init` and `acp`, which start neither a session nor a task.
+`bug-report` is not refused beside either flag.
 
 **Why.** A harness running the agent on a shared machine needs to say what a run may reach without
 editing settings, and a refusal that depends on a mode could be undone by a flag that stops the
@@ -1775,6 +1777,7 @@ or narrow them.
 `verified-by: bravebot_cli::running::a_tool_limit_that_limits_nothing_is_refused_by_name`
 `verified-by: bravebot_cli::main::the_tool_limit_is_taken_out_wherever_it_appears`
 `verified-by: bravebot_cli::running::the_tool_limit_is_refused_beside_each_command_that_starts_no_session_or_task`
+`verified-by: bravebot_cli::main::the_commands_that_start_no_session_refuse_every_flag_that_shapes_one`
 `verified-by: bravebot_cli::running::a_no_shell_run_does_not_send_the_planner_from_read_git_to_run`
 
 <a id="CLI-27"></a>
@@ -1930,6 +1933,15 @@ reports the rules of the `permissions` block only: the modes of [permission-mode
 `readsStayInWorkspace` and `bypassUnreachable` ([PERM-16](permissions.md#PERM-16),
 [PERM-17](permissions.md#PERM-17)) are not consulted, and a manifest run reads no rule.
 
+The desktop's Conversation permissions panel answers the same question through the bridge method
+`permissions.check`, with the same decision, rule, file, reason and not-in-force line, each spelled
+field drawn as this command draws it. It answers against the rules the open session holds
+([PERM-12](permissions.md#PERM-12)) rather than reading the files again, so after a settings file
+is edited the panel and this command can give different answers until a new session is started. It
+reads and writes nothing else, and grants and revokes nothing. Words that name no call are refused
+as a bad request, and a call made while the session runs a turn is refused because the turn holds
+the session's rules.
+
 **Why.** A person finds out whether a rule works by hitting the prompt or the refusal, and when two
 layers disagree the precedence is the thing they cannot see. Naming the file is what narrows a
 surprising answer to one place to edit, and naming a checkout's ungranted allow rule says why a rule
@@ -1949,6 +1961,12 @@ that is written down is still asking.
 `verified-by: bravebot_cli::running::permissions_check_refuses_a_command_line_that_names_no_call`
 `verified-by: bravebot_cli::running::permissions_check_prints_a_reason_only_from_the_persons_own_file`
 `verified-by: bravebot_cli::running::permissions_check_draws_the_control_characters_of_a_checkouts_rules_as_pictures`
+`verified-by: bravebot_ui_bridge::rules::permissions_check_names_the_rule_and_the_file_that_decide`
+`verified-by: bravebot_ui_bridge::rules::permissions_check_says_when_no_rule_decides`
+`verified-by: bravebot_ui_bridge::rules::permissions_check_refuses_words_that_name_no_call`
+`verified-by: bravebot_ui_bridge::rules::permissions_check_answers_against_the_rules_the_session_holds`
+`verified-by: bravebot_ui_bridge::project_questions_tests::a_checkouts_allow_rule_is_not_in_force_until_granted`
+`verified-by: bravebot_ui_bridge::project_questions_tests::permissions_check_is_refused_during_a_turn_and_for_an_unknown_session`
 
 <a id="CLI-31"></a>
 ### CLI-31: `-i <prompt>` opens the interface that draws and sends the prompt as its first turn

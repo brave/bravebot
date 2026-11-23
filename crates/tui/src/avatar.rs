@@ -691,13 +691,34 @@ pub fn look_now() -> Look {
     if let Some(look) = pinned::get() {
         return look;
     }
-    static STARTED: OnceLock<Instant> = OnceLock::new();
-    let seconds = STARTED.get_or_init(Instant::now).elapsed().as_secs_f64();
-    let own = held(startup_seed(), seconds, crate::indicator::stilled());
+    let (seed, seconds) = clock();
+    let own = held(seed, seconds, crate::indicator::stilled());
     match poke::last() {
-        Some((motion, at)) => poked(own, motion, at.elapsed()),
+        Some((motion, at)) => poked(own, motion, since_click(at)),
         None => own,
     }
+}
+
+/// How long ago a click was made. A test holds it, so that a click is read at an age the test
+/// chooses and not at the age its own speed gave it.
+fn since_click(at: Instant) -> Duration {
+    #[cfg(all(test, unix))]
+    if let Some(held) = sampled::since_click() {
+        return held;
+    }
+    at.elapsed()
+}
+
+/// The seed this process draws and how many seconds it has been drawing it, which is what its
+/// schedule is read from. A test samples the live path at seconds of its own choosing.
+fn clock() -> (&'static str, f64) {
+    #[cfg(all(test, unix))]
+    if let Some(sampled) = sampled::get() {
+        return sampled;
+    }
+    static STARTED: OnceLock<Instant> = OnceLock::new();
+    let seconds = STARTED.get_or_init(Instant::now).elapsed().as_secs_f64();
+    (startup_seed(), seconds)
 }
 
 /// What a click on the face makes it do, the two things it does on its own schedule.
@@ -853,6 +874,65 @@ mod pinned {
 
 #[cfg(test)]
 pub(crate) use pinned::holding as with_face_held;
+
+/// A seed, a second and the age of the last click, held fixed for the calling thread, so a test can
+/// read the live path of [`look_now`] at any second of a process's life, and a click at any age,
+/// without waiting for either. Unix only, like the one test that reads it, which starts a child
+/// process.
+#[cfg(all(test, unix))]
+mod sampled {
+    use super::Look;
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    type Clock = Option<(&'static str, f64)>;
+
+    thread_local! {
+        static SAMPLED: Cell<Clock> = const { Cell::new(None) };
+        static SINCE_CLICK: Cell<Option<Duration>> = const { Cell::new(None) };
+    }
+
+    pub(super) fn get() -> Clock {
+        SAMPLED.with(Cell::get)
+    }
+
+    pub(super) fn since_click() -> Option<Duration> {
+        SINCE_CLICK.with(Cell::get)
+    }
+
+    /// Restores the previous clock and click age when dropped, so a panic in the test leaves
+    /// nothing behind.
+    struct Restore(Clock, Option<Duration>);
+
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SAMPLED.with(|sampled| sampled.set(self.0));
+            SINCE_CLICK.with(|since| since.set(self.1));
+        }
+    }
+
+    /// What [`super::look_now`] answers `seconds` into the life of a process whose seed is `seed`.
+    pub(crate) fn look_at(seed: &'static str, seconds: f64) -> Look {
+        looked_at(seed, seconds, None)
+    }
+
+    /// The same, with the last click made `since` ago and not as long ago as the test took to get
+    /// here.
+    pub(crate) fn look_after_click(seed: &'static str, seconds: f64, since: Duration) -> Look {
+        looked_at(seed, seconds, Some(since))
+    }
+
+    fn looked_at(seed: &'static str, seconds: f64, since: Option<Duration>) -> Look {
+        let _restore = Restore(
+            SAMPLED.with(|sampled| sampled.replace(Some((seed, seconds)))),
+            SINCE_CLICK.with(|held| held.replace(since)),
+        );
+        super::look_now()
+    }
+}
+
+#[cfg(all(test, unix))]
+pub(crate) use sampled::{look_after_click as look_now_after_click, look_at as look_now_at};
 
 /// [`look_at`], or the face at rest where no motion was asked for. Taken as an argument so the rule
 /// can be checked without putting a process-wide switch in force under every other test.
@@ -1341,6 +1421,119 @@ mod tests {
         assert!(look_now().blink);
         poke_as(false);
         assert!(look_now().away);
+    }
+
+    /// VIEW-21. The variable that makes a run of this test binary the child of
+    /// `the_live_face_is_still_where_the_environment_asks_for_no_motion`. Its value says whether
+    /// the child was started with `NO_MOTION` set.
+    #[cfg(unix)]
+    const LIVE_CHILD: &str = "BRAVEBOT_TEST_NO_MOTION_FACE_CHILD";
+
+    /// VIEW-21. [`look_now`], the function every frame of the running program reads, in a process
+    /// whose environment has `NO_MOTION` set or does not: `sense_no_motion` stores the answer and
+    /// `look_now` reads it.
+    ///
+    /// The static `look_now` reads is one per process and every test in this binary shares it, and
+    /// the crate forbids the unsafe code that setting a variable in process takes. The test
+    /// therefore starts this binary again with the variable set on that command alone, and the
+    /// child makes the assertions. It samples `look_now` every fiftieth of a second across three
+    /// minutes of a face's life, at a fixed seed, so a blink (about a tenth of a second wide) or a
+    /// glance cannot fall between two samples. The control child, with the variable unset, has to
+    /// show a blink and a glance among the same samples, which is also what shows the schedule
+    /// the still face is held against is not itself at rest. Rejects: `look_now` holding the
+    /// schedule where the person asked for no motion, as it does when it reads the wrong variable
+    /// or hands `held` a flag that is always off, which every test that hands the flag in as an
+    /// argument passes.
+    #[cfg(unix)]
+    #[test]
+    fn the_live_face_is_still_where_the_environment_asks_for_no_motion() {
+        const THIS: &str =
+            "avatar::tests::the_live_face_is_still_where_the_environment_asks_for_no_motion";
+        const CHECKED: &str = "live face checked:";
+        const SEED: &str = "v2:the-face-under-test";
+
+        if let Ok(expectation) = std::env::var(LIVE_CHILD) {
+            let asked = expectation == "asked";
+            crate::indicator::sense_no_motion();
+            assert_eq!(
+                crate::indicator::stilled(),
+                asked,
+                "stilled() after sense_no_motion()"
+            );
+            reset_pokes();
+
+            let seconds: Vec<f64> = (0..9_000).map(|step| f64::from(step) * 0.02).collect();
+            let schedule: Vec<Look> = seconds.iter().map(|at| look_at(SEED, *at)).collect();
+            let live: Vec<Look> = seconds.iter().map(|at| look_now_at(SEED, *at)).collect();
+            assert!(
+                schedule.iter().any(|look| look.blink) && schedule.iter().any(|look| look.away),
+                "the schedule of the seed never blinks and glances: the test has nothing to hold still"
+            );
+            if asked {
+                let moved: Vec<(f64, Look)> = seconds
+                    .iter()
+                    .zip(&live)
+                    .filter(|(_, look)| **look != Look::default())
+                    .map(|(at, look)| (*at, *look))
+                    .collect();
+                assert!(
+                    moved.is_empty(),
+                    "the face moved with NO_MOTION set, first at {:?}",
+                    moved.first()
+                );
+            } else {
+                assert_eq!(live, schedule, "the face did not follow its schedule");
+            }
+
+            // A click moves the face for a moment, unless no motion was asked for.
+            let at_rest = seconds
+                .iter()
+                .zip(&schedule)
+                .find(|(_, look)| **look == Look::default())
+                .map(|(at, _)| *at)
+                .expect("a second at which the schedule holds the face at rest");
+            // A click moves the face for a moment, unless no motion was asked for. The click's age
+            // is held, so the blink is read at once and again at an age well past a blink of the
+            // schedule, whatever the speed of this process. The second age is written out and not
+            // built from the click's own constant, so a click that lasts too long is caught.
+            poke();
+            let clicked = look_now_after_click(SEED, at_rest, Duration::ZERO);
+            assert_eq!(
+                clicked.blink, !asked,
+                "the face after a click, at a second its schedule holds it at rest"
+            );
+            let over = look_now_after_click(SEED, at_rest, Duration::from_millis(500));
+            assert!(
+                !over.blink,
+                "the face was still blinking half a second after the click"
+            );
+
+            println!("{CHECKED} {expectation}");
+            return;
+        }
+
+        for (value, expectation) in [(Some("1"), "asked"), (None, "declined")] {
+            // nosemgrep: rust.lang.security.current-exe.current-exe
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", THIS, "--test-threads=1", "--nocapture"])
+                .env(LIVE_CHILD, expectation)
+                .env_remove("NO_MOTION")
+                .env_remove("NO_COLOR");
+            if let Some(value) = value {
+                command.env("NO_MOTION", value);
+            }
+            let what = format!("the child run with NO_MOTION {value:?}");
+            let output =
+                crate::testutil::output_within(&mut command, Duration::from_secs(60), &what);
+            let said = String::from_utf8_lossy(&output.stdout);
+            let failed = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{what} failed:\n{said}\n{failed}");
+            assert!(
+                said.contains(&format!("{CHECKED} {expectation}")),
+                "{what} did not reach its assertions:\n{said}\n{failed}"
+            );
+        }
     }
 
     #[test]

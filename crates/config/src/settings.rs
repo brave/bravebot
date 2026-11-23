@@ -1150,6 +1150,55 @@ impl RunDeadlines {
     }
 }
 
+/// Each rule in force and the file that wrote it, cloned out of [`Settings`] by
+/// [`Settings::rule_sources`].
+///
+/// Kept apart from [`Settings`] so that a front end holding a session's rules can name the file
+/// and reason for the rule that decides a call without keeping the whole of the settings (CLI-30).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RuleSources(Vec<RuleSource>);
+
+impl RuleSources {
+    /// The file that wrote the rule `anchored` in `list`, and the rule as that file spelled it,
+    /// as [`Settings::rule_source`] answers.
+    pub fn source(&self, list: &str, anchored: &str) -> Option<(&Path, &str)> {
+        source_of(&self.0, list, anchored)
+    }
+
+    /// Why the person wrote the rule `anchored` in `list`, where their own file said (PERM-1), as
+    /// [`Settings::rule_reason`] answers.
+    pub fn reason(&self, list: &str, anchored: &str) -> Option<&str> {
+        reason_of(&self.0, list, anchored)
+    }
+}
+
+/// The first entry of `sources` for the rule `anchored` in `list`, which is the weakest layer
+/// that wrote it.
+fn find_rule_source<'a>(
+    sources: &'a [RuleSource],
+    list: &str,
+    anchored: &str,
+) -> Option<&'a RuleSource> {
+    sources
+        .iter()
+        .find(|source| source.list == list && source.anchored == anchored)
+}
+
+/// The file and spelling [`RuleSources::source`] and [`Settings::rule_source`] answer with.
+fn source_of<'a>(
+    sources: &'a [RuleSource],
+    list: &str,
+    anchored: &str,
+) -> Option<(&'a Path, &'a str)> {
+    find_rule_source(sources, list, anchored)
+        .map(|source| (source.file.as_path(), source.written.as_str()))
+}
+
+/// The reason [`RuleSources::reason`] and [`Settings::rule_reason`] answer with.
+fn reason_of<'a>(sources: &'a [RuleSource], list: &str, anchored: &str) -> Option<&'a str> {
+    find_rule_source(sources, list, anchored).and_then(|source| source.reason.as_deref())
+}
+
 /// One rule in force, with the file that wrote it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuleSource {
@@ -2588,10 +2637,14 @@ impl Settings {
     /// said for a `Read` or `Edit` rule written with a single leading slash. Where two layers wrote
     /// the same rule, the weakest layer that did is named.
     pub fn rule_source(&self, list: &str, anchored: &str) -> Option<(&Path, &str)> {
-        self.rule_sources
-            .iter()
-            .find(|source| source.list == list && source.anchored == anchored)
-            .map(|source| (source.file.as_path(), source.written.as_str()))
+        source_of(&self.rule_sources, list, anchored)
+    }
+
+    /// Each rule in force and the file that wrote it, for a caller that keeps them without the
+    /// rest of the settings. Its lookups answer as [`Settings::rule_source`] and
+    /// [`Settings::rule_reason`] do.
+    pub fn rule_sources(&self) -> RuleSources {
+        RuleSources(self.rule_sources.clone())
     }
 
     /// Why the person wrote the rule `anchored` in `list`, where their own file said (PERM-1).
@@ -2601,10 +2654,7 @@ impl Settings {
     /// person's own file: a reason is display text and is shown as the person's own words, so a
     /// checkout's is not read at all.
     pub fn rule_reason(&self, list: &str, anchored: &str) -> Option<&str> {
-        self.rule_sources
-            .iter()
-            .find(|source| source.list == list && source.anchored == anchored)
-            .and_then(|source| source.reason.as_deref())
+        reason_of(&self.rule_sources, list, anchored)
     }
 
     /// The `permissions` blocks and `deny`, `ask` and `allow` values that were not the shape rules
@@ -7144,6 +7194,67 @@ mod tests {
             settings.rule_source("deny", &anchored),
             Some((project.as_path(), "Read(/secret)"))
         );
+    }
+
+    /// The sources cloned out of the settings answer every lookup as the settings do, across two
+    /// layers, so a front end that keeps only them names the same file and reason (CLI-30).
+    #[test]
+    fn rule_sources_answer_as_the_settings_do() {
+        let layers = Layers::new("rule-sources-cloned")
+            .global(
+                r#"{"permissions": {
+                     "deny": [{"rule": "Bash(rm *)", "reason": "never from a session"}],
+                     "allow": ["Bash(git *)", "Read(/notes.md)"]
+                   }}"#,
+            )
+            .project(r#"{"permissions": {"ask": ["Bash(git *)"], "deny": ["Read(/secret)"]}}"#);
+        let settings = layers.read();
+        let sources = settings.rule_sources();
+
+        let rules = settings.permissions();
+        let mut asked: Vec<(&str, String)> = Vec::new();
+        for (list, held) in [
+            ("deny", &rules.deny),
+            ("ask", &rules.ask),
+            ("allow", &rules.allow),
+        ] {
+            asked.extend(held.iter().map(|rule| (list, rule.clone())));
+        }
+        assert_eq!(asked.len(), 5);
+        asked.push(("deny", "Bash(git *)".to_owned()));
+        asked.push(("allow", "Bash(make *)".to_owned()));
+
+        for (list, rule) in &asked {
+            assert_eq!(
+                sources.source(list, rule),
+                settings.rule_source(list, rule),
+                "{list} {rule}"
+            );
+            assert_eq!(
+                sources.reason(list, rule),
+                settings.rule_reason(list, rule),
+                "{list} {rule}"
+            );
+        }
+
+        let global = layers.home.join(SETTINGS_FILE);
+        let project = layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE);
+        assert_eq!(
+            sources.source("deny", "Bash(rm *)"),
+            Some((global.as_path(), "Bash(rm *)"))
+        );
+        assert_eq!(
+            sources.reason("deny", "Bash(rm *)"),
+            Some("never from a session")
+        );
+        assert_eq!(
+            sources.source("ask", "Bash(git *)").map(|(file, _)| file),
+            Some(project.as_path())
+        );
+        assert_eq!(sources.reason("ask", "Bash(git *)"), None);
+        assert_eq!(sources.source("deny", "Bash(git *)"), None);
+        assert_eq!(sources.clone(), sources);
+        assert_eq!(RuleSources::default().source("deny", "Bash(rm *)"), None);
     }
 
     /// An `allow` rule a checkout wrote is not in force, so it is traced to no file: nothing could

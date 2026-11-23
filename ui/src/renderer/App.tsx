@@ -4,6 +4,7 @@ import type { ComposerFooterProps, ProjectChoice } from './components/Composer'
 import { botHistory, homeConversation } from '../shared/bot-history'
 import type { Tab } from '../shared/view'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { PanelName } from '../shared/state'
 import type {
   BridgeEvent,
   ForkedSession,
@@ -24,7 +25,7 @@ import { SessionInfo, firstChat } from './components/Sessions'
 import { FIND_EVENT, FOCUS_COMPOSER_EVENT, Transcript } from './components/Transcript'
 import { Context } from './components/Context'
 import { Gutter, useColumns } from './components/Gutter'
-import { shown } from './columns'
+import { FOLD_MS, shown } from './columns'
 import { TrustPrompt } from './components/TrustPrompt'
 import { FolderPrompt, RulesPrompt } from './components/ProjectQuestions'
 import { Unconfigured } from './components/Unconfigured'
@@ -140,6 +141,18 @@ export function App(): React.JSX.Element {
     try { setUpdateStatus(parseUpdateStatus(await call('update.status'))) } catch { setUpdateStatus(null) }
   }, [])
   useEffect(() => { void readUpdateStatus() }, [readUpdateStatus])
+  /** The context-column panels turned off in `bravebot-ui.json` (PANEL-20), read once at start. */
+  const [hiddenPanels, setHiddenPanels] = useState<PanelName[]>([])
+  useEffect(() => {
+    window.bravebot.readHiddenPanels().then(setHiddenPanels, () => setHiddenPanels([]))
+  }, [])
+  /** Show a ticked or unticked section at once and save it at once, so closing the window loses nothing. */
+  const changeHiddenPanels = useCallback((hidden: PanelName[]) => {
+    setHiddenPanels(hidden)
+    window.bravebot.writeHiddenPanels(hidden)
+  }, [])
+  /** Counts View > Choose Sections, which opens the context column's checklist each time it rises. */
+  const [sectionsAsked, setSectionsAsked] = useState(0)
   const dismissedUpdate = preferences.dismissedUpdate
   const download = useCallback(() => { void window.bravebot.openPage('releases') }, [])
   const updateNotice = useMemo(() => {
@@ -1087,6 +1100,14 @@ export function App(): React.JSX.Element {
     focusComposer: () => document.dispatchEvent(new Event(FOCUS_COMPOSER_EVENT)),
     about: () => void about(),
     caffeinate: () => void caffeinate(),
+    // A folded column is unfolded first and the checklist opened once it has finished growing, so
+    // the menu is placed against the button where it comes to rest.
+    sections: () => {
+      const ask = () => setSectionsAsked((n) => n + 1)
+      if (!collapsed.right) return ask()
+      toggle('right')
+      setTimeout(ask, FOLD_MS + 40)
+    },
     changelog: () => void changelog(),
     note: askNote,
     compact: askCompact,
@@ -1326,7 +1347,7 @@ export function App(): React.JSX.Element {
         onReset={reset}
         onNudge={nudge}
       />
-      <Context live={live} audit={auditPanel} details={details} onAddNote={askNote}
+      <Context live={live} audit={auditPanel} details={details} hidden={hiddenPanels} onHidden={changeHiddenPanels} sectionsAsked={sectionsAsked} onAddNote={askNote}
         onAddFolder={addFolderFromPanel} onCloseFolder={closeFolderFromPanel} />
       </div>
       </div>

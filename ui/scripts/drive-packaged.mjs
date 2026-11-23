@@ -83,7 +83,7 @@ check(
   `a release offers no Reload and no Developer Tools (${seen.developer.map((i) => i.label).join(', ') || 'none'})`,
 )
 check(
-  seen.view.filter(Boolean).join() === 'view.fold-left,view.fold-right,view.reset-columns,view.find,view.focus-composer,view.theme',
+  seen.view.filter(Boolean).join() === 'view.fold-left,view.fold-right,app.sections,view.reset-columns,view.find,view.focus-composer,view.theme',
   `View offers columns and themes (${seen.view.filter(Boolean).join(', ')})`,
 )
 

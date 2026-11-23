@@ -6823,6 +6823,59 @@ mod tests {
             );
         }
 
+        /// SESSION-20. A resume puts the asides into the view and neither half into the transcript
+        /// the person reads the exchange in, by either path that fills it: the one that has the
+        /// turns' own history and the one for a record that has none. Rejects a resume that draws
+        /// the question or the answer among the exchange's lines, which shows the person a turn the
+        /// session never had and reads as something the planner was told.
+        #[test]
+        fn a_resume_puts_the_asides_in_the_view_and_neither_half_in_the_transcript() {
+            use bravebot_aichat::protocol::Message;
+
+            let mut conversation = bravebot_agent::Conversation::new();
+            conversation.push(Message::user("fix the parser"));
+            conversation.push(Message::assistant("fixed it"));
+
+            for history in [None, Some(Vec::new())] {
+                let mut session = Session::new("none");
+                session.replay(
+                    &conversation,
+                    "a title",
+                    &bravebot_session::sessions::Recalled {
+                        history,
+                        turns: Some(1),
+                        trails: Default::default(),
+                        todos: Default::default(),
+                        asides: vec![Aside {
+                            question: "why recursive?".to_string(),
+                            answer: Some("because of nesting".to_string()),
+                            kept: true,
+                        }],
+                        started: None,
+                    },
+                );
+
+                assert_eq!(session.asides().len(), 1, "the aside was not brought back");
+                let drawn: Vec<&str> = session
+                    .transcript
+                    .iter()
+                    .map(|entry| entry.text.as_str())
+                    .collect();
+                assert!(
+                    drawn.iter().any(|text| text.contains("fixed it")),
+                    "the exchange the session had was not drawn: {drawn:?}"
+                );
+                assert!(
+                    !drawn.iter().any(|text| text.contains("recursive")),
+                    "the question was drawn among the exchange's lines: {drawn:?}"
+                );
+                assert!(
+                    !drawn.iter().any(|text| text.contains("nesting")),
+                    "the answer was drawn among the exchange's lines: {drawn:?}"
+                );
+            }
+        }
+
         /// The point of delegating is that the reading lands somewhere else, and the interface
         /// has the same problem the planner does: a turn that asked a delegate to run the build
         /// should not have the build log in the middle of it.

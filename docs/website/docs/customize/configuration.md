@@ -1543,10 +1543,14 @@ forward-slash form is easier to write. `~/x` starts at your home directory on it
 way. `Read(/D:/work/**)`, with one slash, still starts where any `/x` rule does. A workspace
 rule such as `Read(.env)` does not cover a file on a drive outside the workspace.
 
-**A one-segment relative pattern floats where it restricts and not where it grants.** `Edit(src/**)`
-in `deny` or `ask` covers a `src` directory at any depth, including a copy under `vendor`; the same
-pattern in `allow` covers only the `src` at the top. Anchor it as `Edit(./src/**)` to pin it to the
-top of the workspace in either list.
+**A relative pattern that starts at a plain directory name floats where it restricts and not where
+it grants.** `Edit(src/**)` in `deny` or `ask` covers a `src` directory at any depth, including a
+copy under `vendor`; the same pattern in `allow` covers only the `src` at the top. This holds
+however many segments the pattern has: `Edit(src/lib/**)` in `deny` covers `vendor/pkg/src/lib/a.js`.
+Anchor it as `Edit(./src/**)` to pin it to the top of the workspace in either list.
+
+A bare name is the exception. A pattern with no directory part, such as `Read(.env)`, matches at any
+depth in every list, `allow` included.
 
 A **command** specifier matches a step's program and arguments, with `*` standing in for any text:
 

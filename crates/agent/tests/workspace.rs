@@ -11107,6 +11107,257 @@ fn a_write_in_a_directory_the_person_opened_is_kept_for_an_undo_and_leaves_no_sc
     );
 }
 
+/// What a turn that wrote into the session's own directory and into the project leaves for an
+/// undo: the file decisions before the turn and after it, and the backups the turn kept, which
+/// are the project file's alone because nothing is kept for the session's own directory.
+struct ScratchTurn {
+    _project: Scratch,
+    given: SessionScratch,
+    workspace: Workspace,
+    before: TrustStore,
+    after: TrustStore,
+    backups: Vec<bravebot_agent::workspace::Backup>,
+}
+
+impl ScratchTurn {
+    /// The key the map holds a file of the session's own directory under, for a file that exists.
+    fn key(&self, name: &str) -> String {
+        bravebot_agent::workspace::key_of(
+            &self
+                .given
+                .path()
+                .join(name)
+                .canonicalize()
+                .expect("the file is there"),
+        )
+    }
+
+    /// The production undo: `current` meets `target`, and the backups the turn kept are put back.
+    fn undo(&mut self, current: &mut TrustStore, target: &TrustStore) -> Vec<PathBuf> {
+        bravebot_agent::rewind::restore(
+            &self.workspace,
+            std::mem::take(&mut self.backups),
+            current,
+            target,
+            &mut None,
+            None,
+            &mut bravebot_agent::confirm::Unattended,
+        )
+    }
+}
+
+/// The project is vouched for before the turn. The turn writes `fetched.json` in the session's own
+/// directory from untrusted bytes, `workings.txt` there from trusted ones, and `source.txt` in the
+/// project.
+fn a_turn_that_wrote_into_the_sessions_own_directory(name: &str) -> ScratchTurn {
+    let project = Scratch::new(name);
+    std::fs::write(project.path.join("source.txt"), "before").expect("a file in the project");
+    let given = SessionScratch::create().expect("a directory of its own");
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(given.directory());
+
+    let mut before = bravebot_agent::workspace::trust_store(workspace.root());
+    before.trust(".");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(before.clone())
+    .with_root(workspace.root())
+    .with_scratch(Some(given.path()));
+
+    let named = |file: &str| given.path().join(file).display().to_string();
+    workspace
+        .write(
+            &mut policy,
+            &trusted_text(&named("fetched.json")),
+            &Labelled::new("a fetched page".to_string(), Label::untrusted_public()),
+        )
+        .expect("a write in the session's own directory");
+    workspace
+        .write(
+            &mut policy,
+            &trusted_text(&named("workings.txt")),
+            &trusted_text("intermediate"),
+        )
+        .expect("a write in the session's own directory");
+    workspace
+        .write(
+            &mut policy,
+            &trusted_text("source.txt"),
+            &trusted_text("after"),
+        )
+        .expect("a write in the project");
+    let after = policy.trust();
+    let backups = workspace.take_backups();
+
+    let turn = ScratchTurn {
+        _project: project,
+        given,
+        workspace,
+        before,
+        after,
+        backups,
+    };
+    assert_eq!(
+        turn.backups
+            .iter()
+            .map(|backup| backup.path.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            turn._project
+                .path
+                .join("source.txt")
+                .canonicalize()
+                .expect("canonical")
+        ],
+        "the fixture kept something for the session's own directory, or nothing for the project"
+    );
+    assert_eq!(
+        turn.after.integrity_of(&turn.key("fetched.json")),
+        Some(Integrity::Untrusted),
+        "the write of untrusted bytes was not recorded under the key the undo will meet"
+    );
+    turn
+}
+
+/// TRUST-19, first leg. A file in the session's own directory holds bytes nobody vouched for, and
+/// no backup of it is kept, so an undo does not put it back and touches only its decision. The
+/// decision is the lower of the current one and the snapshot's, so the file stays untrusted where
+/// the snapshot has no word about it. Rejects an undo that installs the snapshot's decisions in
+/// place of the meet: the file would end undecided or trusted, and a later turn could read the
+/// fetched page back as the person's own.
+#[test]
+fn an_untrusted_file_in_the_sessions_own_directory_stays_untrusted_after_an_undo() {
+    let mut turn =
+        a_turn_that_wrote_into_the_sessions_own_directory("scratch-undo-stays-untrusted");
+    let mut current = turn.after.clone();
+    let target = turn.before.clone();
+
+    let refused = turn.undo(&mut current, &target);
+
+    assert!(refused.is_empty(), "the undo reported {refused:?}");
+    let fetched = turn.key("fetched.json");
+    assert_eq!(current.integrity_of(&fetched), Some(Integrity::Untrusted));
+    assert!(!current.is_trusted(&fetched));
+    assert_eq!(
+        std::fs::read_to_string(turn.given.path().join("fetched.json")).expect("still there"),
+        "a fetched page",
+        "the undo wrote over a file of the session's own directory"
+    );
+}
+
+/// TRUST-19, second leg. Where the current map and the snapshot disagree about a file in the
+/// session's own directory, the lower decision is kept whichever side holds it, and a decision
+/// only the snapshot holds grants nothing. Rejects a meet that keeps the current map's distrust
+/// only (the snapshot's distrust is lost), one that keeps the snapshot's distrust only, and one
+/// that lets either side's trust stand where the other has no word.
+#[test]
+fn an_explicit_distrust_on_either_side_survives_an_undo_and_the_snapshot_grants_nothing() {
+    let mut turn = a_turn_that_wrote_into_the_sessions_own_directory("scratch-undo-either-side");
+    let names = [
+        "current-distrusts.txt",
+        "snapshot-distrusts.txt",
+        "only-the-snapshot-trusts.txt",
+        "only-the-current-trusts.txt",
+        "both-trust.txt",
+    ];
+    for name in names {
+        std::fs::write(turn.given.path().join(name), "workings").expect("a file of the turn");
+    }
+    let [
+        current_distrusts,
+        snapshot_distrusts,
+        only_snapshot,
+        only_current,
+        both,
+    ] = names.map(|name| turn.key(name));
+
+    let mut current = turn.after.clone();
+    let mut target = turn.before.clone();
+    current.distrust(&current_distrusts);
+    target.trust(&current_distrusts);
+    target.distrust(&snapshot_distrusts);
+    current.trust(&snapshot_distrusts);
+    target.trust(&only_snapshot);
+    current.trust(&only_current);
+    current.trust(&both);
+    target.trust(&both);
+
+    let refused = turn.undo(&mut current, &target);
+
+    assert!(refused.is_empty(), "the undo reported {refused:?}");
+    assert_eq!(
+        current.integrity_of(&current_distrusts),
+        Some(Integrity::Untrusted),
+        "the snapshot's trust lifted a distrust the current map held"
+    );
+    assert_eq!(
+        current.integrity_of(&snapshot_distrusts),
+        Some(Integrity::Untrusted),
+        "the current map's trust lifted a distrust the snapshot held"
+    );
+    assert!(
+        !current.is_trusted(&only_snapshot),
+        "the snapshot granted trust the current map never gave"
+    );
+    assert!(
+        !current.is_trusted(&only_current),
+        "the current map's trust stood where the snapshot had no word"
+    );
+    assert!(
+        current.is_trusted(&both),
+        "a file both sides trust lost its trust in the meet"
+    );
+}
+
+/// TRUST-19, third leg. Keeping the lower decision for a file in the session's own directory does
+/// not stop the undo from putting back the other files it covers. The snapshot here distrusts a
+/// file of the session's own directory the current map trusts, and the project file the same turn
+/// wrote is put back to what it held. Rejects an undo that gives up, or reports the project file as
+/// one it could not put back, once the meet lowered something.
+#[test]
+fn keeping_the_lower_decision_for_a_scratch_file_does_not_stop_the_other_files_being_restored() {
+    let mut turn =
+        a_turn_that_wrote_into_the_sessions_own_directory("scratch-undo-others-restored");
+    let workings = turn.key("workings.txt");
+    let mut current = turn.after.clone();
+    current.trust(&workings);
+    let mut target = turn.before.clone();
+    target.distrust(&workings);
+    let project_file = turn._project.path.join("source.txt");
+    assert_eq!(
+        std::fs::read_to_string(&project_file).expect("the file the turn wrote"),
+        "after"
+    );
+
+    let refused = turn.undo(&mut current, &target);
+
+    assert!(
+        refused.is_empty(),
+        "the undo could not put back {refused:?}"
+    );
+    assert_eq!(
+        current.integrity_of(&workings),
+        Some(Integrity::Untrusted),
+        "the lower decision was not kept for the file of the session's own directory"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&project_file).expect("the project file"),
+        "before",
+        "keeping the lower decision stopped the project file being put back"
+    );
+    assert!(
+        current.is_trusted("source.txt"),
+        "the undo distrusted the project: source.txt is no longer trusted, though the snapshot \
+         and the current map both trust the project"
+    );
+}
+
 /// Given, not opened by name. It is not among the directories the user asked for, because `/status`
 /// says what it is instead of listing it as somewhere they chose to reach.
 #[test]

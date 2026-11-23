@@ -1,7 +1,7 @@
 use super::*;
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::{Event, RecordingSink};
-use bravebot_core::label::Integrity;
+use bravebot_core::label::{Integrity, Label};
 use bravebot_core::policy::{ReleasePlan, Routing};
 use bravebot_core::trust::TrustStore;
 
@@ -147,6 +147,35 @@ fn an_edit_from_a_trusted_context_replaces_the_passage() {
     assert_eq!(
         std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
         "keep\nnew\ntail\n"
+    );
+}
+
+/// The result of an edit holds the lines it produced only where the edited body's label is
+/// trusted. No turn reaches the other case, because a context that has met something untrusted
+/// is refused before the edit is worked out, so the choice is tested where it is made: a body
+/// labelled untrusted gets the count alone and a trusted one gets the lines, whatever its
+/// confidentiality.
+#[test]
+fn an_edit_result_shows_its_lines_only_for_a_trusted_body() {
+    assert_eq!(
+        what_an_edit_result_shows(Label::untrusted_public()),
+        EditResultShows::CountAlone,
+        "an untrusted body was shown as lines"
+    );
+    assert_eq!(
+        what_an_edit_result_shows(Label::untrusted_private()),
+        EditResultShows::CountAlone,
+        "an untrusted private body was shown as lines"
+    );
+    assert_eq!(
+        what_an_edit_result_shows(Label::trusted_public()),
+        EditResultShows::LinesAndCount,
+        "a trusted body lost its lines"
+    );
+    assert_eq!(
+        what_an_edit_result_shows(Label::trusted_private()),
+        EditResultShows::LinesAndCount,
+        "a trusted private body lost its lines"
     );
 }
 

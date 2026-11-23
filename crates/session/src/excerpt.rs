@@ -189,6 +189,8 @@ pub fn of(project: &std::path::Path, id: &str) -> Result<Excerpt, Refused> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_profile::{in_isolated_profile, project};
+    use bravebot_agent::conversation::Stored;
     use bravebot_aichat::protocol::Message;
 
     fn a_record(messages: Vec<Message>) -> Record {
@@ -346,6 +348,173 @@ mod tests {
         assert_eq!(private.excerpt(), Err(Refused::Private));
 
         assert_eq!(a_record(Vec::new()).excerpt(), Err(Refused::Empty));
+    }
+
+    /// NAME-10: words another program kept are refused as not ours whatever else the record says.
+    /// A copy made by `sessions import` is private, and a fork of one can carry this build's own
+    /// front end word, so the refusal has to come from the tag on the words: with the front end
+    /// word ours, an imported record is `NotOurs` whether it is private or public and whether the
+    /// words are in the archive or in the conversation.
+    #[test]
+    fn a_record_holding_imported_words_is_refused_as_not_ours() {
+        for holds in ["private", "public"] {
+            for in_archive in [true, false] {
+                let mut record = a_record(said(1));
+                let mut words = Stored::plain(Message::user("fix the parser"));
+                words.composed = Some(Composed::Imported);
+                if in_archive {
+                    record.conversation.archive.push(words);
+                } else {
+                    record.conversation.messages.push(words);
+                }
+                record.conversation.holds = holds.to_string();
+                assert_eq!(
+                    record.excerpt(),
+                    Err(Refused::NotOurs),
+                    "a {holds} record with imported words in its {} was not refused as another \
+                     program's",
+                    if in_archive {
+                        "archive"
+                    } else {
+                        "conversation"
+                    }
+                );
+            }
+        }
+    }
+
+    /// NAME-10: both front ends this build has are quoted, and a word that is neither is not, so a
+    /// record a front end this build does not know wrote is refused. The words are the ones a
+    /// record stores (SESSION-29), written out here so a change to either spelling fails.
+    #[test]
+    fn a_front_end_this_build_knows_is_quoted_and_an_unknown_one_is_not() {
+        for word in ["terminal", "desktop"] {
+            let mut record = a_record(said(1));
+            record.front = Some(word.to_string());
+            assert!(
+                record.excerpt().is_ok(),
+                "a record the {word} front end wrote was refused"
+            );
+        }
+        for word in ["someone-elses-agent", "Desktop", "terminal ", ""] {
+            let mut record = a_record(said(1));
+            record.front = Some(word.to_string());
+            assert_eq!(
+                record.excerpt(),
+                Err(Refused::NotOurs),
+                "a record from the front end {word:?} was quoted"
+            );
+        }
+    }
+
+    /// NAME-10: a record with no front end word, one written before the word was kept (SESSION-29),
+    /// is quoted. Nothing says another program wrote it, and refusing it would make every older
+    /// session impossible to name.
+    #[test]
+    fn a_record_with_no_front_end_word_is_quoted() {
+        let mut record = a_record(said(1));
+        record.front = None;
+        assert!(
+            record.excerpt().is_ok(),
+            "a record written before the front end was kept was refused: {:?}",
+            record.excerpt()
+        );
+    }
+
+    /// NAME-10: only a record that says its planner was shown public content is quoted. A word
+    /// that is missing, empty or any spelling but `public` reads as private, so each is refused as
+    /// `Private`. Rejects reading the stored word against `private` alone, which lets every
+    /// spelling the planner never wrote through.
+    #[test]
+    fn a_holds_word_that_is_missing_or_not_public_is_refused_as_private() {
+        for word in ["private", "", "PUBLIC", "public-ish", "yes"] {
+            let mut record = a_record(said(1));
+            record.conversation.holds = word.to_string();
+            assert_eq!(
+                record.excerpt(),
+                Err(Refused::Private),
+                "a record whose holds word was {word:?} was quoted"
+            );
+        }
+
+        let mut record = a_record(said(1));
+        let mut written = serde_json::to_value(&record.conversation).expect("a snapshot as json");
+        written
+            .as_object_mut()
+            .expect("an object")
+            .remove("holds")
+            .expect("the word is written");
+        record.conversation = serde_json::from_value(written).expect("a snapshot with no word");
+        assert_eq!(
+            record.excerpt(),
+            Err(Refused::Private),
+            "a record that never recorded what its planner was shown was quoted"
+        );
+
+        let mut public = a_record(said(1));
+        public.conversation.holds = "public".to_string();
+        assert!(public.excerpt().is_ok(), "a public record was refused");
+    }
+
+    /// NAME-10: an id that is well formed and names no record is `NotFound` as a malformed one is,
+    /// and one that names a record finds it, so the answer comes from the store. Rejects a look-up
+    /// that answers something else for a missing record, and one that never finds any.
+    #[test]
+    fn a_well_formed_id_with_no_record_is_not_found() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = project("excerpt-no-such-record");
+        assert_eq!(of(&root, "abc-123"), Err(Refused::NotFound));
+
+        let directory = crate::sessions::project_directory(&root).expect("a sessions directory");
+        std::fs::create_dir_all(&directory).expect("create the sessions directory");
+        let record = a_record(said(1));
+        std::fs::write(
+            directory.join("abc-123.json"),
+            serde_json::to_string(&record).expect("the record as json"),
+        )
+        .expect("write the record");
+        assert!(
+            of(&root, "abc-123").is_ok(),
+            "a stored record was not found"
+        );
+        assert_eq!(of(&root, "def-456"), Err(Refused::NotFound));
+    }
+
+    /// NAME-10: an id that cannot be quoted leaves the turn with a note that names the session and
+    /// says why, so each `Refused` variant says its own reason. Rejects an arm that answers
+    /// another variant's sentence, which would tell a person a private session is empty, and one
+    /// that leaves the session unnamed or says nothing.
+    #[test]
+    fn each_refusal_says_its_own_reason_and_names_the_session() {
+        let all = [
+            Refused::NotFound,
+            Refused::Manifest,
+            Refused::NotOurs,
+            Refused::Private,
+            Refused::Empty,
+        ];
+        let notes: Vec<String> = all.iter().map(|refused| refused.said("abc-123")).collect();
+        for (refused, note) in all.iter().zip(&notes) {
+            assert!(
+                note.contains("abc-123"),
+                "{refused:?} did not name the session: {note:?}"
+            );
+            assert!(
+                !note.starts_with("session_mention") && note.trim().len() > "abc-123".len(),
+                "{refused:?} said no reason: {note:?}"
+            );
+        }
+        for (at, first) in notes.iter().enumerate() {
+            for (later, second) in notes.iter().enumerate().skip(at + 1) {
+                assert_ne!(
+                    first, second,
+                    "{:?} and {:?} said the same thing",
+                    all[at], all[later]
+                );
+            }
+        }
     }
 
     /// An id is one path segment of a session's own name, so a mention cannot reach a file of

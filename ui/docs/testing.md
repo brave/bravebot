@@ -80,6 +80,10 @@ matter:
   bridge, against a model service and a website the script serves itself. A host the person's
   file allows is fetched with no card, a host a rule refuses is neither asked about nor
   fetched, and the banner names what is not in force. No paid inference.
+- `pnpm run drive:rule-check`: the Permissions panel's rule check, through the real app and
+  bridge, against a model service the script serves itself. `Bash git push` is refused by the
+  person's own deny rule, named with its file and reason, and a checkout's ungranted allow rule
+  is named as not in force. Screenshots of both answers, light and dark. No paid inference.
 - `pnpm run drive:permission-mode`: the composer's permission mode, through the real app and
   bridge, against a model service the script serves itself, in a directory nobody trusted.
   Accepting edits writes with no card and still asks about a command, the control works while a
@@ -201,7 +205,7 @@ at, that a control keeps keyboard focus through an animation.
 | `pnpm run drive:pointer-crash` | The renderer process survives the pointer ([#3581](https://github.com/brave/bravebot/issues/3581)), in a real window with a real agent, a scratch state directory and Playwright's mouse: a session is written through the window, its record is marked as the terminal's, and in a window short enough that the inspector column scrolls the pointer is swept over the transcript in 8 launches (`POINTER_RUNS`). A page that ends (`crash` event, `window.fault kind=renderer_gone` line) fails the run. Not covered: the operating system's own pointer, which an attempt to post with CoreGraphics did not deliver to the page. The rule it protects is also pinned by `scripts/context-column-contain.test.mjs` |
 | `pnpm run drive:resize` | Divider drags, the clamps, keyboard resizing, persistence |
 | `pnpm run drive:columns` | Folding each side column, and what is remembered |
-| `pnpm run drive:panels` | The context panels, the row of buttons that turns them on and off, and the transcript's tool runs |
+| `pnpm run drive:panels` | The context panels, the Overview and Files tabs, and the transcript's tool runs on the real profile. First, on an isolated profile with the acceptance fixture's bridge: the Choose sections checklist, that a panel turned off is kept in `bravebot-ui.json` and still off after a relaunch, and every section off. Screenshots in light and dark. |
 | `pnpm run drive:markdown` | Markdown rendering, light and dark |
 | `pnpm run drive:providers` | Settings › Providers second in the list, Fix and the arrow keys choosing an account, hiding a model and a service, moving rows by drag and by keyboard, the model picker leaving out what was hidden in the chosen order, and Reset to defaults keeping the sign-in. Screenshots at the default and minimum size and in dark. Isolated profile, deterministic bridge. |
 | `pnpm run drive:models` | Model defaults, composer placement, search and keyboard selection, the service rail and its marks, search across services, the Reasoning column by click and keyboard, turn payload, per-conversation persistence, and discovery error recovery. A warning of the model list, drawn with the command it names as code in the code type role, at the window's size and at its minimum. Also bot creation, Avatar refresh and layout, saved bot models, composer changes, and persistence after reload. Uses deterministic replies without paid inference. |
@@ -213,6 +217,7 @@ at, that a control keeps keyboard focus through an animation.
 | `pnpm run drive:exposure` | Answering a read that would expose a credential, and that the value is never drawn |
 | `pnpm run drive:shown` | That no decision card takes an approval before the rows it rests on have been on screen: every kind drawn too tall for a 900x560 window, shut until scrolled through, shut again on a change of width, deaf to a press while shut, and a refusal taken at once; and that rows swept through under the file-drop overlay count for nothing until the drag ends. Screenshots of a card waiting and read, light and dark |
 | `pnpm run drive:rules` | Permission rules from settings files: what is refused, what is not asked, and what is reported as not in force |
+| `pnpm run drive:rule-check` | Which rule decides a call, asked in the Permissions panel: the decision, rule, file, reason and a checkout rule not in force |
 | `pnpm run drive:permission-mode` | The composer's permission mode: accepting edits, plan mode, a change while a turn runs, and the menu shortcut |
 | `pnpm run drive:sandbox-mode` | The composer's sandbox mode: the menu offers workspace-write, read-only and strict and no way to turn the sandbox off, and a program is held to the mode chosen for its turn |
 | `pnpm run drive:spend-limit` | The composer's spend limit: a small limit brings up the limit question, and going on without a limit clears the control |
@@ -344,13 +349,13 @@ These pass `--user-data-dir` with a temporary profile, so the app's own state is
 `drive-bot-summon`, `drive-bot-turn`, `drive-bots`, `drive-close-chat`, `drive-connectors`,
 `drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language`, `drive-language-server`,
 `drive-manual-walkthrough`, `drive-mcp`, `drive-menu`, `drive-models`, `drive-models-live`, `drive-note-changelog-awake`,
-`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,
+`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rule-check`, `drive-rules`, `drive-sandbox-mode`,
 `drive-secure-files`, `drive-session-list`, `drive-spend-limit`, `drive-shown`, `drive-turn-details`,
 `drive-ux-acceptance`, `drive-vetting`, `drive-visual`, `drive-window-lifecycle` and `drive-perf`.
 
 `drive-at-mentions`, `drive-connectors`, `drive-drop`, `drive-exposure`, `drive-fetch`,
 `drive-language-server`, `drive-manual-walkthrough`, `drive-mcp`, `drive-menu`, `drive-note-changelog-awake`, `drive-paste`,
-`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`, `drive-spend-limit` and `drive-vetting`
+`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rule-check`, `drive-rules`, `drive-sandbox-mode`, `drive-spend-limit` and `drive-vetting`
 launch through `scripts/drive-world.mjs`, whose `launchWorld` always passes `--user-data-dir`, with
 the temporary profile its caller made. `drive-manual-walkthrough`, `drive-note-changelog-awake`, `drive-remembered-trust`,
 `drive-rewind` and `drive-vetting` keep their own fixtures and take from it the launch, the

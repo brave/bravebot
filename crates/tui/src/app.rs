@@ -85,6 +85,7 @@ pub(crate) use records::coverage_causes;
 use records::*;
 
 mod session_commands;
+pub use session_commands::set_language;
 use session_commands::*;
 
 mod side_requests;
@@ -2032,12 +2033,31 @@ pub fn run(
 
     // Restore the terminal even if the loop failed: leaving a user in raw mode on an
     // alternate screen is worse than the original error.
-    end_the_run(
+    finish_run(
         &mut terminal,
+        result,
         hand_back_terminal,
         crate::hangup::end_if_the_terminal_hung_up,
-    )?;
+    )
+}
 
+/// End [`run`] with `result`, the way the loop ended, after the terminal has been handed back whatever
+/// that was (INPUT-33).
+///
+/// A session that ends by failing hands the terminal back as one that is left does, since a terminal
+/// left in raw mode on a screen that is not its own is worse for the person than the error that put
+/// it there. Where the terminal cannot be handed back either, that failure is the one returned and the
+/// session's own is dropped: it is the one that says the terminal is still held, and `hung_up` has
+/// been asked about it.
+///
+/// Split from `run`, which needs a real terminal, so that a test can end a run by failing.
+fn finish_run<W: Write, T>(
+    terminal: &mut Terminal<CrosstermBackend<W>>,
+    result: io::Result<T>,
+    hand_back: impl FnOnce(&mut CrosstermBackend<W>) -> io::Result<()>,
+    hung_up: impl FnOnce(),
+) -> io::Result<T> {
+    end_the_run(terminal, hand_back, hung_up)?;
     result
 }
 
@@ -4433,6 +4453,97 @@ mod tests {
         assert_eq!(failure.to_string(), "the terminal went away");
     }
 
+    /// INPUT-33: disambiguated keys are asked for only where the terminal said it understands them.
+    /// A terminal that answered nothing in time is taken not to, because the request is left on its
+    /// screen as text where it is not understood. Rejects: an answer of `None` read as yes (the
+    /// request sent blind to a terminal that gave no reply), and an answer of no read as yes.
+    #[test]
+    fn disambiguated_keys_are_asked_for_only_where_the_terminal_says_it_understands_them() {
+        assert!(!enhanced(None), "no reply was taken for a yes");
+        assert!(!enhanced(Some(false)), "a no was taken for a yes");
+        assert!(enhanced(Some(true)), "a yes was not taken");
+    }
+
+    /// INPUT-33: the terminal is put in raw mode before anything is written to it, and a terminal that
+    /// will not enter raw mode is not taken at all. The colour question comes after raw mode, so its
+    /// reply arrives as bytes rather than as a line, and before the alternate screen, so the query is
+    /// not painted into the session; the keyboard is asked about after both. Rejects: a takeover that
+    /// never enters raw mode, one that enters it after the modes are written (a reply to the question,
+    /// and every key until then, is a line the terminal echoes), one that senses the terminal first,
+    /// and one that goes on to draw when raw mode could not be entered.
+    #[test]
+    fn raw_mode_is_entered_before_anything_is_written_and_the_takeover_ends_where_it_cannot_be() {
+        use std::cell::RefCell;
+        struct Recording<'a>(&'a RefCell<Vec<u8>>);
+        impl std::io::Write for Recording<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.borrow_mut().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let written = RefCell::new(Vec::new());
+        let steps: RefCell<Vec<(&str, usize)>> = RefCell::new(Vec::new());
+        take_over(
+            &mut Recording(&written),
+            true,
+            || {
+                steps
+                    .borrow_mut()
+                    .push(("raw mode", written.borrow().len()));
+                Ok(())
+            },
+            |out| {
+                steps.borrow_mut().push(("colours", written.borrow().len()));
+                out.write_all(b"COLOUR-QUERY")
+                    .expect("the query is written");
+            },
+            || {
+                steps
+                    .borrow_mut()
+                    .push(("keyboard", written.borrow().len()));
+                true
+            },
+        )
+        .expect("taken over");
+        assert_eq!(
+            *steps.borrow(),
+            [("raw mode", 0), ("colours", 0), ("keyboard", 12)],
+            "raw mode, then the colour question, then the keyboard question, each before the modes"
+        );
+        assert_eq!(
+            String::from_utf8(written.take()).expect("utf8"),
+            format!("COLOUR-QUERY{}", asked_for(true)),
+            "the query comes before the alternate screen and the modes follow it"
+        );
+
+        steps.borrow_mut().clear();
+        let failure = take_over(
+            &mut Recording(&written),
+            true,
+            || Err(std::io::Error::other("no raw mode here")),
+            |_| steps.borrow_mut().push(("colours", 0)),
+            || {
+                steps.borrow_mut().push(("keyboard", 0));
+                true
+            },
+        )
+        .expect_err("a terminal that would not enter raw mode was taken");
+        assert_eq!(failure.to_string(), "no raw mode here");
+        assert!(
+            steps.borrow().is_empty(),
+            "the takeover went on after raw mode failed: {:?}",
+            steps.borrow()
+        );
+        assert!(
+            written.borrow().is_empty(),
+            "something was written to a terminal that is not in raw mode"
+        );
+    }
+
     fn listed(key: &str, window: Option<u64>) -> bravebot_aichat::models::Model {
         bravebot_aichat::models::Model {
             key: key.to_string(),
@@ -4967,6 +5078,82 @@ mod tests {
         assert!(
             elsewhere.starts_with("high ") && elsewhere.contains("chosen with /effort"),
             "{elsewhere}"
+        );
+    }
+
+    /// PATHREQ-4, SANDBOX-28: `/status` lists the paths the person let programs reach, read from the
+    /// workspace's grant when the report is built and worded as `/reach paths` words them. A session
+    /// that was granted none draws no heading. The fault it rejects is a report built from no
+    /// grant, which the hand-built facts of the status tests cannot notice.
+    #[test]
+    fn the_status_of_a_session_lists_the_paths_programs_were_let_reach() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-status-requested-paths");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let config = a_config_offering_three_tiers();
+        let session = Session::new("none");
+        let shown = || {
+            status_report(&session, &stored, &workspace, None, &config, None)
+                .lines
+                .into_iter()
+                .map(|line| (line.label, line.value))
+                .collect::<Vec<_>>()
+        };
+
+        assert!(
+            !shown()
+                .iter()
+                .any(|(label, _)| label == t!(status_requested_paths)),
+            "a heading for paths nobody was asked about"
+        );
+
+        workspace.grant_path_reach(
+            std::path::PathBuf::from("/data/in"),
+            false,
+            "reads in".to_string(),
+        );
+        workspace.grant_path_reach(
+            std::path::PathBuf::from("/data/out"),
+            true,
+            "writes out".to_string(),
+        );
+        let first = t!(
+            path_listed,
+            number = "1",
+            access = t!(reach_access_reads),
+            path = "/data/in"
+        );
+        let second = t!(
+            path_listed,
+            number = "2",
+            access = t!(reach_access_writes),
+            path = "/data/out"
+        );
+        let lines = shown();
+        let at = lines
+            .iter()
+            .position(|(label, _)| label == t!(status_requested_paths))
+            .unwrap_or_else(|| panic!("no Requested paths heading in {lines:?}"));
+        assert_eq!(
+            lines[at].1,
+            t!(count_requested_paths, count = 2),
+            "the heading does not count the grant"
+        );
+        assert_eq!(
+            lines[at + 1..at + 3]
+                .iter()
+                .map(|(_, row)| row.as_str())
+                .collect::<Vec<_>>(),
+            [first.as_str(), second.as_str()],
+            "the rows are not the grant, numbered as /reach paths numbers them"
         );
     }
 
@@ -15005,6 +15192,62 @@ mod tests {
         }
     }
 
+    /// INPUT-34: the fact the reader keeps about each event reaches the session through
+    /// `took_input`, and the rung that leaves is held to it. Two interrupts that were one read of
+    /// the terminal must not be two presses, however the session is driven, so this goes through
+    /// the reader and not through a field set by hand. Rejects: `took_input` that does not take the
+    /// reader's fact (so a run is read as presses), and one that takes it as always true or always
+    /// false (so two real presses cannot leave).
+    #[test]
+    fn what_the_reader_says_arrived_together_reaches_the_rung_that_leaves() {
+        let mut session = Session::new("none");
+        {
+            let _held = crate::input::script::hold_together([
+                TermEvent::Key(ctrl('c')),
+                TermEvent::Key(ctrl('c')),
+            ]);
+            for press in 1..=2 {
+                let taken = crate::input::read().expect("the script holds the event");
+                took_input(&mut session, &taken);
+                assert!(
+                    !session.key_arrived_alone,
+                    "press {press}: the reader said it arrived with others and the session did not hear it"
+                );
+                assert_eq!(
+                    handle_key(&mut session, ctrl('c')),
+                    Action::Redraw,
+                    "press {press}: an interrupt that arrived with others did more than say so"
+                );
+                assert!(
+                    !session.offered_to_leave,
+                    "press {press}: an interrupt that arrived with others offered the way out"
+                );
+            }
+        }
+        assert!(!session.is_quitting(), "a run of two interrupts left");
+
+        let _held =
+            crate::input::script::hold([TermEvent::Key(ctrl('c')), TermEvent::Key(ctrl('c'))]);
+        let taken = crate::input::read().expect("the script holds the event");
+        took_input(&mut session, &taken);
+        assert!(
+            session.key_arrived_alone,
+            "an event on its own was heard as a run"
+        );
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
+        assert!(
+            session.offered_to_leave,
+            "the first of two presses did not offer the way out"
+        );
+        let taken = crate::input::read().expect("the script holds the event");
+        took_input(&mut session, &taken);
+        assert_eq!(
+            handle_key(&mut session, ctrl('c')),
+            Action::Quit,
+            "the second of two presses that each arrived alone did not leave"
+        );
+    }
+
     /// The rungs above the last one stop something and stay, and none of them is touched: a person
     /// pressing the key to stop a turn must still stop it on the first press.
     #[test]
@@ -17981,6 +18224,70 @@ mod tests {
         assert_eq!(
             bravebot_session::store::load_model().as_deref(),
             Some("the-recorded-pick")
+        );
+    }
+
+    /// INCOG-2. A theme chosen in an incognito session takes effect for the session and is not
+    /// recorded: `/theme brave` over a recorded `nord` puts `brave` in force, says so, and leaves the
+    /// theme file reading `nord`. A theme the picker put in force reaches `theme_picked`, which
+    /// records nothing and says so too. The faults it rejects are a `set_theme` that puts nothing in
+    /// force where the session cannot record, which leaves the person on the theme they chose to
+    /// leave, and a choice that rewrites the recorded theme. Run in a process of its own by
+    /// `in_isolated_profile`, so engaging the mode and the theme in force reach no other test, and
+    /// the theme is put back to `brave` whatever the test does.
+    #[test]
+    fn a_theme_chosen_in_an_incognito_session_takes_effect_and_is_not_recorded() {
+        struct BraveWhenDropped;
+        impl Drop for BraveWhenDropped {
+            fn drop(&mut self) {
+                crate::theme::apply_brave();
+            }
+        }
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let _held = crate::theme::exclusive();
+        let _restored = BraveWhenDropped;
+        bravebot_session::store::save_theme("nord");
+        let recorded = bravebot_session::store::load_theme;
+        assert_eq!(recorded().as_deref(), Some("nord"), "nothing was seeded");
+        crate::theme::apply(&crate::theme::find("nord").expect("nord is built in"));
+        assert_eq!(crate::theme::name(), "nord");
+        bravebot_core::incognito::engage();
+        let said = |session: &Session| -> Vec<String> {
+            session.transcript.iter().map(|e| e.text.clone()).collect()
+        };
+
+        let mut session = Session::new("none").with_stored_history();
+        set_theme(&mut session, "brave");
+        assert_eq!(
+            crate::theme::name(),
+            "brave",
+            "the theme chosen was not put in force for the session"
+        );
+        assert_eq!(
+            recorded().as_deref(),
+            Some("nord"),
+            "an incognito session recorded the theme"
+        );
+        assert!(
+            said(&session).contains(&t!(session_theme_set, theme = "brave").to_string()),
+            "the choice was not said: {:?}",
+            said(&session)
+        );
+
+        let mut session = Session::new("none").with_stored_history();
+        theme_picked(&mut session, "dracula");
+        assert_eq!(
+            recorded().as_deref(),
+            Some("nord"),
+            "a theme picked in an incognito session was recorded"
+        );
+        assert!(
+            said(&session).contains(&t!(session_theme_set, theme = "dracula").to_string()),
+            "the pick was not said: {:?}",
+            said(&session)
         );
     }
 
@@ -21463,6 +21770,96 @@ mod tests {
         assert_eq!(with_session_style(Task::new("p"), &session).style, None);
     }
 
+    /// INSTR-12. Every turn the terminal starts carries the style in force when it begins, a
+    /// `/loop` tick and a `/goal` round included. The turn's task is built in `run_turn_animated`,
+    /// which needs a terminal and a backend, so this has two halves. The first holds the style
+    /// through what starts a tick and what sends a goal round, so the task built for either reads
+    /// the same style a typed prompt's does. The second scans the source for what makes those two
+    /// turns the typed one's: the tick and the goal round both go out as `Action::Submit`, `submit`
+    /// runs each through `run_turn_animated`, and that function is where the style is put on the
+    /// task. A task built for a tick or a round anywhere else, or without that helper, fails the
+    /// scan. It does not run the worker: that the helper's call is reached is reasoned from the
+    /// source, not observed.
+    #[test]
+    fn every_turn_the_terminal_starts_carries_the_style_in_force_ticks_and_goal_rounds_included() {
+        let named = |session: &Session| {
+            with_session_style(Task::new("p"), session)
+                .style
+                .map(|style| style.name.to_string())
+        };
+        let mut session = Session::new("none");
+        set_style(&mut session, &a_workspace(), "concise");
+        let concise = Some("concise".to_string());
+        assert_eq!(named(&session), concise, "the typed turn's task");
+
+        assert!(
+            session
+                .start_loop(
+                    crate::loops::request("5m check the build"),
+                    Vec::new(),
+                    Vec::new()
+                )
+                .is_some(),
+            "the loop sent no first tick"
+        );
+        assert_eq!(named(&session), concise, "a loop's tick");
+
+        // A session does one of a loop and a goal at a time, so the goal has a session of its own.
+        let mut session = Session::new("none");
+        set_style(&mut session, &a_workspace(), "concise");
+        session.start_goal("cargo test exits 0".to_string());
+        let round = next_after_a_turn(&mut session, |session| {
+            Ok(
+                session.goal_judged(Ok(bravebot_agent::goal::Verdict::NotMet {
+                    reason: "a test fails".to_string(),
+                })),
+            )
+        })
+        .expect("judging cannot fail here");
+        assert!(round.is_some(), "a goal not met sent no round");
+        assert_eq!(named(&session), concise, "a goal's round");
+
+        let turns = include_str!("app/turns.rs");
+        let actions = include_str!("app/actions.rs");
+        let main = include_str!("app.rs");
+        let function = |source: &'static str, name: &str| -> &'static str {
+            let from = source
+                .find(&format!("fn {name}("))
+                .unwrap_or_else(|| panic!("`fn {name}(` is not in the source"));
+            let rest = &source[from..];
+            &rest[..rest
+                .find("\n}\n")
+                .unwrap_or_else(|| panic!("`fn {name}` is not closed"))]
+        };
+
+        let run = function(turns, "run_turn_animated");
+        assert!(
+            run.contains("task = with_session_style(task, session);"),
+            "`run_turn_animated` builds a turn's task without the session's style"
+        );
+        let submit = function(actions, "submit");
+        assert!(
+            submit.contains("run_turn_animated(") && submit.contains("next_after_a_turn("),
+            "a goal's round is no longer sent through the loop that runs each turn"
+        );
+        assert_eq!(
+            actions.matches("run_turn_animated(").count(),
+            1,
+            "a turn is started by something other than `submit`"
+        );
+        let tick = main
+            .find("session.loop_tick()")
+            .expect("the tick is not taken from the session");
+        assert!(
+            main[tick..]
+                .chars()
+                .take(160)
+                .collect::<String>()
+                .contains("Action::Submit("),
+            "a tick no longer goes out as a submission"
+        );
+    }
+
     /// What `/limit` says is what the next turn is held to: a bare word reports, a figure sets,
     /// `off` clears, and a figure that is not a count leaves the limit as it was.
     #[test]
@@ -23205,6 +23602,58 @@ mod tests {
             Some(Action::Submit("the brief".to_string()))
         );
         assert_eq!(queued_next(&mut next), None, "it was sent twice");
+    }
+
+    /// SESSION-34: the first prompt of the session a handoff starts is sent as a line the person
+    /// typed, because they read and approved it. The same words typed and sent at rest are the
+    /// comparison: the action, the transcript's line, the turn and the history Up recalls from must
+    /// each be what the typed line leaves. Rejects a start that begins the turn without going
+    /// through the path a typed line takes, which sends the brief but leaves it out of the history
+    /// the person recalls from, and one that draws it as another speaker's.
+    #[test]
+    fn the_brief_is_sent_as_a_line_the_person_typed_and_is_recalled_as_one() {
+        let mut typed = Session::new("none");
+        type_line(&mut typed, "the brief");
+        let typed_sends = handle_key(&mut typed, key(KeyCode::Enter));
+
+        let mut handed = Session::new("none");
+        handed.hand_over("the brief".to_string());
+        let handed_sends = queued_next(&mut handed);
+
+        assert_eq!(typed_sends, Action::Submit("the brief".to_string()));
+        assert_eq!(
+            handed_sends,
+            Some(typed_sends),
+            "the brief is not sent as the action a typed line is"
+        );
+        assert_eq!(handed.status, typed.status, "the turn did not begin alike");
+        assert_eq!(handed.turns, typed.turns);
+        assert_eq!(handed.transcript.len(), typed.transcript.len());
+        let drawn = |session: &Session| {
+            session
+                .transcript
+                .last()
+                .map(|entry| (entry.speaker, entry.text.clone()))
+        };
+        assert_eq!(
+            drawn(&handed),
+            Some((crate::state::Speaker::User, "the brief".to_string())),
+            "the brief is not in the transcript as a line the person typed"
+        );
+        assert_eq!(drawn(&handed), drawn(&typed));
+
+        // Recalled with Up once the turn is over, as a line they sent is.
+        for session in [&mut typed, &mut handed] {
+            session.complete("done", Vec::new(), 0);
+            assert!(session.input().is_empty());
+            handle_key(session, key(KeyCode::Up));
+        }
+        assert_eq!(typed.input(), "the brief");
+        assert_eq!(
+            handed.input(),
+            "the brief",
+            "the brief is not among the lines the person can recall"
+        );
     }
 
     /// CLI-31. A prompt from the command line is drawn as the person's own line, so what a terminal
@@ -41708,6 +42157,82 @@ mod tests {
         assert_eq!(last_note(&session), t!(session_cleared));
     }
 
+    /// SESSION-34: the record a handoff came from is not touched by the new session and can still
+    /// be resumed. The new session's first save is written, and the source is read back from disk
+    /// and compared with what it held before the handoff, field for field; the new record must
+    /// then be there under an id of its own, holding the link and none of the source's turns.
+    /// Rejects a handoff whose new record is begun under the source's id, which the first save
+    /// then writes over the record the clause says stays resumable.
+    #[test]
+    fn the_record_a_handoff_came_from_is_untouched_by_the_new_one_and_still_resumes() {
+        use bravebot_session::sessions::{self, Standing};
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-handoff-source");
+        std::fs::create_dir_all(&root).expect("create");
+        let (mut workspace, mut session, source, _conversation, answers) =
+            a_session_to_branch(&root);
+        let before = sessions::load(&root, source.id()).expect("the source's record");
+        assert_eq!(before.turns, 1, "the source did not start with its turn");
+        assert_eq!(
+            source.to_resume().map(|one| one.id),
+            Some(source.id().to_string()),
+            "the source was not resumable to begin with"
+        );
+
+        let (conversation, mut handed) =
+            clear_session(&mut session, &mut workspace, Some(source.id()));
+        handed.save(
+            "the brief",
+            Standing {
+                history: Some(session.turn_history()),
+                conversation: &conversation.snapshot(),
+                turns: session.turns,
+                tokens: session.tokens,
+                split: Default::default(),
+                spend: session.spend_by_turn(),
+                timing: session.timing_by_turn(),
+                model: None,
+                todos: &session.todos_by_turn(),
+                asides: &[],
+                trust: &answers.trust,
+                programs: &answers.programs,
+                directories: &[],
+                manifest: None,
+                rewind: session.rewind.points(),
+                checkouts: &[],
+                touched: None,
+                answered_by_mode: false,
+            },
+        );
+
+        let after = sessions::load(&root, source.id()).expect("the source's record is gone");
+        assert_eq!(
+            serde_json::to_string(&after).expect("serialise"),
+            serde_json::to_string(&before).expect("serialise"),
+            "the handoff changed the record it came from"
+        );
+        assert_eq!(after.handed_off_from, None, "the source was linked");
+        assert_eq!(
+            source.to_resume().map(|one| one.id),
+            Some(source.id().to_string()),
+            "the source is no longer resumable"
+        );
+        let written = sessions::load(&root, handed.id()).expect("the new record was not written");
+        assert_eq!(written.handed_off_from.as_deref(), Some(source.id()));
+        assert_eq!(
+            written.turns, 0,
+            "the new record carries the source's turns"
+        );
+        assert_ne!(
+            handed.id(),
+            source.id(),
+            "the handoff reused the source's id"
+        );
+    }
+
     /// SANDBOX-24, SANDBOX-28: `/resume` hands on a workspace that holds no path programs were let
     /// reach and no host answered. The workspace handed on is a clone that shares them with the
     /// one left, so the answer is read from the clone the next session starts with.
@@ -42046,6 +42571,71 @@ mod tests {
                 workspace.scratch(),
                 Some(after.as_path()),
                 "{brief:?} left the workspace reaching the old directory"
+            );
+        }
+    }
+
+    /// PREM-9: the session the terminal client opens on carries the tier its configuration
+    /// settles, so the opening screen draws it and `/status` before a turn says the same thing. The
+    /// named test builds `Session::new(..).on_tier(config)` itself, so a startup that never calls
+    /// `on_tier` would leave every test passing and the opening screen saying "no premium key"
+    /// beside a stored key. Rejects: `new_session` leaving the session's tier at the default.
+    #[test]
+    fn the_session_the_startup_builds_carries_the_tier_its_configuration_settles() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-opening-tier");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let settings = bravebot_config::Settings::default();
+
+        let free = a_config_needing_no_sign_in();
+        let mut held = a_config_needing_no_sign_in();
+        held.premium_key = Some(bravebot_config::Secret::new("a-premium-key"));
+        assert_ne!(
+            crate::status::configured_tier(&free),
+            crate::status::configured_tier(&held),
+            "both configurations say the same thing, so nothing here distinguishes them"
+        );
+
+        for (how, mut config) in [("holding no key", free), ("holding a key", held)] {
+            let session = new_session(
+                &mut config,
+                &settings,
+                &workspace,
+                &AskedFor::default(),
+                crate::state::Servers::default(),
+                SessionBasis {
+                    confinement: String::new(),
+                    sockets_with_a_path_reachable: false,
+                    sandbox: crate::sandbox_command::Sandboxed::at_start(),
+                    skip_permissions: true,
+                    asked_for_auto: false,
+                    from_link: false,
+                    prompts: bravebot_agent::turn::SystemPrompts::default(),
+                },
+            );
+            assert_eq!(
+                session.tier,
+                crate::status::configured_tier(&config),
+                "the session opened {how} was not given the tier its configuration settles"
+            );
+            let opening = crate::logo::lines(
+                &session.confinement,
+                session.sandbox_mode(),
+                session.sockets_with_a_path_reachable,
+                &session.tier,
+                90,
+                24,
+            )
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+            assert!(
+                opening.contains(crate::status::configured_tier(&config)),
+                "the opening screen of the session {how} says something its configuration does not: {opening}"
             );
         }
     }
@@ -42443,6 +43033,199 @@ mod tests {
         assert!(unknown.session_excerpts.is_empty());
         let said = session.transcript.last().expect("a note").text.clone();
         assert!(said.contains("no session no-such-id"), "{said}");
+    }
+
+    /// Rewrite the stored record `id` of `root` after `edit`, so a session is one that a record
+    /// another program or a private conversation would have made, which `a_session_to_branch` does
+    /// not store.
+    fn change_stored_session(
+        root: &std::path::Path,
+        id: &str,
+        edit: impl FnOnce(&mut bravebot_session::sessions::Record),
+    ) {
+        let mut record = bravebot_session::sessions::load(root, id).expect("the record is stored");
+        edit(&mut record);
+        let path = bravebot_session::sessions::project_directory(root)
+            .expect("a sessions directory")
+            .join(format!("{id}.json"));
+        std::fs::write(
+            path,
+            serde_json::to_string(&record).expect("the record as json"),
+        )
+        .expect("write the record");
+    }
+
+    /// NAME-10: the note a mention leaves in the transcript carries how many characters the excerpt
+    /// added, counted in characters and not bytes, and says when older turns were left out. Rejects
+    /// a note with no count or a wrong one, a byte count (the cut session's words are multibyte),
+    /// and the uncut sentence for a cut excerpt.
+    #[test]
+    fn the_note_for_a_named_session_says_how_many_characters_it_added() {
+        use bravebot_aichat::protocol::Message;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-name-a-session-count");
+        std::fs::create_dir_all(&root).expect("create");
+        let (_, mut session, stored, _, _) = a_session_to_branch(&root);
+        let id = stored.id().to_string();
+        let named = format!("carry on from @session:{id}");
+
+        let uncut = with_named_sessions(
+            Task::new(named.as_str()),
+            &mut session,
+            &root,
+            &named,
+            Wrote::ThePerson,
+        );
+        let text = &uncut.session_excerpts[0].1;
+        let added = text.chars().count();
+        let said = session.transcript.last().expect("a note").text.clone();
+        assert_eq!(
+            said,
+            t!(session_mention_added, id = id.as_str(), chars = added)
+        );
+        assert!(said.contains(&added.to_string()), "{said}");
+        assert!(!said.contains("left out older turns"), "{said}");
+
+        // One turn of 9,000 two-byte characters is cut at the bound, so the excerpt is the newest
+        // part and its length in bytes is not its length in characters.
+        let mut long = Conversation::new();
+        long.push(Message::user("é".repeat(9_000)));
+        long.push(Message::assistant("ok"));
+        change_stored_session(&root, &id, |record| record.conversation = long.snapshot());
+        let cut = with_named_sessions(
+            Task::new(named.as_str()),
+            &mut session,
+            &root,
+            &named,
+            Wrote::ThePerson,
+        );
+        let text = &cut.session_excerpts[0].1;
+        let added = text.chars().count();
+        assert_ne!(
+            added,
+            text.len(),
+            "the excerpt is not multibyte, so a byte count would pass"
+        );
+        assert!(added <= bravebot_session::excerpt::BOUND, "{added}");
+        let said = session.transcript.last().expect("a note").text.clone();
+        assert_eq!(
+            said,
+            t!(session_mention_added_cut, id = id.as_str(), chars = added)
+        );
+        assert_ne!(
+            said,
+            t!(
+                session_mention_added_cut,
+                id = id.as_str(),
+                chars = text.len()
+            )
+        );
+        assert_ne!(
+            said,
+            t!(session_mention_added, id = id.as_str(), chars = added)
+        );
+    }
+
+    /// NAME-10: a session that cannot be quoted leaves the turn without its words and the
+    /// transcript says why, with the sentence of that reason and no other: one note, naming the
+    /// session. Rejects an arm that says another reason's sentence (a private session called
+    /// empty), one that says nothing, and one that adds the excerpt anyway.
+    #[test]
+    fn a_session_that_cannot_be_quoted_is_left_out_with_the_reason_it_was() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-name-a-session-refused");
+        std::fs::create_dir_all(&root).expect("create");
+        let (_, mut session, stored, _, _) = a_session_to_branch(&root);
+        let id = stored.id().to_string();
+        let pristine = bravebot_session::sessions::load(&root, &id).expect("the record is stored");
+        let named = format!("carry on from @session:{id}");
+        let id = id.as_str();
+
+        type Change = Box<dyn Fn(&mut bravebot_session::sessions::Record)>;
+        let cases: Vec<(&str, Change, String)> = vec![
+            (
+                "a manifest run",
+                Box::new(|record| record.manifest = Some(Default::default())),
+                t!(session_mention_manifest, id = id),
+            ),
+            (
+                "another program's record",
+                Box::new(|record| record.front = Some("someone-elses-agent".to_string())),
+                t!(session_mention_not_ours, id = id),
+            ),
+            (
+                "a session shown private content",
+                Box::new(|record| record.conversation.holds = "private".to_string()),
+                t!(session_mention_private, id = id),
+            ),
+            (
+                "a session with nothing in it",
+                Box::new(|record| record.conversation = Conversation::new().snapshot()),
+                t!(session_mention_empty, id = id),
+            ),
+        ];
+        for (what, change, expected) in &cases {
+            change_stored_session(&root, id, |record| {
+                *record = pristine.clone();
+                change(record);
+            });
+            let notes = session.transcript.len();
+            let task = with_named_sessions(
+                Task::new(named.as_str()),
+                &mut session,
+                &root,
+                &named,
+                Wrote::ThePerson,
+            );
+            assert!(
+                task.session_excerpts.is_empty(),
+                "{what}: the excerpt was added anyway"
+            );
+            assert_eq!(task.prompt, named, "{what}: the line was changed");
+            assert_eq!(
+                session.transcript.len(),
+                notes + 1,
+                "{what}: not exactly one note was made"
+            );
+            let said = session.transcript.last().expect("a note").text.clone();
+            assert_eq!(&said, expected, "{what}: the note says another reason");
+            assert!(
+                said.contains(id),
+                "{what}: the note names no session: {said}"
+            );
+        }
+        // A session that is not stored is the one reason with no record to change.
+        let unknown = "carry on from @session:no-such-id";
+        let notes = session.transcript.len();
+        let task = with_named_sessions(
+            Task::new(unknown),
+            &mut session,
+            &root,
+            unknown,
+            Wrote::ThePerson,
+        );
+        assert!(task.session_excerpts.is_empty());
+        assert_eq!(session.transcript.len(), notes + 1);
+        assert_eq!(
+            session.transcript.last().expect("a note").text,
+            t!(session_mention_no_such, id = "no-such-id")
+        );
+
+        // The same stored session, whole again, is quoted: the notes above came from the record
+        // and not from the line.
+        change_stored_session(&root, id, |record| *record = pristine.clone());
+        let again = with_named_sessions(
+            Task::new(named.as_str()),
+            &mut session,
+            &root,
+            &named,
+            Wrote::ThePerson,
+        );
+        assert_eq!(again.session_excerpts.len(), 1);
     }
 
     /// NAME-10: the `@` list offers the sessions that are not the open one, and none that is a
@@ -48026,6 +48809,7 @@ mod tests {
     mod command_history;
     mod completions;
     mod dropping;
+    mod handover;
     mod hangup;
     #[cfg(unix)]
     mod herdr;

@@ -67,6 +67,11 @@ pub enum AdviceError {
     /// The advisor model is refused: by the machine-level settings, or because it searches the web
     /// before it replies.
     Refused(bravebot_config::ModelRefusal),
+    /// No configured service answers for the advisor model, so nothing is sent. Without this the
+    /// request would go to Brave's endpoint under a name it does not serve, which answers with a
+    /// model of its own and a success, and the whole conversation would have been sent to it
+    /// (ADVISOR-7, ADVISOR-8).
+    NotServed,
     /// The question or the answer was refused by the kernel.
     Denied(Denial),
     /// The call failed or was refused in transit.
@@ -77,6 +82,7 @@ impl fmt::Display for AdviceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Refused(why) => write!(f, "advisor model refused: {why:?}"),
+            Self::NotServed => write!(f, "no configured service answers for the advisor model"),
             Self::Denied(d) => write!(f, "{d}"),
             Self::Chat(e) => write!(f, "{e}"),
         }
@@ -126,6 +132,15 @@ pub fn consult<S: Sink>(
     // one in the middle of a turn.
     if let Some((_, why)) = chat.config.model_refused(model) {
         return Err(AdviceError::Refused(why));
+    }
+    // The question `--advisor`, `/advisor` and the summary and judge models are put, asked here
+    // because a setting is not checked when the run starts (ADVISOR-8): a name nothing serves
+    // would otherwise reach Brave's endpoint, which substitutes a model of its own.
+    if matches!(
+        crate::backend::serving(chat.config, chat.egress, model),
+        crate::backend::Serving::NothingConfigured { .. }
+    ) {
+        return Err(AdviceError::NotServed);
     }
 
     let request = request_for(model, context, question);

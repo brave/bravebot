@@ -630,6 +630,11 @@ Confidentiality goes both ways ([LABEL-8](labels.md#LABEL-8)). A delegate starts
 whatever private content its parent's context held, so what it writes is private from its first
 round. A parent shown a private report holds it from then on.
 
+Today no run hands the planner a reference to a delegate's report, because a delegate starts from a
+trusted conversation and nothing it does lowers that. Were a report quarantined, the planner would
+be told the reference and none of the words, and the person would be shown a preview marked as kept
+from the planner.
+
 A delegate that starts out holding private content can start a processor as one that holds none
 can ([PROC-4](processors.md#PROC-4)). It is offered `spawn_processor` and told it may hand files to
 processors where its list holds the tool, and what it writes is private, so the answer it gets is
@@ -643,6 +648,7 @@ processors where its list holds the tool, and what it writes is private, so the 
 `verified-by: bravebot_agent::tools::no_description_says_that_private_content_closes_processors`
 `verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_offered_processors_like_any_other`
 `verified-by: bravebot_agent::turn::what_a_delegate_reported_reaches_the_person_watching`
+`verified-by: bravebot_agent::turn::a_report_the_planner_was_handed_a_reference_to_is_kept_from_it_and_drawn_marked`
 
 <a id="DELEGATE-9"></a>
 ### DELEGATE-9: nothing but the report crosses back
@@ -659,18 +665,27 @@ The driver's own record of whether a delegate changed a file and whether it ran 
 back too, and a parent whose workspace the delegate worked in counts both as its own for
 [TURN-4](turns.md#TURN-4)'s question and closing line.
 
-The driver's own count of the delegate's rounds and time, and the fixed cause of its end, go to the
-trail and to the person's note and never to the planner ([TRACE-8](trace.md#TRACE-8)).
+The driver's own record of how long the delegate ran, how many rounds it made and how it ended goes
+to the trail and to the person's note ([trace.md](trace.md)). The planner is told none of the time
+and none of the rounds made. It is told only: the sentence naming the round bound or the token
+budget a delegate reached ([DELEGATE-26](#DELEGATE-26), [DELEGATE-29](#DELEGATE-29)); that the
+person stopped the delegate before it reported; that a delegate that did not finish did not finish,
+and for a rate-limited, unavailable, transport or incomplete ending the driver's own sentence for
+that category and no other word of the cause ([backends.md](backends.md)); for a delegate that ran
+in a checkout, the checkout's id and either that it was removed because nothing was done in it, or
+its commit and path, with the advice to apply the files of a kept one ([checkouts.md](checkouts.md));
+and how many commands it ran and writes it made ([grounding.md](grounding.md)).
 
 **Why.** This is the feature rather than a restriction on it. A delegate whose reading reached
 its parent's context would have moved the log rather than absorbed it.
 
-The parent is told beside each report how many commands the delegate ran and writes it made
-([GROUND-2](grounding.md#GROUND-2)).
-
 `verified-by: bravebot_agent::turn::what_a_delegate_read_never_reaches_the_planner_that_asked`
 `verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_the_workspace_counts_as_the_turns_own`
 `verified-by: bravebot_agent::turn::a_delegates_rounds_time_and_cause_in_the_trail_never_reach_the_planner`
+`verified-by: bravebot_agent::turn::a_delegate_that_ended_on_a_limit_an_outage_a_silence_or_a_stopped_reply_is_told_to_the_planner`
+`verified-by: bravebot_agent::turn::a_delegate_held_to_its_bound_says_so_to_the_planner_and_the_person`
+`verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_same_sentence_about_the_bound`
+`verified-by: bravebot_agent::turn::a_delegates_report_is_put_beside_how_many_commands_it_ran_and_writes_it_made`
 
 <a id="DELEGATE-10"></a>
 ### DELEGATE-10: a delegate's effects are gated on their own
@@ -688,6 +703,7 @@ came from a planner ([SERVERS-21](mcp-servers.md#SERVERS-21)).
 Delegation saves context. It never saves an approval.
 
 `verified-by: bravebot_agent::turn::a_delegates_write_is_approved_on_its_own`
+`verified-by: bravebot_agent::turn::a_delegates_run_is_put_to_the_person_and_runs_only_on_a_yes`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_server_asked_every_call_is_refused_unasked`
 `verified-by: bravebot_agent::mcp::a_rule_decides_a_workers_call_to_a_servers_tool_as_the_turns_own`

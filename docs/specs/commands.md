@@ -403,7 +403,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model` and `/model session`, `/theme`, `/effort` and `/effort session`, and `/variant` in every form; `/config`; `/language` in every form; `/crash-reports` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/redraw`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model` and `/model session`, `/theme`, `/effort` and `/effort session`, and `/variant` in every form; `/config`; `/language` in every form; `/crash-reports` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/sessions`; `/panel`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/redraw`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
 | everything else | every other command, `/loop <interval> <prompt>`, `/goal <condition>`, every other form of `/schedule` and every other form of `/mcp` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
@@ -422,7 +422,7 @@ bare word and `list` alone are the list, so `/mcp listing` and `/mcp list weathe
 section names a waiting `/mcp` as a line that holds another back or leaves it alone, it is one of the
 forms that wait.
 A command that changes what the session keeps, `/rename`, `/note`, `/issue`, `/pr`,
-`/forget-trust`, `/sandbox`, `/model`, `/effort`, `/advisor` or `/style`, is carried out as it is
+`/forget-trust`, `/sandbox`, `/model`, `/effort`, `/variant`, `/advisor` or `/style`, is carried out as it is
 typed unless a line waiting ahead of it could change what it acts on, and otherwise waits behind
 that line, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
 session `/clear` leaves, `/forget-trust` ahead of a waiting `/cd` would forget the directory `/cd`
@@ -438,12 +438,12 @@ typed behind it waits, since the mode typed last is the one the person means to 
 `/pr` act on the link the record holds ([PANEL-12](info-panel.md#PANEL-12)), which only a line that
 starts another record, switches to one or leaves this one changes: `/clear`, `/handoff`, `/branch`,
 `/resume`, `/bg` and `/exit`. Behind any other waiting line, a prompt and a command line included,
-they are carried out as they are typed. `/model`, `/effort` and `/advisor` act on what a request is
+they are carried out as they are typed. `/model`, `/effort`, `/variant` and `/advisor` act on what a request is
 built with. A prompt reads it, and so does every command that sends a request or leaves for another
-session, and the three hold one another back, since the level a model reads depends on the model. A
+session, and the four hold one another back, since the level a model reads and the names `/variant` takes depend on the model. A
 command line, `/clear`, `/undo`, `/rewind`, `/hunks`, `/memory`, `/unfinished`, `/reach`, `/branch`, `/add-dir`,
 `/cd` and `/mcp` read none of it and change none of it, nor does a waiting `/rename`, `/note`,
-`/style`, `/forget-trust`, `/issue`, `/pr` or `/sandbox`, so behind any of those the three are
+`/style`, `/forget-trust`, `/issue`, `/pr` or `/sandbox`, so behind any of those the four are
 carried out as they are typed. `/rename` and `/note` act on the name and the notes the record holds. A
 note is stamped with the turn count it is typed at, and a rename gives up every rewind point and is
 undone by the commands that put one back, so a line that begins a turn changes what they act on:
@@ -451,7 +451,7 @@ every prompt, every command that sends a request or begins a turn, `/clear`, `/u
 `/hunks`, `/cd`, `/compact`, `/handoff`, `/branch`, `/resume`, `/bg` and `/exit` hold them back, and
 they name it. A command line adds to the conversation and saves the record with the notes and the name
 it already holds, and `/add-dir`, `/memory`, `/unfinished`, `/reach`, `/mcp`, `/style`, `/forget-trust`, `/issue`,
-`/pr`, `/sandbox`, `/model`, `/effort` and `/advisor` write neither, so behind any of those, and
+`/pr`, `/sandbox`, `/model`, `/effort`, `/variant` and `/advisor` write neither, so behind any of those, and
 behind a waiting `/note` for `/rename` and a waiting `/rename` for `/note`, they are carried out as
 they are typed. A `/note` typed behind a waiting `!make` is written at once and stamped with the turn
 the running turn is. `/style` acts on the pick that every turn reads when it is built and on the
@@ -462,7 +462,7 @@ begins a turn, and `/clear`, `/cd`, `/add-dir`, `/reach`, `/branch`, `/handoff`,
 and `/exit` hold it back, since each moves or ends that reach or leaves for another session, and it
 names the line. A command line and `/compact`, `/btw`, `/recap`, `/memory`, `/unfinished`, `/undo`, `/rewind`,
 `/hunks`, `/mcp`, `/after`, `/rename`, `/note`, `/forget-trust`, `/issue`, `/pr`, `/sandbox`,
-`/model`, `/effort` and `/advisor` do not, so behind any of those it is carried out as it is typed:
+`/model`, `/effort`, `/variant` and `/advisor` do not, so behind any of those it is carried out as it is typed:
 `/undo`, `/rewind` and `/hunks` put back files the workspace resolves and move no reach, `/mcp`
 starts or ends a server confined so that it cannot write under `~/.bravebot`, and `/after` arms a
 prompt that goes out when its delay is up and sends nothing now, so a style typed after it is the
@@ -478,7 +478,7 @@ removes what a file tool wrote, which may be a `.git` entry written into an adde
 holds the working directory, and a server `/mcp` starts may write the directory its declaration
 names. Behind
 `/compact`, `/btw`, `/recap`, `/memory`, `/unfinished`, `/add-dir`, `/reach`, `/branch`, `/after`, `/rename`, `/note`, `/style`,
-`/issue`, `/pr`, `/sandbox`, `/model`, `/effort` and `/advisor` it is carried out as it is typed:
+`/issue`, `/pr`, `/sandbox`, `/model`, `/effort`, `/variant` and `/advisor` it is carried out as it is typed:
 `/after` arms a prompt that goes out when its delay is up and runs nothing now, so the turn it sends
 runs under the answer as `/forget-trust` left it whichever of the two is carried out first.
 `/add-dir` and `/reach` start no program and move neither the working directory nor the root. The first
@@ -1151,7 +1151,11 @@ offering a write over a file somebody wrote, and keeps the check from depending 
 `verified-by: bravebot_tui::init_command::a_file_of_the_name_is_there_whatever_it_holds`
 `verified-by: bravebot_tui::init_command::a_link_with_no_target_is_there`
 `verified-by: bravebot_tui::init_command::the_prompt_names_no_path_for_the_person_to_vouch_for`
-`verified-by: bravebot_tui::init_command::the_prompt_asks_for_the_title_the_length_the_five_areas_and_the_tools`
+`verified-by: bravebot_tui::init_command::the_prompt_asks_for_the_file_to_be_written_to_agents_md_with_write_file`
+`verified-by: bravebot_tui::init_command::the_prompt_asks_for_the_title_repository_guidelines`
+`verified-by: bravebot_tui::init_command::the_prompt_asks_for_between_200_and_400_words`
+`verified-by: bravebot_tui::init_command::the_prompt_asks_for_each_of_the_five_areas`
+`verified-by: bravebot_tui::init_command::the_prompt_tells_the_planner_to_ask_the_person_with_ask_user_where_it_cannot_see`
 `verified-by: bravebot_agent::turn::a_file_the_planner_may_not_see_is_reserved_rather_than_opened`
 
 <a id="CMD-18"></a>
@@ -1229,8 +1233,9 @@ reaches a path, so one that climbs out of the sessions directory reads nothing. 
 prompt, and none of it is sent. Escape or Ctrl-C in the list stays in the session. The command is
 refused, with a line that does not repeat the id typed, for an id that names no record, for the
 session already open, for a manifest run ([SESSION-10](sessions.md#SESSION-10)), and for a record
-a running background session holds ([BG-9](background-sessions.md#BG-9)), and it says so where this
-directory holds no other session. Typed during a turn it waits for the turn to end (CMD-8).
+a running background session holds ([BG-9](background-sessions.md#BG-9)). An id that names no record
+gets the one line `no session with that id in this directory`, whether or not the directory holds
+another session. Typed during a turn it waits for the turn to end (CMD-8).
 
 **Why.** The picker, the restoration and the refusals already exist for the flag, and a second
 route into them would restore a different set. Choosing a record reads none of its content to

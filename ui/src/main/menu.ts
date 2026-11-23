@@ -279,6 +279,7 @@ function buildMenu(): void {
       submenu: [
         item('view.fold-left'),
         item('view.fold-right'),
+        item('app.sections'),
         item('view.reset-columns'),
         { type: 'separator' },
         item('view.find'),

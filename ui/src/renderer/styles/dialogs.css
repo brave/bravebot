@@ -277,6 +277,13 @@
 }
 .watch-add { display: flex; align-items: flex-end; gap: var(--leo-spacing-m); margin-top: var(--leo-spacing-xl); }
 .watch-add leo-input { flex: 1; min-width: 0; }
+.rule-check-form { display: flex; align-items: flex-end; gap: var(--leo-spacing-m); }
+.rule-check-form leo-dropdown { flex: none; }
+.rule-check-form leo-input { flex: 1; min-width: 0; }
+.rule-check-answer { display: flex; flex-direction: column; gap: var(--leo-spacing-m); margin-top: var(--leo-spacing-l); }
+.rule-check-label { flex: 0 0 8ch; font: var(--type-caption); color: var(--ink-tertiary); }
+.rule-check-value { flex: 1; min-width: 0; font: var(--type-meta); color: var(--ink-primary); overflow-wrap: anywhere; }
+.rule-check-value > code { font: var(--type-code); }
 
 /* ------------------------------------------------------------- previews */
 
