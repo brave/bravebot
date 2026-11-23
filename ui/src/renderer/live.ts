@@ -48,7 +48,8 @@ export interface Queued {
   aside?: 'recap'
   /**
    * Set for a typed `/manifest` line that waits for the turn, which the bridge refused while it ran:
-   * its task. It starts a plan run when the turn ends and is never sent as a prompt (MANIFEST-9).
+   * its task. It starts a plan run when the turn ends, with the pictures and PDFs `staged` holds
+   * (DROP-4), and is never sent as a prompt (MANIFEST-9).
    */
   manifest?: string
   /**

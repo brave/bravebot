@@ -1,8 +1,11 @@
-// `/manifest` typed into the composer (CMD-1, MANIFEST-9), as the desktop window reads it.
+// `/manifest` typed into the composer (CMD-1, MANIFEST-9, DROP-4), as the desktop window reads it.
 //
-// The bridge plans and runs the task (crates/ui-bridge/src/manifest.rs). What the window owns is
-// which lines start a run at all. The faults these reject are a longer word taken for the command,
-// and a line that only mentions the command being taken for it.
+// The bridge plans and runs the task (crates/ui-bridge/src/manifest.rs), and the main process turns
+// the window's drop grants into the run's `attachments` (src/main/sanitise.ts). What the window owns
+// is which lines start a run at all, and that what was dropped on the line goes with it as grant ids
+// and markers. The faults these reject are a longer word taken for the command, a line that only
+// mentions the command being taken for it, a paperclip file or a pasted picture sent with the task,
+// and a waiting line that loses its drops.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -23,6 +26,7 @@ test('the command word with a task gives the trimmed task', () => {
   assert.equal(shared.manifestTask('/manifest t'), 't')
   assert.equal(shared.manifestTask('/manifest fix the docs'), 'fix the docs')
   assert.equal(shared.manifestTask('  /manifest   fix the docs  '), 'fix the docs')
+  assert.equal(shared.manifestTask('/manifest build [Image #1]'), 'build [Image #1]')
 })
 
 test('the command word alone gives an empty task', () => {
@@ -33,6 +37,7 @@ test('the command word alone gives an empty task', () => {
 test('any other line is not the command', () => {
   assert.equal(shared.manifestTask('/manifestx'), null)
   assert.equal(shared.manifestTask('/manifestx t'), null)
+  assert.equal(shared.manifestTask('/manifests x'), null)
   assert.equal(shared.manifestTask('say /manifest'), null)
   assert.equal(shared.manifestTask('say /manifest x'), null)
   assert.equal(shared.manifestTask('manifest x'), null)
@@ -71,10 +76,33 @@ const windowWith = (state, answer = () => ({})) => {
   return seen
 }
 
+const picture = { marker: '[Image #1]', via: 'drop', file: { kind: 'image', name: 'shot.png', id: 'g1' } }
+const textFile = { marker: '[File #2]', via: 'drop', file: { kind: 'text', name: 'a.txt', id: 'd2' } }
+const pasted = { marker: '[Image #3]', via: 'paste', picture: { id: 'p3', thumbnail: '' } }
+const withStaged = (...staged) => ({ ...live(), staging: { made: staged.length, staged } })
+
 test('a typed /manifest t sends one manifest.run with the session, task and model, and no turn.send', async () => {
   const seen = windowWith(live())
   await running.planRun(seen.on, 's', 't', '/manifest t')
-  assert.deepEqual(seen.calls, [{ method: 'manifest.run', params: { session: 's', task: 't', model: 'm1' } }])
+  assert.deepEqual(seen.calls, [{ method: 'manifest.run', params: { session: 's', task: 't', model: 'm1', drops: [], files: [] } }])
+})
+
+test('a dropped picture goes as its grant id and a dropped text file as its marker and name, never a path (DROP-4)', async () => {
+  const seen = windowWith(withStaged(picture, textFile))
+  await running.planRun(seen.on, 's', 'build [Image #1] from [File #2]', '/manifest build [Image #1] from [File #2]')
+  assert.deepEqual(seen.calls, [{
+    method: 'manifest.run',
+    params: { session: 's', task: 'build [Image #1] from [File #2]', model: 'm1', drops: ['g1'], files: [{ marker: '[File #2]', name: 'a.txt' }] },
+  }])
+  assert.deepEqual(seen.problems, [])
+  assert.deepEqual(seen.state.staging.staged, [], 'what was sent leaves the composer')
+})
+
+test('only what the line still names goes with it', async () => {
+  const seen = windowWith(withStaged(picture, textFile))
+  await running.planRun(seen.on, 's', 'build [Image #1]', '/manifest build [Image #1]')
+  assert.deepEqual(seen.calls[0].params.drops, ['g1'])
+  assert.deepEqual(seen.calls[0].params.files, [])
 })
 
 test('the task is drawn as a plan-task row, before the call, and no user row is added', async () => {
@@ -85,11 +113,20 @@ test('the task is drawn as a plan-task row, before the call, and no user row is 
   assert.equal(seen.state.entries.at(-1).text, 't')
 })
 
-test('a turn_in_flight refusal takes the row back off and queues the line with its task', async () => {
-  const seen = windowWith(live(), () => { throw new running.RequestFailed('turn_in_flight', 'a turn is running') })
-  await running.planRun(seen.on, 's', 't', '/manifest t')
-  assert.deepEqual(seen.state.queued, [{ prompt: '/manifest t', attachments: [], staged: [], manifest: 't' }])
+test('a turn_in_flight refusal takes the row back off and queues the line with its task and drops', async () => {
+  const seen = windowWith(withStaged(picture), () => { throw new running.RequestFailed('turn_in_flight', 'a turn is running') })
+  await running.planRun(seen.on, 's', 't [Image #1]', '/manifest t [Image #1]')
+  assert.deepEqual(seen.state.queued, [{ prompt: '/manifest t [Image #1]', attachments: [], staged: [picture], manifest: 't [Image #1]' }])
   assert.deepEqual(seen.state.entries.map((entry) => entry.kind), ['user'])
+  assert.deepEqual(seen.state.staging.staged, [], 'the waiting line holds its drops, the composer does not')
+})
+
+test('a line from the queue sends the drops it waited with, not what the composer holds now', async () => {
+  const seen = windowWith(withStaged(textFile))
+  await running.planRun(seen.on, 's', 't [Image #1]', '/manifest t [Image #1]', true, [picture])
+  assert.deepEqual(seen.calls[0].params.drops, ['g1'])
+  assert.deepEqual(seen.calls[0].params.files, [])
+  assert.deepEqual(seen.state.staging.staged, [textFile], 'the next draft keeps its own drops')
 })
 
 test('any other refusal takes the row back off and shows the bridge sentence', async () => {
@@ -98,6 +135,13 @@ test('any other refusal takes the row back off and shows the bridge sentence', a
   assert.deepEqual(seen.state.entries.map((entry) => entry.kind), ['user', 'error'])
   assert.equal(seen.state.entries.at(-1).text, 'the planner refused')
   assert.deepEqual(seen.state.queued, [])
+})
+
+test('a refused line with drops on it goes back in the composer with them', async () => {
+  const seen = windowWith(withStaged(picture), () => { throw new running.RequestFailed('bad_request', 'the planner refused') })
+  await running.planRun(seen.on, 's', 't [Image #1]', '/manifest t [Image #1]')
+  assert.deepEqual(seen.drafts, ['/manifest t [Image #1]'])
+  assert.deepEqual(seen.state.staging.staged, [picture])
 })
 
 test('a line from the queue refused again is shown as an error, not queued a second time', async () => {
@@ -115,16 +159,19 @@ test('an empty task adds the terminal note and sends nothing', async () => {
   assert.equal(seen.state.entries.at(-1).text, 'a manifest run needs a task to plan')
 })
 
-test('paperclip files or staged items on the line put the draft back and send nothing', async () => {
-  const clipped = windowWith({ ...live(), attachments: [{ id: 'f1', path: '/p/a.txt' }] })
-  await running.planRun(clipped.on, 's', 't', '/manifest t')
-  const dropped = windowWith({ ...live(), staging: { made: 1, staged: [{ marker: '[File #1]', via: 'drop', file: { kind: 'text', name: 'a.txt', id: 'd1' } }] } })
-  await running.planRun(dropped.on, 's', 't [File #1]', '/manifest t [File #1]')
-  for (const [seen, line] of [[clipped, '/manifest t'], [dropped, '/manifest t [File #1]']]) {
-    assert.deepEqual(seen.calls, [])
+test('a paperclip file, a pasted picture or a folded paste on the line puts the draft back and sends nothing', async () => {
+  const folded = { marker: '[Pasted text #4 +5 lines]', via: 'text', pasted: { marker: '[Pasted text #4 +5 lines]', text: 'a\nb\nc\nd\ne\nf' } }
+  const cases = [
+    [{ ...live(), attachments: [{ id: 'f1', path: '/p/a.txt' }] }, '/manifest t', running.NO_PAPERCLIP],
+    [withStaged(pasted), '/manifest t [Image #3]', running.NO_PASTED_PICTURE],
+    [withStaged(picture, folded), '/manifest t [Image #1] [Pasted text #4 +5 lines]', running.ONLY_DROPS],
+  ]
+  for (const [state, line, problem] of cases) {
+    const seen = windowWith(state)
+    await running.planRun(seen.on, 's', shared.manifestTask(line), line)
+    assert.deepEqual(seen.calls, [], line)
     assert.deepEqual(seen.drafts, [line])
-    assert.equal(seen.problems.length, 1)
-    assert.match(seen.problems[0], /takes no files/)
+    assert.deepEqual(seen.problems, [problem])
     assert.deepEqual(seen.state.entries.map((entry) => entry.kind), ['user'])
   }
 })
@@ -181,7 +228,13 @@ test('every composer path and the queue start a /manifest line as a run, never a
     assert.ok(branch > 0 && branch < sent, name)
     assert.match(body.slice(branch, branch + 200), /planRun\(/, name)
   }
-  assert.match(turn, /message\.manifest !== undefined\s*\?\s*planRun\(handle, message\.manifest, message\.prompt, true\)/)
+  // A waiting line starts its run with what it waited with (DROP-4).
+  assert.match(turn, /message\.manifest !== undefined\s*\?\s*planRun\(handle, message\.manifest, message\.prompt, true, message\.staged\)/)
+})
+
+test('the bridge method is one the window may send', () => {
+  const index = readFileSync('src/main/index.ts', 'utf8')
+  assert.match(index, /'manifest\.run',/)
 })
 
 // Chat › Plan and Run…, which only writes the start of the line into the composer.

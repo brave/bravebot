@@ -293,14 +293,17 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     }
   }, [])
 
-  /** Start a plan run for a typed `/manifest <task>` line (MANIFEST-9). See `plan-run.ts`. */
-  const planRun = useCallback((handle: string, task: string, line: string, queuedAlready = false) => startPlanRun({
+  /**
+   * Start a plan run for a typed `/manifest <task>` line (MANIFEST-9), with the pictures, PDFs and
+   * files dropped on it (DROP-4). See `plan-run.ts`. A line from the queue brings what it named.
+   */
+  const planRun = useCallback((handle: string, task: string, line: string, queuedAlready = false, queuedStaged: Staged[] = []) => startPlanRun({
     call,
     read: (target) => openedLives.current.get(target),
     update: (target, change) => updateSession(target, (old) => old ? change(old) : old),
     putBack: (target, text) => { if (handleRef.current === target) setDraft(text) },
     setProblem,
-  }, handle, task, line, queuedAlready), [])
+  }, handle, task, line, queuedAlready, queuedStaged), [])
 
   /**
    * Carry out a typed `/plan [task]` line (MODE-12): queued while a turn runs or another plan line
@@ -327,14 +330,14 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       const handle = item.handle
       dequeuing.current.add(handle)
       // A waiting `/schedule` or `/recap` line is asked again and starts no turn, a waiting
-      // `/manifest` line starts its run, and a waiting `/plan` line sets plan mode and then sends
-      // its task alone.
+      // `/manifest` line starts its run with what was dropped on it (DROP-4), and a waiting `/plan`
+      // line sets plan mode and then sends its task alone.
       const settled = message.aside === 'recap'
         ? askAside(handle, 'recap', '', message.prompt, [], true)
         : message.schedule !== undefined
           ? schedule(handle, message.schedule, message.prompt, message.staged, true)
           : message.manifest !== undefined
-            ? planRun(handle, message.manifest, message.prompt, true)
+            ? planRun(handle, message.manifest, message.prompt, true, message.staged)
             : message.plan !== undefined
               ? plan(handle, message.plan, message.prompt, message.staged, true)
               : send(message.prompt, handle, message.attachments, message.staged)
@@ -483,7 +486,8 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       void askAside(handleRef.current, exit.kind, exit.question, exit.line, exit.staged)
       return
     }
-    // `planRun` reads the folded draft, so a paste or other staged item it names is refused.
+    // `planRun` reads the folded draft, so the files dropped on it go with the run, and a paste or
+    // other staged item it names is refused.
     const manifest = manifestTask(draft)
     if (manifest !== null) {
       setDraft('')
