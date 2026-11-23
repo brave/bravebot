@@ -5,17 +5,41 @@
 // The assertion worth making is the one a screenshot cannot make: that the thing passes
 // through heights between full and nothing. A collapse that jumps looks identical in
 // stills, so the height is sampled while it moves.
-import { mkdirSync } from 'node:fs'
-import { checker, launchLive, sessionsOrSkip, SHOTS_DIR } from './drive-support.mjs'
+import { mkdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { installBridge, makeProfile } from './acceptance-fixture.mjs'
+import { checker, launchArguments, launchLive, SHOTS_DIR } from './drive-support.mjs'
 
 mkdirSync(SHOTS_DIR, { recursive: true })
 
+/** Launch as `drive-support.mjs` does, on X11 under Linux so it runs under `xvfb-run`. */
+const launch = async (userData, env = {}) => {
+  const { _electron: electron } = await import('playwright-core')
+  const x11 = process.platform === 'linux' ? ['--ozone-platform=x11'] : []
+  return electron.launch({ args: [...launchArguments(userData), ...x11], cwd: process.cwd(), timeout: 40000, env: { ...process.env, ...env } })
+}
+
+/** Draw the window in one theme for a screenshot. A fresh profile follows the system's. */
+const theme = async (page, name) => {
+  await page.emulateMedia({ colorScheme: name })
+  await page.waitForTimeout(300)
+}
+
 const { check, problems } = checker()
 
-const { app, page } = await launchLive()
+await checklist()
+
+const { app, page } = await launchLive(() => launch())
 await page.waitForTimeout(2500)
 
-const sessions = await sessionsOrSkip(app, page)
+// Not `sessionsOrSkip`, which exits 0 and would drop what the checklist found.
+const sessions = await page.locator('.session').count()
+if (sessions === 0) {
+  console.log('  --   the real profile has no sessions; the folds and the tabs are untested')
+  await app.close()
+  console.log(problems.length ? `\nRESULT: ${problems.length} problem(s)` : '\nRESULT: ok')
+  process.exit(problems.length ? 1 : 0)
+}
 
 // A run only exists where a turn made two calls in a row, so the sessions are tried in
 // order until one has one. Every session has the context panels, so the first will do for
@@ -166,5 +190,100 @@ await plan.locator('summary').click()
 await page.waitForTimeout(400)
 check(await isOpen(plan.locator('.panel-collapse')), 'and unfolds again')
 await app.close()
+
 console.log(problems.length ? `\nRESULT: ${problems.length} problem(s)` : '\nRESULT: ok')
 process.exit(problems.length ? 1 : 0)
+
+// --- the Choose sections checklist (PANEL-20) --------------------------------------------
+// Run before the rest, which skips when the real profile has no sessions. Against a user-data
+// directory and agent state of its own and the acceptance drivers' bridge, so turning sections off
+// and reading the file back never touches the person's own `bravebot-ui.json` or records.
+async function checklist() {
+const { profile: userData, directory, state } = makeProfile()
+const sections = page2 => page2.locator('[data-test="context-sections"]')
+const row = (page2, name) => page2.locator(`leo-menu-item[data-panel="${name}"]`)
+const shown = (page2, name) => page2.locator(`#panel-${name}`).isVisible()
+
+/** Launch on the fixture profile with the fixture bridge, and open its first conversation. */
+const openFixture = async () => {
+  const app = await launch(userData, { BRAVEBOT_HOME: state })
+  const page = await app.firstWindow()
+  page.on('pageerror', (e) => console.log('PAGE ERROR:', e.message))
+  await page.setViewportSize({ width: 1350, height: 900 })
+  await installBridge(app, { directory })
+  // The fixture answers every method it does not know with `{}`, which the composer's spend limit
+  // and variant picker cannot draw, so those two are answered here and the rest are passed on.
+  await app.evaluate(({ ipcMain }) => {
+    const fixture = ipcMain._invokeHandlers.get('bravebot:request')
+    ipcMain.removeHandler('bravebot:request')
+    ipcMain.handle('bravebot:request', (event, method, params) =>
+      method === 'session.limit' ? { ok: { limit: null, spent: 0 } }
+        : method === 'session.variant' ? { error: { message: 'No variants in this fixture.' } }
+          : fixture(event, method, params))
+  })
+  await page.reload()
+  await page.locator('.session').filter({ hasText: 'Review the sample project' }).click()
+  await page.waitForTimeout(1200)
+  if (await page.locator('.app.right-folded').count()) await page.getByRole('button', { name: 'Context panel', exact: true }).click()
+  await page.waitForTimeout(600)
+  return { app, page }
+}
+
+{
+  const { app, page } = await openFixture()
+
+  check(await sections(page).isVisible(), 'the context head has a Choose sections button')
+  check(await shown(page, 'writes'), 'Changes shows before anything is turned off')
+  await sections(page).click()
+  await page.waitForTimeout(400)
+  check(await row(page, 'writes').isVisible(), 'the button opens the checklist')
+  await theme(page, 'light')
+  await page.screenshot({ path: `${SHOTS_DIR}/14-sections-menu-light.png` })
+  await theme(page, 'dark')
+  await page.screenshot({ path: `${SHOTS_DIR}/14-sections-menu-dark.png` })
+  await theme(page, 'light')
+
+  await row(page, 'writes').click()
+  await page.waitForTimeout(300)
+  check(!(await shown(page, 'writes')), 'unticking Changes hides the Changes panel at once')
+  check(await row(page, 'plan').isVisible(), 'and the checklist stays open')
+  check((await row(page, 'writes').getAttribute('aria-checked')) === 'false', 'and Changes reads as unticked')
+  await page.screenshot({ path: `${SHOTS_DIR}/15-sections-changes-off-light.png` })
+  await theme(page, 'dark')
+  await page.screenshot({ path: `${SHOTS_DIR}/15-sections-changes-off-dark.png` })
+  await theme(page, 'light')
+
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(400)
+  check(!(await row(page, 'plan').isVisible()), 'Escape closes the checklist')
+  check(!(await shown(page, 'writes')), 'and keeps Changes hidden')
+  await page.waitForTimeout(500)
+  await app.close()
+}
+
+const stored = JSON.parse(readFileSync(join(userData, 'bravebot-ui.json'), 'utf8'))
+check(JSON.stringify(stored.hidden) === '["writes"]', `bravebot-ui.json holds "hidden": ${JSON.stringify(stored.hidden)}`)
+
+{
+  const { app, page } = await openFixture()
+  check(!(await shown(page, 'writes')), 'after a relaunch Changes is still hidden')
+  check(await shown(page, 'plan'), 'and Plan still shows')
+
+  // Every section off: the column keeps its head, the button and one line saying so.
+  await sections(page).click()
+  await page.waitForTimeout(400)
+  for (const name of ['plan', 'read', 'confined', 'notes', 'asides']) {
+    await row(page, name).click()
+    await page.waitForTimeout(150)
+  }
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(400)
+  check(await page.locator('#context-all-off').isVisible(), 'every section off draws the line saying so')
+  check(await sections(page).isVisible(), 'and keeps the Choose sections button')
+  check(await page.locator('#context-column').isVisible(), 'and the column stays drawn')
+  await page.screenshot({ path: `${SHOTS_DIR}/16-sections-all-off-light.png` })
+  await theme(page, 'dark')
+  await page.screenshot({ path: `${SHOTS_DIR}/16-sections-all-off-dark.png` })
+  await app.close()
+}
+}
