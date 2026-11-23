@@ -1928,6 +1928,10 @@ for one that does not.
 `verified-by: bravebot_bedrock::lib::what_a_model_refused_outlives_the_client_that_found_out`
 `verified-by: bravebot_bedrock::lib::a_request_refused_on_its_contents_is_asked_again_without_the_breakpoints`
 `verified-by: bravebot_bedrock::lib::only_a_refusal_on_the_contents_drops_the_breakpoints`
+`verified-by: bravebot_tui::app::tests::caching_note::the_caching_off_note_is_made_after_a_turn_has_ended`
+`verified-by: bravebot_tui::app::tests::caching_note::the_caching_off_note_is_made_after_a_manifest_run_has_ended`
+`verified-by: bravebot_tui::app::tests::caching_note::the_caching_off_note_follows_the_model_a_pick_puts_in_force`
+`verified-by: bravebot_tui::app::tests::caching_note::the_caching_off_note_is_made_when_the_session_starts`
 `verified-by: bravebot_aichat::anthropic::protocol::the_system_prompt_and_the_end_of_the_conversation_carry_a_breakpoint`
 `verified-by: bravebot_aichat::anthropic::protocol::a_conversation_ending_in_a_tool_result_is_marked_on_the_result`
 `verified-by: bravebot_aichat::anthropic::protocol::a_conversation_ending_in_a_call_is_marked_nowhere_but_the_prompt`

@@ -276,6 +276,7 @@ row so the cost is known before sending.
 `verified-by: bravebot_mentions::lib::a_session_reference_is_not_a_file_and_is_read_back_by_its_id`
 `verified-by: bravebot_mentions::lib::a_session_row_completes_to_its_reference_and_enter_sends_it_finished`
 `verified-by: bravebot_tui::references::an_at_sign_offers_past_sessions_after_the_files`
+`verified-by: bravebot_tui::app::tests::mentioned_sessions::the_at_list_says_how_old_each_session_is_and_offers_the_newest_first`
 `verified-by: bravebot_tui::references::a_word_narrows_sessions_by_title_and_not_by_what_is_drawn_beside_them`
 `verified-by: bravebot_tui::references::the_sessions_are_read_only_while_a_reference_is_typed`
 `verified-by: bravebot_tui::references::tab_completes_a_session_and_enter_sends_it_finished`

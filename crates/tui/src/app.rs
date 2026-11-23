@@ -50911,6 +50911,7 @@ mod tests {
     }
 
     mod box_text;
+    mod caching_note;
     mod chrome;
     mod clicks;
     mod command_history;
@@ -50925,6 +50926,7 @@ mod tests {
     mod hover;
     mod interrupt;
     mod jump;
+    mod mentioned_sessions;
     mod menu;
     mod pasting;
     mod peeking;
@@ -50937,6 +50939,7 @@ mod tests {
     mod standing;
     mod startup_input;
     mod summoning;
+    mod waiting_commands;
     mod watching;
     mod wide;
     mod wrapped;

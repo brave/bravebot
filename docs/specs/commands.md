@@ -845,6 +845,10 @@ carried out or queued as above.
 `verified-by: bravebot_agent::aside::a_fork_shares_the_stored_messages_instead_of_copying_them`
 `verified-by: bravebot_agent::aside::a_question_shares_the_stored_messages_instead_of_copying_them`
 `verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_btw_asked_mid_turn`
+`verified-by: bravebot_tui::app::tests::waiting_commands::ctrl_enter_on_a_waiting_command_stops_the_turn_and_carries_the_command_out`
+`verified-by: bravebot_tui::app::tests::waiting_commands::exit_typed_mid_turn_waits_for_the_turn_and_does_not_stop_it`
+`verified-by: bravebot_tui::app::tests::waiting_commands::a_file_the_open_command_numbers_is_refused_while_a_turn_runs_and_not_queued`
+`verified-by: bravebot_tui::app::tests::waiting_commands::a_btw_typed_behind_a_waiting_btw_waits_behind_it`
 `verified-by: bravebot_tui::app::stopping_the_turn_stops_the_question_beside_it`
 `verified-by: bravebot_tui::app::a_question_still_out_when_the_turn_is_stopped_is_stopped`
 `verified-by: bravebot_tui::app::a_question_still_out_when_the_turn_ends_by_itself_stays_out`

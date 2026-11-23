@@ -2586,6 +2586,7 @@ person than whatever error put it there.
 `verified-by: bravebot_tui::app::tests::handover::nothing_runs_after_a_terminal_that_could_not_be_given_back`
 `verified-by: bravebot_tui::app::tests::handover::a_terminal_that_could_not_be_taken_again_is_returned_as_a_failure`
 `verified-by: bravebot_tui::app::tests::handover::every_handover_goes_through_the_one_that_gives_back_and_takes_again`
+`verified-by: bravebot_tui::app::tests::handover::every_handover_takes_the_terminal_again_with_the_mouse_choice_the_session_holds`
 `verified-by: bravebot_cli::terminal_modes::the_editor_a_prompt_is_written_in_is_started_on_a_terminal_that_is_out_of_raw_mode`
 `verified-by: bravebot_cli::terminal_modes::a_session_in_lines_takes_none_of_what_the_interface_that_draws_takes`
 

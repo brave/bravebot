@@ -4071,22 +4071,55 @@ mod tests {
             );
         }
 
+        /// The last row of the screen as it is drawn: the scroller's footer.
+        fn footer_row(session: &Session) -> String {
+            let mut terminal = Terminal::new(TestBackend::new(90, 24)).expect("terminal");
+            terminal
+                .draw(|frame| {
+                    draw(frame, session);
+                })
+                .expect("draw succeeds");
+            let buffer = terminal.backend().buffer().clone();
+            let last = buffer.area.height - 1;
+            (0..buffer.area.width)
+                .map(|column| buffer[(column, last)].symbol())
+                .collect()
+        }
+
         /// The footer is the one row of the screen the interface speaks in its own voice. A
         /// quotation there is untrusted content drawn outside a marked block, and a line that can
         /// be quoted is a line that can be written to read like the interface.
+        ///
+        /// The view stands on each of the three matches in turn, one in the assistant's reply and
+        /// two in a quarantined block, and on each the footer holds the count and none of the
+        /// words of any of the three lines. A footer that quoted the line the view is on would
+        /// pass the first match alone when the line quoted there is one the check does not name.
+        ///
+        /// Rejects `draw_scroller_hint` appending the text of the match the view is on.
         #[test]
         fn the_search_footer_never_quotes_what_it_matched() {
-            let (drawn, _) = screen(&searching("needle"));
+            let mut session = searching("needle");
+            let (_, laid) = lay_out(&session, 90, 24);
+            let rows = laid.matches;
+            assert_eq!(rows.len(), 3, "the fixture holds three matches: {rows:?}");
+            let in_the_lines_matched = ["there is a", "in there", "haystack", "holds a", "behind"];
 
-            let footer = drawn
-                .as_str()
-                .split("/needle")
-                .nth(1)
-                .expect("the footer names what is being looked for");
-            assert!(
-                !footer.contains("haystack"),
-                "the footer quoted the line it matched: {footer}"
-            );
+            for at in 1..=3 {
+                if at > 1 {
+                    session.to_a_match(&rows, true);
+                }
+                let footer = footer_row(&session);
+                assert!(
+                    footer.contains("/needle") && footer.contains(&format!("{at} of 3")),
+                    "the view is not on match {at}: {footer}"
+                );
+                for words in in_the_lines_matched {
+                    assert!(
+                        !footer.contains(words),
+                        "on match {at} the footer quoted the line it matched ({words}): {footer}"
+                    );
+                }
+            }
         }
 
         /// An interface that shows content and then refuses to let a person find it has protected
