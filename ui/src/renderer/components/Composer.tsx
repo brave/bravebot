@@ -6,6 +6,7 @@ import { useContextWindow } from '../context-window'
 import { markerAt, type Staged, type SummonedBot } from '../staging'
 import type { Enhancement } from '../enhancing'
 import type { Handoff } from '../handoff'
+import type { Queued } from '../live'
 import { Button, ButtonMenu, Icon, ProgressRing, TextArea } from '../nala'
 import { FileGlyph } from './FileGlyph'
 import { IconButton } from './IconButton'
@@ -24,6 +25,29 @@ async function askOffer(session: string, line: string, cursor: number): Promise<
     ? { typed: ok.typed, word: typeof ok.word === 'string' ? ok.word : null, entries: ok.entries, completes: ok.completes === true }
     : { typed: null, word: null, entries: [], completes: false }
 }
+
+/**
+ * A line waiting for the turn to end, as typed. `plan` marks a `/manifest` line, which starts a
+ * plan run, and `command` marks any line that starts something other than a turn.
+ */
+export interface QueuedRow {
+  text: string
+  plan?: boolean
+  command?: boolean
+}
+
+/** How a waiting message is drawn in the queue: the line as typed, and what it starts. */
+export const queuedRow = (message: Queued): QueuedRow => ({
+  text: message.prompt,
+  plan: message.manifest !== undefined,
+  command: message.manifest !== undefined || message.schedule !== undefined || message.aside !== undefined,
+})
+
+/** The queue's caption. A command starts something other than a turn, so it is not called one. */
+export const queueNote = (rows: QueuedRow[], paused: boolean): string =>
+  paused
+    ? 'Held until you resume'
+    : rows.some((row) => row.command) ? 'Each starts after this one' : 'Each starts a turn of its own after this one'
 
 /** How many lines the field grows to before it starts to scroll. */
 const FIELD_MAX_ROWS = 6
@@ -108,7 +132,7 @@ export interface ComposerProps {
   onDropHandoff: (force?: boolean) => void
   /** Lines sent into the running turn that it has not read yet. */
   interjected: string[]
-  queued: string[]
+  queued: QueuedRow[]
   queuePaused: boolean
   onResumeQueued: () => void
   onRemoveQueued: (index: number) => void
@@ -312,14 +336,15 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
           <div className="composer-tray queued-messages" role="group" aria-label="Queued messages">
             <div className="tray-head">
               <span className="tray-title">{queuePaused ? 'Queue paused' : 'Queued'} <span className="num">· {queued.length}</span></span>
-              <span className="tray-note">{queuePaused ? 'Held until you resume' : 'Each starts a turn of its own after this one'}</span>
+              <span className="tray-note">{queueNote(queued, queuePaused)}</span>
               {queuePaused && (
                 <Button kind="plain" size="tiny" className="tray-action" aria-label="Resume queue"
                   isDisabled={running || backendReady === false} onClick={onResumeQueued}>Resume</Button>
               )}
             </div>
-            {queued.map((text, index) => (
+            {queued.map(({ text, plan }, index) => (
               <div className="tray-row" key={index}>
+                {plan && <span className="tray-mark plan-task-mark">Plan</span>}
                 <span className="tray-text" data-tooltip={text}>{text}</span>
                 <IconButton icon="close" size="tiny" label={`Remove queued message ${index + 1}`} tooltip="Remove"
                   onClick={() => onRemoveQueued(index)} />

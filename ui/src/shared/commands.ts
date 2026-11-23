@@ -35,6 +35,7 @@ export type CommandId =
   | 'session.export-markdown'
   | 'session.export-pdf'
   | 'turn.send'
+  | 'turn.plan'
   | 'turn.cancel'
   | 'mode.cycle'
   | 'turn.rewind'
@@ -68,7 +69,7 @@ export type CommandId =
  * with the rest of the declaration: the main process greys a menu item by it, and anything
  * drawing an in-window menu can grey a row by the same tag rather than by its own opinion.
  */
-export type Requires = 'always' | 'session' | 'running' | 'sendable' | 'exportable' | 'forkable' | 'rewindable'
+export type Requires = 'always' | 'session' | 'running' | 'sendable' | 'startable' | 'exportable' | 'forkable' | 'rewindable'
 
 export interface Command {
   id: CommandId
@@ -111,6 +112,14 @@ export interface WindowState {
    */
   canSend: boolean
   /**
+   * There is a session, nothing is running, it is not waiting on a question asked before its first
+   * turn, and the backend is not known to be unready. This is `canSend` without the draft.
+   *
+   * Plan and Run… writes the start of a line into the composer, so it is offered while the
+   * composer is empty, which `canSend` is not.
+   */
+  canStart: boolean
+  /**
    * There is a session and somebody has said something in it.
    *
    * Sent rather than derived from `hasSession`, for the same reason `canSend` is: a session
@@ -147,6 +156,7 @@ export const NOTHING_OPEN: WindowState = {
   hasSession: false,
   running: false,
   canSend: false,
+  canStart: false,
   canExport: false,
   includeTools: false,
   canRewind: false,
@@ -183,6 +193,9 @@ export const COMMANDS: readonly Command[] = [
   { id: 'session.export-markdown', label: 'Markdown…', requires: 'exportable' },
   { id: 'session.export-pdf', label: 'PDF…', requires: 'exportable' },
   { id: 'turn.send', label: 'Send', accelerator: 'CmdOrCtrl+Enter', requires: 'sendable' },
+  // Writes `/manifest ` into the composer and puts the caret there. The run starts only when the
+  // person sends that line (CMD-1, MANIFEST-9), so the item answers nothing and sends nothing.
+  { id: 'turn.plan', label: 'Plan and Run…', requires: 'startable' },
   { id: 'turn.cancel', label: 'Cancel Turn', accelerator: 'CmdOrCtrl+.', requires: 'running' },
   // Not Shift+Tab, which the terminal uses: in a text field that key moves focus backwards.
   // Offered while a turn runs, since the mode chosen applies to the rest of it.
@@ -271,6 +284,8 @@ export function isEnabled(requires: Requires, state: WindowState): boolean {
       return state.hasSession && state.running
     case 'sendable':
       return state.canSend
+    case 'startable':
+      return state.canStart
     case 'exportable':
       return state.canExport
     case 'forkable':
@@ -309,13 +324,14 @@ export function isChecked(id: CommandId, state: WindowState): boolean {
  */
 export function parseWindowState(value: unknown): WindowState | null {
   if (typeof value !== 'object' || value === null) return null
-  const { hasSession, running, canSend, canExport, includeTools, canRewind, caffeinated, folded } = value as Record<
+  const { hasSession, running, canSend, canStart, canExport, includeTools, canRewind, caffeinated, folded } = value as Record<
     string,
     unknown
   >
   if (typeof hasSession !== 'boolean') return null
   if (typeof running !== 'boolean') return null
   if (typeof canSend !== 'boolean') return null
+  if (typeof canStart !== 'boolean') return null
   if (typeof canExport !== 'boolean') return null
   if (typeof includeTools !== 'boolean') return null
   if (typeof canRewind !== 'boolean') return null
@@ -323,7 +339,7 @@ export function parseWindowState(value: unknown): WindowState | null {
   if (typeof folded !== 'object' || folded === null) return null
   const { left, right } = folded as Record<string, unknown>
   if (typeof left !== 'boolean' || typeof right !== 'boolean') return null
-  return { hasSession, running, canSend, canExport, includeTools, canRewind, caffeinated, folded: { left, right } }
+  return { hasSession, running, canSend, canStart, canExport, includeTools, canRewind, caffeinated, folded: { left, right } }
 }
 
 /**

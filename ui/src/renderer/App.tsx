@@ -1,6 +1,6 @@
 import { SettingsView, type SettingsPage } from './components/SettingsView'
 import { BotDetails } from './components/BotDetails'
-import type { ComposerFooterProps, ProjectChoice } from './components/Composer'
+import { queuedRow, type ComposerFooterProps, type ProjectChoice } from './components/Composer'
 import { botHistory, homeConversation } from '../shared/bot-history'
 import type { Tab } from '../shared/view'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -39,7 +39,8 @@ import { UsagePingNotice } from './components/UsagePingNotice'
 import { CrashReportsNotice } from './components/CrashReportsNotice'
 import { bannerShown, parseUpdateStatus, type UpdateStatus } from '../shared/update'
 import { pickModel, pickedModel, rememberPickedModel, reopenedModel } from './models'
-import { canSend } from './can-send'
+import { canSend, canStart } from './can-send'
+import { planPrefill } from '../shared/manifest'
 import { useCommandRouter, usePublishedState } from './commands'
 import { useWindowTitle } from './window-title'
 import { type Fork, forkedSessions } from '../shared/forks'
@@ -1101,6 +1102,12 @@ export function App(): React.JSX.Element {
     create: (directory) => { void (directory ? create(directory) : newChat()) },
     closeSession: () => void closeSession(),
     send: submitOrHandOff,
+    // Only writes the line. The run starts when the person sends it (CMD-1).
+    plan: () => {
+      if (!liveRef.current) return
+      setDraft(planPrefill(draft))
+      document.dispatchEvent(new Event(FOCUS_COMPOSER_EVENT))
+    },
     cancel: () => void cancel(),
     cycleMode: () => { if (liveRef.current) void chooseMode(nextPermissionMode(liveRef.current.permissionMode)) },
     toggle,
@@ -1149,6 +1156,7 @@ export function App(): React.JSX.Element {
       hasSession: live !== null,
       running: live?.running ?? false,
       canSend: canSend(live, backendReady, draft),
+      canStart: canStart(live, backendReady),
       canExport,
       includeTools,
       canRewind: live !== null && !live.running && (live.rewind?.length ?? 0) > 0,
@@ -1293,7 +1301,7 @@ export function App(): React.JSX.Element {
         onStaging={(handle, staging) => updateSession(handle, (old) => old ? { ...old, staging } : old)}
         queuePaused={live?.queuePaused ?? false}
         onResumeQueued={() => setLive((old) => old ? { ...old, queuePaused: false } : old)}
-        queued={live?.queued?.map((message) => message.prompt) ?? []}
+        queued={live?.queued?.map(queuedRow) ?? []}
         onInterject={interjectDraft}
         onEnhance={() => { const handle = handleRef.current; if (handle) void enhancement.enhance(handle) }}
         onStopEnhance={() => { const handle = handleRef.current; if (handle) enhancement.stop(handle) }}

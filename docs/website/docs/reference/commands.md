@@ -1134,6 +1134,10 @@ In [plan mode](../security/permission-modes.md) a plan with a write in it does
 not run at all, decided from the frozen plan before the plan is put to anybody. See
 [Plan first, then execute](../using/manifest-mode.md) for the `--mode manifest` form.
 
+The desktop window takes the same line in its composer. Typed while a turn runs, it waits until the
+turn ends. It refuses a line with an attached file, so name the file in the task. See
+[From the desktop app](../using/manifest-mode.md#from-the-desktop-app).
+
 ## `/memory`
 
 Lists the [memory](../customize/agents.md#memory) of each definition this session resolved that

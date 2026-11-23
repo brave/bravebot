@@ -17,6 +17,14 @@ export function askingFirst(live: SendState | null | undefined): boolean {
 }
 
 /**
+ * Whether the composer could start a turn now, whatever it holds: a session is open, it is idle and
+ * not waiting on a question asked before its first turn, and the backend is not known to be unready.
+ */
+export function canStart(live: SendState | null | undefined, backendReady: boolean | null | undefined): boolean {
+  return !!live && !live.running && !askingFirst(live) && backendReady !== false
+}
+
+/**
  * Whether a draft may be sent now: a session is open, it is idle and not waiting on a question
  * asked before its first turn, the backend is not known to be unready, and the draft is not blank.
  *
@@ -24,5 +32,5 @@ export function askingFirst(live: SendState | null | undefined): boolean {
  * cannot disagree about it.
  */
 export function canSend(live: SendState | null | undefined, backendReady: boolean | null | undefined, draft: string): boolean {
-  return !!live && !live.running && !askingFirst(live) && backendReady !== false && draft.trim().length > 0
+  return canStart(live, backendReady) && draft.trim().length > 0
 }

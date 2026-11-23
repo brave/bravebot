@@ -293,6 +293,7 @@ function buildMenu(): void {
       label: 'Chat',
       submenu: [
         item('turn.send'),
+        item('turn.plan'),
         item('turn.cancel'),
         SEPARATOR,
         item('mode.cycle'),

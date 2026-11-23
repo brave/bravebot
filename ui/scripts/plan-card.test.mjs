@@ -152,14 +152,40 @@ test('a run is left out of an export and is not a prompt', () => {
 
 test('a declined plan is said to be declined, read off the flag and not the sentence', () => {
   // The sentence is one the agent would not write, so the title can only have come from the flag.
+  // The decided card above it shows the plan, so a declined run ends on one caption line.
   const declined = draw(ended({ declined: true, problem: 'some other wording entirely' }))
-  assert.ok(declined.includes('The plan was declined, so nothing ran'), declined)
-  assert.ok(declined.includes('class="plan-ended quiet"'), declined)
+  assert.equal(declined, '<p class="session-notice plan-ended-note"><span class="notice-text">Nothing was read or written. Saved as run <code>run-123</code>.</span></p>')
 
   // And wording that sounds like a decline, without the flag, is not drawn as one.
   const failed = draw(ended({ declined: false, problem: 'the plan was not approved' }))
-  assert.ok(!failed.includes('The plan was declined'), failed)
+  assert.ok(!failed.includes('plan-ended-note'), failed)
   assert.ok(failed.includes('The run stopped'), failed)
+})
+
+test('a stopped run’s folds have no native marker and a carat that turns when open', () => {
+  const markup = draw(ended({ problem: 'step 2 writes outside the workspace', attempt: { goal: null, proposed: null, plan: 'the plan', steps: ['1. [act] write NOTES.md'] } }))
+  const summaries = [...markup.matchAll(/<summary>(.*?)<\/summary>/g)].map((found) => found[1])
+  assert.equal(summaries.length, 2, markup)
+  // Leo's wrapper sets the icon's name and class once it is mounted, so the source says which.
+  for (const summary of summaries) assert.match(summary, /^<leo-icon><\/leo-icon>/, summary)
+  const { readFileSync } = require('node:fs')
+  assert.match(readFileSync('src/renderer/components/Transcript.tsx', 'utf8'), /<summary><Icon className="chevron" name="carat-right" \/>\{children\}<\/summary>/)
+})
+
+test('the stylesheet sizes the plan rows as the design asks', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const css = (await readFile('src/renderer/styles/transcript.css', 'utf8')).replace(/\s+/g, ' ')
+  const rule = (selector) => css.match(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`))?.[1] ?? ''
+  assert.match(rule('.bubble.user.plan-task'), /border-radius: var\(--radius-bubble\)/)
+  assert.match(rule('.bubble.user.plan-task'), /padding: var\(--leo-spacing-l\) var\(--leo-spacing-2xl\)/)
+  assert.match(rule('.plan-task-mark'), /color: var\(--ink-secondary\)/)
+  assert.doesNotMatch(rule('.plan-task-mark'), /opacity/)
+  assert.match(rule('.plan-reply .preview'), /white-space: pre-wrap; overflow-wrap: anywhere/)
+  assert.match(rule('.plan-reply .preview'), /padding: var\(--leo-spacing-m\) var\(--leo-spacing-l\)/)
+  assert.match(rule('.plan-reply-foot code, .plan-record code, .plan-ended-note code'), /white-space: nowrap/)
+  assert.match(rule('.plan-ended summary'), /list-style: none/)
+  assert.match(rule('.plan-ended summary'), /--leo-icon-size: var\(--icon-caption\)/)
+  assert.match(rule('.plan-ended > strong'), /font: var\(--type-meta-strong\)/)
 })
 
 // CHATGPT-8: a run the ChatGPT account failed carries the same sentence a turn does, with the command

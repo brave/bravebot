@@ -177,6 +177,8 @@ const ALLOWED_IDS = [
   // Unfolds the context column and opens its section checklist. It only changes what the column
   // draws, and reaches no agent method.
   'app.sections',
+  // Writes `/manifest ` into the composer. The run starts only when the person sends the line.
+  'turn.plan',
 ]
 const ours = every.filter((i) => i.id && !i.role).map((i) => i.id)
 check(
@@ -230,6 +232,9 @@ const fresh = await readMenu()
 const freshItem = (id) => fresh.flatMap((m) => m.items).find((i) => i.id === id)
 check(freshItem('session.close').enabled === false, 'with no chat open, Close Chat is grey')
 check(freshItem('turn.send').enabled === false, 'with no session open, Send is grey')
+check(freshItem('turn.plan').enabled === false, 'with no session open, Plan and Run… is grey')
+// Electron reports an item with no accelerator as null.
+check(accel('turn.plan') == null, 'Plan and Run… has no shortcut')
 check(freshItem('turn.cancel').enabled === false, 'with nothing running, Cancel Turn is grey')
 
 const click = (id) =>
@@ -266,6 +271,29 @@ if (hasSessions) {
     open.flatMap((m) => m.items).find((i) => i.id === 'turn.send').enabled === false,
     'clearing it greys Send again',
   )
+
+  // Plan and Run… is offered with the composer empty, and only writes the start of the line.
+  check(open.flatMap((m) => m.items).find((i) => i.id === 'turn.plan').enabled === true, 'an empty composer leaves Plan and Run… offered')
+  const bubblesBefore = await page.locator('.bubble.user').count()
+  await click('turn.plan')
+  // The click runs in the main process, which then messages the renderer, so the draft is polled
+  // for, up to a deadline, rather than read after a guess at how long that takes.
+  let prefilled = false
+  for (let tries = 0; tries < 100 && !prefilled; tries++) {
+    prefilled = (await page.locator(COMPOSER_INPUT).inputValue()) === '/manifest '
+    if (!prefilled) await page.waitForTimeout(50)
+  }
+  check(prefilled, 'Plan and Run… leaves "/manifest " in the composer')
+  check(
+    // The composer's text field sits inside the leo-textarea's shadow root, so focus is read there.
+    await page.locator(COMPOSER_INPUT).evaluate((el) => el.getRootNode().activeElement === el),
+    'and puts the caret in the composer',
+  )
+  await page.screenshot({ path: `${SHOTS_DIR}/11-menu-plan-prefill.png` })
+  check((await page.locator('.bubble.user').count()) === bubblesBefore, 'and sends nothing')
+  check((await page.locator('.plan-task').count()) === 0, 'and starts no run')
+  await page.locator(COMPOSER_INPUT).fill('')
+  await page.waitForTimeout(400)
 
   // One prompt to the stand-in model service gives the transcript a prompt and a reply, which the
   // context-menu checks below right-click. The wait is on the reply and then on the composer being

@@ -387,6 +387,28 @@ export const askedServer = (request: ServerRequest): Entry => ({ kind: 'server',
 export const askedManifest = (request: ManifestRequest, unheld: string[] = []): Entry => ({ kind: 'manifest', id: nextId(), request, decision: null, unheld })
 
 /**
+ * The entries without the agent's narration of a plan's steps, once the plan's card lists them.
+ *
+ * The agent says the plan, a heading line and then one line per step, before it asks about it.
+ * The card shows the same steps, so a narration whose step lines are the card's, in order, is
+ * dropped and the card is the one place the plan is read. Only the run's own narration is looked
+ * at: the search stops at the run's task row or an earlier plan's card.
+ */
+export function withoutNarratedPlan(entries: Entry[], steps: string[]): Entry[] {
+  if (!steps.length) return entries
+  for (let at = entries.length - 1; at >= 0; at--) {
+    const entry = entries[at]!
+    if (entry.kind === 'plan-task' || entry.kind === 'manifest') break
+    if (entry.kind !== 'narration') continue
+    const lines = entry.text.split('\n').map((line) => line.trim()).filter(Boolean).slice(1)
+    if (lines.length === steps.length && lines.every((line, index) => line === steps[index]!.trim())) {
+      return [...entries.slice(0, at), ...entries.slice(at + 1)]
+    }
+  }
+  return entries
+}
+
+/**
  * Whether a rule is about a server's tool, which is the one family a plan run applies (MANIFEST-15).
  * The family is the text before the first `(`, as the agent reads it.
  */

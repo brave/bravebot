@@ -118,6 +118,7 @@ const BUSY = {
   hasSession: true,
   running: true,
   canSend: true,
+  canStart: true,
   canExport: true,
   includeTools: false,
   canRewind: true,

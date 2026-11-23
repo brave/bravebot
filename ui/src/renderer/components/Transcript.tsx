@@ -17,7 +17,7 @@ import { drawCommand } from '../../shared/connectors'
 import type { Side } from '../columns'
 import type { ExportFormat } from '../../shared/export'
 import { Diff } from './Diff'
-import { BackendTray, Composer, ProjectMenu, type ComposerFooterProps } from './Composer'
+import { BackendTray, Composer, ProjectMenu, type ComposerFooterProps, type QueuedRow } from './Composer'
 import { BotView } from './BotView'
 import type { BotConversation } from '../../shared/bot-history'
 import type { FolderQuestion, RefusedFolder, RulesQuestion, SessionSummary } from '../../shared/protocol'
@@ -144,7 +144,7 @@ interface Props {
   onEscapeHandoff: () => boolean
   /** Drop the armed brief where the box is empty, or always where `force` is set. */
   onDropHandoff: (force?: boolean) => void
-  queued: string[]
+  queued: QueuedRow[]
   queuePaused: boolean
   onResumeQueued: () => void
   onRemoveQueued: (index: number) => void
@@ -1954,49 +1954,61 @@ function ThreeAnswers({
   )
 }
 
+/** A fold's title on a stopped run, with the carat a card's Details fold has. */
+function PlanSummary({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return <summary><Icon className="chevron" name="carat-right" />{children}</summary>
+}
+
 /**
  * A manifest run that stopped, with what it produced.
  *
- * Three cases read differently. The person stopped it, the agent refused or failed it and said
+ * A declined plan is one caption line, since the decided card above it shows the plan. Otherwise
+ * three cases read differently. The person stopped it, the agent refused or failed it and said
  * why, or the model service failed. The plan and the steps that ran are shown in every case
  * where they exist, because the run somebody needs to read is the one that stopped.
  */
 function PlanEnded({ ended }: { ended: ManifestError }): React.JSX.Element {
-  const declined = ended.declined === true
+  // The decided card above already shows the declined plan, so the ending is one caption line.
+  if (ended.declined === true && !ended.stopped) {
+    return (
+      <p className="session-notice plan-ended-note">
+        <span className="notice-text">
+          Nothing was read or written.
+          {ended.record && <> Saved as run <code>{ended.record}</code>.</>}
+        </span>
+      </p>
+    )
+  }
   const title = ended.stopped
     ? 'You stopped this run'
-    : declined
-      ? 'The plan was declined, so nothing ran'
-      : ended.problem
-        ? 'The run stopped'
-        : failureSummary(ended.category ?? ended.kind, null, ended.accountMessage).title
+    : ended.problem
+      ? 'The run stopped'
+      : failureSummary(ended.category ?? ended.kind, null, ended.accountMessage).title
   const detail: React.ReactNode = ended.stopped
     ? 'Steps that finished before the stop remain in the project. The run was not saved.'
-    : declined
-      ? 'Nothing was read or written.'
-      : ended.problem ?? (ended.accountMessage
-        ? <FailureSentence text={ended.accountMessage} command={ended.accountCommand} />
-        : failureSummary(ended.category ?? ended.kind).description)
+    : ended.problem ?? (ended.accountMessage
+      ? <FailureSentence text={ended.accountMessage} command={ended.accountCommand} />
+      : failureSummary(ended.category ?? ended.kind).description)
   const attempt = ended.attempt
   return (
-    <div className={`plan-ended ${ended.stopped || declined ? 'quiet' : 'failed'}`}>
+    <div className={`plan-ended ${ended.stopped ? 'quiet' : 'failed'}`}>
       <strong>{title}</strong>
       <p className="plan-detail">{detail}</p>
       {attempt?.plan && (
         <details>
-          <summary>The plan</summary>
+          <PlanSummary>The plan</PlanSummary>
           <pre className="plan-text">{attempt.plan}</pre>
         </details>
       )}
       {!attempt?.plan && attempt?.proposed && (
         <details>
-          <summary>What the planner proposed, which could not be used</summary>
+          <PlanSummary>What the planner proposed, which could not be used</PlanSummary>
           <pre className="plan-text">{attempt.proposed}</pre>
         </details>
       )}
       {!!attempt?.steps.length && (
         <details open>
-          <summary>Steps that ran</summary>
+          <PlanSummary>Steps that ran</PlanSummary>
           <pre className="plan-text">{attempt.steps.join('\n')}</pre>
         </details>
       )}
