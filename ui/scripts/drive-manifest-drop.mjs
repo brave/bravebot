@@ -110,7 +110,10 @@ try {
   assert.ok(word === null || !word.startsWith('Planning'), `the approved run says it is planning: ${word}`)
   await stop.waitFor({ state: 'hidden', timeout: 60000 })
   await page.waitForFunction(() => document.querySelector('.composer .stop') === null, null, { timeout: 60000 })
-  for (let i = 0; i < 50 && !existsSync(join(project, 'first.md')); i++) await page.waitForTimeout(100)
+  const written = join(project, 'first.md')
+  const until = Date.now() + 10000
+  while (!existsSync(written) && Date.now() < until) await page.waitForTimeout(100)
+  assert.ok(existsSync(written), 'the approved plan did not write first.md')
   assert.equal(readFileSync(join(project, 'first.md'), 'utf8'), '# Notes from the plan\n', 'the approved plan ran')
 
   // ---- the same line typed while a turn runs waits, and goes with its picture ---------------------
