@@ -143,7 +143,9 @@ test('every panel hidden leaves the column, its head and one line saying so', ()
   assert.ok(markup.includes('id="context-column"'), markup)
   assert.ok(/class="context-head[ "]/.test(markup), markup)
   assert.ok(markup.includes('id="context-all-off"'), markup)
-  assert.ok(markup.includes('Every section is turned off.'), markup)
+  assert.ok(markup.includes('Every section is turned off. Use Choose sections to show one.'), markup)
+  // A panel's own empty row, inside the same inset the panels give theirs.
+  assert.match(markup, /class="panel-inner context-all-off"[^>]*><p class="panel-empty">/)
 })
 
 test('ticking or unticking a section toggles that one and keeps column order', () => {

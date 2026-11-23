@@ -246,7 +246,19 @@ const openFixture = async ({ unfold = true } = {}) => {
   return { app, page }
 }
 
+/** Where an empty row's icon and text start, and the ink they are drawn in. */
+const emptyLook = (page2, selector) => page2.locator(selector).evaluate((p) => {
+  const text = document.createRange()
+  text.selectNodeContents(p.lastChild)
+  return {
+    icon: Math.round(p.querySelector('leo-icon').getBoundingClientRect().left),
+    text: Math.round(text.getBoundingClientRect().left),
+    ink: getComputedStyle(p).color,
+  }
+})
+
 let before
+let emptyRow
 {
   const { app, page } = await openFixture()
 
@@ -258,10 +270,20 @@ let before
   check((await width(page)) !== start, `the context column's width moves from ${start} to ${await width(page)}`)
 
   check(await sections(page).isVisible(), 'the context head has a Choose sections button')
+  const target = await sections(page).boundingBox()
+  const glyph = await sections(page).locator('leo-icon').boundingBox()
+  check(Math.round(target.width) === 28 && Math.round(target.height) === 28,
+    `the button is a 28px hit target (${Math.round(target.width)}x${Math.round(target.height)})`)
+  check(Math.round(glyph.width) === 16 && Math.round(glyph.height) === 16,
+    `and its icon is 16px, the control size (${Math.round(glyph.width)}x${Math.round(glyph.height)})`)
   check(await shown(page, 'notes'), 'Notes shows before anything is turned off')
+  emptyRow = await emptyLook(page, '#panel-notes .panel-empty')
   await sections(page).click()
   await page.waitForTimeout(400)
   check(await row(page, 'notes').isVisible(), 'the button opens the checklist')
+  const heading = page.locator('.context-sections .menu-heading')
+  check((await heading.isVisible()) && (await heading.textContent()) === 'Sections', 'the checklist opens under a "Sections" heading')
+  check((await heading.boundingBox()).y < (await row(page, 'plan').boundingBox()).y, 'above its first row')
   await theme(page, 'light')
   await page.screenshot({ path: `${SHOTS_DIR}/14-sections-menu-light.png` })
   await theme(page, 'dark')
@@ -319,6 +341,11 @@ check(JSON.stringify(stored().hidden) === '["notes"]', `bravebot-ui.json holds "
   check(await sections(page).isVisible(), 'and keeps the Choose sections button')
   check(await page.locator('#context-column').isVisible(), 'and the column stays drawn')
   check(!(await folded(page)), 'and the column is not folded')
+  check((await page.locator('#context-all-off').textContent()) === 'Every section is turned off. Use Choose sections to show one.',
+    'the line names the control that turns a section back on')
+  const allOffRow = await emptyLook(page, '#context-all-off .panel-empty')
+  check(JSON.stringify(allOffRow) === JSON.stringify(emptyRow),
+    `and its icon, text and ink match "No notes." (${JSON.stringify(allOffRow)} against ${JSON.stringify(emptyRow)})`)
   await page.screenshot({ path: `${SHOTS_DIR}/16-sections-all-off-light.png` })
   await theme(page, 'dark')
   await page.screenshot({ path: `${SHOTS_DIR}/16-sections-all-off-dark.png` })
@@ -400,4 +427,27 @@ check(
   stored().layout.right === before.start && stored().layout.collapsed.right === false,
   `and the column back at ${stored().layout.right}px of ${before.start}px, unfolded`,
 )
+
+// The button stays in the head at narrower windows, down to the 900px minimum, with the column
+// unfolded by hand where the window folded it.
+{
+  const { app, page } = await openFixture()
+  for (const size of [1200, 900]) {
+    await app.evaluate(({ BrowserWindow }, w) => { for (const win of BrowserWindow.getAllWindows()) win.setSize(w, 900) }, size)
+    await page.setViewportSize({ width: size, height: 900 })
+    await page.waitForTimeout(600)
+    if (await folded(page)) await page.getByRole('button', { name: 'Context panel', exact: true }).click()
+    await page.waitForTimeout(600)
+    const button = await sections(page).boundingBox()
+    const column = await page.locator('#context-column').boundingBox()
+    check(await sections(page).isVisible() && button.x + button.width <= column.x + column.width && button.x > column.x,
+      `at ${size}px the Choose sections button shows inside the column's head`)
+    for (const name of ['light', 'dark']) {
+      await theme(page, name)
+      await page.screenshot({ path: `${SHOTS_DIR}/18-sections-${size}-${name}.png` })
+    }
+    await theme(page, 'light')
+  }
+  await app.close()
+}
 }

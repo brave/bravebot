@@ -78,8 +78,10 @@
   --leo-icon-size: var(--icon-control);
 }
 .panel-empty leo-icon { flex: none; }
-/* Every Overview section turned off: the one line sits where the first panel's heading would. */
-.context-all-off { padding: var(--leo-spacing-l) var(--leo-spacing-xl); }
+/* Every Overview section turned off. The line is a panel's own empty row inside `.panel-inner`, so
+   it starts at the same left edge as "No notes.". This adds the space above it and the 1px border
+   Leo's Collapse draws round a panel's contents, transparent here as it is there. */
+.context-all-off { padding-top: var(--leo-spacing-l); border-inline: 1px solid transparent; }
 
 /* ------------------------------------------------------------------ rows */
 

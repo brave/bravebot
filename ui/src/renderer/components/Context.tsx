@@ -163,6 +163,9 @@ export const Context = memo(function Context({ live, audit, details, hidden = NO
         {tab === 'overview' && onHidden && (
           <IconMenu icon="list-settings" label={t.uiContextSections()} className="context-sections" data-test="context-sections"
             openRequest={openRequest} onOpen={(open) => { if (!open) setOpenRequest(0) }}>
+            {/* Says what the rows are when none is ticked. Not an item, so the arrow keys pass over
+                it, and hidden from a screen reader, which hears the button's name instead. */}
+            <div className="menu-heading" aria-hidden="true">{t.uiContextSectionsHeading()}</div>
             {HIDEABLE.map((name) => {
               const shown = !hidden.includes(name)
               return (
@@ -183,7 +186,7 @@ export const Context = memo(function Context({ live, audit, details, hidden = NO
 
       {/* The column stays drawn with its head when every section is off: turning sections off
           never folds it (PANEL-20). */}
-      {allOff && <div className="context-all-off" id="context-all-off"><Empty icon="eye-off">{t.uiContextAllOff()}</Empty></div>}
+      {allOff && <div className="panel-inner context-all-off" id="context-all-off"><Empty icon="eye-off">{t.uiContextAllOff()}</Empty></div>}
 
       <Section id="plan" title="Plan"count={live.todos.length} off={off.has('plan')}
         about="The steps the agent has set itself, and which it has done.">
