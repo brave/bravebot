@@ -261,7 +261,9 @@ named on the command line, or a command typed in a session, which starts one run
 session back afterwards (MANIFEST-11). What a session may not do is hold the mode. A session is
 several turns over one conversation and each of them decides what to do next after the last one
 read something, so a session that was in this mode would be a contradiction; one run started from
-one is not.
+one is not. The desktop composer starts a run the same way, from a typed `/manifest <task>` line
+that it sends as `manifest.run` and never as a prompt
+([CMD-8](commands.md#CMD-8)).
 
 An unknown mode name is refused rather than guessed, because guessing wrong here would silently run
 the mode the user did not ask for.
@@ -276,6 +278,7 @@ observe before it plans. Name a workspace file instead.
 `verified-by: bravebot_cli::main::a_leading_mode_flag_is_a_task_not_an_unknown_option`
 `verified-by: bravebot_agent::manifest::piped_input_is_refused_rather_than_dropped`
 `verified-by: bravebot_tui::app::a_session_can_ask_for_a_manifest_run`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/manifest-command.test.mjs asserts that a typed /manifest <task> starts one manifest.run with the session, task and model and no turn.send, and that manifest.started then manifest.done leave the chat not running with the run's reply after its task row; make check-ui runs it)`
 `verified-by: bravebot_tui::app::a_manifest_run_needs_a_task_to_plan`
 
 <a id="MANIFEST-10"></a>
