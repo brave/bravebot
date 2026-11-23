@@ -205,7 +205,7 @@ export function App(): React.JSX.Element {
   }, [live?.summary.id, live?.summary.directory, live?.model, live?.modelPicked])
   const [forks, setForks] = useState<Fork[]>([])
   const { bots, botsRef, readBots, saveBot, removeBot } = useBots({ openedLives, updateSession, setLive, setProblem })
-  const { answerTrust, answerRules, answerFolder, send, submit, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
+  const { answerTrust, answerRules, answerFolder, send, submit, queueDraft, cancel, answer, answerQuestions, interjectDraft, plan } = useTurn({
     liveRef, handleRef, openedLives, updateSession, setLive, setProblem, setUnconfigured, refreshLives, live, livesRevision, backendReady, draft, setDraft,
   })
   const enhancement = useEnhance({ openedLives, updateSession, setProblem })
@@ -736,6 +736,17 @@ export function App(): React.JSX.Element {
   // The open chat's handle while its note dialog is up.
   const [noting, setNoting] = useState<string | null>(null)
   const askNote = useCallback(() => { if (liveRef.current) setNoting(liveRef.current.handle) }, [])
+  // The open chat's handle while Plan a Task… asks for the task (MODE-12).
+  const [planning, setPlanning] = useState<string | null>(null)
+  const askPlan = useCallback(() => { if (liveRef.current) setPlanning(liveRef.current.handle) }, [])
+  // Carried out as the typed line would be, so a plan asked for mid-turn waits in the queue as
+  // that line does.
+  const planTask = useCallback(async (text: string) => {
+    if (!planning) return true
+    const task = text.trim()
+    await plan(planning, task, task ? `/plan ${task}` : '/plan', [])
+    return true
+  }, [planning, plan])
   // The open chat's handle while the dialog asking for a compaction's focus is up (CMD-34).
   const [compacting, setCompacting] = useState<string | null>(null)
   const askCompact = useCallback(() => { if (liveRef.current) setCompacting(liveRef.current.handle) }, [])
@@ -1126,6 +1137,7 @@ export function App(): React.JSX.Element {
     },
     changelog: () => void changelog(),
     note: askNote,
+    planTask: askPlan,
     compact: askCompact,
     handoff: askHandoff,
     background: askBackground,
@@ -1414,6 +1426,11 @@ export function App(): React.JSX.Element {
       {projectAction?.kind === 'stats' && <SpendReport directory={projectAction.directory} onClose={leaveProjectAction} />}
       {noting && live?.handle === noting && (
         <NoteDialog running={live.running} onCancel={() => setNoting(null)} onAdd={addNote} />
+      )}
+      {planning && live?.handle === planning && (
+        <AskDialog title="Plan a task" subtitle="Switches this chat to Plan mode. With a task, starts a turn that plans it without changing anything."
+          label="Task (optional)" action="Plan" optional rows={2} test="plan" className="plan-dialog"
+          running={false} onCancel={() => setPlanning(null)} onConfirm={planTask} />
       )}
       {compacting && live?.handle === compacting && (
         <AskDialog title="Compact conversation" subtitle="Summarises earlier messages so less is sent to the model."

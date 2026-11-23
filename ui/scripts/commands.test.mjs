@@ -91,6 +91,28 @@ test('Compact Conversation… is offered on an open chat with no turn running, a
   assert.match(allowed, /'session\.compact\.cancel',/)
 })
 
+test('Plan a Task… is offered on an open chat, mid-turn as well, and the Chat menu and router reach it (MODE-12, MODE-5)', () => {
+  const plan = command('session.plan')
+  assert.equal(plan.label, 'Plan a Task…')
+  assert.equal(plan.requires, 'session')
+  assert.equal(plan.accelerator, undefined, 'it asks for the task first, so it has no shortcut')
+  assert.equal(isEnabled(plan.requires, NOTHING_OPEN), false)
+  assert.equal(isEnabled(plan.requires, { ...NOTHING_OPEN, hasSession: true }), true)
+  assert.equal(isEnabled(plan.requires, { ...NOTHING_OPEN, hasSession: true, running: true }), true, 'mid-turn the plan waits in the queue')
+  const menu = readFileSync('src/main/menu.ts', 'utf8')
+  const chat = menu.slice(menu.indexOf("label: 'Chat'"), menu.indexOf("role: 'windowMenu'"))
+  assert.match(chat, /item\('mode\.cycle'\),\s*item\('session\.plan'\)/)
+  let listener = null
+  globalThis.window = { bravebot: { onCommand: (handler) => { listener = handler; return () => {} } } }
+  const react = { useRef: (current) => ({ current }), useEffect: (effect) => { effect() } }
+  const { useCommandRouter } = load('src/renderer/commands.ts', { react })
+  const called = []
+  useCommandRouter(new Proxy({}, { get: (_, name) => () => called.push(name) }))
+  listener('session.plan')
+  assert.deepEqual(called, ['planTask'])
+  delete globalThis.window
+})
+
 test('Hand Off to New Chat… is offered on an open chat with no turn running, and the menu and router reach it (SESSION-34, CMD-34)', () => {
   const handoff = command('session.handoff')
   assert.equal(handoff.label, 'Hand Off to New Chat…')

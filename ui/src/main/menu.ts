@@ -297,6 +297,7 @@ function buildMenu(): void {
         item('turn.cancel'),
         SEPARATOR,
         item('mode.cycle'),
+        item('session.plan'),
         SEPARATOR,
         item('turn.rewind'),
         item('session.note'),
