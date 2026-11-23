@@ -1649,6 +1649,10 @@ mod tests {
         assert!(withheld("PYTHONPATH", &planted, &session));
         assert!(!withheld("PYTHONPATH", &genuine, &session));
         assert!(withheld("GIT_CONFIG_GLOBAL", &genuine, &session));
+        assert!(withheld("DYLD_LIBRARY_PATH", &planted, &session));
+        assert!(!withheld("DYLD_LIBRARY_PATH", &genuine, &session));
+        assert!(withheld("DYLD_FRAMEWORK_PATH", &planted, &session));
+        assert!(!withheld("DYLD_FRAMEWORK_PATH", &genuine, &session));
         assert!(withheld("PYTHONEXECUTABLE", &planted, &session));
         assert!(!withheld("PYTHONEXECUTABLE", &genuine, &session));
     }
