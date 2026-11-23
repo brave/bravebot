@@ -703,7 +703,7 @@ calls one, is drawn as a plain program.
 <a id="SERVERS-7"></a>
 ### SERVERS-7: every call to a server's tool is put to the person, with three answers
 
-A call is shown as `alias:tool`, then the arguments as the planner wrote them. An argument filled
+A call is shown as `alias:tool`, then its arguments, each with the value the planner wrote. An argument filled
 from a choice is drawn as the number and where it came from ([MCP-14](mcp.md#MCP-14)). The server's
 own description of the tool is shown as content, marked, cut to two rows with a way to expand it,
 per [SERVERS-8](#SERVERS-8).
@@ -783,7 +783,11 @@ said. The rules are
 [PERM-1](permissions.md#PERM-1)'s `Mcp` family. A call is refused as well, and sends nothing, where
 the context its arguments were written in has met untrusted content.
 
-The arguments are drawn as the planner wrote them, one per row as a JSON value. A string that holds
+The arguments are drawn one per row as a JSON value, each the value the planner wrote. The rows are
+in the order the agent holds the arguments, which is the keys of the planner's object in the order
+the JSON parser keeps them (sorted by key, since the workspace does not enable serde_json's
+`preserve_order`), and the terminal, the plain interface, the editor and the desktop draw that same
+order. A string that holds
 a line feed, another control character or a character a person could not tell from another or from
 nothing is drawn line by line instead: its row says how many lines it has, a sentence says how many
 characters were written out, and each line is a numbered row of its own with those characters written
@@ -935,6 +939,9 @@ the list from `also` on `mcp-call.request`.
 `verified-by: bravebot_tui::confirm::mcp::a_choice_is_drawn_as_the_number_and_where_it_came_from_at_every_width`
 `verified-by: bravebot_cli::plain::a_call_filled_from_a_choice_is_asked_with_the_number_and_where_it_came_from`
 `verified-by: bravebot_ui_bridge::refusal::an_mcp_question_takes_no_answer_of_another_kind`
+`verified-by: bravebot_agent::mcp::a_calls_arguments_reach_the_question_in_the_order_the_agent_holds_them`
+`verified-by: bravebot_tui::confirm::mcp::a_call_prompt_draws_its_arguments_in_the_order_the_request_holds_them`
+`verified-by: bravebot_ui_bridge::wire::a_calls_arguments_cross_the_wire_in_the_order_the_request_holds_them`
 
 <a id="SERVERS-8"></a>
 ### SERVERS-8: a server's own words are never an identifier
@@ -1349,6 +1356,7 @@ the server is not started either, and the line says why.
 `verified-by: bravebot_agent::servers::describing_a_server_keeps_nothing_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::servers::a_server_directory_that_is_not_text_is_kept_out_as_it_is_and_not_as_its_lookalike`
 `verified-by: bravebot_agent::servers::a_server_whose_own_directory_cannot_be_made_is_not_started_and_the_note_says_where_and_why`
+`verified-by: bravebot_agent::confine::a_server_started_by_a_runner_is_held_to_its_registry_hosts_and_another_is_not`
 
 <a id="SERVERS-11"></a>
 ### SERVERS-11: a remote server is an egress destination, and its host is approved as one
@@ -1512,6 +1520,11 @@ same line a no gives.
 `verified-by: bravebot_tui::confirm::mcp::a_destination_longer_than_the_move_box_leaves_the_host_and_what_a_yes_does_on_screen`
 `verified-by: bravebot_tui::confirm::mcp::the_end_of_a_long_destination_can_be_scrolled_to_with_the_host_still_shown`
 `verified-by: bravebot_tui::confirm::mcp::a_move_question_takes_a_yes_only_from_a_draw_showing_the_host_and_the_keys`
+`verified-by: bravebot_agent::servers::a_redirected_handshake_of_a_plugins_server_is_left_unstarted_and_unmoved`
+`verified-by: bravebot_agent::servers::a_declaration_edited_while_its_move_was_asked_is_left_alone_and_not_started`
+`verified-by: bravebot_agent::servers::a_move_to_a_destination_that_fails_its_handshake_is_not_started_or_written`
+`verified-by: bravebot_agent::servers::the_next_session_after_a_recorded_handshake_move_starts_at_the_new_address_unasked`
+`verified-by: bravebot_agent::servers::a_move_that_cannot_be_written_is_used_for_the_session_and_says_so`
 `verified-by: bravebot_ui_bridge::wire::the_mcp_questions_carry_what_a_card_draws`
 `verified-by: bravebot_ui_bridge::refusal::refusing_an_mcp_question_is_a_no_in_its_own_shape`
 
@@ -1876,6 +1889,7 @@ content.
 `verified-by: bravebot_agent::servers::a_server_not_answering_tools_list_within_its_startup_bound_is_left_out_at_that_bound`
 `verified-by: bravebot_agent::servers::a_server_not_answering_prompts_list_within_its_startup_bound_is_left_out_at_that_bound`
 `verified-by: bravebot_agent::servers::a_handshake_is_given_up_on_after_three_times_its_startup_bound_and_five_seconds`
+`verified-by: bravebot_agent::servers::a_handshake_that_outlasts_its_time_though_each_request_answers_is_left_out_as_too_slow`
 `verified-by: bravebot_agent::servers::a_started_server_is_held_to_the_call_bound_its_declaration_gives`
 `verified-by: bravebot_agent::servers::a_declarations_own_timeouts_are_drawn_and_the_defaults_are_not`
 `verified-by: bravebot_agent::mcp::a_call_that_outlasts_its_bound_is_a_failure_the_planner_is_told_timed_out`

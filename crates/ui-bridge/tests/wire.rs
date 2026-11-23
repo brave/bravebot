@@ -2653,6 +2653,45 @@ fn a_host_prompt_carries_the_hosts_and_nothing_else() {
     );
 }
 
+/// SERVERS-7: the `arguments` array of `mcp-call.request` lists the call's arguments one to an
+/// entry in the order the request holds them, and so does each later call of `also`. The request
+/// carries `zeta`, `alpha`, `mid`, which is neither the sorted nor the reverse order.
+///
+/// A wrong implementation builds the array from a sorted map or sorts it, so a desktop card draws
+/// the rows in another order than the terminal does.
+#[test]
+fn a_calls_arguments_cross_the_wire_in_the_order_the_request_holds_them() {
+    use bravebot_agent::confirm::McpCallRequest;
+    let held = || {
+        vec![
+            ("zeta".to_string(), "1".to_string()),
+            ("alpha".to_string(), "2".to_string()),
+            ("mid".to_string(), "3".to_string()),
+        ]
+    };
+    let call = wire::mcp_call_request(
+        1,
+        &McpCallRequest {
+            alias: "weather".into(),
+            tool: "get_forecast".into(),
+            arguments: held(),
+            description: None,
+            may_stand: false,
+            asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: vec![held()],
+        },
+    );
+
+    let order = json!([
+        {"name": "zeta", "value": "1"},
+        {"name": "alpha", "value": "2"},
+        {"name": "mid", "value": "3"},
+    ]);
+    assert_eq!(call["arguments"], order);
+    assert_eq!(call["also"], json!([order]));
+}
+
 /// AUTO-1, MODE-11: a window can ask for auto, and for no mode past it. The regression it rejects
 /// is a request naming a mode being read as another one, or bypass being read at all, which would
 /// leave a client drawing a mode its session is not in or reach a mode only the command line may.

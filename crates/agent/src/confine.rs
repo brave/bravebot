@@ -3915,6 +3915,27 @@ fn refused_as_not_confined(step: &Step, refused: &crate::host_proxy::Refused) ->
     }
 }
 
+/// The list a server's proxy decides with: the entries of `hosts` and the registry hosts of the
+/// toolchain the server's program is (SANDBOX-24, SERVERS-10).
+fn host_list_of_a_server(
+    program: &Path,
+    hosts: &Hosts,
+) -> Result<bravebot_sandbox::hosts::HostList, crate::host_proxy::Refused> {
+    let spelled = |entries: &[bravebot_config::sandbox_network::HostEntry]| {
+        entries
+            .iter()
+            .map(|host| host.entry.clone())
+            .collect::<Vec<_>>()
+    };
+    let toolchains: Vec<Toolchain> = Toolchain::of(&canonical(program)).into_iter().collect();
+    crate::host_proxy::list_for(
+        &spelled(hosts.allowed.as_deref().unwrap_or_default()),
+        &spelled(&hosts.denied),
+        false,
+        &toolchains,
+    )
+}
+
 /// The decision [`held_to_the_session_network`] makes, with the way a host list is applied left to
 /// `limit`, so that a launch and a view of one cannot decide differently.
 fn held_under_the_session_network(
@@ -3939,20 +3960,7 @@ fn held_under_the_session_network(
     let Some(hosts) = hosts.filter(|hosts| hosts.allowed.is_some()) else {
         return Ok((policy, Vec::new()));
     };
-    let spelled = |entries: &[bravebot_config::sandbox_network::HostEntry]| {
-        entries
-            .iter()
-            .map(|host| host.entry.clone())
-            .collect::<Vec<_>>()
-    };
-    let toolchains: Vec<Toolchain> = Toolchain::of(&canonical(program)).into_iter().collect();
-    let list = crate::host_proxy::list_for(
-        &spelled(hosts.allowed.as_deref().unwrap_or_default()),
-        &spelled(&hosts.denied),
-        false,
-        &toolchains,
-    )
-    .map_err(|refused| refused.to_string())?;
+    let list = host_list_of_a_server(program, hosts).map_err(|refused| refused.to_string())?;
     let (held, environment) = limit(policy, &list)?;
     match cannot_hold_to_the_proxy(&held, capabilities) {
         Some(detail) => Err(detail),
@@ -13075,6 +13083,45 @@ mod tests {
         assert!(!with(None, Some(&["a.example"])).asks_about_unlisted_hosts());
         assert!(!with(Some(OnUnlisted::Ask), None).asks_about_unlisted_hosts());
         assert!(!confinement(&["/work/project"]).asks_about_unlisted_hosts());
+    }
+
+    /// SANDBOX-24, SERVERS-10: a server whose program is `npx` is held to the person's allowed
+    /// hosts and the npm registry, and a server whose program is `weather-mcp` to the person's
+    /// allowed hosts alone. The host `registry.npmjs.org` is the one that tells the two apart.
+    ///
+    /// A wrong implementation gives the server no toolchain (an empty list to `list_for`), which
+    /// leaves a server started by `npx` unable to fetch its own package, or gives every server the
+    /// registry hosts, which widens a server that is not a runner.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_server_started_by_a_runner_is_held_to_its_registry_hosts_and_another_is_not() {
+        let hosts = Hosts {
+            allowed: Some(vec![bravebot_config::sandbox_network::HostEntry {
+                entry: "api.mine.example".to_string(),
+                by: None,
+            }]),
+            denied: Vec::new(),
+            on_unlisted: None,
+        };
+
+        let runner = host_list_of_a_server(Path::new("/opt/none/bin/npx"), &hosts).expect("list");
+        let plain =
+            host_list_of_a_server(Path::new("/opt/none/bin/weather-mcp"), &hosts).expect("list");
+
+        assert!(runner.decide("api.mine.example").is_allowed());
+        assert!(plain.decide("api.mine.example").is_allowed());
+        assert!(
+            runner.decide("registry.npmjs.org").is_allowed(),
+            "the runner was not given the registry its package comes from"
+        );
+        assert!(
+            !plain.decide("registry.npmjs.org").is_allowed(),
+            "a server that is not a runner was given the npm registry"
+        );
+        assert!(
+            !runner.decide("crates.io").is_allowed(),
+            "the runner was given another toolchain's registry"
+        );
     }
 
     /// A granted host is added to the allowed set, so the next line's proxy is another one that

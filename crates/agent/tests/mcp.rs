@@ -1356,6 +1356,69 @@ fn serve_with(tools: Option<Value>, result: Option<Value>) -> (String, mpsc::Rec
     (format!("http://127.0.0.1:{port}"), receiver)
 }
 
+/// SERVERS-7: a call's arguments reach the question one to a row in the order the agent holds
+/// them. The agent holds the planner's object as serde_json parses it, which keeps its keys sorted
+/// (the workspace does not enable `preserve_order`), so the order the planner wrote is not the one
+/// drawn. The planner writes `zeta`, `alpha`, `mid`, and the question lists `alpha`, `mid`, `zeta`.
+/// Enabling `preserve_order` changes this order and fails the test, which is then the place to
+/// change SERVERS-7 as well.
+///
+/// A wrong implementation reverses the arguments or collects them into a hash map on the way to
+/// the question, so the rows are drawn in another order than the parsed object has.
+#[test]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_calls_arguments_reach_the_question_in_the_order_the_agent_holds_them() {
+    let scratch = Scratch::new("call-argument-order");
+    let (url, _server) = serve_with(
+        Some(json!([{
+            "name": "get_forecast",
+            "description": DESCRIPTION,
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "zeta": {"type": "integer"},
+                    "alpha": {"type": "integer"},
+                    "mid": {"type": "integer"},
+                },
+            },
+        }])),
+        None,
+    );
+    let session = session(&url, &scratch, true);
+    let written = r#"{"zeta":1,"alpha":2,"mid":3}"#;
+    let (endpoint, _chat) = serve_chat(vec![tool_request(FORECAST, written), reply_with("done")]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+
+    let [call] = confirmer.calls.as_slice() else {
+        panic!(
+            "the call was not put to the person once: {:?}",
+            confirmer.calls
+        );
+    };
+    let names: Vec<&str> = call
+        .arguments
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["alpha", "mid", "zeta"],
+        "the rows are not in the order the agent holds the arguments"
+    );
+    assert_eq!(
+        call.arguments[2],
+        ("zeta".to_string(), "1".to_string()),
+        "a value is drawn beside another argument's name"
+    );
+}
+
 /// How many checks of the forecast payload the chat server was asked for.
 fn checks_of_the_answer(all: &[String]) -> usize {
     all.iter()

@@ -8438,6 +8438,277 @@ while {answering}"#
         }
     }
 
+    /// A reply that fails every request, which is what a destination that cannot be served says.
+    fn failing(_: &str, _: &str) -> String {
+        "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            .to_string()
+    }
+
+    /// An asker at a terminal that runs `before_yes` when it is asked about a move, as a person
+    /// editing a file while the question is on the screen would, and then says yes.
+    struct EditingWhileAsked {
+        person: Person<&'static [u8], Vec<u8>>,
+        before_yes: Box<dyn FnMut()>,
+    }
+
+    impl Asker for EditingWhileAsked {
+        fn anybody_there(&self) -> bool {
+            self.person.anybody_there()
+        }
+
+        fn ask_to_start(&mut self, question: &Question<'_>) -> Answer {
+            self.person.ask_to_start(question)
+        }
+
+        fn ask_to_move(&mut self, request: &MoveRequest) -> bool {
+            (self.before_yes)();
+            self.person.ask_to_move(request)
+        }
+    }
+
+    /// Reach the redirected server with a yes to the move, after running `before_yes`.
+    fn reached_after(redirected: &Redirected, before_yes: Box<dyn FnMut()>) -> Reached {
+        let requested = vec![(
+            redirected.project.join(".bravebot/settings.json"),
+            "weather".to_string(),
+        )];
+        let home = Home {
+            directory: Some(redirected.home.clone()),
+            writable: true,
+        };
+        let mut asker = EditingWhileAsked {
+            person: Person {
+                answers: b"y\n",
+                screen: Vec::new(),
+                present: true,
+            },
+            before_yes,
+        };
+        reach(
+            &requested,
+            &redirected.project,
+            &home,
+            &Managed::at(&managed_beside(&redirected.home)),
+            Asking::Person,
+            &mut asker,
+            Stream::Null,
+        )
+    }
+
+    /// SERVERS-11, handshake road: a declaration edited while the person is asked about its move is
+    /// left as the edit made it, and the server is not started, since what the person said yes to
+    /// is no longer what the file says. The approvals are not written either.
+    ///
+    /// A wrong implementation writes the move over the edit, or starts the server at the
+    /// destination without recording it.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_declaration_edited_while_its_move_was_asked_is_left_alone_and_not_started() {
+        let redirected = redirected("cli-servers-move-edited");
+        let approved = std::fs::read(mcp::approvals_file(&redirected.home)).expect("approvals");
+        let edited = Declaration::http("http://127.0.0.1:1/edited".to_string()).expect("edited");
+        let home = redirected.home.clone();
+        let writing = edited.clone();
+        let edit = Box::new(move || {
+            let mut declarations = Declarations::default();
+            declarations.insert("weather", &writing);
+            std::fs::write(mcp::declarations_file(&home), declarations.to_text()).expect("edit");
+        });
+
+        let reached = reached_after(&redirected, edit);
+
+        assert!(reached.aliases().is_empty(), "{:?}", reached.notes);
+        assert_eq!(
+            reached.notes,
+            vec![t!(mcp_move_edited, alias = "weather").to_string()]
+        );
+        assert_eq!(declared_in(&redirected.home), edited, "the edit was lost");
+        assert_eq!(
+            std::fs::read(mcp::approvals_file(&redirected.home)).expect("approvals"),
+            approved,
+            "the move approved an address over an edited declaration"
+        );
+    }
+
+    /// SERVERS-11, handshake road: a yes to a move whose destination does not complete its
+    /// handshake starts nothing and writes nothing. The declaration and the approvals are as they
+    /// were, and the note says the destination's handshake failed.
+    ///
+    /// A wrong implementation records the move before the destination answers, so a server that
+    /// cannot be reached there is left declared there.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn a_move_to_a_destination_that_fails_its_handshake_is_not_started_or_written() {
+        let (moved_to, second) = serving(failing, String::new());
+        let (declared_url, first) = serving(redirecting, moved_to.clone());
+        let redirected = redirected_at(
+            "cli-servers-move-fails",
+            |declared| declared,
+            declared_url,
+            moved_to,
+            first,
+            second,
+        );
+        let approved = std::fs::read(mcp::approvals_file(&redirected.home)).expect("approvals");
+
+        let (reached, screen) = reached_redirected(&redirected, Asking::Person, true, true, "y\n");
+
+        assert!(screen.contains(t!(mcp_move_title)), "{screen}");
+        assert!(reached.aliases().is_empty(), "{:?}", reached.notes);
+        let [note] = reached.notes.as_slice() else {
+            panic!("one note about the failed destination: {:?}", reached.notes);
+        };
+        assert!(
+            note.contains("weather") && note.contains("did not complete its handshake"),
+            "{note}"
+        );
+        assert!(
+            redirected.second.try_iter().next().is_some(),
+            "the destination was not tried, so the note proves nothing"
+        );
+        assert_eq!(declared_in(&redirected.home), redirected.declared);
+        assert_eq!(
+            std::fs::read(mcp::approvals_file(&redirected.home)).expect("approvals"),
+            approved
+        );
+    }
+
+    /// SERVERS-11, handshake road: the session after a recorded move starts the server where it
+    /// moved to without asking and without reaching the old address.
+    ///
+    /// A wrong implementation keeps the declaration where it was, so the next session is
+    /// redirected and asked again.
+    #[test]
+    fn the_next_session_after_a_recorded_handshake_move_starts_at_the_new_address_unasked() {
+        let redirected = redirected("cli-servers-move-next-session");
+        let (reached, _) = reached_redirected(&redirected, Asking::Person, true, true, "y\n");
+        assert_eq!(reached.aliases(), vec!["weather"], "{:?}", reached.notes);
+        let _ = redirected.first.try_iter().count();
+        let _ = redirected.second.try_iter().count();
+
+        let (again, screen) = reached_redirected(&redirected, Asking::Person, true, true, "");
+
+        assert_eq!(screen, "", "the next session asked something");
+        assert_eq!(again.aliases(), vec!["weather"], "{:?}", again.notes);
+        assert!(again.notes.is_empty(), "{:?}", again.notes);
+        assert_eq!(
+            redirected.first.try_iter().count(),
+            0,
+            "the old address was reached again"
+        );
+        assert!(
+            redirected
+                .second
+                .try_iter()
+                .next()
+                .is_some_and(|body| body.contains(r#""initialize""#)),
+            "the server was not started at the address it moved to"
+        );
+    }
+
+    /// SERVERS-11, handshake road: where the move cannot be written the server is still used where
+    /// its reply pointed, for this session, and the note says the move was not recorded.
+    ///
+    /// A wrong implementation leaves the server out when the write fails.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn a_move_that_cannot_be_written_is_used_for_the_session_and_says_so() {
+        let redirected = redirected("cli-servers-move-not-written");
+        let approvals = mcp::approvals_file(&redirected.home);
+        let unwritable = Box::new(move || {
+            std::fs::remove_file(&approvals).expect("remove");
+            std::fs::create_dir(&approvals).expect("a directory in its place");
+        });
+
+        let reached = reached_after(&redirected, unwritable);
+
+        assert_eq!(reached.aliases(), vec!["weather"], "{:?}", reached.notes);
+        let [note] = reached.notes.as_slice() else {
+            panic!("one note: {:?}", reached.notes);
+        };
+        assert!(note.contains("this session only"), "{note}");
+        assert_eq!(declared_in(&redirected.home), redirected.declared);
+    }
+
+    /// SERVERS-11: a server an installed plugin carries, whose handshake is redirected, is left
+    /// unstarted and unmoved, as a move nobody can be asked about is. The person is not asked, the
+    /// destination is sent nothing, no `mcp.json` is written and the plugin's alias gains no
+    /// approval for the destination, so it cannot shadow the plugin's own server.
+    ///
+    /// A wrong implementation asks about the move of a plugin's server, which then writes the
+    /// plugin's alias into the person's declarations.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_redirected_handshake_of_a_plugins_server_is_left_unstarted_and_unmoved() {
+        let (moved_to, second) = serving(weather, String::new());
+        let (declared_url, first) = serving(redirecting, moved_to.clone());
+        let root = scratch("cli-servers-plugin-move");
+        let servers =
+            format!(r#"{{"servers":{{"weather":{{"transport":"http","url":"{declared_url}"}}}}}}"#);
+        let home = crate::plugin_servers::tests::install(&root, "home", "demo", &servers);
+        let project = root.join("project");
+        std::fs::create_dir_all(project.join(".bravebot")).expect("project");
+        let requested = vec![(
+            project.join(".bravebot/settings.json"),
+            "demo_weather".to_string(),
+        )];
+        let mut person = Person {
+            answers: "1\ny\n".as_bytes(),
+            screen: Vec::new(),
+            present: true,
+        };
+
+        let reached = reach(
+            &requested,
+            &project,
+            &Home {
+                directory: Some(home.clone()),
+                writable: true,
+            },
+            &Managed::at(&managed_beside(&home)),
+            Asking::Person,
+            &mut person,
+            Stream::Null,
+        );
+
+        let screen = String::from_utf8(person.screen).expect("screen");
+        assert!(
+            screen.contains("demo_weather"),
+            "the first-use question was not put: {screen}"
+        );
+        assert!(
+            !screen.contains(t!(mcp_move_title)),
+            "the move of a plugin's server was put to the person: {screen}"
+        );
+        assert!(reached.aliases().is_empty(), "{:?}", reached.notes);
+        assert!(
+            reached
+                .notes
+                .contains(&t!(mcp_move_not_started, alias = "demo_weather").to_string()),
+            "{:?}",
+            reached.notes
+        );
+        assert!(
+            first.try_iter().next().is_some(),
+            "the handshake was not tried where the plugin declares it"
+        );
+        assert!(
+            second.try_iter().next().is_none(),
+            "something was sent where the reply pointed"
+        );
+        assert!(
+            !mcp::declarations_file(&home).exists(),
+            "the plugin's alias was written into mcp.json"
+        );
+        let destination = Declaration::http(moved_to).expect("destination");
+        assert!(
+            !Approvals::read(&home).approves(&destination.digest()),
+            "the destination was approved"
+        );
+    }
+
     /// SERVERS-11: a project a person said to use every server in answers for what the checkout
     /// requests and not for where a server went, so the move is still asked, and a yes approves
     /// where it moved in `mcp-approved` rather than leaving it to the project.
@@ -8975,6 +9246,64 @@ done
                 deadline.saturating_duration_since(before)
             );
         }
+    }
+
+    /// Answers `initialize` at once and every `tools/list` page after 1.6 seconds, each page
+    /// naming a next one, so no request outlasts a two second bound and the eight pages the
+    /// client reads take longer than the handshake is given.
+    #[cfg(unix)]
+    fn endless_listing_server() -> String {
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"fake","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/list"'*)
+      sleep 1.6
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[],"nextCursor":"more"}}\n' "$id"
+      ;;
+  esac
+done
+"#
+        .to_string()
+    }
+
+    /// SERVERS-15: a handshake whose every request answers inside the startup bound but which
+    /// does not end is stopped when the handshake's own time is up, three times the bound and five
+    /// seconds (11 seconds for a bound of 2), and the server is left out with the note that says
+    /// the handshake as a whole was too slow, naming the bound. It is not the note a request that
+    /// timed out gives.
+    ///
+    /// A wrong implementation never gives up on a list that keeps paging, so the start does not
+    /// return in time, or drops the server without the `servers_too_slow` note, or words it with
+    /// another figure.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_handshake_that_outlasts_its_time_though_each_request_answers_is_left_out_as_too_slow() {
+        let root = scratch("cli-servers-too-slow");
+        let mut notes = Vec::new();
+        let timeouts = Timeouts::new(Some(2), None).expect("timeouts");
+
+        let started = std::time::Instant::now();
+        let Some(reached) = started_slow(&root, &endless_listing_server(), timeouts, &mut notes)
+        else {
+            return;
+        };
+        let took = started.elapsed();
+
+        assert!(reached.is_empty(), "a handshake that never ended was kept");
+        assert!(
+            took >= Duration::from_secs(10) && took < Duration::from_secs(25),
+            "the handshake was given up on after {took:?}, not at 11 seconds"
+        );
+        assert_eq!(
+            notes,
+            vec![t!(servers_too_slow, alias = "weather", seconds = 2).to_string()],
+            "{notes:?}"
+        );
     }
 
     /// Once the handshake is done a server is held to the call bound its declaration gives, which
