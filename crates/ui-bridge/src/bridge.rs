@@ -3930,13 +3930,13 @@ impl Bridge {
                 ));
             }
             let path = request.string("path")?;
-            if path.is_empty() || path.chars().any(char::is_control) {
+            if !bravebot_agent::watch::armable(&path) {
                 return Err(Failure::bad_request("Choose a project file."));
             }
-            if !watches.live().iter().any(|w| w.path() == path) {
-                let workspace = Workspace::new(open.project.clone())
-                    .map_err(|_| Failure::bad_request("Project unavailable."))?;
-                watches.arm(path.clone(), workspace.root().to_path_buf(), 0, workspace.look(&path, workspace.root()), std::time::Instant::now())
+            let workspace = Workspace::new(open.project.clone())
+                .map_err(|_| Failure::bad_request("Project unavailable."))?;
+            if watches.watching(&workspace, &path).is_none() {
+                watches.arm(path.clone(), workspace.root().to_path_buf(), bravebot_agent::watch::BY_THE_PERSON, workspace.look(&path, workspace.root()), std::time::Instant::now())
                     .map_err(|_| Failure::bad_request("Cannot watch this file. It must be inside the project, with fewer than eight active watches."))?;
             }
         } else if request.method == "watches.stop" {

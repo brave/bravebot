@@ -8434,7 +8434,6 @@ mod tests {
             "/config",
             "/language",
             "/crash-reports",
-            "/watch",
             "/jobs",
             "/outputs",
             "/panel",
@@ -8467,6 +8466,7 @@ mod tests {
             "/goal",
             "/schedule",
             "/mcp",
+            "/watch",
         ];
         // Waits for the turn to end.
         const QUEUED: &[&str] = &[

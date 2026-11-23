@@ -439,7 +439,8 @@ impl Workspace {
     /// a `deny` rule is anchored at the home directory and never matches the spelling `~/x`, and
     /// a watch is looked at later from a working directory that may have moved, where `~/x` reads
     /// as relative and the watch is ended.
-    pub(crate) fn expanded(&self, named: &str) -> String {
+    #[must_use]
+    pub fn expanded(&self, named: &str) -> String {
         match self.spelled(named, self.home.as_deref()) {
             Ok(Some(path)) => path.to_string_lossy().into_owned(),
             _ => named.to_string(),

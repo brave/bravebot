@@ -10316,6 +10316,101 @@ mod tests {
         );
     }
 
+    /// A watch the person typed is the same watch a turn arms: its fire is the driver's sentence
+    /// and begins a turn.
+    #[test]
+    fn a_person_arms_a_watch_and_it_fires_like_any_other() {
+        let mut s = session();
+        s.arm_watch_by_person("notes.md", ARMED_IN, saw("first"));
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_armed, number = 1, path = "notes.md")),
+            "arming said nothing"
+        );
+        assert!(s.watches()[0].armed_by_the_person());
+
+        let later = Instant::now() + Duration::from_secs(6);
+        let prompt = s
+            .watch_fired(later, |_, _| saw("second"))
+            .expect("a change to a watch the person armed did not begin a turn");
+        assert_eq!(prompt, watch::fired(1, "notes.md", watch::Change::Written));
+    }
+
+    /// The loop or goal is the person's own, so their watch gives way rather than ending it in
+    /// silence, and the note names the command that clears it.
+    #[test]
+    fn a_person_cannot_arm_a_watch_under_a_loop_or_a_goal_and_is_told_how_to_clear_it() {
+        let mut under_a_loop = session();
+        under_a_loop.start_loop(
+            crate::loops::request("5m watch"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
+        under_a_loop.arm_watch_by_person("notes.md", ARMED_IN, saw("first"));
+        assert!(under_a_loop.watches().is_empty());
+        assert!(under_a_loop.looping().is_some(), "the person's loop ended");
+        let said = t!(watch_refused_under_a_loop);
+        assert!(said.contains("/loop stop"), "{said}");
+        assert!(
+            under_a_loop
+                .transcript
+                .iter()
+                .any(|entry| entry.text == said),
+            "the person was not told why"
+        );
+
+        let mut under_a_goal = session();
+        under_a_goal.start_goal("cargo test exits 0".to_string());
+        under_a_goal.arm_watch_by_person("notes.md", ARMED_IN, saw("first"));
+        assert!(under_a_goal.watches().is_empty());
+        assert!(under_a_goal.goal.is_some(), "the person's goal ended");
+        let said = t!(watch_refused_under_a_goal);
+        assert!(said.contains("/goal clear"), "{said}");
+        assert!(
+            under_a_goal
+                .transcript
+                .iter()
+                .any(|entry| entry.text == said),
+            "the person was not told why"
+        );
+    }
+
+    /// The cap holds for the person as for a turn.
+    #[test]
+    fn a_person_arming_a_ninth_watch_is_refused() {
+        let mut s = session();
+        for n in 0..watch::MAX_LIVE {
+            s.arm_watch_by_person(&format!("{n}.md"), ARMED_IN, saw("first"));
+        }
+        assert_eq!(s.watches().len(), watch::MAX_LIVE);
+
+        s.arm_watch_by_person("ninth.md", ARMED_IN, saw("first"));
+        assert_eq!(s.watches().len(), watch::MAX_LIVE);
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_not_armed_full, count = watch::MAX_LIVE)),
+            "a refused ninth watch said nothing"
+        );
+    }
+
+    /// A typed path the session cannot reach is not armed, and the sentence is about the path the
+    /// person typed rather than a turn's request.
+    #[test]
+    fn a_path_the_person_cannot_reach_is_refused_and_said_so() {
+        let mut s = session();
+        s.arm_watch_by_person("/elsewhere/gone.md", ARMED_IN, watch::Looked::OutOfReach);
+        assert!(s.watches().is_empty());
+        assert!(
+            s.transcript.iter().any(
+                |entry| entry.text == t!(watch_refused_unreadable, path = "/elsewhere/gone.md")
+            ),
+            "a refused watch said nothing"
+        );
+    }
+
     /// A watch that outlived its session would start sending prompts at somebody who opened a
     /// conversation to read it, about a file that moved while nobody was here.
     ///
@@ -10467,6 +10562,22 @@ mod tests {
                 .iter()
                 .any(|entry| entry.text == t!(watch_none))
         );
+    }
+
+    /// `/watch` lists a watch the person armed as theirs, since no turn armed it and "armed by
+    /// turn 0" names a turn that never ran (FSWATCH-10).
+    #[test]
+    fn a_watch_the_person_armed_is_listed_as_armed_by_them() {
+        let mut s = session();
+        s.arm_watch_by_person("notes.md", ARMED_IN, saw("first"));
+        s.report_watches();
+        let listed = s
+            .transcript
+            .iter()
+            .find(|entry| entry.text.starts_with("watch 1: notes.md"))
+            .expect("the watch is listed");
+        assert!(listed.text.contains("armed by you"), "{:?}", listed.text);
+        assert!(!listed.text.contains("turn"), "{:?}", listed.text);
     }
 
     /// `/init`'s prompt is the driver's, said once for the turn that sends it and not for the next.

@@ -946,11 +946,18 @@ fn running_lines(facts: &Facts<'_>) -> Vec<Line> {
                 &t!(status_watch, number = watch.number()),
                 watch.path().to_string(),
             )
-            .with_note(t!(
-                status_watch_armed_by,
-                turn = watch.armed_by(),
-                left = crate::loops::spell(watch.left(now))
-            )),
+            .with_note(if watch.armed_by_the_person() {
+                t!(
+                    status_watch_armed_by_you,
+                    left = crate::loops::spell(watch.left(now))
+                )
+            } else {
+                t!(
+                    status_watch_armed_by,
+                    turn = watch.armed_by(),
+                    left = crate::loops::spell(watch.left(now))
+                )
+            }),
         );
     }
 
@@ -1656,6 +1663,37 @@ mod tests {
             .expect("the watch is on the report");
         assert_eq!(line.value, "notes/plan.md");
         assert!(line.note.contains('3'), "{:?}", line.note);
+    }
+
+    /// A watch the person armed with `/watch <path>` was armed by no turn, so its line says it
+    /// was theirs and never reads "armed by turn 0" (FSWATCH-10).
+    #[test]
+    fn the_report_says_a_watch_was_armed_by_the_person() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut watches = watch::Watches::new();
+        watches
+            .arm(
+                "notes/plan.md".to_string(),
+                std::path::PathBuf::from("/work"),
+                watch::BY_THE_PERSON,
+                watch::Looked::Saw("first".to_string()),
+                std::time::Instant::now(),
+            )
+            .expect("a watch");
+
+        let mut facts = facts(&config, &trust);
+        facts.watches = watches.live();
+        let report = report(&facts);
+
+        let line = report
+            .lines
+            .iter()
+            .find(|line| line.label.trim() == t!(status_watch, number = 1))
+            .expect("the watch is on the report");
+        assert_eq!(line.value, "notes/plan.md");
+        assert!(line.note.starts_with("armed by you"), "{:?}", line.note);
+        assert!(!line.note.contains("turn"), "{:?}", line.note);
     }
 
     /// The time on the line is what the watch has left of its week, which is when it stops
