@@ -8393,8 +8393,11 @@ while {answering}"#
     }
 
     /// SERVERS-13: bypassing every check refuses the move unasked, as a one-shot run and a session
-    /// with nobody at the terminal do.
+    /// with nobody at the terminal do. The refusal leaves what is approved as it was: the bytes of
+    /// `mcp-approved` are the same after it, so neither the destination nor any other declaration
+    /// gains an approval from a move nobody was asked about.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_redirected_handshake_nobody_is_asked_about_starts_nothing() {
         for (asking, present) in [
             (Asking::Bypass, true),
@@ -8402,6 +8405,7 @@ while {answering}"#
             (Asking::Person, false),
         ] {
             let redirected = redirected("cli-servers-move-unasked");
+            let approved = std::fs::read(mcp::approvals_file(&redirected.home)).expect("approvals");
 
             let (reached, screen) = reached_redirected(&redirected, asking, present, true, "y\n");
 
@@ -8425,6 +8429,11 @@ while {answering}"#
                 declared_in(&redirected.home),
                 redirected.declared,
                 "{asking:?}"
+            );
+            assert_eq!(
+                std::fs::read(mcp::approvals_file(&redirected.home)).expect("approvals"),
+                approved,
+                "{asking:?}: a refused move changed what is approved"
             );
         }
     }

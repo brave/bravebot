@@ -1238,6 +1238,13 @@ impl Session {
         let Some(server) = self.0.servers.iter().find(|server| server.alias == alias) else {
             return false;
         };
+        // A server an installed plugin carries is never moved: a move would write the plugin's
+        // alias into the person's `mcp.json`, where it would then shadow the plugin's server. It
+        // stays where it is declared and nobody is asked, as the handshake road leaves it.
+        if server.plugin.is_some() {
+            reporter.notice(t!(mcp_move_declined, alias = alias));
+            return false;
+        }
         let (declared, startup, bound) = match &*held(&server.connection) {
             Connection::Http(http) => (http.url().to_string(), http.startup(), http.bound()),
             Connection::Stdio(_) => return false,

@@ -188,6 +188,11 @@ fn serve_chat_by_marker(
 
 /// A whole chat response as the SSE stream that would have delivered it.
 fn as_sse(reply: &str) -> String {
+    as_sse_costing(reply, (0, 0))
+}
+
+/// [`as_sse`], the stream reporting `(prompt, completion)` tokens as what the reply cost.
+fn as_sse_costing(reply: &str, (prompt, completion): (u64, u64)) -> String {
     let parsed: Value = serde_json::from_str(reply).expect("a valid reply");
     let mut frames = String::new();
     let mut frame = |value: Value| frames.push_str(&format!("data: {value}\n\n"));
@@ -213,7 +218,7 @@ fn as_sse(reply: &str) -> String {
     }
     frame(json!({
         "choices": [{"finish_reason": "stop"}],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+        "usage": {"prompt_tokens": prompt, "completion_tokens": completion},
     }));
     frames.push_str("data: [DONE]\n\n");
     frames
@@ -3578,9 +3583,16 @@ fn serve_chat_checking_the_list(
 /// carries the driver's own `inconclusive` filler and no check request holds the list. The check
 /// says `unsafe` with a sentence so that the word on the question can only be the check's: a
 /// question built from the `safe` that every other check here gets, or from the filler, differs.
+/// Every mode that asks is looped: one that checks only for `ask` and `acceptEdits` leaves a list
+/// put in plan mode or in auto mode with the filler.
 #[test]
 fn a_servers_list_is_checked_whole_before_it_is_asked_about() {
-    for mode in [PermissionMode::Ask, PermissionMode::AcceptEdits] {
+    for mode in [
+        PermissionMode::Ask,
+        PermissionMode::AcceptEdits,
+        PermissionMode::Plan,
+        PermissionMode::Auto,
+    ] {
         let scratch = Scratch::new(&format!("list-checked-{mode:?}"));
         let (url, server) = serve_weather();
         let session = session(&url, &scratch, true);
@@ -7344,6 +7356,7 @@ fn a_hop_the_person_refuses_sends_nothing_and_the_refusal_names_the_declaration(
 /// SERVERS-13: bypassing every check answers no question about a move. Nobody is asked, nothing is
 /// sent where the reply pointed, and nothing is rewritten.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn bypassing_refuses_a_hop_and_asks_nobody() {
     let scratch = Scratch::new("move-bypass");
     let moving = moving(&scratch, true, Managed::default());
@@ -7354,6 +7367,8 @@ fn bypassing_refuses_a_hop_and_asks_nobody() {
     ]);
     let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
     asked.moved = Decision::Approve;
+    let approvals_before = std::fs::read(approvals_file(&scratch.state())).expect("mcp-approved");
+    let moved_to = Declaration::http(moving.moved_to.clone()).expect("where the reply pointed");
     let mut confirmer = bravebot_agent::Confining::new(&mut asked, PermissionMode::Bypass, false);
     run_turn(
         &endpoint,
@@ -7374,7 +7389,142 @@ fn bypassing_refuses_a_hop_and_asks_nobody() {
         moving.second.try_iter().next().is_none(),
         "bypassing sent something where the reply pointed"
     );
+    assert_eq!(
+        std::fs::read(approvals_file(&scratch.state())).expect("mcp-approved"),
+        approvals_before,
+        "a refused move changed what is approved"
+    );
+    assert!(
+        !Approvals::read(&scratch.state()).approves(&moved_to.digest()),
+        "a refused move approved the destination"
+    );
     assert_eq!(declared_now(&scratch), moving.declared);
+}
+
+/// The host a server is declared at is part of the digest an approval binds to, so a declaration
+/// that differs from an approved one in its host alone is a declaration nobody approved
+/// (SERVERS-11, SERVERS-13). The tool filters and the question every call asks are the same on
+/// both, and a move keeps them, so the address is the only thing that tells the two digests apart.
+///
+/// A wrong implementation leaves the url out of the digest, which lets an approved alias be
+/// repointed at another host without a new question.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn two_declarations_that_differ_only_in_their_host_have_two_digests() {
+    let approved = Declaration::http("http://weather.example/mcp".to_string()).expect("approved");
+    let repointed = approved
+        .clone()
+        .moved_to("http://elsewhere.example/mcp".to_string())
+        .expect("moved");
+    assert_ne!(approved, repointed);
+    assert_ne!(approved.digest(), repointed.digest());
+    let mut approvals = Approvals::default();
+    approvals.approve("weather", approved.digest());
+    assert!(approvals.approves(&approved.digest()));
+    assert!(!approvals.approves(&repointed.digest()));
+    assert_eq!(
+        approved.digest(),
+        Declaration::http("http://weather.example/mcp".to_string())
+            .expect("again")
+            .digest()
+    );
+}
+
+/// SERVERS-11: a call to a server an installed plugin carries, whose reply points somewhere else,
+/// is refused without a question. A yes would write the plugin's alias into the person's
+/// `mcp.json`, where it would shadow the plugin's server, so the server stays where the plugin
+/// declared it, nothing is sent where the reply pointed, and no file of the person's is written.
+/// The person answers yes to every question here, so only the refusal before the question can be
+/// what stops it.
+///
+/// A wrong implementation asks about the move of a plugin's server, which then reaches the second
+/// server or is told its declaration was edited.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_plugins_server_whose_reply_points_elsewhere_is_not_moved_and_nobody_is_asked() {
+    let scratch = Scratch::new("plugin-move");
+    let (second_url, second) = serve_weather();
+    let (first_url, first) = serve_moving(format!("{second_url}/mcp"));
+    a_plugin_carrying_the_server_at(&scratch, &first_url);
+    let state = scratch.state();
+    let home = bravebot_agent::servers::Home {
+        directory: Some(state.clone()),
+        writable: true,
+    };
+    let requested = bravebot_agent::plugin_servers::PluginServers::requests(&state, &[]);
+    let mut person = bravebot_agent::servers::Person {
+        answers: &b"1\n"[..],
+        screen: Vec::new(),
+        present: true,
+    };
+    let reached = bravebot_agent::servers::reach(
+        &requested,
+        &scratch.project(),
+        &home,
+        &Managed::default(),
+        bravebot_agent::servers::Asking::Person,
+        &mut person,
+        bravebot_sandbox::Stream::Null,
+    );
+    let session = reached
+        .session()
+        .unwrap_or_else(|| panic!("the plugin's server was not reached: {:?}", reached.notes));
+    let _ = (methods(&first), methods(&second));
+    let approvals_before = std::fs::read(approvals_file(&state)).ok();
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request("mcp__demo_weather__get_forecast", r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.moved = Decision::Approve;
+    let notices = noticed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+
+    assert_eq!(
+        confirmer.calls.len(),
+        1,
+        "control: the call is put to the person"
+    );
+    assert!(
+        confirmer.moves.is_empty(),
+        "the move of a plugin's server was put to the person: {:?}",
+        confirmer.moves
+    );
+    assert_eq!(
+        methods(&first),
+        ["tools/call"],
+        "the call was not sent where the plugin declared the server"
+    );
+    assert!(
+        second.try_iter().next().is_none(),
+        "something was sent where the reply pointed"
+    );
+    assert!(
+        !declarations_file(&state).exists(),
+        "the plugin's alias was written into the person's declarations"
+    );
+    assert_eq!(
+        std::fs::read(approvals_file(&state)).ok(),
+        approvals_before,
+        "a refused move changed what is approved"
+    );
+    assert!(
+        notices.iter().any(|notice| notice.contains("demo_weather")
+            && notice.contains("stays where it is declared")),
+        "the person was not told it stayed: {notices:?}"
+    );
+    let sent = rounds(&chat);
+    let told = sent.last().expect("a round after the call");
+    assert!(
+        told.contains("declared at") && !told.contains(&authority(&second_url)),
+        "the planner was not told where the server is declared, or was told where the reply pointed: {told}"
+    );
 }
 
 /// SERVERS-12: a yes does not reach a destination the machine's administrator denies, and writes
@@ -10188,6 +10338,429 @@ fn no_more_checks_are_made_at_once_than_the_reads_of_one_round() {
         8,
         "the checks held open at one moment were not the eight a round may read"
     );
+}
+
+/// How [`serve_checks_by_alias`] treats the check of each server's list. The check's request names
+/// the server whose list it reads, and that is what tells the checks apart.
+#[derive(Clone, Copy)]
+struct ChecksBy {
+    /// The alias whose check is held for `delay` before it answers, or `""` for none.
+    slow: &'static str,
+    delay: std::time::Duration,
+    /// The alias whose check says `unsafe`, or `""` for none. Every other check says `safe`.
+    unsafe_for: &'static str,
+    /// What each check reports having spent, as `(prompt, completion)` tokens.
+    cost: (u64, u64),
+}
+
+/// Whether `body` is the request of the check on the list of the server `alias`.
+fn names_the_list_of(body: &str, alias: &str) -> bool {
+    body.contains(&format!(
+        "what the MCP server {alias} listed when it started"
+    ))
+}
+
+/// A mock chat server answering each connection on a thread of its own. A check is answered as
+/// `by` says, by the alias its request names, and the turn's own round is answered at once. Every
+/// body is reported.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn serve_checks_by_alias(by: ChecksBy) -> (String, mpsc::Receiver<String>) {
+    let listener = open_files::bind_mock_server();
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let sender = sender.clone();
+            thread::spawn(move || {
+                let body = body_of(&stream);
+                sender.send(body.clone()).ok();
+                let (reply, cost) = match body.contains(A_CHECK_ASKING) {
+                    true => {
+                        if names_the_list_of(&body, by.slow) {
+                            thread::sleep(by.delay);
+                        }
+                        let word = match names_the_list_of(&body, by.unsafe_for) {
+                            true => "unsafe",
+                            false => "safe",
+                        };
+                        let said = format!(
+                            r#"{{\"verdict\": \"{word}\", \"reason\": \"what the check said\"}}"#
+                        );
+                        (reply_with(&said), by.cost)
+                    }
+                    false => (reply_with("done"), (0, 0)),
+                };
+                let frames = as_sse_costing(&reply, cost);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                    frames.len()
+                );
+                stream.write_all(response.as_bytes()).ok();
+                stream.flush().ok();
+            });
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+/// A server that answers its handshake and lists no tool at all.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn serve_no_tools() -> (String, mpsc::Receiver<String>) {
+    let listener = open_files::bind_mock_server();
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let body = body_of(&stream);
+            sender.send(body.clone()).ok();
+            let request: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+            let response = match request.get("method").and_then(Value::as_str) {
+                Some("tools/list") => {
+                    let reply =
+                        json!({"jsonrpc": "2.0", "id": request.get("id"), "result": {"tools": []}})
+                            .to_string();
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                        reply.len()
+                    )
+                }
+                _ => answered(&body, "get_forecast"),
+            };
+            stream.write_all(response.as_bytes()).ok();
+            stream.flush().ok();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+/// The questions about several lists are drawn in the order the servers are declared although the
+/// check of the first list is the last to return (SERVERS-8). The first server's check is held
+/// while the other two answer at once, so asking in the order the checks return would put the
+/// second and third lists before the first.
+///
+/// A wrong implementation asks each list as its check returns, or as the first check that is
+/// ready, which puts `b` and `c` ahead of `a` here. The existing test in which every check takes
+/// the same time cannot tell that from the declared order.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_questions_are_drawn_in_server_order_though_a_later_servers_check_returns_first() {
+    let scratch = Scratch::new("checks-out-of-order");
+    let session = three_servers(&scratch);
+    let (endpoint, chat) = serve_checks_by_alias(ChecksBy {
+        slow: "a",
+        delay: A_CHECK_TAKES,
+        unsafe_for: "",
+        cost: (0, 0),
+    });
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::reject());
+    let started = std::time::Instant::now();
+    let (result, _reporter) = timed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(session.clone())),
+        &mut confirmer,
+        &Cancel::new(),
+    );
+    let took = started.elapsed();
+    result.expect("the turn runs");
+
+    let put: Vec<&str> = confirmer
+        .lists
+        .iter()
+        .map(|list| list.alias.as_str())
+        .collect();
+    assert_eq!(
+        put,
+        ["a", "b", "c"],
+        "the questions were not drawn in server order"
+    );
+    let checked: Vec<String> = chat
+        .try_iter()
+        .filter(|body| body.contains(A_CHECK_ASKING))
+        .collect();
+    for alias in ["a", "b", "c"] {
+        assert_eq!(
+            checked
+                .iter()
+                .filter(|body| names_the_list_of(body, alias))
+                .count(),
+            1,
+            "the list of {alias} was not checked once"
+        );
+    }
+    assert!(
+        took >= A_CHECK_TAKES,
+        "the first check was not held, so b and c did not return first: {took:?}"
+    );
+}
+
+/// Which lists are checked and put to the person depends on the servers and the mode and never on
+/// what a list holds or what its check said (SERVERS-8). The first server lists no tool, the
+/// second's check says `unsafe`, and the third is ordinary: each is checked once and each is put
+/// to the person, in order, with the word its own check gave, and the list after the `unsafe` one
+/// is not skipped.
+///
+/// A wrong implementation skips the check or the question for an empty list, or stops asking once
+/// a check has said `unsafe`.
+#[test]
+fn every_list_is_checked_and_asked_whatever_it_holds_and_whatever_its_check_said() {
+    let scratch = Scratch::new("checks-by-content");
+    let (empty_url, _empty) = serve_no_tools();
+    let (second_url, _second) = serve_weather();
+    let (third_url, _third) = serve_weather();
+    let session = Session::new(
+        vec![
+            reach_as("a", &empty_url),
+            reach_as("b", &second_url),
+            reach_as("c", &third_url),
+        ],
+        scratch.project(),
+        Some(scratch.state()),
+        true,
+        Managed::default(),
+    );
+    let (endpoint, chat) = serve_checks_by_alias(ChecksBy {
+        slow: "",
+        delay: std::time::Duration::ZERO,
+        unsafe_for: "b",
+        cost: (0, 0),
+    });
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::reject());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(session.clone())),
+        &mut confirmer,
+    );
+
+    let checked: Vec<String> = chat
+        .try_iter()
+        .filter(|body| body.contains(A_CHECK_ASKING))
+        .collect();
+    for alias in ["a", "b", "c"] {
+        assert_eq!(
+            checked
+                .iter()
+                .filter(|body| names_the_list_of(body, alias))
+                .count(),
+            1,
+            "the list of {alias} was not checked once"
+        );
+    }
+    let put: Vec<(&str, bravebot_core::vetting::Verdict)> = confirmer
+        .lists
+        .iter()
+        .map(|list| (list.alias.as_str(), list.verdict))
+        .collect();
+    assert_eq!(
+        put,
+        [
+            ("a", bravebot_core::vetting::Verdict::Safe),
+            ("b", bravebot_core::vetting::Verdict::Unsafe),
+            ("c", bravebot_core::vetting::Verdict::Safe),
+        ],
+        "a list was not put with the word its own check gave"
+    );
+    assert_eq!(
+        session
+            .offering()
+            .into_iter()
+            .filter(|(alias, _)| alias != "a")
+            .collect::<Vec<_>>(),
+        vec![
+            ("b".to_string(), Offering::Tools(1)),
+            ("c".to_string(), Offering::Tools(1)),
+        ]
+    );
+}
+
+/// A turn stopped at the first question still charges every check that was made, including the
+/// ones for the lists it did not get to ask about (SERVERS-8). The first check is held while the
+/// other two return, each reporting what it spent, and the stop comes at the first question. The
+/// figure the turn reports holds all three.
+///
+/// A wrong implementation charges only the checks of the lists it asked, so a stop leaves the
+/// other checks uncounted.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_turn_stopped_at_the_first_question_still_charges_the_checks_it_made_for_the_other_lists() {
+    let scratch = Scratch::new("checks-charged-after-stop");
+    let session = three_servers(&scratch);
+    let (endpoint, _chat) = serve_checks_by_alias(ChecksBy {
+        slow: "a",
+        delay: A_CHECK_TAKES,
+        unsafe_for: "",
+        cost: (10, 5),
+    });
+    let cancel = Cancel::new();
+    let mut stopping = Answering::new(Decision::Reject, CallDecision::reject());
+    stopping.stop = Some(cancel.clone());
+
+    let (_result, reporter) = timed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(session.clone())),
+        &mut stopping,
+        &cancel,
+    );
+
+    assert_eq!(stopping.lists.len(), 1, "only the first list is put");
+    let spent = reporter
+        .spent
+        .last()
+        .expect("the turn reported what it spent");
+    assert_eq!(
+        spent.tokens,
+        3 * (10 + 5),
+        "the checks of the lists nobody was asked about were not all charged: {spent:?}"
+    );
+}
+
+/// Where no check is made of a list, the question about it carries the word `inconclusive` and no
+/// sentence, never `safe` (CHECK-10, SERVERS-13). The confirmer here is the bare recording one:
+/// the mode that skips prompts, `Confining`, answers the question before it reaches an inner
+/// confirmer, so it would never show what the driver filled in.
+///
+/// A wrong implementation fills in `safe`, which reads as a check that found nothing, or invents a
+/// sentence for a check nobody ran.
+#[test]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_list_asked_where_no_check_was_made_carries_an_inconclusive_word_and_no_sentence() {
+    let scratch = Scratch::new("bypass-filler-verdict");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let (endpoint, chat) = serve_chat(vec![reply_with("done")]);
+    let mut asking = Answering::new(Decision::Approve, CallDecision::reject());
+
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast")
+            .with_mcp(Some(session))
+            .with_permission_mode(PermissionMode::Bypass),
+        &mut asking,
+    );
+
+    let [put] = asking.lists.as_slice() else {
+        panic!("expected one list question, got {}", asking.lists.len());
+    };
+    assert!(
+        matches!(
+            put.verdict,
+            bravebot_core::vetting::Verdict::Inconclusive(_)
+        ),
+        "the question carries {:?} for a check nobody made",
+        put.verdict
+    );
+    assert_eq!(
+        put.reason, None,
+        "a sentence was filled in for a check nobody made"
+    );
+    let sent: Vec<String> = chat.try_iter().collect();
+    assert!(
+        !sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+        "a check was made of a list under bypass"
+    );
+}
+
+/// A server a managed `mcp.deny` or `mcp.allow` refuses is not started under bypass, and nothing is
+/// sent to its host, so the planner has no tool of it (SERVERS-13, SERVERS-12). The mode answers
+/// the question about a server and records nothing, and the decision about where a server may be
+/// reached is not a question. The control is an `allow` that names the host, which starts it.
+///
+/// A wrong implementation lets the mode skip the host decision, so the handshake reaches the
+/// refused host.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn bypassing_does_not_reach_a_host_the_managed_layer_refuses() {
+    for (n, (lists, refused)) in [
+        (r#""deny": [{"host": "127.0.0.1"}]"#, true),
+        (r#""allow": [{"host": "*.corp.example"}]"#, true),
+        (r#""allow": [{"host": "127.0.0.1"}]"#, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let scratch = Scratch::new(&format!("bypass-managed-host-{n}"));
+        let (url, server) = serve_weather();
+        let declaration = Declaration::http(url.clone()).expect("a declaration");
+        let mut declarations = Declarations::default();
+        declarations.insert("weather", &declaration);
+        std::fs::write(declarations_file(&scratch.state()), declarations.to_text())
+            .expect("mcp.json");
+        let managed = scratch.path.join("managed.json");
+        std::fs::write(&managed, format!(r#"{{"mcp": {{{lists}}}}}"#)).expect("managed.json");
+        let home = bravebot_agent::servers::Home {
+            directory: Some(scratch.state()),
+            writable: true,
+        };
+        let requested = vec![(
+            scratch.project().join(".bravebot/settings.json"),
+            "weather".to_string(),
+        )];
+
+        let reached = bravebot_agent::servers::reach(
+            &requested,
+            &scratch.project(),
+            &home,
+            &Managed::at(&managed),
+            bravebot_agent::servers::Asking::Bypass,
+            &mut bravebot_agent::servers::nobody(),
+            bravebot_sandbox::Stream::Null,
+        );
+
+        let reached_the_host = methods(&server);
+        match refused {
+            false => {
+                assert!(reached.session().is_some(), "{lists}: {:?}", reached.notes);
+                assert!(
+                    reached_the_host.iter().any(|method| method == "initialize"),
+                    "{lists}: the control did not reach the host: {reached_the_host:?}"
+                );
+            }
+            true => {
+                assert!(
+                    reached_the_host.is_empty(),
+                    "{lists}: the host was sent {reached_the_host:?}"
+                );
+                assert_eq!(reached.notes.len(), 1, "{lists}: {:?}", reached.notes);
+                assert!(
+                    reached.notes[0].contains(&managed.display().to_string()),
+                    "{lists}: the note does not name the file that refused it: {:?}",
+                    reached.notes
+                );
+                let session = reached.session();
+                assert!(session.is_none(), "{lists}: the refused server was started");
+
+                let (endpoint, chat) = serve_chat(vec![
+                    tool_request(FORECAST, r#"{"city":"Paris"}"#),
+                    reply_with("done"),
+                ]);
+                let mut inner = Answering::new(Decision::Approve, CallDecision::approve());
+                let mut confirmer =
+                    bravebot_agent::Confining::new(&mut inner, PermissionMode::Bypass, false);
+                run_turn(
+                    &endpoint,
+                    &scratch.project(),
+                    Task::new("the forecast")
+                        .with_mcp(session)
+                        .with_permission_mode(PermissionMode::Bypass),
+                    &mut confirmer,
+                );
+                let sent = rounds(&chat);
+                let told = sent.last().expect("a round after the call");
+                assert!(
+                    told.contains("no such tool"),
+                    "{lists}: the planner was not told the tool is not there: {told}"
+                );
+                assert!(
+                    methods(&server).is_empty(),
+                    "{lists}: the call reached the host"
+                );
+            }
+        }
+    }
 }
 
 /// A server like the weather server, except that every call is answered by `failure`, which is

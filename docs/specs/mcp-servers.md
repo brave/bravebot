@@ -1067,6 +1067,9 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_agent::mcp::a_turn_spending_a_subscription_makes_the_checks_of_the_lists_one_after_another`
 `verified-by: bravebot_agent::mcp::the_time_taken_over_several_lists_made_together_is_charged_to_the_person_once`
 `verified-by: bravebot_agent::mcp::no_more_checks_are_made_at_once_than_the_reads_of_one_round`
+`verified-by: bravebot_agent::mcp::the_questions_are_drawn_in_server_order_though_a_later_servers_check_returns_first`
+`verified-by: bravebot_agent::mcp::every_list_is_checked_and_asked_whatever_it_holds_and_whatever_its_check_said`
+`verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_first_question_still_charges_the_checks_it_made_for_the_other_lists`
 `verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing`
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_started_in_a_fresh_session_puts_the_lists_to_the_person_before_it_plans`
 `verified-by: bravebot_tui::app::clearing_keeps_the_answer_to_an_mcp_servers_list_for_the_process`
@@ -1447,7 +1450,10 @@ list to the person again.
 A no rewrites nothing and sends nothing. A call's hop then says the server stays where it is
 declared, and a handshake's leaves the server unstarted with a line saying why. A one-shot run, a
 session with nobody at the terminal and the mode that skips prompts refuse it unasked
-([SERVERS-13](#SERVERS-13)).
+([SERVERS-13](#SERVERS-13)). So does a call to a server an installed plugin carries, whose
+declaration is the plugin's and not the person's: a yes would write the plugin's alias into
+`mcp.json`, where it would shadow the plugin's server, so a call's hop for one is refused with the
+same line a no gives.
 
 `verified-by: bravebot_mcp::http::mcp_traffic_passes_through_the_network_gate`
 `verified-by: bravebot_mcp::http::a_redirect_to_another_host_is_refused`
@@ -1478,6 +1484,8 @@ session with nobody at the terminal and the mode that skips prompts refuse it un
 `verified-by: bravebot_agent::mcp::a_move_is_recorded_over_the_declaration_asked_about_and_nothing_else`
 `verified-by: bravebot_agent::mcp::a_declaration_edited_while_a_move_is_asked_about_is_left_alone_and_the_server_is_not_moved`
 `verified-by: bravebot_agent::mcp::a_move_keeps_everything_but_the_address_of_the_declaration_it_replaces`
+`verified-by: bravebot_agent::mcp::a_plugins_server_whose_reply_points_elsewhere_is_not_moved_and_nobody_is_asked`
+`verified-by: bravebot_agent::mcp::two_declarations_that_differ_only_in_their_host_have_two_digests`
 `verified-by: bravebot_agent::mcp::a_server_that_moves_a_second_time_is_recorded_over_what_the_first_move_wrote`
 `verified-by: bravebot_agent::mcp::a_server_moved_during_a_turn_is_reached_with_the_headers_and_token_it_was_declared_with`
 `verified-by: bravebot_agent::mcp::a_server_moved_twice_is_reached_with_the_headers_and_token_at_each_destination`
@@ -1699,6 +1707,8 @@ not say beside each one whether it started unasked because of the mode.
 `verified-by: bravebot_agent::mcp::bypassing_does_not_answer_a_call_to_a_server_asked_every_call`
 `verified-by: bravebot_agent::mcp::a_list_offered_in_bypass_stays_offered_and_each_later_call_asks`
 `verified-by: bravebot_agent::mcp::bypassing_refuses_a_hop_and_asks_nobody`
+`verified-by: bravebot_agent::mcp::bypassing_does_not_reach_a_host_the_managed_layer_refuses`
+`verified-by: bravebot_agent::mcp::two_declarations_that_differ_only_in_their_host_have_two_digests`
 `verified-by: bravebot_agent::mcp::bypassing_does_not_call_a_server_the_run_holds_no_grant_for`
 `verified-by: bravebot_agent::mcp::a_deny_rule_refuses_a_call_to_a_server_under_bypass_before_anybody_is_asked`
 `verified-by: bravebot_agent::permission_mode::bypassing_refuses_to_move_a_server`
