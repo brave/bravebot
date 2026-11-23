@@ -35,3 +35,8 @@ for, and the mutation against the defect the contract exists to refuse. A contra
 
 A function marked `external_body` is assumed rather than proved. A new one is named in the pull
 request, with the reason Verus cannot read it, and is small enough to check by eye.
+
+A new entry in `verify/survivors.txt` is a change to a contracted function that Verus still
+verifies. Read its reason against the change: one that makes a gate stricter, or that changes
+nothing the function returns, may be listed. One that lets more through is a contract that does
+not state what it is for, and the pull request strengthens the contract instead.

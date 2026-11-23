@@ -46,6 +46,20 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 `verify/mutations.txt` lists a defect for each, and `make check-verus` requires Verus to refuse
 every one.
 
+`contrib/check-verus-sweep.py` makes the defects nobody listed. It changes one token at a time in
+the body of each function Verus proves against a contract: `==` and `!=`, `&&` and `||`, `true`
+and `false`, a dropped `!`, `<` and `<=`, `>` and `>=`, `Integrity::Trusted` and `Untrusted`,
+`Confidentiality::Public` and `Private`, and `Ruling::Allow` and `Ask`. A change Verus verifies
+survives, and `make check-verus` fails unless `verify/survivors.txt` lists it with the reason it is
+acceptable. It fails as well where a listed change no longer survives.
+
+Most contracts here state one direction: what a gate always asks about or refuses, and when output
+may be trusted. They do not state that a gate lets through what it may. A change that makes a gate
+stricter meets such a contract and survives, and its entry in `verify/survivors.txt` says so. A
+unit test is what pins that a gate is not stricter than it has to be. A survivor that lets more
+through is a contract that does not say what it is for, so strengthen the contract instead of
+listing it.
+
 `verify/history.rs` is a copy of three fixes from the history, 3facf14a, e0cd1903 and 20ce6086,
 with a contract each, written before the crates they are in carried contracts. Verus refuses each
 under the `before_<commit>` cfg that restores the code before the fix. A copy can drift from the
@@ -120,8 +134,9 @@ Then:
   attribute, an `assume` or `admit`, or an `assume_specification`. Verus verifies a crate with
   any of these, so the ledger is what shows a reviewer each one. CI runs it in the Security job.
 - `make check-verus` runs Verus. Each crate in `CRATES` in `contrib/check-verus.py` has to verify,
-  each mutation has to be refused, and `verify/history.rs` has to verify and be refused under each
-  `before_<commit>` cfg.
+  each mutation has to be refused, each change `contrib/check-verus-sweep.py` makes has to be
+  refused or listed in `verify/survivors.txt`, and `verify/history.rs` has to verify and be refused
+  under each `before_<commit>` cfg.
 
 CI's `Verus` job runs `make check-verus` on a pull request that changes `crates/core/`, `verify/`
 or the scripts that run them, on the merge queue's branch, and on `main`. It installs the release
@@ -129,9 +144,10 @@ or the scripts that run them, on the merge queue's branch, and on `main`. It ins
 `VERUS_SHA256`, and the toolchain `VERUS_TOOLCHAIN` names. A bump of the release changes all three
 together.
 
-`crates/core/src/spec.rs`, `verify/` and the two scripts have code owners in `.github/CODEOWNERS`.
-A contract that is removed or weakened in the crate has to change `verify/contracts.txt` to pass,
-and a definition a contract names lives in `spec.rs`, so either change needs an owner's approval.
+`crates/core/src/spec.rs`, `verify/` and the three scripts have code owners in
+`.github/CODEOWNERS`. A contract that is removed or weakened in the crate has to change
+`verify/contracts.txt` to pass, and a definition a contract names lives in `spec.rs`, so either
+change needs an owner's approval. A survivor listed in `verify/survivors.txt` needs one as well.
 The body a contract holds needs none, because Verus checks it.
 
 ## Running
