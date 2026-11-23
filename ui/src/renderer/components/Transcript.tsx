@@ -550,6 +550,7 @@ export function Transcript({
       showToast('Too large to paste', paste.outcome.note, 'note')
       return
     }
+    if (paste.outcome.kind !== 'staged') return
     restage(live.handle, stagePaste(live.staging ?? EMPTY_STAGING, paste.outcome.picture, draft, caret()))
   })
   useEffect(() => window.bravebot.onPaste(pasted), [pasted])

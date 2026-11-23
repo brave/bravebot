@@ -364,6 +364,41 @@ test('a manifest run takes no paste', async () => {
   assert.deepEqual(forwarded, { session: 's1', task: 't', model: 'm' })
 })
 
+// ---- pasted text (PASTE-10) ---------------------------------------------------------------------
+
+// A stub of the bridge's `pastes.clean` that removes a word, not a character, and says a note the
+// agent does not use, so a character list or wording of this process's own would fail the tests
+// below. The bridge's own answer is pinned in crates/ui-bridge/tests/attaching.rs.
+const cleaned = []
+const clean = async (text) => {
+  cleaned.push(text)
+  const kept = text.replaceAll('HIDDEN', '')
+  const removed = (text.length - kept.length) / 'HIDDEN'.length
+  return removed > 0 ? { text: kept, removed, note: `stub: ${removed} gone` } : { text: kept, removed }
+}
+
+test('pasted text is what the bridge cleaned it to, with its count, and its note only when it says one', async () => {
+  assert.deepEqual(await main.cleanPaste('s1', 'see this', clean), { kind: 'text', text: 'see this', removed: 0 }, 'a clean paste passes through with no note')
+  assert.deepEqual(await main.cleanPaste('s1', 'see HIDDENthisHIDDEN', clean), { kind: 'text', text: 'see this', removed: 2, note: 'stub: 2 gone' })
+  assert.deepEqual(await main.cleanPaste('s1', 'HIDDEN', clean), { kind: 'text', text: '', removed: 1, note: 'stub: 1 gone' }, 'nothing but hidden characters still says so')
+})
+
+test('a bridge that does not answer, or answers something else, gives unclean text, never the raw paste', async () => {
+  assert.deepEqual(await main.cleanPaste('s1', 'raw', async () => { throw new Error('the agent is not running') }), { kind: 'unclean' })
+  for (const answer of [undefined, null, {}, { text: 'raw' }, { removed: 0 }, { text: 3, removed: 0 }, { text: 'raw', removed: '0' }, { text: 'raw', removed: -1 }, { text: 'raw', removed: 1.5 }, { text: 'raw', removed: 1, note: 7 }]) {
+    assert.deepEqual(await main.cleanPaste('s1', 'raw', async () => answer), { kind: 'unclean' }, JSON.stringify(answer))
+  }
+})
+
+test('text pasted into a session this process does not hold, or text that is not a string, is not sent to the bridge', async () => {
+  cleaned.length = 0
+  assert.equal(await main.cleanPaste('nobody', 'text', clean), null)
+  assert.equal(await main.cleanPaste(undefined, 'text', clean), null)
+  assert.equal(await main.cleanPaste('s1', 3, clean), null)
+  assert.equal(await main.cleanPaste('s1', { text: 'x' }, clean), null)
+  assert.deepEqual(cleaned, [], 'the bridge is never asked')
+})
+
 /**
  * The notes that say a size are the bridge's, built from the catalogs the terminal reads, so the
  * window cannot say one differently. A unit written into the window is the start of a second copy.
