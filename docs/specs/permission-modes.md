@@ -697,6 +697,7 @@ word for bypassing would let a session reach the one mode MODE-5 keeps to the co
 `verified-by: bravebot_tui::app::the_plan_command_without_a_task_sets_the_mode_and_sends_nothing`
 `verified-by: bravebot_tui::app::the_plan_command_sets_plan_mode_rather_than_cycling_to_the_next`
 `verified-by: bravebot_tui::app::the_plan_command_waits_for_the_turn_in_flight`
+`verified-by: bravebot_ui_bridge::permission_mode::a_window_plan_line_sets_plan_mode_and_its_turn_is_sent_only_the_task`
 
 <a id="MODE-13"></a>
 ### MODE-13: `--dangerously-bypass-approvals-and-sandbox` is the bypass flag and the sandbox mode `off`, given together
