@@ -415,6 +415,24 @@ test('text pasted into a session this process does not hold, or text that is not
   assert.deepEqual(cleaned, [], 'the bridge is never asked')
 })
 
+// The preload cancels every trusted text paste to clean it, so the composer's own paste handler
+// never sees one. The cleaned text is folded where the window writes it, or a long paste would land
+// whole in the box (PASTE-1).
+test('cleaned text folds behind a marker before it is written into the draft', () => {
+  const transcript = readFileSync(join('src', 'renderer', 'components', 'Transcript.tsx'), 'utf8')
+  const start = transcript.indexOf("if (paste.outcome.kind === 'text') {")
+  const handler = transcript.slice(start, transcript.indexOf('pasteText(', start))
+  assert.ok(start !== -1 && handler.length > 0, 'the cleaned text is written with pasteText')
+  assert.match(handler, /stageText\([^)]*paste\.outcome\.text/, 'the cleaned text is offered to stageText first')
+
+  const long = 'one\ntwo\nthree\nfour'
+  const folded = staging.stageText(staging.EMPTY_STAGING, long, 'see ', 4, 4)
+  assert.equal(folded.draft, 'see [Pasted text #1 +4 lines] ')
+  assert.equal(staging.unfolded(folded.staging, folded.draft), `see ${long} `)
+  assert.equal(staging.stageText(staging.EMPTY_STAGING, 'short', 'see ', 4, 4), null, 'a short paste is written as it is')
+  assert.deepEqual(staging.pasteText('see ', 4, 4, 'short'), { draft: 'see short', caret: 9 })
+})
+
 /**
  * The notes that say a size are the bridge's, built from the catalogs the terminal reads, so the
  * window cannot say one differently. A unit written into the window is the start of a second copy.

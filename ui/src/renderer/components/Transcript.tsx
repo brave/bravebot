@@ -564,9 +564,18 @@ export function Transcript({
       // The catalog note begins in lower case, as the terminal's status line shows it.
       const note = paste.outcome.note
       if (note) showToast('Paste cleaned', note.charAt(0).toUpperCase() + note.slice(1), 'note')
+      // A long paste folds behind a marker, as one the browser was left to insert would have.
       const area = input.current?.shadowRoot?.querySelector('textarea')
-      const next = pasteText(draft, area?.selectionStart ?? draft.length, area?.selectionEnd ?? draft.length, paste.outcome.text)
-      if (next.draft !== draft) restage(live.handle, { staging: live.staging ?? EMPTY_STAGING, ...next })
+      const start = area?.selectionStart ?? draft.length
+      const end = area?.selectionEnd ?? start
+      const staging = live.staging ?? EMPTY_STAGING
+      const folds = stageText(staging, paste.outcome.text, draft, start, end)
+      if (folds) {
+        restage(live.handle, folds)
+        return
+      }
+      const next = pasteText(draft, start, end, paste.outcome.text)
+      if (next.draft !== draft) restage(live.handle, { staging, ...next })
       return
     }
     restage(live.handle, stagePaste(live.staging ?? EMPTY_STAGING, paste.outcome.picture, draft, caret()))
