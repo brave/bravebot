@@ -116,6 +116,9 @@
 .settings-card dd.settings-log > p { margin: 0; }
 .settings-card dd.settings-log > p + p { margin-top: var(--leo-spacing-m); }
 .settings-card dd.settings-log > .settings-log-note { width: 100%; color: var(--ink-secondary); text-wrap: pretty; }
+/* The log level control under the log's table, with its note under it. */
+.settings-log-level { display: flex; flex-direction: column; align-items: flex-start; gap: var(--leo-spacing-m); }
+.settings-log-level leo-dropdown { min-width: 240px; }
 .settings-card dl.settings-limits-table { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
 
 /* A collapsible inside a card takes the same radius as the tables and boxes in it. */

@@ -18,7 +18,7 @@ try {
   const errors = []
   page.on('pageerror', e => errors.push(e.message))
   await app.evaluate(({ ipcMain, BrowserWindow }, directory) => {
-    const report = { build: 'bravebot 0.9.0 fixture', configured: true, problem: null, model: 'local/test', brave: false, bedrock: false, providers: [{ name: 'Local', key: 'gateway:local', credential: 'not required' }], selected: null, layers: [], overrides: [], logs: { directory: '/test/.bravebot/logs', writing: true }, managed: { path: '/etc/bravebot/managed.json', keys: ['provider'] }, network: { roots: ['/test/roots.pem'], problem: null, trustsNothing: false, proxy: 'proxy.example:8080', authenticated: true, unusableProxy: null, noProxy: 'localhost' } }
+    const report = { build: 'bravebot 0.9.0 fixture', configured: true, problem: null, model: 'local/test', brave: false, bedrock: false, providers: [{ name: 'Local', key: 'gateway:local', credential: 'not required' }], selected: null, layers: [], overrides: [], logs: { directory: '/test/.bravebot/logs', writing: true, level: 'error' }, managed: { path: '/etc/bravebot/managed.json', keys: ['provider'] }, network: { roots: ['/test/roots.pem'], problem: null, trustsNothing: false, proxy: 'proxy.example:8080', authenticated: true, unusableProxy: null, noProxy: 'localhost' } }
     // Figures that are not the agent's real ones, so a placeholder that held its own would not match them.
     const defaultFor = { 'turn-started': 41, 'tool-finished': 42, 'turn-finished': 43, 'prompt-shown': 44, 'checkout-made': 46, 'compacted': 47, 'session-started': 45, 'session-ended': 7 }
     const accounts = [
@@ -59,6 +59,9 @@ try {
       if (method.endsWith('.reply')) state.replies.push({ method, params })
       return { ok: {} }
     })
+    // Stands in for the main process asking `diagnostic_log.set`; the report then states the level.
+    state.levels = []
+    replace('bravebot:diagnostic-log:set-level', (_, level) => { state.levels.push(level); report.logs.level = level; return { level, writing: report.logs.writing } })
     replace('bravebot:settings:select', (_, clear) => { report.selected = clear ? null : '/test/override.json'; report.layers = clear ? [] : [report.selected]; return report })
     replace('bravebot:hooks:save', (_, text, expected) => {
       if (state.conflict || expected !== state.hooks.text) throw new Error('File changed since this editor opened. Reopen it to review the latest version.')
@@ -102,9 +105,9 @@ try {
   assert.equal(await diagnostics.locator('[data-test="settings-log-directory"]').textContent(), '/test/.bravebot/logs')
   await diagnostics.getByText('Logs are written here when something fails. The folder may be empty until then.', { exact: true }).waitFor()
   await diagnostics.scrollIntoViewIfNeeded()
-  // The log box comes first, then the sentence, then the button that sentence is about.
+  // The log box comes first, then the level control, then the sentence, then the button that sentence is about.
   assert.deepEqual(await diagnostics.evaluate(block => [...block.children].map(child => child.tagName === 'DIV' ? child.className : child.tagName)),
-    ['H3', 'DL', 'P', 'settings-actions'])
+    ['H3', 'DL', 'settings-log-level', 'P', 'settings-actions'])
   // The value's paragraphs carry no outer margin, so the box padding is even and the first line
   // shares the label's baseline; the path and the note are one spacing step apart.
   const margins = () => diagnostics.locator('dd.settings-log > p').evaluateAll(ps => ps.map(p => [getComputedStyle(p).marginTop, getComputedStyle(p).marginBottom]))
@@ -126,6 +129,7 @@ try {
   await diagnostics.getByRole('button', { name: 'Refresh diagnostics' }).click()
   await diagnostics.getByText('This session keeps nothing, so no log is written.', { exact: true }).waitFor()
   assert.equal(await diagnostics.locator('[data-test="settings-log-directory"]').count(), 0, 'a process that writes no log names no folder')
+  assert.equal(await diagnostics.locator('[data-test="settings-log-level"]').count(), 0, 'a process that writes no log offers no level')
   assert.deepEqual(await margins(), [['0px', '0px']])
   await shoot('01-log-not-written')
   await app.evaluate(() => { const { logs } = globalThis.agentSettingsFixture.state.report; logs.directory = null; logs.writing = false })
@@ -136,6 +140,25 @@ try {
   await app.evaluate(() => { const { logs } = globalThis.agentSettingsFixture.state.report; logs.directory = '/test/.bravebot/logs'; logs.writing = true })
   await diagnostics.getByRole('button', { name: 'Refresh diagnostics' }).click()
   await diagnostics.locator('[data-test="settings-log-directory"]').waitFor()
+  // Log detail (DIAG-11): the control shows the level the agent reported, and choosing another asks
+  // for it and reads the report again. It is not offered where no log is written.
+  const levelControl = diagnostics.locator('[data-test="settings-log-level"]')
+  const levelShown = () => levelControl.evaluate(el => el.value)
+  assert.equal(await levelShown(), 'error')
+  await diagnostics.getByText('Applies until you quit the app. Raise it, reproduce the problem, then choose Report a Bug… from the Help menu.', { exact: true }).waitFor()
+  await levelControl.click()
+  await page.getByRole('option', { name: 'Everything (debug)', exact: true }).click()
+  await diagnostics.getByText('Logs are written here as the agent works.', { exact: true }).waitFor()
+  assert.deepEqual((await app.evaluate(() => globalThis.agentSettingsFixture.state)).levels, ['debug'])
+  await diagnostics.getByRole('button', { name: 'Refresh diagnostics' }).click()
+  await diagnostics.getByText('Logs are written here as the agent works.', { exact: true }).waitFor()
+  for (let tries = 0; tries < 50 && (await levelShown()) !== 'debug'; tries++) await page.waitForTimeout(100)
+  assert.equal(await levelShown(), 'debug', 'Refresh diagnostics shows the level the agent reports')
+  await shoot('01-log-level-debug')
+  await levelControl.click()
+  await page.getByRole('option', { name: 'Errors only', exact: true }).click()
+  await diagnostics.getByText('Logs are written here when something fails. The folder may be empty until then.', { exact: true }).waitFor()
+  assert.deepEqual((await app.evaluate(() => globalThis.agentSettingsFixture.state)).levels, ['debug', 'error'])
   // The model service and the accounts are the Providers page, the second in the list.
   assert.deepEqual(await dialog.locator('[data-test^="settings-page-"]').evaluateAll((items) => items.map((item) => item.dataset.test)),
     ['settings-page-general', 'settings-page-providers', 'settings-page-connectors', 'settings-page-agent'])

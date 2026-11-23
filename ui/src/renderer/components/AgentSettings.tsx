@@ -3,6 +3,7 @@ import { SettingsGroup } from './SettingsGroup'
 import { useDelayedFlag } from '../hooks'
 import type { AgentSettings as Report, Hook, HooksDocument, Limits, Refusal } from '../../shared/agent-settings'
 import { composeHooks, unusableTimeout } from '../../shared/agent-settings'
+import { isLogLevel, type LogLevel } from '../../shared/protocol'
 import { Alert, Button, Dropdown, Icon, Input, ProgressRing } from '../nala'
 import { Skeleton } from './Skeleton'
 const fieldText = (event: { value?: unknown; target?: EventTarget | null }): string | null => {
@@ -20,6 +21,27 @@ const grouped = new Intl.NumberFormat('en-US')
 const runLimit = (value: number | null, unit: string): string => value === null ? 'Built-in' : `${grouped.format(value)} ${unit}`
 const spendLimit = ({ limit, path }: NonNullable<Limits['session']>): string =>
   limit === null ? 'None' : `${grouped.format(limit.count)} ${limit.unit}${path ? ` (set in ${path})` : ''}`
+
+/**
+ * The diagnostic log level of the running agent (DIAG-11). The level shown is the one the agent
+ * reported, and choosing another only asks for it; what the agent then reports is shown next.
+ */
+export function LogDetail({ level, busy, onChoose }: {
+  level: LogLevel
+  busy: boolean
+  onChoose: (level: LogLevel) => void
+}): React.JSX.Element {
+  return <div className="settings-log-level">
+    <Dropdown value={level} disabled={busy} data-test="settings-log-level"
+      onChange={(detail) => { const value = detail.value; if (isLogLevel(value) && value !== level) onChoose(value) }}>
+      <span slot="label">Log detail</span>
+      <leo-option value="error">Errors only</leo-option>
+      <leo-option value="info">Errors and steps (info)</leo-option>
+      <leo-option value="debug">Everything (debug)</leo-option>
+    </Dropdown>
+    <p data-test="settings-log-level-note">Applies until you quit the app. Raise it, reproduce the problem, then choose Report a Bug… from the Help menu.</p>
+  </div>
+}
 
 function LimitsInForce({ limits }: { limits: Limits }): React.JSX.Element {
   return <>
@@ -113,6 +135,13 @@ export function AgentSettings({ session, onChanged, onDirty }: {
       if (next) { setReport(next); onChanged(); setStatus(clear ? 'Run override cleared.' : 'Run override selected. Future turns and model discovery use it.'); await load() }
     } catch (error) { setProblem(String(error)) } finally { setBusy(false) }
   }
+  const chooseLevel = async (level: LogLevel) => {
+    setBusy(true); setProblem(''); setStatus('')
+    try { await window.bravebot.setLogLevel(level) }
+    catch (error) { setProblem(String(error)); setBusy(false); return }
+    // Read back rather than assumed: the section shows the level the agent reports it is in.
+    await load()
+  }
   // A file the agent passed over in part is the person's to edit: composing it back from the
   // entries it did read would drop the rest.
   const editable = !!document && document.entire
@@ -134,7 +163,10 @@ export function AgentSettings({ session, onChanged, onDirty }: {
             ? <p data-test="settings-log-none">No state directory is set, so no log is kept.</p>
             : !report.logs.writing
               ? <p data-test="settings-log-none">This session keeps nothing, so no log is written.</p>
-              : <><p className="settings-path" data-test="settings-log-directory">{report.logs.directory}</p><p className="settings-log-note">Logs are written here when something fails. The folder may be empty until then.</p></>}</dd></dl>}
+              : <><p className="settings-path" data-test="settings-log-directory">{report.logs.directory}</p><p className="settings-log-note">{report.logs.level === 'info' || report.logs.level === 'debug'
+                ? 'Logs are written here as the agent works.'
+                : 'Logs are written here when something fails. The folder may be empty until then.'}</p></>}</dd></dl>}
+          {report.logs?.writing && <LogDetail level={isLogLevel(report.logs.level) ? report.logs.level : 'error'} busy={busy} onChoose={(level) => void chooseLevel(level)} />}
           <p>Read the agent’s configuration again, after changing a file or the environment.</p>
           <div className="settings-actions"><Button size="small" kind="outline" onClick={() => void load()} isDisabled={busy}><Icon name="refresh" slot="icon-before" />Refresh diagnostics</Button></div>
         </section>
