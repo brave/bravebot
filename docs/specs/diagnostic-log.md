@@ -9,6 +9,10 @@ governs:
   - crates/ui-bridge/src/bug_report.rs
   - crates/ui-bridge/src/bin/bravebot-rpc.rs
   - crates/ui-bridge/src/diagnostic_log.rs
+  - crates/ui-bridge/src/arguments.rs
+  - ui/src/main/bridge.ts
+  - ui/src/main/index.ts
+  - ui/src/renderer/components/AgentSettings.tsx
   - ui/src/main/bug-report.ts
   - ui/src/renderer/components/BugReport.tsx
   - crates/ui-bridge/src/window_fault.rs
@@ -346,4 +350,5 @@ at the host, so a client connected to it does not choose what it holds.
 `verified-by: bravebot_ui_bridge::bug_report::the_report_names_the_log_directory_when_there_is_no_log`
 `verified-by: bravebot_ui_bridge::no_state_directory::with_no_state_directory_there_is_no_bug_report_and_no_update_record`
 `verified-by: bravebot_ui_bridge::host_allowlist::the_allowlist_classifies_every_method_the_bridge_answers`
-`verified-by: by-construction (the main process and the renderer are not crates this workspace compiles, so ui/scripts/diagnostic-log-level.test.mjs pins the main process's half: the agent is started with no --log-level until a level is chosen, with the chosen level again when it is started a second time, and with none after going back to error, a word that is not a level is refused before it reaches the agent, a level the agent refused is not kept, and diagnostic_log.set is not on the window's allow-list; ui/scripts/agent-settings.test.mjs pins that the Log detail control shows the report's level, asks for the level chosen and is hidden where no log is written; ui/scripts/drive-agent-settings.mjs chooses debug in a real window with a real agent and a scratch state directory and checks that the refreshed section and settings report name it; make check-ui runs the first two, and the governs list above holds the files to existing)`
+`verified-by: bravebot_ui_bridge::allowlist::diagnostic_log_set_is_denied_to_a_client_of_the_host`
+`verified-by: by-construction (the main process and the renderer are not crates this workspace compiles, so ui/scripts/diagnostic-log-level.test.mjs pins the main process's half: the agent is started with no --log-level until a level is chosen, with the chosen level again when it is started a second time, with none after going back to error, and at the level a bridge was made with, the main process hands the level the agent accepted to the bridge of a window made later, a word that is not a level is refused before it reaches the agent, a level the agent refused is not kept, and diagnostic_log.set is not on the window's allow-list; ui/scripts/agent-settings.test.mjs pins that the Log detail control shows the report's level, asks for the level chosen and is hidden where no log is written; ui/scripts/drive-agent-settings.mjs drives the control in a real window whose IPC handlers are replaced by a fixture, and checks that choosing debug asks for it and that the refreshed section shows the level the fixture reports; ui/scripts/drive-manual-walkthrough.mjs chooses debug and then error in a real window with a real agent and a scratch state directory, and checks that the section and the agent's settings report name each; make check-ui runs the first two, and the governs list above holds the files to existing)`
