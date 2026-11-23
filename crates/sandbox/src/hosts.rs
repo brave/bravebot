@@ -617,8 +617,8 @@ mod tests {
         }
     }
 
-    /// A name in ASCII, an `xn--` name included, is decided by the entries as before: a denied
-    /// `xn--` entry refuses that name and no other, and an allowed wildcard still allows an `xn--`
+    /// A name in ASCII, an `xn--` name included, is decided by the entries like any other name: a
+    /// denied `xn--` entry refuses that name and no other, and an allowed wildcard allows an `xn--`
     /// name no denied entry names. The regression it rejects is a check that refuses every name
     /// that looks international, which stops a program reaching a name a person listed.
     #[test]
