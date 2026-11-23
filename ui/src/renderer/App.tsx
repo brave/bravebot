@@ -1344,8 +1344,11 @@ export function App(): React.JSX.Element {
           onPage={setSettingsPage}
           onBack={() => {
             setSettings(false)
-            // Back to the control that opened the page, once the chat view is no longer inert.
-            requestAnimationFrame(() => document.querySelector('.agent-settings-open')?.shadowRoot?.querySelector<HTMLElement>('button')?.focus())
+            // Back to the control that opened the page, once the chat view is no longer inert. That
+            // takes a second frame with reduced motion: base.css gives every property a 0.01ms
+            // transition there, so for the first frame the sidebar is still `visibility: hidden`
+            // from `in-settings` and refuses focus.
+            requestAnimationFrame(() => requestAnimationFrame(() => document.querySelector('.agent-settings-open')?.shadowRoot?.querySelector<HTMLElement>('button')?.focus()))
           }}
           session={live?.handle}
           chosen={chosen}
