@@ -43144,6 +43144,10 @@ mod tests {
                 &crate::resume::Refusal::NoSuchSession.note(),
                 "the refusal for a directory with no other session said something else"
             );
+            assert_eq!(
+                said, "no session with that id in this directory",
+                "the refusal is not the one line CMD-14 words"
+            );
             assert!(
                 !said.contains("7f3c91e2") && !said.contains('\u{1b}'),
                 "the refusal repeated the id typed: {said:?}"
@@ -43152,6 +43156,552 @@ mod tests {
         assert_eq!(stored.id(), current_id);
         assert!(session.looping().is_some(), "the refusal ended the loop");
         assert!(bravebot_session::sessions::load(&root, &current_id).is_some());
+    }
+
+    /// A terminal nothing is drawn on: a session opened or cleared bypassing every permission puts
+    /// no question to it.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_fixed_viewport_terminal()
+    -> ratatui::Terminal<ratatui::backend::CrosstermBackend<io::Stdout>> {
+        ratatui::Terminal::with_options(
+            ratatui::backend::CrosstermBackend::new(io::stdout()),
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 20, 5)),
+            },
+        )
+        .expect("a terminal")
+    }
+
+    /// Begin the session a `/resume` hands the record to, as the loop's caller does.
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn begun_from_a_switch(switch: Switch) -> Begun {
+        let mut terminal = a_fixed_viewport_terminal();
+        let mut config = a_config_needing_no_sign_in();
+        let mut servers = crate::state::Servers::default();
+        begin_session(
+            &mut terminal,
+            &mut config,
+            &switch.workspace,
+            &mut servers,
+            Startup {
+                confinement: String::new(),
+                sockets_with_a_path_reachable: false,
+                sandbox: switch.sandbox,
+                start: Start::Resuming(switch.record),
+                named: None,
+                links: Links::default(),
+                skip_permissions: true,
+                asked_for_auto: false,
+                prompts: bravebot_agent::turn::SystemPrompts::default(),
+            },
+        )
+        .unwrap_or_else(|ended| panic!("the next session did not begin: {ended:?}"))
+    }
+
+    /// What a session left by `/resume` was standing on beside the conversation.
+    #[derive(Clone, Copy)]
+    enum Standing {
+        Loop,
+        Goal,
+        Watch,
+    }
+
+    /// CMD-14: a `/resume` ends the loop, the goal and the watches of the session it leaves, and
+    /// closes the checkouts that session kept, so the session that begins from the record chosen
+    /// holds none of them. Each case runs `Held::resume` and then begins the next session from
+    /// what it left, which is the state the next session starts from.
+    ///
+    /// Rejects: a resume that hands the session left (its loop, goal or watches) on to the next
+    /// one, and one that leaves a kept checkout in the workspace handed on or in the one left
+    /// (`Workspace::end_session` dropping `forget_session_checkouts`).
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
+    fn resuming_ends_the_loop_the_goal_the_watches_and_the_checkouts_the_session_kept() {
+        use bravebot_agent::workspace::SessionCheckout;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        for (name, standing) in [
+            ("bravebot-app-resume-standing-loop", Standing::Loop),
+            ("bravebot-app-resume-standing-goal", Standing::Goal),
+            ("bravebot-app-resume-standing-watch", Standing::Watch),
+        ] {
+            let base = crate::test_profile::project(name);
+            let root = base.join("project");
+            std::fs::create_dir_all(&root).expect("create");
+            let (_, _, earlier, _, _) = a_session_to_branch(&root);
+            let earlier_id = earlier.id().to_string();
+            drop(earlier);
+            let (mut workspace, mut session, mut stored, mut conversation, mut answers) =
+                a_session_to_branch(&root);
+            match standing {
+                // The fixture starts a loop, which `/goal` and a watch are each refused beside.
+                Standing::Loop => assert!(session.looping().is_some()),
+                Standing::Goal => {
+                    session.start_goal("cargo test exits 0".to_string());
+                    assert!(session.goal().is_some(), "the goal was not set");
+                }
+                Standing::Watch => {
+                    session = Session::new("none");
+                    session.arm_watch(
+                        "notes.md",
+                        &root,
+                        bravebot_agent::watch::Looked::Saw("first".to_string()),
+                    );
+                    assert_eq!(session.watches().len(), 1, "the watch was not armed");
+                }
+            }
+
+            // A checkout the session kept, taken back as a resume of a record that listed it
+            // takes it, so it is the workspace's own list that is under test.
+            let state = bravebot_agent::home::directory().expect("a state directory");
+            std::fs::create_dir_all(&state).expect("create");
+            let kept_at = state
+                .canonicalize()
+                .expect("canonical")
+                .join("checkouts")
+                .join(bravebot_agent::home::key_for(workspace.root()))
+                .join("c1");
+            std::fs::create_dir_all(&kept_at).expect("create");
+            std::fs::create_dir_all(workspace.root().join(".git/worktrees/c1")).expect("create");
+            let kept = SessionCheckout {
+                applied: false,
+                id: "c1".into(),
+                path: kept_at,
+                repository: workspace.root().join(".git"),
+                commit: "0123456789abcdef0123456789abcdef01234567".into(),
+                delegate: bravebot_core::delegate::DelegateId::nth(1),
+                worked_in: false,
+                candidates: Default::default(),
+                size: None,
+            };
+            assert!(
+                workspace
+                    .restore_session_checkouts(&state, &[kept])
+                    .is_empty(),
+                "the fixture's checkout was not taken back"
+            );
+            assert_eq!(workspace.session_checkouts().len(), 1);
+
+            let mut scratch = None;
+            let settings = bravebot_config::Settings::default();
+            let run_settings = RunSettings::from_settings(&settings);
+            let mut servers = crate::state::Servers::default();
+            let mut switch = None;
+            let ended = Held {
+                session: &mut session,
+                conversation: &mut conversation,
+                stored: &mut stored,
+                answers: &mut answers,
+                workspace: &mut workspace,
+                scratch: &mut scratch,
+                settings: &settings,
+                run_settings: &run_settings,
+            }
+            .resume(&mut servers, &mut switch, &earlier_id);
+            assert!(matches!(ended, Some(Ended::Left(Some(_)))), "{ended:?}");
+            let switch = switch.expect("no record was left for the next session");
+
+            assert!(
+                switch.workspace.session_checkouts().is_empty(),
+                "{name}: the workspace handed on still kept a checkout"
+            );
+            assert!(
+                workspace.session_checkouts().is_empty(),
+                "{name}: the session left kept its checkout"
+            );
+            let next = begun_from_a_switch(switch);
+            assert!(
+                next.session.looping().is_none(),
+                "{name}: the next session began inside the loop of the one left"
+            );
+            assert!(
+                next.session.goal().is_none(),
+                "{name}: the next session began toward the goal of the one left"
+            );
+            assert!(
+                next.session.watches().is_empty(),
+                "{name}: the next session held a watch of the one left"
+            );
+            assert!(
+                next.workspace.session_checkouts().is_empty(),
+                "{name}: the next session began holding a checkout of the one left"
+            );
+        }
+    }
+
+    /// INSTR-12: a resumed session starts in the style the settings name, or in none, and a pick
+    /// made with `/style` in the session before is not stored, so it does not come back.
+    ///
+    /// Rejects: a resume that skips the style the settings name, one that restores the earlier
+    /// session's pick over it, and one that stores the pick in the record.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_resumed_session_starts_in_the_style_the_settings_name_and_not_the_earlier_pick() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-resume-style");
+        std::fs::create_dir_all(&root).expect("create");
+        let (workspace, mut session, stored, _conversation, _answers) = a_session_to_branch(&root);
+        set_style(&mut session, &workspace, "concise");
+        assert_eq!(
+            session.style().map(|style| style.name.as_ref()),
+            Some("concise"),
+            "the earlier session did not pick the style"
+        );
+        let id = stored.id().to_string();
+        drop(stored);
+        let file = bravebot_agent::home::directory()
+            .expect("a state directory")
+            .join("settings.json");
+        std::fs::create_dir_all(file.parent().expect("a directory")).expect("create");
+
+        for (setting, wanted) in [(None, None), (Some("explanatory"), Some("explanatory"))] {
+            match setting {
+                Some(name) => {
+                    std::fs::write(&file, format!(r#"{{"style": "{name}"}}"#)).expect("settings")
+                }
+                None => {
+                    std::fs::remove_file(&file).ok();
+                }
+            }
+            let record = bravebot_session::sessions::load(&root, &id).expect("the record");
+            let begun = begun_from_a_switch(Switch {
+                record: Box::new(record),
+                workspace: workspace.clone(),
+                sandbox: crate::sandbox_command::Sandboxed::at_start(),
+            });
+
+            assert_eq!(
+                begun.session.style().map(|style| style.name.as_ref()),
+                wanted,
+                "the resumed session did not start in the style the settings name ({setting:?})"
+            );
+        }
+    }
+
+    /// SESSION-20: a session with no turn yet writes no record and no trail when an aside is
+    /// answered, and one that has had a turn writes both. The aside's answer is not needed for
+    /// this, since the guard is on the record the answer would be written into.
+    ///
+    /// Rejects: `ask_aside` writing the record or the trail whatever the turn count, which leaves a
+    /// record for a session nobody asked anything in.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn an_aside_answered_before_any_turn_writes_no_record_and_one_after_a_turn_does() {
+        use bravebot_core::event::Event;
+        use bravebot_session::audit::Stamped;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let settings = bravebot_config::Settings::default();
+        let run_settings = RunSettings::from_settings(&settings);
+        let events = [Stamped {
+            at: 0,
+            from: None,
+            event: Event::GatePassed {
+                gate: "aside",
+                detail: String::new(),
+            },
+        }];
+
+        let root = crate::test_profile::project("bravebot-app-aside-no-turn");
+        std::fs::create_dir_all(&root).expect("create");
+        let mut workspace = Workspace::new(&root).expect("a workspace");
+        let mut session = Session::new("none");
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(TrustStore::new(&root), TrustedPrograms::new(), rules);
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let mut conversation = Conversation::new();
+        let mut scratch = None;
+        assert_eq!(session.turns, 0);
+        Held {
+            session: &mut session,
+            conversation: &mut conversation,
+            stored: &mut stored,
+            answers: &mut answers,
+            workspace: &mut workspace,
+            scratch: &mut scratch,
+            settings: &settings,
+            run_settings: &run_settings,
+        }
+        .record_the_aside(&events);
+        assert_eq!(
+            stored.resumable(),
+            None,
+            "an aside before any turn wrote a record"
+        );
+        assert!(
+            sessions::list(&root).is_empty(),
+            "an aside before any turn left a session in the picker"
+        );
+        let trail = sessions::project_directory(&root)
+            .map(|directory| directory.join(format!("{}.audit.jsonl", stored.id())));
+        assert!(
+            !trail.is_some_and(|path| path.exists()),
+            "an aside before any turn wrote a trail"
+        );
+
+        // The control: the same aside once a turn has been had writes both.
+        let root = crate::test_profile::project("bravebot-app-aside-after-a-turn");
+        std::fs::create_dir_all(&root).expect("create");
+        let (mut workspace, mut session, mut stored, mut conversation, mut answers) =
+            a_session_to_branch(&root);
+        assert!(session.turns > 0);
+        let mut scratch = None;
+        Held {
+            session: &mut session,
+            conversation: &mut conversation,
+            stored: &mut stored,
+            answers: &mut answers,
+            workspace: &mut workspace,
+            scratch: &mut scratch,
+            settings: &settings,
+            run_settings: &run_settings,
+        }
+        .record_the_aside(&events);
+        let trail = sessions::project_directory(&root)
+            .map(|directory| directory.join(format!("{}.audit.jsonl", stored.id())))
+            .expect("the store");
+        assert!(
+            std::fs::read_to_string(&trail).is_ok_and(|text| text.contains("aside")),
+            "an aside after a turn did not write its trail"
+        );
+    }
+
+    /// What `Held::clear` is given to hand a session off, with the answers the session had been
+    /// given and the untrusted content it had met: a distrusted directory, a program vouched for, a
+    /// file agreed to be shown, a path reached, and a conversation that observed untrusted bytes.
+    fn a_session_with_answers_to_hand_off(
+        root: &std::path::Path,
+    ) -> (
+        Workspace,
+        Session,
+        bravebot_session::sessions::Handle,
+        Conversation,
+        Answers,
+    ) {
+        let (workspace, session, stored, mut conversation, mut answers) = a_session_to_branch(root);
+        answers.trust.distrust("vendor");
+        give_answers(&mut answers, root);
+        workspace.grant_path_reach(
+            std::path::PathBuf::from("/data/in"),
+            false,
+            "reads in".to_string(),
+        );
+        conversation.observed(bravebot_core::label::Label::untrusted_public());
+        assert_eq!(
+            conversation.context(),
+            bravebot_core::label::Integrity::Untrusted
+        );
+        (workspace, session, stored, conversation, answers)
+    }
+
+    /// Put the session into bypass, which settles the questions a new session opens with.
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn bypassing(session: &mut Session) {
+        for _ in 0..8 {
+            if session.permission_mode() == bravebot_agent::PermissionMode::Bypass {
+                return;
+            }
+            session.cycle_permission_mode();
+        }
+        panic!("the fixture would put a question to the terminal");
+    }
+
+    /// SESSION-34: the session a handoff begins carries only the brief. The trust map, the programs
+    /// vouched for, the files agreed to be shown, the paths reached and the quarantine (the
+    /// untrusted label of the conversation) do not cross, and the next action is the brief sent as
+    /// a prompt. Goes through `Held::clear`, the entry point `/handoff` takes.
+    ///
+    /// Rejects: a `clear` that keeps the trust map, the programs or the old untrusted label, and
+    /// one that drops the first prompt.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_handoff_through_held_clear_carries_only_the_brief() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-handoff-carries");
+        std::fs::create_dir_all(&root).expect("create");
+        let (mut workspace, mut session, mut stored, mut conversation, mut answers) =
+            a_session_with_answers_to_hand_off(&root);
+        assert!(
+            answers.trust.rules().any(|(path, _)| path == "vendor"),
+            "the fixture's distrust was not recorded"
+        );
+        bypassing(&mut session);
+        // The fixture's loop sent its first tick, so the session is working. A handoff is made at
+        // rest, where the next pass of the loop sends the brief.
+        session.status = crate::state::Status::Idle;
+        let mut scratch = None;
+        let settings = bravebot_config::Settings::default();
+        let run_settings = RunSettings::from_settings(&settings);
+        let mut terminal = a_fixed_viewport_terminal();
+
+        let ended = Held {
+            session: &mut session,
+            conversation: &mut conversation,
+            stored: &mut stored,
+            answers: &mut answers,
+            workspace: &mut workspace,
+            scratch: &mut scratch,
+            settings: &settings,
+            run_settings: &run_settings,
+        }
+        .clear(&mut terminal, Some("carry on with the notes".to_string()));
+
+        assert!(ended.is_none(), "the handoff ended the session: {ended:?}");
+        assert!(
+            session.looping().is_none(),
+            "the loop of the source session crossed"
+        );
+        assert!(
+            !answers.trust.rules().any(|(path, _)| path == "vendor"),
+            "the trust map of the source session crossed"
+        );
+        assert_eq!(
+            answers.programs,
+            TrustedPrograms::new(),
+            "a program vouched for crossed"
+        );
+        assert!(
+            !answers.exposed.holds(".env"),
+            "a file agreed to be shown crossed"
+        );
+        assert!(workspace.path_reach().is_empty(), "a path reached crossed");
+        assert_eq!(
+            conversation.context(),
+            bravebot_core::label::Integrity::Trusted,
+            "the quarantine of the source crossed"
+        );
+        assert!(
+            conversation.recounted().is_empty(),
+            "the conversation crossed"
+        );
+        assert_eq!(
+            queued_next(&mut session),
+            Some(Action::Submit("carry on with the notes".to_string())),
+            "the brief was not the next prompt"
+        );
+    }
+
+    /// SESSION-34: the record a handoff came from is written as it was, through the entry point
+    /// `/handoff` takes. The source is read back after `Held::clear` and compared field for field
+    /// with what it held before, and the new record holds the link under an id of its own.
+    ///
+    /// Rejects: a retitle or touch of the source inside `Held::clear`, and a new record begun
+    /// under the source's id.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_handoff_through_held_clear_leaves_the_source_record_as_it_was() {
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-handoff-source-clear");
+        std::fs::create_dir_all(&root).expect("create");
+        let (mut workspace, mut session, mut stored, mut conversation, mut answers) =
+            a_session_to_branch(&root);
+        let source = stored.id().to_string();
+        let before = serde_json::to_string(&sessions::load(&root, &source).expect("the source"))
+            .expect("serialise");
+        bypassing(&mut session);
+        let mut scratch = None;
+        let settings = bravebot_config::Settings::default();
+        let run_settings = RunSettings::from_settings(&settings);
+        let mut terminal = a_fixed_viewport_terminal();
+
+        let ended = Held {
+            session: &mut session,
+            conversation: &mut conversation,
+            stored: &mut stored,
+            answers: &mut answers,
+            workspace: &mut workspace,
+            scratch: &mut scratch,
+            settings: &settings,
+            run_settings: &run_settings,
+        }
+        .clear(&mut terminal, Some("carry on with the notes".to_string()));
+
+        assert!(ended.is_none(), "{ended:?}");
+        assert_ne!(stored.id(), source, "the new session kept the source's id");
+        assert_eq!(stored.handed_off_from(), Some(source.as_str()));
+        let after = serde_json::to_string(&sessions::load(&root, &source).expect("the source"))
+            .expect("serialise");
+        assert_eq!(after, before, "the handoff changed the record it came from");
+    }
+
+    /// CMD-14: `/resume <id>` typed at the prompt goes through the loop's dispatch arm, and the
+    /// `Ended` that `Held::resume` answers leaves the loop with the record chosen for the next
+    /// session to begin from. The line is typed key by key into a session in a directory that
+    /// holds another record.
+    ///
+    /// Rejects: an arm that drops the `Ended` and carries on in the session, and one that ends the
+    /// session without leaving the record chosen.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn typing_resume_with_an_id_leaves_the_loop_with_the_record_chosen() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-resume-arm");
+        std::fs::create_dir_all(&root).expect("create");
+        let (_, _, earlier, _, _) = a_session_to_branch(&root);
+        let earlier_id = earlier.id().to_string();
+        drop(earlier);
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let mut terminal = a_fixed_viewport_terminal();
+        let mut config = a_config_needing_no_sign_in();
+        let mut servers = crate::state::Servers::default();
+        let mut moments = bravebot_agent::hooks::SessionMoments::read(None, &root);
+        let mut switch = None;
+        let line = format!("/resume {earlier_id}");
+        let events = line
+            .chars()
+            .map(|c| TermEvent::Key(key(KeyCode::Char(c))))
+            .chain([TermEvent::Key(key(KeyCode::Enter))]);
+        let _held = crate::input::script::hold(events);
+
+        let ended = event_loop(
+            &mut terminal,
+            &mut config,
+            &workspace,
+            &mut servers,
+            Startup {
+                confinement: String::new(),
+                sockets_with_a_path_reachable: false,
+                sandbox: crate::sandbox_command::Sandboxed::at_start(),
+                start: Start::Fresh,
+                named: None,
+                links: Links::default(),
+                skip_permissions: true,
+                asked_for_auto: false,
+                prompts: bravebot_agent::turn::SystemPrompts::default(),
+            },
+            &mut moments,
+            &mut switch,
+        )
+        .expect("the loop ended on the command and not on the script running out");
+
+        assert!(
+            matches!(ended, Ended::Left(_)),
+            "the loop did not end on the resume: {ended:?}"
+        );
+        assert_eq!(
+            switch
+                .expect("no record was left for the next session")
+                .record
+                .id,
+            earlier_id
+        );
     }
 
     /// Whether `path` has been removed within a second, since ending the session that held it waits

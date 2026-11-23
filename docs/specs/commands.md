@@ -1238,7 +1238,7 @@ before it is built. This command is the part that needs none of that.
 ### CMD-14: `/resume` leaves for another recorded session, restored as `--resume` restores it
 
 `/resume` with no argument draws the list `--resume` draws ([SESSION-8](sessions.md#SESSION-8)),
-leaving out the session being run, and `/resume <id>` names a record of this directory. Either way
+marking the session being run as the current one, and `/resume <id>` names a record of this directory. Either way
 the running session ends and the next begins from the record chosen through the path a start with
 `--resume` takes, so its transcript, spend, trust map, programs and rules are the record's own and
 nothing the session left granted reaches it: the directories opened and the checkouts kept are
@@ -1266,6 +1266,9 @@ decide, so the command only says which one the person meant.
 `verified-by: bravebot_tui::sessions::resume_by_id_does_not_follow_an_id_out_of_the_sessions_directory`
 `verified-by: bravebot_tui::app::resuming_ends_the_session_and_leaves_its_record_resumable`
 `verified-by: bravebot_tui::app::resume_where_the_directory_holds_no_other_session_stays_and_does_not_echo_the_id`
+`verified-by: bravebot_tui::app::resuming_ends_the_loop_the_goal_the_watches_and_the_checkouts_the_session_kept`
+`verified-by: bravebot_tui::app::typing_resume_with_an_id_leaves_the_loop_with_the_record_chosen`
+`verified-by: bravebot_tui::sessions_screen_tests::a_bare_resume_lists_the_other_sessions_beside_the_current_one_and_keeps_the_session`
 
 <a id="CMD-15"></a>
 ### CMD-15: `/request` opens the last request built, and takes no argument

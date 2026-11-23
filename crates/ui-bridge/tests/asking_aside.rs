@@ -601,6 +601,56 @@ fn a_btw_is_in_the_record_when_the_session_is_opened_again() {
     assert_eq!(asides[0]["kept"], true, "{opened}");
 }
 
+/// Every record or trail file the home holds, so a test can say that none was written.
+fn files_the_home_kept(home: &Path) -> Vec<PathBuf> {
+    fn walk(directory: &Path, found: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else if path.to_string_lossy().ends_with(".audit.jsonl")
+                || (path.extension().is_some_and(|e| e == "json")
+                    && std::fs::read_to_string(&path)
+                        .is_ok_and(|text| text.contains("\"conversation\"")))
+            {
+                found.push(path);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(home, &mut found);
+    found
+}
+
+/// SESSION-20: a session that has had no turn writes no record and no trail when `/btw` or
+/// `/recap` is answered, and the same aside after a turn is in the record. The aside is answered
+/// both times, so the difference is the record and not the answer.
+///
+/// Rejects: `keep_aside` saving a session that holds no record handle, which leaves a record, and
+/// a trail, for a session nobody has asked anything in.
+#[test]
+fn an_aside_answered_before_any_turn_writes_no_record_and_one_after_a_turn_does() {
+    let mut window = Window::open("bridge-aside-before-any-turn");
+
+    let recap = window.recap();
+    assert_eq!(recap["data"]["status"], "answered", "{recap}");
+    let btw = window.btw(BTW_QUESTION);
+    assert_eq!(btw["data"]["status"], "answered", "{btw}");
+
+    assert_eq!(
+        files_the_home_kept(&window.scratch.home()),
+        Vec::<PathBuf>::new(),
+        "an aside before any turn wrote a record or a trail"
+    );
+
+    window.say("look at src/net.rs");
+    let ended = files_the_home_kept(&window.scratch.home());
+    assert!(
+        !ended.is_empty(),
+        "the control did not write a record after a turn"
+    );
+}
+
 /// CMD-8: a `/btw` with nothing after it is refused, and nothing reaches the service for it.
 #[test]
 fn an_empty_btw_is_refused() {

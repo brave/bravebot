@@ -574,6 +574,7 @@ change of the file.
 `verified-by: bravebot_agent::aside::a_question_is_sent_under_its_own_system_prompt_and_no_style`
 `verified-by: bravebot_agent::compact::the_summariser_is_sent_under_its_own_system_prompt_and_no_style`
 `verified-by: bravebot_agent::manifest::a_style_in_force_is_not_sent_to_the_planner_of_a_manifest_run`
+`verified-by: bravebot_tui::app::a_resumed_session_starts_in_the_style_the_settings_name_and_not_the_earlier_pick`
 
 <a id="INSTR-13"></a>
 ### INSTR-13: a project's skill directories are read least specific first, at the root only
