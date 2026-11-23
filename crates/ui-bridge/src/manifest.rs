@@ -88,30 +88,27 @@ fn titled(task: &str, attachments: &[bravebot_agent::turn::Attachment]) -> Strin
     });
     let mut out = String::with_capacity(task.len());
     let mut rest = task;
-    while let Some(open) = rest.find('[') {
-        let (before, from) = rest.split_at(open);
+    while let Some((before, opened)) = rest.split_once('[') {
         out.push_str(before);
-        let marker = from
-            .find(']')
-            .map(|close| &from[..=close])
-            .filter(|marker| {
-                marker[1..marker.len() - 1]
-                    .split_once(" #")
-                    .is_some_and(|(noun, number)| {
-                        !noun.is_empty()
-                            && noun.chars().all(char::is_alphabetic)
-                            && !number.is_empty()
-                            && number.chars().all(|c| c.is_ascii_digit())
-                    })
-            });
-        match marker.and_then(|marker| names.next().map(|name| (marker, name))) {
-            Some((marker, name)) => {
+        let after = opened.split_once(']').and_then(|(inner, after)| {
+            inner
+                .split_once(" #")
+                .is_some_and(|(noun, number)| {
+                    !noun.is_empty()
+                        && noun.chars().all(char::is_alphabetic)
+                        && !number.is_empty()
+                        && number.chars().all(|c| c.is_ascii_digit())
+                })
+                .then_some(after)
+        });
+        match after.and_then(|after| names.next().map(|name| (after, name))) {
+            Some((after, name)) => {
                 out.push_str(&name);
-                rest = &from[marker.len()..];
+                rest = after;
             }
             None => {
                 out.push('[');
-                rest = &from[1..];
+                rest = opened;
             }
         }
     }
