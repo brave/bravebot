@@ -78,8 +78,13 @@ test('the row is plain text that keeps its line breaks and is not an entry the m
 
 test('the composer asks for the command only from the text a person typed, through one function', () => {
   const turn = readFileSync('src/renderer/use-turn.ts', 'utf8')
-  // The recogniser is applied to the draft in the three places the box sends a line from.
-  assert.equal([...turn.matchAll(/scheduleArgument\(/g)].length, 3, 'submit, the interject key and the queue key')
+  // The recogniser is applied to the draft, through `exitOf`, in the three places the box sends a
+  // line from, and `exitOf` applies it to the line with its folded pastes put back.
+  assert.equal([...turn.matchAll(/exitOf\(/g)].length, 3, 'submit, the interject key and the queue key')
+  assert.doesNotMatch(turn, /scheduleArgument\(/)
+  const staging = readFileSync('src/renderer/staging.ts', 'utf8')
+  assert.equal([...staging.matchAll(/scheduleArgument\(/g)].length, 1)
+  assert.match(staging.slice(staging.indexOf('export function exitOf(')), /= leaving\(staging, draft\)[\s\S]*scheduleArgument\(line\)/)
   // A line leaving the queue is asked again only where the person's line was held for the turn.
   assert.match(turn, /message\.schedule !== undefined\s*\?\s*schedule\(handle, message\.schedule, message\.prompt, message\.staged, true\)\s*:\s*send\(/)
   // The window holds a writing form for the turn on the bridge's refusal, not on a reading of the line.
@@ -110,14 +115,13 @@ test('a /schedule line sends the markers it names, and clears what the box had s
   assert.equal([...turn.matchAll(/staged: \[\], schedule: argument/g)].length, 0, 'no queued schedule line drops what it named')
   assert.equal([...turn.matchAll(/\{ prompt: line, attachments: \[\], staged, schedule: argument \}/g)].length, 2)
   // Each place the box dispatches a /schedule line takes what it names, then clears the staging.
-  const sites = [...turn.matchAll(/if \(typed !== null[^{]*\{(.*?)return\s*\}/gs)].map((match) => match[1])
+  const sites = [...turn.matchAll(/const exit = exitOf\(live\??\.staging, draft\)(.*?)if \(exit\.to === 'schedule'[^{]*\{(.*?)return\s*\}/gs)]
   assert.equal(sites.length, 3, 'submit, the interject key and the queue key')
-  for (const site of sites) {
-    const naming = site.search(/const staged = named\(live\??\.staging, /)
-    const clearing = site.indexOf("setDraft('')")
-    assert.ok(naming >= 0 && clearing > naming, 'the staged items are taken before the draft is cleared')
+  for (const [, before, site] of sites) {
+    assert.doesNotMatch(before, /setDraft\(/, 'the staged items are taken before the draft is cleared')
+    assert.match(site, /setDraft\(''\)/)
     assert.match(site, /setLive\(\(old\) => old \? \{ \.\.\.old, attachments: \[\], staging: sent\(old\.staging\) \} : old\)/)
-    assert.match(site, /void schedule\(.*, staged\)$/m)
+    assert.match(site, /void schedule\(.*, exit\.argument, exit\.line, exit\.staged\)$/m)
   }
 })
 

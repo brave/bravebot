@@ -151,6 +151,35 @@ test('a draft leaving the box carries the words, and what it names is found on t
   assert.equal(exits.scheduleArgument(scheduled.words), 'explain [Image #1] l1\nl2\nl3\nl4')
 })
 
+// What `submit`, `queueDraft` and `interjectDraft` in use-turn.ts hand on: the prompt to `send`,
+// the queued `prompt`, the line sent into the turn, the `/btw` question and the `/schedule`
+// argument all come from `exitOf`, and a refused send or a failed aside puts its `line` back.
+test('every exit of a draft holding a folded paste carries the pasted words', () => {
+  const shot = staging.stagePaste(staging.EMPTY_STAGING, picture('p'), '', 0)
+  const folded = staging.stageText(shot.staging, 'l1\nl2\nl3\nl4', `${shot.draft}and `, shot.caret + 4)
+  const words = '[Image #1] and l1\nl2\nl3\nl4'
+  const grants = { drops: [], pastes: ['p'] }
+
+  const prompt = staging.exitOf(folded.staging, folded.draft)
+  assert.deepEqual({ to: prompt.to, line: prompt.line }, { to: 'prompt', line: words }, 'the prompt sent or queued')
+  assert.deepEqual(staging.grantsOf(prompt.staged), grants, 'the picture is still granted')
+  assert.ok(!prompt.line.includes('[Pasted text'))
+
+  const btw = staging.exitOf(folded.staging, `/btw ${folded.draft}`)
+  assert.deepEqual({ to: btw.to, kind: btw.kind, question: btw.question, line: btw.line }, { to: 'aside', kind: 'btw', question: words, line: `/btw ${words}` })
+  assert.deepEqual(staging.grantsOf(btw.staged), grants)
+
+  const scheduled = staging.exitOf(folded.staging, `/schedule ${folded.draft}`)
+  assert.deepEqual({ to: scheduled.to, argument: scheduled.argument, line: scheduled.line }, { to: 'schedule', argument: words, line: `/schedule ${words}` })
+  assert.deepEqual(staging.grantsOf(scheduled.staged), grants)
+
+  assert.equal(staging.exitOf(folded.staging, '/recap').to, 'aside')
+  assert.equal(staging.exitOf(folded.staging, '   '), null)
+  // A command is read from the words, as the terminal reads it from `self.unfolded(self.input.trim())`.
+  const command = staging.stageText(staging.EMPTY_STAGING, '/schedule x\n2\n3\n4', '', 0)
+  assert.equal(staging.exitOf(command.staging, command.draft).to, 'schedule')
+})
+
 // The marker and the threshold are the terminal's, read from where the terminal keeps them, so the
 // two front ends cannot drift apart.
 test('the folded marker and threshold are the terminal’s', () => {

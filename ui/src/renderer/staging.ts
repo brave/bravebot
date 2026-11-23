@@ -15,6 +15,8 @@
 import type { DropOutcome, DroppedFile } from '../shared/drops'
 import type { PastedPicture, PastedText } from '../shared/pastes'
 import { summonMarker } from '../shared/summons'
+import { btwQuestion, isRecap } from '../shared/aside'
+import { scheduleArgument } from '../shared/schedule'
 
 /** A bot picked from the `@` list for one message (MEMORY-14). */
 export interface SummonedBot {
@@ -148,6 +150,29 @@ export function markerAt(staging: Staging | undefined, draft: string, caret: num
  */
 export function leaving(staging: Staging | undefined, draft: string): { words: string; staged: Staged[] } {
   return { words: unfolded(staging, draft).trim(), staged: named(staging, draft) }
+}
+
+/**
+ * Where a draft goes when it leaves the composer, and what it carries there: a `/schedule`
+ * argument, a `/btw` or `/recap` question, or a prompt to send, queue or put into the turn. Each is
+ * read from the words, with every folded paste put back, so no exit carries a marker (PASTE-1).
+ * `line` is the words, which is also what goes back into the composer when the exit fails.
+ */
+export type Exit =
+  | { to: 'schedule'; argument: string; line: string; staged: Staged[] }
+  | { to: 'aside'; kind: 'btw' | 'recap'; question: string; line: string; staged: Staged[] }
+  | { to: 'prompt'; line: string; staged: Staged[] }
+
+/** The exit `draft` takes, or null for a blank draft. */
+export function exitOf(staging: Staging | undefined, draft: string): Exit | null {
+  const { words: line, staged } = leaving(staging, draft)
+  if (!line) return null
+  const argument = scheduleArgument(line)
+  if (argument !== null) return { to: 'schedule', argument, line, staged }
+  const question = btwQuestion(line)
+  if (question !== null) return { to: 'aside', kind: 'btw', question, line, staged }
+  if (isRecap(line)) return { to: 'aside', kind: 'recap', question: '', line, staged }
+  return { to: 'prompt', line, staged }
 }
 
 function writtenAt(draft: string, caret: number, written: string[]): { draft: string; caret: number } {

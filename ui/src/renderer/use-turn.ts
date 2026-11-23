@@ -11,9 +11,9 @@ import { type Interjection, type Live, NEW_CHAT, liveKey } from './live'
 import { conversationPreferences, setConversation } from './experience'
 import { Unconfigurable, METHOD, call, callBot, callSummon } from './rpc'
 import { RequestFailed } from './rewind'
-import { scheduleArgument, type ScheduleAnswer } from '../shared/schedule'
-import { btwQuestion, isRecap, type AsideStarted } from '../shared/aside'
-import { grantsOf, named, sent, summonOf, type Staged } from './staging'
+import type { ScheduleAnswer } from '../shared/schedule'
+import type { AsideStarted } from '../shared/aside'
+import { exitOf, grantsOf, named, sent, summonOf, type Staged } from './staging'
 import * as t from './transcript'
 
 /** What `useTurn` takes from the component that owns the sessions and the composer. */
@@ -106,9 +106,13 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     const bot = sending?.bot ?? null
     const model = sending?.model ?? null
     const attachments = selectedFiles ?? sending?.attachments ?? []
-    // A queued message carries what it named when it was queued. Otherwise it is what the draft
-    // still names: a marker deleted before sending took its file or picture off.
+    // A queued message carries what it named when it was queued, and a draft from the composer
+    // what it named before its folded pastes were put back. Otherwise it is what the prompt still
+    // names: a marker deleted before sending took its file or picture off.
     const staged = queuedStaged ?? named(sending?.staging, prompt)
+    // A queued message is sent with the files it was queued with and takes nothing off the
+    // composer. A draft from the composer leaves with what the composer held.
+    const queued = selectedFiles !== undefined
     const grants = grantsOf(staged)
     // The bot picked from the `@` list for this message, which answers this turn alone (MEMORY-14).
     const summoned = summonOf(staged)
@@ -118,7 +122,6 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     const mentioned = await window.bravebot.request<{ files: string[] }>('mentions.named', { session: handle, prompt })
     if (!mentioned.ok) {
       const refused = mentioned.error?.message ?? 'The files this message names could not be checked.'
-      const queued = selectedFiles !== undefined
       updateSession(handle, (old) => old ? {
         ...old,
         sendRefused: refused,
@@ -143,7 +146,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
             summary: old.summary.title === NEW_CHAT ? { ...old.summary, title: prompt.slice(0, 70) } : old.summary,
             attachments: selectedFiles ? old.attachments : [],
             sendRefused: null,
-            staging: queuedStaged ? old.staging : sent(old.staging),
+            staging: queued ? old.staging : sent(old.staging),
             entries: [
               ...old.entries,
               ...reads.map((path): t.Entry => ({ kind: 'attached', id: crypto.randomUUID(), path })),
@@ -247,7 +250,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
    * composer with them, so it can be asked again. A file chosen with the paperclip is a grant a
    * question cannot be handed, so a `/btw` with one is refused here.
    */
-  const askAside = useCallback(async (handle: string, kind: 'btw' | 'recap', question: string, line: string, queuedAlready = false) => {
+  const askAside = useCallback(async (handle: string, kind: 'btw' | 'recap', question: string, line: string, onLine: Staged[], queuedAlready = false) => {
     const asking = openedLives.current.get(handle)
     if (kind === 'btw' && (asking?.attachments?.length ?? 0) > 0) {
       if (handleRef.current === handle) setDraft(line)
@@ -258,7 +261,9 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     // What was pasted or dropped on the line goes with the question (CMD-5): pictures and PDFs as
     // the ids the main process resolves, as it does for a prompt's, and a text file as its name
     // (DROP-4). The bridge refuses a dropped file while a turn runs, in the terminal's words.
-    const staged = kind === 'btw' ? named(asking?.staging, line) : []
+    // `onLine` was found on the line before its folded pastes were put back, and `line` is the
+    // words, so a line put back in the composer holds no marker that names nothing.
+    const staged = kind === 'btw' ? onLine : []
     const carried = {
       pastes: grantsOf(staged).pastes,
       drops: staged.flatMap((item) => item.via === 'drop' && item.file.kind !== 'text' ? [item.file.id] : []),
@@ -280,13 +285,6 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     }
   }, [])
 
-  /** The command a typed line asks for, if it is `/btw` or `/recap`, or null for a prompt. */
-  const typedAside = (line: string): { kind: 'btw' | 'recap'; question: string } | null => {
-    const question = btwQuestion(line)
-    if (question !== null) return { kind: 'btw', question }
-    return isRecap(line) ? { kind: 'recap', question: '' } : null
-  }
-
   // Chats whose queued message is between leaving the queue and `send` returning. `send` awaits the
   // bridge's check of the message's `@` names before it marks the chat running, and without this the
   // queue would take the next message in that gap and send both.
@@ -302,7 +300,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       dequeuing.current.add(handle)
       // A waiting `/schedule` or `/recap` line is asked again and starts no turn.
       const settled = message.aside === 'recap'
-        ? askAside(handle, 'recap', '', message.prompt, true)
+        ? askAside(handle, 'recap', '', message.prompt, [], true)
         : message.schedule !== undefined
           ? schedule(handle, message.schedule, message.prompt, message.staged, true)
           : send(message.prompt, handle, message.attachments, message.staged)
@@ -387,25 +385,25 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
 
   /** Hold the draft for after the turn: each queued message starts a turn of its own, with the grants it names. */
   const queueDraft = () => {
-    if (!draft.trim()) return
-    const typed = scheduleArgument(draft)
-    if (typed !== null && handleRef.current) {
+    // Each exit carries the words, with every folded paste put back, and what the folded draft
+    // names (PASTE-1).
+    const exit = exitOf(live?.staging, draft)
+    if (!exit) return
+    if (exit.to === 'schedule' && handleRef.current) {
       const handle = handleRef.current
-      const staged = named(live?.staging, draft)
       setDraft('')
       setLive((old) => old ? { ...old, attachments: [], staging: sent(old.staging) } : old)
-      void schedule(handle, typed, draft.trim(), staged)
+      void schedule(handle, exit.argument, exit.line, exit.staged)
       return
     }
-    const aside = typedAside(draft)
-    if (aside && handleRef.current) {
+    if (exit.to === 'aside' && handleRef.current) {
       setDraft('')
-      void askAside(handleRef.current, aside.kind, aside.question, draft.trim())
+      void askAside(handleRef.current, exit.kind, exit.question, exit.line, exit.staged)
       return
     }
     setLive((old) => old ? {
       ...old,
-      queued: [...(old.queued ?? []), { prompt: draft.trim(), attachments: old.attachments ?? [], staged: named(old.staging, draft) }],
+      queued: [...(old.queued ?? []), { prompt: exit.line, attachments: old.attachments ?? [], staged: exit.staged }],
       attachments: [],
       staging: sent(old.staging),
     } : old)
@@ -414,48 +412,43 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
 
   /** Send whatever is in the composer, on the same terms the Send button uses. */
   const submit = useCallback(() => {
-    const prompt = draft.trim()
-    if (!handleRef.current || !canSend(live, backendReady, prompt)) return
-    const typed = scheduleArgument(prompt)
-    if (typed !== null) {
-      const staged = named(live?.staging, prompt)
+    const exit = exitOf(live?.staging, draft)
+    if (!handleRef.current || !exit || !canSend(live, backendReady, exit.line)) return
+    if (exit.to === 'schedule') {
       setDraft('')
       setLive((old) => old ? { ...old, attachments: [], staging: sent(old.staging) } : old)
-      void schedule(handleRef.current, typed, prompt, staged)
+      void schedule(handleRef.current, exit.argument, exit.line, exit.staged)
       return
     }
-    const aside = typedAside(prompt)
-    if (aside) {
+    if (exit.to === 'aside') {
       setDraft('')
-      void askAside(handleRef.current, aside.kind, aside.question, prompt)
+      void askAside(handleRef.current, exit.kind, exit.question, exit.line, exit.staged)
       return
     }
     setDraft('')
-    void send(prompt)
+    // A refused send puts `exit.line` back in the composer, which is the words.
+    void send(exit.line, undefined, undefined, exit.staged)
   }, [draft, live?.staging, live?.running, live?.askingTrust, live?.rulesQuestion, live?.folderQuestion, send, schedule, askAside, backendReady])
 
   /** What the composer's interject key does: queue the line behind the turn, or send it into the turn. */
   const interjectDraft = () => {
     const handle = handleRef.current
-    const text = draft.trim()
-    if (!handle || !text || !live) return
-    const typed = scheduleArgument(text)
-    if (typed !== null) {
-      const staged = named(live.staging, text)
+    if (!handle || !live) return
+    const exit = exitOf(live.staging, draft)
+    if (!exit) return
+    if (exit.to === 'schedule') {
       setDraft('')
       setLive((old) => old ? { ...old, attachments: [], staging: sent(old.staging) } : old)
-      void schedule(handle, typed, text, staged)
+      void schedule(handle, exit.argument, exit.line, exit.staged)
       return
     }
-    const aside = typedAside(text)
-    if (aside) {
+    if (exit.to === 'aside') {
       setDraft('')
-      void askAside(handle, aside.kind, aside.question, text)
+      void askAside(handle, exit.kind, exit.question, exit.line, exit.staged)
       return
     }
-    if (route(live, named(live.staging, draft)) === 'queue') { queueDraft(); return }
-    const staged = named(live.staging, draft)
-    const line = { id: crypto.randomUUID(), prompt: text, attachments: [], staged }
+    if (route(live, exit.staged) === 'queue') { queueDraft(); return }
+    const line = { id: crypto.randomUUID(), prompt: exit.line, attachments: [], staged: exit.staged }
     updateSession(handle, (old) => old ? sentInto(old, line) : old)
     setDraft('')
     void interject(handle, line)
