@@ -49,6 +49,16 @@ matter:
 
 - `pnpm run drive:manual-walkthrough`: the manual 0.9 verification through the real app
   and backend, with a local model fixture. Runs in CI; detailed coverage is below.
+- `pnpm run drive:prototype`: the desktop as a client of `bravebot-host`, through the real host, the
+  real app and a model service the script serves itself. The host starts the desktop and the host
+  test client, which stands in for a phone and is read from the host's own output, so the window is
+  not the only witness. Both see one session and each view names the client that acted last; a
+  message the other client sent is in the window with no send from it; the desktop answers a write
+  the other client's turn asks about; the phone cancels one turn and the desktop another, and each is
+  named in the other's view; a send during a turn is
+  refused as busy and the draft stays in the box; and closing the window leaves the session and its
+  turn running. No paid inference. Not run in CI yet. See
+  [desktop prototype mode](../../docs/design/mobile/desktop-prototype.md).
 - After building, `node scripts/drive-agent-settings.mjs`: 0.9 settings, hook forms and
   conflicts, watch controls, approval evidence, background cancellation, context/failure
   states, focus restoration and narrow layouts. Uses deterministic IPC fixtures.

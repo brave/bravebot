@@ -2023,6 +2023,12 @@ type RowProps = {
   face?: Face
   /** Open a long prompt: find or a fork landing landed on this row. */
   revealed?: boolean
+  /**
+   * What an entry the person can no longer answer says became of it, in place of "Request cancelled
+   * when the turn ended". A window that shares a session with another client uses it for a question
+   * that was settled without telling it who answered or how.
+   */
+  interruptedNote?: string
 }
 
 /**
@@ -2042,6 +2048,7 @@ export const Row = memo(function Row({
   forkable,
   face,
   revealed,
+  interruptedNote,
 }: RowProps): React.JSX.Element {
   const card = (
     <Card
@@ -2065,7 +2072,7 @@ export const Row = memo(function Row({
   // vouched for it. The turn ending declassifies nothing.
   return (
     <div className="interrupted-request">
-      <strong>Request cancelled when the turn ended</strong>
+      <strong>{interruptedNote ?? 'Request cancelled when the turn ended'}</strong>
       <Collapse title="Request details" isOpen={undefined} data-test="interrupted-details">
         {card}
       </Collapse>
