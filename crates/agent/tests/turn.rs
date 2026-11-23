@@ -1389,6 +1389,30 @@ fn a_request_the_script_cannot_answer_is_told_so() {
     );
 }
 
+/// A request the marker-keyed mock has no reply left for is told so, with a status, as the
+/// sequence mock tells it. DELEGATE-9 and DELEGATE-17 tests count the planner's requests, and a
+/// turn that makes one request more than they scripted has to fail at that count. A mock that hangs
+/// up instead fails the turn on a transport error in `expect("turn runs")`, before any count is read.
+#[test]
+fn a_request_no_marker_rule_can_answer_is_told_so_and_not_hung_up_on() {
+    let (endpoint, _received) = serve_by_marker(vec![("KNOWN-RUN", vec![reply_with("the only")])]);
+
+    let unmatched = ask_directly(&endpoint, r#"{"messages":[{"content":"STRANGER"}]}"#);
+    let answered = ask_directly(&endpoint, r#"{"messages":[{"content":"KNOWN-RUN"}]}"#);
+    let exhausted = ask_directly(&endpoint, r#"{"messages":[{"content":"KNOWN-RUN"}]}"#);
+
+    assert!(
+        answered.starts_with("HTTP/1.1 200 OK"),
+        "the rule's own reply was not given: {answered}"
+    );
+    for (what, answer) in [("unmatched", unmatched), ("exhausted", exhausted)] {
+        assert!(
+            answer.starts_with("HTTP/1.1 400") && answer.contains("ran out of scripted replies"),
+            "an {what} request was not answered with a status: {answer:?}"
+        );
+    }
+}
+
 /// A model that answers on what it was asked rather than on the order it was asked in.
 ///
 /// Delegates run alongside the turn that started them, so their requests interleave and the
@@ -1529,8 +1553,12 @@ fn serve_by_marker_in(
                             .find(|(marker, replies)| body.contains(marker) && !replies.is_empty())
                             .map(|(marker, replies)| (*marker, replies.pop_front()))
                     };
+                    // A request no rule has a reply left for is told so, as `out_of_script` says,
+                    // so a turn that makes one more request than its test scripted fails at the
+                    // assertion about the count and not at a transport error in `expect`.
                     let Some((marker, Some(reply))) = answering else {
-                        drop(stream);
+                        stream.write_all(out_of_script().as_bytes()).ok();
+                        stream.flush().ok();
                         return;
                     };
                     {
@@ -110146,6 +110174,704 @@ fn a_look_at_a_vouched_job_has_its_colour_codes_taken_out_and_counted() {
         look.contains("2 colour codes were taken out of this output."),
         "{look}"
     );
+}
+
+/// CHECKOUT-20, CHECKOUT-3. A delegate that a delegate in a checkout starts shares that checkout, so
+/// it is offered no `lsp` whatever its kind holds, and nor is the delegate that started it. The
+/// control is the same two levels of workers in the working directory, which are offered `lsp`, so
+/// the absence is the checkout's. Rejects withholding `lsp` only from the delegate a spawn call gave
+/// the checkout to (a test of whether that call made one, or of whose checkout it is), which leaves
+/// the delegates it starts holding a tool whose server is rooted outside their tree.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
+fn a_delegate_started_inside_a_checkout_is_offered_no_lsp_either() {
+    let scratch = Scratch::new("checkout-nested-no-lsp");
+    let home = Scratch::new("checkout-nested-no-lsp-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let middle = |inner: &str| {
+        vec![
+            tool_request(
+                "spawn_agent",
+                &format!(r#"{{"kind":"worker","task":"{inner}"}}"#),
+            ),
+            reply_with("started"),
+            reply_with("waiting"),
+            reply_with("finished"),
+            reply_with("finished"),
+        ]
+    };
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "START-NESTED-WITH-AND-WITHOUT-A-CHECKOUT",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"MIDDLE-IN-A-CHECKOUT","isolation":"checkout"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"MIDDLE-IN-THE-WORKING-DIRECTORY"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("waiting"),
+                reply_with("done"),
+                reply_with("done"),
+            ],
+        ),
+        ("MIDDLE-IN-A-CHECKOUT", middle("INNER-IN-A-CHECKOUT")),
+        (
+            "MIDDLE-IN-THE-WORKING-DIRECTORY",
+            middle("INNER-IN-THE-WORKING-DIRECTORY"),
+        ),
+        ("INNER-IN-A-CHECKOUT", vec![reply_with("looked")]),
+        ("INNER-IN-THE-WORKING-DIRECTORY", vec![reply_with("looked")]),
+    ]);
+    let (asked, _) = run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "START-NESTED-WITH-AND-WITHOUT-A-CHECKOUT",
+    );
+
+    let lsp = r#""name":"lsp""#;
+    let write = r#""name":"write_file""#;
+    // A turn replays the arguments it called with, so a run's requests hold the task of every run
+    // it started: each run is told apart by the marker of the run above it being absent.
+    let requests = |own: &str, above: &str| -> Vec<&String> {
+        asked
+            .iter()
+            .filter(|body| body.contains(own) && !body.contains(above))
+            .collect()
+    };
+    let planner = "START-NESTED-WITH-AND-WITHOUT-A-CHECKOUT";
+    for (name, requests, withheld) in [
+        (
+            "the delegate in a checkout",
+            requests("MIDDLE-IN-A-CHECKOUT", planner),
+            true,
+        ),
+        (
+            "the delegate it started",
+            requests("INNER-IN-A-CHECKOUT", "MIDDLE-IN-A-CHECKOUT"),
+            true,
+        ),
+        (
+            "the delegate in the working directory",
+            requests("MIDDLE-IN-THE-WORKING-DIRECTORY", planner),
+            false,
+        ),
+        (
+            "the delegate it started in the working directory",
+            requests(
+                "INNER-IN-THE-WORKING-DIRECTORY",
+                "MIDDLE-IN-THE-WORKING-DIRECTORY",
+            ),
+            false,
+        ),
+    ] {
+        assert!(!requests.is_empty(), "{name} asked nothing");
+        for body in requests {
+            assert!(
+                body.contains(write),
+                "{name} was not offered the tools its kind holds"
+            );
+            assert_eq!(
+                body.contains(lsp),
+                !withheld,
+                "{name}: lsp was {} the tools",
+                if withheld { "among" } else { "missing from" }
+            );
+        }
+    }
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains(planner) && body.contains(lsp)),
+        "the planner was not offered lsp, so the absence above says nothing"
+    );
+}
+
+/// CHECKOUT-9. Nothing a checkout holds is read as a source: a copy of the project's `AGENTS.md`, of
+/// a definition under `.bravebot/agents` or of `.bravebot/settings.json` that HEAD holds and the
+/// working directory does not or holds differently has no effect on a delegate working in the
+/// checkout, which has the working directory's. Rejects resolving the standing instructions or the
+/// kinds of delegate from the checkout's own tree, which a delegate writing there could then change
+/// for the delegates it starts.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_delegate_in_a_checkout_reads_nothing_the_checkout_holds_as_a_source() {
+    let scratch = Scratch::new("checkout-delegate-sources");
+    let home = Scratch::new("checkout-delegate-sources-home");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", "COMMITTED-README-BYTES\n"),
+            ("AGENTS.md", "COMMITTED-RULE-NINE\n"),
+            (
+                ".bravebot/agents/committed-kind.md",
+                "---\nname: committed-kind\ndescription: COMMITTED-KIND-DESCRIPTION.\nkind: reader\n---\n\nRead.\n",
+            ),
+            (
+                ".bravebot/settings.json",
+                r#"{"permissions":{"deny":["Read(README)"]}}"#,
+            ),
+        ],
+        "first",
+    );
+    std::fs::write(scratch.path.join("AGENTS.md"), "WORKING-RULE-NINE\n").unwrap();
+    std::fs::create_dir_all(scratch.path.join(".bravebot/agents")).unwrap();
+    std::fs::write(
+        scratch.path.join(".bravebot/agents/working-kind.md"),
+        "---\nname: working-kind\ndescription: WORKING-KIND-DESCRIPTION.\nkind: reader\n---\n\nRead.\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "START-A-READER-OF-SOURCES",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"READ-IN-THE-CHECKOUT","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "READ-IN-THE-CHECKOUT",
+            vec![
+                tool_request("read_file", r#"{"path":"README"}"#),
+                reply_with("read it"),
+            ],
+        ),
+    ]);
+    let (asked, _) = run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "START-A-READER-OF-SOURCES",
+    );
+
+    let delegate: Vec<&String> = asked
+        .iter()
+        .filter(|body| {
+            body.contains("working in a checkout of commit")
+                && !body.contains("START-A-READER-OF-SOURCES")
+        })
+        .collect();
+    assert!(
+        !delegate.is_empty(),
+        "the delegate in the checkout asked nothing"
+    );
+    for (held, text) in [
+        (true, "WORKING-RULE-NINE"),
+        (true, "WORKING-KIND-DESCRIPTION"),
+        (false, "COMMITTED-RULE-NINE"),
+        (false, "COMMITTED-KIND-DESCRIPTION"),
+    ] {
+        assert!(
+            delegate.iter().all(|body| body.contains(text) == held),
+            "{text} {} the delegate's requests",
+            if held { "is missing from" } else { "reached" }
+        );
+    }
+    // The committed settings file denies a read of README. Nothing reads it, so the read the
+    // delegate made in its checkout came back with the committed bytes.
+    assert!(
+        delegate
+            .iter()
+            .any(|body| body.contains("COMMITTED-README-BYTES")),
+        "a deny rule the checkout's own settings file holds stopped the delegate reading README"
+    );
+}
+
+/// CHECKOUT-9, CRED-15. What a person answered about a credential a read turned up is not copied to
+/// a delegate in a checkout: it reads the checkout's committed `.env` and the person is asked again.
+/// The control is the same turn with no delegate, which asks once, so the second question is the
+/// delegate's and not the planner's. Rejects seeding a delegate's `Exposed` set from the turn that
+/// started it.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn what_a_person_answered_about_a_credential_is_not_copied_to_a_delegate_in_a_checkout() {
+    let questions_asked = |name: &str, with_a_delegate: bool| -> usize {
+        let scratch = Scratch::new(name);
+        let home = Scratch::new(&format!("{name}-home"));
+        let body = format!("DEBUG=true\nAWS_ACCESS_KEY_ID={DECLARED_KEY}\nPORT=80\n");
+        repository::commit_files(&scratch.path, &[(".env", &body)], "add a key");
+        std::fs::write(scratch.path.join(".env"), &body).unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let mut planner = vec![tool_request("read_file", r#"{"path":".env"}"#)];
+        if with_a_delegate {
+            planner.push(tool_request(
+                "spawn_agent",
+                r#"{"kind":"worker","task":"READ-THE-ENV-AGAIN","isolation":"checkout"}"#,
+            ));
+        }
+        planner.extend([
+            reply_with("waiting"),
+            reply_with("done"),
+            reply_with("done"),
+        ]);
+        let (endpoint, _received) = serve_by_marker(vec![
+            ("READ-THEN-DELEGATE", planner),
+            (
+                "READ-THE-ENV-AGAIN",
+                vec![
+                    tool_request("read_file", r#"{"path":".env"}"#),
+                    reply_with("read it"),
+                ],
+            ),
+        ]);
+        let mut person = RemembersExposures {
+            allow: true,
+            ..Default::default()
+        };
+        let asked = person.asked.clone();
+        turns::run_cancellable(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("READ-THEN-DELEGATE").with_home(Some(home.path.clone())),
+            &mut person,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+        asked.lock().map(|held| held.len()).unwrap()
+    };
+
+    assert_eq!(
+        questions_asked("credential-answer-planner-alone", false),
+        1,
+        "the planner's own read was not put to the person once"
+    );
+    assert_eq!(
+        questions_asked("credential-answer-checkout", true),
+        2,
+        "the delegate in the checkout was not asked about the committed .env again"
+    );
+}
+
+/// The words `concise` opens a prompt with, which no other part of a request says.
+const THE_CONCISE_STYLES_WORDS: &str = "Lead with the result";
+
+/// INSTR-12. A delegate carries no style: with one picked on the parent, the parent's request holds
+/// its words and the delegate's holds none, and the trail records the style once, for the turn a
+/// person started. Rejects passing the parent's style to the task a delegate runs, whether it then
+/// reaches the delegate's prompt or only its trail.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_delegate_carries_no_style_the_parent_has() {
+    let scratch = Scratch::new("style-delegate");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-A-STYLED-DELEGATE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"REPORT-IN-ANY-STYLE"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+                reply_with("done"),
+            ],
+        ),
+        ("REPORT-IN-ANY-STYLE", vec![reply_with("reported")]),
+    ]);
+    let mut sink = RecordingSink::new();
+    turns::run_cancellable(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("HAVE-A-STYLED-DELEGATE")
+            .with_style(bravebot_agent::styles::named("concise").cloned()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let asked = every_request(&received);
+    let (parent, delegate): (Vec<&String>, Vec<&String>) = asked
+        .iter()
+        .partition(|body| body.contains("HAVE-A-STYLED-DELEGATE"));
+    assert!(
+        !parent.is_empty()
+            && parent
+                .iter()
+                .all(|body| body.contains(THE_CONCISE_STYLES_WORDS)),
+        "the parent's request did not carry the style, so the delegate's absence of it says nothing"
+    );
+    assert!(!delegate.is_empty(), "the delegate asked nothing");
+    for body in delegate {
+        assert!(
+            !body.contains(THE_CONCISE_STYLES_WORDS),
+            "the style's words reached a delegate's request: {body}"
+        );
+    }
+    let recorded: Vec<bool> = sink
+        .recorded()
+        .filter(|(_, event)| {
+            matches!(
+                event,
+                Event::GatePassed {
+                    gate: "output_style",
+                    ..
+                }
+            )
+        })
+        .map(|(from, _)| from.is_some())
+        .collect();
+    assert_eq!(
+        recorded,
+        [false],
+        "the style was recorded for the turn a person started and for no delegate"
+    );
+}
+
+/// INSTR-12. A style grants nothing: with one in force, in the asking mode, a write is put to the
+/// person where it would have been, and a refusal leaves the file as it was. `proactive` is the
+/// style whose words invite action. Rejects a style that switches the mode, or that skips the
+/// question, so the write goes through unasked.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn with_a_style_in_force_a_write_is_still_put_to_the_person() {
+    for style in ["concise", "proactive"] {
+        for approved in [true, false] {
+            let scratch = Scratch::new(&format!("style-write-{style}-{approved}"));
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let (endpoint, _received) = serve_sequence(vec![
+                tool_request_2("write_file", r#"{"path":"out.txt","contents":"written"}"#),
+                reply_with("understood"),
+            ]);
+            let live = bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Ask);
+            let mut recording = match approved {
+                true => RecordingConfirmer::approving(),
+                false => RecordingConfirmer::rejecting(),
+            };
+            let mut confirmer = bravebot_agent::Confining::new(&mut recording, live.clone(), false);
+            turns::run(
+                &config_for(&endpoint),
+                &bravebot_net::Egress::new(),
+                &workspace,
+                &Task::new("write it")
+                    .with_permission_mode(live)
+                    .with_style(bravebot_agent::styles::named(style).cloned()),
+                &mut confirmer,
+                &mut RecordingSink::new(),
+            )
+            .expect("turn runs");
+
+            assert_eq!(
+                recording.seen.len(),
+                1,
+                "{style}, approved {approved}: the write was not put to the person once"
+            );
+            assert_eq!(
+                scratch.path.join("out.txt").exists(),
+                approved,
+                "{style}, approved {approved}"
+            );
+        }
+    }
+}
+
+/// INSTR-12. A style grants nothing: with one in force plan mode still refuses a write, tells the
+/// planner so, and raises no prompt, in a workspace whose trust map would have let the write
+/// through. Rejects a style, `proactive` in particular, being read as a lifting of plan mode.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn with_a_style_in_force_plan_mode_still_refuses_a_write() {
+    let scratch = Scratch::new("style-plan-write");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"out.txt","contents":"written"}"#),
+        reply_with("understood"),
+    ]);
+    let live = bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Plan);
+    let mut recording = RecordingConfirmer::approving();
+    let mut confirmer = bravebot_agent::Confining::new(&mut recording, live.clone(), false);
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("write it")
+            .with_permission_mode(live)
+            .with_style(bravebot_agent::styles::named("proactive").cloned()),
+        &mut confirmer,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "plan mode wrote because a style was in force"
+    );
+    assert!(
+        recording.seen.is_empty(),
+        "the write was put to the person, so plan mode did not refuse it itself"
+    );
+    let _first = received.recv().expect("first request");
+    let told = tool_results(&received.recv().expect("second request"));
+    assert!(
+        told.contains("plan mode, so writing is refused"),
+        "the planner was not told plan mode refused the write: {told}"
+    );
+}
+
+/// INSTR-12. The classifier that vets a run in auto mode is sent no style: with `concise` in force
+/// the planner's requests hold its words and the classifier's hold none. Rejects a style's words in
+/// the classifier's system prompt or its message. The classifier is consulted only where a sandbox
+/// can confine the line, so the leg is skipped on a machine with none.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_style_in_force_is_not_sent_to_the_classifier_that_vets_a_run() {
+    if bravebot_sandbox::base::Prelude::current().is_none() {
+        return;
+    }
+    let scratch = Scratch::new("style-classifier");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with("allow"), reply_with("allow")],
+        vec![
+            tool_request_2("run", r#"{"command":"touch made.txt"}"#),
+            reply_with("done"),
+        ],
+    );
+    let live = bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Auto);
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    let mut confirmer = bravebot_agent::Confining::new(&mut asked, live.clone(), false);
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("make the file made.txt")
+            .with_permission_mode(live)
+            .with_confined_runs(true)
+            .with_style(bravebot_agent::styles::named("concise").cloned()),
+        &mut confirmer,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let (classifier, planner): (Vec<String>, Vec<String>) = received
+        .try_iter()
+        .partition(|body| body.contains(A_CLASSIFIER_ASKING));
+    assert!(
+        !classifier.is_empty(),
+        "the classifier was not consulted, so its absence of the style says nothing"
+    );
+    assert!(
+        !planner.is_empty()
+            && planner
+                .iter()
+                .all(|body| body.contains(THE_CONCISE_STYLES_WORDS)),
+        "the planner's requests did not carry the style"
+    );
+    for body in classifier {
+        assert!(
+            !body.contains(THE_CONCISE_STYLES_WORDS),
+            "the style's words reached the classifier: {body}"
+        );
+    }
+}
+
+/// INSTR-12. A processor is sent no style: with `concise` in force the planner's requests hold its
+/// words and the processor's holds none. Rejects a style's words in a processor's system prompt.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_style_in_force_is_not_sent_to_a_processor() {
+    let scratch = Scratch::new("style-processor");
+    std::fs::write(scratch.path.join("config.py"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"config.py"}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"rewrite it"}"#,
+        ),
+        processor_reply("REWRITTEN"),
+        tool_request(
+            "write_file",
+            r#"{"path":"config.py","contents_ref":"ref:3"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    turns::run_cancellable(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("rewrite the config")
+            .with_style(bravebot_agent::styles::named("concise").cloned()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let (processor, planner): (Vec<String>, Vec<String>) = received
+        .try_iter()
+        .filter(|body| !is_a_side_request(body))
+        .partition(|body| body.contains("You are an isolated processor"));
+    assert_eq!(processor.len(), 1, "the processor was not asked once");
+    assert!(
+        !planner.is_empty()
+            && planner
+                .iter()
+                .all(|body| body.contains(THE_CONCISE_STYLES_WORDS)),
+        "the planner's requests did not carry the style"
+    );
+    assert!(
+        !processor[0].contains(THE_CONCISE_STYLES_WORDS),
+        "the style's words reached the processor: {}",
+        processor[0]
+    );
+}
+
+/// INSTR-12. The aside (`/btw` and `/recap`), the goal judge and the summariser are sent no style,
+/// over a conversation whose last turn was in one: that turn's request holds the words, and none of
+/// these four requests does. Rejects the words in any of their system prompts or messages. The
+/// leaks are collected so one run names every request that carried them.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
+fn a_style_in_force_is_not_sent_to_the_aside_the_goal_judge_or_the_summariser() {
+    let scratch = Scratch::new("style-side-requests");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+    let session = bravebot_agent::chatgpt::AccountSession::begin();
+    let mut conversation = a_long_conversation();
+    // Measured as nothing, so the styled turn below is not itself compacted over its budget.
+    conversation.measured(0);
+    let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+    turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("carry on again").with_style(bravebot_agent::styles::named("concise").cloned()),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    assert!(
+        received
+            .recv()
+            .expect("the styled turn's request")
+            .contains(THE_CONCISE_STYLES_WORDS),
+        "the turn's own request did not carry the style, so the others' absence of it says nothing"
+    );
+
+    let mut leaks = Vec::new();
+    let mut sink = RecordingSink::new();
+    let trust = || bravebot_core::trust::TrustStore::new("/work");
+    let cancel = bravebot_core::cancel::Cancel::new();
+
+    for (name, question) in [
+        (
+            "/btw",
+            bravebot_agent::aside::Question::about(&conversation, "why?", Vec::new()),
+        ),
+        (
+            "/recap",
+            bravebot_agent::aside::Question::recap(&conversation),
+        ),
+    ] {
+        let (endpoint, received) = serve_sequence(vec![reply_with("because")]);
+        turn::aside(
+            &config_for(&endpoint),
+            &egress,
+            &session,
+            question,
+            None,
+            &mut sink,
+            trust(),
+            |_: &str| {},
+            &cancel,
+        )
+        .expect("the aside is answered");
+        if received
+            .recv()
+            .expect("the aside's request")
+            .contains(THE_CONCISE_STYLES_WORDS)
+        {
+            leaks.push(name);
+        }
+    }
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("NOT MET\nnothing shows it")]);
+    turn::goal(
+        &config_for(&endpoint),
+        &egress,
+        &session,
+        bravebot_agent::goal::Check::of(
+            &conversation,
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
+        None,
+        &mut sink,
+        trust(),
+        &cancel,
+    )
+    .expect("the condition is judged");
+    if received
+        .recv()
+        .expect("the judge's request")
+        .contains(THE_CONCISE_STYLES_WORDS)
+    {
+        leaks.push("the goal judge");
+    }
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+    turn::compact(
+        &config_for(&endpoint),
+        &egress,
+        &session,
+        &mut conversation,
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trust(),
+        None,
+        &cancel,
+        None,
+    )
+    .expect("compacting runs")
+    .expect("a long conversation has something to summarise");
+    if received
+        .recv()
+        .expect("the summariser's request")
+        .contains(THE_CONCISE_STYLES_WORDS)
+    {
+        leaks.push("the summariser");
+    }
+
+    assert!(leaks.is_empty(), "the style's words reached: {leaks:?}");
 }
 
 /// OUTPUT-1, RUN-21. A person who reads output of a program nobody vouched for is shown the bytes

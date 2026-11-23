@@ -686,6 +686,7 @@ its parent's context would have moved the log rather than absorbed it.
 `verified-by: bravebot_agent::turn::a_delegate_held_to_its_bound_says_so_to_the_planner_and_the_person`
 `verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_same_sentence_about_the_bound`
 `verified-by: bravebot_agent::turn::a_delegates_report_is_put_beside_how_many_commands_it_ran_and_writes_it_made`
+`verified-by: bravebot_agent::turn::a_request_no_marker_rule_can_answer_is_told_so_and_not_hung_up_on`
 
 <a id="DELEGATE-10"></a>
 ### DELEGATE-10: a delegate's effects are gated on their own
@@ -969,6 +970,7 @@ front of them for a turn they were told had finished.
 `verified-by: bravebot_tui::state::a_turn_waiting_on_several_delegates_names_each_until_it_reports`
 `verified-by: bravebot_tui::state::a_turn_waiting_on_a_delegate_names_it_until_its_report_is_in`
 `verified-by: bravebot_tui::state::a_new_round_ends_the_wait_the_indicator_names`
+`verified-by: bravebot_agent::turn::a_request_no_marker_rule_can_answer_is_told_so_and_not_hung_up_on`
 
 <a id="DELEGATE-18"></a>
 ### DELEGATE-18: inference wait counts elapsed time once

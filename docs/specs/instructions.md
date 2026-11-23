@@ -565,6 +565,14 @@ change of the file.
 `verified-by: bravebot_tui::app::a_prompt_containing_the_style_command_or_a_longer_word_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_style_picked_under_a_replaced_opening_says_it_does_not_show`
 `verified-by: bravebot_tui::app::a_style_named_to_the_command_reaches_the_next_turn_and_only_a_known_name_does`
+`verified-by: bravebot_agent::turn::a_delegate_carries_no_style_the_parent_has`
+`verified-by: bravebot_agent::turn::with_a_style_in_force_a_write_is_still_put_to_the_person`
+`verified-by: bravebot_agent::turn::with_a_style_in_force_plan_mode_still_refuses_a_write`
+`verified-by: bravebot_agent::turn::a_style_in_force_is_not_sent_to_the_classifier_that_vets_a_run`
+`verified-by: bravebot_agent::turn::a_style_in_force_is_not_sent_to_a_processor`
+`verified-by: bravebot_agent::turn::a_style_in_force_is_not_sent_to_the_aside_the_goal_judge_or_the_summariser`
+`verified-by: bravebot_agent::aside::a_question_is_sent_under_its_own_system_prompt_and_no_style`
+`verified-by: bravebot_agent::compact::the_summariser_is_sent_under_its_own_system_prompt_and_no_style`
 
 <a id="INSTR-13"></a>
 ### INSTR-13: a project's skill directories are read least specific first, at the root only
