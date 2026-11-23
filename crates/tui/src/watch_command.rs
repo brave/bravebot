@@ -35,11 +35,11 @@ pub fn parse(argument: &str) -> Asked {
     if argument.is_empty() {
         return Asked::List;
     }
-    let first = argument
+    let (first, rest) = argument
         .split_once(char::is_whitespace)
-        .map_or(argument, |(first, _)| first);
+        .unwrap_or((argument, ""));
     if first == STOP {
-        return match argument[STOP.len()..].trim().parse::<usize>() {
+        return match rest.trim().parse::<usize>() {
             Ok(number) => Asked::Stop(number),
             Err(_) => Asked::Unreadable,
         };
