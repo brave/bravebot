@@ -395,6 +395,12 @@ impl Held<'_> {
     pub(super) fn arm_watch_command(&mut self, path: &str) {
         // A `~` spelled out, so a later look from a moved working directory reads the same path.
         let path = self.workspace.expanded(path);
+        // A path already watched under any spelling arms nothing new, and takes no second look.
+        if let Some(number) = self.session.watch_on(self.workspace, &path) {
+            self.session
+                .note(t!(watch_already, number = number, path = path.as_str()));
+            return;
+        }
         if self.workspace.names_something_else(&path) {
             self.session
                 .note(t!(watch_refused_directory, path = path.as_str()));

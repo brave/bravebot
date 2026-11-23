@@ -20,6 +20,8 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::workspace::Workspace;
+
 /// Whether this turn may arm a standing watch, and why not where it may not.
 ///
 /// Read twice, once by the tool table and once by dispatch, for the reason the scheduling answer
@@ -146,6 +148,15 @@ pub fn fired(number: usize, path: &str, change: Change) -> String {
 /// differ, and a watch that one of them ended and the other went on looking at.
 pub fn names_the_same_file(path: &str, under: &Path, root: &Path) -> bool {
     Path::new(path).is_absolute() || under == root
+}
+
+/// Whether a path a person typed is one a watch may be asked for at all.
+///
+/// An empty path names nothing, and a control character in one is refused rather than written
+/// into a note or a fire's prompt. Every client that lets a person arm a watch asks this, so each
+/// only says the refusal its own way.
+pub fn armable(path: &str) -> bool {
+    !path.is_empty() && !path.chars().any(char::is_control)
 }
 
 /// How long a watch lives before it ends itself.
@@ -306,14 +317,25 @@ impl Watches {
         self.live.is_empty()
     }
 
-    /// The number of the live watch on `path`, if one is on it.
+    /// The number of the live watch on the file `path` names in `workspace`, if one is on it.
     ///
     /// A person arming a path already watched arms nothing new, in every client, so the comparison
-    /// is made here once rather than by each client that arms one.
-    pub fn watching(&self, path: &str) -> Option<usize> {
+    /// is made here once rather than by each client that arms one. A watch's own path is read only
+    /// while it still names the file it was armed on from the workspace's directory
+    /// ([`names_the_same_file`]). Two spellings are then the same file where they are spelled the
+    /// same, or where the workspace resolves both to one place (`notes.md` and `./notes.md`, or a
+    /// link and what it leads to).
+    pub fn watching(&self, workspace: &Workspace, path: &str) -> Option<usize> {
+        let resolved = workspace.resolve(path).ok();
         self.live
             .iter()
-            .find(|watch| watch.path == path)
+            .filter(|watch| names_the_same_file(&watch.path, &watch.under, workspace.root()))
+            .find(|watch| {
+                watch.path == path
+                    || resolved.as_ref().is_some_and(|resolved| {
+                        workspace.resolve(&watch.path).ok().as_ref() == Some(resolved)
+                    })
+            })
             .map(|watch| watch.number)
     }
 
@@ -957,17 +979,49 @@ mod tests {
         assert_eq!(watches.live().len(), MAX_LIVE);
     }
 
-    /// A path already watched is named by the watch on it, and a path nobody watches by none.
+    /// A path already watched is named by the watch on it under any spelling the workspace
+    /// resolves to the same file, and a path nobody watches by none.
     #[test]
     fn watching_names_the_live_watch_on_a_path() {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let workspace = Workspace::new(scratch.path()).expect("workspace");
+        let root = workspace.root().to_path_buf();
+        std::fs::write(root.join("b.txt"), "b").expect("scratch");
         let mut watches = Watches::new();
         let now = Instant::now();
-        armed(&mut watches, "a.txt", now);
-        armed(&mut watches, "b.txt", now);
-        assert_eq!(watches.watching("b.txt"), Some(2));
-        assert_eq!(watches.watching("c.txt"), None);
+        for path in ["a.txt", "b.txt"] {
+            watches
+                .arm(path.to_string(), root.clone(), 1, saw("first"), now)
+                .expect("a watch");
+        }
+
+        assert_eq!(watches.watching(&workspace, "b.txt"), Some(2));
+        assert_eq!(watches.watching(&workspace, "./b.txt"), Some(2));
+        assert_eq!(watches.watching(&workspace, "c.txt"), None);
         assert!(watches.stop(2));
-        assert_eq!(watches.watching("b.txt"), None);
+        assert_eq!(watches.watching(&workspace, "./b.txt"), None);
+    }
+
+    /// A watch's relative path is read under the directory it was armed in, so once the workspace
+    /// is somewhere else the same spelling is a different file.
+    #[test]
+    fn watching_does_not_match_a_relative_watch_armed_under_another_directory() {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let workspace = Workspace::new(scratch.path()).expect("workspace");
+        let mut watches = Watches::new();
+        armed(&mut watches, "b.txt", Instant::now());
+        assert_eq!(watches.watching(&workspace, "./b.txt"), None);
+        assert_eq!(watches.watching(&workspace, "b.txt"), None);
+    }
+
+    /// An empty path or one holding a control character is refused before anything looks at it.
+    #[test]
+    fn a_path_is_armable_unless_empty_or_holding_a_control_character() {
+        assert!(armable("notes.md"));
+        assert!(armable("a file with spaces.md"));
+        assert!(!armable(""));
+        assert!(!armable("notes\n.md"));
+        assert!(!armable("notes\u{1b}[2J.md"));
     }
 
     /// A path the session does not reach has no look to record, absent or otherwise.

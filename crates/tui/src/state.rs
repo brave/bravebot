@@ -10391,21 +10391,6 @@ mod tests {
         );
     }
 
-    /// Typing the same path twice leaves one watch, and says which one it is.
-    #[test]
-    fn a_person_arming_a_path_already_watched_arms_nothing_new() {
-        let mut s = session();
-        s.arm_watch("notes.md", ARMED_IN, saw("first"));
-        s.arm_watch_by_person("notes.md", ARMED_IN, saw("first"));
-        assert_eq!(s.watches().len(), 1);
-        assert!(
-            s.transcript
-                .iter()
-                .any(|entry| entry.text == t!(watch_already, number = 1, path = "notes.md")),
-            "the second arming said nothing"
-        );
-    }
-
     /// A typed path the session cannot reach is not armed, and the sentence is about the path the
     /// person typed rather than a turn's request.
     #[test]

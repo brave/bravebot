@@ -45841,6 +45841,28 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// Typing a path already watched, under the same spelling or another one the workspace resolves
+    /// to the same file, leaves one watch and says which one it is.
+    #[test]
+    fn typing_watch_on_a_path_already_watched_arms_nothing_new() {
+        let (root, mut workspace, mut session, mut answers) =
+            watch_project("bravebot-typed-watch-again-test");
+        std::fs::write(workspace.root().join("notes.md"), "first").expect("scratch");
+
+        arm_typed(&mut session, &mut workspace, &mut answers, "notes.md");
+        assert_eq!(session.watches().len(), 1, "the watch was not armed");
+        for again in ["notes.md", "./notes.md"] {
+            arm_typed(&mut session, &mut workspace, &mut answers, again);
+            assert_eq!(session.watches().len(), 1, "{again} armed a second watch");
+            assert!(
+                noted(&session, &t!(watch_already, number = 1, path = again)),
+                "{again} said nothing about the watch already on it"
+            );
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// FSWATCH-2: a directory is refused, as a turn's request for one is.
     #[test]
     fn typing_watch_on_a_directory_is_refused() {

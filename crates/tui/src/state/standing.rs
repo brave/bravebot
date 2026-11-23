@@ -247,24 +247,30 @@ impl Session {
         );
     }
 
+    /// The number of the live watch on the file `path` names in `workspace`, under any spelling
+    /// the workspace resolves to it, as the desktop's `watches.add` asks it too.
+    pub fn watch_on(
+        &self,
+        workspace: &bravebot_agent::workspace::Workspace,
+        path: &str,
+    ) -> Option<usize> {
+        self.watches.watching(workspace, path)
+    }
+
     /// Arm a standing watch on a path the person typed after `/watch`.
     ///
     /// The caller took the first look through the same gate every later look goes through, so a
     /// path out of reach arrives here as [`watch::Looked::OutOfReach`] and is refused. Refused
     /// under a loop or a goal, because those are the person's own and a watch they arm does not
-    /// end them without saying so; the note says how to clear the one in the way. A path already
-    /// watched arms nothing new, by the registry's own [`watch::Watches::watching`], which the
-    /// desktop's `watches.add` asks as well.
+    /// end them without saying so; the note says how to clear the one in the way. Whether the path
+    /// is already watched is asked first, of [`Session::watch_on`], by the caller that holds the
+    /// workspace.
     pub fn arm_watch_by_person(
         &mut self,
         path: &str,
         under: impl Into<std::path::PathBuf>,
         first: watch::Looked,
     ) {
-        if let Some(number) = self.watches.watching(path) {
-            self.note(t!(watch_already, number = number, path = path));
-            return;
-        }
         self.arm_watch_as(
             path,
             under.into(),

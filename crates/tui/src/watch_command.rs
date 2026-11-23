@@ -28,8 +28,8 @@ pub enum Asked {
 /// spaces in it works, and one leading `@` is taken off so the file completer's form is accepted.
 ///
 /// A bare number is not read as a path: it is almost always `stop <n>` with the word left out,
-/// and a watch on a file named `3` would be a guess. A path with a control character in it is
-/// refused, as the desktop refuses one.
+/// and a watch on a file named `3` would be a guess. A path [`bravebot_agent::watch::armable`]
+/// refuses is refused here too, as the desktop refuses it.
 pub fn parse(argument: &str) -> Asked {
     let argument = argument.trim();
     if argument.is_empty() {
@@ -48,7 +48,7 @@ pub fn parse(argument: &str) -> Asked {
         return Asked::Unreadable;
     }
     let path = argument.strip_prefix('@').unwrap_or(argument);
-    if path.is_empty() || path.chars().any(char::is_control) {
+    if !bravebot_agent::watch::armable(path) {
         return Asked::Unreadable;
     }
     Asked::Arm(path.to_string())

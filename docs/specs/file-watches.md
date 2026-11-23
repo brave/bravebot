@@ -469,7 +469,9 @@ The gate is the first look every later pass takes ([FSWATCH-7](#FSWATCH-7)), ask
 path inside the working directory is reached, a path outside it is reached only under bypass in a
 trusted project, and any other path is refused and says so. A typed path is the person's own, so no
 promotion is recorded for it. A directory is refused ([FSWATCH-2](#FSWATCH-2)). A path already
-watched arms nothing new and names the watch that is on it. A ninth watch is refused as a turn's is
+watched arms nothing new and names the watch that is on it, whether it is spelled as the watch's
+path is or another way the working directory resolves to the same file (`./notes.md` for
+`notes.md`, or a link to it). A ninth watch is refused as a turn's is
 ([FSWATCH-8](#FSWATCH-8)).
 
 Under a loop or a goal it arms nothing, and the refusal says how to end the loop (`/loop stop`) or
@@ -506,7 +508,9 @@ channel opened on a path nobody named.
 `verified-by: bravebot_tui::state::a_person_arms_a_watch_and_it_fires_like_any_other`
 `verified-by: bravebot_tui::state::a_person_cannot_arm_a_watch_under_a_loop_or_a_goal_and_is_told_how_to_clear_it`
 `verified-by: bravebot_tui::state::a_person_arming_a_ninth_watch_is_refused`
-`verified-by: bravebot_tui::state::a_person_arming_a_path_already_watched_arms_nothing_new`
+`verified-by: bravebot_tui::app::typing_watch_on_a_path_already_watched_arms_nothing_new`
+`verified-by: bravebot_agent::watch::watching_does_not_match_a_relative_watch_armed_under_another_directory`
+`verified-by: bravebot_agent::watch::a_path_is_armable_unless_empty_or_holding_a_control_character`
 `verified-by: bravebot_tui::state::a_path_the_person_cannot_reach_is_refused_and_said_so`
 `verified-by: bravebot_tui::state::a_watch_the_person_armed_is_listed_as_armed_by_them`
 `verified-by: bravebot_tui::status::the_report_says_a_watch_was_armed_by_the_person`
