@@ -78,7 +78,9 @@ fn main() {
     bravebot_backtrace::start(bravebot_backtrace::Process::Rpc);
     // The terminal's log, in the same directory, so a failure in the window leaves the record a
     // bug report names (DIAG-4, DIAG-8). At the level `--log-level` named, or the terminal's
-    // default of `error` when it named none (DIAG-3).
+    // default of `error` when it named none (DIAG-3). The window changes the level later through
+    // `diagnostic_log.set`, which keeps this file open rather than calling `configure` again
+    // (DIAG-11).
     bravebot_diag::configure(
         log_level.unwrap_or(bravebot_diag::Level::Error),
         bravebot_agent::home::writable(),
