@@ -4874,7 +4874,16 @@ watch-not-armed-full =
     as a session keeps. /watch stop <n> ends one
 watch-not-armed-unreadable =
     a watch on { $path } was asked for and not armed: that path cannot be looked at from here
-watch-fired = watch { $number }: { $path } looks written to
+watch-refused-under-a-loop =
+    no watch is armed: a loop is running, and a session does one thing at a time that happens
+    without anybody typing. /loop stop ends the loop
+watch-refused-under-a-goal =
+    no watch is armed: this session is working towards a goal, and it does one thing at a time.
+    /goal clear ends the goal
+watch-refused-unreadable =
+    no watch is armed on { $path }: this session cannot reach that path
+watch-already = watch { $number } is already on { $path }
+watch-fired =watch { $number }: { $path } looks written to
 watch-fired-removed = watch { $number }: { $path } no longer exists
 watch-fired-appeared = watch { $number }: { $path } now exists
 watch-listed = watch { $number }: { $path }, armed by turn { $turn }, { $left } left

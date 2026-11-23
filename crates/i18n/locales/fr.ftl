@@ -3719,7 +3719,16 @@ watch-not-armed-full =
     maximum qu'une session garde. /watch stop <n> en arrête une
 watch-not-armed-unreadable =
     une veille sur { $path } a été demandée sans être posée : ce chemin ne peut pas être regardé d'ici
-watch-fired = veille { $number } : { $path } semble avoir été écrit
+watch-refused-under-a-loop =
+    aucune veille n'est posée : une boucle tourne, et une session ne fait qu'une seule chose à la
+    fois qui se produise sans que personne ne tape. /loop stop arrête la boucle
+watch-refused-under-a-goal =
+    aucune veille n'est posée : cette session travaille vers un objectif, et elle fait une chose à
+    la fois. /goal clear abandonne l'objectif
+watch-refused-unreadable =
+    aucune veille n'est posée sur { $path } : cette session n'atteint pas ce chemin
+watch-already = la veille { $number } porte déjà sur { $path }
+watch-fired =veille { $number } : { $path } semble avoir été écrit
 watch-fired-removed = veille { $number } : { $path } n'existe plus
 watch-fired-appeared = veille { $number } : { $path } existe maintenant
 watch-listed =

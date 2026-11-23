@@ -233,28 +233,83 @@ impl Session {
         under: impl Into<std::path::PathBuf>,
         first: watch::Looked,
     ) {
+        let armed_by = self.turns;
+        self.arm_watch_as(
+            path,
+            under.into(),
+            first,
+            armed_by,
+            Refusals {
+                under_a_loop: t!(watch_not_armed_under_a_loop),
+                under_a_goal: t!(watch_not_armed_under_a_goal),
+                unreadable: t!(watch_not_armed_unreadable, path = path),
+            },
+        );
+    }
+
+    /// Arm a standing watch on a path the person typed after `/watch`.
+    ///
+    /// The caller took the first look through the same gate every later look goes through, so a
+    /// path out of reach arrives here as [`watch::Looked::OutOfReach`] and is refused. Refused
+    /// under a loop or a goal, because those are the person's own and a watch they arm does not
+    /// end them without saying so; the note says how to clear the one in the way. A path already
+    /// watched arms nothing new, as the desktop's `watches.add` does.
+    pub fn arm_watch_by_person(
+        &mut self,
+        path: &str,
+        under: impl Into<std::path::PathBuf>,
+        first: watch::Looked,
+    ) {
+        let already = self
+            .watches
+            .live()
+            .iter()
+            .find(|watch| watch.path() == path)
+            .map(|watch| watch.number());
+        if let Some(number) = already {
+            self.note(t!(watch_already, number = number, path = path));
+            return;
+        }
+        self.arm_watch_as(
+            path,
+            under.into(),
+            first,
+            watch::BY_THE_PERSON,
+            Refusals {
+                under_a_loop: t!(watch_refused_under_a_loop),
+                under_a_goal: t!(watch_refused_under_a_goal),
+                unreadable: t!(watch_refused_unreadable, path = path),
+            },
+        );
+    }
+
+    /// What [`Session::arm_watch`] and [`Session::arm_watch_by_person`] share: the session's own
+    /// checks, then the registry's, with the sentence each refusal is noted with.
+    fn arm_watch_as(
+        &mut self,
+        path: &str,
+        under: std::path::PathBuf,
+        first: watch::Looked,
+        armed_by: usize,
+        refusals: Refusals,
+    ) {
         if !self.looping.is_empty() {
-            self.note(t!(watch_not_armed_under_a_loop));
+            self.note(refusals.under_a_loop);
             return;
         }
         if self.goal.is_some() {
-            self.note(t!(watch_not_armed_under_a_goal));
+            self.note(refusals.under_a_goal);
             return;
         }
-        match self.watches.arm(
-            path.to_string(),
-            under.into(),
-            self.turns,
-            first,
-            Instant::now(),
-        ) {
+        match self
+            .watches
+            .arm(path.to_string(), under, armed_by, first, Instant::now())
+        {
             Ok(number) => self.note(t!(watch_armed, number = number, path = path)),
             Err(watch::Refused::Full) => {
                 self.note(t!(watch_not_armed_full, count = watch::MAX_LIVE))
             }
-            Err(watch::Refused::NothingToLookAt) => {
-                self.note(t!(watch_not_armed_unreadable, path = path))
-            }
+            Err(watch::Refused::NothingToLookAt) => self.note(refusals.unreadable),
         }
     }
 
@@ -615,4 +670,11 @@ impl Session {
         }
         Some(self.begin_turn(prompt, (attached, pasted), Vec::new(), names))
     }
+}
+
+/// The sentences a refused arming is noted with, which differ by who asked for the watch.
+struct Refusals {
+    under_a_loop: &'static str,
+    under_a_goal: &'static str,
+    unreadable: String,
 }
