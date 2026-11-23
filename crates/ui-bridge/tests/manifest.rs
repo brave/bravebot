@@ -903,6 +903,46 @@ fn a_picture_dropped_onto_the_task_reaches_the_planner() {
     );
 }
 
+/// DROP-2, MANIFEST-11: the rule a picture dropped onto the task records stays in the session's
+/// trust map after the run, and the next turn still holds it.
+#[test]
+fn a_picture_dropped_onto_the_task_stays_trusted_for_the_next_turn() {
+    let scratch = Scratch::new("bridge-manifest-dropped-picture-kept");
+    let shot = scratch.path.join("shot.png");
+    std::fs::write(&shot, [0x89u8, 0x50]).unwrap();
+    let shot = shot.display().to_string();
+    let (endpoint, _rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    front.call(
+        "manifest.run",
+        json!({"session": session, "task": "build [Image #1]", "attachments": [shot]}),
+    );
+    let events = front.answering(
+        &session,
+        &[
+            ("manifest.request", "approve"),
+            ("confirm.request", "approve"),
+        ],
+    );
+    let ended = events.last().unwrap();
+    assert_eq!(ended["event"], "manifest.done", "{ended}");
+
+    front.send(
+        "turn.send",
+        message_ids::with_fresh(json!({"session":session,"prompt":"say done"})),
+    );
+    let turn = front.question_or_the_end();
+    assert_eq!(turn["event"], "turn.done", "{turn}");
+    assert!(
+        turn["data"]["trust"]["rules"]
+            .as_array()
+            .is_some_and(|rules| rules.iter().any(|rule| rule["path"] == shot.as_str())),
+        "the drop's rule is not in the session's trust map: {turn}"
+    );
+}
+
 /// DROP-4: a text file dropped onto the task goes as its name, put in the place of its marker.
 #[test]
 fn a_text_file_dropped_onto_the_task_is_its_name() {
