@@ -592,6 +592,7 @@ incognito has already accepted.
 `verified-by: bravebot_lsp::server::a_session_index_directory_is_created_never_adopted`
 `verified-by: bravebot_lsp::server::a_session_with_a_state_directory_indexes_under_it`
 `verified-by: bravebot_lsp::server::the_cache_is_never_read_by_the_driver`
+`verified-by: bravebot_lsp::server::nothing_the_driver_does_with_an_index_reads_a_file_inside_it`
 `verified-by: bravebot_lsp::server::a_server_whose_index_directory_cannot_be_made_private_does_not_start`
 `verified-by: bravebot_lsp::server::starting_a_server_on_an_index_keeps_it_from_being_removed`
 

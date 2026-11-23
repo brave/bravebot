@@ -129,7 +129,7 @@ const NEEDS_A_WINDOW = [
   'session.close', 'turn.send', 'turn.cancel', 'view.find', 'view.focus-composer', 'mode.cycle',
   'turn.rewind', 'session.note', 'session.export-text', 'session.export-markdown',
   'session.export-pdf', 'session.export-tools', 'view.fold-left', 'view.fold-right',
-  'view.reset-columns', 'view.theme', 'app.about', 'help.doctor',
+  'view.reset-columns', 'view.theme', 'app.about', 'help.doctor', 'app.sections',
 ]
 
 /**

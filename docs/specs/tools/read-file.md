@@ -403,7 +403,12 @@ the rounds after it, to tell the planner what it already had.
 `verified-by: bravebot_agent::turn::a_same_size_rewrite_that_leaves_the_modification_time_alone_is_answered_with_a_notice`
 `verified-by: bravebot_agent::turn::a_rewrite_of_the_same_bytes_is_answered_with_the_lines_again`
 `verified-by: bravebot_agent::turn::a_different_window_of_the_same_file_is_not_answered_with_a_notice`
+`verified-by: bravebot_agent::turn::a_repeat_read_spelled_differently_is_the_same_window`
+`verified-by: bravebot_agent::turn::a_window_that_differs_in_only_its_offset_or_only_its_limit_is_sent`
 `verified-by: bravebot_agent::turn::a_repeat_read_of_a_file_the_planner_may_not_see_is_not_a_notice`
+`verified-by: bravebot_agent::turn::a_window_that_was_quarantined_is_sent_once_the_file_is_vouched_for`
+`verified-by: bravebot_agent::turn::a_window_held_back_behind_a_link_is_sent_once_the_tree_is_vouched_for`
+`verified-by: bravebot_agent::turn::a_repeat_read_of_a_file_that_can_no_longer_be_opened_is_a_notice_and_not_a_permission_error`
 `verified-by: bravebot_agent::conversation::compaction_forgets_the_reads_whose_rounds_it_removed_and_keeps_the_others`
 `verified-by: bravebot_agent::conversation::a_kept_read_follows_its_message_to_its_new_position`
 `verified-by: bravebot_agent::conversation::a_window_shown_again_is_recorded_under_its_latest_token`
@@ -411,6 +416,7 @@ the rounds after it, to tell the planner what it already had.
 `verified-by: bravebot_agent::turn::a_read_repeated_after_its_result_was_dropped_sends_the_lines_again`
 `verified-by: bravebot_agent::turn::a_read_of_a_file_shown_before_a_resume_sends_the_lines_again`
 `verified-by: bravebot_agent::workspace::requests_that_come_to_the_same_lines_are_one_window`
+`verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_have_two_window_keys_and_a_leading_dot_slash_changes_none`
 
 <a id="READ-9"></a>
 ### READ-9: a notebook the planner may read is shown as its cells, without their outputs

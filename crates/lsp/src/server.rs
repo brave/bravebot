@@ -2589,6 +2589,63 @@ done
         }
     }
 
+    /// LSP-10: nothing the driver does with an index opens a file inside it.
+    ///
+    /// A named pipe stands where a file would be read. Opening one for reading waits until something
+    /// opens it for writing, and nothing does, so a read of the marker or of anything inside an
+    /// index never returns. The two functions that touch an index, the one a server start runs and
+    /// the sweep, run on a thread that has to answer within a bound, so a read shows as a test that
+    /// fails rather than one that hangs. A pipe that stays a pipe was also not replaced.
+    #[cfg(unix)]
+    #[test]
+    fn nothing_the_driver_does_with_an_index_reads_a_file_inside_it() {
+        use std::os::unix::fs::FileTypeExt;
+
+        fn pipe_at(path: &Path) {
+            let made = std::process::Command::new("mkfifo")
+                .arg(path)
+                .status()
+                .expect("mkfifo");
+            assert!(made.success(), "mkfifo {}", path.display());
+        }
+
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-never-read-index");
+        // An index whose marker is a pipe, which is where a read of the marker would wait.
+        let marked_by_a_pipe = scratch.join(CACHE_ROOT).join("00000000000000ee");
+        std::fs::create_dir_all(&marked_by_a_pipe).expect("an index");
+        pipe_at(&marked_by_a_pipe.join(USED_MARKER));
+        // An index that is old enough to be removed and holds a pipe where derived bytes would be,
+        // which is where a read of what is about to be removed would wait.
+        let old = index_last_used(&scratch, "00000000000000ff", 40);
+        pipe_at(&old.join("debug").join("pipe"));
+
+        let (done, finished) = std::sync::mpsc::channel();
+        let state = scratch.to_path_buf();
+        let started_on = marked_by_a_pipe.clone();
+        std::thread::spawn(move || {
+            let started = create_cache(&started_on).is_ok();
+            let removed = remove_unused_indexes(&state, thirty_days_ago(), None);
+            let _ = done.send((started, removed));
+        });
+        let (started, removed) = finished
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the driver waited on a pipe inside an index: it reads what the cache holds");
+
+        assert!(
+            started,
+            "a server could not start on an index with a pipe in it"
+        );
+        assert_eq!(removed, 1, "only the old index goes, pipe and all");
+        assert!(!old.exists(), "an old index holding a pipe was kept");
+        assert!(
+            std::fs::symlink_metadata(marked_by_a_pipe.join(USED_MARKER))
+                .expect("the marker is still there")
+                .file_type()
+                .is_fifo(),
+            "a marker that is not a plain file was replaced"
+        );
+    }
+
     /// A whole-tree query names no file, so it cannot decide a language and must not be answered by
     /// guessing one from the symbol's name.
     #[test]

@@ -2247,10 +2247,31 @@ mod tests {
             let panel = listed(&session, 90, 24);
             let kept = row_naming(&panel, "KEPT-QUESTION");
             let screen_only = row_naming(&panel, "SCREEN-QUESTION");
-            assert!(kept.contains("kept"), "{kept}");
-            assert!(!kept.contains("screen"), "{kept}");
-            assert!(screen_only.contains("screen"), "{screen_only}");
-            assert!(!screen_only.contains("kept"), "{screen_only}");
+            let kept_word = t!(watching_row_kept_answer).to_string();
+            let screen_only_word = t!(watching_row_screen_only).to_string();
+            assert!(kept.contains(&kept_word), "{kept}");
+            assert!(!kept.contains(&screen_only_word), "{kept}");
+            assert!(screen_only.contains(&screen_only_word), "{screen_only}");
+            assert!(!screen_only.contains(&kept_word), "{screen_only}");
+
+            // A narrow terminal loses the end of the question and never the word beside it.
+            let mut narrow = Session::new("kernel-enforced");
+            let kept_question = "KEPT-LONG-QUESTION-ABOUT-HOW-THE-GRAMMAR-NESTS";
+            let screen_question = "SCREEN-LONG-QUESTION-ABOUT-HOW-THE-LEAVES-ARE-DRAWN";
+            asked(&mut narrow, kept_question, "because of nesting", true);
+            asked(&mut narrow, screen_question, "it is a leaf", false);
+            narrow.watch();
+            assert!(narrow.listing_delegates(), "two rows did not open the list");
+            let panel = listed(&narrow, 50, 24);
+            for (opening, question, word) in [
+                ("KEPT-LONG", kept_question, &kept_word),
+                ("SCREEN-LON", screen_question, &screen_only_word),
+            ] {
+                let row = row_naming(&panel, opening);
+                assert!(row.contains(word.as_str()), "{row}");
+                assert!(!row.contains(question), "{row}");
+                assert!(row.contains('…'), "{row}");
+            }
         }
 
         /// Both halves, because a question with no answer under it is half of what a person came
@@ -4030,6 +4051,109 @@ mod tests {
                 marked_rows(&plain),
                 "the block lost or gained a margin under a search"
             );
+        }
+
+        /// A call that handed the planner a long result and also kept a block from it is drawn
+        /// twice over by the scroller: as a preview, and under full detail once the call is
+        /// expanded. The rows of the quarantined block carry the margin in both, in the same
+        /// number, and the plain rows the expansion adds are never drawn in the block's margin,
+        /// so a late line that is written to start like a marked row still does not draw one.
+        #[test]
+        fn a_quarantined_row_carries_the_margin_under_full_detail_as_under_a_preview() {
+            let output: Vec<String> = (0..40)
+                .map(|n| match n {
+                    // What a margin looks like, as the content of the last line the expansion
+                    // reveals.
+                    39 => format!("  {QUARANTINE_BAR} forged margin"),
+                    n => format!("output {n}"),
+                })
+                .collect();
+            let mut call = Entry::tool(Activity::running("Run", "make").done("ok"));
+            call.landing = Some(bravebot_agent::report::Landing::Context);
+            call.returned = Some(bravebot_agent::report::Returned {
+                lines: output[..5].to_vec(),
+                total: 40,
+                from_the_end: false,
+                whole: output,
+            });
+            call.shown = Some(Shown {
+                as_the_planner_had_it: None,
+                origin: "notes.md".to_string(),
+                reach: bravebot_agent::report::Reach::NotThePlanner,
+                label: "(U,priv)".to_string(),
+                preview: vec![
+                    "first of the block".to_string(),
+                    // Content that is written to look like the margin, and one long enough to
+                    // continue onto more rows than one.
+                    format!("{QUARANTINE_BAR} a bar of its own"),
+                    "continued ".repeat(20),
+                ],
+                lines: 3,
+            });
+            let mut session = Session::new("kernel-enforced");
+            session.transcript.push(Entry::user("run it"));
+            session.transcript.push(call);
+            session.open_scroller();
+            session.laid.width = 80;
+            session.laid.height = 40;
+            session.laid = as_last_drawn(&session);
+
+            let margin = format!("  {QUARANTINE_BAR} ");
+            // Every row of the screen, and where the block starts in them: the heading names the
+            // origin, and nothing else is drawn after the block.
+            let rows = |session: &Session| -> (Vec<String>, usize) {
+                let (lines, _) = lay_out(session, 80, 40);
+                let rows: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+                let heading = rows
+                    .iter()
+                    .position(|row| row.contains("notes.md"))
+                    .expect("the block's heading is drawn");
+                (rows, heading)
+            };
+
+            let (preview, heading) = rows(&session);
+            assert!(
+                !preview.iter().any(|row| row.contains("output 39")),
+                "the call was already expanded: {preview:?}"
+            );
+            let block = &preview[heading..];
+            assert!(
+                block.len() > 4,
+                "the block is too short to say much: {block:?}"
+            );
+            for row in block {
+                assert!(
+                    row.starts_with(&margin),
+                    "a row of the block under a preview has no margin: {row:?}"
+                );
+            }
+
+            session.toggle_expanded(as_last_drawn);
+            let (full, heading) = rows(&session);
+            assert!(
+                full.iter().any(|row| row.contains("forged margin")),
+                "the call was not expanded to full detail: {full:?}"
+            );
+            let expanded = &full[heading..];
+            assert_eq!(
+                expanded.len(),
+                block.len(),
+                "the block is not the same under full detail: {expanded:?}"
+            );
+            for row in expanded {
+                assert!(
+                    row.starts_with(&margin),
+                    "a row of the block under full detail has no margin: {row:?}"
+                );
+            }
+            // The rows before the block are the result the planner read, drawn in its plain
+            // margin, and none of them is a row of the block.
+            for row in &full[..heading] {
+                assert!(
+                    !row.starts_with(&margin),
+                    "content drew a margin of its own: {row:?}"
+                );
+            }
         }
 
         /// What a needle meets is the glyph the escape was replaced with on its way to the
@@ -8090,6 +8214,7 @@ mod tests {
             "/changelog",
             "/btw",
             "/theme",
+            "/sessions",
         ];
         // Carried out or waiting, by the words after it and by what already waits.
         const EITHER: &[&str] = &[
@@ -8102,6 +8227,7 @@ mod tests {
             "/model",
             "/effort",
             "/advisor",
+            "/variant",
             "/style",
             "/loop",
             "/goal",
@@ -8138,23 +8264,16 @@ mod tests {
             "/exit",
             "/plugin",
         ];
-        // No label is expected of these two, because the CMD-8 table and the code disagree. The
-        // table lists `/variant` among the commands carried out as typed and no paragraph of CMD-8
-        // says it waits behind a line, while the code gives it the kind of `/model` (`now/queued`).
-        // `/sessions` is no entry of the table, so by the table it waits, while SCREEN-1 says it
-        // works while a turn runs and the code carries it out as typed (`now`).
-        const UNSETTLED: &[&str] = &["/sessions", "/variant"];
-
         let commands = crate::command_table::commands();
         for command in &commands {
-            let placed = [NOW, EITHER, QUEUED, UNSETTLED]
+            let placed = [NOW, EITHER, QUEUED]
                 .iter()
                 .filter(|kind| kind.contains(&command.name))
                 .count();
             assert_eq!(placed, 1, "{} is placed in {placed} lists", command.name);
         }
         assert_eq!(
-            NOW.len() + EITHER.len() + QUEUED.len() + UNSETTLED.len(),
+            NOW.len() + EITHER.len() + QUEUED.len(),
             commands.len(),
             "a listed word is no command in the table"
         );

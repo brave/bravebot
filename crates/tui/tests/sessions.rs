@@ -1989,6 +1989,73 @@ fn a_question_asked_beside_the_work_survives_a_resume() {
     );
 }
 
+/// SESSION-20: a record written before the asides were kept has no `asides` key, and reads as a
+/// session with no questions beside it, which is what such a session was. The key is taken out of a
+/// record that holds one, so the file read back is the one an older build wrote.
+///
+/// Rejects an `asides` field with no default: the older record would not load, and it would drop out
+/// of the resume list although its conversation is intact.
+#[test]
+fn a_record_from_before_asides_were_kept_reads_as_a_session_with_no_questions() {
+    let scratch = Scratch::new("asides-absent");
+    let conversation = a_conversation();
+    let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    handle.save(
+        "make a space invaders game",
+        Standing {
+            history: None,
+            conversation: &conversation.snapshot(),
+            turns: 1,
+            tokens: 1_200,
+            split: Default::default(),
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &a_plan(),
+            asides: &[bravebot_session::sessions::Aside {
+                question: "why is the parser recursive?".to_string(),
+                answer: Some("because the grammar nests".to_string()),
+                kept: true,
+            }],
+            trust: &a_trust_map(),
+            programs: &a_program_list(),
+            directories: &[],
+            manifest: None,
+            rewind: &[],
+            checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
+        },
+    );
+    let path = sessions::project_directory(&scratch.project)
+        .expect("directory")
+        .join(format!("{}.json", handle.id()));
+    let mut body: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(
+        body.as_object_mut().unwrap().remove("asides").is_some(),
+        "the record written with a question beside the work holds no `asides` key to take out"
+    );
+    std::fs::write(&path, serde_json::to_vec(&body).unwrap()).unwrap();
+
+    let record = sessions::load(&scratch.project, handle.id())
+        .expect("a record without the key still loads");
+    assert!(record.asides.is_empty());
+    assert!(
+        sessions::recall(&scratch.project, &record)
+            .asides
+            .is_empty(),
+        "a record written before the asides were kept recalled some"
+    );
+    assert_eq!(
+        Conversation::restored(record.conversation.clone())
+            .messages()
+            .len(),
+        conversation.messages().len(),
+        "the record's conversation was not read back whole"
+    );
+}
+
 /// A picture is part of the message the user sent, and a resume that brought the words back without
 /// it would leave the planner answering about something it can no longer see. The record is the only
 /// place the bytes outlive the process that pasted them: the clipboard has moved on.

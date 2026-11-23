@@ -699,6 +699,7 @@ which is drawn before any file this program reads has been looked for.
 `verified-by: bravebot_tui::avatar::the_face_stays_at_rest_where_no_motion_is_asked_for`
 `verified-by: bravebot_tui::lib::a_presentation_variable_says_nothing_beyond_being_set`
 `verified-by: bravebot_tui::indicator::the_live_path_reads_no_motion_from_the_environment_by_presence`
+`verified-by: bravebot_tui::avatar::the_live_face_is_still_where_the_environment_asks_for_no_motion`
 
 
 <a id="VIEW-22"></a>
@@ -765,6 +766,10 @@ a model was slow exactly as it draws a slow program.
 `verified-by: bravebot_cli::progress::a_finished_call_that_asked_no_model_prints_nothing_about_one`
 `verified-by: bravebot_ui_bridge::reporting::what_a_call_spent_at_a_model_reaches_a_front_end`
 `verified-by: bravebot_agent::turn::what_a_check_cost_reaches_the_row_the_call_drew`
+`verified-by: bravebot_agent::turn::what_a_processor_cost_reaches_the_row_the_call_drew`
+`verified-by: bravebot_agent::turn::what_a_processor_that_chose_cost_reaches_the_row_the_call_drew`
+`verified-by: bravebot_agent::turn::what_a_processor_that_wrote_no_document_cost_reaches_the_row_the_call_drew`
+`verified-by: bravebot_agent::turn::what_a_processor_that_failed_cost_reaches_the_row_the_call_drew`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which renders the real transcript row through react-dom and asserts that the figure reaches the markup, written past a minute as the terminal writes it, that a call which asked no model draws none, and that a wait under a second is left off; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
 
 

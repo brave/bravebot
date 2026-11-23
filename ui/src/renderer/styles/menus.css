@@ -50,3 +50,12 @@ leo-menu-item[aria-disabled='true'] .menu-icon-row { --leo-icon-color: var(--leo
   --leo-icon-color: var(--ink-accent);
 }
 .menu-detail { color: var(--ink-tertiary); }
+/* A heading over a menu's items, in caption ink as the sidebar's group headings are. It is not an
+   item: it takes no pointer or focus. Its side padding is the items' own. */
+.menu-heading {
+  cursor: default;
+  padding: var(--leo-spacing-s) var(--leo-spacing-m) 0;
+  font: var(--type-caption-strong);
+  color: var(--ink-tertiary);
+  user-select: none;
+}

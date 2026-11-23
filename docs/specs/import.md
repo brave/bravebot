@@ -593,6 +593,7 @@ that answers yes on their behalf.
 
 `verified-by: bravebot_cli::running::a_one_shot_first_run_names_the_import_command_and_asks_nothing`
 `verified-by: bravebot_cli::running::an_exported_key_is_importable_and_the_refusal_names_the_command`
+`verified-by: bravebot_cli::running::a_json_first_run_names_the_import_command_and_asks_nothing`
 `verified-by: bravebot_cli::running::a_one_shot_first_run_with_ollama_running_names_the_import_command`
 `verified-by: bravebot_cli::running::a_one_shot_first_run_with_a_server_running_names_the_import_command`
 `verified-by: bravebot_cli::import::the_command_line_names_every_source_that_holds_something`

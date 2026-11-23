@@ -544,6 +544,7 @@ failed request.
 `verified-by: bravebot_net::egress::a_refusal_after_a_redirect_carries_no_body_and_names_the_url_that_was_asked_for`
 `verified-by: bravebot_net::egress::a_request_that_waits_without_bound_is_not_handed_a_refusals_body`
 `verified-by: bravebot_net::lib::a_refusals_body_is_in_no_text_made_from_the_failure`
+`verified-by: bravebot_net::egress::a_key_the_service_repeats_in_a_refusals_body_is_in_no_failure_text_event_or_log_line`
 
 ## Known costs
 

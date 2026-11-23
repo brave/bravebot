@@ -48,11 +48,14 @@ const catalogEnUs = {
   uiAppearanceDark: (): string => 'Dark',
   uiAppearanceLight: (): string => 'Light',
   uiAppearanceSystem: (): string => 'System',
+  uiContextAllOff: (): string => 'Every section is turned off. Use Choose sections to show one.',
   uiContextOutOfRequest: ({ count }: { count: number }): string => {
     const category = plural.en.select(count)
     if (category === 'one') return String(count) + ' earlier message kept out of the request, recalled when relevant'
     return String(count) + ' earlier messages kept out of the request, recalled when relevant'
   },
+  uiContextSections: (): string => 'Choose sections',
+  uiContextSectionsHeading: (): string => 'Sections',
   uiCrashReportsNotice: (): string => 'If BraveBot crashes, it sends Brave a report the next time it starts. The report holds the version, your operating system and the line of BraveBot\'s source that failed. It never holds your prompts, files or keys. You can turn this off in Settings, under General, or by setting BRAVEBOT_CRASH_REPORTS=0 in the environment.',
   uiCrashReportsNoticeDismiss: (): string => 'Dismiss crash reports notice',
   uiCrashReportsNoticeLess: (): string => 'Less',
@@ -250,7 +253,10 @@ const catalogFr: Messages = {
   uiAppearanceDark: (): string => 'Sombre',
   uiAppearanceLight: (): string => 'Clair',
   uiAppearanceSystem: (): string => 'Système',
+  uiContextAllOff: (): string => 'Toutes les sections sont désactivées. Utilisez Choisir les sections pour en afficher une.',
   uiContextOutOfRequest: catalogEnUs.uiContextOutOfRequest,
+  uiContextSections: (): string => 'Choisir les sections',
+  uiContextSectionsHeading: (): string => 'Sections',
   uiCrashReportsNotice: (): string => 'Si BraveBot plante, il envoie à Brave un rapport au démarrage suivant. Le rapport contient la version, votre système d\'exploitation et la ligne du code source de BraveBot qui a échoué. Il ne contient jamais vos invites, vos fichiers ni vos clés. Vous pouvez le désactiver dans les réglages, sous Général, ou en définissant BRAVEBOT_CRASH_REPORTS=0 dans l\'environnement.',
   uiCrashReportsNoticeDismiss: (): string => 'Fermer l\'avis sur les rapports de plantage',
   uiCrashReportsNoticeLess: (): string => 'Moins',

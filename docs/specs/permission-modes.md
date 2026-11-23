@@ -78,9 +78,11 @@ runs in this mode without being asked about, so there this mode does not put eve
 decision somebody made; this one is what holds when they have made none.
 
 `verified-by: bravebot_agent::permission_mode::the_default_mode_asks_about_everything`
+`verified-by: bravebot_agent::permission_mode::asking_puts_a_write_a_run_an_output_a_file_and_a_vouch_to_the_person`
 `verified-by: bravebot_tui::state::a_session_starts_by_asking_about_everything`
 `verified-by: bravebot_tui::app::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
 `verified-by: bravebot_cli::auto_start::the_flag_opens_a_session_in_auto_and_a_start_without_it_asks`
+`verified-by: bravebot_cli::running::a_one_shot_run_with_no_flag_and_no_setting_opens_asking`
 
 <a id="MODE-2"></a>
 ### MODE-2: accepting edits answers the write prompt and no other, except where the write would create a credential or lands on a protected path
