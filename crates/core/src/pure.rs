@@ -1442,6 +1442,87 @@ mod tests {
         assert_eq!(read_set("wc", &args(&["--files0-f=list"])), None);
     }
 
+    /// Each abbreviation below begins exactly one listed option, so a lookup that resolved it the
+    /// way GNU `getopt_long` resolves a unique prefix would read it as that option and prove the
+    /// call. The same call spelled in full is proven, so the two answers differ only by the
+    /// spelling.
+    #[test]
+    fn an_abbreviation_of_a_listed_option_proves_nothing() {
+        let calls: &[(&str, &[&str], &[&str])] = &[
+            (
+                "diff",
+                &["--brief", "a.txt", "b.txt"],
+                &["--brie", "a.txt", "b.txt"],
+            ),
+            ("du", &["--summarize", "dir"], &["--summar", "dir"]),
+            ("du", &["--max-depth=1", "dir"], &["--max-dep=1", "dir"]),
+            (
+                "sort",
+                &["--key", "1", "notes.txt"],
+                &["--ke", "1", "notes.txt"],
+            ),
+            (
+                "grep",
+                &["--recursive", "TODO", "src"],
+                &["--recursi", "TODO", "src"],
+            ),
+        ];
+        for (program, full, abbreviated) in calls {
+            assert!(
+                read_set(program, &args(full)).is_some(),
+                "{program} {full:?} was not proven"
+            );
+            assert_eq!(
+                read_set(program, &args(abbreviated)),
+                None,
+                "{program} {abbreviated:?} was proven"
+            );
+        }
+    }
+
+    /// A value written on its option, as in `-f1` or `--key=1`, is part of that word, so the word
+    /// after it is still a file the call reads. Skipping the next word for an attached value as
+    /// well would leave `rows.csv` out of the answer, and a file nobody vouched for would be read
+    /// under a proof that never named it. Each call is checked against the same call with the
+    /// value given as the next word.
+    #[test]
+    fn an_option_value_attached_to_its_option_leaves_the_next_word_a_path() {
+        // The last word of every call is the one file it reads.
+        let calls: &[(&str, &[&str], &[&str])] = &[
+            ("cut", &["-f1", "rows.csv"], &["-f", "1", "rows.csv"]),
+            ("cut", &["-d,", "rows.csv"], &["-d", ",", "rows.csv"]),
+            ("head", &["-n20", "notes.txt"], &["-n", "20", "notes.txt"]),
+            (
+                "sort",
+                &["--key=1", "notes.txt"],
+                &["--key", "1", "notes.txt"],
+            ),
+            (
+                "du",
+                &["--max-depth=1", "dir"],
+                &["--max-depth", "1", "dir"],
+            ),
+            (
+                "grep",
+                &["--max-count=1", "TODO", "notes.txt"],
+                &["--max-count", "1", "TODO", "notes.txt"],
+            ),
+        ];
+        for (program, attached, apart) in calls {
+            let expected = Some(vec![apart.last().unwrap().to_string()]);
+            assert_eq!(
+                read_set(program, &args(attached)),
+                expected,
+                "{program} {attached:?} did not name its file"
+            );
+            assert_eq!(
+                read_set(program, &args(apart)),
+                expected,
+                "{program} {apart:?} did not name its file"
+            );
+        }
+    }
+
     /// An option the entry does not list proves nothing, whatever it looks like. This is what makes
     /// the list an allowlist: `-S` makes one grep follow symlinks out of the tree it was pointed
     /// at, and nobody has to have thought of it.

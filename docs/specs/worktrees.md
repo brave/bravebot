@@ -150,7 +150,8 @@ it goes with the session and with whatever was done in it
 ([CHECKOUT-6](checkouts.md#CHECKOUT-6)).
 
 Each refusal names which of these it was, in the driver's words, and carries no text read from the
-repository.
+repository. A refusal caused by an entry under a path the map does not trust is one fixed sentence
+that names none of them ([CHECKOUT-4](checkouts.md#CHECKOUT-4)).
 
 **Why a temporary worktree is refused.** A delegate's work in a temporary checkout is brought back
 with `apply_checkout` before the session ends. A session's work has no such step, so a temporary

@@ -42,13 +42,7 @@ const NAME_NARROWEST: usize = 8;
 
 /// The order the headings are drawn in: the order of [`Status::ORDER`] for the statuses a roster
 /// entry can have (SCREEN-16).
-const ORDER: [State; 5] = [
-    State::NeedsInput,
-    State::Interrupted,
-    State::Working,
-    State::Idle,
-    State::Stopped,
-];
+const ORDER: [State; 5] = bravebot_session::listing::ROSTER_ORDER;
 
 /// One session as the list draws it.
 #[derive(Debug, Clone, PartialEq, Eq)]

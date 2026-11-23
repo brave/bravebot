@@ -14,7 +14,9 @@
 //!
 //! The list is for a client that is the person's own program, started over a channel it shares with
 //! the host alone. It offers answers that grant trust, run a command and fetch a page, so a client
-//! reached any other way, such as over a network, needs a list of its own and not this one.
+//! reached any other way, such as over a network, needs a list of its own and not this one. Each
+//! client gives only the answers the person named for it on the host's command line ([`Answer`]),
+//! and a reply of any other kind is refused ([`check_answer`]).
 //!
 //! The parameters are checked as well as the method. A parameter the bridge would read but the
 //! list does not name is refused, not ignored: `turn.send` carries `prompt` and nothing that
@@ -61,16 +63,16 @@ pub const OFFERED: &[Operation] = &[
         method: "session.close",
         fields: &["session"],
     },
-    // Takes over a session whose client has gone. The host answers it itself.
+    // Joins a session another connection opened. The host answers it itself.
     Operation {
         method: "session.attach",
         fields: &["session"],
     },
-    // The one answer that widens what a session may read that the host's client gives. The client
-    // is the program the person named on the host's command line, started over a channel it shares
-    // with the host alone, so its answer is the person's own (see the client contract: startup
-    // trust is a local-client capability). A client that is not that, such as one reached over a
-    // network, is not offered it.
+    // The one answer that widens what a session may read that a client of the host gives, and only
+    // a client the person gave `trust` on the host's command line ([`Answer::Trust`]). Such a client
+    // is a program the person named, started over a channel it shares with the host alone, so its
+    // answer is the person's own (see the client contract: startup trust is a local-client
+    // capability). A client that is not that, such as one reached over a network, is not offered it.
     Operation {
         method: "trust.reply",
         fields: &["session", "trusted"],
@@ -108,21 +110,115 @@ pub const OFFERED: &[Operation] = &[
 /// The offered methods the host answers itself in `Host::dispatch`, which the bridge has no method for.
 pub const BY_THE_HOST: &[&str] = &["instance.info", "session.attach"];
 
-/// The kinds of question a client of the host can answer: the ones whose reply the host offers.
+/// A kind of answer a client of the host may give. The person names each client's answers on the
+/// host's command line (`--answers`), and nothing a client sends changes them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Answer {
+    Confirm,
+    Run,
+    Fetch,
+    Ask,
+    /// The startup question about the session's directory.
+    Trust,
+}
+
+impl Answer {
+    pub const ALL: [Self; 5] = [
+        Self::Confirm,
+        Self::Run,
+        Self::Fetch,
+        Self::Ask,
+        Self::Trust,
+    ];
+
+    /// The word the command line and `instance.info` use.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Confirm => "confirm",
+            Self::Run => "run",
+            Self::Fetch => "fetch",
+            Self::Ask => "ask",
+            Self::Trust => "trust",
+        }
+    }
+
+    /// The method that gives this answer.
+    fn reply(self) -> &'static str {
+        match self {
+            Self::Confirm => "confirm.reply",
+            Self::Run => "run.reply",
+            Self::Fetch => "fetch.reply",
+            Self::Ask => "ask.reply",
+            Self::Trust => "trust.reply",
+        }
+    }
+
+    /// The question of a turn this answers. The startup question is not one a turn asks.
+    fn question(self) -> Option<Kind> {
+        match self {
+            Self::Confirm => Some(Kind::Write),
+            Self::Run => Some(Kind::Run),
+            Self::Fetch => Some(Kind::Fetch),
+            Self::Ask => Some(Kind::Ask),
+            Self::Trust => None,
+        }
+    }
+
+    /// The answer `method` gives, where it is one.
+    pub fn given_by(method: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|answer| answer.reply() == method)
+    }
+
+    /// The answers a comma-separated list names, in the order of [`Answer::ALL`]. `none` alone is
+    /// no answer at all. An empty list, an unknown word or one named twice is refused, so a typing
+    /// mistake does not quietly give a client fewer or more answers than the person meant.
+    pub fn list(words: &str) -> Result<Vec<Self>, String> {
+        if words == "none" {
+            return Ok(Vec::new());
+        }
+        let mut answers = Vec::new();
+        for word in words.split(',') {
+            let Some(answer) = Self::ALL.into_iter().find(|answer| answer.word() == word) else {
+                return Err(format!(
+                    "`{word}` is not an answer; name some of confirm, run, fetch, ask and trust, \
+                     separated by commas, or none"
+                ));
+            };
+            if answers.contains(&answer) {
+                return Err(format!("`{word}` is named twice"));
+            }
+            answers.push(answer);
+        }
+        answers.sort();
+        Ok(answers)
+    }
+}
+
+/// The kinds of question a client that gives `answers` is asked: the ones whose reply the host
+/// offers and that client may give.
 ///
 /// Derived from [`OFFERED`] so that offering a reply method and being asked its question are one
-/// decision. `trust.reply` is not here: the startup question is not one a turn asks.
-pub fn answerable() -> Vec<Kind> {
+/// decision. `trust.reply` gives none: the startup question is not one a turn asks.
+pub fn answerable(answers: &[Answer]) -> Vec<Kind> {
     OFFERED
         .iter()
-        .filter_map(|operation| match operation.method {
-            "confirm.reply" => Some(Kind::Write),
-            "run.reply" => Some(Kind::Run),
-            "fetch.reply" => Some(Kind::Fetch),
-            "ask.reply" => Some(Kind::Ask),
-            _ => None,
-        })
+        .filter_map(|operation| Answer::given_by(operation.method))
+        .filter(|answer| answers.contains(answer))
+        .filter_map(Answer::question)
         .collect()
+}
+
+/// Refuse a reply that gives an answer the connection may not give. Any other request passes.
+pub fn check_answer(request: &Request, answers: &[Answer]) -> Result<(), Failure> {
+    match Answer::given_by(&request.method) {
+        Some(answer) if !answers.contains(&answer) => Err(refused(format!(
+            "this client may not give `{}` answers",
+            answer.word()
+        ))),
+        _ => Ok(()),
+    }
 }
 
 /// The bridge methods the host does not offer.
@@ -132,6 +228,9 @@ pub fn answerable() -> Vec<Kind> {
 pub const DENIED: &[&str] = &[
     // Reach saved sessions, every project's list, and other directories.
     "session.list",
+    "background.list",
+    // Totals what every project's records spent (CLI-37).
+    "session.stats",
     "session.open",
     "session.fork",
     "session.addressed",
@@ -149,6 +248,8 @@ pub const DENIED: &[&str] = &[
     // Change how the host's own sessions behave, which a person at the host decides.
     "session.mode",
     "session.sandbox",
+    "session.limit",
+    "session.variant",
     "settings.inspect",
     "settings.select",
     "permissions.list",
@@ -161,6 +262,13 @@ pub const DENIED: &[&str] = &[
     "usage_ping.set",
     "usage_ping.notice_due",
     "usage_ping.mark_notice_shown",
+    // The machine's crash report switch and the one-time notice about it. The notice belongs to the
+    // window, not to a client of the host: such a client has no screen to show it on, and whether
+    // reports are on in this process and the switch are the person's at the host.
+    "crash_reports.get",
+    "crash_reports.set",
+    "crash_reports.notice_due",
+    "crash_reports.mark_notice_shown",
     // The machine's recorded effort level, which the terminal shares.
     "effort.get",
     "effort.set",
@@ -182,6 +290,13 @@ pub const DENIED: &[&str] = &[
     "bug-report.compose",
     // What the desktop window reports about its own page, which a client of the host has none of.
     "window.fault",
+    // The text of the desktop window's own title (PANEL-19), which a client of the host has no
+    // window to show.
+    "window.title",
+    // Which of the session-bus names the desktop window's main process holds lead to a socket a
+    // stage may write (SANDBOX-30). The directories a session may write are those of this process,
+    // and a client of the host has no opener to protect.
+    "opener.judge",
     "update.status",
     // The machine's sign-ins, which are its person's and not a workspace's, and the sign-in the
     // window starts only after its main process asked that person.
@@ -219,6 +334,32 @@ pub const DENIED: &[&str] = &[
     // (INPUT-50). The only client of the host today has no box to put it in.
     "session.enhance",
     "session.enhance.cancel",
+    // The `/cost`, `/context`, `/request` and `/status` reports the window's Chat menu opens
+    // (CMD-19). The only client of the host today has no menu that asks for them, and the last
+    // request holds the session's whole system prompt and the paths of its instruction files.
+    "session.report.cost",
+    "session.report.context",
+    "session.report.request",
+    "session.report.status",
+    // Shortening a conversation, which a person asks for from the window's Chat menu (CMD-34). The
+    // only client of the host today has no menu to ask from.
+    "session.compact",
+    "session.compact.cancel",
+    // Asking for a brief to hand a chat off from, which a person asks for from the window's Chat
+    // menu (SESSION-34, CMD-34). The only client of the host today has no menu to ask from.
+    "session.handoff",
+    "session.handoff.cancel",
+    // Handing a chat to a background session on this machine, which a person asks for from the
+    // window's Chat menu (BG-2, CMD-34), and stopping one, which a person asks for from the chat
+    // list's menu (BG-11). The only client of the host today has no menu to ask from.
+    "session.background",
+    "session.background.stop",
+    // A question asked beside the work, for the `/btw` or `/recap` line a person typed into the
+    // window's own composer (CMD-1, CMD-8, CMD-16). A client of the host is a program, and a
+    // program never types it.
+    "session.btw",
+    "session.recap",
+    "session.aside.cancel",
     // Answers that widen what a session may do or read beyond `trust.reply` above, which are not
     // offered to any client yet.
     "output.reply",
@@ -292,7 +433,15 @@ mod tests {
 
     #[test]
     fn a_method_the_host_does_not_name_is_refused_whether_or_not_the_bridge_has_it() {
-        for method in ["session.list", "settings.select", "no.such.method", ""] {
+        for method in [
+            "session.list",
+            "background.list",
+            "settings.select",
+            "crash_reports.notice_due",
+            "crash_reports.mark_notice_shown",
+            "no.such.method",
+            "",
+        ] {
             let failure = check(&request(method, json!({}))).err().expect("refused");
             assert_eq!(failure.code, ErrorCode::NotAllowed, "{method}");
         }
@@ -338,9 +487,56 @@ mod tests {
             ["confirm.reply", "run.reply", "fetch.reply", "ask.reply"]
         );
         assert_eq!(
-            answerable(),
+            answerable(&Answer::ALL),
             [Kind::Write, Kind::Run, Kind::Fetch, Kind::Ask]
         );
+        for answer in Answer::ALL {
+            assert!(
+                OFFERED
+                    .iter()
+                    .any(|operation| operation.method == answer.reply()),
+                "{} is not offered",
+                answer.reply()
+            );
+        }
+    }
+
+    /// A client is asked only the questions whose answers it may give, so one that may not
+    /// confirm a write is never shown one.
+    #[test]
+    fn a_client_is_asked_only_the_kinds_it_may_answer() {
+        assert_eq!(answerable(&[Answer::Run, Answer::Trust]), [Kind::Run]);
+        assert_eq!(answerable(&[Answer::Trust]), []);
+        assert_eq!(answerable(&[]), []);
+    }
+
+    #[test]
+    fn a_reply_the_client_may_not_give_is_refused_and_any_other_request_passes() {
+        let trust = request("trust.reply", json!({"session": "s1", "trusted": true}));
+        let failure = check_answer(&trust, &[Answer::Confirm]).expect_err("refused");
+        assert_eq!(failure.code, ErrorCode::NotAllowed);
+        assert!(check_answer(&trust, &[Answer::Trust]).is_ok());
+        let send = request("turn.send", json!({}));
+        assert!(check_answer(&send, &[]).is_ok());
+    }
+
+    #[test]
+    fn a_list_of_answers_names_known_words_once_or_none() {
+        assert_eq!(
+            Answer::list("trust,confirm"),
+            Ok(vec![Answer::Confirm, Answer::Trust])
+        );
+        assert_eq!(Answer::list("none"), Ok(vec![]));
+        for wrong in [
+            "",
+            "confirm,",
+            "write",
+            "confirm,confirm",
+            "none,run",
+            "Confirm",
+        ] {
+            assert!(Answer::list(wrong).is_err(), "{wrong:?} was accepted");
+        }
     }
 
     /// Rejects an offer of `schedule.command` to a client of the host: a program never types the
@@ -357,10 +553,48 @@ mod tests {
         assert_eq!(failure.code, ErrorCode::NotAllowed);
     }
 
+    /// Rejects `session.btw`, `session.recap` and `session.aside.cancel` for a client of the host:
+    /// a program never types the `/btw` or `/recap` line (CMD-1), so the methods are the window's
+    /// alone.
+    #[test]
+    fn asking_beside_the_work_is_denied_to_a_client_of_the_host() {
+        for method in ["session.btw", "session.recap", "session.aside.cancel"] {
+            assert!(DENIED.contains(&method), "{method}");
+            let failure = check(&request(method, json!({"session": "s1"})))
+                .err()
+                .expect("refused");
+            assert_eq!(failure.code, ErrorCode::NotAllowed, "{method}");
+        }
+    }
+
     #[test]
     fn no_method_is_both_offered_and_denied() {
         for operation in OFFERED {
             assert!(!DENIED.contains(&operation.method), "{}", operation.method);
+        }
+    }
+
+    /// CRASH-9: the crash report switch and its notice are the person's at the host, so a client of
+    /// the host may call none of the four methods. The faults this rejects are a method moved to
+    /// the offered list, which would let a client turn reports off or mark the notice shown, and a
+    /// method dropped from both lists.
+    #[test]
+    fn the_crash_report_methods_are_denied_to_a_client_of_the_host() {
+        for method in [
+            "crash_reports.get",
+            "crash_reports.set",
+            "crash_reports.notice_due",
+            "crash_reports.mark_notice_shown",
+        ] {
+            assert!(DENIED.contains(&method), "{method} is not denied");
+            assert!(
+                OFFERED.iter().all(|operation| operation.method != method),
+                "{method} is offered"
+            );
+            let failure = check(&request(method, json!({"enabled": false})))
+                .err()
+                .expect("refused");
+            assert_eq!(failure.code, ErrorCode::NotAllowed, "{method}");
         }
     }
 }

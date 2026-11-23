@@ -60,8 +60,9 @@ such as a write.
 
 Some characters draw as nothing: zero-width characters, bidirectional controls, variation selectors
 and the tag characters, which write ASCII letters that a model reads. Those two questions write each
-one out as `‹U+XXXX›`, and a tag character also with the letter it stands for. A sentence above the
-text says how many there are. The planner receives the text itself.
+one out as `‹U+XXXX›`, and a tag character also with the letter it stands for. The question to vouch
+for a file does the same for the lines of the file it shows. A sentence above the text says how many
+there are. The planner receives the text itself.
 
 A control character in text or a name drawn for you is replaced by a mark and never dropped. The
 characters below U+0020 become their Control Pictures (an escape reads as `␛`), DEL becomes `␡`, and

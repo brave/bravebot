@@ -31,6 +31,11 @@ pub(crate) struct Finished<'a> {
     pub(crate) ending: Ending,
     /// What to say where one model was asked for and another one answered.
     pub(crate) not_served: Option<&'a str>,
+    /// Whether `reply` is a manifest run's answer going to a terminal, which is written with its
+    /// control characters replaced because the slot it names is untrusted text released as it came
+    /// (LAYER-3). The caller says so from the stream and the mode, never from the reply: a pipe, a
+    /// file, a result object and an ordinary turn's reply are written as they are (CLI-5).
+    pub(crate) draw_the_reply: bool,
 }
 
 /// Write a finished turn: the reply to `reply`, every other word to `beside`.
@@ -53,7 +58,14 @@ pub(crate) fn report(reply: &mut impl Write, beside: &mut impl Write, run: &Fini
         };
         let _ = writeln!(beside, "{said}");
     }
-    let _ = writeln!(reply, "{}", run.reply);
+    let drawn;
+    let answer = if run.draw_the_reply {
+        drawn = crate::progress::printable_lines(run.reply);
+        drawn.as_str()
+    } else {
+        run.reply
+    };
+    let _ = writeln!(reply, "{answer}");
     if let Some(attempt) = run.attempt {
         let _ = writeln!(beside);
         let _ = write!(beside, "{}", crate::progress::printable_lines(attempt));

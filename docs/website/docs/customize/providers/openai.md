@@ -25,7 +25,7 @@ OpenAI's is sent chat completions, as [Chat completions](#chat-completions) says
 `OPENAI_API_KEY=<your key>`, or store it with `bravebot auth login gateway openai`, which needs no
 block written first: it adds `"provider": {"openai": {}}` to your settings, and that entry sends the
 stored key to `api.openai.com`. A block you write yourself has to say where the key lives: one
-naming no `env`, no `options.apiKey` and no stored key sends none, and OpenAI refuses the request.
+naming no `env`, no `options.apiKey`, no `options.keyFile` and no stored key sends none, and OpenAI refuses the request.
 `OPENAI_API_KEY` is a name other OpenAI tools read as well, and naming it in `env` is what makes
 bravebot send the key your shell holds, so the entry the sign-in adds does not name it. Like any
 variable a `provider` block names, it is [withheld from the programs bravebot
@@ -119,6 +119,13 @@ Two things differ on this route at `api.openai.com`:
   description and from the model pages at `developers.openai.com`, so it changes with a release of bravebot. A
   Responses-only model that neither document names, such as one released since, is offered. `gpt-image-1-mini`
   is one, and this route refused it.
+
+The listing also leaves out the models that search the web before they reply: `gpt-5-search-api`,
+`gpt-4o-search-preview` and `gpt-4o-mini-search-preview`. Over chat completions the search runs at
+OpenAI and its results enter the reply without passing through bravebot's labels, so bravebot refuses
+the id wherever it would request it: `--model`, the `model` key, a recorded pick, `summaryModel`,
+`advisorModel`, a goal check and a definition's `model`. Listing the id under `models` does not
+change that. The Responses protocol, which the default `openai` entry uses, keeps them.
 
 A model is named with the id in front, as `openai/<model id>`, in `--model` or the `model` key.
 

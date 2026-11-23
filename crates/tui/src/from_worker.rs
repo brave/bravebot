@@ -103,9 +103,11 @@ pub(crate) fn show_in_a_turn(
         | ToMain::Manifest(_)
         | ToMain::ToolList(_)
         | ToMain::McpCall(_)
+        | ToMain::Apply(_)
         | ToMain::Move(_)
         | ToMain::Path(_)
         | ToMain::Host(_)
+        | ToMain::Hook(_)
         | ToMain::Ask(_)) => return Some(question),
     }
     None
@@ -119,6 +121,7 @@ mod tests {
     fn a_task_list() -> Vec<Row> {
         vec![Row {
             content: "write the test".to_string(),
+            as_the_planner_had_it: "write the test".to_string(),
             marker: "-",
             status: Status::Active,
         }]

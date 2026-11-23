@@ -177,7 +177,7 @@ class CheckTargets(unittest.TestCase):
                     "extension-trusted/tests/fixture.test.mjs",
                     "pnpm --dir ui install --frozen-lockfile", "pnpm --dir ui run typecheck",
                     "pnpm --dir ui run build", "node --test scripts/fixture.test.mjs",
-                    "node scripts/drive-manual-walkthrough.mjs"]
+                    "node scripts/drive-manual-walkthrough.mjs", "node scripts/drive-reports.mjs"]
         for failing in ("", *commands):
             with self.subTest(failing=failing):
                 result = self.run_make("check-ui", FAIL_COMMAND=failing)
@@ -231,13 +231,16 @@ class CheckTargets(unittest.TestCase):
                 (self.root / directory / "tests/fixture.test.mjs").touch()
 
     def test_linux_walkthrough_uses_a_virtual_display_and_preserves_its_failure(self):
-        """The headless CI route must not hide an Electron failure."""
-        command = "xvfb-run -a node scripts/drive-manual-walkthrough.mjs"
-        for failing in ("", command):
+        """The headless CI route must not hide an Electron failure, and a failed walkthrough stops
+        it before the reports drive."""
+        commands = ["xvfb-run -a node scripts/drive-manual-walkthrough.mjs",
+                    "xvfb-run -a node scripts/drive-reports.mjs"]
+        for failing in ("", *commands):
             with self.subTest(failing=failing):
                 result = self.run_make("check-ui-walkthrough", TEST_PLATFORM="Linux", FAIL_COMMAND=failing)
                 self.assertEqual(result.returncode != 0, bool(failing), result.stderr)
-                self.assertEqual(self.log.read_text().splitlines(), [command])
+                expected = commands[:commands.index(failing) + 1] if failing else commands
+                self.assertEqual(self.log.read_text().splitlines(), expected)
 
     def test_the_installer_test_precedes_the_lockfile_checks_and_each_failure_stops_the_gate(self):
         """Every project's lockfile gets the same gate, and the installer test and the lint's own

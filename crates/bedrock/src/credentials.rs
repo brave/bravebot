@@ -98,6 +98,12 @@ fn absent(command: &Command) -> bool {
 ///   the four `XDG_` directories to choose the handler it runs. Those names and kinds are those of
 ///   the browser opener (`crates/tui/src/opener.rs`). `XDG_DATA_DIRS` is also in the generic list
 ///   and is repeated here so this list reads as complete.
+/// - `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` are where `gio open`, which `xdg-open` runs
+///   under a GNOME session, finds the session bus (`$XDG_RUNTIME_DIR/bus` when the address is not
+///   set). A service a stage runs on a socket it can create answers as the bus. They are judged as
+///   the opener judges them: the directory as one directory and the address as a
+///   [`Names::BusAddress`]. Whether a service on such a socket can make `gio open` run code or
+///   choose a handler was not shown ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)).
 /// - `OPENSSL_CONF` is a configuration file of the OpenSSL the CLI bundles, which can load an
 ///   engine or a provider module, and `OPENSSL_CONF_INCLUDE` is where its `.include` lines are read
 ///   from. `OPENSSL_ENGINES` and `OPENSSL_MODULES` are where those engines and providers are loaded
@@ -118,7 +124,7 @@ fn absent(command: &Command) -> bool {
 /// frozen executable runs `AWS_PAGER` and `PAGER` only for output on a terminal, which every start
 /// here has piped. `AWS_DATA_PATH` names JSON service models, `AWS_CA_BUNDLE`, `SSL_CERT_FILE` and
 /// `SSL_CERT_DIR` name certificates, and `AWS_WEB_IDENTITY_TOKEN_FILE` names a token; none is run.
-const CODE_SELECTORS: [(&str, Names); 16] = [
+const CODE_SELECTORS: [(&str, Names); 18] = [
     ("AWS_CONFIG_FILE", Names::File),
     ("AWS_SHARED_CREDENTIALS_FILE", Names::File),
     selectors::BROWSER,
@@ -130,6 +136,8 @@ const CODE_SELECTORS: [(&str, Names); 16] = [
     ("XDG_DATA_DIRS", Names::Directories),
     ("XDG_CONFIG_HOME", Names::Directory),
     ("XDG_CONFIG_DIRS", Names::Directories),
+    selectors::XDG_RUNTIME_DIR,
+    selectors::DBUS_SESSION_BUS_ADDRESS,
     ("HOME", Names::Directory),
     ("PAGER", Names::Commands),
     ("MANPAGER", Names::Commands),
@@ -1062,10 +1070,97 @@ mod tests {
     /// not here: it is in the list and is kept only for a directory outside every stage's.
     #[test]
     fn the_aws_start_keeps_the_variables_a_sign_in_is_run_to_read() {
-        for name in ["AWS_PROFILE", "AWS_REGION", "DISPLAY", "XDG_RUNTIME_DIR"] {
+        for name in ["AWS_PROFILE", "AWS_REGION", "DISPLAY", "WAYLAND_DISPLAY"] {
             assert!(
                 !withheld_value(name, "/stage/anything"),
                 "{name} was removed"
+            );
+        }
+    }
+
+    /// SANDBOX-30, `gio open` under `aws sso login`: the session bus it connects to. The
+    /// regressions it rejects: neither name in the AWS list (a start that keeps both whatever they
+    /// hold), a name removed whatever it holds, which takes the person's own bus from
+    /// the sign-in, and `DBUS_SESSION_BUS_ADDRESS` judged as a path, which no address is.
+    #[test]
+    fn the_aws_start_removes_a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write()
+     {
+        assert!(withheld_value("XDG_RUNTIME_DIR", "/stage/run"));
+        assert!(withheld_value("XDG_RUNTIME_DIR", "run"));
+        assert!(!withheld_value("XDG_RUNTIME_DIR", "/safe/run"));
+
+        assert!(withheld_value(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/stage/run/bus"
+        ));
+        assert!(withheld_value(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/safe/run/bus;unix:path=/stage/run/bus"
+        ));
+        assert!(withheld_value(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:abstract=/tmp/dbus-x"
+        ));
+        assert!(!withheld_value(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/safe/run/bus"
+        ));
+        assert!(!withheld_value(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:runtime=yes"
+        ));
+    }
+
+    /// A runtime directory or bus address that is not text is judged as the bytes it is. The
+    /// regressions it rejects: `unix:path=/safe/run/bus` followed by a byte that is not UTF-8 read
+    /// as the path under `/safe` and kept, `/stage/run\xff` read as a path outside `/stage`, and a
+    /// value judged by its lossy rendering: the only path judged outside is the one spelled with
+    /// `U+FFFD`, which the bytes `\xff` render as but are not.
+    #[cfg(unix)]
+    #[test]
+    fn an_aws_runtime_directory_or_bus_address_that_is_not_text_is_judged_by_its_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+
+        assert!(withheld_bytes(
+            "DBUS_SESSION_BUS_ADDRESS",
+            OsStr::from_bytes(b"unix:path=/safe/run/bus\xff")
+        ));
+        assert!(withheld_bytes(
+            "XDG_RUNTIME_DIR",
+            OsStr::from_bytes(b"/stage/run\xff")
+        ));
+
+        let only_the_lookalike = |path: &Path| {
+            path == Path::new("/safe/run\u{FFFD}") || path == Path::new("/safe/run/bus\u{FFFD}")
+        };
+        let withheld_where_only_the_lookalike_is_outside = |name: &str, value: &OsStr| {
+            command_for_with(
+                Path::new("/usr/bin/aws"),
+                [(OsString::from(name), value.to_os_string())],
+                &only_the_lookalike,
+            )
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+        };
+        for (name, bytes, text) in [
+            (
+                "XDG_RUNTIME_DIR",
+                &b"/safe/run\xff"[..],
+                "/safe/run\u{FFFD}",
+            ),
+            (
+                "DBUS_SESSION_BUS_ADDRESS",
+                &b"unix:path=/safe/run/bus\xff"[..],
+                "unix:path=/safe/run/bus\u{FFFD}",
+            ),
+        ] {
+            assert!(
+                withheld_where_only_the_lookalike_is_outside(name, OsStr::from_bytes(bytes)),
+                "{name}: bytes were judged by their lossy rendering"
+            );
+            assert!(
+                !withheld_where_only_the_lookalike_is_outside(name, OsStr::new(text)),
+                "{name}: the genuine lookalike was removed"
             );
         }
     }
@@ -1545,7 +1640,8 @@ mod tests {
     }
 
     /// A checked start removes the generic names of `CODE_SELECTORS` in the sandbox crate as well
-    /// as the CLI's own, so `PYTHONPATH` and a `GIT_CONFIG_` name a stage may write do not reach it.
+    /// as the CLI's own, so `PYTHONPATH`, `PYTHONEXECUTABLE` and a `GIT_CONFIG_` name a stage may
+    /// write do not reach it.
     #[test]
     fn an_aws_start_has_the_generic_code_selectors_removed_as_well() {
         let (session, planted, genuine, _safe) = planted_and_genuine("credentials-generic");
@@ -1557,6 +1653,8 @@ mod tests {
         assert!(!withheld("DYLD_LIBRARY_PATH", &genuine, &session));
         assert!(withheld("DYLD_FRAMEWORK_PATH", &planted, &session));
         assert!(!withheld("DYLD_FRAMEWORK_PATH", &genuine, &session));
+        assert!(withheld("PYTHONEXECUTABLE", &planted, &session));
+        assert!(!withheld("PYTHONEXECUTABLE", &genuine, &session));
     }
 
     /// The whole path from the process environment to the program started: the real
@@ -1827,6 +1925,259 @@ mod tests {
         let said = absent.to_string();
         assert!(said.contains("none configured"), "{said}");
         assert!(said.contains("aws configure sso"), "{said}");
+    }
+
+    /// Set in a run of the test binary that has a stand-in `aws` first on `PATH`, to the directory
+    /// the stand-in writes its calls into.
+    #[cfg(unix)]
+    const STAND_IN_SESSION: &str = "BRAVEBOT_TEST_STAND_IN_AWS_SESSION";
+
+    /// What the stand-in prints for an export it refuses and for an export that succeeds.
+    #[cfg(unix)]
+    const EXPORT_REFUSED: &str = "echo refused >&2; exit 255";
+    #[cfg(unix)]
+    const EXPORT_GOOD: &str =
+        "echo '{\"Version\":1,\"AccessKeyId\":\"AKIA\",\"SecretAccessKey\":\"x\"}'";
+
+    /// What the stand-in prints for the profile listing: two profiles, or a failure.
+    #[cfg(unix)]
+    const LISTS_WORK_AND_PERSONAL: &str = "printf 'work\\npersonal\\n'";
+    #[cfg(unix)]
+    const LISTING_FAILS: &str = "echo no listing >&2; exit 1";
+
+    /// Runs the test binary again as `test`, with an `aws` first on `PATH` that appends the
+    /// arguments of each call to `calls` in the session directory and answers an export, the
+    /// listing and a sign-in as given (a sign-in always succeeds). The run writes what each call
+    /// under test returned to `results`. Returns the session directory.
+    #[cfg(unix)]
+    fn run_again_under_stand_in_aws(
+        test: &str,
+        name: &str,
+        export: &str,
+        listing: &str,
+    ) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let session = fresh_directory(&format!("{name}-session"));
+        let installed = fresh_directory(&format!("{name}-installed"));
+        let aws = installed.join("aws");
+        let script = format!(
+            "#!/bin/sh\necho \"$*\" >> '{calls}'\ncase \"$1 $2\" in\n\
+             \"configure export-credentials\") {export};;\n\
+             \"configure list-profiles\") {listing};;\n\
+             \"sso login\") : ;;\nesac\n",
+            calls = session.join("calls").display()
+        );
+        std::fs::write(&aws, script).unwrap();
+        std::fs::set_permissions(&aws, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths([
+            installed.clone(),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ])
+        .unwrap();
+
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--test-threads=1", "--nocapture"])
+            .env(STAND_IN_SESSION, &session)
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+
+        let said = String::from_utf8_lossy(&child.stderr).into_owned();
+        assert!(
+            session.join("results").exists(),
+            "the child did not finish the test: {said}"
+        );
+        assert!(child.status.success(), "{said}");
+        session
+    }
+
+    #[cfg(unix)]
+    fn calls_and_results(session: &Path) -> (String, String) {
+        let read = |name: &str| std::fs::read_to_string(session.join(name)).unwrap();
+        (read("calls"), read("results"))
+    }
+
+    /// A report on a profile the CLI does not list says so and names the ones it has, and the
+    /// list comes from asking the CLI for it after the export is refused. An implementation that
+    /// reports every refusal as a missing profile, one that never asks, and one that reads the
+    /// export's error text instead of asking all fail: the stand-in's refusal says nothing about
+    /// a profile, and the profile it lists is reported as refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_report_on_a_profile_the_cli_does_not_list_names_the_profiles_it_has() {
+        const TEST: &str = "credentials::tests::a_report_on_a_profile_the_cli_does_not_list_names_the_profiles_it_has";
+
+        if let Some(directory) = std::env::var_os(STAND_IN_SESSION) {
+            let results = [
+                format!("missing: {:?}", session(Some("missing"))),
+                format!("work: {:?}", session(Some("work"))),
+            ];
+            std::fs::write(PathBuf::from(directory).join("results"), results.join("\n")).unwrap();
+            return;
+        }
+
+        let directory = run_again_under_stand_in_aws(
+            TEST,
+            "credentials-report-profile",
+            EXPORT_REFUSED,
+            LISTS_WORK_AND_PERSONAL,
+        );
+        let (calls, results) = calls_and_results(&directory);
+        assert_eq!(
+            results,
+            "missing: Err(NoSuchProfile { profile: \"missing\", available: [\"work\", \"personal\"] })\n\
+             work: Err(Refused { detail: \"refused\" })"
+        );
+        // The listing follows each refused export and nothing is asked before one.
+        assert_eq!(
+            calls,
+            "configure export-credentials --format process --profile missing\n\
+             configure list-profiles\n\
+             configure export-credentials --format process --profile work\n\
+             configure list-profiles\n"
+        );
+    }
+
+    /// No sign-in starts for a profile the CLI does not list, by either way in: the one a window
+    /// can stop and the plain one, which reaches the sign-in itself. The profile the CLI lists
+    /// does get its sign-in. An implementation that lists the profiles and then signs in anyway
+    /// starts `sso login --profile missing`, which the recorded calls show.
+    #[cfg(unix)]
+    #[test]
+    fn a_sign_in_for_a_profile_the_cli_does_not_list_never_runs_the_login() {
+        const TEST: &str = "credentials::tests::a_sign_in_for_a_profile_the_cli_does_not_list_never_runs_the_login";
+
+        if let Some(directory) = std::env::var_os(STAND_IN_SESSION) {
+            let results = [
+                format!(
+                    "until missing: {:?}",
+                    sign_in_if_needed_until(Some("missing"), |_| {}, &Stop::new())
+                ),
+                format!("login missing: {:?}", login(Some("missing"), |_| {})),
+                format!(
+                    "sign in missing: {:?}",
+                    sign_in_if_needed(Some("missing"), |_| {})
+                ),
+                format!(
+                    "until work: {:?}",
+                    sign_in_if_needed_until(Some("work"), |_| {}, &Stop::new())
+                ),
+            ];
+            std::fs::write(PathBuf::from(directory).join("results"), results.join("\n")).unwrap();
+            return;
+        }
+
+        let directory = run_again_under_stand_in_aws(
+            TEST,
+            "credentials-sign-in-profile",
+            EXPORT_REFUSED,
+            LISTS_WORK_AND_PERSONAL,
+        );
+        let (calls, results) = calls_and_results(&directory);
+        let absent = "NoSuchProfile { profile: \"missing\", available: [\"work\", \"personal\"] }";
+        assert_eq!(
+            results,
+            format!(
+                "until missing: Err(Failed({absent}))\n\
+                 login missing: Err({absent})\n\
+                 sign in missing: Err({absent})\n\
+                 until work: Ok(())"
+            )
+        );
+        assert_eq!(
+            calls,
+            "configure export-credentials --format process --profile missing\n\
+             configure list-profiles\n\
+             configure list-profiles\n\
+             configure export-credentials --format process --profile missing\n\
+             configure list-profiles\n\
+             configure export-credentials --format process --profile work\n\
+             configure list-profiles\n\
+             sso login --profile work\n"
+        );
+    }
+
+    /// A session the export shows to be good costs that export and nothing else, whether it is
+    /// asked about for a report or before a sign-in. An implementation that lists the profiles
+    /// before it exports, or on every check, adds a `configure list-profiles` call.
+    #[cfg(unix)]
+    #[test]
+    fn a_good_session_costs_the_export_and_no_listing() {
+        const TEST: &str = "credentials::tests::a_good_session_costs_the_export_and_no_listing";
+
+        if let Some(directory) = std::env::var_os(STAND_IN_SESSION) {
+            let results = [
+                format!("report: {:?}", session(Some("good-report"))),
+                format!(
+                    "sign in: {:?}",
+                    sign_in_if_needed_until(Some("good-sign-in"), |_| {}, &Stop::new())
+                ),
+            ];
+            std::fs::write(PathBuf::from(directory).join("results"), results.join("\n")).unwrap();
+            return;
+        }
+
+        let directory = run_again_under_stand_in_aws(
+            TEST,
+            "credentials-good-session",
+            EXPORT_GOOD,
+            LISTS_WORK_AND_PERSONAL,
+        );
+        let (calls, results) = calls_and_results(&directory);
+        assert_eq!(results, "report: Ok(())\nsign in: Ok(())");
+        assert_eq!(
+            calls,
+            "configure export-credentials --format process --profile good-report\n\
+             configure export-credentials --format process --profile good-sign-in\n"
+        );
+    }
+
+    /// A CLI that fails to list its profiles has not said any is missing, so the sign-in goes
+    /// ahead and a report keeps the refusal it already had. An implementation that reads a failed
+    /// listing as an empty one withholds the sign-in and reports no profiles configured.
+    #[cfg(unix)]
+    #[test]
+    fn a_listing_the_cli_fails_to_give_does_not_withhold_the_sign_in() {
+        const TEST: &str =
+            "credentials::tests::a_listing_the_cli_fails_to_give_does_not_withhold_the_sign_in";
+
+        if let Some(directory) = std::env::var_os(STAND_IN_SESSION) {
+            let results = [
+                format!("report: {:?}", session(Some("unlisted-one"))),
+                format!(
+                    "until: {:?}",
+                    sign_in_if_needed_until(Some("unlisted-two"), |_| {}, &Stop::new())
+                ),
+                format!("login: {:?}", login(Some("unlisted-three"), |_| {})),
+            ];
+            std::fs::write(PathBuf::from(directory).join("results"), results.join("\n")).unwrap();
+            return;
+        }
+
+        let directory = run_again_under_stand_in_aws(
+            TEST,
+            "credentials-listing-fails",
+            EXPORT_REFUSED,
+            LISTING_FAILS,
+        );
+        let (calls, results) = calls_and_results(&directory);
+        assert_eq!(
+            results,
+            "report: Err(Refused { detail: \"refused\" })\nuntil: Ok(())\nlogin: Ok(())"
+        );
+        assert_eq!(
+            calls,
+            "configure export-credentials --format process --profile unlisted-one\n\
+             configure list-profiles\n\
+             configure export-credentials --format process --profile unlisted-two\n\
+             configure list-profiles\n\
+             sso login --profile unlisted-two\n\
+             configure list-profiles\n\
+             sso login --profile unlisted-three\n"
+        );
     }
 
     /// A credential can stop working before the expiry it stated. Kept anyway, the check before

@@ -24,6 +24,8 @@ use crate::confirm::{
     Classified, Confirmer, Decision, OutputRequest, PromptAlert, RunDecision, RunRequest,
     VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
+use bravebot_core::event::Sink;
+use bravebot_core::policy::Policy;
 use bravebot_core::vetting::{Endorsed, Verdict};
 
 /// How much this session asks before it acts.
@@ -258,6 +260,68 @@ impl PermissionMode {
     }
 }
 
+/// What set a permission mode, for the trail (TRACE-12).
+///
+/// A choice the caller makes from what it already knows, never from anything a turn read, so
+/// [`ModeCause::phrase`] is static text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModeCause {
+    /// The session asks until something else says otherwise.
+    Default,
+    /// A command-line flag.
+    Flag,
+    /// The person's `permissions.startInAuto` setting.
+    Setting,
+    /// The mode key.
+    Key,
+    /// A click on the mode under the box.
+    Click,
+    /// A slash command, which is `/plan`.
+    Command,
+    /// The person approving a plan.
+    PlanApproval,
+    /// A settings layer taking bypass off the ladder.
+    BypassUnreachable,
+    /// A request from a client that is not the terminal.
+    Request,
+    /// A caller that did not say.
+    Unnamed,
+}
+
+impl ModeCause {
+    /// The words the trail uses for this cause.
+    pub fn phrase(self) -> &'static str {
+        match self {
+            Self::Default => "by default",
+            Self::Flag => "by a command-line flag",
+            Self::Setting => "by the startInAuto setting",
+            Self::Key => "by the mode key",
+            Self::Click => "by a click on the mode",
+            Self::Command => "by the /plan command",
+            Self::PlanApproval => "by approving a plan",
+            Self::BypassUnreachable => "because settings made bypass unreachable",
+            Self::Request => "by a request from the client",
+            Self::Unnamed => "without a cause being given",
+        }
+    }
+}
+
+/// One change of mode, kept until a turn writes it to the trail (TRACE-12).
+#[derive(Debug, Clone, Copy)]
+struct ModeChange {
+    from: PermissionMode,
+    to: PermissionMode,
+    cause: ModeCause,
+}
+
+/// What a handle has not yet put in the trail: the mode the sitting opened in, which only the first
+/// turn writes, and every change since the last write, in the order they happened.
+#[derive(Debug)]
+struct ModeLog {
+    opening: Option<(PermissionMode, ModeCause)>,
+    changes: Vec<ModeChange>,
+}
+
 /// The mode a session is in, readable from a turn that is running while the person changes it.
 ///
 /// Cloning gives another handle on the same mode, so the key that sets it, the confirmer that
@@ -272,6 +336,9 @@ pub struct LiveMode {
     /// Whether the mode was bypass at any moment since this handle was made, which a later
     /// change of mode does not take back (MODE-4).
     bypassed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Shared by every handle, so the turn that writes the trail sees a change made through any
+    /// of them (TRACE-12).
+    log: std::sync::Arc<std::sync::Mutex<ModeLog>>,
     nobody_to_ask: bool,
 }
 
@@ -282,7 +349,58 @@ impl LiveMode {
             bypassed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
                 mode == PermissionMode::Bypass,
             )),
+            log: std::sync::Arc::new(std::sync::Mutex::new(ModeLog {
+                opening: Some((mode, ModeCause::Default)),
+                changes: Vec::new(),
+            })),
             nobody_to_ask: false,
+        }
+    }
+
+    fn locked(&self) -> std::sync::MutexGuard<'_, ModeLog> {
+        self.log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Say the mode this handle was made with was chosen by `cause`, which is what the trail
+    /// gives for the mode a session opened in (TRACE-12).
+    pub fn opened_by(self, cause: ModeCause) -> Self {
+        if let Some((_, was)) = self.locked().opening.as_mut() {
+            *was = cause;
+        }
+        self
+    }
+
+    /// Open in `mode` because of `cause`. Before the trail has been written and before any change,
+    /// this is the mode the session opened in; after either it is a change like any other.
+    pub fn starting_in(&self, mode: PermissionMode, cause: ModeCause) {
+        let mut log = self.locked();
+        if log.opening.is_some() && log.changes.is_empty() {
+            log.opening = Some((mode, cause));
+            self.store(mode);
+        } else {
+            drop(log);
+            self.set_by(mode, cause);
+        }
+    }
+
+    /// Write what has not been written yet to the trail: the opening mode, once, then each change
+    /// in the order it was made (TRACE-12).
+    pub(crate) fn record_into<S: Sink>(&self, policy: &mut Policy<'_, S>) {
+        let (opening, changes) = {
+            let mut log = self.locked();
+            (log.opening.take(), std::mem::take(&mut log.changes))
+        };
+        if let Some((mode, cause)) = opening {
+            policy.record_permission_mode_opened(mode.name(), cause.phrase());
+        }
+        for change in changes {
+            policy.record_permission_mode_changed(
+                change.from.name(),
+                change.to.name(),
+                change.cause.phrase(),
+            );
         }
     }
 
@@ -317,6 +435,26 @@ impl LiveMode {
     }
 
     pub fn set(&self, mode: PermissionMode) {
+        self.set_by(mode, ModeCause::Unnamed);
+    }
+
+    /// Move to `mode`, and keep the move for the trail where it is a change (TRACE-12). The lock is
+    /// held across the read and the store, so two setters leave their changes in the order they
+    /// took effect.
+    pub fn set_by(&self, mode: PermissionMode, cause: ModeCause) {
+        let mut log = self.locked();
+        let from = self.get();
+        self.store(mode);
+        if from != mode {
+            log.changes.push(ModeChange {
+                from,
+                to: mode,
+                cause,
+            });
+        }
+    }
+
+    fn store(&self, mode: PermissionMode) {
         if mode == PermissionMode::Bypass {
             self.bypassed
                 .store(true, std::sync::atomic::Ordering::Release);
@@ -534,9 +672,11 @@ impl Unasked {
     }
 
     /// See [`Confining::confirm_manifest`].
-    pub fn manifest(&self) -> Option<Decision> {
-        match self.mode.get() {
-            PermissionMode::Bypass => Some(Decision::Approve),
+    /// The answer and the name of the mode that gave it.
+    pub fn manifest(&self) -> Option<(Decision, &'static str)> {
+        let mode = self.mode.get();
+        match mode {
+            PermissionMode::Bypass => Some((Decision::Approve, mode.name())),
             PermissionMode::Ask
             | PermissionMode::AcceptEdits
             | PermissionMode::Plan
@@ -792,9 +932,18 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// question, and a person in plan mode who wants a run planned before it touches anything is
     /// asking for exactly what this mode does.
     fn confirm_manifest(&mut self, request: &crate::confirm::ManifestRequest) -> Decision {
+        self.confirm_manifest_noting_the_mode(request).0
+    }
+
+    /// The answer and, where bypassing gave it, the mode, read from one look at the mode, so a plan
+    /// nobody saw answers no call's question for a person (MANIFEST-15, MODE-8).
+    fn confirm_manifest_noting_the_mode(
+        &mut self,
+        request: &crate::confirm::ManifestRequest,
+    ) -> (Decision, Option<&'static str>) {
         match self.unasked.manifest() {
-            Some(answer) => answer,
-            None => self.asking().confirm_manifest(request),
+            Some((answer, mode)) => (answer, Some(mode)),
+            None => (self.asking().confirm_manifest(request), None),
         }
     }
 
@@ -872,6 +1021,19 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// A call to a server declared to ask every call is asked in bypass too: the person chose that
     /// for the server when they declared it, and the mode that answers the other questions does not
     /// take that choice back (SERVERS-21).
+    /// Put to the person in every mode, bypass and plan mode included: the list is the trusted
+    /// selector of the calls a processor proposed, and no mode is a person reading it.
+    fn confirm_apply(
+        &mut self,
+        request: &crate::confirm::ApplyRequest,
+    ) -> crate::confirm::ApplyDecision {
+        self.asking().confirm_apply(request)
+    }
+
+    fn can_put_apply_lists(&mut self) -> bool {
+        self.asking().can_put_apply_lists()
+    }
+
     fn confirm_mcp_call(
         &mut self,
         request: &crate::confirm::McpCallRequest,
@@ -934,6 +1096,17 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
             Some(answer) => answer,
             None => self.asking().confirm_move(request),
         }
+    }
+
+    fn can_ask_about_a_hook(&self) -> bool {
+        self.inner.can_ask_about_a_hook()
+    }
+
+    /// Always the person's. No mode answers whether a plugin's hook may fire, bypassing every check
+    /// included, for the reason none answers the install prompt (PLUGIN-4, PLUGIN-7): the question
+    /// has no mode in its request and [`Unasked`] holds no answer for it.
+    fn confirm_hook(&mut self, request: &crate::confirm::HookRequest) -> Decision {
+        self.asking().confirm_hook(request)
     }
 
     /// Always the inner confirmer's. A question the planner posed is not a permission, and an answer
@@ -1429,6 +1602,7 @@ mod tests {
             rule: "notes.txt".to_string(),
             preview: "a line".to_string(),
             truncated: false,
+            hidden: 0,
             verdict,
             reason: None,
             label: String::new(),
@@ -2066,6 +2240,58 @@ mod tests {
             destination: "https://elsewhere.example/mcp".to_string(),
             authority: "elsewhere.example:443".to_string(),
             may_record: true,
+        }
+    }
+
+    /// PLUGIN-7, S31: no mode answers whether a plugin's hook may fire. Bypassing every check
+    /// answers a write and a run, and this question still reaches the confirmer behind it: a
+    /// refusing person is not overridden, an agreeing one is asked exactly once, and a confirmer
+    /// nobody can ask says so through the mode.
+    ///
+    /// Rejects: a mode that answers the hook question yes unasked, and a wrapper that does not pass
+    /// on whether anybody can be asked.
+    #[test]
+    fn no_mode_answers_the_question_about_a_plugins_hook() {
+        use crate::confirm::{AnswersHooks, HookRequest};
+        let request = HookRequest {
+            plugin: "demo".to_string(),
+            moment: "turn-started",
+            argv: vec!["/p/hook.sh".to_string()],
+            records: true,
+        };
+        for mode in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+            PermissionMode::Auto,
+            PermissionMode::Bypass,
+        ] {
+            let mut refuses = AnswersHooks::new(Decision::Reject);
+            let mut confining = Confining::new(&mut refuses, mode, false);
+            assert!(confining.can_ask_about_a_hook(), "{mode:?}");
+            assert_eq!(
+                confining.confirm_hook(&request),
+                Decision::Reject,
+                "{mode:?}"
+            );
+            assert_eq!(refuses.asked.len(), 1, "{mode:?} did not put the question");
+
+            let mut agrees = AnswersHooks::new(Decision::Approve);
+            assert_eq!(
+                Confining::new(&mut agrees, mode, false).confirm_hook(&request),
+                Decision::Approve,
+                "{mode:?}"
+            );
+            assert_eq!(agrees.asked.len(), 1, "{mode:?}");
+
+            let mut nobody = Unattended;
+            let mut confining = Confining::new(&mut nobody, mode, false);
+            assert!(!confining.can_ask_about_a_hook(), "{mode:?}");
+            assert_eq!(
+                confining.confirm_hook(&request),
+                Decision::Reject,
+                "{mode:?}"
+            );
         }
     }
 

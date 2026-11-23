@@ -80,6 +80,10 @@ pub struct State {
     /// checkout proposed, which names the session the yes was given in as the terminal's does
     /// (PERM-15). `None` once the handle exists, or where nothing has named the session yet.
     pub named: Option<String>,
+    /// The id of the record this session was handed off from (SESSION-34), given to the handle
+    /// the first turn makes. Taken by the bridge from a chat it holds open, never from text the
+    /// window sent. `None` once the handle exists, or for a session nobody handed work to.
+    pub handed_off_from: Option<String>,
     pub turns: usize,
     /// Where each turn began and ended, and what came of it (SESSION-23).
     ///
@@ -89,6 +93,12 @@ pub struct State {
     /// and extended by every turn taken here, so a save writes back the history it was given.
     pub history: Option<Vec<bravebot_session::sessions::StoredTurn>>,
     pub tokens: u64,
+    /// The most the session may spend before a turn asks the person whether to go on (TURN-8).
+    ///
+    /// Shared with each turn, so a figure given at the question is the session's afterwards. Not
+    /// saved: a session opened, resumed or forked here reads it from the `limit` setting, as the
+    /// terminal does.
+    pub spend_limit: bravebot_agent::SpendLimit,
     /// How many of `tokens` the model read and how many it wrote, for the turns that reported it.
     pub split: bravebot_session::sessions::Split,
     /// What each turn cost, by turn number.
@@ -208,12 +218,21 @@ pub enum Mcp {
 }
 
 /// A handle for a fresh session in `project`, under the id it was `named` by already if it was
-/// ([`State::named`]).
-pub fn begin_named(named: Option<String>, project: &Path) -> Handle {
-    match named {
+/// ([`State::named`]), linked to the session it was `handed_off_from` if it was
+/// ([`State::handed_off_from`]).
+pub fn begin_named(
+    named: Option<String>,
+    handed_off_from: Option<String>,
+    project: &Path,
+) -> Handle {
+    let mut handle = match named {
         Some(id) => Handle::begin_as(id, project, crate::FRONT, crate::agent_build()),
         None => Handle::begin(project, crate::FRONT, crate::agent_build()),
+    };
+    if let Some(source) = handed_off_from {
+        handle.hand_off_from(&source);
     }
+    handle
 }
 
 impl State {
@@ -236,8 +255,9 @@ impl State {
     /// by already if it was.
     pub fn handle_or_begin(&mut self, project: &Path) -> &mut Handle {
         let named = self.named.take();
+        let handed_off_from = self.handed_off_from.take();
         self.handle
-            .get_or_insert_with(|| begin_named(named, project))
+            .get_or_insert_with(|| begin_named(named, handed_off_from, project))
     }
 
     pub fn fresh(trust: TrustStore) -> Self {
@@ -262,9 +282,13 @@ impl State {
             kept: None,
             handle: None,
             named: None,
+            handed_off_from: None,
             turns: 0,
             history: Some(Vec::new()),
             tokens: 0,
+            // The bridge replaces this with the project's `limit` setting when it opens the
+            // session.
+            spend_limit: Default::default(),
             split: Default::default(),
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
@@ -429,6 +453,8 @@ pub struct Running {
     /// Lines typed into this turn, taken by the worker at a round boundary. A manifest run has
     /// none, because it plans before anything is read and never asks between rounds (MANIFEST-9).
     pub interjections: Option<Interjections>,
+    /// What the turn's trail is told about the host clients that act on it (TRACE-7).
+    pub actors: crate::turn::ActorNotes,
 }
 
 /// The next number for a turn or run to be stopped by. It counts across sessions, which is
@@ -454,6 +480,8 @@ pub struct Started {
     pub target: u64,
     /// The worker's end of [`Running::interjections`].
     pub interjections: Interjections,
+    /// The same notes [`Running::actors`] holds.
+    pub actors: crate::turn::ActorNotes,
 }
 
 impl Running {
@@ -467,6 +495,7 @@ impl Running {
         let finished = Arc::new(AtomicBool::new(false));
         let target = next_target();
         let interjections = Interjections::default();
+        let actors = crate::turn::ActorNotes::default();
         let running = Running {
             cancel: cancel.clone(),
             answers: answers_tx,
@@ -474,6 +503,7 @@ impl Running {
             target,
             finished: Arc::clone(&finished),
             interjections: Some(interjections.clone()),
+            actors: actors.clone(),
         };
         Started {
             running,
@@ -483,6 +513,7 @@ impl Running {
             finished,
             target,
             interjections,
+            actors,
         }
     }
 
@@ -549,10 +580,15 @@ impl Running {
     /// As [`Self::refuse_pending`], and publish the refused question's number before waking the
     /// worker, as an answer does ([`Self::answer_with`]).
     pub fn refuse_pending_with(&self, refused: impl FnOnce(u64)) {
+        self.refuse_pending_unless(&[], refused);
+    }
+
+    /// As [`Self::refuse_pending_with`], leaving waiting a question whose kind is among `kinds`.
+    pub fn refuse_pending_unless(&self, kinds: &[crate::turn::Kind], refused: impl FnOnce(u64)) {
         let Ok(mut pending) = self.pending.lock() else {
             return;
         };
-        let Some(question) = pending.take() else {
+        let Some(question) = pending.take_if(|question| !kinds.contains(&question.kind)) else {
             return;
         };
         // The lock is held through the refusal, so the worker cannot leave its wait and register
@@ -563,6 +599,27 @@ impl Running {
         // match arm accepts it. A `Write` sent at a waiting run would be discarded as
         // a mismatch and the turn would block until the channel dropped instead.
         let _ = self.answers.send(question.kind.refusal());
+    }
+}
+
+/// From now on only `kinds` can be answered, and the question `running` waits on is refused if
+/// its kind is not among them, with its number published first as [`Running::refuse_pending_with`]
+/// does. A question whose kind is still answerable stays waiting.
+pub fn narrow(
+    answerers: &crate::answerers::Answerers,
+    running: Option<&Running>,
+    kinds: &[crate::turn::Kind],
+    refused: impl FnOnce(u64),
+) {
+    // First, so that a question registered from here on is refused when it is asked, and one
+    // registered just before is where the refusal below finds it. Where the set cannot be written
+    // no question is answerable either, so the waiting one is refused whatever its kind.
+    let kinds = match answerers.only(kinds) {
+        Ok(()) => kinds,
+        Err(_) => &[],
+    };
+    if let Some(running) = running {
+        running.refuse_pending_unless(kinds, refused);
     }
 }
 

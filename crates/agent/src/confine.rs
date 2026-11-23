@@ -20,6 +20,7 @@ use bravebot_config::sandbox_network::Hosts;
 use bravebot_core::command::Step;
 use bravebot_core::permissions::{WrapperQuestion, is_wrapper};
 use bravebot_core::policy::Containment;
+use bravebot_i18n::t;
 use bravebot_sandbox::SandboxMode;
 use bravebot_sandbox::Variables;
 use bravebot_sandbox::base::{Prelude, base, credential_locations, run_base, with_security_cache};
@@ -453,7 +454,7 @@ impl Confinement {
     /// only one the stage's policy reaches by IP. A stage with no egress is given none: it reaches
     /// nothing. Where the proxy cannot be started the stage is refused, since starting it without
     /// the filter is the unfiltered reach the list exists to remove.
-    fn host_proxy(&self, step: &Step) -> Result<Option<Arc<Proxy>>, String> {
+    fn host_proxy(&self, step: &Step) -> Result<Option<Arc<Proxy>>, crate::host_proxy::Refused> {
         let Some(hosts) = &self.hosts else {
             return Ok(None);
         };
@@ -487,7 +488,11 @@ impl Confinement {
             crate::host_proxy::list_for(&allowed, &spelled(&hosts.denied), remote, &toolchains)?;
         crate::host_proxy::proxy_for(&list)
             .map(Some)
-            .map_err(|error| format!("the allowed-hosts proxy could not start: {error}"))
+            .map_err(|error| {
+                crate::host_proxy::Refused::new(format!(
+                    "the allowed-hosts proxy could not start: {error}"
+                ))
+            })
     }
 
     /// This confinement with the state directory in force, as [`crate::home::directory`] answers
@@ -1297,6 +1302,82 @@ impl Confinement {
             .filter(move |grant| self.home.is_some() && grant.covers(step))
     }
 
+    /// The credential scopes a person's remembered grants attach to the stages of `steps`, each
+    /// once, in the order a stage first has one.
+    ///
+    /// A scope is listed only where [`Confinement::granted`] attaches its grant to a stage and the
+    /// mode lends it ([`Confinement::lends`]), so a
+    /// grant for another program, operation word or checkout, one for a stage with an assignment in
+    /// front of it, and a global grant whose argv the scope table refuses add nothing. A directory a
+    /// person named with `/reach <dir>` is not a credential scope and is not listed: it stays on
+    /// the road [`Confinement::holds`] guards.
+    ///
+    /// Read from the grant record and the compiled steps, never from what a program printed. It
+    /// does not change [`Confinement::holds`], which refuses a stage lent any grant.
+    pub fn remembered_scopes(&self, steps: &[&Step]) -> Vec<Scope> {
+        let mut scopes: Vec<Scope> = Vec::new();
+        for step in steps {
+            for scope in self.kept_on(step) {
+                if !scopes.contains(&scope) {
+                    scopes.push(scope);
+                }
+            }
+        }
+        scopes
+    }
+
+    /// The credential scopes the remembered grants lend `step`, each once, in the record's order.
+    /// The one place that says which grants count, so the prompt, the policy and the trail agree.
+    fn kept_on(&self, step: &Step) -> Vec<Scope> {
+        let mut scopes: Vec<Scope> = Vec::new();
+        for grant in self.granted(step) {
+            if let Reached::Scope(scope) = grant.reached
+                && self.lends(scope)
+                && !scopes.contains(&scope)
+            {
+                scopes.push(scope);
+            }
+        }
+        scopes
+    }
+
+    /// What the trail records of the scopes a person kept at an earlier prompt that a stage of this
+    /// line is lent: each stage by its place in the line and the names lent to it, which are menu
+    /// words and nothing the plan chose. `None` where no stage is lent one. Said apart from
+    /// [`Confinement::requested_for_the_trail`] because the planner did not ask for these.
+    pub fn kept_for_the_trail(&self, steps: &[&Step]) -> Option<String> {
+        let kept = self.remembered_scopes(steps);
+        if kept.is_empty() {
+            return None;
+        }
+        let named: Vec<String> = steps
+            .iter()
+            .enumerate()
+            .map(|(at, step)| {
+                let lent = self.kept_on(step);
+                match lent.is_empty() {
+                    true => format!("stage {} (nothing)", at + 1),
+                    false => format!(
+                        "stage {} ({})",
+                        at + 1,
+                        lent.iter()
+                            .map(|scope| scope.name())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                }
+            })
+            .collect();
+        Some(format!(
+            "a person kept {} at an earlier prompt, lent to {}",
+            kept.iter()
+                .map(|scope| scope.name())
+                .collect::<Vec<_>>()
+                .join(", "),
+            named.join(", ")
+        ))
+    }
+
     /// This confinement, failing for the step that starts `program` as the platform would for one
     /// it cannot confine.
     #[cfg(test)]
@@ -1413,6 +1494,9 @@ impl Confinement {
                             (Reached::Directory(_), Some(home)) => {
                                 grant.directory(home, self.state()).is_some()
                             }
+                            // A scope the mode does not lend is not on the stage, so it is not
+                            // drawn as a row and does not count as one the line carries.
+                            (Reached::Scope(scope), _) => self.lends(*scope),
                             _ => true,
                         })
                         .map(|grant| Remembered {
@@ -2513,6 +2597,39 @@ impl Confinement {
         })
     }
 
+    /// The sentence refusing a step because a `denyRead` or `denyWrite` entry cannot be applied,
+    /// or `None` where every entry can.
+    fn unapplied_denial_refusal(&self) -> Option<String> {
+        let (item, reason) = self.filesystem.unapplied_denial()?;
+        // An entry a checkout's layer wrote is text the person did not write, and this
+        // sentence reaches the planner as the driver's own. It names the list, the reason (a
+        // closed set the driver wrote) and the file, and leaves the spelling to the screens
+        // that are the person's own (SANDBOX-25). Which of the two is decided from the layer
+        // that wrote the entry, never from the entry.
+        if item.entry.from_a_checkout {
+            return Some(
+                t!(
+                    run_not_confined_checkout_entry,
+                    list = item.list.key(),
+                    file = item
+                        .entry
+                        .by
+                        .as_deref()
+                        .map(crate::confirm::shown_path)
+                        .unwrap_or_default(),
+                    reason = crate::permissions::filesystem_reason(reason)
+                )
+                .to_string(),
+            );
+        }
+        Some(format!(
+            "sandbox.filesystem.{} names `{}`, which cannot be applied, and a stage started \
+             without it would reach the path it holds back",
+            item.list.key(),
+            item.entry.path
+        ))
+    }
+
     /// What `command` is started as under this confinement, or the reason it cannot be.
     ///
     /// Refused rather than started unconfined where the platform's mechanism is missing or will
@@ -2528,11 +2645,14 @@ impl Confinement {
             detail,
             before: crate::exec::StartedBefore::Nothing,
             network_closed: false,
+            entry: None,
         };
         if let Some(detail) = self.directory_refusal() {
             return Err(not_confined(detail));
         }
-        let proxy = self.host_proxy(step).map_err(not_confined)?;
+        let proxy = self
+            .host_proxy(step)
+            .map_err(|refused| refused_as_not_confined(step, &refused))?;
         let proxied = proxy.as_deref().map(Proxy::environment).unwrap_or_default();
         let identified = self.identified(step);
         let chosen = identified.as_ref().and_then(Identified::command);
@@ -2570,13 +2690,8 @@ impl Confinement {
                 Some((name.to_str()?.to_string(), value.to_str()?.to_string()))
             })
             .collect();
-        if let Some(item) = self.filesystem.unapplied_denial() {
-            return Err(not_confined(format!(
-                "sandbox.filesystem.{} names `{}`, which cannot be applied, and a stage started \
-                 without it would reach the path it holds back",
-                item.list.key(),
-                item.entry.path
-            )));
+        if let Some(detail) = self.unapplied_denial_refusal() {
+            return Err(not_confined(detail));
         }
         let mut wanted = self.policy(step, directory, &readable);
         if let Some(proxy) = &proxy {
@@ -2600,6 +2715,7 @@ impl Confinement {
                 detail,
                 before: crate::exec::StartedBefore::Nothing,
                 network_closed: true,
+                entry: None,
             });
         }
         if let Some(detail) = cannot_hold_to_the_proxy(&wanted, &capabilities) {
@@ -2645,6 +2761,7 @@ impl Confinement {
                 detail: error.to_string(),
                 before: crate::exec::StartedBefore::Nothing,
                 network_closed: false,
+                entry: None,
             })
     }
 }
@@ -2734,6 +2851,7 @@ pub(crate) fn begin(
                 detail: refusal.to_string(),
                 before: crate::exec::StartedBefore::Nothing,
                 network_closed: false,
+                entry: None,
             });
         }
         let prepared = confinement.prepared(&command, step, directory)?;
@@ -2785,6 +2903,7 @@ impl Container {
                 detail: other.to_string(),
                 before: crate::exec::StartedBefore::Nothing,
                 network_closed: false,
+                entry: None,
             }),
         }
     }
@@ -3186,8 +3305,8 @@ const SHELL_REDIRECTION_SENTENCE: &str = " A redirection inside a shell's comman
 
 /// Whether a step runs a shell with a command string that redirects, the steps
 /// [`SHELL_REDIRECTION_SENTENCE`] is said for: the file it resolved to is a shell and an argument
-/// the planner wrote holds a `>`. An argument a filename pattern produced is a name read from disk
-/// and is not looked at (CMDLINE-4). Decided from the compiled step alone, as
+/// the planner wrote holds a `>`. An argument a filename pattern produced, matched or passed through
+/// as written, is not looked at (CMDLINE-4). Decided from the compiled step alone, as
 /// [`launches_applications`] is; nothing the shell printed is read.
 fn redirects_inside_a_shell(step: &Step) -> bool {
     let Step {
@@ -3784,6 +3903,18 @@ pub fn foreseen_under_the_session_network(
 /// A server's policy under the session network, and the variables that point it at the proxy.
 type Held = Result<(SandboxPolicy, Vec<(String, String)>), String>;
 
+/// A refused allowed-hosts list as the error a step is stopped with. The sentence is fixed; the
+/// entry travels beside it for the person alone.
+fn refused_as_not_confined(step: &Step, refused: &crate::host_proxy::Refused) -> ExecError {
+    ExecError::NotConfined {
+        program: step.program.clone(),
+        detail: refused.to_string(),
+        before: crate::exec::StartedBefore::Nothing,
+        network_closed: false,
+        entry: refused.entry().map(str::to_string),
+    }
+}
+
 /// The decision [`held_to_the_session_network`] makes, with the way a host list is applied left to
 /// `limit`, so that a launch and a view of one cannot decide differently.
 fn held_under_the_session_network(
@@ -3820,7 +3951,8 @@ fn held_under_the_session_network(
         &spelled(&hosts.denied),
         false,
         &toolchains,
-    )?;
+    )
+    .map_err(|refused| refused.to_string())?;
     let (held, environment) = limit(policy, &list)?;
     match cannot_hold_to_the_proxy(&held, capabilities) {
         Some(detail) => Err(detail),
@@ -8480,6 +8612,37 @@ mod tests {
             !failed(Prelude::MacOs, &[&matched]).contains(SHELL_REDIRECTION_SENTENCE),
             "read a name a pattern matched on disk"
         );
+        // A pattern that matched nothing is passed to the shell as written and is marked the same
+        // way, so whether a name exists does not decide whether the sentence is said. The same
+        // argument unmarked is a command string holding a redirection.
+        let mut unmatched = step("/bin/sh", &["-c", "echo hi", "o>*.zzz"]);
+        assert!(
+            failed(Prelude::MacOs, &[&unmatched]).contains(SHELL_REDIRECTION_SENTENCE),
+            "an argument the planner wrote holding a `>` was not looked at"
+        );
+        unmatched.matched = vec![false, false, true];
+        assert!(
+            !failed(Prelude::MacOs, &[&unmatched]).contains(SHELL_REDIRECTION_SENTENCE),
+            "read a pattern that matched nothing and was passed through as written"
+        );
+        unmatched.matched = vec![false, false, false];
+        assert!(failed(Prelude::MacOs, &[&unmatched]).contains(SHELL_REDIRECTION_SENTENCE));
+
+        // Compiled from a line, an escaped `>` inside an unquoted pattern that matches nothing is
+        // marked by the compiler, and the sentence is not said for it.
+        let root = crate::testutil::scratch_dir("bravebot-confine-unmatched-pattern-shell");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("a scratch directory");
+        let plan = plan_of(r"/bin/sh -c 'echo hi' o\>*.zzz", &root);
+        let [compiled] = plan.steps.steps()[..] else {
+            panic!("one step");
+        };
+        assert_eq!(
+            compiled.args,
+            ["-c", "echo hi", "o>*.zzz"].map(String::from)
+        );
+        assert!(compiled.from_a_pattern(2), "{:?}", compiled.matched);
+        assert!(!failed(Prelude::MacOs, &[compiled]).contains(SHELL_REDIRECTION_SENTENCE));
     }
 
     /// SANDBOX-8, SANDBOX-19: after a failed step on macOS whose program lists processes, the
@@ -9460,6 +9623,7 @@ mod tests {
                     path: (*path).to_string(),
                     by: None,
                     pinned: false,
+                    from_a_checkout: false,
                 })
                 .collect()
         };
@@ -9800,6 +9964,7 @@ mod tests {
                     path: (*path).to_string(),
                     by: None,
                     pinned: false,
+                    from_a_checkout: false,
                 })
                 .collect(),
             ..Lists::default()
@@ -10378,6 +10543,229 @@ mod tests {
         for policy in [&ls, &other_make, &target] {
             assert!(!reads(policy, &known_hosts));
         }
+    }
+
+    /// SANDBOX-27: `remembered_scopes` lists a scope only where the grant attaches to a stage of the
+    /// line, which is what decides whether a later line is put to the person. The regressions it
+    /// rejects: listing every stored grant whatever the line (a grant for another program or
+    /// operation word makes every vouched line asked), listing a grant for a stage that has an
+    /// assignment in front of it (which is lent nothing), listing a scope the mode does not lend,
+    /// and listing a directory a person named, which is not a credential scope. The control is the
+    /// line the grant was made for, which lists it once however many stages carry it.
+    #[test]
+    fn a_remembered_scope_is_listed_only_for_a_line_it_is_lent_to() {
+        let grants = vec![
+            remembered("/usr/bin/make", Some("deploy"), a_scope("remote"), false),
+            remembered(
+                "/usr/bin/make",
+                Some("deploy"),
+                Reached::Directory(PathBuf::from("/work/named")),
+                false,
+            ),
+        ];
+        let confined = confinement(&["/work/project"]).with_grants(grants.clone());
+        let deploy = step("/usr/bin/make", &["deploy"]);
+        assert_eq!(
+            confined.remembered_scopes(&[&deploy, &deploy]),
+            [Scope::Remote],
+            "the control: the line the grant was made for lists the scope, and not the directory"
+        );
+
+        let other_word = step("/usr/bin/make", &["test"]);
+        let no_word = step("/usr/bin/make", &[]);
+        let other_program = step("/usr/bin/cmake", &["deploy"]);
+        let other_path = step("/opt/make", &["deploy"]);
+        let mut assigned = deploy.clone();
+        assigned.environment = vec![("A".to_string(), "b".to_string())];
+        let mut expanded = deploy.clone();
+        expanded.expansions = vec![bravebot_core::command::Expansion {
+            name: "A".to_string(),
+            parts: vec![bravebot_core::command::ValuePart::Variable(
+                "HOME".to_string(),
+            )],
+        }];
+        for (said, line) in [
+            ("another operation word", [&other_word]),
+            ("no operation word", [&no_word]),
+            ("another program", [&other_program]),
+            ("another file of the same name", [&other_path]),
+            ("a stage with an assignment", [&assigned]),
+            (
+                "a stage with an assignment worked out at spawn",
+                [&expanded],
+            ),
+        ] {
+            assert!(
+                confined.remembered_scopes(&line).is_empty(),
+                "{said} was listed"
+            );
+        }
+        assert!(
+            confined.remembered_scopes(&[]).is_empty(),
+            "an empty line was listed"
+        );
+        assert_eq!(
+            confined.remembered_scopes(&[&other_word, &assigned, &deploy]),
+            [Scope::Remote],
+            "a plain stage was not listed beside stages that carry nothing"
+        );
+        assert!(
+            confinement(&["/work/project"])
+                .remembered_scopes(&[&deploy])
+                .is_empty(),
+            "a line was listed a scope with no grant held"
+        );
+        assert!(
+            confined
+                .clone()
+                .with_mode(SandboxMode::ReadOnly)
+                .remembered_scopes(&[&deploy])
+                .is_empty(),
+            "a scope the mode does not lend was listed, so the person would be asked about nothing"
+        );
+        let homeless = Confinement::new(
+            Prelude::Windows,
+            PathBuf::from("/tmp"),
+            None,
+            vec![PathBuf::from("/work/project")],
+            Some(Path::new("/var/scratch")),
+        )
+        .with_grants(grants);
+        assert!(
+            homeless.remembered_scopes(&[&deploy]).is_empty(),
+            "a scope was listed for a session that names no home"
+        );
+    }
+
+    /// SANDBOX-23, SANDBOX-27: a grant bound to another checkout is not read for this one, so it
+    /// lists no scope and a vouched line in this checkout is not asked about because of it. The
+    /// regression it rejects: reading every grant in the record whatever its checkout. The control
+    /// is the same grant bound to this checkout.
+    #[test]
+    fn a_scope_kept_in_another_checkout_is_not_listed_for_this_one() {
+        let top = crate::testutil::scratch_dir("confine-remembered-other-checkout");
+        let _ = std::fs::remove_dir_all(&top);
+        let (here, elsewhere, state) = (top.join("here"), top.join("elsewhere"), top.join("state"));
+        for directory in [&here, &elsewhere, &state] {
+            std::fs::create_dir_all(directory).expect("a directory");
+        }
+        let store = crate::reach::Store::new(&state);
+        let grant_in = |root: &Path| Grant {
+            workspace: crate::reach::Workspace::of(root),
+            ..remembered("/usr/bin/make", Some("deploy"), a_scope("remote"), false)
+        };
+        assert!(store.allow(&grant_in(&elsewhere)), "the grant was not kept");
+        let deploy = step("/usr/bin/make", &["deploy"]);
+
+        let read = store.read(Some("a-session"), &here);
+        assert!(
+            read.is_empty(),
+            "the record gave this checkout another's grant"
+        );
+        assert!(
+            confinement(&["/work/project"])
+                .with_grants(read)
+                .remembered_scopes(&[&deploy])
+                .is_empty()
+        );
+
+        assert!(store.allow(&grant_in(&here)), "the grant was not kept");
+        let read = store.read(Some("a-session"), &here);
+        assert_eq!(read.len(), 1, "the control grant was not read: {read:?}");
+        assert_eq!(
+            confinement(&["/work/project"])
+                .with_grants(read)
+                .remembered_scopes(&[&deploy]),
+            [Scope::Remote],
+            "the control: the grant of this checkout lists its scope"
+        );
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
+    /// SANDBOX-23, SANDBOX-27: a global grant (none bound to a checkout) is listed only for an argv
+    /// the scope table gives the scope to. The regression it rejects: listing a global grant for
+    /// `git push --receive-pack=<file>`, which the stage is not lent the scope for, so the person
+    /// would be asked about a scope the line does not carry. The control is `git push origin`.
+    #[test]
+    fn a_global_scope_is_not_listed_for_an_argv_the_table_refuses() {
+        let confined = confinement(&["/work/project"]).with_grants(vec![remembered(
+            "/usr/bin/git",
+            Some("push"),
+            a_scope("remote"),
+            false,
+        )]);
+        let plain = step("/usr/bin/git", &["push", "origin"]);
+        assert_eq!(
+            confined.remembered_scopes(&[&plain]),
+            [Scope::Remote],
+            "the control: the argv the table gives the scope to was not listed"
+        );
+        for refused in [
+            &["push", "--receive-pack=/work/project/hook.sh", "origin"][..],
+            &["push", "origin", "ext::sh -c id"][..],
+            &["push", "foo://host/repo"][..],
+        ] {
+            let line = step("/usr/bin/git", refused);
+            assert!(
+                confined.remembered_scopes(&[&line]).is_empty(),
+                "{refused:?} was listed a scope the table refuses"
+            );
+        }
+    }
+
+    /// RUN-5, SANDBOX-27: `holds` still refuses a stage lent anything a person remembered, and
+    /// asking for the remembered scopes changes no answer of it. The regressions it rejects:
+    /// narrowing `holds` to the grants `remembered_scopes` lists (a directory a person named would
+    /// then be held), and `remembered_scopes` taking the grants out of the confinement. The control
+    /// is the same line with no grant, which is held.
+    #[test]
+    fn remembered_scopes_leave_the_refusal_of_a_stage_lent_a_grant_in_place() {
+        let make = step("/usr/bin/make", &["test"]);
+        let closed = || {
+            reading_confinement(Prelude::MacOs, &["/work/project"]).with_network(Network::Closed)
+        };
+        assert_eq!(
+            held(&closed(), &[&make]),
+            Containment::Held,
+            "the control: the plain line is not held, so the rows below prove nothing"
+        );
+        for (said, reached, listed) in [
+            ("a scope", a_scope("remote"), vec![Scope::Remote]),
+            (
+                "a directory",
+                Reached::Directory(PathBuf::from("/work/named")),
+                Vec::new(),
+            ),
+        ] {
+            let confined = closed().with_grants(vec![remembered(
+                "/usr/bin/make",
+                Some("test"),
+                reached,
+                false,
+            )]);
+            assert_eq!(
+                held(&confined, &[&make]),
+                Containment::Unknown,
+                "{said} was lent to a stage and the line was held"
+            );
+            assert_eq!(confined.remembered_scopes(&[&make]), listed, "{said}");
+            assert_eq!(
+                held(&confined, &[&make]),
+                Containment::Unknown,
+                "{said}: asking for the remembered scopes changed the answer of holds"
+            );
+        }
+        let other = closed().with_grants(vec![remembered(
+            "/usr/bin/make",
+            Some("deploy"),
+            a_scope("remote"),
+            false,
+        )]);
+        assert_eq!(
+            held(&other, &[&make]),
+            Containment::Held,
+            "a grant for another operation word refused a line it is not lent to"
+        );
     }
 
     /// A remembered scope is attached to a stage only where the scope table would give the stage

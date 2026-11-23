@@ -96,6 +96,13 @@ pub(super) fn arming_under(task: &Task, watch_file_allowed: bool) -> crate::watc
 /// A delegate in a checkout is offered no `lsp`, whatever its kind holds: the session's
 /// servers are rooted at the working directory, and a path in the checkout is outside it
 /// (CHECKOUT-20).
+///
+/// `offers_web_search` is whether a variable `webSearch.env` names holds text or a key file is
+/// configured, which is what puts `web_search` on the planner's list (WEBSEARCH-4).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a value the turn has already resolved, and turn.rs is its only caller"
+)]
 pub(super) fn offered_tools<S: Sink>(
     task: &Task,
     workspace: &Workspace,
@@ -104,6 +111,7 @@ pub(super) fn offered_tools<S: Sink>(
     scheduling: tools::Scheduling,
     arming: crate::watch::Arming,
     policy: &mut Policy<'_, S>,
+    offers_web_search: bool,
 ) -> Result<(Option<Addressed>, Vec<Tool>), Denial> {
     let Some(spec) = &task.delegate else {
         // What the command line took away is decided before the table is written, for the
@@ -125,6 +133,9 @@ pub(super) fn offered_tools<S: Sink>(
             tools::offer_set_link(&mut offered);
         }
         tools::offer_recall(&mut offered);
+        if offers_web_search {
+            tools::offer_web_search(&mut offered);
+        }
         if task.courier.is_some() {
             tools::offer_message_session(&mut offered);
         }
@@ -164,6 +175,9 @@ pub(super) fn offered_tools<S: Sink>(
                     tools::offer_set_link(&mut offered);
                 }
                 tools::offer_recall(&mut offered);
+                if offers_web_search {
+                    tools::offer_web_search(&mut offered);
+                }
                 if task.courier.is_some() {
                     tools::offer_message_session(&mut offered);
                 }
@@ -520,7 +534,19 @@ pub(super) fn settle_servers<S: Sink, C: Confirmer, R: Reporter>(
         (None, None) => held(task),
     };
     let holding = match &task.mcp {
-        Some(session) => session.in_a_turn(holding),
+        Some(session) => {
+            // The plugins' directories are hashed again here, before any list of theirs is put to
+            // the person, and a plugin found changed is named once in the session (PLUGIN-7).
+            let answers = task.account_session().plugin_hook_answers();
+            let held =
+                session.without_plugins_that_may_not_run(session.in_a_turn(holding), answers);
+            for plugin in answers.take_stopped_servers() {
+                let said = t!(servers_plugin_stopped_changed, plugin = plugin);
+                reporter.notice(said.clone());
+                notices.push(crate::skills::Notice::from_message(said));
+            }
+            held
+        }
         None => holding,
     };
     let holds_a_server = holding

@@ -15,6 +15,7 @@
 use crate::emit::Emitter;
 use crate::protocol::Event;
 use crate::wire;
+use bravebot_agent::aside::Fork;
 use bravebot_agent::confirm::{
     CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest, ManifestRequest,
     McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
@@ -24,6 +25,7 @@ use bravebot_agent::report::{self, Activity, CallId, Landing, Phase, Reporter, S
 use bravebot_core::ask::{Answer, AnswerMemo, Asking};
 use bravebot_core::delegate::DelegateId;
 use bravebot_core::event::Sink;
+use bravebot_core::file_authority::FileAuthority;
 use bravebot_core::todo::Row;
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -77,6 +79,33 @@ pub struct Question {
 /// answer. `None` means nothing is outstanding, so a reply that names a request cannot be
 /// applied — which is what makes an approval single-use rather than replayable.
 pub type Pending = Arc<Mutex<Option<Question>>>;
+
+/// What a turn's trail is to say about the host client that acted on it (TRACE-7), left by the
+/// thread that took the action and written by the turn's sink before the next entry it records.
+/// Each line is made by the host from a name the person gave a client, never from anything a
+/// session read.
+#[derive(Clone, Default)]
+pub struct ActorNotes(Arc<Mutex<Vec<String>>>);
+
+impl ActorNotes {
+    pub fn note(&self, line: String) {
+        if let Ok(mut notes) = self.0.lock() {
+            notes.push(line);
+        }
+    }
+
+    #[cfg(test)]
+    pub fn take_for_test(&self) -> Vec<String> {
+        self.take()
+    }
+
+    fn take(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .map(|mut notes| std::mem::take(&mut *notes))
+            .unwrap_or_default()
+    }
+}
 
 /// What a front-end answered.
 ///
@@ -185,6 +214,74 @@ impl Kind {
     }
 }
 
+// ---------------------------------------------------------------- publishing
+
+/// The slot a turn's reporter keeps the latest exchange in, for a question asked beside the turn
+/// (CMD-8).
+pub type ExchangeSlot = Arc<Mutex<Option<Fork>>>;
+
+/// What the turn in flight has published for a `/btw` asked while it runs (CMD-8): the exchange as
+/// its latest request was built, and the turn's own file authority, which a question beside the
+/// turn shares.
+///
+/// Held on the session beside its state and not inside it, because the turn's worker holds the
+/// state for the whole turn. Emptied when the next turn begins, so a question is never asked over
+/// an exchange the session has moved past.
+#[derive(Clone, Default)]
+pub struct Published {
+    exchange: ExchangeSlot,
+    files: Arc<Mutex<Option<FileAuthority>>>,
+    /// The account session the turn is sent under, which a question beside it is sent under too
+    /// (CHATGPT-10: one session to the account), since the session's own copy is in its state.
+    account: Arc<Mutex<Option<bravebot_agent::chatgpt::AccountSession>>>,
+}
+
+impl Published {
+    /// The slot a turn's [`BridgeReporter::publishing`] fills.
+    pub fn exchange_slot(&self) -> ExchangeSlot {
+        Arc::clone(&self.exchange)
+    }
+
+    /// The exchange the turn last published, if it has built a request yet.
+    pub fn exchange(&self) -> Option<Fork> {
+        locked(&self.exchange).clone()
+    }
+
+    /// Keep the file authority the turn runs under.
+    pub fn keep_files(&self, files: FileAuthority) {
+        *locked(&self.files) = Some(files);
+    }
+
+    /// The file authority of the turn that published the exchange.
+    pub fn files(&self) -> Option<FileAuthority> {
+        locked(&self.files).clone()
+    }
+
+    /// Keep the account session the turn is sent under.
+    pub fn keep_account(&self, account: bravebot_agent::chatgpt::AccountSession) {
+        *locked(&self.account) = Some(account);
+    }
+
+    /// The account session of the turn that published the exchange.
+    pub fn account(&self) -> Option<bravebot_agent::chatgpt::AccountSession> {
+        locked(&self.account).clone()
+    }
+
+    /// A turn is beginning, so what the last one published is dropped.
+    pub fn turn_begins(&self) {
+        *locked(&self.exchange) = None;
+        *locked(&self.files) = None;
+        *locked(&self.account) = None;
+    }
+}
+
+/// The slot's contents, whether or not a thread panicked holding it: a slot holds one value that
+/// is replaced whole, so a poisoned one is never half written.
+fn locked<T>(slot: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    slot.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 // ---------------------------------------------------------------- announcing
 
 /// Tells a front-end what a turn is doing.
@@ -206,6 +303,12 @@ pub struct BridgeReporter {
     /// [`bravebot_agent::roster::Roster`]'s and the terminal uses as well. Shared with the session
     /// so the list lasts across turns (VIEW-35).
     roster: Arc<Mutex<bravebot_agent::roster::Roster>>,
+    /// Where the session's reports are answered from while the turn holds its state (CMD-8).
+    /// `None` for a reporter whose requests and spend are not the session's turn's.
+    reports: Option<crate::reports::Shared>,
+    /// Where the exchange is kept at each round for a question asked beside the turn (CMD-8), or
+    /// `None` where nothing asks one, so no fork is built.
+    published: Option<ExchangeSlot>,
 }
 
 impl BridgeReporter {
@@ -220,12 +323,27 @@ impl BridgeReporter {
             prompt_at: None,
             task_list: Vec::new(),
             roster: Arc::default(),
+            reports: None,
+            published: None,
         }
+    }
+
+    /// Keep the exchange each round's request is built over in `slot`, replacing the one before.
+    pub fn publishing(mut self, slot: ExchangeSlot) -> Self {
+        self.published = Some(slot);
+        self
     }
 
     /// Report into the session's own list of agents and not a fresh one.
     pub fn sharing(mut self, roster: Arc<Mutex<bravebot_agent::roster::Roster>>) -> Self {
         self.roster = roster;
+        self
+    }
+
+    /// Keep the turn's request and what it spends in the session's report store, so `/cost`,
+    /// `/context` and `/request` are answered while the turn runs (CMD-8).
+    pub fn holding(mut self, reports: crate::reports::Shared) -> Self {
+        self.reports = Some(reports);
         self
     }
 
@@ -312,10 +430,36 @@ impl BridgeReporter {
 impl Reporter for BridgeReporter {
     fn spent(&mut self, spent: bravebot_agent::Spent) {
         self.spent = Some(spent);
+        if let Some(reports) = &self.reports {
+            crate::reports::hold(reports).spent(&spent);
+        }
+    }
+
+    /// Built only for a reporter that keeps it, since building one copies every span.
+    fn wants_request_view(&self) -> bool {
+        self.reports.is_some()
+    }
+
+    /// The turn's own request. A delegate's never arrives here: the handle a delegate reports
+    /// through drops it.
+    fn request_built(&mut self, view: bravebot_agent::request_view::RequestView) {
+        if let Some(reports) = &self.reports {
+            crate::reports::hold(reports).request_built(view);
+        }
     }
 
     fn prompt_recorded(&mut self, at: usize) {
         self.prompt_at = Some(at);
+    }
+
+    fn wants_fork(&self) -> bool {
+        self.published.is_some()
+    }
+
+    fn exchange_forked(&mut self, fork: Fork) {
+        if let Some(slot) = &self.published {
+            *locked(slot) = Some(fork);
+        }
     }
 
     /// The planner has read a line the person typed while the turn ran, so a front end moves it
@@ -541,6 +685,7 @@ pub struct BridgeSink {
     counted: &'static str,
     turn: usize,
     trail: bravebot_session::audit::Trail,
+    actors: ActorNotes,
 }
 
 impl BridgeSink {
@@ -551,7 +696,33 @@ impl BridgeSink {
             counted: "turn",
             turn,
             trail: bravebot_session::audit::Trail::new(),
+            actors: ActorNotes::default(),
         }
+    }
+
+    /// Write what `actors` is given about the clients that act on this turn.
+    pub fn noting(mut self, actors: ActorNotes) -> Self {
+        self.actors = actors;
+        self
+    }
+
+    /// Write what the clients that acted since the last entry left, for a turn that ends with no
+    /// entry after a cancel.
+    pub fn write_notes(&mut self) {
+        let notes = self.actors.take();
+        if notes.is_empty() {
+            return;
+        }
+        // Entries about the turn, not about a delegate that happens to be recording.
+        let recording = self.trail.recording();
+        self.trail.recording_for(None);
+        for detail in notes {
+            self.write(bravebot_core::event::Event::GatePassed {
+                gate: "actor",
+                detail,
+            });
+        }
+        self.trail.recording_for(recording);
     }
 
     /// A sink for a manifest run, whose events carry `run` and no `turn`.
@@ -596,8 +767,8 @@ fn pictured_fields(event: &serde_json::Value) -> serde_json::Map<String, serde_j
         .collect()
 }
 
-impl Sink for BridgeSink {
-    fn emit(&mut self, event: bravebot_core::event::Event) {
+impl BridgeSink {
+    fn write(&mut self, event: bravebot_core::event::Event) {
         // Projected with the agent's own function rather than a second spelling of it:
         // two renderings of one trail would drift the moment either changed.
         let written = bravebot_session::audit::as_json(&event, self.trail.recording());
@@ -608,6 +779,13 @@ impl Sink for BridgeSink {
         });
         self.emitter.send(Event::new("audit", &self.session, data));
         self.trail.emit(event);
+    }
+}
+
+impl Sink for BridgeSink {
+    fn emit(&mut self, event: bravebot_core::event::Event) {
+        self.write_notes();
+        self.write(event);
     }
 
     /// Passed to the trail, which both readers above take the answer from: the record written at
@@ -755,8 +933,8 @@ impl BridgeConfirmer {
             // nothing can be answered, so nothing is approved.
             return None;
         };
-        // Checked under the lock that registers the question. A controller lost after this point
-        // finds the question registered and refuses it; one lost before it is seen here. Checked
+        // Checked under the lock that registers the question. A narrowing after this point finds
+        // the question registered and refuses it; one before it is seen here. Checked
         // anywhere else, a question could be registered between the two and wait for nobody.
         if !self.answerers.can_answer(kind) {
             return None;
@@ -793,7 +971,9 @@ impl BridgeConfirmer {
             *pending = None;
         }
 
-        self.emitter.view_answered(&self.session, id);
+        // Whoever cancelled the turn, if anyone did, stays the name on the view.
+        self.emitter
+            .view_answered(&self.session, id, crate::view::Acting::Same);
 
         // Belt and braces. `Running::answer` already refuses a reply whose kind does not
         // match the outstanding question, so this should be unreachable — and it is

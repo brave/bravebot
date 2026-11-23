@@ -13,7 +13,10 @@ a turn is over.
 
 One file, in one place: `hooks.json` in `~/.bravebot`, the directory holding what is yours.
 
-No other file declares a hook. A checkout carries none, a directory you happen to start a session
+No other file declares a hook, with one exception: a plugin you installed. Its hooks file is read from
+its own folder under `~/.bravebot/plugins`, fires only after you answer a question, and the answer is
+recorded in `~/.bravebot/hooks-approved` (see [Hooks from a plugin](#hooks-from-a-plugin) and
+[Plugins](plugins.md)). A checkout carries none, a directory you happen to start a session
 in carries none, and there is no layering, no merging and no overriding. On a platform that names no
 profile directory there are no hooks at all.
 
@@ -128,6 +131,29 @@ when you closed the session has ended. If a `session-started` hook cannot be sta
 says so. A `session-ended` hook that cannot be started has nowhere to say so, because the session is
 already closed.
 
+## Hooks from a plugin
+
+A [plugin](plugins.md) you installed may carry a hooks file, in the same format as `hooks.json`. Its
+hooks are shown in full when you install the plugin, and none runs until you answer a question.
+
+- The question is asked at the first moment the hook would fire, in a session you are watching. It
+  names the plugin, the moment and the full program and arguments, and is asked at most once per
+  session.
+- `y` runs the hook and writes one line to `~/.bravebot/hooks-approved`. `n` records nothing, and the
+  question comes again in a later session.
+- No permission mode answers it, `--dangerously-skip-permissions` included.
+- Where nobody can be asked, no plugin hook fires: a one-shot run, the desktop app, an editor over
+  ACP and the local host. `--safe` reads none.
+- `turn-started`, `turn-finished`, `checkout-made`, `tool-finished` and `compacted` ask and fire.
+  `session-started` does in the full-screen interface and in lines, and `file-changed` in the
+  full-screen interface only. `prompt-shown` and `session-ended` fire only a hook you already
+  answered yes to, and neither asks.
+- Before a plugin hook fires, the plugin's folder is hashed again. If it no longer matches what was
+  installed, the hook is stopped, no question is put, and a notice names the plugin once per session.
+
+A plugin hook is told only the moment and decides nothing, as your own hooks. The full text is in
+[Plugins](plugins.md#a-plugins-hooks).
+
 ## A hook is a program and its arguments
 
 `run` is an array: the program first, then each argument as its own string. Nothing joins them into a
@@ -241,6 +267,10 @@ Nothing a hook prints is read, so this report is the only way you learn your for
 since you mistyped its path.
 
 ## Known costs
+
+- **A plugin hook only on `session-ended` fires only after an earlier yes.** That moment never asks.
+- **A plugin's `file-changed` question waits while you have a draft in the input box.**
+- **The desktop app and ACP cannot approve a plugin hook,** so none runs there.
 
 - **`file-changed` fires in the full-screen interface alone.** A session in lines, a one-shot run, the
   desktop app, an editor over ACP and the local host look at no file, so an entry for it fires nowhere

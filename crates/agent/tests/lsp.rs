@@ -1210,6 +1210,318 @@ fn a_name_out_of_an_unvouched_tree_is_not_in_the_planners_context() {
     }
 }
 
+/// LSP-3: a position asked in a file nobody vouched for decides which locations come back, so the
+/// answer is one reference even where it names only vouched files. The same question asked in a
+/// vouched file shows the location as written.
+///
+/// The server answers each of the three questions with a location in `src/b.rs`. A wrong
+/// implementation that labels from the reported names alone shows `src/b.rs:1:11` for the
+/// question asked in `vendor/x.rs` too. `incomingCalls`, `outgoingCalls` and `documentSymbol` are
+/// asked the same way in the tests below, against a server that speaks them.
+#[test]
+fn a_position_asked_in_an_unvouched_file_is_not_in_the_planners_context() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+
+    let definition = "*'\"textDocument/definition\"'*)";
+    assert!(FAKE_SERVER.contains(definition), "the fixture changed");
+    let mut results = Vec::new();
+    for operation in ["goToDefinition", "findReferences", "goToImplementation"] {
+        for (queried, distrusted) in [("vendor/x.rs", true), ("src/a.rs", false)] {
+            let scratch = Scratch::new(&format!(
+                "agent-lsp-asked-in-{}-{operation}",
+                if distrusted { "vendor" } else { "src" }
+            ));
+            let (workspace, _recorded) = a_workspace_with_a_server(&scratch);
+            let program = scratch.programs.join("rust-analyzer");
+            std::fs::write(
+                &program,
+                FAKE_SERVER.replacen(
+                    definition,
+                    "*'\"textDocument/references\"'*|*'\"textDocument/implementation\"'*|*'\"textDocument/definition\"'*)",
+                    1,
+                ),
+            )
+            .expect("write the server");
+            std::fs::create_dir_all(scratch.path.join("vendor")).expect("create vendor");
+            std::fs::write(scratch.path.join("vendor/x.rs"), "pub struct Held;\n")
+                .expect("write the queried file");
+            std::fs::write(scratch.path.join("src/b.rs"), "x").expect("write the reported file");
+            // SAFETY: PATH_LOCK is held for the whole of this body, so no other test in this
+            // binary is reading or writing the environment while this runs.
+            unsafe {
+                std::env::set_var("DEFINED_AT", scratch.path.join("src/b.rs"));
+            }
+
+            let (endpoint, received) = serve_sequence(vec![
+                tool_request(
+                    "lsp",
+                    &format!(
+                        r#"{{"operation":"{operation}","path":"{queried}","line":1,"character":12}}"#
+                    ),
+                ),
+                reply_with("that is where it is"),
+            ]);
+            let config = config_for(&endpoint);
+            let egress = bravebot_net::Egress::new();
+            let mut sink = RecordingSink::new();
+            let mut asking = AskedAboutServers {
+                asked: 0,
+                reject: false,
+                approve_writes: false,
+            };
+            let mut trust = trusting_the_workspace(&workspace);
+            trust.distrust("vendor");
+
+            let mut conversation = Conversation::new();
+            turn::resume(
+                &config,
+                &egress,
+                &workspace,
+                &Task::new("where is Held used"),
+                &mut conversation,
+                &mut asking,
+                &mut bravebot_agent::report::RecordingReporter::default(),
+                &mut sink,
+                trust,
+                TrustedPrograms::new(),
+                None,
+                &Cancel::new(),
+            )
+            .outcome
+            .expect("the turn runs");
+
+            let _first = received.recv().expect("the question");
+            let carrying_the_answer = received.recv().expect("the request carrying the result");
+            results.push((operation, distrusted, carrying_the_answer));
+        }
+    }
+
+    for (operation, distrusted, request) in results {
+        if distrusted {
+            assert!(
+                !request.contains("src/b.rs"),
+                "{operation}: an answer selected by an unvouched file reached the planner: {request}"
+            );
+            assert!(
+                request.contains("Result of lsp"),
+                "{operation}: the planner is told something came back: {request}"
+            );
+        } else {
+            assert!(
+                tool_result_in(&request).contains("src/b.rs:1:11"),
+                "{operation}: a vouched-for file's answer is read as written: {request}"
+            );
+        }
+    }
+}
+
+/// The fake server, extended to answer the call hierarchy exchange and `documentSymbol`, each with
+/// one location in `$DEFINED_AT`.
+///
+/// `prepareCallHierarchy` returns the item that `incomingCalls` and `outgoingCalls` then wrap, and
+/// `documentSymbol` answers with a `SymbolInformation` list, which is the shape that names a file.
+fn server_speaking_calls_and_symbols() -> String {
+    const ITEM: &str = r#"{\"name\":\"held\",\"kind\":12,\"uri\":\"file://$DEFINED_AT\",\"range\":{\"start\":{\"line\":0,\"character\":10},\"end\":{\"line\":0,\"character\":14}},\"selectionRange\":{\"start\":{\"line\":0,\"character\":10},\"end\":{\"line\":0,\"character\":14}}}"#;
+    let shutdown = "*'\"shutdown\"'*)";
+    assert!(FAKE_SERVER.contains(shutdown), "the fixture changed");
+    let cases = format!(
+        r#"*'"textDocument/prepareCallHierarchy"'*)
+      reply "{{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":[{ITEM}]}}"
+      ;;
+    *'"callHierarchy/incomingCalls"'*)
+      reply "{{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":[{{\"from\":{ITEM},\"fromRanges\":[]}}]}}"
+      ;;
+    *'"callHierarchy/outgoingCalls"'*)
+      reply "{{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":[{{\"to\":{ITEM},\"fromRanges\":[]}}]}}"
+      ;;
+    *'"textDocument/documentSymbol"'*)
+      reply "{{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":[{{\"name\":\"Held\",\"kind\":23,\"location\":{{\"uri\":\"file://$DEFINED_AT\",\"range\":{{\"start\":{{\"line\":0,\"character\":10}},\"end\":{{\"line\":0,\"character\":14}}}}}}}}]}}"
+      ;;
+    "#
+    );
+    FAKE_SERVER.replacen(shutdown, &format!("{cases}{shutdown}"), 1)
+}
+
+/// Ask one `lsp` question at `queried` of `server`, in a workspace where `vendor` is distrusted and
+/// `src/b.rs` is the file the server reports, and return the request that carried the answer back
+/// to the model.
+///
+/// `vendor/x.rs` and `src/a.rs` exist, and so do `src/link.rs` (a symbolic link to `vendor/x.rs`)
+/// and `src/hard.rs` (a hard link to it).
+fn the_request_carrying_the_answer(
+    name: &str,
+    server: &str,
+    operation: &str,
+    queried: &str,
+) -> String {
+    let scratch = Scratch::new(name);
+    let (workspace, _recorded) = a_workspace_with_a_server(&scratch);
+    std::fs::write(scratch.programs.join("rust-analyzer"), server).expect("write the server");
+    std::fs::create_dir_all(scratch.path.join("vendor")).expect("create vendor");
+    std::fs::write(scratch.path.join("vendor/x.rs"), "pub struct Held;\n")
+        .expect("write the queried file");
+    std::fs::write(scratch.path.join("src/b.rs"), "x").expect("write the reported file");
+    std::os::unix::fs::symlink(
+        scratch.path.join("vendor/x.rs"),
+        scratch.path.join("src/link.rs"),
+    )
+    .expect("link to the distrusted file");
+    std::fs::hard_link(
+        scratch.path.join("vendor/x.rs"),
+        scratch.path.join("src/hard.rs"),
+    )
+    .expect("hard link to the distrusted file");
+    // SAFETY: the caller holds PATH_LOCK for the whole of its body, so no other test in this binary
+    // is reading or writing the environment while this runs.
+    unsafe {
+        std::env::set_var("DEFINED_AT", scratch.path.join("src/b.rs"));
+    }
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "lsp",
+            &format!(r#"{{"operation":"{operation}","path":"{queried}","line":1,"character":12}}"#),
+        ),
+        reply_with("that is where it is"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: false,
+        approve_writes: false,
+    };
+    let mut trust = trusting_the_workspace(&workspace);
+    trust.distrust("vendor");
+
+    let mut conversation = Conversation::new();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("where is Held used"),
+        &mut conversation,
+        &mut asking,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trust,
+        TrustedPrograms::new(),
+        None,
+        &Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let _first = received.recv().expect("the question");
+    received.recv().expect("the request carrying the result")
+}
+
+/// LSP-3: `incomingCalls`, `outgoingCalls` and `documentSymbol` asked in a file nobody vouched for
+/// come back as one reference, though the server names only `src/b.rs`, which is vouched for. The
+/// same questions asked in `src/a.rs` show the location as written.
+///
+/// A wrong implementation that gives these operations no queried file, or that labels from the
+/// reported names alone, shows `src/b.rs:1:11` for `vendor/x.rs` too.
+#[test]
+fn a_call_hierarchy_or_symbol_question_asked_in_an_unvouched_file_is_quarantined() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let server = server_speaking_calls_and_symbols();
+
+    for operation in ["incomingCalls", "outgoingCalls", "documentSymbol"] {
+        let vouched = the_request_carrying_the_answer(
+            &format!("agent-lsp-asked-src-{operation}"),
+            &server,
+            operation,
+            "src/a.rs",
+        );
+        assert!(
+            tool_result_in(&vouched).contains("src/b.rs:1:11"),
+            "{operation}: a vouched-for file's answer is read as written: {vouched}"
+        );
+
+        let unvouched = the_request_carrying_the_answer(
+            &format!("agent-lsp-asked-vendor-{operation}"),
+            &server,
+            operation,
+            "vendor/x.rs",
+        );
+        assert!(
+            !unvouched.contains("src/b.rs"),
+            "{operation}: an answer selected by an unvouched file reached the planner: {unvouched}"
+        );
+        assert!(
+            unvouched.contains("Result of lsp"),
+            "{operation}: the planner is told something came back: {unvouched}"
+        );
+        assert!(
+            !unvouched.contains("1 location"),
+            "{operation}: the count of an answer an unvouched file selected reached the planner: {unvouched}"
+        );
+    }
+}
+
+/// LSP-3, TRUST-2: a question asked at a file by another name of a file nobody vouched for is
+/// asked about under the file's own entry. `src/link.rs` is a symbolic link and `src/hard.rs` a
+/// hard link to `vendor/x.rs`, and both sit in a vouched directory.
+///
+/// A wrong implementation that looks the typed name up alone reads both as vouched and shows the
+/// location.
+#[test]
+fn a_question_asked_through_another_name_of_an_unvouched_file_is_quarantined() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let server = FAKE_SERVER.to_string();
+
+    for (spelling, queried) in [("link", "src/link.rs"), ("hard", "src/hard.rs")] {
+        let request = the_request_carrying_the_answer(
+            &format!("agent-lsp-asked-through-{spelling}"),
+            &server,
+            "goToDefinition",
+            queried,
+        );
+        assert!(
+            !request.contains("src/b.rs"),
+            "{spelling}: a question asked through another name of an unvouched file was read as written: {request}"
+        );
+        assert!(request.contains("Result of lsp"), "{spelling}: {request}");
+    }
+}
+
+/// LSP-3, LSP-6: an answer with no locations is one bit the queried file decided. Asked in a file
+/// nobody vouched for it comes back as a reference, so the planner does not read "nothing found" as
+/// a fact about the code. Asked in a vouched file the driver's own sentence says the server
+/// answered with no locations, which is not a server that failed to run.
+#[test]
+fn an_empty_answer_from_an_unvouched_file_is_quarantined() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let plain = r#"[{\"uri\":\"file://$DEFINED_AT\",\"range\":{\"start\":{\"line\":0,\"character\":10},\"end\":{\"line\":0,\"character\":14}}}]"#;
+    assert!(FAKE_SERVER.contains(plain), "the fixture's reply changed");
+    let server = FAKE_SERVER.replacen(plain, "[]", 1);
+
+    let vouched = the_request_carrying_the_answer(
+        "agent-lsp-empty-src",
+        &server,
+        "goToDefinition",
+        "src/a.rs",
+    );
+    assert!(
+        tool_result_in(&vouched).contains("answered with no locations"),
+        "a vouched-for file's empty answer is read as the driver's sentence: {vouched}"
+    );
+
+    let unvouched = the_request_carrying_the_answer(
+        "agent-lsp-empty-vendor",
+        &server,
+        "goToDefinition",
+        "vendor/x.rs",
+    );
+    assert!(
+        !unvouched.contains("answered with no locations"),
+        "an empty answer decided by an unvouched file reached the planner: {unvouched}"
+    );
+    assert!(unvouched.contains("Result of lsp"), "{unvouched}");
+}
+
 /// LSP-14: the end line of a definition reaches the planner with the location where the tree is
 /// vouched for, and is not in its context where it is not. The answer is labelled by the files it
 /// names, so the end line changes neither which label an answer gets nor when it is quarantined.
@@ -1901,24 +2213,90 @@ fn a_write_of_quarantined_bytes_reports_no_diagnostics() {
     let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
     let (result, _asked, started) = write_result(
         "agent-lsp-write-unvouched",
-        &[
-            a_question_about_a_symbol(),
-            tool_request("read_file", r#"{"path":"vendor/x.rs"}"#),
-            tool_request(
-                "spawn_processor",
-                r#"{"reads":["ref:3"],"instruction":"return the whole file"}"#,
-            ),
-            reply_with(&format!(
-                "{}\\nfn quarantined() {{}}",
-                bravebot_core::processor::ProcessorSpec::NOTE_MARKER
-            )),
-        ],
+        &a_running_server_and_a_processors_rewrite_of_an_unvouched_file(),
         r#"{"path":"vendor/x.rs","contents_ref":"ref:5"}"#,
     );
 
     assert_eq!(started, 1, "the server did not run: {result}");
     assert!(result.contains("replaced vendor/x.rs"), "{result}");
     assert!(!result.contains("language server"), "{result}");
+}
+
+/// The planner's steps before a write of quarantined bytes: a question that starts the server, a
+/// read of a file under the distrusted `vendor/`, and a processor's rewrite of it, which is `ref:5`.
+fn a_running_server_and_a_processors_rewrite_of_an_unvouched_file() -> Vec<String> {
+    vec![
+        a_question_about_a_symbol(),
+        tool_request("read_file", r#"{"path":"vendor/x.rs"}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:3"],"instruction":"return the whole file"}"#,
+        ),
+        reply_with(&format!(
+            "{}\\nfn quarantined() {{}}",
+            bravebot_core::processor::ProcessorSpec::NOTE_MARKER
+        )),
+    ]
+}
+
+/// Every result the planner was given for `tool` in a request body, in the order of the calls.
+fn every_result_of(tool: &str, request: &str) -> Vec<String> {
+    let parsed: serde_json::Value = serde_json::from_str(request).expect("a request body");
+    let prefix = format!("Result of {tool}");
+    parsed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter_map(|message| message["content"].as_str())
+        .filter(|content| content.starts_with(&prefix))
+        .map(str::to_string)
+        .collect()
+}
+
+/// LSP-12 and WRITE-5: what withholds the report is the trust of the bytes written, which a write
+/// records for the file (TRUST-4), and not the trust the path had before the write.
+///
+/// A processor's answer can only be written to the file it was about, so the destination is
+/// `vendor/x.rs`, which the tree distrusts. The planner first writes that file in its own words,
+/// which vouches for the path (the control: that write is reported on), and then writes the
+/// processor's answer over it. The path is vouched when the second write is made and the bytes are
+/// not, so a gate that read the path's trust before the write would report, and one that reads the
+/// file's entry after it does not.
+#[test]
+fn quarantined_bytes_written_over_a_vouched_path_report_no_diagnostics() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let mut replies = a_running_server_and_a_processors_rewrite_of_an_unvouched_file();
+    replies.push(tool_request(
+        "write_file",
+        r#"{"path":"vendor/x.rs","contents":"pub struct Held;\nfn broken( {\n"}"#,
+    ));
+    replies.push(tool_request(
+        "write_file",
+        r#"{"path":"vendor/x.rs","contents_ref":"ref:5"}"#,
+    ));
+    replies.push(reply_with("written"));
+    let (requests, _asked, started) =
+        diagnosing_turn("agent-lsp-write-vouched-path", "write x.rs", &[], replies);
+    assert_eq!(started, 1, "the server did not run");
+
+    let results = every_result_of("write_file", requests.last().expect("a request"));
+    assert_eq!(results.len(), 2, "{results:?}");
+    assert!(
+        results[0].contains("replaced vendor/x.rs"),
+        "{}",
+        results[0]
+    );
+    assert!(
+        results[0].contains("language server: 2 errors at line 2, 4; 1 warning"),
+        "the path the planner's own words vouched for is not reported on: {}",
+        results[0]
+    );
+    assert!(results[1].contains("replaced"), "{}", results[1]);
+    assert!(
+        !results[1].contains("language server"),
+        "quarantined bytes written over a vouched path were reported on: {}",
+        results[1]
+    );
 }
 
 /// The edit the planner makes in the tests below, in its own words.

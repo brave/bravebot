@@ -1142,6 +1142,7 @@ fn worded(row: accounts::Row) -> Line {
             (Held::KeyStored, Of::Brave) => t!(auth_status_brave_held).into(),
             (Held::KeyStored, _) => t!(doctor_gateway_token_stored).into(),
             (Held::KeyFromEnvironment, _) => t!(doctor_gateway_token).into(),
+            (Held::KeyFromFile, _) => t!(doctor_gateway_token_key_file).into(),
             (Held::KeyNotNeeded, _) => t!(doctor_gateway_token_not_needed).into(),
             (Held::Account { expires }, Of::Xai) => t!(auth_status_xai_expires, expires = expires),
             (Held::Account { expires }, _) => t!(auth_status_chatgpt_expires, expires = expires),
@@ -1181,6 +1182,11 @@ fn worded(row: accounts::Row) -> Line {
             (Why::GatewayNoneStored, _) => t!(auth_status_gateway_none_stored, id = id),
             (Why::GatewayUnrecorded, _) => t!(auth_status_gateway_unrecorded, id = id),
             (Why::GatewayAbsent, _) => t!(doctor_gateway_token_absent, id = id),
+            (Why::GatewayKeyFileUnusable(fault), _) => t!(
+                auth_status_gateway_key_file_unusable,
+                reason = bravebot_agent::backend::key_file_fault_said(fault),
+                id = id
+            ),
             (Why::KeysUnreadable, _) => t!(auth_gateway_held_unreadable).into(),
         }
     };
@@ -3307,6 +3313,49 @@ mod tests {
             assert!(said.contains("odd"), "{described}: {said:?}");
             assert!(!acts(&said), "{described}: {said:?}");
             assert!(said.contains("U+202E"), "{described}: {said:?}");
+        }
+    }
+
+    /// A key read from the file a block's `options.keyFile` names is said as that, and a file that
+    /// gives no key is said with the reason and the remedy and with neither the path nor any text of
+    /// the file. Storing a key is named, since a stored key is read before the file. The regressions
+    /// it rejects are saying a key from a file in the words of a variable or of nothing, and wording
+    /// the row from anything the file held.
+    #[test]
+    fn a_key_file_is_said_as_the_source_and_a_file_that_gives_no_key_is_said_with_its_reason() {
+        use bravebot_agent::accounts::{Held as Has, Row, Standing as Of, Way as For, Why};
+        use bravebot_config::provider::KeyFileFault;
+        let row = |standing| Row {
+            way: For::Gateway { id: "work".into() },
+            standing,
+            stored: false,
+        };
+        let (_, from_file) = worded(row(Of::SignedIn(Has::KeyFromFile)));
+        let (_, from_variable) = worded(row(Of::SignedIn(Has::KeyFromEnvironment)));
+        assert!(
+            from_file.said().contains("options.keyFile"),
+            "{}",
+            from_file.said()
+        );
+        assert_ne!(from_file.said(), from_variable.said());
+
+        let mut sentences = Vec::new();
+        for fault in [
+            KeyFileFault::NotAbsolute,
+            KeyFileFault::Unreadable,
+            KeyFileFault::TooLarge,
+            KeyFileFault::Empty,
+            KeyFileFault::NotAKey,
+        ] {
+            let (_, said) = worded(row(Of::NotSignedIn(Why::GatewayKeyFileUnusable(fault))));
+            let said = said.said();
+            assert!(said.contains("options.keyFile"), "{said}");
+            assert!(said.contains("auth login gateway work"), "{said}");
+            assert!(
+                !sentences.contains(&said),
+                "two faults share a sentence: {said}"
+            );
+            sentences.push(said);
         }
     }
 

@@ -5,10 +5,39 @@ import { projectLabel } from '../shared/recents'
 import type { SessionInfoValue, SessionStatus } from './components/Sessions'
 import * as t from './transcript'
 import type { Live } from './live'
+import type { TitleState } from '../shared/window-title'
+
+/**
+ * What an open session's sidebar row says about it. Only what asks something of the reader:
+ * "Ready" and "Completed" were true of nearly every row and so said nothing about any of them.
+ */
+export function sessionStatus(current: Live): SessionStatus | undefined {
+  const outstanding = t.outstanding(current.entries)
+  return outstanding ? (outstanding.kind === 'ask' ? 'answer' : 'approval')
+    : current.running ? 'working'
+      : current.entries.at(-1)?.kind === 'error' ? 'failed'
+        : undefined
+}
+
+/**
+ * What the window title says the session on screen is doing, from the same rule as its row.
+ * A failed turn is ready again, as in the terminal.
+ */
+export function titleState(current: Live | null): TitleState {
+  const status = current ? sessionStatus(current) : undefined
+  return status === 'answer' || status === 'approval' ? 'waiting'
+    : status === 'working' ? 'working'
+      : 'ready'
+}
 
 /** Whether a bot has recorded this conversation, in the folder it ran in. */
 export function hadConversation(bot: Bot, summary: { id: string; directory: string }): boolean {
   return bot.conversations.some((each) => each.id === summary.id && each.directory === summary.directory)
+}
+
+/** Whether a background process is running this chat: it is working, needs input or is idle (BG-6). */
+export function heldInBackground(summary: SessionSummary): boolean {
+  return summary.background === 'working' || summary.background === 'needs-input' || summary.background === 'idle'
 }
 
 /** What a chat in a bot's home folder is listed under. */
@@ -60,14 +89,9 @@ export function listSessions({ sessions, opened, conversations, bots, now, curre
     const owner = conversations[conversationKey(summary.directory, summary.id)]?.botSlug
     const bot = bots.find((item) => hadConversation(item, summary) || item.slug === owner)
       ?? bots.find((item) => item.slug === current?.bot?.slug)
-    const outstanding = current ? t.outstanding(current.entries) : undefined
-    // Only what asks something of the reader. "Ready" and "Completed" were true of nearly
-    // every row and so said nothing about any of them.
-    const status: SessionStatus | undefined = !current ? undefined
-      : outstanding ? (outstanding.kind === 'ask' ? 'answer' : 'approval')
-        : current.running ? 'working'
-          : current.entries.at(-1)?.kind === 'error' ? 'failed'
-            : undefined
+    // A chat a background process holds cannot be opened here, so its row says why.
+    const status: SessionStatus | undefined = current ? sessionStatus(current)
+      : heldInBackground(summary) ? 'background' : undefined
     if (!bot && !status) continue
     info[conversationKey(summary.directory, summary.id)] = {
       bot: bot ? { name: bot.name, avatar: bot.avatar } : undefined,

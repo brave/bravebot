@@ -26,6 +26,15 @@ export function apply(
         return { ...old, entries: [...old.entries, t.watchFired(message.data.number, message.data.path)] }
       case 'schedule.ran':
         return { ...old, entries: [...old.entries, t.scheduleAnswered(message.data)] }
+      // An answer to `/btw` or `/recap`: a row to read and an aside of the session, never a prompt
+      // and never part of what a turn sends (CMD-8, CMD-16).
+      case 'aside.done': {
+        const done = message.data
+        const asides = done.status === 'answered'
+          ? [...(old.asides ?? []), { question: done.question, answer: done.answer ?? null, kept: done.kept === true }]
+          : old.asides
+        return { ...old, asides, entries: [...old.entries, t.asideAnswered(done)] }
+      }
       case 'watch.ended':
         return { ...old, entries: [...old.entries, t.narrated(`Watch ${message.data.number} ended: ${message.data.reason}${message.data.message ? `. ${message.data.message}` : ''}`)] }
       case 'turn.started':

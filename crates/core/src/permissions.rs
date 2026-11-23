@@ -37,6 +37,9 @@ use crate::ambient::{CanonicalHost, canonical_host};
 use crate::trust::is_absolute_key;
 use std::fmt;
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// The family of tools a rule names.
 ///
 /// Claude Code's own spellings, which are categories rather than tool names there too: its docs
@@ -53,6 +56,10 @@ pub enum Subject {
     Bash,
     /// Fetching a URL: `fetch_url`, and every redirect hop it follows.
     WebFetch,
+    /// Searching the web through the first-party search tool, `web_search`. A rule names the family
+    /// and nothing else: a query is the planner's own words, and a rule matching words would be
+    /// the driver deciding from content ([`Unreadable::NotASearchRule`]).
+    WebSearch,
     /// Calling a tool of an MCP server a person declared, named `alias:tool`.
     Mcp,
 }
@@ -65,6 +72,7 @@ impl Subject {
             Self::Edit => "Edit",
             Self::Bash => "Bash",
             Self::WebFetch => "WebFetch",
+            Self::WebSearch => "WebSearch",
             Self::Mcp => "Mcp",
         }
     }
@@ -76,6 +84,7 @@ impl Subject {
             "Edit" => Some(Self::Edit),
             "Bash" => Some(Self::Bash),
             "WebFetch" => Some(Self::WebFetch),
+            "WebSearch" => Some(Self::WebSearch),
             "Mcp" => Some(Self::Mcp),
             _ => None,
         }
@@ -95,6 +104,7 @@ impl fmt::Display for Subject {
 
 /// Which list a rule came from, which is what it does when it matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(verus_keep_ghost, verus_verify, derive(Structural))]
 pub enum Ruling {
     /// The action is refused outright.
     Deny,
@@ -123,6 +133,7 @@ impl fmt::Display for Ruling {
 
 /// What the rules had to say about one action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify, derive(Structural))]
 pub enum Decision {
     /// A rule matched.
     Ruled(Ruling),
@@ -152,16 +163,29 @@ pub struct Anchors {
     /// ([`crate::spelling`]).
     pub backslash_separates: bool,
     /// Whether the volume the paths live on holds two spellings that differ only in case as one
-    /// file. Supplied by the caller because this crate asks the host nothing, and false when the
-    /// caller cannot tell: folding reads a rule about `Docs` as also covering `docs`, which on a
-    /// volume that keeps them apart is a different file.
+    /// file. Supplied by the caller because this crate asks the host nothing. False where the volume
+    /// keeps them apart and where the caller cannot tell, which [`Anchors::case_unknown`] separates:
+    /// folding reads a rule about `Docs` as also covering `docs`, which on a volume that keeps them
+    /// apart is a different file.
     pub folds_case: bool,
+    /// Whether the caller could not tell if the volume folds case. A rule in `deny` or `ask` is then
+    /// read as it is on a volume that folds, since reading it byte for byte leaves a file open that
+    /// the person wrote the rule to keep from the planner, and a rule in `allow` is read byte for
+    /// byte, since folding it would grant a file nobody named (PERM-3). Not read where
+    /// [`Anchors::folds_case`] is true.
+    pub case_unknown: bool,
 }
 
 impl Anchors {
     /// Anchors that resolve nothing, for a caller with no settings file.
     pub fn none() -> Self {
         Self::default()
+    }
+
+    /// Whether a rule in the list `ruling` names is read as on a volume that folds case: where the
+    /// volume does, and for a rule that restricts where the caller could not tell.
+    fn folds_for(&self, ruling: Ruling) -> bool {
+        self.folds_case || (self.case_unknown && ruling != Ruling::Allow)
     }
 }
 
@@ -368,6 +392,12 @@ impl Rule {
             return Err(Rejected::new(text, Unreadable::WhitespaceAtAnEnd));
         }
 
+        // A rule that restricts is stored in the fold it is matched in, which is the folding one
+        // wherever the caller could not tell (PERM-3).
+        let anchors = &Anchors {
+            folds_case: anchors.folds_for(ruling),
+            ..anchors.clone()
+        };
         let mut typed_unreadable = None;
         let pattern = match specifier {
             // A bare family name, and `(*)`, are the same rule and cover every use of it.
@@ -411,6 +441,12 @@ impl Rule {
             }
             Some(specifier) if subject == Subject::Mcp => tool_pattern(specifier)
                 .ok_or_else(|| Rejected::new(text, Unreadable::NotAToolRule))?,
+            // Nothing in a search call is routing a rule could name: the host is fixed in source
+            // and the query is the planner's own words. A rule that matched them would be the
+            // driver deciding from content, so only the bare family is a rule.
+            Some(_) if subject == Subject::WebSearch => {
+                return Err(Rejected::new(text, Unreadable::NotASearchRule));
+            }
             Some(specifier) => {
                 let written = command_pattern(specifier);
                 let typed = match typed_line(specifier) {
@@ -754,6 +790,10 @@ pub enum Unreadable {
     NotAHost,
     /// An `Mcp` rule whose specifier is not `alias` or `alias:tool`.
     NotAToolRule,
+    /// A `WebSearch` rule with a specifier, as `WebSearch(domain:example.com)` or
+    /// `WebSearch(weather)`. A search has no host a person chooses and its query is content, so
+    /// there is nothing a specifier could match.
+    NotASearchRule,
     /// A value where a list of rules belongs, or the `permissions` block holding them, that is
     /// neither: `null`, a string, a list in place of the block.
     NotAList,
@@ -816,6 +856,9 @@ pub struct Permissions {
     /// The volume's answer, kept for the same reason: a path arrives folded or not according to
     /// the volume the rules were read for, and the patterns were stored the way it says.
     folds_case: bool,
+    /// Whether the answer could not be had, kept from the anchors. The rules that restrict were
+    /// stored folded and a path is folded for them, and the rules that grant were not.
+    case_unknown: bool,
 }
 
 impl Permissions {
@@ -860,8 +903,15 @@ impl Permissions {
             allow: read(allow, Ruling::Allow),
             backslash_separates: anchors.backslash_separates,
             folds_case: anchors.folds_case,
+            case_unknown: anchors.case_unknown,
         };
         (permissions, rejected)
+    }
+
+    /// Whether the rules in `deny` and `ask` are matched as on a volume that folds case: where it
+    /// does, and where the answer could not be had. The rules in `allow` follow `folds_case` alone.
+    fn restrictions_fold(&self) -> bool {
+        self.folds_case || self.case_unknown
     }
 
     /// Attach to each rule the reason the person gave for writing it (PERM-1).
@@ -993,7 +1043,8 @@ impl Permissions {
     ///
     /// `allow` rules are left as written, since a grant covers only the spelling approved (PERM-7).
     pub fn follow_links(&mut self, land: impl Fn(&str) -> Option<String>) {
-        let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
+        let (backslash_separates, folds_case) =
+            (self.backslash_separates, self.restrictions_fold());
         for rule in self.deny.iter_mut().chain(self.ask.iter_mut()) {
             rule.follow_links(&land, backslash_separates, folds_case);
         }
@@ -1011,7 +1062,10 @@ impl Permissions {
     /// A name of the workspace that is not UTF-8 reaches here as its lossy rendering, which can
     /// only make a rule cover one more name, never fewer.
     pub fn cover_workspace(&mut self, workspace: &str) {
-        let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
+        // The rules that restrict are stored folded wherever the volume could not be asked, so the
+        // workspace is keyed and compared the same way, as `follow_links` and `copy_beneath` do.
+        let (backslash_separates, folds_case) =
+            (self.backslash_separates, self.restrictions_fold());
         let segments = split(&key_of(workspace, backslash_separates, folds_case));
         for rule in self.deny.iter_mut().chain(self.ask.iter_mut()) {
             rule.cover_workspace(&segments, folds_case);
@@ -1026,17 +1080,26 @@ impl Permissions {
     /// in, an allow rule included, since the checkout is the same tree. The rules are the delegate's
     /// own copy, so the copies go when the delegate does.
     pub fn copy_beneath(&mut self, from: &str, to: &str) {
-        let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
-        let from = split(&key_of(from, backslash_separates, folds_case));
-        let to = split(&key_of(to, backslash_separates, folds_case));
+        // Each list is keyed as its rules are stored: the rules that restrict in the fold they are
+        // matched in, which is the folding one where the answer could not be had, and the rules
+        // that grant in the one the volume's answer gives.
+        let keyed = |folds_case: bool| {
+            (
+                split(&key_of(from, self.backslash_separates, folds_case)),
+                split(&key_of(to, self.backslash_separates, folds_case)),
+            )
+        };
+        let (restricting_from, restricting_to) = keyed(self.restrictions_fold());
+        let (granting_from, granting_to) = keyed(self.folds_case);
         // A rule that restricts is matched in the full fold where the volume folds case, as
         // `TrustStore::copy_beneath` copies a refusal, and a grant in the fold it is stored in.
+        let restricting_folds = self.restrictions_fold();
         let restricting = self.deny.iter_mut().chain(self.ask.iter_mut());
         for rule in restricting {
-            rule.copy_beneath(&from, &to, true, folds_case);
+            rule.copy_beneath(&restricting_from, &restricting_to, true, restricting_folds);
         }
         for rule in &mut self.allow {
-            rule.copy_beneath(&from, &to, false, folds_case);
+            rule.copy_beneath(&granting_from, &granting_to, false, self.folds_case);
         }
     }
 
@@ -1053,11 +1116,25 @@ impl Permissions {
 
     /// The rule that decides [`Permissions::for_path`], and which list it is in.
     pub fn rule_for_path(&self, subject: Subject, path: &str) -> Option<(Ruling, &Rule)> {
-        let path = key_of(path, self.backslash_separates, self.folds_case);
-        let canonical = crate::trust::canonical_form(&path, self.folds_case);
-        self.deciding(|rule, restricting| {
-            rule.subject == subject
-                && rule.covers_path(&path, &canonical, self.folds_case, restricting)
+        // The path is spelled for each list as that list's rules are stored: folded for the rules
+        // that restrict wherever the answer could not be had, and as the volume's answer gives for
+        // the rules that grant.
+        let spelled = |folds_case: bool| {
+            let path = key_of(path, self.backslash_separates, folds_case);
+            let canonical = crate::trust::canonical_form(&path, folds_case).into_owned();
+            (path, canonical)
+        };
+        let granting = spelled(self.folds_case);
+        let restricting = match self.restrictions_fold() == self.folds_case {
+            true => granting.clone(),
+            false => spelled(true),
+        };
+        self.deciding(|rule, restricts| {
+            let ((path, canonical), folds_case) = match restricts {
+                true => (&restricting, self.restrictions_fold()),
+                false => (&granting, self.folds_case),
+            };
+            rule.subject == subject && rule.covers_path(path, canonical, folds_case, restricts)
         })
     }
 
@@ -1119,6 +1196,19 @@ impl Permissions {
         self.deciding(|rule, _| rule.subject == Subject::WebFetch && rule.covers_host(&host))
     }
 
+    /// What the rules say about a web search.
+    ///
+    /// The family alone: a search carries no routing field a rule could be written against, so one
+    /// `WebSearch` rule covers every search ([`Subject::WebSearch`]).
+    pub fn for_search(&self) -> Decision {
+        decision_of(self.rule_for_search())
+    }
+
+    /// The rule that decides [`Permissions::for_search`].
+    pub fn rule_for_search(&self) -> Option<(Ruling, &Rule)> {
+        self.deciding(|rule, _| rule.subject == Subject::WebSearch)
+    }
+
     /// What the rules say about calling `tool` of the server declared as `alias`.
     ///
     /// The two names and never the arguments: the names are what a person typed and what a
@@ -1148,20 +1238,7 @@ impl Permissions {
             return Decision::Unmatched;
         }
         let each: Vec<Decision> = stages.iter().map(|argv| self.for_command(argv)).collect();
-
-        // Restricting any stage restricts the pipeline: an unwanted program in the middle is
-        // still an unwanted program.
-        for ruling in [Ruling::Deny, Ruling::Ask] {
-            if each.contains(&Decision::Ruled(ruling)) {
-                return Decision::Ruled(ruling);
-            }
-        }
-        // Granting needs every stage granted. One stage nobody wrote a rule for is a program
-        // nobody has answered for, and it is what the next stage reads.
-        if each.iter().all(|d| *d == Decision::Ruled(Ruling::Allow)) {
-            return Decision::Ruled(Ruling::Allow);
-        }
-        Decision::Unmatched
+        pipeline_decision(&each)
     }
 
     /// Deny, then ask, then allow, first match wins.
@@ -1170,19 +1247,100 @@ impl Permissions {
     /// deny beats a narrow allow, so a deny rule cannot carry exceptions. That is what makes a
     /// deny rule readable as a statement about what will not happen.
     fn deciding(&self, matches: impl Fn(&Rule, bool) -> bool) -> Option<(Ruling, &Rule)> {
-        [
-            (&self.deny, Ruling::Deny, true),
-            (&self.ask, Ruling::Ask, true),
-            (&self.allow, Ruling::Allow, false),
-        ]
-        .into_iter()
-        .find_map(|(rules, ruling, restricting)| {
-            rules
-                .iter()
-                .find(|rule| matches(rule, restricting))
-                .map(|rule| (ruling, rule))
-        })
+        let denied = self.deny.iter().find(|rule| matches(rule, true));
+        let asked = self.ask.iter().find(|rule| matches(rule, true));
+        let allowed = self.allow.iter().find(|rule| matches(rule, false));
+        let ruling = ruling_of(denied.is_some(), asked.is_some(), allowed.is_some())?;
+        let rule = match ruling {
+            Ruling::Deny => denied,
+            Ruling::Ask => asked,
+            Ruling::Allow => allowed,
+        }?;
+        Some((ruling, rule))
     }
+}
+
+/// Which list decides, given which lists hold a rule that matches: deny, then ask, then allow.
+///
+/// The order is the whole of the precedence. A matching deny decides whatever else matches, and an
+/// allow decides only where neither restricting list holds a match.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::ruling_of(denied, asked, allowed),
+))]
+fn ruling_of(denied: bool, asked: bool, allowed: bool) -> Option<Ruling> {
+    if denied {
+        return Some(Ruling::Deny);
+    }
+    if asked {
+        return Some(Ruling::Ask);
+    }
+    if allowed {
+        return Some(Ruling::Allow);
+    }
+    None
+}
+
+/// What the rules say about a pipeline, from what they say about each stage.
+///
+/// Restricting any stage restricts the pipeline: an unwanted program in the middle is still an
+/// unwanted program, and a deny anywhere beats an ask anywhere. Granting needs every stage granted:
+/// one stage nobody wrote a rule for is a program nobody has answered for, and it is what the next
+/// stage reads. An empty pipeline is unmatched.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::pipeline_decision(each@),
+))]
+fn pipeline_decision(each: &[Decision]) -> Decision {
+    if each.is_empty() {
+        return Decision::Unmatched;
+    }
+    let mut denied = false;
+    let mut asked = false;
+    let mut all_allowed = true;
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= each.len(),
+            denied == crate::spec::some_stage_is(
+                each@.take(at as int),
+                Decision::Ruled(Ruling::Deny),
+            ),
+            asked == crate::spec::some_stage_is(
+                each@.take(at as int),
+                Decision::Ruled(Ruling::Ask),
+            ),
+            all_allowed == crate::spec::every_stage_is(
+                each@.take(at as int),
+                Decision::Ruled(Ruling::Allow),
+            ),
+        decreases each.len() - at,
+    ))]
+    while at < each.len() {
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            crate::spec::a_stage_more_is_one_more_stage(each@, at as int);
+        }
+        let stage = each[at];
+        denied = denied || stage == Decision::Ruled(Ruling::Deny);
+        asked = asked || stage == Decision::Ruled(Ruling::Ask);
+        all_allowed = all_allowed && stage == Decision::Ruled(Ruling::Allow);
+        at += 1;
+    }
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        assert(each@.take(each.len() as int) == each@);
+    }
+    if denied {
+        return Decision::Ruled(Ruling::Deny);
+    }
+    if asked {
+        return Decision::Ruled(Ruling::Ask);
+    }
+    if all_allowed {
+        return Decision::Ruled(Ruling::Allow);
+    }
+    Decision::Unmatched
 }
 
 /// What a deciding rule, or the lack of one, comes to.
@@ -2308,6 +2466,7 @@ mod tests {
             workspace: Some("/home/someone/proj".to_string()),
             backslash_separates: false,
             folds_case: false,
+            case_unknown: false,
         }
     }
 
@@ -2593,6 +2752,22 @@ mod tests {
             permissions.for_path(Subject::Read, "src/main.rs"),
             Decision::Ruled(Ruling::Ask)
         );
+    }
+
+    /// WEBSEARCH-2: `WebSearch` is a family with no specifier, since a search has no routing a rule
+    /// could name. Bare, and with `(*)`, it covers every search; with anything else in brackets it
+    /// is reported as unreadable and dropped. The regressions it rejects: a specifier read as a
+    /// pattern over the query (a decision from content) and a bare rule that covers nothing.
+    #[test]
+    fn a_websearch_rule_takes_no_specifier() {
+        for text in ["WebSearch", "WebSearch(*)"] {
+            let permissions = rules(&[], &[], &[text]);
+            assert_eq!(permissions.for_search(), Decision::Ruled(Ruling::Allow));
+        }
+        for text in ["WebSearch(weather)", "WebSearch(domain:example.com)"] {
+            let rejected = Rule::parse(text, &anchors()).expect_err(text);
+            assert_eq!(rejected.reason, Unreadable::NotASearchRule, "{text}");
+        }
     }
 
     /// A bare family name and `(*)` are the same rule, and both cover every use.
@@ -3257,7 +3432,7 @@ mod tests {
     /// path with whitespace at an end.
     #[test]
     fn brackets_holding_only_whitespace_are_empty_in_every_family() {
-        for family in ["Read", "Edit", "Bash", "WebFetch", "Mcp"] {
+        for family in ["Read", "Edit", "Bash", "WebFetch", "WebSearch", "Mcp"] {
             for blank in ["", " ", "\t", "\n", "\u{a0}", "\u{3000}"] {
                 let written = format!("{family}({blank})");
                 let rejected = Rule::parse(&written, &anchors()).expect_err(&written);
@@ -3740,19 +3915,134 @@ mod tests {
         assert!(!Anchors::none().folds_case);
     }
 
+    /// Rules read where the volume could not be asked.
+    fn rules_where_the_volume_could_not_be_asked(
+        deny: &[&str],
+        ask: &[&str],
+        allow: &[&str],
+    ) -> Permissions {
+        let anchors = Anchors {
+            case_unknown: true,
+            ..anchors()
+        };
+        read_with(&anchors, deny, ask, allow)
+    }
+
+    /// PERM-3. Where the caller could not tell whether the volume folds case, a rule that restricts
+    /// is read as on a volume that folds: `Read(.env)` in `deny` or `ask` covers `.ENV`, since a
+    /// file a folding volume opens under either spelling is otherwise left to the planner, and the
+    /// extra file a refusal covers on a volume that does not fold grants nothing.
+    #[test]
+    fn a_deny_or_ask_rule_folds_case_where_the_volume_could_not_be_asked() {
+        for (written, path) in [
+            ("Read(.env)", ".ENV"),
+            ("Read(src/**)", "SRC/x/y"),
+            ("Read(Docs/**)", "docs/a.md"),
+            ("Read(cla\u{df}.md)", "class.md"),
+        ] {
+            for (ruling, permissions) in [
+                (
+                    Ruling::Deny,
+                    rules_where_the_volume_could_not_be_asked(&[written], &[], &[]),
+                ),
+                (
+                    Ruling::Ask,
+                    rules_where_the_volume_could_not_be_asked(&[], &[written], &[]),
+                ),
+            ] {
+                assert_eq!(
+                    permissions.for_path(Subject::Read, path),
+                    Decision::Ruled(ruling),
+                    "{written} in the {ruling} list did not cover {path:?}"
+                );
+            }
+        }
+    }
+
+    /// PERM-3. The same unknown answer leaves a rule that grants as written, in the spelling it
+    /// names and no other, so a failed probe never grants a file nobody named. A refusal beside it
+    /// still wins over the grant for the spelling it covers.
+    #[test]
+    fn an_allow_rule_compares_bytes_where_the_volume_could_not_be_asked() {
+        let permissions = rules_where_the_volume_could_not_be_asked(&[], &[], &["Edit(Docs/**)"]);
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "Docs/a.md"),
+            Decision::Ruled(Ruling::Allow)
+        );
+        for path in ["docs/a.md", "DOCS/a.md"] {
+            assert_eq!(
+                permissions.for_path(Subject::Edit, path),
+                Decision::Unmatched,
+                "{path} may be another file and was granted"
+            );
+        }
+
+        let both = rules_where_the_volume_could_not_be_asked(
+            &["Edit(secret.md)"],
+            &[],
+            &["Edit(Docs/**)"],
+        );
+        assert_eq!(
+            both.for_path(Subject::Edit, "SECRET.md"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            both.for_path(Subject::Edit, "Docs/a.md"),
+            Decision::Ruled(Ruling::Allow)
+        );
+        assert_eq!(
+            both.for_path(Subject::Edit, "docs/a.md"),
+            Decision::Unmatched
+        );
+    }
+
+    /// PERM-3, CHECKOUT-9. The copy of a rule for a checkout follows the list it is in: a refusal
+    /// written with `Class` is copied under a checkout of `class` where the answer is unknown, and
+    /// a grant is not.
+    #[test]
+    fn a_copy_for_a_checkout_folds_a_refusal_and_not_a_grant_where_the_volume_could_not_be_asked() {
+        let mut permissions = rules_where_the_volume_could_not_be_asked(
+            &["Read(//work/Class/secrets/**)"],
+            &["Read(//work/Class/asked/**)"],
+            &["Read(//work/Class/granted/**)"],
+        );
+        permissions.copy_beneath("/work/class", "/state/c1");
+        for (path, decision) in [
+            ("/state/c1/secrets/key", Decision::Ruled(Ruling::Deny)),
+            ("/state/c1/asked/notes", Decision::Ruled(Ruling::Ask)),
+            ("/state/c1/granted/file", Decision::Unmatched),
+        ] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, path),
+                decision,
+                "{path} was ruled wrongly under a copy for a checkout of /work/class"
+            );
+        }
+    }
+
     /// The documented asymmetry, and the reason for it: a rule that restricts should cover the
-    /// nested copy of what it named, and a rule that grants should cover what it named.
+    /// nested copy of what it named, in `deny` and in `ask`, and a rule that grants should cover
+    /// what it named. An implementation that floats only the `deny` list leaves the nested copy
+    /// unasked about.
     #[test]
     fn a_single_segment_directory_floats_when_it_restricts_and_not_when_it_grants() {
-        let denying = rules(&["Edit(src/**)"], &[], &[]);
-        assert_eq!(
-            denying.for_path(Subject::Edit, "src/app.ts"),
-            Decision::Ruled(Ruling::Deny)
-        );
-        assert_eq!(
-            denying.for_path(Subject::Edit, "vendor/pkg/src/lib.js"),
-            Decision::Ruled(Ruling::Deny)
-        );
+        for (list, ruling) in [("deny", Ruling::Deny), ("ask", Ruling::Ask)] {
+            let rule = "Edit(src/**)";
+            let restricting = match ruling {
+                Ruling::Deny => rules(&[rule], &[], &[]),
+                _ => rules(&[], &[rule], &[]),
+            };
+            assert_eq!(
+                restricting.for_path(Subject::Edit, "src/app.ts"),
+                Decision::Ruled(ruling),
+                "list {list}: src/** missed the workspace's own src"
+            );
+            assert_eq!(
+                restricting.for_path(Subject::Edit, "vendor/pkg/src/lib.js"),
+                Decision::Ruled(ruling),
+                "list {list}: src/** did not float to the nested copy"
+            );
+        }
 
         let allowing = rules(&[], &[], &["Edit(src/**)"]);
         assert_eq!(
@@ -4078,6 +4368,99 @@ mod tests {
         );
     }
 
+    /// PERM-3, PERM-7. Where the volume could not be asked about case, a `deny` rule on an
+    /// ancestor of the workspace is stored folded, so the workspace is keyed folded too and the
+    /// rule covers the workspace under the relative name the file tools ask by, as it covers the
+    /// full path. A workspace at a mount root is in this state.
+    #[test]
+    fn a_deny_rule_on_an_ancestor_covers_the_workspace_by_its_relative_name_where_the_volume_could_not_be_asked()
+     {
+        let mut permissions =
+            rules_where_the_volume_could_not_be_asked(&["Read(//Volumes/**)"], &[], &[]);
+        permissions.cover_workspace("/Volumes/BravePoc");
+        assert_eq!(
+            permissions.for_path(Subject::Read, "/Volumes/BravePoc/secrets/.env"),
+            Decision::Ruled(Ruling::Deny),
+            "the rule stopped covering the full path of the file"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "secrets/.env"),
+            Decision::Ruled(Ruling::Deny),
+            "the rule on an ancestor did not cover the relative name of a file in the workspace"
+        );
+    }
+
+    /// PERM-3, PERM-7. The same for an `ask` rule about writing: where the volume could not be
+    /// asked, an `Edit` rule on an ancestor of the workspace asks for a write under the relative
+    /// name as it does under the full path.
+    #[test]
+    fn an_ask_rule_on_an_ancestor_covers_the_workspace_by_its_relative_name_where_the_volume_could_not_be_asked()
+     {
+        let mut permissions =
+            rules_where_the_volume_could_not_be_asked(&[], &["Edit(//Volumes/**)"], &[]);
+        permissions.cover_workspace("/Volumes/BravePoc");
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "/Volumes/BravePoc/secrets/.env"),
+            Decision::Ruled(Ruling::Ask),
+            "the rule stopped covering the full path of the file"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "secrets/.env"),
+            Decision::Ruled(Ruling::Ask),
+            "the rule on an ancestor did not cover the relative name of a file in the workspace"
+        );
+    }
+
+    /// PERM-3, PERM-7. Where the volume could not be asked, a rule on an ancestor written in
+    /// another case than the workspace's name still covers the workspace under its relative name,
+    /// as it does where the volume is known to fold case.
+    #[test]
+    fn a_rule_on_an_ancestor_in_another_case_covers_the_workspace_where_the_volume_could_not_be_asked()
+     {
+        for (written, subject, ruling) in [
+            ("Read(//volumes/**)", Subject::Read, Ruling::Deny),
+            ("Edit(//volumes/**)", Subject::Edit, Ruling::Ask),
+        ] {
+            let mut permissions = match ruling {
+                Ruling::Deny => rules_where_the_volume_could_not_be_asked(&[written], &[], &[]),
+                _ => rules_where_the_volume_could_not_be_asked(&[], &[written], &[]),
+            };
+            permissions.cover_workspace("/Volumes/BravePoc");
+            assert_eq!(
+                permissions.for_path(subject, "secrets/.env"),
+                Decision::Ruled(ruling),
+                "{written} in the {ruling} list did not cover the relative name of a file in a workspace spelled in another case"
+            );
+        }
+    }
+
+    /// PERM-3, PERM-7. Where the volume could not be asked, an `allow` rule on an ancestor of the
+    /// workspace is still compared byte for byte and gains no relative name, so the fold the
+    /// refusals are read in never widens a grant.
+    #[test]
+    fn an_allow_rule_on_an_ancestor_gains_no_relative_name_where_the_volume_could_not_be_asked() {
+        for written in ["Edit(//Volumes/**)", "Edit(//volumes/**)"] {
+            let mut permissions = rules_where_the_volume_could_not_be_asked(&[], &[], &[written]);
+            permissions.cover_workspace("/Volumes/BravePoc");
+            assert_eq!(
+                permissions.for_path(Subject::Edit, "secrets/.env"),
+                Decision::Unmatched,
+                "{written} in the allow list granted a relative name"
+            );
+        }
+        let permissions =
+            rules_where_the_volume_could_not_be_asked(&[], &[], &["Edit(//Volumes/**)"]);
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "/Volumes/BravePoc/secrets/.env"),
+            Decision::Ruled(Ruling::Allow)
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "/volumes/BravePoc/secrets/.env"),
+            Decision::Unmatched,
+            "an allow rule was compared folded where the volume could not be asked"
+        );
+    }
+
     /// CHECKOUT-9. A rule about a full path under the working directory also covers the same
     /// place under the checkout, in every list. A rule about a place outside it, a pattern whose
     /// written-out stretch stops short of it, and a relative rule gain nothing, so the copy is not
@@ -4349,6 +4732,14 @@ mod tests {
             folding.for_path(Subject::Read, "REAL/secret"),
             Decision::Ruled(Ruling::Deny),
             "a landing on a volume that folds case missed another case of the name it reaches"
+        );
+
+        let mut unasked = rules_where_the_volume_could_not_be_asked(&["Read(linked/**)"], &[], &[]);
+        unasked.follow_links(|_| Some("Real".to_string()));
+        assert_eq!(
+            unasked.for_path(Subject::Read, "REAL/secret"),
+            Decision::Ruled(Ruling::Deny),
+            "a landing where the volume could not be asked missed another case of the name it reaches"
         );
     }
 
@@ -5882,6 +6273,7 @@ mod tests {
             workspace: None,
             backslash_separates: true,
             folds_case: false,
+            case_unknown: false,
         };
         let permissions = read_with(
             &anchors,

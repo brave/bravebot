@@ -1453,6 +1453,8 @@ answer is to set the budget rather than to compact.
 `verified-by: bravebot_tui::app::a_failed_turn_measures_context_if_requests_were_sent`
 `verified-by: bravebot_tui::app::a_failed_turn_with_no_requests_sent_remains_unmeasured`
 `verified-by: bravebot_agent::conversation::a_restored_conversation_remembers_what_its_last_request_came_to`
+`verified-by: bravebot_tui::app::a_resumed_session_reads_the_context_from_the_request_its_record_measured`
+`verified-by: bravebot_tui::app::a_finished_compaction_reads_what_it_won_back_and_an_unfinished_one_keeps_the_measured_reading`
 `verified-by: bravebot_agent::conversation::compacting_forgets_a_measurement_of_the_conversation_it_replaced`
 `verified-by: bravebot_config::lib::a_default_budget_is_marked_as_guessed`
 `verified-by: bravebot_config::lib::an_advertised_budget_is_not_marked_as_guessed`
@@ -2380,6 +2382,21 @@ first, so the other cannot be reached at all, and the list `?` puts up names the
 while one of the two lines is a lie. Which action wins would come down to the order the code reads
 them in, which is nothing a person could predict from what they wrote, so neither wins.
 
+**A chord this terminal cannot send is given up, and said.** A chord on Escape arrives only from a
+terminal that reports keys the way the disambiguation protocol does (INPUT-48). One that was not
+asked, or that refused, has no bytes for Ctrl-Escape and sends `ESC ESC` for Alt-Escape, which is
+read as the Escape key pressed on its own. So where the terminal does not report keys that way,
+`alt-esc` and `ctrl-esc` leave the action on its default, and a line at startup names the action,
+the chord asked for and the key it stayed on: `keybindings.stash: "alt-esc" cannot be delivered by
+this terminal, so stash stays on ctrl-s`. More than one is one line with a count behind it. No other
+chord is given up for this reason, since every other one arrives without the protocol.
+
+**Why.** The chord is dead either way, and the person pressing it gets the Escape key's own
+behaviour: the line they typed is cleared. Leaving the action on the chord would also make the list
+`?` puts up name a key that does nothing, since the rows are asked of the chord in force. Saying it
+at startup is the only moment anything can: the settings file is read once, and a key that does
+nothing is not something a person can tell from a key they pressed wrongly.
+
 **A mode reads the chord that opened it.** Inside the search over prompts, the chord that puts a line
 away narrows the scope and the one that opened the search closes it (INPUT-19, INPUT-31); inside the
 view of what a delegate is doing, the chord that opened the view leaves it, and the `outputs` chord
@@ -2397,7 +2414,9 @@ Shift is spared because Shift-Tab arrives carrying it.
 
 **A configured chord takes precedence over line editing.** When a chord is moved onto one of the
 readline editing keys (such as `ctrl-u` or `alt-b`), the action answers rather than the line
-editing arm. In vi's normal mode, `/` translates to the chord configured for history search.
+editing arm. A chord moved onto Escape carrying a modifier answers as well, rather than the arms
+that clear the box and that put an enhancement away, which answer Escape pressed alone. In vi's
+normal mode, `/` translates to the chord configured for history search.
 
 The keys of the Sessions screen are a table of their own, `sessionsKeys`, and a bare character is
 on offer there ([SCREEN-14](sessions-screen.md#SCREEN-14)).
@@ -2428,6 +2447,15 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::keybindings::conflicting_chords_fall_back_to_defaults`
 `verified-by: bravebot_tui::keybindings::no_two_actions_are_left_on_one_chord`
 `verified-by: bravebot_tui::keybindings::two_actions_can_trade_chords`
+`verified-by: bravebot_tui::keybindings::a_chord_on_escape_is_given_up_where_the_terminal_cannot_send_it`
+`verified-by: bravebot_tui::keybindings::a_terminal_that_cannot_disambiguate_keeps_every_chord_but_one_on_escape`
+`verified-by: bravebot_tui::keybindings::the_chord_a_terminal_cannot_send_is_said_with_the_key_it_stayed_on`
+`verified-by: bravebot_tui::app::a_chord_on_escape_is_dropped_and_said_where_the_terminal_cannot_send_it`
+`verified-by: bravebot_tui::app::two_chords_the_terminal_cannot_send_are_said_in_one_line_with_a_count`
+`verified-by: bravebot_tui::app::a_chord_on_escape_stands_unsaid_where_the_terminal_sends_it`
+`verified-by: bravebot_tui::app::stash_moved_onto_alt_escape_stashes_instead_of_clearing_the_box`
+`verified-by: bravebot_tui::app::undo_moved_onto_ctrl_escape_fires_instead_of_clearing_the_box`
+`verified-by: bravebot_tui::app::stash_moved_onto_alt_escape_stashes_the_enhancement_instead_of_restoring_the_draft`
 `verified-by: bravebot_tui::keybindings::unknown_actions_in_map_are_ignored`
 `verified-by: bravebot_tui::keybindings::custom_chords_override_defaults`
 `verified-by: bravebot_tui::keybindings::the_background_chord_is_ctrl_b_and_can_be_moved`
@@ -2594,6 +2622,7 @@ available, spent in the one place where a second press is the whole of what is b
 `verified-by: bravebot_tui::app::a_press_on_its_own_after_a_run_still_leaves`
 `verified-by: bravebot_tui::app::a_return_that_arrived_with_other_keys_does_not_send`
 `verified-by: bravebot_tui::app::every_refused_return_is_said_and_not_just_the_first`
+`verified-by: bravebot_tui::app::a_return_that_arrived_with_other_keys_is_not_queued_while_a_turn_runs`
 `verified-by: bravebot_tui::app::a_refused_way_out_says_so`
 `verified-by: bravebot_tui::app::a_return_of_its_own_still_sends`
 `verified-by: bravebot_tui::app::a_program_cannot_send_its_own_line_with_an_arrow_and_a_return`

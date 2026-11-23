@@ -51,7 +51,7 @@ At the first stage-2b or stage-3d device work, validate a transcript, composer, 
   - The host records which device made each send, answer and cancel. The view shows the device that acted last, for example "approved on Phone", and the trace records the device for each action.
   - The first answer to a question counts. A later answer from any device fails on its question number (RPCVIEW-6).
   - A send while a turn runs is refused as busy, and the client keeps it as a draft. There is no shared queue.
-  - Host-only questions, such as workspace trust and command-output admission, are offered only to connections the host lets answer them. This is a property of the connection, not of control. Today every host connection can answer the same kinds ([HOST-10](../../specs/local-host.md#HOST-10)); stage 5a makes them per connection.
+  - Host-only questions, such as workspace trust and command-output admission, are offered only to connections the host lets answer them. This is a property of the connection, not of control. Today every host connection can answer the same kinds ([HOST-10](../../specs/local-host.md#HOST-10)); stage 5a makes them per connection, fixed on the host's command line ([decision 11](#11-clients-are-named-on-the-hosts-command-line-with-the-kinds-each-may-answer)).
   - A device that leaves or breaks blocks no other device. Its pairing can be revoked on the host (stage 6). A locked or backgrounded phone cannot answer approvals (stage 7, decision 8).
 - **Reason:** an approval is bound to one exact request and answered once, so a device does not need to hold control to answer it. A takeover prompt would confirm the device, not the effect. Moving from desktop to phone needs no handoff, and a lost phone does not leave a session stuck.
 - **Cost:** an approval can be answered on a device the person was not using, such as an unlocked tablet on a desk. Two sends at once start one turn and refuse the other as busy. The host has one controller per session now ([HOST-7](../../specs/local-host.md#HOST-7)); stage 5a replaces it.
@@ -100,6 +100,38 @@ No dependencies or build tooling are added by this proposal. Stage 1 covers the 
 - **Reason:** macOS marks a new socket pair or pipe close-on-exec in a second step, and Linux does it atomically (checked in the standard library source). A program another thread starts between the two steps holds both ends, and the bridge hands them on to its tools. That race was reproduced. A start also creates the pipes of its own standard streams inside `spawn`, so a start is a descriptor creation as well as a fork, and two starts overlapping can leave one holding the other's pipe ends open. A version in which starts shared the lock and only channel creation excluded them hung a test, most likely for that reason, and was reverted. The host will create channels while its other threads start hooks, commands, language servers and sandboxed programs, which is when the overlap happens. Adding the gate after the host exists means finding every start again; with the source test, a new start that skips it fails a check instead.
 - **Cost:** starts run one at a time. The lock is held until the program has started, since the standard library offers no narrower point between the fork that copies descriptors and the exec. On Linux that includes the Landlock rule setup before the exec, which makes system calls on memory built before the fork and allocates nothing ([SANDBOX-34](../../specs/sandboxing.md#SANDBOX-34)), so a start stuck in its exec holds up every start behind it. The lock is not reentrant, and entering it again panics. A caller that waits for a program to finish starts it under the gate and waits outside, as the AWS CLI calls do. Start latency under the gate was not measured.
 - **Revisit when:** measured start latency shows contention, for example many delegates or hooks starting together. Reductions to assess in this order: take the gate only on macOS, where the race exists; create channels before any worker thread exists so tool starts need no gate; start programs through a helper process that holds none of the host's descriptors. Letting starts overlap each other is not a reduction. The root-cause alternative on macOS is to start programs with `posix_spawn` and `POSIX_SPAWN_CLOEXEC_DEFAULT`, which closes every descriptor the child is not explicitly given, whatever created it. That covers the TCP and TLS sockets and other descriptors the gate does not, and would make the gate unnecessary there, but it means leaving `std::process::Command`. A change that drops the gate on a platform needs its own evidence from the `control_boundary` race tests.
+
+### 11. Clients are named on the host's command line, with the kinds each may answer
+
+- **Decision:** the host's command line names each client it launches and the question kinds that client may answer: `--client NAME --answers KINDS --program /ABS [--arg VALUE]...`, repeated for each client. The `-- PROGRAM ARGS` form is removed.
+  - KINDS is a list drawn from `confirm`, `run`, `fetch`, `ask` and `trust`, or `none`. There is no default.
+  - The host starts every client at startup, in command-line order, and serves them at once. `launch NAME` starts one again after it has ended, and is refused while a client of that name is connected. A bare `launch` is accepted only when one client is defined.
+  - The name is the client that acted, as the view and the trace show it.
+  - Names and kinds come only from the command line and the `launch` line the person types. Nothing a client sends and no file sets them.
+- **Reason:**
+  - The host launches every local client over an anonymous socket pair, the development relay included, so it cannot tell a host-local client from the phone's relay unless the person tells it.
+  - One program after `--` cannot be two clients with different kinds.
+  - A shorthand would need default kinds, and it would either give trust to whatever program it names, the relay included, or remove trust from flows that have it.
+- **Cost:**
+  - Every launcher changes, and every launch spells out its kinds.
+  - Each client argument takes its own `--arg`.
+  - A phone that leaves ends its relay, and it cannot reconnect until the person types `launch relay` on the host and enters the new port and code ([HOST-12](../../specs/local-host.md#HOST-12)). This happens whenever the phone sleeps, changes network or closes the app. Stage 6 pairing removes it.
+- **Revisit when:** stage 6 pairing names devices, which then replace launch names for remote clients.
+
+### 12. The host asks about each workspace's trust at startup
+
+- **Decision:** before it launches any client, the host asks on its own terminal about each `--workspace` that has no kept yes. It always asks, and no option turns the question off.
+  - It uses the same question, the same kept record and the same check of whether a yes may be kept as the terminal and the desktop app ([TRUST-23](../../specs/trust-map.md#TRUST-23)).
+  - A kept yes answers every later session in that workspace, from the phone as from any other client.
+  - A no keeps nothing, and that workspace's sessions ask as before.
+  - The host does not ask about a workspace where a yes cannot be kept, because a yes there would answer nothing. It says on standard error that each session there asks.
+  - The host reads the answers from its standard input before it starts reading `launch` and `quit`. Each answer is a line. As in a session in lines ([TRUST-23](../../specs/trust-map.md#TRUST-23)), a line that is not yes declines and keeps nothing, except `quit`, which stops the host and keeps nothing for the workspace being asked about.
+  - An end of input at the question answers no, and the host then stops, as the end of its input always does ([HOST-1](../../specs/local-host.md#HOST-1)).
+- **Reason:** the phone does not answer startup trust ([Q9](open-questions.md#q9-may-the-phone-answer-startup-trust)). Without the startup question, a phone that opens a session in a workspace nobody has trusted waits until the person answers on the host. The person has just typed the host's command line naming those workspaces, so the host asks them there once.
+- **Cost:**
+  - Host startup is interactive for a workspace with no kept yes. A test or script that starts the host with such a workspace has to answer on standard input.
+  - A session the phone opens, which is always in a `--workspace` ([HOST-2](../../specs/local-host.md#HOST-2)), still waits when that workspace has no kept yes, until a client on the host that may answer trust, such as the host test client, attaches and the person answers there. A workspace has none after it was last answered no, after a kept yes is taken back from the terminal or the desktop app, after the directory is replaced by another at the same path, or where a yes cannot be kept: the home directory, a filesystem root, an incognito session, or a filesystem that does not record when a directory was made. The phone's composer then says that the folder is not trusted yet and that the question is answered on the computer the host runs on.
+- **Revisit when:** [Q9](open-questions.md#q9-may-the-phone-answer-startup-trust) is decided.
 
 ## Open questions
 

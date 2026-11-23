@@ -56,6 +56,18 @@ pub enum BackendError {
     NoGatewayToken {
         provider: String,
     },
+    /// A gateway's block names a file for its token, nothing before the file in the order held one,
+    /// and the file gives none ([BACKEND-16](../../../docs/specs/backends.md#BACKEND-16)).
+    ///
+    /// Refused for the reason [`BackendError::NoGatewayToken`] is, and kept apart from it so the
+    /// sentence can say which setting to fix and why the file was not used. The fault holds neither
+    /// the path nor any text of the file, and the sentence names neither, since the value of
+    /// `options.keyFile` is a string the person wrote and one pasted into the wrong field is the key
+    /// itself. `options.apiKey` is not tried in the file's place.
+    NoGatewayKeyFile {
+        provider: String,
+        fault: bravebot_config::provider::KeyFileFault,
+    },
     /// The Google Cloud CLI gave no access token for a Vertex AI project that takes no key
     /// ([BACKEND-65](../../../docs/specs/backends.md#BACKEND-65)).
     GoogleCloud(crate::gcloud::GcloudError),
@@ -98,6 +110,11 @@ impl fmt::Display for BackendError {
                 "no credential for the {provider} gateway: set one of the variables its `env` names, \
                  or `options.apiKey` in its settings block"
             ),
+            Self::NoGatewayKeyFile { provider, fault } => f.write_str(&t!(
+                backend_no_gateway_key_file,
+                provider = provider.as_str(),
+                reason = key_file_fault_said(*fault)
+            )),
             Self::GoogleCloud(e) => write!(f, "{e}"),
             Self::PremiumKey(cause) => write!(f, "{cause}"),
             // Counts belong to structured diagnostics; preserve the underlying error's display.
@@ -290,7 +307,9 @@ impl BackendError {
                 };
             }
             Self::PremiumKey(cause) => return cause.diagnosis().with_premium_key(),
-            Self::NoGatewayToken { .. } => return Diagnosis::of(Category::Unconfigured).after(0),
+            Self::NoGatewayToken { .. } | Self::NoGatewayKeyFile { .. } => {
+                return Diagnosis::of(Category::Unconfigured).after(0);
+            }
             // A missing CLI is a machine that is not set up, as a missing token variable is. A CLI
             // that gave no token is a sign-in that is missing or ended.
             Self::GoogleCloud(crate::gcloud::GcloudError::NotInstalled) => {
@@ -327,9 +346,10 @@ impl BackendError {
             Self::Bedrock(error) => match error {
                 BedrockError::Credentials(_) => Category::Unauthorized,
                 BedrockError::Encode(_) | BedrockError::Cancelled => Category::Internal,
-                BedrockError::Decode { .. } | BedrockError::Frame(_) | BedrockError::NoContent => {
-                    Category::Undecodable
-                }
+                BedrockError::Decode { .. }
+                | BedrockError::Frame(_)
+                | BedrockError::NoContent
+                | BedrockError::ThoughtOnly => Category::Undecodable,
                 BedrockError::Incomplete | BedrockError::Stalled => Category::Incomplete,
                 BedrockError::Reported { kind } => match kind.as_str() {
                     "validationException" => Category::Refused,
@@ -436,7 +456,8 @@ impl BackendError {
     /// to the conversation is what gets an answer.
     pub fn is_empty_reply(&self) -> bool {
         match self {
-            Self::Aichat(ChatError::NoContent) | Self::Bedrock(BedrockError::NoContent) => true,
+            Self::Aichat(ChatError::NoContent)
+            | Self::Bedrock(BedrockError::NoContent | BedrockError::ThoughtOnly) => true,
             Self::Attempted { cause, .. } | Self::PremiumKey(cause) => cause.is_empty_reply(),
             _ => false,
         }
@@ -861,9 +882,11 @@ pub enum Serving {
     /// person at the machine cannot write the file that refused it, so what they are told is which
     /// file refused and why, and nothing about setting a service up.
     Refused {
-        /// The file that refused it, which is the only actionable thing in the answer.
-        file: PathBuf,
-        /// Which of the two lists refused it.
+        /// The file that refused it, which is the only actionable thing in the answer. `None` where
+        /// no file did: the model searches the web before it replies and is refused whatever the
+        /// layer says ([`ModelRefusal::Retrieves`]).
+        file: Option<PathBuf>,
+        /// Which of the lists, or what, refused it.
         why: ModelRefusal,
     },
 }
@@ -904,7 +927,7 @@ fn serving_with(
     // is would report a working Bedrock account for a request that is never sent (BACKEND-48).
     if let Some((file, why)) = config.model_refused(model) {
         return Serving::Refused {
-            file: file.to_path_buf(),
+            file: file.map(Path::to_path_buf),
             why,
         };
     }
@@ -1023,11 +1046,16 @@ pub fn answering(
 /// a session that sets a recorded pick aside, and a delegate definition that names one. A copy per
 /// caller would be three places for the two reasons to drift apart. Read by a person and never by the
 /// planner, which is why this module may look a message up at all.
-pub fn refusal_reason(file: &Path, why: ModelRefusal) -> String {
-    let path = file.display().to_string();
-    match why {
-        ModelRefusal::NotAllowed => t!(managed_model_not_allowed, path = path),
-        ModelRefusal::Denied => t!(managed_model_denied, path = path),
+pub fn refusal_reason(file: Option<&Path>, why: ModelRefusal) -> String {
+    let path = file.map(|file| file.display().to_string());
+    match (why, path) {
+        (ModelRefusal::NotAllowed, Some(path)) => t!(managed_model_not_allowed, path = path),
+        (ModelRefusal::Denied, Some(path)) => t!(managed_model_denied, path = path),
+        // A file refuses the first two and none refuses this one, so a missing path with either of
+        // them is not a state `Config::model_refused` produces.
+        (ModelRefusal::Retrieves, _) | (ModelRefusal::NotAllowed | ModelRefusal::Denied, None) => {
+            t!(model_retrieves).to_string()
+        }
     }
 }
 
@@ -1076,7 +1104,7 @@ pub fn pick(config: &Config, recorded: Option<String>) -> Pick {
     let answered = serving(config, &egress, &model);
     // Worded before the answer is spent, which is the only place the file that refused is in hand.
     let refused = match &answered {
-        Serving::Refused { file, why } => Some(refusal_reason(file, *why)),
+        Serving::Refused { file, why } => Some(refusal_reason(file.as_deref(), *why)),
         Serving::Configured | Serving::NothingConfigured { .. } => None,
     };
     match sets_aside(answered, || serving(config, &egress, &config.default_model)) {
@@ -1946,7 +1974,8 @@ impl GatewayClient<'_> {
 ///
 /// Only a block that named a credential is refused for not holding one. A block naming none is
 /// somebody saying the gateway wants none, which is how a local Ollama is configured, and refusing it
-/// names a remedy that does not exist.
+/// names a remedy that does not exist. A block naming a key file that gives no key is refused with
+/// the file's own sentence, so the request is never sent in its place with no credential.
 ///
 /// `None` rather than an empty token, and separate from building the client so that is assertable:
 /// `Bearer` with nothing after it is a different request from one carrying no credential, and a
@@ -1961,6 +1990,26 @@ fn gateway_token(
         Credential::Absent => Err(BackendError::NoGatewayToken {
             provider: provider.display_name().to_string(),
         }),
+        Credential::KeyFileUnusable(fault) => Err(BackendError::NoGatewayKeyFile {
+            provider: provider.display_name().to_string(),
+            fault,
+        }),
+    }
+}
+
+/// Why the file a block's `options.keyFile` names gives no key, in the catalog's words.
+///
+/// One place for the sentence, so a refused request, `doctor`, `auth status` and the window say the
+/// same thing of the same fault. A closed set the driver wrote: nothing in it is the path or any text
+/// of the file.
+pub fn key_file_fault_said(fault: bravebot_config::provider::KeyFileFault) -> &'static str {
+    use bravebot_config::provider::KeyFileFault;
+    match fault {
+        KeyFileFault::NotAbsolute => t!(gateway_key_file_not_absolute),
+        KeyFileFault::Unreadable => t!(gateway_key_file_unreadable),
+        KeyFileFault::TooLarge => t!(gateway_key_file_too_large),
+        KeyFileFault::Empty => t!(gateway_key_file_empty),
+        KeyFileFault::NotAKey => t!(gateway_key_file_not_a_key),
     }
 }
 
@@ -2455,7 +2504,7 @@ mod tests {
         assert_eq!(
             serving(&denied, &egress, "z-ai/glm-4.6"),
             Serving::Refused {
-                file: path,
+                file: Some(path),
                 why: ModelRefusal::Denied,
             }
         );
@@ -2472,7 +2521,7 @@ mod tests {
         assert_eq!(
             serving(&allowing, &egress, "z-ai/some-other-model"),
             Serving::Refused {
-                file: path,
+                file: Some(path),
                 why: ModelRefusal::NotAllowed,
             }
         );
@@ -5269,6 +5318,156 @@ mod tests {
         assert!(said.contains("options.apiKey"), "no remedy: {said}");
     }
 
+    /// A scratch directory holding `key.txt` with `text`, for the key file tests of this module.
+    fn a_gateway_key_file(name: &str, text: &str) -> (PathBuf, PathBuf) {
+        let directory = crate::testutil::scratch_dir(&format!("backend-key-file-{name}"));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a directory");
+        let file = directory.join("key.txt");
+        std::fs::write(&file, text).expect("a file");
+        (directory, file)
+    }
+
+    /// A gateway block at `endpoint` naming `key_file`, and `api_key` where given, with one model.
+    fn key_file_gateway(endpoint: &str, key_file: &Path, api_key: Option<&str>) -> Config {
+        let mut options = serde_json::json!({
+            "baseURL": format!("{endpoint}/v1"),
+            "keyFile": key_file.to_str().expect("a path"),
+        });
+        if let Some(key) = api_key {
+            options["apiKey"] = key.into();
+        }
+        with_providers(
+            &serde_json::json!({"provider": {"gw": {
+                "options": options, "models": {"a-model": {}}
+            }}})
+            .to_string(),
+        )
+    }
+
+    /// One request for `gw/a-model` through `config`, with what the call came to.
+    fn ask_through(config: &Config) -> Result<Completion, BackendError> {
+        let egress = Egress::new();
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        // A test helper: a policy that does not begin is a broken fixture.
+        // nosemgrep: trailofbits.rs.panic-in-function-returning-result.panic-in-function-returning-result
+        let mut policy = bravebot_core::policy::Policy::begin(
+            {
+                let mut routing = bravebot_core::policy::Routing::new();
+                routing.insert_trusted("task", "say hello");
+                routing
+            },
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        )
+        .expect("policy");
+        let request = ChatRequest::new(
+            "gw/a-model",
+            vec![bravebot_aichat::protocol::Message::user("hi")],
+        );
+        Backend::select(config, &egress, "gw/a-model").complete(&mut policy, &request)
+    }
+
+    /// BACKEND-16: the file a block's `options.keyFile` names is sent as the gateway's bearer token,
+    /// and a file replaced between two requests is the one the second request reads. The key reaches
+    /// the `authorization` header and nothing else the server was sent. The regressions it rejects
+    /// are a file that is not read for a request, a token read once for the session, and the
+    /// block's `apiKey` sent beside or in place of the file.
+    #[test]
+    fn a_key_file_is_sent_as_the_gateways_bearer_token() {
+        let (directory, file) = a_gateway_key_file("sent", "placeholder-first-file-key\n");
+        for (text, expected) in [
+            (
+                "placeholder-first-file-key\n",
+                "Bearer placeholder-first-file-key",
+            ),
+            (
+                "placeholder-second-file-key\n",
+                "Bearer placeholder-second-file-key",
+            ),
+        ] {
+            std::fs::write(&file, text).expect("a file");
+            let (endpoint, received) = answer_once(OPENAI_WHOLE, "application/json");
+            let config = key_file_gateway(&endpoint, &file, Some("placeholder-stale-api-key"));
+            assert!(ask_through(&config).is_ok(), "{expected}");
+            let received = received.recv().expect("the request arrived");
+            assert_eq!(header(&received, "authorization"), Some(expected));
+            assert!(
+                received
+                    .1
+                    .iter()
+                    .all(|(_, value)| !value.contains("placeholder-stale-api-key")),
+                "the block's apiKey went with the request: {received:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// BACKEND-16: a block naming a key file that gives no key is refused with the remedy named, and
+    /// no request is sent: not with no credential, and not with the block's `apiKey` in the file's
+    /// place. The sentence holds neither the path nor any text of the file, so a path pasted into the
+    /// wrong field or a file that holds the wrong thing is not repeated. The regressions it rejects
+    /// are sending the request with no `authorization` header, falling through to `apiKey`, and a
+    /// sentence that quotes the path or the file.
+    #[test]
+    fn a_gateway_whose_key_file_gives_no_key_refuses_the_request_and_sends_nothing() {
+        let (directory, file) =
+            a_gateway_key_file("refused-marker-5e1a", "marker-text-7b3c two words");
+        for (contents, reason) in [
+            (None, "is missing"),
+            (Some("  \n"), "holds nothing but whitespace"),
+            (Some("marker-text-7b3c two words"), "holds whitespace"),
+        ] {
+            match contents {
+                Some(text) => std::fs::write(&file, text).expect("a file"),
+                None => std::fs::remove_file(&file).expect("a file to remove"),
+            }
+            // A server that would answer, so a request that went out is told from one that did not.
+            // With a stale `apiKey` in the block and without one: the first is a token that must not
+            // stand in for the file, the second is a block that must not be read as naming none.
+            for api_key in [Some("placeholder-stale-api-key"), None] {
+                let (endpoint, received) = answer_once(OPENAI_WHOLE, "application/json");
+                let config = key_file_gateway(&endpoint, &file, api_key);
+                let failure = ask_through(&config).expect_err("refused");
+                assert!(
+                    matches!(failure, BackendError::NoGatewayKeyFile { .. }),
+                    "{failure:?}"
+                );
+                let said = failure.to_string();
+                for named in [
+                    "gw",
+                    "options.keyFile",
+                    reason,
+                    "nothing was sent",
+                    "fix the path",
+                ] {
+                    assert!(said.contains(named), "{named} is not in: {said}");
+                }
+                for held in [
+                    "marker-5e1a",
+                    "marker-text-7b3c",
+                    "placeholder-stale-api-key",
+                ] {
+                    assert!(!said.contains(held), "{held} is in: {said}");
+                    assert!(
+                        !format!("{failure:?}").contains(held),
+                        "{held} is in a Debug"
+                    );
+                }
+                assert!(
+                    received
+                        .recv_timeout(std::time::Duration::from_millis(300))
+                        .is_err(),
+                    "a request was sent although the key file gave no key"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
     fn vertex_config(entry: &str) -> Config {
         with_providers(&format!(r#"{{"provider": {{"google-vertex": {entry}}}}}"#))
     }
@@ -5778,6 +5977,7 @@ mod tests {
     fn only_a_finished_reply_with_nothing_in_it_is_an_empty_reply() {
         assert!(BackendError::from(ChatError::NoContent).is_empty_reply());
         assert!(BackendError::from(BedrockError::NoContent).is_empty_reply());
+        assert!(BackendError::from(BedrockError::ThoughtOnly).is_empty_reply());
         assert!(
             BackendError::from(BedrockError::NoContent)
                 .counted(1, None, None)

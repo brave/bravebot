@@ -305,6 +305,8 @@ fn home_only_line(key: &str, path: String) -> String {
         "askIdleSeconds" => t!(doctor_settings_ask_idle_ignored, path = path),
         "permissions.startInAuto" => t!(doctor_settings_start_in_auto_ignored, path = path),
         "run.scrubEnv" => t!(doctor_settings_scrub_env_ignored, path = path),
+        "webSearch.keyFile" => t!(doctor_settings_web_search_key_file_ignored, path = path),
+        "webSearch.env" => t!(doctor_settings_web_search_env_ignored, path = path),
         "limit" => t!(doctor_settings_limit_ignored, path = path),
         "updateCheck" => t!(doctor_settings_update_check_ignored, path = path),
         "deepLinks" => t!(doctor_settings_deep_links_ignored, path = path),
@@ -342,6 +344,36 @@ fn retention_facts(settings: &bravebot_config::Settings) -> Vec<(String, String)
                     doctor_retention_paused,
                     path = progress::printable_path(path)
                 ),
+            )
+        })
+        .collect()
+}
+
+/// The `deniedHosts` entries that are not host names, each as the line `doctor` says, where the
+/// session holds a host list.
+///
+/// A stage that has network access is refused while one is set, and the sentence the planner reads
+/// for that names no entry (SANDBOX-24), so this is where the person finds which entry to fix. The
+/// entry is a checkout's own text where a checkout wrote it, so it is written with control
+/// characters made visible and nothing here decides on it beyond whether it is a host name, as the
+/// stage's own check does. Without `allowedHosts` no list is held and no stage is refused, so
+/// nothing is said.
+pub(crate) fn sandbox_hosts_lines(hosts: &bravebot_config::sandbox_network::Hosts) -> Vec<String> {
+    if hosts.allowed.is_none() {
+        return Vec::new();
+    }
+    hosts
+        .denied
+        .iter()
+        .filter(|denied| bravebot_sandbox::hosts::HostRule::parse(&denied.entry).is_none())
+        .map(|denied| {
+            t!(
+                doctor_sandbox_hosts_denied_not_a_host,
+                entry = progress::printable(&denied.entry),
+                source = match &denied.by {
+                    Some(path) => progress::printable_path(path),
+                    None => t!(doctor_sandbox_filesystem_source_flag).to_string(),
+                }
             )
         })
         .collect()
@@ -986,6 +1018,7 @@ fn report_backends(config: &Config, ending: &mut Ending) {
     for held in config.held() {
         report_held(held);
     }
+    report_web_search(config);
     report_chatgpt_sign_in(ending);
     report_xai_sign_in(ending);
 }
@@ -1011,6 +1044,55 @@ fn report_held(held: bravebot_config::Held<'_>) {
         if let Some(dropped) = why_it_dropped(held, *drop) {
             fact(t!(doctor_dropped), dropped);
         }
+    }
+}
+
+/// What `doctor` says of where the web search key would come from: a variable `webSearch.env` names,
+/// the file `webSearch.keyFile` names, or nothing.
+///
+/// Looks at the process environment for whether a named variable holds text, and at the file's
+/// metadata through [`Config::web_search_source`], and reads no text from either into the report, so
+/// the report cannot hold the key. A variable is said by its place in `webSearch.env` and never by
+/// its name: the name is a string the person wrote, and one pasted into the wrong field is the key
+/// itself, which a report people paste would then carry. The path is the person's own setting and is
+/// not a secret.
+fn report_web_search(config: &Config) {
+    fact(
+        t!(doctor_web_search),
+        web_search_line(config, |name| std::env::var(name).ok()),
+    );
+}
+
+/// The words of [`report_web_search`], separate from the printing so a test can hold them, over a
+/// lookup it is handed so a test sets no variable of the process.
+pub(crate) fn web_search_line(config: &Config, lookup: impl Fn(&str) -> Option<String>) -> String {
+    use bravebot_config::web_search_key::Source;
+    let named = !config.web_search_env.is_empty();
+    match (
+        config.web_search_source(lookup),
+        config.web_search_key_file.as_deref(),
+    ) {
+        (Some(Source::Variable { entry }), _) => {
+            t!(doctor_web_search_variable, entry = entry)
+        }
+        (Some(Source::File), Some(path)) if named => t!(
+            doctor_web_search_keyed_no_variable,
+            path = progress::printable_path(path)
+        ),
+        (Some(Source::File), Some(path)) => t!(
+            doctor_web_search_keyed,
+            path = progress::printable_path(path)
+        ),
+        (None, Some(path)) if named => t!(
+            doctor_web_search_missing_and_variables,
+            path = progress::printable_path(path)
+        ),
+        (None, Some(path)) => t!(
+            doctor_web_search_missing,
+            path = progress::printable_path(path)
+        ),
+        (None, None) if named => t!(doctor_web_search_variables_empty).to_string(),
+        (None, None) | (Some(Source::File), None) => t!(doctor_web_search_absent).to_string(),
     }
 }
 
@@ -1174,7 +1256,7 @@ fn report_serving(config: &Config, ending: &mut Ending) {
         bravebot_agent::backend::Serving::Refused { file, why } => {
             *ending = ends_on(*ending, Ending::Configuration);
             println!();
-            println!("{}", managed_refusal(&model, &file, why));
+            println!("{}", managed_refusal(&model, file.as_deref(), why));
         }
         bravebot_agent::backend::Serving::Configured => {}
     }
@@ -1212,6 +1294,13 @@ pub(crate) fn doctor() -> ExitCode {
             // file that wrote each, so a person finds what to edit; and each way an entry was not
             // obeyed, since a refusal that is not in force holds back nothing and says nothing.
             doctor_sandbox_filesystem(&settings, &managed);
+
+            let hosts = bravebot_config::sandbox_network::settled()
+                .cloned()
+                .unwrap_or_else(|| bravebot_config::sandbox_network::resolve(&settings, &managed));
+            for line in sandbox_hosts_lines(&hosts.hosts) {
+                fact(t!(doctor_sandbox_hosts), line);
+            }
 
             let granted = report_allow_rules(&settings);
             report_mcp_declared(&settings, &mut ending);
@@ -1737,7 +1826,10 @@ pub(crate) fn gateway_models(provider: &bravebot_config::provider::Provider) -> 
 /// that is working.
 ///
 /// A key `bravebot auth login gateway` stored is named as that, because it is the one place a token
-/// can come from that neither the environment nor the settings file shows (CRED-25).
+/// can come from that neither the environment nor the settings file shows (CRED-25). A key read from
+/// the file `options.keyFile` names is named as that, and a file that gives no key is said with the
+/// reason and without the path: the value is a string the person wrote, and one pasted into the
+/// wrong field is the key itself, so neither it nor any text of the file reaches the report.
 pub(crate) fn gateway_credential(
     provider: &bravebot_config::provider::Provider,
     lookup: impl Fn(&str) -> Option<String>,
@@ -1748,7 +1840,14 @@ pub(crate) fn gateway_credential(
     }
     match provider.credential_and_source(lookup) {
         (Credential::Token(_), Some(Source::Stored)) => t!(doctor_gateway_token_stored).to_string(),
+        (Credential::Token(_), Some(Source::KeyFile)) => {
+            t!(doctor_gateway_token_key_file).to_string()
+        }
         (Credential::Token(_), _) => t!(doctor_gateway_token).to_string(),
+        (Credential::KeyFileUnusable(fault), _) => t!(
+            doctor_gateway_token_key_file_unusable,
+            reason = bravebot_agent::backend::key_file_fault_said(fault)
+        ),
         (Credential::Absent, _) => t!(
             doctor_gateway_token_absent,
             id = progress::printable(&provider.id)
@@ -1798,6 +1897,7 @@ pub(crate) fn what_would_end(held: bravebot_config::Held<'_>) -> String {
             t!(doctor_ends_gateway_token, gateway = host)
         }
         bravebot_config::Held::PremiumKey => t!(doctor_ends_premium_key).to_string(),
+        bravebot_config::Held::SearchKey => t!(doctor_ends_search_key).to_string(),
         bravebot_config::Held::ChatgptAccount => t!(doctor_ends_chatgpt_account).to_string(),
         bravebot_config::Held::XaiAccount => t!(doctor_ends_xai_account).to_string(),
     }
@@ -1848,6 +1948,7 @@ pub(crate) fn how_soon_a_leak_is_noticed(held: bravebot_config::Held<'_>) -> Opt
         | bravebot_config::Held::AwsAccessKey
         | bravebot_config::Held::GatewayToken { .. }
         | bravebot_config::Held::PremiumKey
+        | bravebot_config::Held::SearchKey
         | bravebot_config::Held::ChatgptAccount
         | bravebot_config::Held::XaiAccount => None,
     }
@@ -1975,6 +2076,21 @@ pub(crate) fn why_it_dropped(
             gate = gate,
             answer = answer
         ),
+        (Held::SearchKey, Condition::NothingDecidesEachUse) => t!(
+            doctor_dropped_search_key_nothing_decides_each_use,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::SearchKey, Condition::NoBoundFixedBeforeIssue) => t!(
+            doctor_dropped_search_key_no_bound_fixed_before_issue,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::SearchKey, Condition::NotMintedForOneStep) => t!(
+            doctor_dropped_search_key_not_minted_for_one_step,
+            gate = gate,
+            answer = answer
+        ),
         (Held::ChatgptAccount, Condition::NothingDecidesEachUse) => t!(
             doctor_dropped_chatgpt_account_nothing_decides_each_use,
             gate = gate,
@@ -2009,7 +2125,11 @@ pub(crate) fn why_it_dropped(
         // each credential does drop at, and a drop recorded on one of them is an account nobody
         // has written.
         (
-            Held::SigningKey | Held::AwsAccessKey | Held::GatewayToken { .. } | Held::PremiumKey,
+            Held::SigningKey
+            | Held::AwsAccessKey
+            | Held::GatewayToken { .. }
+            | Held::PremiumKey
+            | Held::SearchKey,
             Condition::NothingCanRefuseAUse
             | Condition::BoundEnforcedWithinReach
             | Condition::BoundWithNoEnd
@@ -2068,7 +2188,8 @@ pub(crate) fn what_outlives_revoking(held: bravebot_config::Held<'_>) -> Option<
         bravebot_config::Held::SigningKey
         | bravebot_config::Held::AwsSession
         | bravebot_config::Held::GatewayToken { .. }
-        | bravebot_config::Held::PremiumKey => None,
+        | bravebot_config::Held::PremiumKey
+        | bravebot_config::Held::SearchKey => None,
     }
 }
 
@@ -4372,6 +4493,124 @@ mod tests {
             .clone()
     }
 
+    /// A configuration over a placeholder signing key, for the web search `doctor` tests.
+    fn a_configuration() -> Config {
+        Config::from_lookup(|name| match name {
+            bravebot_config::env_var::SIGNING_KEY => Some("test-signing-key".to_string()),
+            bravebot_config::env_var::KEY_ID => Some("test-key-id".to_string()),
+            bravebot_config::env_var::ENDPOINT => Some("https://free.invalid".to_string()),
+            _ => None,
+        })
+        .expect("complete")
+    }
+
+    /// The `doctor` account of the Brave Search key names the setting, says where the key goes and
+    /// how custody ends, and the line for a configured key file names the setting and the path and
+    /// never the key, which is a placeholder in a scratch file here. A report that read the file to
+    /// say it was there would print the key into a paste; one that said nothing of the setting
+    /// would leave somebody without the name of what to remove.
+    #[test]
+    fn the_web_search_key_is_reported_by_its_setting_and_never_by_its_value() {
+        const PLACEHOLDER: &str = "placeholder-search-key";
+        let account = what_would_end(bravebot_config::Held::SearchKey);
+        for named in [
+            "webSearch.keyFile",
+            "api.search.brave.com",
+            "Brave Search API dashboard",
+        ] {
+            assert!(account.contains(named), "{named} is not in: {account}");
+        }
+        assert!(!account.contains(PLACEHOLDER));
+
+        let directory =
+            // nosemgrep: rust.lang.security.temp-dir.temp-dir
+            std::env::temp_dir().join(format!("bravebot-doctor-web-search-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a directory");
+        let file = directory.join("key.txt");
+        std::fs::write(&file, PLACEHOLDER).expect("a file");
+
+        let nothing = |_: &str| None;
+        let absent = web_search_line(&a_configuration(), nothing);
+        assert!(absent.contains("webSearch.keyFile"), "{absent}");
+
+        let missing = web_search_line(
+            &a_configuration().with_web_search_key_file(directory.join("absent.txt")),
+            nothing,
+        );
+        assert!(missing.contains("webSearch.keyFile"), "{missing}");
+        assert_ne!(missing, absent);
+
+        let configured =
+            web_search_line(&a_configuration().with_web_search_key_file(&file), nothing);
+        assert!(configured.contains("webSearch.keyFile"), "{configured}");
+        assert!(configured.contains("configured"), "{configured}");
+        assert!(!configured.contains(PLACEHOLDER), "{configured}");
+        assert_ne!(configured, missing);
+        assert_ne!(configured, absent);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// S5: `doctor` says which source the key would come from, by the place of a variable in
+    /// `webSearch.env` and never by its name or its text, and a variable that holds text is said
+    /// before the file. The faults this rejects are printing the variable's name, which a person may
+    /// have pasted the key into, printing the text, and saying the file where a variable would win.
+    #[test]
+    fn the_web_search_source_is_reported_by_place_and_never_by_the_variable_or_its_text() {
+        const NAME: &str = "SECRET_LOOKING_NAME_sk_live_0123456789";
+        const TEXT: &str = "placeholder-text-of-the-variable";
+        const FILE_TEXT: &str = "placeholder-text-of-the-file";
+        // The name carries the process id, and this test removes the directory it makes.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let directory = std::env::temp_dir().join(format!(
+            "bravebot-doctor-web-search-source-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a directory");
+        let file = directory.join("key.txt");
+        std::fs::write(&file, FILE_TEXT).expect("a file");
+        let holding = |name: &str| (name == NAME).then(|| TEXT.to_string());
+        let nothing = |_: &str| None;
+
+        let from_variable = web_search_line(
+            &a_configuration()
+                .with_web_search_env(&["UNSET_FIRST", NAME])
+                .with_web_search_key_file(&file),
+            holding,
+        );
+        assert!(from_variable.contains("entry 2"), "{from_variable}");
+        assert!(!from_variable.contains("key.txt"), "{from_variable}");
+
+        let from_file = web_search_line(
+            &a_configuration()
+                .with_web_search_env(&[NAME])
+                .with_web_search_key_file(&file),
+            nothing,
+        );
+        assert!(from_file.contains("key.txt"), "{from_file}");
+        assert!(!from_file.contains("entry"), "{from_file}");
+
+        let none = web_search_line(&a_configuration().with_web_search_env(&[NAME]), nothing);
+        assert!(none.contains("not offered"), "{none}");
+        assert_ne!(none, from_variable);
+
+        for said in [&from_variable, &from_file, &none] {
+            for withheld in [NAME, TEXT, FILE_TEXT, "sk_live"] {
+                assert!(!said.contains(withheld), "{withheld} is in: {said}");
+            }
+        }
+        let account = what_would_end(bravebot_config::Held::SearchKey);
+        for named in [
+            "webSearch.env",
+            "unsetting the variable",
+            "Brave Search API dashboard",
+        ] {
+            assert!(account.contains(named), "{named} is not in: {account}");
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
     /// BACKEND-62: a gateway dropped for a `baseURL` port that cannot be read is named by its id
     /// and by the text written where the port belongs, and nothing else of the url is shown. The
     /// regression it rejects is the gateway vanishing from the settings with no line saying why.
@@ -4447,7 +4686,91 @@ mod tests {
         assert_eq!(from_variable, from_file);
     }
 
-    /// A gateway nothing holds a credential for says so. Reporting one as found would answer the
+    /// BACKEND-16, CRED-25: `doctor` says whether the file `options.keyFile` names was found and
+    /// usable, and why it is not, and never what the file holds or the path the setting names: the
+    /// setting is a string the person wrote, and one pasted into the wrong field is the key itself.
+    /// A variable is said before the file, as a request reads them. The regressions it rejects are
+    /// printing the key, printing the path, saying a file that gives no key is found, and saying
+    /// nothing of the file where the block names no other source.
+    #[test]
+    fn a_gateway_key_file_is_reported_as_found_or_unusable_and_never_printed() {
+        const KEY: &str = "placeholder-gateway-file-key";
+        // The name carries the process id, and this test removes the directory it makes.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let directory = std::env::temp_dir().join(format!(
+            "bravebot-doctor-gateway-key-file-marker-4c2d-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a directory");
+        let file = directory.join("key.txt");
+        let block = |env: &str| {
+            format!(
+                r#"{{"provider": {{"gw": {{{env} "options": {{"baseURL": "https://example.invalid/v1",
+                    "keyFile": {}}}}}}}}}"#,
+                serde_json::json!(file.to_str().expect("a path"))
+            )
+        };
+        let provider = configured_gateway(&block(""));
+
+        std::fs::write(&file, format!("{KEY}\n")).expect("a file");
+        let found = gateway_credential(&provider, |_| None);
+        assert_eq!(found, t!(doctor_gateway_token_key_file));
+
+        let mut said = vec![found];
+        for (contents, reason) in [
+            (None, "is missing"),
+            (Some("\n"), "holds nothing but whitespace"),
+            (Some("two words"), "holds whitespace"),
+        ] {
+            match contents {
+                Some(text) => std::fs::write(&file, text).expect("a file"),
+                None => std::fs::remove_file(&file).expect("a file to remove"),
+            }
+            let line = gateway_credential(&provider, |_| None);
+            assert!(line.contains("options.keyFile"), "{line}");
+            assert!(line.contains(reason), "{line}");
+            assert_ne!(line, t!(doctor_gateway_token_key_file), "{line}");
+            said.push(line);
+        }
+        // The block also names a variable that holds text: that is said, not the file.
+        std::fs::write(&file, format!("{KEY}\n")).expect("a file");
+        let with_variable = configured_gateway(&block(r#""env": ["A_TOKEN_VARIABLE"],"#));
+        let from_variable = gateway_credential(&with_variable, |name| {
+            (name == "A_TOKEN_VARIABLE").then(|| "placeholder-variable-text".to_string())
+        });
+        assert_eq!(from_variable, t!(doctor_gateway_token));
+        said.push(from_variable);
+
+        for line in &said {
+            for held in [KEY, "marker-4c2d", "placeholder-variable-text", "key.txt"] {
+                assert!(!line.contains(held), "{held} is in: {line}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// CRED-25: the account of what would end a gateway token names the file `options.keyFile`
+    /// names beside the other ways custody ends, so somebody who keeps the key in a file is not told
+    /// only to delete a value from the settings or unset a variable. The regression it rejects is an
+    /// account written before the file was a source.
+    #[test]
+    fn the_account_of_a_gateway_token_names_a_key_file_as_a_source_that_ends_custody() {
+        let account = what_would_end(bravebot_config::Held::GatewayToken {
+            host: "gateway.invalid",
+        });
+        for named in [
+            "gateway.invalid",
+            "options.keyFile",
+            "unsetting the variable",
+            "bravebot auth logout gateway",
+            "leaves the token live there",
+        ] {
+            assert!(account.contains(named), "{named} is not in: {account}");
+        }
+    }
+
+    /// BACKEND-16: a gateway nothing holds a credential for says so. Reporting one as found would answer the
     /// question `doctor` exists to answer wrongly, and the request then fails somewhere further away.
     #[test]
     fn a_gateway_with_no_credential_is_reported_as_having_none() {
@@ -4870,6 +5193,40 @@ mod tests {
         assert!(!report.contains("brew install"));
     }
 
+    /// SANDBOX-24: `doctor` names a `deniedHosts` entry that is not a host name, with control
+    /// characters made visible and the file that wrote it, and says nothing where no `allowedHosts`
+    /// list is held or the entry is a host name. The regressions it rejects are the entry printed
+    /// with its newline (a second line a checkout wrote), the entry left out, and an entry reported
+    /// where no stage is refused for it.
+    #[test]
+    fn doctor_names_a_denied_host_that_is_no_host_name_with_controls_visible() {
+        use bravebot_config::sandbox_network::{HostEntry, Hosts};
+        let entry = |text: &str| HostEntry {
+            entry: text.to_string(),
+            by: Some(PathBuf::from("/work/.bravebot/settings.json")),
+        };
+        let held = Hosts {
+            allowed: Some(vec![entry("a.example")]),
+            denied: vec![entry("bad.example"), entry("two words\nsecond line")],
+            on_unlisted: None,
+        };
+        let lines = sandbox_hosts_lines(&held);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("two words"), "{lines:?}");
+        assert!(!lines[0].contains('\n'), "{lines:?}");
+        assert!(
+            lines[0].contains("/work/.bravebot/settings.json"),
+            "{lines:?}"
+        );
+        assert!(!lines[0].contains("bad.example"), "{lines:?}");
+
+        let unlisted = Hosts {
+            allowed: None,
+            ..held
+        };
+        assert!(sandbox_hosts_lines(&unlisted).is_empty());
+    }
+
     /// SANDBOX-25: where the backend cannot hold a path back from the session directory, `doctor`
     /// says a denial inside it is not in force and why, so the report does not call "in force" an
     /// entry whose only effect is that every stage is refused. The regression it rejects is the line
@@ -4882,6 +5239,7 @@ mod tests {
             path: path.to_string(),
             by: None,
             pinned: false,
+            from_a_checkout: false,
         };
         let outside = directory.parent().unwrap().join("outside.env");
         let outside = outside.to_str().unwrap();
@@ -4925,6 +5283,46 @@ mod tests {
                 ]
             );
         }
+    }
+
+    /// SANDBOX-25: an entry a checkout's file wrote is kept out of the sentence the planner gets,
+    /// and `doctor` is the person's own screen, so it still prints the entry as written, with the
+    /// file that wrote it, whether the entry is in force or refused. The regression it rejects is
+    /// a report that hides the spelling of a checkout's entry from the person who has to read it.
+    #[test]
+    fn doctor_still_shows_the_text_of_an_entry_a_checkout_wrote() {
+        use bravebot_sandbox::rules::{Entry, Lists, resolve};
+        let directory = scratch("checkout-entry-text").canonicalize().unwrap();
+        let file = directory.join(".bravebot/settings.json");
+        let entry = |path: &str| Entry {
+            path: path.to_string(),
+            by: Some(file.clone()),
+            pinned: false,
+            from_a_checkout: true,
+        };
+        let lists = Lists {
+            deny_read: vec![entry("MARKER-FROM-THE-CLONE.env")],
+            deny_write: vec![entry("MARKER-WILDCARD-*.env")],
+            ..Lists::default()
+        };
+        let rules = resolve(&lists, None, None, &directory);
+        let shown = progress::printable_path(&file);
+
+        let lines = sandbox_filesystem_lines(&rules, &directory, None);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        let read = lines
+            .iter()
+            .find(|line| line.contains("MARKER-FROM-THE-CLONE.env"))
+            .unwrap_or_else(|| panic!("the entry is not shown: {lines:?}"));
+        assert!(read.contains("denyRead") && read.contains(&shown), "{read}");
+        let write = lines
+            .iter()
+            .find(|line| line.contains("MARKER-WILDCARD-*.env"))
+            .unwrap_or_else(|| panic!("the refused entry is not shown: {lines:?}"));
+        assert!(
+            write.contains("denyWrite") && write.contains(&shown),
+            "{write}"
+        );
     }
 
     /// SANDBOX-22 and SANDBOX-10: `doctor` names the mode and where it came from, and names the

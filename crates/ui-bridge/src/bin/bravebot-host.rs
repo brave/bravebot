@@ -5,11 +5,13 @@
 
 //! A bridge that keeps its sessions while the programs that drive it come and go.
 //!
-//! The host starts the client program it was given over an anonymous channel
+//! The host starts each client program it was given over an anonymous channel
 //! (`control_link::launch`) and serves it until it ends. There is no socket path or port for
-//! another program to connect to. A later client is another launch of the same program, which the
-//! person asks for by typing `launch` on the host's standard input; `quit` or the end of that
-//! input stops the host and the work its sessions have going.
+//! another program to connect to. Each client has a name and the answers it may give, both from
+//! the command line. The clients start once each, in the order given, and are served at once. A
+//! client that has ended is started again when the person types `launch NAME` on the host's
+//! standard input; `quit` or the end of that input stops the host and the work its sessions have
+//! going.
 //!
 //! **This is the only file here that may touch stdout or end the process,** for the reason
 //! `bravebot-rpc` is.
@@ -37,7 +39,7 @@ fn main() {
         sessions_root,
         workspaces,
         settings,
-        client,
+        clients,
     } = start
     else {
         println!(
@@ -89,81 +91,164 @@ fn main() {
     bravebot_ui_bridge::settings::settle_for_process(&process);
     bravebot_ui_bridge::settings::start_the_sweep_for_process(&process);
 
-    let mut host = bravebot_ui_bridge::host::Host::new(bravebot_ui_bridge::host::Setup {
+    // Before any client starts, the person is asked here about each workspace no yes was kept
+    // about, as a session in lines asks (TRUST-23). The answers are read before `launch` and `quit`
+    // are, from the same input.
+    let asked = bravebot_ui_bridge::host_trust::ask_about_each(
+        &workspaces,
+        bravebot_agent::home::directory().as_deref(),
+        bravebot_agent::home::profile().as_deref(),
+        &mut std::io::stdin().lock(),
+        &mut std::io::stderr(),
+    );
+    if asked == bravebot_ui_bridge::host_trust::Asked::Stop {
+        return;
+    }
+
+    let host = bravebot_ui_bridge::host::Host::new(bravebot_ui_bridge::host::Setup {
         workspaces,
         settings,
         inspection,
     });
     eprintln!("bravebot-host: instance {}", host.instance());
 
-    let current: Current = Default::default();
+    let clients = std::sync::Arc::new(clients);
+    let current = std::sync::Arc::new(Served {
+        channels: std::sync::Mutex::new(std::collections::HashMap::new()),
+        quitting: std::sync::atomic::AtomicBool::new(false),
+        // Every client starts once, in the order the command line gives.
+        connected: std::sync::Mutex::new((0..clients.len()).collect()),
+    });
+    let names = clients.iter().map(|client| client.name.clone()).collect();
     let (commands, received) = std::sync::mpsc::channel();
-    listen_for_commands(commands, std::sync::Arc::clone(&current));
+    listen_for_commands(commands, std::sync::Arc::clone(&current), names);
+    let mut running: Vec<_> = (0..clients.len())
+        .map(|client| start_client(&host, &clients, client, &current))
+        .collect();
     loop {
-        run_client(&mut host, &client, &current);
-        // `quit` wins over a `launch` typed while the client was connected.
-        let mut launch = false;
-        for command in received.try_iter() {
-            match command {
-                Command::Quit => return stop(&mut host),
-                Command::Launch => launch = true,
+        match received.recv() {
+            // `quit` wins over a client still to start.
+            Ok(Command::Launch(_))
+                if current.quitting.load(std::sync::atomic::Ordering::SeqCst) => {}
+            Ok(Command::Launch(client)) => {
+                running.push(start_client(&host, &clients, client, &current));
             }
-        }
-        while !launch {
-            match received.recv() {
-                Ok(Command::Launch) => launch = true,
-                Ok(Command::Quit) | Err(_) => return stop(&mut host),
-            }
+            Ok(Command::Quit) | Err(_) => break,
         }
     }
+    // Every channel has been shut, so each client's connection ends and its thread returns.
+    for client in running {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a client's thread that panicked has already lost its connection, and the host stops either way"
+        )]
+        let _ = client.join();
+    }
+    stop(&host);
 }
 
 /// What the person typed on the host's input.
 #[cfg(unix)]
 enum Command {
-    Launch,
+    /// The client at this place on the command line, which is not connected.
+    Launch(usize),
     Quit,
 }
 
-/// The near end of the client being served, kept so that `quit` can end it, and whether `quit`
-/// has been asked for.
+/// The near end of each client's channel, kept so that `quit` can end it, whether `quit` has been
+/// asked for, and which clients are connected or starting, by their place on the command line.
 #[cfg(unix)]
-#[derive(Default)]
 struct Served {
-    channel: std::sync::Mutex<Option<std::os::unix::net::UnixStream>>,
+    channels: std::sync::Mutex<std::collections::HashMap<usize, std::os::unix::net::UnixStream>>,
     quitting: std::sync::atomic::AtomicBool,
+    connected: std::sync::Mutex<std::collections::HashSet<usize>>,
+}
+
+#[cfg(unix)]
+impl Served {
+    /// `client` is no longer connected, so it may be launched again.
+    fn served(&self, client: usize) {
+        if let Ok(mut connected) = self.connected.lock() {
+            connected.remove(&client);
+        }
+    }
+
+    /// End every client's connection.
+    fn end_every_channel(&self) {
+        if let Ok(channels) = self.channels.lock() {
+            for channel in channels.values() {
+                let _ = channel.shutdown(std::net::Shutdown::Both);
+            }
+        }
+    }
 }
 
 #[cfg(unix)]
 type Current = std::sync::Arc<Served>;
 
-/// Read `launch` and `quit` from the host's input on a thread of its own, so `quit` is heard while
-/// a client is connected. Quitting ends the connection being served, which is what returns control
-/// to the loop that stops the host.
+/// The client `named`, counted as connected from now, or why it cannot be launched. A bare
+/// `launch` names the only client there is. A client already connected is not launched twice.
 #[cfg(unix)]
-fn listen_for_commands(commands: std::sync::mpsc::Sender<Command>, current: Current) {
+fn to_launch(current: &Served, names: &[String], named: Option<&str>) -> Result<usize, String> {
+    let client = match named {
+        Some(named) => names
+            .iter()
+            .position(|name| name == named)
+            .ok_or_else(|| format!("no client is named `{named}`"))?,
+        None if names.len() == 1 => 0,
+        None => {
+            return Err(format!(
+                "name the client to launch: `launch NAME`, where NAME is one of {}",
+                names.join(", ")
+            ));
+        }
+    };
+    let mut connected = current
+        .connected
+        .lock()
+        .map_err(|_| "the clients connected cannot be read".to_string())?;
+    if !connected.insert(client) {
+        return Err(format!(
+            "the client named `{}` is still connected",
+            names[client]
+        ));
+    }
+    Ok(client)
+}
+
+/// Read `launch` and `quit` from the host's input on a thread of its own, so `quit` is heard while
+/// clients are connected. Quitting ends every client's connection, which is what lets the host stop.
+#[cfg(unix)]
+fn listen_for_commands(
+    commands: std::sync::mpsc::Sender<Command>,
+    current: Current,
+    names: Vec<String>,
+) {
     std::thread::spawn(move || {
         let quit = |commands: &std::sync::mpsc::Sender<Command>| {
             current
                 .quitting
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             let _ = commands.send(Command::Quit);
-            if let Ok(channel) = current.channel.lock()
-                && let Some(channel) = channel.as_ref()
-            {
-                let _ = channel.shutdown(std::net::Shutdown::Both);
-            }
+            current.end_every_channel();
         };
         for line in std::io::stdin().lines() {
+            let launch = |named| match to_launch(&current, &names, named) {
+                Ok(client) => {
+                    let _ = commands.send(Command::Launch(client));
+                }
+                Err(refused) => eprintln!("bravebot-host: {refused}"),
+            };
             match line.as_ref().map(|line| line.trim()) {
-                Ok("launch") => {
-                    let _ = commands.send(Command::Launch);
+                Ok("launch") => launch(None),
+                Ok(line) if line.starts_with("launch ") => {
+                    launch(line.strip_prefix("launch ").map(str::trim))
                 }
                 Ok("quit") => return quit(&commands),
-                Ok(_) => eprintln!("bravebot-host: type `launch` or `quit`"),
+                Ok(_) => eprintln!("bravebot-host: type `launch NAME` or `quit`"),
                 // A line that is not text is not the end of the input.
                 Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
-                    eprintln!("bravebot-host: that line is not text; type `launch` or `quit`");
+                    eprintln!("bravebot-host: that line is not text; type `launch NAME` or `quit`");
                 }
                 Err(error) => {
                     eprintln!("bravebot-host: cannot read its input ({error}); stopping");
@@ -207,70 +292,125 @@ fn can_write_in(root: &std::path::Path) -> Result<(), String> {
 /// Stop the work of every session and give the threads a few seconds to finish writing their
 /// records before the process ends.
 #[cfg(unix)]
-fn stop(host: &mut bravebot_ui_bridge::host::Host) {
+fn stop(host: &bravebot_ui_bridge::host::Host) {
     if !host.shutdown(std::time::Duration::from_secs(10)) {
         eprintln!("bravebot-host: some sessions were still working when the host stopped");
     }
 }
 
+/// Start the client at `client` on the command line over a new channel, and serve it on a thread
+/// of its own until it ends. Said here, so the clients are said to start in the order they do.
+#[cfg(unix)]
+fn start_client(
+    host: &bravebot_ui_bridge::host::Host,
+    clients: &std::sync::Arc<Vec<Client>>,
+    client: usize,
+    current: &Current,
+) -> std::thread::JoinHandle<()> {
+    eprintln!("bravebot-host: starting client {}", clients[client].name);
+    let (host, clients, current) = (
+        host.clone(),
+        std::sync::Arc::clone(clients),
+        std::sync::Arc::clone(current),
+    );
+    std::thread::spawn(move || run_client(&host, &clients[client], client, &current))
+}
+
 /// Start the client over a new channel and serve it until it ends.
 #[cfg(unix)]
 fn run_client(
-    host: &mut bravebot_ui_bridge::host::Host,
-    client: &[std::ffi::OsString],
+    host: &bravebot_ui_bridge::host::Host,
+    client: &Client,
+    place: usize,
     current: &Current,
 ) {
+    let name = &client.name;
     let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::named_by_person(&client[0]),
+        &bravebot_sandbox::programs::Resolved::named_by_person(&client.program),
         bravebot_sandbox::programs::Inherits::All,
         bravebot_sandbox::programs::SearchPath::Inherited,
         // The client the person named, started with the environment they set (SANDBOX-30).
         bravebot_sandbox::programs::CodeSelectors::Kept,
     );
-    command.args(&client[1..]);
+    command.args(&client.arguments);
     let mut linked = match bravebot_ui_bridge::control_link::launch(command) {
         Ok(linked) => linked,
         Err(error) => {
-            eprintln!("bravebot-host: cannot start the client: {error}");
+            current.served(place);
+            eprintln!("bravebot-host: cannot start client {name}: {error}");
             return;
         }
     };
-    if let Ok(mut slot) = current.channel.lock() {
-        *slot = linked.channel.try_clone().ok();
+    if let Ok(mut channels) = current.channels.lock()
+        && let Ok(kept) = linked.channel.try_clone()
+    {
+        channels.insert(place, kept);
     }
     // A `quit` typed before the channel was kept ends it now.
     if current.quitting.load(std::sync::atomic::Ordering::SeqCst) {
         let _ = linked.channel.shutdown(std::net::Shutdown::Both);
     }
-    let ended = host.serve(linked.channel);
-    if let Ok(mut slot) = current.channel.lock() {
-        *slot = None;
+    let ended = host.serve(linked.channel, &client.name, &client.answers);
+    if let Ok(mut channels) = current.channels.lock() {
+        channels.remove(&place);
     }
+    // The host has dealt with the loss of the connection. A launch typed once the line below is
+    // written is accepted.
+    current.served(place);
     match ended {
-        Ok(ended) => eprintln!("bravebot-host: client ended ({ended:?})"),
-        Err(error) => eprintln!("bravebot-host: serving the client failed: {error}"),
+        Ok(ended) => eprintln!("bravebot-host: client {name} ended ({ended:?})"),
+        Err(error) => eprintln!("bravebot-host: serving client {name} failed: {error}"),
     }
     let _ = linked.child.kill();
     let _ = linked.child.wait();
 }
 
+/// A client program the person named, what to call it, and the answers it may give.
+#[cfg(unix)]
+#[derive(Debug, PartialEq)]
+struct Client {
+    name: String,
+    answers: Vec<bravebot_ui_bridge::allowlist::Answer>,
+    program: std::ffi::OsString,
+    arguments: Vec<std::ffi::OsString>,
+}
+
+/// A client as far as the command line has named it.
+#[cfg(unix)]
+struct Named {
+    name: String,
+    answers: Option<Vec<bravebot_ui_bridge::allowlist::Answer>>,
+    program: Option<std::ffi::OsString>,
+    arguments: Vec<std::ffi::OsString>,
+}
+
 /// What the command line asked for.
 #[cfg(unix)]
+#[derive(Debug, PartialEq)]
 enum Start {
     Version,
     Run {
         sessions_root: std::path::PathBuf,
         workspaces: Vec<std::path::PathBuf>,
         settings: Option<std::path::PathBuf>,
-        client: Vec<std::ffi::OsString>,
+        clients: Vec<Client>,
     },
 }
 
 #[cfg(unix)]
 const USAGE: &str = "usage: bravebot-host --sessions-root DIR --workspace DIR [--workspace DIR]... \
-[--settings FILE] -- CLIENT [ARGUMENT]...\n       bravebot-host --version\n\
-CLIENT is the absolute path of the program to drive the host. It is started over a channel it \
-shares with the host alone.";
+[--settings FILE] CLIENT...\n       bravebot-host --version\n\
+CLIENT is --client NAME --answers KINDS --program PATH [--arg VALUE]...\n\
+NAME is up to 32 of a-z, 0-9 and -, and names one client. KINDS is the answers the client may \
+give, some of confirm, run, fetch, ask and trust separated by commas, or none. PATH is the \
+absolute path of the program, which is started over a channel it shares with the host alone.";
+
+/// Say why the command line is refused.
+#[cfg(unix)]
+fn refuse<T>(why: &str) -> Option<T> {
+    eprintln!("bravebot-host: {why}\n{USAGE}");
+    None
+}
 
 /// The value after an option, or a word about its absence.
 #[cfg(unix)]
@@ -285,14 +425,40 @@ fn value(
     given
 }
 
+/// The value after an option that has to be text.
+#[cfg(unix)]
+fn text(arguments: &mut impl Iterator<Item = std::ffi::OsString>, option: &str) -> Option<String> {
+    value(arguments, option)?
+        .into_string()
+        .ok()
+        .or_else(|| refuse(&format!("the value of {option} is not text")))
+}
+
+/// The client the last `--client` named, which `option` is about.
+#[cfg(unix)]
+fn current<'a>(clients: &'a mut [Named], option: &str) -> Option<&'a mut Named> {
+    clients
+        .last_mut()
+        .or_else(|| refuse(&format!("{option} comes after the --client it is about")))
+}
+
+#[cfg(unix)]
+fn is_a_name(name: &str) -> bool {
+    (1..=32).contains(&name.len())
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
 #[cfg(unix)]
 impl Start {
     /// Everything here is the person's own choice, made on the command line they typed. Nothing is
-    /// read from a file a tool could write.
+    /// read from a file a tool could write, and nothing a client sends changes it.
     // nosemgrep: rust.lang.security.args.args
     fn from_arguments(arguments: impl Iterator<Item = std::ffi::OsString>) -> Option<Self> {
         let mut arguments = arguments;
         let (mut root, mut workspaces, mut settings) = (None, Vec::new(), None);
+        let mut clients: Vec<Named> = Vec::new();
         while let Some(argument) = arguments.next() {
             match argument.to_str() {
                 Some("--version" | "-V") => return Some(Self::Version),
@@ -303,50 +469,271 @@ impl Start {
                     workspaces.push(value(&mut arguments, "--workspace")?.into())
                 }
                 Some("--settings") => settings = Some(value(&mut arguments, "--settings")?.into()),
+                Some("--client") => {
+                    let name = text(&mut arguments, "--client")?;
+                    if !is_a_name(&name) {
+                        return refuse(&format!(
+                            "`{name}` is not a client name; use 1 to 32 of a-z, 0-9 and -"
+                        ));
+                    }
+                    if clients.iter().any(|client| client.name == name) {
+                        return refuse(&format!("two clients are named `{name}`"));
+                    }
+                    clients.push(Named {
+                        name,
+                        answers: None,
+                        program: None,
+                        arguments: Vec::new(),
+                    });
+                }
+                Some("--answers") => {
+                    let words = text(&mut arguments, "--answers")?;
+                    let client = current(&mut clients, "--answers")?;
+                    if client.answers.is_some() {
+                        return refuse(&format!("client `{}` has two --answers", client.name));
+                    }
+                    match bravebot_ui_bridge::allowlist::Answer::list(&words) {
+                        Ok(answers) => client.answers = Some(answers),
+                        Err(why) => return refuse(&format!("client `{}`: {why}", client.name)),
+                    }
+                }
+                Some("--program") => {
+                    let program = value(&mut arguments, "--program")?;
+                    let client = current(&mut clients, "--program")?;
+                    if client.program.is_some() {
+                        return refuse(&format!("client `{}` has two --program", client.name));
+                    }
+                    client.program = Some(program);
+                }
                 Some("--") => {
-                    let client: Vec<std::ffi::OsString> = arguments.collect();
-                    return Self::checked(root, workspaces, settings, client);
+                    return refuse(
+                        "name each client with --client NAME --answers KINDS --program PATH, \
+                         not after `--`",
+                    );
+                }
+                // Taken as it is, so a value that looks like an option, or is not text, is passed on.
+                Some("--arg") => {
+                    let argument = value(&mut arguments, "--arg")?;
+                    current(&mut clients, "--arg")?.arguments.push(argument);
                 }
                 _ => {
-                    eprintln!(
-                        "bravebot-host: unknown option: {}\n{USAGE}",
-                        argument.to_string_lossy()
-                    );
-                    return None;
+                    return refuse(&format!("unknown option: {}", argument.to_string_lossy()));
                 }
             }
         }
-        eprintln!("bravebot-host: no client given after `--`\n{USAGE}");
-        None
+        Self::checked(root, workspaces, settings, clients)
     }
 
     fn checked(
         sessions_root: Option<std::path::PathBuf>,
         workspaces: Vec<std::path::PathBuf>,
         settings: Option<std::path::PathBuf>,
-        client: Vec<std::ffi::OsString>,
+        named: Vec<Named>,
     ) -> Option<Self> {
         let Some(sessions_root) = sessions_root.filter(|root| root.is_absolute()) else {
-            eprintln!("bravebot-host: --sessions-root must be an absolute path\n{USAGE}");
-            return None;
+            return refuse("--sessions-root must be an absolute path");
         };
         if workspaces.is_empty() {
-            eprintln!("bravebot-host: give at least one --workspace\n{USAGE}");
-            return None;
+            return refuse("give at least one --workspace");
         }
-        if client
-            .first()
-            .is_none_or(|program| !std::path::Path::new(program).is_absolute())
-        {
-            eprintln!("bravebot-host: the client must be given as an absolute path\n{USAGE}");
-            return None;
+        if named.is_empty() {
+            return refuse("name at least one client with --client");
+        }
+        let mut clients = Vec::new();
+        for client in named {
+            // The person says what each client may answer. A client given no answers by mistake,
+            // or every answer by default, would not be what they chose.
+            let Some(answers) = client.answers else {
+                return refuse(&format!("client `{}` needs --answers", client.name));
+            };
+            let Some(program) = client
+                .program
+                .filter(|program| std::path::Path::new(program).is_absolute())
+            else {
+                return refuse(&format!(
+                    "client `{}` needs --program with an absolute path",
+                    client.name
+                ));
+            };
+            clients.push(Client {
+                name: client.name,
+                answers,
+                program,
+                arguments: client.arguments,
+            });
         }
         Some(Self::Run {
             sessions_root,
             workspaces,
             settings,
-            client,
+            clients,
         })
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use bravebot_ui_bridge::allowlist::Answer;
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    fn parsed(arguments: Vec<OsString>) -> Option<Start> {
+        Start::from_arguments(arguments.into_iter())
+    }
+
+    fn words(arguments: &[&str]) -> Vec<OsString> {
+        arguments.iter().map(OsString::from).collect()
+    }
+
+    const BEFORE: [&str; 4] = ["--sessions-root", "/root", "--workspace", "/work"];
+
+    /// Each client keeps its own name, answers, program and arguments, in the order given, and an
+    /// argument is passed on as it is, including one that looks like an option or is not text.
+    #[test]
+    fn each_client_keeps_what_its_group_named_in_order() {
+        let mut arguments = words(&BEFORE);
+        arguments.extend(words(&[
+            "--client",
+            "relay",
+            "--answers",
+            "confirm,ask",
+            "--program",
+            "/bin/node",
+            "--arg",
+            "--",
+            "--arg",
+            "--workspace",
+            "--client",
+            "test",
+            "--answers",
+            "none",
+            "--program",
+            "/bin/test",
+            "--arg",
+        ]));
+        arguments.push(OsString::from_vec(b"\xff".to_vec()));
+        let Some(Start::Run { clients, .. }) = parsed(arguments) else {
+            panic!("refused");
+        };
+        assert_eq!(
+            clients,
+            [
+                Client {
+                    name: "relay".into(),
+                    answers: vec![Answer::Confirm, Answer::Ask],
+                    program: "/bin/node".into(),
+                    arguments: words(&["--", "--workspace"]),
+                },
+                Client {
+                    name: "test".into(),
+                    answers: vec![],
+                    program: "/bin/test".into(),
+                    arguments: vec![OsString::from_vec(b"\xff".to_vec())],
+                },
+            ]
+        );
+    }
+
+    /// A command line that leaves a client's answers or program to a default, names a client
+    /// twice or by a name that is not one, or uses the `--` form, is refused.
+    #[test]
+    fn a_client_that_is_not_fully_named_is_refused() {
+        for client in [
+            &["--client", "a", "--program", "/bin/cat"][..],
+            &["--client", "a", "--answers", "confirm"],
+            &["--client", "a", "--answers", "confirm", "--program", "cat"],
+            &[
+                "--client",
+                "a",
+                "--answers",
+                "write",
+                "--program",
+                "/bin/cat",
+            ],
+            &["--client", "a", "--answers", "", "--program", "/bin/cat"],
+            &[
+                "--client",
+                "A",
+                "--answers",
+                "none",
+                "--program",
+                "/bin/cat",
+            ],
+            &["--client", "", "--answers", "none", "--program", "/bin/cat"],
+            &[
+                "--client",
+                "a-name-that-is-thirty-three-chars",
+                "--answers",
+                "none",
+                "--program",
+                "/bin/cat",
+            ],
+            &[
+                "--client",
+                "a",
+                "--answers",
+                "none",
+                "--answers",
+                "run",
+                "--program",
+                "/bin/cat",
+            ],
+            &[
+                "--client",
+                "a",
+                "--answers",
+                "none",
+                "--program",
+                "/bin/cat",
+                "--program",
+                "/bin/sh",
+            ],
+            &[
+                "--client",
+                "a",
+                "--answers",
+                "none",
+                "--program",
+                "/bin/cat",
+                "--client",
+                "a",
+                "--answers",
+                "none",
+                "--program",
+                "/bin/cat",
+            ],
+            &[
+                "--answers",
+                "none",
+                "--client",
+                "a",
+                "--program",
+                "/bin/cat",
+            ],
+            &[
+                "--arg",
+                "x",
+                "--client",
+                "a",
+                "--answers",
+                "none",
+                "--program",
+                "/bin/cat",
+            ],
+            &["--", "/bin/cat"],
+            &[],
+        ] {
+            let mut arguments = words(&BEFORE);
+            arguments.extend(words(client));
+            assert!(parsed(arguments).is_none(), "{client:?} was accepted");
+        }
+    }
+
+    #[test]
+    fn a_name_of_thirty_two_allowed_characters_is_one() {
+        assert!(is_a_name("a-name-that-is-thirty-two-chars0"));
+        assert!(!is_a_name("a_name"));
     }
 }
 

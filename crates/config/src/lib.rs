@@ -29,11 +29,14 @@ pub mod env_var {
 
 pub mod brave_key;
 pub mod connectors;
+pub mod crash_reports;
 pub mod embeddings;
 pub mod embeddings_key;
 pub mod git_identities;
 pub mod hooks;
+pub mod hooks_approved;
 pub mod install;
+pub mod key_file;
 pub mod keys;
 pub mod limit;
 pub mod lsp;
@@ -52,6 +55,7 @@ mod settings;
 mod testutil;
 pub mod time;
 pub mod usage_ping;
+pub mod web_search_key;
 
 pub use managed::{Managed, ModelRefusal, Models, Refusal, Rule, Server, managed_file};
 pub use named_reach::{
@@ -677,6 +681,18 @@ pub enum Held<'a> {
     /// No parameter. The host is Brave's premium deployment, which [`Config::premium_endpoint`]
     /// names, and the key is one value whatever the person.
     PremiumKey,
+    /// The key the `web_search` tool sends to the Brave Search API, read from the first variable
+    /// the setting `webSearch.env` names that holds text, or else from the file the setting
+    /// `webSearch.keyFile` names, and sent only to `api.search.brave.com` in one request header.
+    ///
+    /// Held, on the same walk as [`Held::PremiumKey`] and for the same reasons: this program
+    /// presents the key itself with nothing deciding a use, and nothing here asks the search
+    /// service for a narrower or shorter form. The Brave Search API dashboard is the issuer and the
+    /// only surface that revokes it. Unsetting the variable, removing the setting or removing the
+    /// file ends this machine's custody and leaves the key working until it is revoked there.
+    ///
+    /// No parameter. The host is fixed and the key is one value whatever the person.
+    SearchKey,
     /// The sign-in a person made to OpenAI with a ChatGPT account, kept in
     /// `~/.bravebot/chatgpt-account.json` as an access token and the refresh token that replaces it.
     ///
@@ -718,13 +734,14 @@ impl<'a> Held<'a> {
     /// The gateway arrangement is a credential plus the host that would end it, so a list of the
     /// kinds has to be given one: a caller walking this is asking which arrangements exist rather
     /// than which are configured, and the host it passes is what the gateway entry will name.
-    pub const fn all(gateway_host: &'a str) -> [Self; 7] {
+    pub const fn all(gateway_host: &'a str) -> [Self; 8] {
         [
             Self::SigningKey,
             Self::AwsAccessKey,
             Self::AwsSession,
             Self::GatewayToken { host: gateway_host },
             Self::PremiumKey,
+            Self::SearchKey,
             Self::ChatgptAccount,
             Self::XaiAccount,
         ]
@@ -816,8 +833,9 @@ impl<'a> Held<'a> {
             // than refused: what the gateway at the other end offers is not something this
             // program has been told. The premium key is the same arrangement: one bearer value the
             // premium host issued, presented by this program, with nothing asked of that host for
-            // something narrower or shorter.
-            Self::GatewayToken { .. } | Self::PremiumKey => &[
+            // something narrower or shorter. The search key is the same again, issued by the Brave
+            // Search API dashboard.
+            Self::GatewayToken { .. } | Self::PremiumKey | Self::SearchKey => &[
                 GateDrop {
                     condition: Condition::NothingDecidesEachUse,
                     attempt: Attempt::NotAttempted,
@@ -869,6 +887,7 @@ impl<'a> Held<'a> {
             | Self::AwsSession
             | Self::GatewayToken { .. }
             | Self::PremiumKey
+            | Self::SearchKey
             | Self::ChatgptAccount
             | Self::XaiAccount => Tier::Held,
         }
@@ -905,6 +924,7 @@ impl<'a> Held<'a> {
             | Self::AwsAccessKey
             | Self::GatewayToken { .. }
             | Self::PremiumKey
+            | Self::SearchKey
             | Self::ChatgptAccount
             | Self::XaiAccount => None,
         }
@@ -922,7 +942,8 @@ impl<'a> Held<'a> {
     /// profile is that credential rather than something derived from it, so revoking reaches it.
     ///
     /// False for the premium key on the same footing: the premium host that revokes it is the only
-    /// place it is presented, and nothing here mints anything from it.
+    /// place it is presented, and nothing here mints anything from it. The search key is the same:
+    /// the search service that revokes it is the only place it is presented.
     ///
     /// True for the ChatGPT sign-in, because the surfaces the record names for ending it are
     /// signing out of the account and removing this program's access in the account's settings,
@@ -968,7 +989,8 @@ impl<'a> Held<'a> {
             Self::SigningKey
             | Self::AwsAccessKey
             | Self::GatewayToken { .. }
-            | Self::PremiumKey => None,
+            | Self::PremiumKey
+            | Self::SearchKey => None,
         }
     }
 }
@@ -1200,6 +1222,29 @@ pub enum Serves<'config, 'name> {
     Aichat,
 }
 
+/// The word `/variant` takes to drop the session's pick
+/// ([BACKEND-66](../../../docs/specs/backends.md#BACKEND-66)).
+pub const VARIANT_OFF: &str = "off";
+
+/// What a `/variant` word does under a model, as [`Config::choose_variant`] decides it
+/// ([BACKEND-66](../../../docs/specs/backends.md#BACKEND-66)).
+///
+/// `'config` is the configuration the offered names are read from. Each client turns this into
+/// its own words: the terminal into a note, the window into an answer or a refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VariantChoice<'config> {
+    /// An empty word: change nothing, and name what the model offers, which may be nothing.
+    Read(Vec<&'config str>),
+    /// [`VARIANT_OFF`]: drop the pick, whatever the model offers.
+    Drop,
+    /// A name the model offers: make it the pick.
+    Pick(String),
+    /// A name, under a model that offers no variants: the pick is left as it was.
+    NoneOffered,
+    /// A name the model does not offer: the pick is left as it was, and these are offered.
+    NotOffered(Vec<&'config str>),
+}
+
 /// Everything needed to talk to the backends this build can reach.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -1334,7 +1379,32 @@ pub struct Config {
     /// Held here so a test of a turn that ends on a failed request can say that a count decides how
     /// many requests it takes, as it can for a gateway through the block.
     patience: provider::Patience,
+    /// The file the setting `webSearch.keyFile` names as holding the key the `web_search` tool
+    /// sends, if the settings in force name one.
+    ///
+    /// A path and not a secret. Nothing in this crate opens the file when the configuration is
+    /// built: [`key_file::read`] does, where the tool is used. A `Debug` of the configuration
+    /// withholds the path, since the setting is a string the person wrote.
+    pub web_search_key_file: Option<web_search_key::KeyPath>,
+    /// The variables the setting `webSearch.env` names as holding the key the `web_search` tool
+    /// sends, in the order they are tried.
+    ///
+    /// Names and not values: [`web_search_key::read`] asks the process environment when a search is
+    /// made, so a variable exported in an open session is read by the next search. A name is a
+    /// string the person wrote, so nothing here says one to the planner, and a `Debug` of the
+    /// configuration says how many there are and not what they are.
+    pub web_search_env: web_search_key::Variables,
+    /// Where the `web_search` tool sends its requests in place of [`WEB_SEARCH_BASE`].
+    ///
+    /// Set only by [`Config::with_web_search_base`], which a test calls to point the tool at a server
+    /// of its own. No setting, variable or flag reaches it, so the key goes to the compiled-in host
+    /// in every run a person starts.
+    web_search_base: Option<String>,
 }
+
+/// The base of every request the `web_search` tool makes. A host fixed in source: no argument, setting
+/// or variable names another.
+pub const WEB_SEARCH_BASE: &str = "https://api.search.brave.com/res";
 
 /// The Bedrock regions refused in the layers in force, each with where it was written.
 ///
@@ -1514,7 +1584,22 @@ fn gateway_variables_under(
     baked: impl Fn(&str) -> Option<String>,
 ) -> Vec<String> {
     let lookup = lookup_in(settings, managed, exported, baked);
-    gateway_variable_names(&gateways(settings, managed, &lookup))
+    let mut names = gateway_variable_names(&gateways(settings, managed, &lookup));
+    add_web_search_variables(&mut names, settings);
+    names
+}
+
+/// Add the variables `webSearch.env` names to `names`, each once.
+///
+/// The search key's variables are withheld from a program this agent starts on the same footing as
+/// a gateway's, since each is a place a credential this agent presents itself may live. Read from
+/// the settings alone: the managed layer states no web search setting.
+pub(crate) fn add_web_search_variables(names: &mut Vec<String>, settings: &Settings) {
+    for name in settings.web_search_env() {
+        if !names.contains(name) {
+            names.push(name.clone());
+        }
+    }
 }
 
 /// Each variable name any of `providers` reads a token from, once.
@@ -1615,6 +1700,10 @@ impl Config {
             .collect();
         let mut config = Self::from_lookup_with_providers(lookup, providers)?;
         config.refused_regions = refused_regions;
+        config.web_search_key_file = settings
+            .web_search_key_file()
+            .map(web_search_key::KeyPath::new);
+        config.web_search_env = web_search_key::Variables::new(settings.web_search_env().to_vec());
         // Held only with a host to send it to, so a key stored on a machine whose build reaches no
         // Brave backend is carried by nothing.
         config.premium_key = premium_key.filter(|_| config.premium_endpoint.is_some());
@@ -1795,8 +1884,91 @@ impl Config {
             budget_was_advertised,
             listed_inputs: None,
             refused_regions: Vec::new(),
+            web_search_key_file: None,
+            web_search_env: web_search_key::Variables::default(),
+            web_search_base: None,
             patience: provider::Patience::default(),
         })
+    }
+
+    /// The same configuration with the file the web search key is read from, as the setting
+    /// `webSearch.keyFile` would name it.
+    pub fn with_web_search_key_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.web_search_key_file = Some(web_search_key::KeyPath::new(path));
+        self
+    }
+
+    /// The same configuration with the variables the web search key is read from, as the setting
+    /// `webSearch.env` would name them.
+    pub fn with_web_search_env(mut self, names: &[&str]) -> Self {
+        self.web_search_env =
+            web_search_key::Variables::new(names.iter().map(|name| (*name).to_string()).collect());
+        self
+    }
+
+    /// The same configuration with `web_search` pointed at `base`, which is how a test stands in
+    /// for the Brave Search API. Nothing a person can set calls this.
+    pub fn with_web_search_base(mut self, base: impl Into<String>) -> Self {
+        self.web_search_base = Some(base.into());
+        self
+    }
+
+    /// The base URL of a `web_search` request: [`WEB_SEARCH_BASE`] unless a test replaced it.
+    pub fn web_search_base(&self) -> &str {
+        self.web_search_base.as_deref().unwrap_or(WEB_SEARCH_BASE)
+    }
+
+    /// Whether a variable `webSearch.env` names holds text or a key file is named and is there,
+    /// which is what makes the `web_search` tool offered.
+    ///
+    /// Looks at the process environment and the file's metadata, and reads no text from the file, so
+    /// the key is not held until a search is made.
+    pub fn offers_web_search(&self) -> bool {
+        self.offers_web_search_under(|name| env::var(name).ok())
+    }
+
+    /// [`Config::offers_web_search`] over a lookup it is handed, so a test needs no variable of the
+    /// process.
+    pub fn offers_web_search_under(&self, lookup: impl Fn(&str) -> Option<String>) -> bool {
+        web_search_key::offered(
+            &self.web_search_env,
+            self.web_search_key_file.as_deref(),
+            lookup,
+        )
+    }
+
+    /// Where the web search key would come from, as a position and never a name or a text.
+    ///
+    /// For a report: `doctor` says which source a search would use and holds no byte of the key.
+    pub fn web_search_source(
+        &self,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Option<web_search_key::Source> {
+        web_search_key::source(
+            &self.web_search_env,
+            self.web_search_key_file.as_deref(),
+            lookup,
+        )
+    }
+
+    /// The key a search sends, read from the process environment and the file as of this call.
+    ///
+    /// Read at the moment of use and not held: a variable exported after the session opened is read
+    /// by the next search, and one removed since the tool was offered is reported as no usable key.
+    pub fn web_search_key(&self) -> Result<Secret, key_file::Problem> {
+        self.web_search_key_under(|name| env::var(name).ok())
+    }
+
+    /// [`Config::web_search_key`] over a lookup it is handed.
+    pub fn web_search_key_under(
+        &self,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Result<Secret, key_file::Problem> {
+        web_search_key::read(
+            &self.web_search_env,
+            self.web_search_key_file.as_deref(),
+            lookup,
+        )
     }
 
     /// The same configuration with the retry count and window its requests to Brave's endpoint are
@@ -1915,6 +2087,40 @@ impl Config {
             .filter(|provider| provider.bedrock.is_none())
             .find(|provider| provider.offers(model))
             .map(|provider| (provider, model))
+    }
+
+    /// The variant names `model` offers, in the file's order
+    /// ([BACKEND-66](../../../docs/specs/backends.md#BACKEND-66)).
+    ///
+    /// They come from the provider block [`Config::provider_for`] resolves the name to. A disabled
+    /// variant is not offered, and a model no provider block lists offers none.
+    pub fn variants_offered(&self, model: &str) -> Vec<&str> {
+        self.provider_for(model)
+            .and_then(|(provider, wire)| provider.model(wire))
+            .map(provider::Model::variant_names)
+            .unwrap_or_default()
+    }
+
+    /// What `/variant <word>` does under `model`
+    /// ([BACKEND-66](../../../docs/specs/backends.md#BACKEND-66)), for every client that offers it.
+    ///
+    /// The word is trimmed. [`VARIANT_OFF`] drops the pick whatever the model offers, an empty word
+    /// reads, and a name is picked only where `model` offers it, so a typo changes nothing.
+    pub fn choose_variant(&self, model: &str, word: &str) -> VariantChoice<'_> {
+        let word = word.trim();
+        if word == VARIANT_OFF {
+            return VariantChoice::Drop;
+        }
+        let offered = self.variants_offered(model);
+        if word.is_empty() {
+            VariantChoice::Read(offered)
+        } else if offered.is_empty() {
+            VariantChoice::NoneOffered
+        } else if offered.contains(&word) {
+            VariantChoice::Pick(word.to_string())
+        } else {
+            VariantChoice::NotOffered(offered)
+        }
     }
 
     /// The name the ChatGPT account knows `model` by, where `model` is one of its models
@@ -2154,10 +2360,20 @@ impl Config {
     /// backend's roster and nothing else reads it, and CRED-2 gives a credential nothing reads no
     /// tier.
     ///
+    /// The search key is listed where a variable `webSearch.env` names holds text or a key file is
+    /// named and is there, whatever backend this configuration reaches, since the tool that reads
+    /// it calls a service of its own.
+    ///
     /// [`Held::ChatgptAccount`] and [`Held::XaiAccount`] are not in it, for the opposite reason: a
     /// sign-in is held on every machine that made one, whatever backend this configuration reaches,
     /// so a caller that reads the file adds it.
     pub fn held(&self) -> Vec<Held<'_>> {
+        self.held_under(|name| env::var(name).ok())
+    }
+
+    /// [`Config::held`] over a lookup it is handed for the variables `webSearch.env` names, so a
+    /// test needs no variable of the process.
+    pub fn held_under(&self, lookup: impl Fn(&str) -> Option<String>) -> Vec<Held<'_>> {
         let mut held = Vec::new();
         if self.serves_aichat() {
             held.push(Held::SigningKey);
@@ -2176,6 +2392,9 @@ impl Config {
         );
         if self.premium_key.is_some() && self.serves_aichat() {
             held.push(Held::PremiumKey);
+        }
+        if self.offers_web_search_under(lookup) {
+            held.push(Held::SearchKey);
         }
         held
     }
@@ -2258,19 +2477,38 @@ impl Config {
     /// Asked of every route to a model rather than at the moment a request goes out, for the reason
     /// [`Config::model_named`] is shared: a name means the same model wherever it was written down,
     /// and an answer that differed per route would be an answer per route to get wrong.
-    pub fn model_refused(&self, name: &str) -> Option<(&std::path::Path, managed::ModelRefusal)> {
+    pub fn model_refused(
+        &self,
+        name: &str,
+    ) -> Option<(Option<&std::path::Path>, managed::ModelRefusal)> {
         let name = self.model_named(name);
         // A gateway model has two spellings, the qualified one and the one the gateway is sent, and
         // an entry may name either whichever the model was asked for as. So does an account model,
         // `chatgpt/gpt-5` being sent to the account as `gpt-5`.
         let Some((provider, wire)) = self.provider_for(&name) else {
             return match self.chatgpt_model(&name).or_else(|| self.xai_model(&name)) {
-                Some(wire) => self.models.refuses_any(&[&name, wire]),
-                None => self.models.refuses(&name),
+                Some(wire) => self.managed_refusal_of(&[&name, wire]),
+                None => self.managed_refusal_of(&[&name]),
             };
         };
         let qualified = format!("{}/{wire}", provider.id);
-        self.models.refuses_any(&[&name, wire, &qualified])
+        // The machine-level layer answers first, since it names a file somebody can act on.
+        self.managed_refusal_of(&[&name, wire, &qualified])
+            .or_else(|| {
+                provider
+                    .retrieves(wire)
+                    .then_some((None, managed::ModelRefusal::Retrieves))
+            })
+    }
+
+    /// [`Models::refuses_any`] for `spellings`, with the file that refused as a path that is there.
+    fn managed_refusal_of(
+        &self,
+        spellings: &[&str],
+    ) -> Option<(Option<&std::path::Path>, managed::ModelRefusal)> {
+        self.models
+            .refuses_any(spellings)
+            .map(|(file, why)| (Some(file), why))
     }
 
     /// What to write down for a chosen model: the tier word where a tier variable named it, so the
@@ -2889,6 +3127,29 @@ mod tests {
         );
     }
 
+    /// CRED-25: a block that names only a key file holds a gateway token this configuration is
+    /// accountable for, as one that names a variable or an `apiKey` does. The regression it rejects
+    /// is a record that leaves out a block whose only source is a file, which `doctor` would then
+    /// not give an account of what would end its token.
+    #[test]
+    fn a_gateway_key_file_is_a_credential_this_configuration_holds() {
+        let settings = Settings::parse(
+            r#"{"provider": {"in-a-file": {
+                "options": {"baseURL": "https://in-a-file.invalid/v1", "keyFile": "/a/key.txt"}
+            }}}"#,
+        );
+        let config =
+            Config::from_lookup_with_providers(complete_env, settings.providers().to_vec())
+                .expect("configured");
+        assert!(
+            config.held().contains(&Held::GatewayToken {
+                host: "in-a-file.invalid"
+            }),
+            "{:?}",
+            config.held()
+        );
+    }
+
     /// CRED-3: a credential's walk holds one drop per gate it failed, asked in order from the top,
     /// and stops where its tier says it stopped. A walk that skipped a gate, repeated one or ran
     /// past the tier would be a record of a different credential than the one standing there, and
@@ -3039,6 +3300,7 @@ mod tests {
         assert_eq!(Held::AwsAccessKey.tier(), Tier::Held);
         assert_eq!(Held::AwsSession.tier(), Tier::Held);
         assert_eq!(Held::PremiumKey.tier(), Tier::Held);
+        assert_eq!(Held::SearchKey.tier(), Tier::Held);
 
         // CRED-4: the tier is a claim about the arrangement, and a gateway's address is not part of
         // one. Two hosts answered differently would be a tier that moved without the arrangement
@@ -3181,6 +3443,169 @@ mod tests {
             [Held::AwsAccessKey, Held::AwsSession],
             "a build that cannot reach the Brave backend is accounted for a key nothing there presents"
         );
+    }
+
+    /// A scratch directory holding a file with the placeholder search key, for the tests of the
+    /// web search key file. The key is a placeholder and no real key is read.
+    fn a_search_key_file(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let directory = std::env::temp_dir().join(format!(
+            "bravebot-config-search-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a directory");
+        let file = directory.join("key.txt");
+        std::fs::write(&file, "placeholder-search-key\n").expect("a file");
+        (directory, file)
+    }
+
+    /// The web search tool is offered only where the setting names a file that is there. An
+    /// implementation that answered from the setting alone would offer the tool, and list a
+    /// credential, on a machine where the file was deleted, and one that answered true by default
+    /// would offer it on every machine.
+    #[test]
+    fn web_search_is_offered_only_for_a_key_file_that_exists() {
+        let none = Config::from_lookup(complete_env).expect("configured");
+        assert_eq!(none.web_search_key_file, None);
+        assert!(!none.offers_web_search());
+
+        let (directory, file) = a_search_key_file("offered");
+        let missing = directory.join("absent.txt");
+        let absent = Config::from_lookup(complete_env)
+            .expect("configured")
+            .with_web_search_key_file(&missing);
+        assert!(!absent.offers_web_search());
+
+        let not_a_file = Config::from_lookup(complete_env)
+            .expect("configured")
+            .with_web_search_key_file(&directory);
+        assert!(!not_a_file.offers_web_search());
+
+        let present = Config::from_lookup(complete_env)
+            .expect("configured")
+            .with_web_search_key_file(&file);
+        assert!(present.offers_web_search());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// The setting reaches the configuration as a path and nothing is read from the file. An
+    /// implementation that dropped the setting in `from_sources` would offer no tool whatever the
+    /// person wrote.
+    #[test]
+    fn the_web_search_setting_reaches_the_configuration() {
+        let settings =
+            Settings::parse(r#"{"webSearch": {"keyFile": "/somewhere/search-key.txt"}}"#);
+        let config = Config::from_sources(
+            &settings,
+            &Managed::default(),
+            &keys::Keys::default(),
+            None,
+            |_| None,
+            complete_env,
+        )
+        .expect("configured");
+        assert_eq!(
+            config.web_search_key_file.as_deref(),
+            Some(std::path::Path::new("/somewhere/search-key.txt"))
+        );
+    }
+
+    /// The search key is held by the walk's record when a variable alone offers it, and not when the
+    /// variables named hold nothing. The fault this rejects is listing the key by the file alone,
+    /// which would leave a key read from a variable with no recorded tier and no account of what
+    /// would end it.
+    #[test]
+    fn a_search_key_from_a_variable_is_held_without_a_file() {
+        let named = Config::from_lookup(complete_env)
+            .expect("configured")
+            .with_web_search_env(&["SEARCH_KEY_UNSET", "SEARCH_KEY_SET"]);
+        let nothing = |_: &str| None;
+        assert_eq!(named.held_under(nothing), [Held::SigningKey]);
+        let blank = |name: &str| (name == "SEARCH_KEY_SET").then(|| "  ".to_string());
+        assert_eq!(named.held_under(blank), [Held::SigningKey]);
+        let set = |name: &str| (name == "SEARCH_KEY_SET").then(|| "placeholder-key".to_string());
+        assert_eq!(named.held_under(set), [Held::SigningKey, Held::SearchKey]);
+    }
+
+    /// The setting reaches the configuration as names and nothing is read from the environment
+    /// there. An implementation that dropped the list in `from_sources` would offer no tool whatever
+    /// the person wrote, and one that read the values there would hold a key in a configuration that
+    /// is cloned and printed.
+    #[test]
+    fn the_web_search_variables_reach_the_configuration_as_names() {
+        let settings =
+            Settings::parse(r#"{"webSearch": {"env": ["FIRST_SEARCH_KEY", "SECOND_SEARCH_KEY"]}}"#);
+        let config = Config::from_sources(
+            &settings,
+            &Managed::default(),
+            &keys::Keys::default(),
+            None,
+            |_| None,
+            complete_env,
+        )
+        .expect("configured");
+        assert_eq!(
+            &*config.web_search_env,
+            ["FIRST_SEARCH_KEY", "SECOND_SEARCH_KEY"]
+        );
+    }
+
+    /// The variables `webSearch.env` names are among the variables withheld from the programs this
+    /// agent starts, through the path a provider's `env` names take, and a name listed twice, or one
+    /// a provider block names as well, is listed once. The fault this rejects is reading the setting
+    /// for the search alone, which leaves the key in the environment of every program a turn starts.
+    #[test]
+    fn the_variables_the_search_key_is_read_from_are_withheld_like_a_gateways() {
+        let settings = Settings::parse(
+            r#"{"webSearch": {"env": ["SEARCH_KEY_ONE", "SHARED_NAME", "SEARCH_KEY_ONE"]},
+                "provider": {"gw": {"options": {"baseURL": "https://gw.example/v1"},
+                                    "env": ["SHARED_NAME", "GATEWAY_ONLY"]}}}"#,
+        );
+        let variables =
+            gateway_variables_under(&settings, &Managed::default(), |_| None, complete_env);
+        for expected in ["SEARCH_KEY_ONE", "SHARED_NAME", "GATEWAY_ONLY"] {
+            assert_eq!(
+                variables.iter().filter(|name| *name == expected).count(),
+                1,
+                "{expected}: {variables:?}"
+            );
+        }
+        let none = gateway_variables_under(
+            &Settings::default(),
+            &Managed::default(),
+            |_| None,
+            complete_env,
+        );
+        assert!(!none.iter().any(|name| name == "SEARCH_KEY_ONE"));
+    }
+
+    /// CRED-2: the search key is in the record exactly when the tool is offered, at the tier its
+    /// walk stopped at. An implementation that pushed it unconditionally would account for a key
+    /// on every machine that has none, and one that left it out would leave a bearer key read from
+    /// a file with no recorded tier.
+    #[test]
+    fn a_search_key_is_held_exactly_when_web_search_is_offered() {
+        let without = Config::from_lookup(complete_env).expect("configured");
+        assert_eq!(without.held(), [Held::SigningKey]);
+
+        let (directory, file) = a_search_key_file("held");
+        let named_but_absent = Config::from_lookup(complete_env)
+            .expect("configured")
+            .with_web_search_key_file(directory.join("absent.txt"));
+        assert_eq!(named_but_absent.held(), [Held::SigningKey]);
+
+        let offered = Config::from_lookup(complete_env)
+            .expect("configured")
+            .with_web_search_key_file(&file);
+        assert_eq!(offered.held(), [Held::SigningKey, Held::SearchKey]);
+        assert_eq!(Held::SearchKey.tier(), Tier::Held);
+        assert_eq!(Held::SearchKey.walk().len(), 3);
+        assert!(!Held::SearchKey.outlives_revocation());
+        assert_eq!(Held::SearchKey.noticed_within(), None);
+        assert_eq!(Held::SearchKey.binding(), None);
+        assert!(Held::all("gateway.invalid").contains(&Held::SearchKey));
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     /// CRED-10: a credential the record stands at Held briefly is owed a figure for how quickly a
@@ -3406,6 +3831,72 @@ mod tests {
         })
         .expect("configured");
         assert_eq!(config.default_model, DEFAULT_MODEL);
+    }
+
+    /// BACKEND-66: the variants a model offers are its provider block's, in the file's order and
+    /// without a disabled one. A model with none, and a model no block lists, offer nothing.
+    #[test]
+    fn variants_offered_lists_the_models_names_and_none_for_an_unknown_model() {
+        let settings = Settings::parse(
+            r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://gateway.example.invalid/v1"},
+                "models": {"m": {"variants": {
+                    "high": {"reasoningEffort": "high"},
+                    "terse": {"textVerbosity": "low"},
+                    "off": {"disabled": true}
+                }}, "bare": {}}
+            }}}"#,
+        );
+        let config =
+            Config::from_lookup_with_providers(complete_env, settings.providers().to_vec())
+                .expect("configured");
+
+        assert_eq!(config.variants_offered("gw/m"), ["high", "terse"]);
+        assert_eq!(config.variants_offered("m"), ["high", "terse"]);
+        assert!(config.variants_offered("gw/bare").is_empty());
+        assert!(config.variants_offered("nowhere/m").is_empty());
+        assert!(config.variants_offered("unknown").is_empty());
+    }
+
+    /// BACKEND-66: `off` drops under any model, an empty word reads, an offered name is picked,
+    /// and any other name is refused with what is offered or with the word that nothing is.
+    #[test]
+    fn choose_variant_drops_reads_picks_and_refuses_on_the_same_rules_for_every_client() {
+        let settings = Settings::parse(
+            r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://gateway.example.invalid/v1"},
+                "models": {"m": {"variants": {
+                    "high": {"reasoningEffort": "high"},
+                    "terse": {"textVerbosity": "low"}
+                }}, "bare": {}}
+            }}}"#,
+        );
+        let config =
+            Config::from_lookup_with_providers(complete_env, settings.providers().to_vec())
+                .expect("configured");
+
+        assert_eq!(config.choose_variant("gw/m", " off "), VariantChoice::Drop);
+        assert_eq!(config.choose_variant("gw/bare", "off"), VariantChoice::Drop);
+        assert_eq!(
+            config.choose_variant("gw/m", "  "),
+            VariantChoice::Read(vec!["high", "terse"])
+        );
+        assert_eq!(
+            config.choose_variant("gw/bare", ""),
+            VariantChoice::Read(vec![])
+        );
+        assert_eq!(
+            config.choose_variant("gw/m", " terse "),
+            VariantChoice::Pick("terse".to_string())
+        );
+        assert_eq!(
+            config.choose_variant("gw/m", "typo"),
+            VariantChoice::NotOffered(vec!["high", "terse"])
+        );
+        assert_eq!(
+            config.choose_variant("gw/bare", "terse"),
+            VariantChoice::NoneOffered
+        );
     }
 
     /// A gateway is additive on the same terms a Bedrock block is. Naming one adds to what a person
@@ -4711,7 +5202,9 @@ mod tests {
             .map(|provider| {
                 let token = match provider.credential(|_| None) {
                     provider::Credential::Token(token) => Some(token.expose().to_string()),
-                    provider::Credential::Absent | provider::Credential::NotNeeded => None,
+                    provider::Credential::Absent
+                    | provider::Credential::KeyFileUnusable(_)
+                    | provider::Credential::NotNeeded => None,
                 };
                 (provider.id.clone(), token)
             })
@@ -4787,7 +5280,9 @@ mod tests {
             provider::Credential::Token(token) => {
                 assert_eq!(token.expose(), "placeholder-stored-key");
             }
-            provider::Credential::Absent | provider::Credential::NotNeeded => {
+            provider::Credential::Absent
+            | provider::Credential::KeyFileUnusable(_)
+            | provider::Credential::NotNeeded => {
                 panic!("the stored key was not the credential")
             }
         }
@@ -4920,9 +5415,51 @@ mod tests {
                 assert_eq!(token.expose(), "placeholder-stored-key");
             }
             provider::Credential::Absent => panic!("the stored key was read as absent"),
+            provider::Credential::KeyFileUnusable(_) => {
+                panic!("the stored key was read as a key file that gives none")
+            }
             provider::Credential::NotNeeded => panic!("the stored key was read as not needed"),
         }
         assert_eq!(source, Some(provider::Source::Stored));
+    }
+
+    /// LABEL-8, BACKEND-19: a model that searches the web before it replies is refused over chat
+    /// completions with no file to name, and the machine-level layer's own refusal of it still
+    /// names its file. The same id over the Responses protocol is not refused, since search there
+    /// is a tool a request has to ask for. The regressions it rejects are a refusal that needs a
+    /// managed file, one that outranks the file's own, and one that applies to the Responses
+    /// route as well.
+    #[test]
+    fn a_model_that_searches_the_web_is_refused_over_chat_completions_only() {
+        let chat = Settings::parse(
+            r#"{"provider": {"openai": {"npm": "@ai-sdk/openai-compatible",
+                "options": {"apiKey": "test-token"},
+                "models": {"gpt-5-search-api": {}, "gpt-5.5": {}}}}}"#,
+        );
+        let config = resolved(&chat, |_| None, complete_env).expect("configured");
+        assert_eq!(
+            config.model_refused("openai/gpt-5-search-api"),
+            Some((None, ModelRefusal::Retrieves))
+        );
+        assert_eq!(config.model_refused("openai/gpt-5.5"), None);
+
+        let denying = managed::scratch(
+            "resolve-retrieving-denied",
+            r#"{"models": {"deny": ["gpt-5-search-api"]}}"#,
+        );
+        let config = resolved_under(&denying, &chat, |_| None, complete_env).expect("configured");
+        assert_eq!(
+            config.model_refused("openai/gpt-5-search-api"),
+            Some((denying.path(), ModelRefusal::Denied)),
+            "the file a person can act on is named first"
+        );
+
+        let responses = Settings::parse(
+            r#"{"provider": {"openai": {"options": {"apiKey": "test-token"},
+                "models": {"gpt-5-search-api": {}}}}}"#,
+        );
+        let config = resolved(&responses, |_| None, complete_env).expect("configured");
+        assert_eq!(config.model_refused("openai/gpt-5-search-api"), None);
     }
 
     /// The only way to say there are to be no gateways at all, which is half of what pinning a
@@ -5108,7 +5645,7 @@ mod tests {
         assert_eq!(config.model_refused("sonnet-arn"), None);
         // And the file that refused is named, since nobody at the machine can edit it.
         assert_eq!(
-            config.model_refused("opus").map(|(path, _)| path),
+            config.model_refused("opus").and_then(|(path, _)| path),
             managed.path()
         );
 
@@ -6661,12 +7198,52 @@ mod tests {
 
     /// Debug-printing the whole config is the obvious debugging reflex, so it must
     /// not leak the key.
+    ///
+    /// The variable names `webSearch.env` lists and the path `webSearch.keyFile` names are strings
+    /// the person wrote, and one pasted into the wrong field is the key itself, so neither `Config`
+    /// nor `Settings` prints them. The regressions it rejects are a field held as a plain `Vec` or
+    /// `PathBuf`, whose derived `Debug` prints each name and the path.
     #[test]
     fn debugging_the_config_does_not_leak_the_key() {
         let config = Config::from_lookup(complete_env).unwrap();
         let shown = format!("{config:?}");
         assert!(!shown.contains("test-signing-key"), "leaked: {shown}");
         assert!(shown.contains("redacted"));
+
+        const FIRST: &str = "PASTED_sk_live_0123456789";
+        const SECOND: &str = "SECOND_PASTED_NAME";
+        const PATH: &str = "/home/person/pasted-marker-4c2d/key.txt";
+        let named = config.with_web_search_env(&[FIRST, SECOND]);
+        let named = named.with_web_search_key_file(PATH);
+        let shown = format!("{named:?}");
+        for withheld in [FIRST, SECOND, "sk_live", PATH, "pasted-marker-4c2d"] {
+            assert!(
+                !shown.contains(withheld),
+                "{withheld} is in the configuration's Debug: {shown}"
+            );
+        }
+        assert!(
+            shown.contains("2 withheld"),
+            "the count is not said: {shown}"
+        );
+        assert_eq!(&*named.web_search_env, [FIRST, SECOND]);
+
+        let settings = Settings::parse(&format!(
+            r#"{{"webSearch": {{"env": ["{FIRST}", "{SECOND}"], "keyFile": "{PATH}"}}}}"#
+        ));
+        assert_eq!(settings.web_search_env(), [FIRST, SECOND]);
+        assert_eq!(settings.web_search_key_file(), Some(PATH));
+        let shown = format!("{settings:?}");
+        for withheld in [FIRST, SECOND, "sk_live", PATH, "pasted-marker-4c2d"] {
+            assert!(
+                !shown.contains(withheld),
+                "{withheld} is in the settings' Debug: {shown}"
+            );
+        }
+        assert!(
+            shown.contains("2 withheld"),
+            "the count is not said: {shown}"
+        );
     }
 
     /// The lifetime the settings chose reaches every place a request is built from: the gateway

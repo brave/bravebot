@@ -3083,6 +3083,176 @@ fn a_vertex_key_is_in_no_error_and_no_recorded_event_on_either_path_for_any_refu
     }
 }
 
+/// Points the process-wide diagnostic log at a directory and away again when it is dropped, a
+/// panic among the assertions included. Held with [`DIAG_LOG`] locked.
+struct DiagnosticLogAt;
+
+impl DiagnosticLogAt {
+    fn begin(dir: &std::path::Path) -> Self {
+        bravebot_diag::configure(bravebot_diag::Level::Debug, Some(dir.to_path_buf()));
+        Self
+    }
+}
+
+impl Drop for DiagnosticLogAt {
+    fn drop(&mut self) {
+        bravebot_diag::configure(bravebot_diag::Level::Error, None);
+    }
+}
+
+/// Everything the diagnostic log wrote under `dir`, and nothing when it wrote no file.
+fn diagnostic_log_under(dir: &std::path::Path) -> String {
+    std::fs::read_dir(dir.join("logs"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+        .collect()
+}
+
+/// A Vertex key is a credential, so it is in no error, no recorded event and no line of the
+/// diagnostic log of a request the service refused, on either path and whatever the status. The
+/// service here repeats the key in the body of its refusal, which is what a service that echoes a
+/// request does, so an implementation that quoted the body into an error, an event or a log line
+/// would carry it. The refusals the test above makes have no body to quote.
+#[test]
+fn a_vertex_key_the_service_echoes_in_its_refusal_is_in_no_error_event_or_log_line() {
+    const KEY: &str = "placeholder-key-e41b7d";
+    let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let diagnostic_log = DiagnosticLogAt::begin(dir.path());
+
+    let mut said: Vec<(String, String)> = Vec::new();
+    for status in [401, 403, 404] {
+        for streaming in [false, true] {
+            let (endpoint, received) = serve_attempts(vec![Attempt::Refused(
+                status,
+                format!(r#"{{"error":{{"message":"API key {KEY} not valid"}}}}"#),
+            )]);
+            let config = config_for(&endpoint);
+            let provider = vertex_at(&endpoint);
+            let egress = Egress::new();
+            let mut sink = RecordingSink::new();
+            let error = {
+                let mut policy = Policy::begin(
+                    routing(),
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::WebFetch]),
+                    &mut sink,
+                )
+                .expect("policy");
+                let mut client = AichatClient::new(&config, &egress).for_gateway(
+                    &provider,
+                    "google/gemini-2.5-flash",
+                    Some(bravebot_config::Secret::new(KEY)),
+                );
+                let request = ChatRequest::new(
+                    "google-vertex/google/gemini-2.5-flash",
+                    vec![Message::user("hello")],
+                );
+                if streaming {
+                    client.complete_streaming(&mut policy, &request, |_| {})
+                } else {
+                    client.complete(&mut policy, &request)
+                }
+                .expect_err("the service refused")
+            };
+
+            let sent = received.recv().expect("the request arrived");
+            assert_eq!(sent.header("x-goog-api-key"), Some(KEY));
+            assert_eq!(sent.header("authorization"), None);
+            let what = format!("status {status}, streaming {streaming}");
+            said.push((what.clone(), error.to_string()));
+            said.push((what.clone(), format!("{error:?}")));
+            said.push((what, format!("{:?}", sink.events())));
+        }
+    }
+
+    let log = diagnostic_log_under(dir.path());
+    drop(diagnostic_log);
+    assert!(
+        !log.is_empty(),
+        "nothing was logged, so the log was not read"
+    );
+    said.push(("the diagnostic log".into(), log));
+    for (what, text) in &said {
+        assert!(!text.contains(KEY), "the key is in {what}: {text}");
+    }
+}
+
+/// A Vertex key is in no event, no line of the diagnostic log and nothing a completed reply holds
+/// of a request the service answered, on either path. The refusals above are the only requests the
+/// other tests read the record of, so an implementation that recorded the prepared request's
+/// headers when it was sent, and not only when it failed, would pass them.
+#[test]
+fn a_vertex_key_is_in_no_event_reply_or_log_line_of_an_answered_request() {
+    const KEY: &str = "placeholder-key-0b96f3";
+    let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let diagnostic_log = DiagnosticLogAt::begin(dir.path());
+
+    let mut said: Vec<(String, String)> = Vec::new();
+    for streaming in [false, true] {
+        let reply = if streaming {
+            Attempt::Frames(vec![
+                frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+                frame("[DONE]"),
+            ])
+        } else {
+            Attempt::Json(REPLY.into())
+        };
+        let (endpoint, received) = serve_attempts(vec![reply]);
+        let config = config_for(&endpoint);
+        let provider = vertex_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let (completion, request) = {
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .expect("policy");
+            let mut client = AichatClient::new(&config, &egress).for_gateway(
+                &provider,
+                "google/gemini-2.5-flash",
+                Some(bravebot_config::Secret::new(KEY)),
+            );
+            let request = ChatRequest::new(
+                "google-vertex/google/gemini-2.5-flash",
+                vec![Message::user("hello")],
+            );
+            let completion = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                client.complete(&mut policy, &request)
+            }
+            .expect("the reply was read");
+            (completion, request)
+        };
+
+        let sent = received.recv().expect("the request arrived");
+        assert_eq!(sent.header("x-goog-api-key"), Some(KEY));
+        assert_eq!(sent.header("authorization"), None);
+        let what = format!("streaming {streaming}");
+        said.push((format!("the reply, {what}"), format!("{completion:?}")));
+        said.push((format!("the request, {what}"), format!("{request:?}")));
+        said.push((
+            format!("the events, {what}"),
+            format!("{:?}", sink.events()),
+        ));
+    }
+
+    // An answered request may write no line, so an empty log is read as it is.
+    let log = diagnostic_log_under(dir.path());
+    drop(diagnostic_log);
+    said.push(("the diagnostic log".into(), log));
+    for (what, text) in &said {
+        assert!(!text.contains(KEY), "the key is in {what}: {text}");
+    }
+}
+
 /// The bearer key of an `openai` entry is a credential, so it is in no text a refusal produces, in
 /// no event the run recorded, in no line of the diagnostic log and in nothing a completed reply
 /// holds, on the roster path and on both chat paths. The service here repeats the key in the body
@@ -5048,6 +5218,58 @@ fn a_models_options_reach_the_anthropic_body_and_cannot_overwrite_what_the_turn_
     assert_eq!(body["max_tokens"], 32_000);
 }
 
+/// BACKEND-15: the keys naming a request's tools are the request's. A model's `options` and the
+/// variant a request names cannot add `tools`, `tool_choice` or `mcp_servers` to a request that
+/// offers none, which would let the service run a tool beside text nobody vouched for, and cannot
+/// replace the tools a turn did offer. A key that is not one of those still reaches the body.
+#[test]
+fn options_and_a_variant_cannot_supply_the_anthropic_tool_keys() {
+    let provider_for = |endpoint: &str| {
+        anthropic_with(
+            endpoint,
+            r#", "models": {"claude-test": {
+                "options": {
+                    "tools": [{"type": "web_fetch_20250910", "name": "web_fetch"}],
+                    "tool_choice": {"type": "any"},
+                    "top_k": 5
+                },
+                "variants": {"deep": {
+                    "mcp_servers": [{"type": "url", "url": "https://mcp.example.invalid", "name": "m"}]
+                }}
+            }}"#,
+        )
+    };
+    let sent = |request: ChatRequest| {
+        let (endpoint, received) = serve(MESSAGES_REPLY);
+        let config = config_for(&endpoint);
+        let provider = provider_for(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+            .complete(&mut policy, &request)
+            .expect("the reply was read");
+        json_of(&received.recv().expect("the request arrived"))
+    };
+    let request = || ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")]);
+
+    let tool_less = sent(request().with_variant(Some("deep".to_string())));
+    for key in ["tools", "tool_choice", "mcp_servers"] {
+        assert!(tool_less.get(key).is_none(), "{key} reached {tool_less}");
+    }
+    assert_eq!(tool_less["top_k"], 5);
+
+    let offered = sent(
+        request()
+            .with_tools(reading_tool())
+            .with_variant(Some("deep".to_string())),
+    );
+    assert_eq!(offered["tools"].as_array().map(Vec::len), Some(1));
+    assert_eq!(offered["tools"][0]["name"], "read_file");
+    assert!(offered.get("tool_choice").is_none(), "{offered}");
+    assert!(offered.get("mcp_servers").is_none(), "{offered}");
+}
+
 /// BACKEND-66: a chosen variant reaches the Anthropic body as `options` do, wins over an option of
 /// the same name, and cannot overwrite what the turn built.
 #[test]
@@ -6829,6 +7051,62 @@ fn a_models_options_reach_the_google_express_body_and_cannot_overwrite_what_the_
     let body = json_of(&received.recv().expect("the request arrived"));
     assert_eq!(body["safetySettings"][0]["threshold"], "BLOCK_NONE");
     assert_eq!(body["contents"][0]["parts"][0]["text"], "hello");
+}
+
+/// BACKEND-15: the keys naming a request's tools are the request's. A model's `options` and the
+/// variant a request names cannot add `tools`, `toolConfig` or `tool_config` to a request that
+/// offers none, which would let the service run a tool of its own beside text nobody vouched for,
+/// and cannot replace the tools a turn did offer. A key that is not one of those still reaches the
+/// body.
+#[test]
+fn options_and_a_variant_cannot_supply_the_google_express_tool_keys() {
+    let sent = |request: ChatRequest| {
+        let (endpoint, received) = serve(GENERATE_CONTENT_REPLY);
+        let text = format!(
+            r#"{{"provider": {{"google-vertex": {{"npm": "@ai-sdk/google-vertex", "options": {{"baseURL": "{endpoint}/v1"}},
+                "models": {{"gemini-options": {{
+                    "options": {{
+                        "tools": [{{"googleSearch": {{}}}}],
+                        "toolConfig": {{"functionCallingConfig": {{"mode": "ANY"}}}},
+                        "safetySettings": [{{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"}}]
+                    }},
+                    "variants": {{"deep": {{
+                        "tool_config": {{"functionCallingConfig": {{"mode": "ANY"}}}}
+                    }}}}
+                }}}}}}}}}}"#
+        );
+        let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+            panic!("not an object");
+        };
+        let provider = bravebot_config::provider::Provider::all(&root)
+            .pop()
+            .expect("one provider");
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        express_client(&egress, &provider, "gemini-options")
+            .complete(&mut policy, &request)
+            .expect("the reply was read");
+        json_of(&received.recv().expect("the request arrived"))
+    };
+    let request = || ChatRequest::new("gemini-options", vec![Message::user("hello")]);
+
+    let tool_less = sent(request().with_variant(Some("deep".to_string())));
+    for key in ["tools", "toolConfig", "tool_config"] {
+        assert!(tool_less.get(key).is_none(), "{key} reached {tool_less}");
+    }
+    assert_eq!(tool_less["safetySettings"][0]["threshold"], "BLOCK_NONE");
+
+    let offered = sent(
+        request()
+            .with_tools(reading_tool())
+            .with_variant(Some("deep".to_string())),
+    );
+    let tools = offered["tools"].to_string();
+    assert!(tools.contains("read_file"), "{offered}");
+    assert!(!tools.contains("googleSearch"), "{offered}");
+    assert!(offered.get("toolConfig").is_none(), "{offered}");
+    assert!(offered.get("tool_config").is_none(), "{offered}");
 }
 
 /// A stop that lands before a request is built sends nothing: spending a key on a reply nobody
@@ -10406,6 +10684,49 @@ fn an_ollama_request_asks_the_server_for_the_window_the_session_budgets_for() {
     assert_eq!(completion.content.label(), Label::untrusted_public());
     let proof = policy.authorise_display_release("test reads the reply");
     assert_eq!(revealed(&proof, completion.content), "hello from ollama");
+}
+
+/// BACKEND-15: the keys naming a request's tools are the request's. A model's `options` and the
+/// variant a request names cannot add `tools` or `tool_choice` to a request that offers none, and
+/// cannot replace the tools a turn did offer. A key that is not one of those still reaches the body.
+#[test]
+fn options_and_a_variant_cannot_supply_the_ollama_tool_keys() {
+    let sent = |request: ChatRequest| {
+        let (endpoint, received) = serve(OLLAMA_REPLY);
+        let provider = ollama_at(
+            &endpoint,
+            r#", "models": {"qwen3:8b": {
+                "options": {
+                    "tools": [{"type": "function", "function": {"name": "web_search"}}],
+                    "keep_alive": "30m"
+                },
+                "variants": {"deep": {"tool_choice": "required"}}
+            }}"#,
+        );
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        ollama_client(&egress, &provider)
+            .complete(&mut policy, &request)
+            .expect("the reply was read");
+        json_of(&received.recv().expect("the request arrived"))
+    };
+    let request = || ChatRequest::new("ollama/qwen3:8b", vec![Message::user("hello")]);
+
+    let tool_less = sent(request().with_variant(Some("deep".to_string())));
+    for key in ["tools", "tool_choice"] {
+        assert!(tool_less.get(key).is_none(), "{key} reached {tool_less}");
+    }
+    assert_eq!(tool_less["keep_alive"], "30m");
+
+    let offered = sent(
+        request()
+            .with_tools(reading_tool())
+            .with_variant(Some("deep".to_string())),
+    );
+    assert_eq!(offered["tools"].as_array().map(Vec::len), Some(1));
+    assert_eq!(offered["tools"][0]["function"]["name"], "read_file");
+    assert!(offered.get("tool_choice").is_none(), "{offered}");
 }
 
 /// A setting a model's block adds to `options` joins the window rather than replacing it, and a

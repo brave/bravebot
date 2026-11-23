@@ -74,6 +74,40 @@ pub struct Update {
     pub rows: Vec<Row>,
     /// How many rows, from the first, the view no longer keeps. A client leaves those out too.
     pub omitted: u64,
+    /// The name the person gave the host's client that sent the last send, answer, trust answer or
+    /// cancel that took effect. Null when the last change was a refusal made because a client left, and
+    /// before any client has acted.
+    #[serde(default)]
+    pub actor: Option<String>,
+}
+
+/// Who a change to the view is credited to. The name is one the person gave a host client on its
+/// command line, never anything a session wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Acting<'a> {
+    /// The change is not an action of any client, such as a refusal made because the clients able
+    /// to answer have left, or no client is named because the bridge has none.
+    Nobody,
+    /// The change is the action of this client.
+    Client(&'a str),
+    /// The change finishes an earlier action, so the name that action set is kept.
+    Same,
+}
+
+impl<'a> From<Option<&'a str>> for Acting<'a> {
+    fn from(actor: Option<&'a str>) -> Self {
+        actor.map_or(Self::Nobody, Self::Client)
+    }
+}
+
+impl Acting<'_> {
+    fn apply(self, actor: &mut Option<String>) {
+        match self {
+            Self::Nobody => *actor = None,
+            Self::Client(name) => *actor = Some(name.to_string()),
+            Self::Same => {}
+        }
+    }
 }
 
 /// The current control and display state, and the last [`RETAINED_ROWS`] rows in the order each
@@ -96,6 +130,8 @@ pub(crate) struct View {
     /// The id of the last row no longer kept. Rows are numbered from 1 and dropped oldest first,
     /// so this is also how many have been dropped.
     dropped_through: u64,
+    /// The client that acted last, as [`Update::actor`] says.
+    actor: Option<String>,
 }
 
 impl View {
@@ -115,6 +151,7 @@ impl View {
             retained: BTreeMap::new(),
             retained_bytes: 0,
             dropped_through: 0,
+            actor: None,
         }
     }
 
@@ -136,6 +173,7 @@ impl View {
             pending: self.pending.clone(),
             rows,
             omitted: self.dropped_through,
+            actor: self.actor.clone(),
         }
     }
 
@@ -201,7 +239,8 @@ impl View {
         }
     }
 
-    pub fn started(&mut self, turn: u64, target: u64, prompt: Value) -> Update {
+    pub fn started(&mut self, turn: u64, target: u64, prompt: Value, actor: Acting) -> Update {
+        actor.apply(&mut self.actor);
         self.turn = turn;
         self.target = target;
         self.status = Status::Running;
@@ -210,10 +249,11 @@ impl View {
         self.changed(vec![row])
     }
 
-    pub fn trusted(&mut self) -> Option<Update> {
+    pub fn trusted(&mut self, actor: Acting) -> Option<Update> {
         if self.status != Status::AwaitingTrust {
             return None;
         }
+        actor.apply(&mut self.actor);
         self.status = Status::Idle;
         Some(self.changed(Vec::new()))
     }
@@ -229,13 +269,25 @@ impl View {
             .collect()
     }
 
-    pub fn answered(&mut self, request: u64) -> Option<Update> {
+    pub fn answered(&mut self, request: u64, actor: Acting) -> Option<Update> {
         if self.pending.as_ref().is_none_or(|p| p.request != request) {
             return None;
         }
+        actor.apply(&mut self.actor);
         let rows = self.resolve();
         self.status = Status::Running;
         Some(self.changed(rows))
+    }
+
+    /// A cancel of the turn on screen, credited only while the turn is running or waiting, so a
+    /// cancel of one that has ended names nobody. No update is made for it: the update that ends
+    /// the turn carries the name. Whether it was credited is returned.
+    pub fn cancelled_by(&mut self, actor: Acting) -> bool {
+        let live = matches!(self.status, Status::Running | Status::Waiting);
+        if live {
+            actor.apply(&mut self.actor);
+        }
+        live
     }
 
     pub fn detach(&mut self) -> Update {
@@ -362,7 +414,7 @@ mod tests {
     fn approval_replacements_preserve_the_payload_and_kind() {
         for kind in ["confirm", "run", "fetch", "ask", "output"] {
             let mut view = View::new(true);
-            view.started(4, 4, json!({"text": "prompt"}));
+            view.started(4, 4, json!({"text": "prompt"}), Acting::Nobody);
             let data = json!({"request": 7, "remark": {"label": "(U,priv)",
                 "preview": ["\u{1b}[2J forged chrome"]}, "future": [1, 2]});
             let name = match kind {
@@ -376,15 +428,56 @@ mod tests {
             let pending = waiting.pending.unwrap();
             assert_eq!(pending.supported, kind != "output");
             assert_eq!(pending.data, data);
-            assert!(view.answered(8).is_none());
-            let resolved = view.answered(7).unwrap();
+            assert!(view.answered(8, Acting::Nobody).is_none());
+            let resolved = view.answered(7, Acting::Nobody).unwrap();
             assert_eq!(resolved.rows[0].id, pending.row);
             assert_eq!(resolved.rows[0].event.as_deref(), Some(name));
             assert_eq!(resolved.rows[0].data, data);
             assert!(resolved.rows[0].resolved);
             assert!(resolved.pending.is_none());
-            assert!(view.answered(7).is_none());
+            assert!(view.answered(7, Acting::Nobody).is_none());
         }
+    }
+
+    /// The view names the client of the last action that took effect. A change that finishes an
+    /// action keeps its name, a refusal made for want of an answerer clears it, and an answer to a
+    /// question that is not waiting changes nothing.
+    #[test]
+    fn the_view_names_the_client_of_the_last_action_that_took_effect() {
+        let mut view = View::new(false);
+        assert_eq!(view.initial().actor, None);
+        assert_eq!(
+            view.trusted(Acting::Client("phone"))
+                .unwrap()
+                .actor
+                .as_deref(),
+            Some("phone")
+        );
+        let started = view.started(1, 1, json!({"text": "go"}), Acting::Client("desktop"));
+        assert_eq!(started.actor.as_deref(), Some("desktop"));
+        let asked = Event::new("confirm.request", "s1", json!({"request": 7}));
+        assert_eq!(
+            view.event(&asked).unwrap().actor.as_deref(),
+            Some("desktop")
+        );
+        assert!(view.answered(8, Acting::Client("phone")).is_none());
+        assert_eq!(view.snapshot().actor.as_deref(), Some("desktop"));
+
+        assert!(view.cancelled_by(Acting::Client("phone")));
+        let resolved = view.answered(7, Acting::Same).unwrap();
+        assert_eq!(resolved.actor.as_deref(), Some("phone"));
+
+        let asked = Event::new("confirm.request", "s1", json!({"request": 9}));
+        view.event(&asked).unwrap();
+        let refused = view.answered(9, Acting::Nobody).unwrap();
+        assert_eq!(refused.actor, None);
+        assert_eq!(view.snapshot().actor, None);
+
+        // A turn that has ended is not cancelled by anyone.
+        view.started(2, 2, json!({"text": "again"}), Acting::Client("desktop"));
+        view.event(&Event::new("turn.done", "s1", json!({"reply": "ok"})));
+        assert!(!view.cancelled_by(Acting::Client("phone")));
+        assert_eq!(view.snapshot().actor.as_deref(), Some("desktop"));
     }
 
     fn status_name(status: Status) -> &'static str {
@@ -471,6 +564,7 @@ mod tests {
             }),
             rows,
             omitted: 2,
+            actor: Some("desktop".into()),
         };
         json!({
             "capability": capability(),
@@ -506,7 +600,7 @@ mod tests {
     #[test]
     fn a_finished_call_replaces_the_row_of_the_call_it_ends() {
         let mut view = View::new(true);
-        view.started(1, 1, json!({"text": "prompt"}));
+        view.started(1, 1, json!({"text": "prompt"}), Acting::Nobody);
         // Every call reads the same file, so only the id can tell them apart.
         let started = |view: &mut View, call: Value| {
             let data = json!({"call": call, "verb": "read", "target": "a.rs", "note": null});
@@ -559,9 +653,9 @@ mod tests {
 
         // A new turn forgets a call the earlier one left running, even when that turn never
         // reported an end.
-        view.started(2, 2, json!({"text": "again"}));
+        view.started(2, 2, json!({"text": "again"}), Acting::Nobody);
         let left = started(&mut view, json!(8));
-        view.started(3, 3, json!({"text": "once more"}));
+        view.started(3, 3, json!({"text": "once more"}), Acting::Nobody);
         assert!(finish(&mut view, json!(8), "late").rows[0].id > left);
     }
 
@@ -572,7 +666,7 @@ mod tests {
     #[test]
     fn a_snapshot_keeps_the_most_recent_rows_and_the_question_waiting() {
         let mut view = View::new(true);
-        view.started(1, 1, json!({"text": "prompt"}));
+        view.started(1, 1, json!({"text": "prompt"}), Acting::Nobody);
         let asked = json!({"request": 3, "path": "a.rs", "remark": {"label": "(U,priv)"}});
         let question = view
             .event(&Event::new("confirm.request", "s1", asked.clone()))
@@ -612,7 +706,7 @@ mod tests {
         };
         assert_eq!(finished(&mut view, 1), first_call);
         assert_eq!(finished(&mut view, 2), last_call);
-        let resolved = view.answered(3).unwrap();
+        let resolved = view.answered(3, Acting::Nobody).unwrap();
         assert_eq!(resolved.rows[0].id, question);
         assert_eq!(resolved.rows[0].data, asked);
 
@@ -652,7 +746,7 @@ mod tests {
     #[test]
     fn a_view_keeps_its_most_recent_rows_within_a_byte_budget_and_says_how_many_it_left_out() {
         let mut view = View::new(true);
-        view.started(1, 1, json!({"text": "prompt"}));
+        view.started(1, 1, json!({"text": "prompt"}), Acting::Nobody);
         let mut last = None;
         for _ in 0..20 {
             last = Some(narrate(&mut view, RETAINED_BYTES / 8));
@@ -678,7 +772,7 @@ mod tests {
     #[test]
     fn a_row_larger_than_the_byte_budget_is_kept_only_while_it_is_the_newest() {
         let mut view = View::new(true);
-        view.started(1, 1, json!({"text": "prompt"}));
+        view.started(1, 1, json!({"text": "prompt"}), Acting::Nobody);
         let large = narrate(&mut view, RETAINED_BYTES + 1).rows[0].id;
         let snapshot = view.snapshot();
         assert_eq!(snapshot.rows.len(), 1);
@@ -696,7 +790,7 @@ mod tests {
     #[test]
     fn a_row_larger_than_the_byte_budget_is_dropped_by_an_update_that_does_not_send_it() {
         let mut view = View::new(true);
-        view.started(1, 1, json!({"text": "prompt"}));
+        view.started(1, 1, json!({"text": "prompt"}), Acting::Nobody);
         let call = json!({"call": 1, "verb": "read", "target": "x"});
         view.event(&Event::new("tool.started", "s1", call.clone()));
         let large = narrate(&mut view, RETAINED_BYTES + 1).rows[0].id;
@@ -708,7 +802,7 @@ mod tests {
         assert!(view.snapshot().rows.is_empty());
 
         let mut view = View::new(true);
-        view.started(1, 1, json!({"text": "prompt"}));
+        view.started(1, 1, json!({"text": "prompt"}), Acting::Nobody);
         let large = narrate(&mut view, RETAINED_BYTES + 1).rows[0].id;
         let detached = view.detach();
         assert!(detached.rows.is_empty());
@@ -721,7 +815,7 @@ mod tests {
     #[test]
     fn a_row_replaced_by_a_later_state_counts_once_toward_the_byte_budget() {
         let mut view = View::new(true);
-        view.started(1, 1, json!({"text": "prompt"}));
+        view.started(1, 1, json!({"text": "prompt"}), Acting::Nobody);
         let call = |call: u64| json!({"call": call, "verb": "read", "target": "x".repeat(RETAINED_BYTES / 8)});
         for at in 1..=6 {
             view.event(&Event::new("tool.started", "s1", call(at)));
@@ -741,7 +835,7 @@ mod tests {
     #[test]
     fn a_long_later_state_of_an_older_row_is_kept_by_the_update_that_sends_it() {
         let mut view = View::new(true);
-        view.started(1, 1, json!({"text": "prompt"}));
+        view.started(1, 1, json!({"text": "prompt"}), Acting::Nobody);
         let call = |target: String| json!({"call": 1, "verb": "read", "target": target});
         view.event(&Event::new("tool.started", "s1", call("x".into())));
         narrate(&mut view, 10);
@@ -785,7 +879,7 @@ mod tests {
     #[test]
     fn failures_have_authoritative_terminal_status() {
         let mut view = View::new(true);
-        view.started(1, 1, json!({"text": "prompt"}));
+        view.started(1, 1, json!({"text": "prompt"}), Acting::Nobody);
         let failed = view
             .event(&Event::new("turn.error", "s1", json!({"kind": "backend"})))
             .unwrap();
@@ -802,7 +896,7 @@ mod tests {
     fn a_terminal_update_clears_the_question_still_waiting() {
         let waiting_on_a_question = || {
             let mut view = View::new(true);
-            view.started(1, 1, json!({"text": "prompt"}));
+            view.started(1, 1, json!({"text": "prompt"}), Acting::Nobody);
             let asked = json!({"request": 7, "path": "a.rs"});
             let waiting = view
                 .event(&Event::new("confirm.request", "s1", asked.clone()))
@@ -832,7 +926,7 @@ mod tests {
             assert!(ended.rows[0].resolved, "{name} {data}");
             assert_eq!(ended.rows[0].data, asked, "{name} {data}");
             assert!(ended.rows[1].id > question, "{name} {data}");
-            assert!(view.answered(7).is_none(), "{name} {data}");
+            assert!(view.answered(7, Acting::Nobody).is_none(), "{name} {data}");
         }
 
         let (mut view, asked, question) = waiting_on_a_question();
@@ -843,6 +937,6 @@ mod tests {
         assert_eq!(detached.rows[0].id, question);
         assert!(detached.rows[0].resolved);
         assert_eq!(detached.rows[0].data, asked);
-        assert!(view.answered(7).is_none());
+        assert!(view.answered(7, Acting::Nobody).is_none());
     }
 }

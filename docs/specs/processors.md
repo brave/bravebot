@@ -54,6 +54,7 @@ which is the thing this design refuses. A loop would give a reply something to s
 `verified-by: bravebot_core::policy::only_the_slots_it_was_given_reach_a_processor`
 `verified-by: bravebot_agent::turn::a_tool_call_from_a_processor_does_nothing`
 `verified-by: bravebot_agent::turn::a_processors_request_has_no_tool_list_no_history_and_no_second_round`
+`verified-by: bravebot_agent::turn::a_processors_request_through_a_gateway_carries_no_tool_list_its_models_options_state`
 `verified-by: bravebot_core::policy::a_reference_to_nothing_is_refused`
 `verified-by: bravebot_core::policy::a_processor_with_nothing_to_read_is_refused`
 `verified-by: bravebot_core::policy::naming_the_same_reference_twice_is_refused`
@@ -368,18 +369,23 @@ driver's own fixed words and the format the person typed after the command, both
 
 What differs from a call a planner makes is where the output goes. The document is released by the
 display gate to the person's input box, and the remark is never released. The driver reads two
-counts of the reader's own answer, whether it showed no file and whether it stopped at a cap, and,
-for a diff nobody vouched for, one yes or no from a credential scan of its text. It reads nothing
-else of the diff and nothing of the draft. A diff that holds what looks like a credential is not given to the
-processor, whether or not its files are vouched for, since nobody is at a prompt to agree to it as
-for a planner's read ([CRED-15](credential-protection.md#CRED-15)).
+counts of the reader's own answer, whether it showed no file and whether it stopped at a cap. It
+reads nothing else of the diff and nothing of the draft. A diff that names a path nobody vouched
+for is not given to a processor and is not scanned: the driver reads only the label the read gave
+the diff, which the paths shown fix, and answers with a note before anything is sent, so the bytes
+of such a file decide neither whether a request is made nor which note the person reads. A diff of
+vouched paths that holds what looks like a credential is not given to the processor either, since
+nobody is at a prompt to agree to it as for a planner's read
+([CRED-15](credential-protection.md#CRED-15)).
 
 **Why.** The diff and the draft stay out of both contexts, as they do for a processor a planner
-starts, and the person is the only reader of the draft before they decide what to send.
+starts, and the person is the only reader of the draft before they decide what to send. A draft
+about an unvouched diff is never offered ([CMD-23](commands.md#CMD-23)), so requesting one would
+charge usage for nothing and would need a scan of bytes the driver may not branch on.
 
 `verified-by: bravebot_agent::commit_message::a_range_is_drafted_from_its_diff_and_the_request_holds_no_tool`
 `verified-by: bravebot_agent::commit_message::a_diff_holding_a_credential_is_not_sent`
-`verified-by: bravebot_agent::commit_message::an_untrusted_diff_holding_a_credential_is_not_sent`
+`verified-by: bravebot_agent::commit_message::an_unvouched_diff_gives_no_draft_and_no_request_whatever_its_text_holds`
 `verified-by: bravebot_agent::commit_message::a_repository_the_map_does_not_trust_is_not_read_or_sent`
 `verified-by: bravebot_agent::commit_message::an_answer_with_no_marker_is_no_draft`
 `verified-by: bravebot_tui::app::a_draft_answered_by_another_model_than_the_configured_one_says_so`
@@ -441,6 +447,11 @@ and not which. The person asked about the call it fills is shown the number
 ([ROUTE-10](routing.md#ROUTE-10)). An answer with no bytes at all is refused by the transport for
 every processor, and is not read.
 
+A processor's token usage, that of a request that failed included, is in the turn's spend and is
+never added to the figure a delegate's token budget is compared with. The figure a budgeted
+delegate is told, the round of its warning and the round at which it loses its tools are the same
+whatever the processor answered ([DELEGATE-29](delegation.md#DELEGATE-29)).
+
 **Why.** The decision is taken by a crate that holds no witness and no constructor, from text this
 process does not read. What this process does afterwards depends on no value of the number, so a page
 that talks the processor round buys one of at most a hundred numbers, or a failed request and the
@@ -467,10 +478,12 @@ word for it. The read is the ninth of the
 `verified-by: bravebot_agent::processor::a_processor_not_asked_to_choose_is_refused_before_anything_is_sent`
 `verified-by: bravebot_agent::turn::a_choice_reaches_the_planner_as_a_reference_to_a_choice_and_nothing_else`
 `verified-by: bravebot_agent::turn::the_planner_is_told_the_same_words_whatever_the_processor_answered`
+`verified-by: bravebot_agent::turn::the_tokens_of_a_processor_that_chose_do_not_change_what_a_delegate_is_told`
+`verified-by: bravebot_agent::turn::a_processors_document_size_does_not_change_what_a_delegate_is_told`
 `verified-by: bravebot_agent::turn::a_choice_cannot_be_a_path_a_body_or_a_document_for_a_processor`
 `verified-by: bravebot_agent::browser_group_servers::a_free_text_answer_cannot_be_named_as_a_choice`
 `verified-by: bravebot_agent::turn::a_call_asking_for_a_number_is_refused_unless_it_asks_in_the_planners_own_terms`
-`verified-by: by-construction (Policy::read_a_number takes a function pointer that captures nothing of the caller's and returns a u8, so one byte is all of an answer that leaves the policy layer, and labels.md pins its uses file by file, so a second reader of an answer is a moved count that check-spec fails on)`
+`verified-by: by-construction (Policy::read_a_number takes a function pointer that captures nothing of the caller's and returns a u8, so one byte is all of an answer that leaves the policy layer through it, and labels.md pins its uses file by file, so a second reader of an answer is a moved count that check-spec fails on)`
 
 ## Known costs
 

@@ -53,6 +53,7 @@
 //! by [`bravebot_sandbox::programs::SearchPath::Reduced`] to the entries that lookup searches, so a
 //! stage cannot choose what runs by writing a file under its interpreter's name either.
 
+use crate::plugin_hooks::{Carried, PluginHooks, Verdict};
 use bravebot_config::hooks::{Hook, Hooks, Moment};
 use std::ffi::OsStr;
 use std::io::Write;
@@ -198,6 +199,14 @@ pub fn in_force(home: Option<&Path>) -> Hooks {
 /// the last, so there is no turn whose restore either could leave incomplete.
 pub struct SessionMoments {
     hooks: Hooks,
+    /// The state directory the hooks were read from, which a plugin's hooks are read from too.
+    home: Option<PathBuf>,
+    /// The hooks the enabled plugins carry, read only for an interface that can ask about them
+    /// ([`Self::keep_answers`]). Empty for every other interface, which fires none of them.
+    plugins: PluginHooks,
+    /// The session whose answers about plugin hooks hold at both ends. Set by an interface where a
+    /// person can be asked, and by no other.
+    account: Option<crate::chatgpt::AccountSession>,
     directory: PathBuf,
     /// The bound of a `session-ended` hook that states no `timeout`.
     end_limit: Duration,
@@ -210,6 +219,9 @@ impl SessionMoments {
     pub fn read(home: Option<&Path>, directory: &Path) -> Self {
         Self {
             hooks: in_force(home),
+            home: home.map(Path::to_path_buf),
+            plugins: PluginHooks::default(),
+            account: None,
             directory: directory.to_path_buf(),
             end_limit: default_limit(Moment::SessionEnded),
             started: false,
@@ -224,6 +236,27 @@ impl SessionMoments {
     pub fn ending_within(mut self, limit: Duration) -> Self {
         self.end_limit = limit;
         self
+    }
+
+    /// For an interface where a person can be asked: read the plugins' hooks and hold `account`,
+    /// whose answers about them are the ones that count for this session at both ends
+    /// (PLUGIN-7).
+    ///
+    /// [`Self::started_asking`] then puts the question for a plugin's `session-started` hook, and
+    /// [`Self::ended`] fires a plugin's `session-ended` hook that already has a yes and asks about
+    /// nothing. An interface that never calls this fires no plugin hook at either end: a one-shot
+    /// run, the bridge and ACP have nobody to ask.
+    pub fn keep_answers(&mut self, account: crate::chatgpt::AccountSession) {
+        self.plugins = PluginHooks::read(self.home.as_deref());
+        self.account = Some(account);
+    }
+
+    /// Whether a plugin carries a `session-started` hook that [`Self::started_asking`] may put a
+    /// question about, so an interface draws its opening screen before the question.
+    pub fn may_ask_at_start(&self) -> bool {
+        !self.started
+            && self.account.is_some()
+            && self.plugins.declares(Moment::SessionStarted, None)
     }
 
     /// Whether [`Self::started`] is about to run a hook, so an interface can draw what the person
@@ -263,6 +296,46 @@ impl SessionMoments {
         ))
     }
 
+    /// [`Self::started`] for an interface that called [`Self::keep_answers`] and holds a
+    /// `confirmer` that can put the question: the person's own hooks fire as they do there, and a
+    /// plugin's `session-started` hook fires after the same decision a turn's moments make
+    /// ([`PluginHooks::firing`]), asking first where it has no answer.
+    ///
+    /// Where `confirmer` cannot ask, or no answers were kept, no plugin hook fires. The sentences
+    /// include the one that names a plugin whose files no longer match its record.
+    pub fn started_asking<C: crate::confirm::Confirmer + ?Sized>(
+        &mut self,
+        confirmer: &mut C,
+    ) -> Vec<String> {
+        if std::mem::replace(&mut self.started, true) {
+            return Vec::new();
+        }
+        let Some(account) = &self.account else {
+            return crate::turn::trouble_sentences(fire(
+                &self.hooks,
+                Moment::SessionStarted,
+                None,
+                &self.directory,
+            ));
+        };
+        let answers = account.plugin_hook_answers();
+        let joined = self.plugins.joined_with(
+            &self.hooks,
+            Moment::SessionStarted,
+            None,
+            answers,
+            confirmer,
+        );
+        let mut said = crate::turn::trouble_sentences(fire(
+            &joined,
+            Moment::SessionStarted,
+            None,
+            &self.directory,
+        ));
+        said.extend(answers.stopped_sentences());
+        said
+    }
+
     /// Fire `session-ended`, and say what went wrong where something did.
     ///
     /// Only for a session that fired `session-started`, so one that never began leaves nothing to
@@ -271,13 +344,29 @@ impl SessionMoments {
         if !self.started || std::mem::replace(&mut self.ended, true) {
             return Vec::new();
         }
-        crate::turn::trouble_sentences(fire_within(
-            &self.hooks,
+        // Never a question: the interface is being left, with the terminal handed back or its input
+        // ended. A plugin's hook fires only where an interface kept the answers and the hook
+        // already has a yes, in this session or recorded (PLUGIN-7).
+        let joined = match &self.account {
+            Some(account) => self.plugins.joined_without_asking(
+                &self.hooks,
+                Moment::SessionEnded,
+                account.plugin_hook_answers(),
+                true,
+            ),
+            None => self.hooks.clone(),
+        };
+        let mut said = crate::turn::trouble_sentences(fire_within(
+            &joined,
             Moment::SessionEnded,
             None,
             &self.directory,
             self.end_limit,
-        ))
+        ));
+        if let Some(account) = &self.account {
+            said.extend(account.plugin_hook_answers().stopped_sentences());
+        }
+        said
     }
 }
 
@@ -303,8 +392,28 @@ fn looked_at(path: &Path) -> Token {
     Some((found.len(), found.modified().ok()?))
 }
 
+/// Whether a path a plugin names is a file below the directory the session opened in: not empty, not
+/// absolute, with no `..` and no drive prefix. A plugin's text must not make the watcher look at a
+/// file elsewhere, so an entry that fails this is not watched. The person's own entries are not
+/// held to it.
+fn stays_in_the_directory(path: &Path) -> bool {
+    use std::path::Component;
+    let mut named_something = false;
+    for part in path.components() {
+        match part {
+            Component::Normal(_) => named_something = true,
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return false,
+        }
+    }
+    named_something
+}
+
 struct Watched {
     hook: Hook,
+    /// The plugin this entry came from and what an approval of it is a digest of. `None` for the
+    /// person's own entry, which is never asked about.
+    plugin: Option<Carried>,
     path: PathBuf,
     seen: Token,
     next_look: Instant,
@@ -326,6 +435,11 @@ pub struct FileChanged {
     watched: Vec<Watched>,
     directory: PathBuf,
     between_looks: Duration,
+    /// The plugins' hooks, shared with each question put about one of them.
+    plugins: std::sync::Arc<PluginHooks>,
+    /// The session whose answers about plugin hooks hold. Set by an interface where a person can be
+    /// asked, and by no other, so no other watches a file for a plugin.
+    account: Option<crate::chatgpt::AccountSession>,
 }
 
 impl FileChanged {
@@ -338,6 +452,7 @@ impl FileChanged {
                 let path = directory.join(hook.path()?);
                 Some(Watched {
                     hook: hook.clone(),
+                    plugin: None,
                     seen: looked_at(&path),
                     path,
                     next_look: now + BETWEEN_LOOKS,
@@ -351,7 +466,46 @@ impl FileChanged {
             watched,
             directory: directory.to_path_buf(),
             between_looks: BETWEEN_LOOKS,
+            plugins: std::sync::Arc::default(),
+            account: None,
         }
+    }
+
+    /// For an interface where a person can be asked: also watch the file each enabled plugin's
+    /// `file-changed` hook names, up to the same [`MAX_WATCHED`] with the person's own entries
+    /// first. A change to one fires its hook only after the decision of [`PluginHooks`], which
+    /// asks first where there is no answer (PLUGIN-7), through [`Watching::serve`].
+    pub fn with_plugins(
+        mut self,
+        home: Option<&Path>,
+        account: crate::chatgpt::AccountSession,
+        now: Instant,
+    ) -> Self {
+        let plugins = PluginHooks::read(home);
+        for carried in plugins.entries_for(Moment::FileChanged) {
+            if self.watched.len() >= MAX_WATCHED {
+                break;
+            }
+            let Some(named) = carried.hook().path() else {
+                continue;
+            };
+            if !stays_in_the_directory(Path::new(named)) {
+                continue;
+            }
+            let path = self.directory.join(named);
+            self.watched.push(Watched {
+                hook: carried.hook().clone(),
+                plugin: Some(carried),
+                seen: looked_at(&path),
+                path,
+                next_look: now + BETWEEN_LOOKS,
+                pending: false,
+                not_before: now,
+            });
+        }
+        self.plugins = std::sync::Arc::new(plugins);
+        self.account = Some(account);
+        self
     }
 
     /// The same, looking at the stated interval rather than every [`BETWEEN_LOOKS`], so a test does
@@ -371,6 +525,24 @@ impl FileChanged {
     /// Look at each file whose look is due and run the entries whose file changed, once each however
     /// many changes the window held, and say what went wrong where something did.
     pub fn poll(&mut self, now: Instant) -> Vec<String> {
+        self.poll_asking(now, &mut |_, _, _| false)
+    }
+
+    /// [`Self::poll`], where `ask` settles a plugin's entry that has no answer yet. It is handed the
+    /// plugins' hooks, the entry and the session, and answers whether the entry may run.
+    ///
+    /// Everything else about a plugin's entry is decided here by [`PluginHooks::verdict`]: a tree
+    /// that changed or a no stops it, a yes runs it. `ask` is reached only for an entry nobody has
+    /// answered, and a `false` runs nothing.
+    pub(crate) fn poll_asking(
+        &mut self,
+        now: Instant,
+        ask: &mut dyn FnMut(
+            &std::sync::Arc<PluginHooks>,
+            &Carried,
+            &crate::chatgpt::AccountSession,
+        ) -> bool,
+    ) -> Vec<String> {
         let mut fired = Vec::new();
         for entry in &mut self.watched {
             if now >= entry.next_look {
@@ -383,6 +555,18 @@ impl FileChanged {
             }
             if entry.pending && now >= entry.not_before {
                 entry.pending = false;
+                if let (Some(carried), Some(account)) = (&entry.plugin, &self.account) {
+                    let may = match self.plugins.verdict(carried, account.plugin_hook_answers()) {
+                        Verdict::Fire => true,
+                        Verdict::Silent => false,
+                        Verdict::Ask => ask(&self.plugins, carried, account),
+                    };
+                    if !may {
+                        continue;
+                    }
+                } else if entry.plugin.is_some() {
+                    continue;
+                }
                 let began = Instant::now();
                 let trouble = run(
                     &entry.hook,
@@ -399,8 +583,21 @@ impl FileChanged {
                 });
             }
         }
-        crate::turn::trouble_sentences(fired)
+        let mut said = crate::turn::trouble_sentences(fired);
+        if let Some(account) = &self.account {
+            said.extend(account.plugin_hook_answers().stopped_sentences());
+        }
+        said
     }
+}
+
+/// A question about a plugin's `file-changed` entry, sent by the thread that looks at the file to
+/// the interface that holds the terminal.
+struct Query {
+    plugins: std::sync::Arc<PluginHooks>,
+    carried: Carried,
+    account: crate::chatgpt::AccountSession,
+    reply: std::sync::mpsc::Sender<bool>,
 }
 
 /// A [`FileChanged`] looked at on a thread of its own, for an interface that has no turn to hold
@@ -410,6 +607,7 @@ impl FileChanged {
 /// to stop; a command already running ends or reaches its bound (HOOK-7).
 pub struct Watching {
     said: std::sync::mpsc::Receiver<Vec<String>>,
+    queries: std::sync::mpsc::Receiver<Query>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -420,18 +618,66 @@ impl Watching {
             return None;
         }
         let (send, said) = std::sync::mpsc::channel();
+        let (put, queries) = std::sync::mpsc::channel();
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let asked = stop.clone();
         std::thread::spawn(move || {
             while !asked.load(std::sync::atomic::Ordering::Relaxed) {
-                let trouble = watched.poll(Instant::now());
+                let trouble =
+                    watched.poll_asking(Instant::now(), &mut |plugins, carried, account| {
+                        // The question is put by the interface that holds the terminal. This thread
+                        // waits for the answer, and a stop, a lost interface or no answer is a no.
+                        let (reply, answer) = std::sync::mpsc::channel();
+                        let query = Query {
+                            plugins: plugins.clone(),
+                            carried: carried.clone(),
+                            account: account.clone(),
+                            reply,
+                        };
+                        if put.send(query).is_err() {
+                            return false;
+                        }
+                        loop {
+                            match answer.recv_timeout(TICK) {
+                                Ok(yes) => return yes,
+                                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                                    if !asked.load(std::sync::atomic::Ordering::Relaxed) => {}
+                                Err(_) => return false,
+                            }
+                        }
+                    });
                 if !trouble.is_empty() && send.send(trouble).is_err() {
                     return;
                 }
                 std::thread::sleep(TICK);
             }
         });
-        Some(Self { said, stop })
+        Some(Self {
+            said,
+            queries,
+            stop,
+        })
+    }
+
+    /// Put each question the thread is waiting on to `confirmer` and give it the answer, and say
+    /// whether any was put, so the caller draws the screen again.
+    ///
+    /// The decision is [`PluginHooks::may_fire`], the same one a turn's moments make: the tree is
+    /// hashed again, then the session's answer, then a recorded yes, then the question. Called by
+    /// the interface that holds the terminal, between frames and never while a turn waits on an
+    /// answer of its own.
+    pub fn serve<C: crate::confirm::Confirmer + ?Sized>(&self, confirmer: &mut C) -> bool {
+        let mut asked = false;
+        while let Ok(query) = self.queries.try_recv() {
+            asked = true;
+            let yes = query.plugins.may_fire(
+                &query.carried,
+                query.account.plugin_hook_answers(),
+                confirmer,
+            );
+            query.reply.send(yes).ok();
+        }
+        asked
     }
 
     /// What the entries have said since the last call.

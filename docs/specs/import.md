@@ -158,6 +158,9 @@ A proxy the environment names carries this request as it carries every other
 `verified-by: bravebot_config::import::a_checkouts_opencode_json_is_never_read`
 `verified-by: bravebot_config::import::claude_config_dir_moves_where_claude_code_is_read`
 `verified-by: bravebot_config::import::xdg_config_home_moves_where_opencode_is_read`
+`verified-by: bravebot_config::import::opencode_files_are_merged_weakest_first_objects_deep_and_scalars_replaced`
+`verified-by: bravebot_config::import::xdg_data_home_moves_where_opencode_auth_is_read`
+`verified-by: bravebot_config::import::nothing_else_in_claude_codes_directory_is_opened`
 `verified-by: bravebot_config::import::ollama_host_moves_where_ollama_is_asked`
 `verified-by: bravebot_config::import::an_ollama_host_off_this_machine_is_left_and_not_asked`
 `verified-by: bravebot_config::import::the_lm_studio_host_moves_where_lm_studio_is_asked`
@@ -407,6 +410,7 @@ setup was looked at.
 `verified-by: bravebot_cli::running::a_claude_code_anthropic_key_is_importable_and_the_refusal_names_the_command`
 `verified-by: bravebot_config::import::a_key_exported_beside_a_host_of_its_own_is_left`
 `verified-by: bravebot_cli::import::a_key_exported_beside_a_host_is_said_to_be_left_and_not_asked_about`
+`verified-by: bravebot_cli::import::what_was_found_and_left_is_said_with_its_reason_where_a_person_is_asked`
 `verified-by: bravebot_cli::running::a_key_exported_beside_a_host_is_said_to_be_left_before_the_routes`
 `verified-by: bravebot_cli::running::a_claude_code_key_command_is_importable_and_the_refusal_names_the_command`
 
@@ -597,6 +601,7 @@ that answers yes on their behalf.
 `verified-by: bravebot_cli::running::nothing_is_asked_where_stderr_is_not_a_terminal`
 `verified-by: bravebot_cli::running::a_settings_file_the_import_cannot_write_is_named_in_place_of_the_command`
 `verified-by: bravebot_cli::running::a_settings_file_the_import_would_take_too_large_is_named_in_place_of_the_command`
+`verified-by: bravebot_cli::running::doctor_with_something_importable_names_the_import_command_and_asks_nothing`
 
 <a id="IMPORT-9"></a>
 ### IMPORT-9: after a write, the start reads its settings again and opens the session if a service now answers

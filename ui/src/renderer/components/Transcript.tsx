@@ -1,5 +1,6 @@
 import { Watches } from './Watches'
 import type { Enhancement } from '../enhancing'
+import type { Handoff } from '../handoff'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
 import { Fragment, memo, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
@@ -87,6 +88,10 @@ interface Live {
   sendRefused?: string | null
   staging?: Staging
   enhancement?: Enhancement
+  /** A Hand Off to New Chat… request that is out, or a brief armed in the box (SESSION-34). */
+  handoff?: Handoff | null
+  /** The chat this one was handed off from (SESSION-34). */
+  handedOffFrom?: { id: string; title: string } | null
 }
 
 /**
@@ -132,6 +137,12 @@ interface Props {
   /** Escape over a rewrite: put back what was written, and say whether there was one. */
   onRestoreEnhanced: () => boolean
   onDismissEnhancement: () => void
+  /** Stop a Hand Off to New Chat… request that is out (SESSION-34). */
+  onStopHandoff: () => void
+  /** Escape over an armed brief: drop it and put back what the box held. Says whether there was one. */
+  onEscapeHandoff: () => boolean
+  /** Drop the armed brief where the box is empty, or always where `force` is set. */
+  onDropHandoff: (force?: boolean) => void
   queued: string[]
   queuePaused: boolean
   onResumeQueued: () => void
@@ -329,6 +340,9 @@ export function Transcript({
   onStopEnhance,
   onRestoreEnhanced,
   onDismissEnhancement,
+  onStopHandoff,
+  onEscapeHandoff,
+  onDropHandoff,
   queued, queuePaused, onResumeQueued, onDismissRefusal,
   onRemoveQueued,
   live,
@@ -495,6 +509,9 @@ export function Transcript({
   const stopEnhance = useEvent(onStopEnhance)
   const restoreEnhanced = useEvent(onRestoreEnhanced)
   const dismissEnhancement = useEvent(onDismissEnhancement)
+  const stopHandoff = useEvent(onStopHandoff)
+  const escapeHandoff = useEvent(onEscapeHandoff)
+  const dropHandoff = useEvent(onDropHandoff)
   const cancel = useEvent(onCancel)
   const draftChanged = useEvent(onDraft)
   const chooseModelFor = useEvent(onModel)
@@ -846,6 +863,7 @@ export function Transcript({
         )}
         <SessionNotices
           forkedFrom={live.forkedFrom}
+          handedOffFrom={live.handedOffFrom ?? null}
           kept={live.trustRemembered ?? null}
           vetting={live.autoVetting === true}
           rules={live.rules ?? null}
@@ -935,6 +953,10 @@ export function Transcript({
           onStopEnhance={stopEnhance}
           onRestoreEnhanced={restoreEnhanced}
           onDismissEnhancement={dismissEnhancement}
+          handoff={live.handoff ?? null}
+          onStopHandoff={stopHandoff}
+          onEscapeHandoff={escapeHandoff}
+          onDropHandoff={dropHandoff}
           onCancel={cancel}
           onModel={chooseModelFor}
           permissionMode={live.permissionMode}
@@ -1639,8 +1661,10 @@ function Questions({
  * of every export: a note this window wrote about a session is not something the session said.
  * The fork link is a button and not a link, because nothing in this window navigates.
  */
-export function SessionNotices({ forkedFrom, kept, vetting, rules, refused = [], onOpenParent, onManage }: {
+export function SessionNotices({ forkedFrom, handedOffFrom = null, kept, vetting, rules, refused = [], onOpenParent, onManage }: {
   forkedFrom: { title: string; prompt: number } | null
+  /** The chat this one was started from with Hand Off to New Chat… (SESSION-34). */
+  handedOffFrom?: { id: string; title: string } | null
   kept: KeptTrust | null
   vetting: boolean
   rules: SettingsRules | null
@@ -1650,9 +1674,15 @@ export function SessionNotices({ forkedFrom, kept, vetting, rules, refused = [],
   onManage: () => void
 }): React.JSX.Element | null {
   const unheld = t.notInForce(rules, refused) || t.grantedRules(rules)
-  if (!forkedFrom && !kept && !vetting && !unheld) return null
+  if (!forkedFrom && !handedOffFrom && !kept && !vetting && !unheld) return null
   return (
     <div className="session-notices">
+      {handedOffFrom && (
+        <p className="session-banner session-notice" role="note" data-test="handed-off-from" data-tooltip={`Record ${handedOffFrom.id}`}>
+          <Icon name="message-bubble" />
+          <span className="notice-text">Handed off from <strong>{handedOffFrom.title}</strong>.</span>
+        </p>
+      )}
       {forkedFrom && (
         <p className="fork-banner session-notice divider">
           <span className="fork-mark"><ForkIcon /></span>
@@ -1993,6 +2023,12 @@ type RowProps = {
   face?: Face
   /** Open a long prompt: find or a fork landing landed on this row. */
   revealed?: boolean
+  /**
+   * What an entry the person can no longer answer says became of it, in place of "Request cancelled
+   * when the turn ended". A window that shares a session with another client uses it for a question
+   * that was settled without telling it who answered or how.
+   */
+  interruptedNote?: string
 }
 
 /**
@@ -2012,6 +2048,7 @@ export const Row = memo(function Row({
   forkable,
   face,
   revealed,
+  interruptedNote,
 }: RowProps): React.JSX.Element {
   const card = (
     <Card
@@ -2035,7 +2072,7 @@ export const Row = memo(function Row({
   // vouched for it. The turn ending declassifies nothing.
   return (
     <div className="interrupted-request">
-      <strong>Request cancelled when the turn ended</strong>
+      <strong>{interruptedNote ?? 'Request cancelled when the turn ended'}</strong>
       <Collapse title="Request details" isOpen={undefined} data-test="interrupted-details">
         {card}
       </Collapse>
@@ -2582,8 +2619,9 @@ function Card({
           <p className="permission-scope" data-deciding="all">
             These steps run in this order, decided before anything was read. Nothing the run reads
             can add a step, drop one, or send anything anywhere this plan does not already name.
-            Approving the plan does not approve its writes or its calls to a server’s tools: each is
-            still put to you when its step is reached. Nothing has been read or written yet, so
+            Approving the plan answers the calls to a server’s tools it shows, and does not approve
+            its writes: each write is still put to you when its step is reached, as is a call something
+            else asks about, such as a rule or a server’s declaration. Nothing has been read or written yet, so
             declining leaves everything as it is. This answer covers this plan only.
           </p>
 
@@ -2780,8 +2818,9 @@ function Card({
             gives instructions.
           </p>
 
-          {/* Each description is the server's text, drawn as text in a marked block, so it never
-              reads as this app's own words (SERVERS-8). */}
+          {/* Each description and each value an argument takes is the server's text, drawn as text
+              in a marked block, one block to a value, so none reads as this app's own words
+              (SERVERS-8). */}
           <ul className="mcp-tools-list" data-deciding="all">
             {request.tools.map((tool) => (
               <li key={tool.name}>
@@ -2793,7 +2832,12 @@ function Card({
                   <ul className="mcp-tool-arguments">
                     {tool.arguments.map((argument, index) => (
                       <li key={index}>
-                        <code>{argument}</code>
+                        <code>{argument.text}</code>
+                        {argument.choices.map((choice, at) => (
+                          <blockquote key={at} className="mcp-tool-description mcp-tool-choice" data-tooltip="Written by the server">
+                            {choice}
+                          </blockquote>
+                        ))}
                       </li>
                     ))}
                   </ul>
@@ -2814,7 +2858,8 @@ function Card({
           )}
 
           <p className="permission-scope" data-deciding="all">
-            Every call to one of these tools is still put to you. Your answer is remembered for
+            Every call to one of these tools is still put to you, or shown on a plan you approve.
+            Your answer is remembered for
             this exact list, so the same list is not asked about again.
           </p>
         </DecisionCard>
@@ -3072,6 +3117,7 @@ function Card({
             well as this one. Only do it for content you know the origin of.</span>
           </p>
 
+          <HiddenCharacters note={request.hiddenNote} />
           <pre className="preview" data-deciding="first">{request.preview}</pre>
           {request.truncated && (
             <div className="quarantine-foot">

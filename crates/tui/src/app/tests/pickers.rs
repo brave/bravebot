@@ -55,8 +55,58 @@ fn a_press_on_a_row_moves_the_cursor_and_a_second_takes_it_in_a_picker_opened_mi
     press(&mut session, row, column, KeyModifiers::NONE);
     assert!(session.picking().is_none(), "the second press left it open");
     match session.take_pick() {
-        Some(Picked::Effort(row)) => assert_eq!(row.0, Some(Effort::High)),
+        Some(Picked::Effort(row, scope)) => {
+            assert_eq!(row.0, Some(Effort::High));
+            assert_eq!(scope, crate::model_prompt::Scope::EverySession);
+        }
         other => panic!("the row taken was {other:?}"),
+    }
+}
+
+/// MOUSE-15, MOUSE-29, VIEW-46. A second press on a row of an effort picker opened mid-turn
+/// takes the row with the scope the picker is in: the one it was opened in, or the one Tab left it
+/// in. Rejects: a press that takes the row in the every-session scope whatever the picker is in,
+/// which records a level that was asked to be kept for this session only, and one that reads the
+/// scope the picker was opened in and not the one in force.
+#[test]
+fn a_second_press_on_a_row_of_the_effort_picker_takes_it_in_the_scope_in_force() {
+    use crate::model_prompt::Scope;
+    for (opened_in, tabs, taken_in) in [
+        (Scope::ThisSession, 0, Scope::ThisSession),
+        (Scope::EverySession, 0, Scope::EverySession),
+        (Scope::EverySession, 1, Scope::ThisSession),
+        (Scope::ThisSession, 1, Scope::EverySession),
+    ] {
+        let (mut session, _) = a_session_beside_the_panel();
+        session.open_picking(Picking::Effort(
+            crate::effort_prompt::Picker::new(None).starting_in(opened_in),
+        ));
+        drawn(&mut session);
+        for _ in 0..tabs {
+            session.press_in_picking(KeyCode::Tab, KeyModifiers::NONE);
+        }
+        drawn(&mut session);
+
+        let (row, column) = row_of_the_picker(&session, 4);
+        press(&mut session, row, column, KeyModifiers::NONE);
+        assert!(
+            session.take_pick().is_none(),
+            "the first press took the row"
+        );
+        press(&mut session, row, column, KeyModifiers::NONE);
+
+        let case = format!("opened in {opened_in:?}, {tabs} Tab");
+        assert!(
+            session.picking().is_none(),
+            "{case}: the picker stayed open"
+        );
+        match session.take_pick() {
+            Some(Picked::Effort(row, scope)) => {
+                assert_eq!(row.0, Some(Effort::Xhigh), "{case}");
+                assert_eq!(scope, taken_in, "{case}");
+            }
+            other => panic!("{case}: the row taken was {other:?}"),
+        }
     }
 }
 
@@ -203,7 +253,7 @@ fn a_double_click_in_place_takes_the_model_pointed_at_on_every_row_of_a_list_scr
                 "{count} models, row {slot}: the second press left it open"
             );
             match session.take_pick() {
-                Some(Picked::Model(model)) => assert_eq!(model.display_name, named),
+                Some(Picked::Model(model, _)) => assert_eq!(model.display_name, named),
                 other => panic!("{count} models, row {slot}: the row taken was {other:?}"),
             }
             assert_eq!(
@@ -379,13 +429,22 @@ fn the_release_of_a_press_that_closed_a_picker_clicks_nothing_in_the_session() {
     let (mut session, buffer) = panel_with_a_model();
     let (row, column) = find_on(&buffer, "claude-sonnet");
     // The click that opened the picker, which the session remembers.
-    assert_eq!(click(&mut session, row, column), Action::ChooseModel);
+    assert_eq!(
+        click(&mut session, row, column),
+        Action::ChooseModel(crate::model_prompt::Scope::EverySession)
+    );
     // The picker read the next press itself and closed on it, and says so.
     session.end_a_pickers_press();
     let release = drag(MouseEventKind::Up(MouseButton::Left), row, column);
-    assert_ne!(handle_mouse(&mut session, release), Action::ChooseModel);
+    assert_ne!(
+        handle_mouse(&mut session, release),
+        Action::ChooseModel(crate::model_prompt::Scope::EverySession)
+    );
     // The next click is an ordinary one again.
-    assert_eq!(click(&mut session, row, column), Action::ChooseModel);
+    assert_eq!(
+        click(&mut session, row, column),
+        Action::ChooseModel(crate::model_prompt::Scope::EverySession)
+    );
 }
 
 fn a_roster() -> Vec<bravebot_aichat::models::Model> {
@@ -461,7 +520,7 @@ fn the_model_picker_opened_mid_turn_takes_a_press_the_wheel_and_a_press_outside(
     press(&mut session, row, column, KeyModifiers::NONE);
     assert!(session.picking().is_none(), "the second press left it open");
     match session.take_pick() {
-        Some(Picked::Model(model)) => assert_eq!(model.display_name, "third-model"),
+        Some(Picked::Model(model, _)) => assert_eq!(model.display_name, "third-model"),
         other => panic!("the row taken was {other:?}"),
     }
 
@@ -498,7 +557,7 @@ fn enter_on_a_folded_section_leaves_the_model_picker_open() {
     session.press_in_picking(KeyCode::Enter, KeyModifiers::NONE);
     assert!(session.picking().is_none(), "Enter left the picker open");
     match session.take_pick() {
-        Some(Picked::Model(model)) => assert_eq!(model.display_name, "first-model"),
+        Some(Picked::Model(model, _)) => assert_eq!(model.display_name, "first-model"),
         other => panic!("the row taken was {other:?}"),
     }
 }

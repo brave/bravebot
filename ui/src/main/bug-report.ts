@@ -112,6 +112,6 @@ export async function showLog(ask: Ask): Promise<boolean> {
   } catch {
     return false
   }
-  showItemInFolder(log)
+  await showItemInFolder(log)
   return true
 }

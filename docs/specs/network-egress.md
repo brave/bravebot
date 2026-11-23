@@ -50,7 +50,13 @@ see it.
 ### NET-1: this process has one way out, and it is not optional
 
 Every outbound request this process makes goes through a single call. The HTTP client is private to
-that module and no other crate depends on it, so there is no second path that could skip the gate.
+that module and no other crate depends on it, so there is no second path that could skip the gate. A
+`web_search` call sends its request through this call as a `fetch_url` call does
+([WEBSEARCH-7](tools/web-search.md#WEBSEARCH-7)).
+
+A `Request` formats with `{:?}` as the names of its headers and the length of its body, and never
+their values or the bytes, because a header carries a credential: the key of a search, the
+`authorization` of a model backend.
 
 **Why.** This is the whole property, and it is structural rather than a matter of discipline. In
 the design this replaces, using the hardened helper was optional and two of three fetchers
@@ -59,6 +65,8 @@ bypassed the redirect check.
 `verified-by: bravebot_core::policy::network_egress_requires_the_fetch_capability`
 `verified-by: bravebot_net::egress::a_successful_fetch_returns_a_labelled_body`
 `verified-by: bravebot_net::egress::a_fetch_without_the_capability_is_refused`
+`verified-by: bravebot_agent::web_search::a_search_returns_a_reference_sends_the_key_in_one_header_and_asks_about_the_query`
+`verified-by: bravebot_net::lib::a_request_prints_its_header_names_and_never_their_values`
 
 <a id="NET-2"></a>
 ### NET-2: a redirect is revalidated on every hop
@@ -71,10 +79,12 @@ permitted host could hand off to a denied one.
 
 Revalidating is what makes a hop checkable; what the check consists of depends on why the request is
 being made. For a `fetch_url` call it is [FETCH-4](tools/fetch-url.md#FETCH-4), which holds the
-chain to the host a person approved. For this program's own connection to its endpoint it is the
+chain to the host a person approved. For a `web_search` call it is
+[WEBSEARCH-7](tools/web-search.md#WEBSEARCH-7), which refuses a hop to any host but the search host
+whatever rules allow, and asks nobody. For this program's own connection to its endpoint it is the
 capability and nothing more, for the reason that clause gives. Whichever it is, the hop is also held
-to the transport the hop before it used, by [NET-9](#NET-9), and for a `fetch_url` call to the
-address its host resolves to, by [FETCH-8](tools/fetch-url.md#FETCH-8).
+to the transport the hop before it used, by [NET-9](#NET-9), and for a `fetch_url` or a `web_search`
+call to the address its host resolves to, by [FETCH-8](tools/fetch-url.md#FETCH-8).
 
 A request may instead refuse redirects (`Request::refusing_redirects`). A redirect in answer to it is
 returned as the failure it is, with the status it came with, and nothing is sent to the address it names,
@@ -85,6 +95,7 @@ premium host, which the premium key is presented to ([PREM-10](premium-credentia
 
 `verified-by: bravebot_net::egress::every_redirect_hop_is_revalidated`
 `verified-by: bravebot_core::policy::a_fetch_cannot_be_redirected_to_a_host_nobody_approved`
+`verified-by: bravebot_core::policy::a_search_cannot_be_redirected_to_another_host_and_the_host_is_not_asked_about`
 `verified-by: bravebot_net::egress::a_redirect_loop_is_bounded`
 `verified-by: bravebot_net::lib::redirect_status_codes_are_recognised`
 `verified-by: bravebot_net::lib::absolute_redirects_are_used_as_given`
@@ -264,6 +275,8 @@ that nothing is trusted.
 `verified-by: bravebot_net::transport::a_certificate_file_a_settings_file_names_is_what_is_trusted`
 `verified-by: bravebot_net::transport::exported_roots_replace_the_files_rather_than_joining_them`
 `verified-by: bravebot_net::transport::a_client_gets_the_built_in_roots_when_nothing_names_others`
+`verified-by: bravebot_net::transport::a_client_built_from_named_certificates_trusts_exactly_those`
+`verified-by: bravebot_net::lib::named_roots_decide_who_a_handshake_trusts`
 `verified-by: bravebot_net::lib::the_one_way_out_is_built_against_the_stated_transport_rather_than_a_default_client`
 
 <a id="NET-8"></a>

@@ -17,6 +17,7 @@ governs:
   - crates/sandbox/src/address.rs
   - crates/sandbox/src/scope.rs
   - crates/cli/src/push_identity.rs
+  - crates/agent/src/plugin_git.rs
   - crates/sandbox/src/mode.rs
   - crates/config/src/sandbox.rs
   - crates/config/src/sandbox_network.rs
@@ -28,6 +29,7 @@ governs:
   - crates/sandbox/src/openshell.rs
   - crates/tui/src/status.rs
   - crates/tui/src/opener.rs
+  - crates/ui-bridge/src/opener_names.rs
   - crates/tui/src/powershell.rs
   - ui/scripts/host-card.test.mjs
   - ui/scripts/shown.test.mjs
@@ -770,7 +772,15 @@ the mode `workspace-write` reads these on purpose:
 
 A path is refused by where it leads, so a link from a readable directory
 to a refused one reaches nothing. On macOS the profile states the refusals after the grants they
-narrow and the lifts after the refusals, since the last matching rule wins. On Linux, where a
+narrow and the lifts after the refusals, since the last matching rule wins. Seatbelt does not carry a
+refusal up to the directories holding the refused path, so a directory that lies between a write row
+and a refused path beneath it, the row's own directory included, is also refused removal, which is
+what renaming it away is, and the refused path is not reached under a new name. The paths are the
+refusals of a read and of a write, each judged where it stands and where its links lead. A directory
+that is not on disk has nothing to rename away, but a tree built elsewhere in the row could be
+moved to its name, so the topmost missing name between the row and the refused path is refused
+creation, whether by a directory, a link or a rename. A file made or removed beside the
+refused path or beside the missing name is not refused. On Linux, where a
 directory is granted with everything beneath it and no subdirectory can be held back, the
 directories above each refused location are listed when the stage starts and granted entry by
 entry, with the refused one left out, a link in a listing is not followed, and what is compared is
@@ -917,6 +927,14 @@ with [SANDBOX-20](#SANDBOX-20).
 `verified-by: bravebot_agent::confine::a_stage_is_given_the_sessions_temp_and_cannot_write_the_accounts`
 `verified-by: bravebot_sandbox::macos::a_program_linked_against_the_platforms_tls_library_starts_under_the_base`
 `verified-by: bravebot_sandbox::macos::a_developer_tool_the_platform_ships_as_a_shim_starts_under_the_base`
+`verified-by: bravebot_sandbox::macos::a_directory_above_a_refused_path_is_not_renamed_away`
+`verified-by: bravebot_sandbox::macos::a_directory_above_a_refusal_spelled_as_a_link_is_not_renamed_away`
+`verified-by: bravebot_sandbox::macos::the_profile_refuses_removal_of_each_directory_between_a_write_row_and_a_refusal`
+`verified-by: bravebot_sandbox::macos::a_tree_built_elsewhere_is_not_moved_to_a_missing_directory_above_a_refusal`
+`verified-by: bravebot_agent::confine::a_stage_cannot_move_a_tree_to_a_missing_directory_above_a_persistence_location`
+`verified-by: bravebot_agent::confine::a_stage_cannot_rename_the_directory_above_a_credential_or_a_persistence_location`
+`verified-by: bravebot_agent::confine::a_bypass_stage_cannot_rename_the_directory_above_a_listed_refusal`
+`verified-by: bravebot_agent::confine::a_bypass_stage_in_a_session_on_the_home_cannot_rename_the_directory_above_a_refusal`
 
 <a id="SANDBOX-13"></a>
 ### SANDBOX-13: a confined process can look at any path, and reads and lists only its grants
@@ -1045,6 +1063,7 @@ The auto mode's classifier is kept from a line with a git stage for the same rea
 
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_the_other_protected_names_beneath_it`
+`verified-by: bravebot_sandbox::macos::a_write_row_does_not_change_rename_into_or_remove_an_entry_of_a_git_directory`
 `verified-by: bravebot_sandbox::macos::a_write_row_inside_a_protected_directory_is_writable_under_itself`
 `verified-by: bravebot_sandbox::macos::every_name_in_the_shared_list_is_in_the_profile`
 `verified-by: bravebot_agent::protected_names::the_sandbox_and_the_file_tools_hold_back_the_same_names`
@@ -1803,7 +1822,12 @@ because an allow follows a deny at the same depth, so the directory `~/.ssh` as 
 would let every program the stage starts read and write the keys. The refusal on those platforms
 covers the table of [SANDBOX-12](#SANDBOX-12) and, on macOS, `/Library/Keychains`. Names are
 compared without regard to case on macOS and exactly on Linux. A directory above a location, the
-home directory among them, is granted and the location inside it stays refused. On macOS Seatbelt's
+home directory among them, is granted and the location inside it stays refused. On macOS a stage
+cannot rename or remove a directory that lies between a row of its own and a location, the row's
+directory included, and it cannot make the topmost directory that is missing between them, so the
+location is not read or written under a new name: in a session opened on the home directory,
+`~/.config` and `~/Library` stay where they are, and a tree built elsewhere cannot be moved to
+`~/.config/systemd`. On macOS Seatbelt's
 refusal of a read is not a refusal of a write, so each location the stage is refused reading that
 lies inside a directory it may write is refused writing too. On Linux and on macOS each place under the home
 directory where a write becomes code that runs later outside the profile is refused writing as well, where a
@@ -1904,7 +1928,9 @@ write there reaches past the stage that made it. The scratch directory is held t
 made, and not to the credential table alone, because every stage writes the temporary directory and
 so the name can be made to lead to any directory the account can reach, most of which are no
 credential location. The cost is that a stage of a session opened on the
-home directory cannot run `git config --global`.
+home directory cannot run `git config --global`. On macOS a stage also cannot rename or remove a
+directory above a refused path, so a stage of that session cannot rename `~/.config` or
+`~/Library`.
 
 Every cache is written by every stage on Linux and macOS in the mode `workspace-write` because a stage is as often a script or a
 wrapper (`make check`, a `just` recipe) as one program, and the binary it resolves to is not the
@@ -2044,6 +2070,10 @@ and Windows `rundll32` were not checked either ([SANDBOX-30](#SANDBOX-30)).
 `verified-by: bravebot_sandbox::policy::a_judged_row_above_a_refusal_that_became_a_link_is_an_error_and_one_not_judged_is_listed`
 `verified-by: bravebot_sandbox::linux::a_judged_row_that_became_a_link_is_refused_and_one_not_judged_is_followed`
 `verified-by: bravebot_sandbox::linux::a_cache_moved_aside_and_linked_to_the_keys_by_one_stage_reaches_nothing_in_the_next`
+`verified-by: bravebot_sandbox::macos::a_directory_above_a_refused_path_is_not_renamed_away`
+`verified-by: bravebot_agent::confine::a_bypass_stage_in_a_session_on_the_home_cannot_rename_the_directory_above_a_refusal`
+`verified-by: bravebot_sandbox::macos::a_tree_built_elsewhere_is_not_moved_to_a_missing_directory_above_a_refusal`
+`verified-by: bravebot_agent::confine::a_stage_cannot_move_a_tree_to_a_missing_directory_above_a_persistence_location`
 
 <a id="SANDBOX-19"></a>
 ### SANDBOX-19: the planner is told its programs are confined, and a failed step says what it ran under
@@ -2096,7 +2126,7 @@ directories it names, and to write the redirection on the `run` line itself, whe
 the file and a refusal names it ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). It names no path:
 the driver compiled no destination from the command string, and nothing the shell printed is read.
 An argument a filename pattern produced ([CMDLINE-4](tools/command-line.md#CMDLINE-4)) is not
-looked at.
+looked at, whether the pattern matched a name or matched nothing and was passed as written.
 
 `verified-by: bravebot_agent::confine::a_failed_shell_step_says_a_redirection_inside_it_is_opened_by_the_sandboxed_shell`
 
@@ -2523,7 +2553,7 @@ forms of `CC`, `CXX`, `AR`, `RANLIB`, `NVCC`, `CFLAGS`, `CXXFLAGS`, `ARFLAGS`, `
 and the others, as the next paragraphs state) and every name that begins `npm_config_` in any case
 (this includes `npm_config_prefix`). A
 `RUSTUP_HOME` that is removed, or that the environment checked does not hold, is set to the account's `.rustup`, since the `cargo` proxy finds
-its toolchains there. `PYTHONPATH`, `PYTHONUSERBASE`, `PYTHONHOME`, `PYTHONPYCACHEPREFIX` and
+its toolchains there. `PYTHONPATH`, `PYTHONUSERBASE`, `PYTHONHOME`, `PYTHONPYCACHEPREFIX`, `PYTHONEXECUTABLE` and
 `NODE_OPTIONS` are in the generic table ([SANDBOX-30](#SANDBOX-30)), which a stage is given too.
 
 A session records the directories a stage may write when its first confined stage starts, which is
@@ -3145,7 +3175,9 @@ run, in the words of the other reach, so there is nothing new to trust.
 **What is not built.** A path the planner proposes, and a reach attached to a command the planner
 has never run. Each puts a path or a shape the planner chose in front of a person to approve, and
 neither is decided here. The one key at the confirmation that remembers a reach is for a credential
-scope the planner asked a line for ([SANDBOX-27](#SANDBOX-27)); none remembers a directory.
+scope the planner asked a line for ([SANDBOX-27](#SANDBOX-27)); none remembers a directory. A line
+lent a remembered credential scope is asked about every time, and a line lent a remembered directory
+is not: a directory grant stays on the directory-trust road.
 
 `verified-by: bravebot_agent::reach::a_grant_covers_the_file_and_the_operation_it_was_made_for`
 `verified-by: bravebot_agent::reach::an_assignment_in_front_of_a_step_removes_every_grant`
@@ -3279,7 +3311,14 @@ own reasons bring, the remote scope's hosts and its toolchain's registries, so t
 different lists. One proxy is started for each distinct list the first time a stage needs it, and
 is kept for the rest of the process. A denied entry that is not a rule fails the stage, since
 dropping it would let the host through, and so does a proxy that cannot be started: a stage is
-never started without the filter its list asks for. An `accept` that fails, as one does with no
+never started without the filter its list asks for. The sentence the planner reads for a denied entry
+that is not a rule says that a `sandbox.network.deniedHosts` entry is not a host name and names no
+byte of the entry, since the entry is a checkout's content where the checkout wrote it. The entry,
+with its control characters made visible, goes to the person in the note of the refusal and in
+`doctor`, which also names the file that wrote it. The sentence is the same wherever the
+`allowedHosts` that holds the list was written (the person's file, the file `--settings` names, the
+managed file), in the foreground and the background, and in a workspace the person did not trust. An
+`accept` that fails, as one does with no
 descriptor left, is retried after a pause that doubles from 5 milliseconds up to a second and starts
 again at the next connection accepted, so the proxy does not hold a core while the descriptors stay
 spent. A connection its client abandoned before it was accepted is passed over with no pause, so a
@@ -3369,6 +3408,36 @@ connections until the session process has no thread or descriptor left to give. 
 address, so a name whose answer holds one that is not public is refused whatever the list holds:
 `localhost` resolves to `::1` as well as `127.0.0.1` on most machines, so a program reaches a
 loopback service through the proxy as `127.0.0.1`, with that address listed.
+
+A name the list allows can resolve to a mapped IPv6 address, and the tunnel is opened to that address
+as the lookup gave it. The list compares a mapped spelling as the IPv4 address it carries, so the
+decision does not depend on the socket. What the connection reaches does. On macOS an IPv6 socket
+with `IPV6_V6ONLY` off reaches an IPv4 listener through `::ffff:127.0.0.1`. Where an IPv6 socket is
+IPv6-only by default, a mapped address may reach nothing, and the tunnel is then not opened. The
+proxy listens on the IPv4 loopback address only, and Windows refuses a stage held to a list, so no
+proxy serves a stage there. What a mapped address reaches on Linux is not verified, so a host on
+which it reaches something other than the IPv4 address it names is possible
+([#4041](https://github.com/brave/bravebot/issues/4041), row 32).
+
+A `64:ff9b::/96` spelling is compared as the IPv4 address it carries, and by text only. Where it
+leads depends on a NAT64 gateway on the network, so what a connection to it reaches is not verified
+([#4041](https://github.com/brave/bravebot/issues/4041), row 33).
+
+A name outside ASCII is compared by the list as written, after ASCII lowercasing. An entry reads ASCII
+letters, digits, `-` and `_`, so an entry cannot spell such a name, and the proxy applies no IDNA
+conversion to a `CONNECT` request, as [PERM-1](permissions.md#PERM-1) applies none to a fetched host.
+A rule there on an international name covers both spellings, and this list does not. A `CONNECT` for
+`bücher.example` is not covered by a denied entry `xn--bcher-kva.example`, and an allowed
+`*.example` covers it, so it is allowed. The name is then resolved as written. The macOS system
+resolver gives the same addresses for `bücher.de` and `xn--bcher-kva.de`, and for `ｅxample.com`
+(U+FF45) as for `example.com`. A denied name is therefore reached by a spelling the resolver reads as
+it when two things hold: the stage is held to a list, and an allowed wildcard such as `*.com` covers
+the spelling while the denied entry names the name exactly. The tunnel is then opened to the
+addresses of the denied name. The resolved addresses are checked only against the denied entries that
+name an address, and an address that is not public is still refused. Whether another resolver
+converts such a name is not verified ([#4041](https://github.com/brave/bravebot/issues/4041), row 34).
+The missing conversion on a `CONNECT` host is a defect and is tracked in
+[#4394](https://github.com/brave/bravebot/issues/4394).
 
 The tests that hold a stage to the proxy through the namespace need a kernel that lets an
 unprivileged user make one. They say so and do not run where it does not, so a green run there
@@ -3466,6 +3535,12 @@ says nothing about them.
 `verified-by: bravebot_agent::host_proxy::a_stage_holds_the_defaults_its_own_reasons_bring_and_no_others`
 `verified-by: bravebot_agent::host_proxy::a_denied_host_is_refused_although_a_default_covers_it`
 `verified-by: bravebot_agent::host_proxy::a_denied_entry_that_is_no_rule_fails_and_an_allowed_one_is_dropped`
+`verified-by: bravebot_agent::host_proxy::the_sentence_for_a_denied_entry_that_is_no_rule_names_no_byte_of_it`
+`verified-by: bravebot_agent::tools::tests::confinement::a_denied_host_that_is_no_host_name_is_told_to_the_person_and_not_the_planner`
+`verified-by: bravebot_agent::tools::tests::confinement::a_denied_host_that_is_no_host_name_is_not_told_whichever_layer_holds_the_list`
+`verified-by: bravebot_agent::tools::tests::confinement::a_denied_host_that_is_no_host_name_is_not_told_in_a_workspace_nobody_trusted`
+`verified-by: bravebot_agent::tools::tests::confinement::the_note_for_a_denied_host_that_is_no_host_name_shows_its_control_characters`
+`verified-by: bravebot_cli::doctor::doctor_names_a_denied_host_that_is_no_host_name_with_controls_visible`
 `verified-by: bravebot_agent::host_proxy::a_list_is_served_by_one_proxy_and_another_list_by_another`
 `verified-by: bravebot_agent::confine::only_a_stage_with_egress_is_pointed_at_the_proxy_and_only_under_a_list`
 `verified-by: bravebot_agent::confine::a_stage_with_a_host_list_is_pointed_at_the_proxy_that_applies_it`
@@ -3475,6 +3550,7 @@ says nothing about them.
 `verified-by: bravebot_config::settings::no_allowed_hosts_is_no_list_and_an_empty_one_is_a_list`
 `verified-by: bravebot_config::settings::the_home_layer_may_write_every_host_key`
 `verified-by: bravebot_config::settings::a_checkout_may_deny_a_host_and_never_allow_one`
+`verified-by: bravebot_config::settings::a_sandbox_block_that_is_not_an_object_takes_no_setting_away`
 `verified-by: bravebot_config::settings::a_checkouts_list_alone_does_not_start_filtering`
 `verified-by: bravebot_config::settings::a_named_file_may_list_hosts_wherever_it_sits`
 `verified-by: bravebot_config::settings::a_misshapen_host_key_is_reported_and_not_read`
@@ -3550,6 +3626,15 @@ need a file made in the tree and a refusal that names a file the volume holds ap
 back. A glob in `allowRead` is compared exactly, since an allowance that names more adds reach the
 person did not write.
 
+A relative entry is read from a directory, and a name in that directory is a name and not a
+pattern, whatever characters it holds, so a `*` or `?` in it is a character. The same path written
+out as an absolute entry has no such directory, so the `*` or `?` is a wildcard there: a write list
+refuses it, and a read list meets every sibling name the wildcard meets. A wildcard has no spelling
+as a plain character, so no absolute entry means what the relative one meant when a name of the
+directory holds `*` or `?`. `bravebot_sandbox::rules::can_anchor_an_absolute_entry` says whether a
+directory can anchor an absolute spelling that keeps the entry's meaning: it is false where a name
+of the directory holds either character, and a root or a Windows prefix is not a name.
+
 An entry of `denyRead` or `denyWrite` that names a path that is not on disk keeps the spelling it
 was written in beneath the part that is. A volume that opens a name under every canonically
 equivalent form (APFS) opens a file made there later under either form, so the path of a request and
@@ -3560,9 +3645,31 @@ pattern, and a volume that holds the two forms apart is refused more than the en
 less. A recorded writable directory and a `PATH` entry that do not exist, spelled in different
 forms, are compared by name only ([SANDBOX-30](#SANDBOX-30)).
 
+A glob in `denyRead` folds by the comparison above and does not ask the volume, so what a volume does
+with case does not change what a glob names. The folding of a glob is verified on macOS only.
+Windows cannot subtract from a grant, so a stage that a `denyRead` would reach is refused there and
+none runs with the path held back; whether the folding of a glob holds on NTFS is not verified. On
+Linux an ext4 or f2fs directory can carry a per-directory `casefold` flag. A glob is expanded by
+listing each directory and compares every name in both cases. The test that expands a glob over
+names in several cases does not set the flag, and no test runs a stage over a directory with the
+flag set. An entry with no wildcard is resolved by the volume, as above, and that is not verified
+over a flagged directory either
+([#4041](https://github.com/brave/bravebot/issues/4041), row 36). The trust map has such a test on
+real directories ([#4279](https://github.com/brave/bravebot/issues/4279)); a stage over a flagged
+directory has none.
+
 An entry that is refused is not in force. A refused allowance leaves reach where it was. A refused
 `denyRead` or `denyWrite` is a path the person meant to hold back, so a stage is not started while one
-is, and the result names the key and the entry. Where the backend cannot subtract from a grant
+is, and the result names the key and the entry, with one exception: an entry a checkout's project or
+local file wrote is text the person did not write, and the result reaches the planner as the driver's
+own sentence, so it names the key, the reason and the file and does not repeat the spelling. The
+reason is one of five sentences the driver wrote, chosen from the spelling by the code that decides
+that the entry is refused, and which of the five the planner can learn is a Known cost
+([Known costs in labels.md](labels.md#known-costs)). The entry
+is marked as a checkout's by the layer that wrote it, never by what it says. A file `--settings`
+names is the person's own wherever it sits, as [PERM-14](permissions.md#PERM-14) says, so its entries
+are quoted, unless the file is withheld, which is read as a checkout's file and marks them. The
+person's own screens (`doctor`, the window) still show the spelling. Where the backend cannot subtract from a grant
 (Windows) a stage the refusal would reach is refused as [SANDBOX-1](#SANDBOX-1) requires, and a
 `denyRead` or `denyWrite` inside the directory the session was opened on, or inside an `allowRead` or
 `allowWrite` entry, is reported as not in force, with why, by `doctor` and by the window, since a stage there is refused and none runs with the path
@@ -3570,15 +3677,20 @@ held back. Where it
 grants a directory with everything beneath it (Landlock) a directory above a refused write is listed
 and granted entry by entry as [SANDBOX-12](#SANDBOX-12) does for a read, which leaves that directory
 without the right to make an entry directly in it: a program cannot create a new file beside a file
-the person denied it writing.
+the person denied it writing. On macOS a directory between a write row and a path the person
+refused, two or more levels below the row among them, is refused removal and renaming, and the
+topmost directory missing between them is refused creation, so the path is not read or written
+under a new name, and a file made beside it is still written.
 
 Every stage of every line a turn starts is built by one function and so holds the lists, a stage
 of a pipeline, of a line left running and of a delegate's turn alike, in the terminal and in a
 window. `doctor` lists every entry with the file or flag that wrote it and each entry that is not in
 force with why. `/status` gives how many entries each list holds and the files that wrote them. The
 opening screen says only that the person's rules are in force. The run prompt says the counts once,
-and the sentence a failed step carries says them. None of them names a path, since a glob's matches
-are the machine's and a path is the person's.
+and the sentence a failed step carries says them. None of those names a path, since a glob's matches
+are the machine's and a path is the person's. The refusal of a stage over an entry that cannot be
+applied is a separate sentence, described above: it names the entry only where the person's own
+file, the command line or the managed file wrote it.
 
 The desktop window shows the four lists and edits nothing: the permissions view lists each entry
 under the list it is in with the file that wrote it, or the command line, and an entry that is not
@@ -3602,6 +3714,11 @@ because the path it names is the one the person was protecting.
 
 `verified-by: bravebot_sandbox::rules::a_name_is_met_by_a_star_and_a_question_mark_and_nothing_looser`
 `verified-by: bravebot_sandbox::rules::an_entry_is_read_from_where_its_spelling_says`
+`verified-by: bravebot_sandbox::rules::an_entry_is_read_by_name_to_the_absolute_path_it_spells`
+`verified-by: bravebot_sandbox::rules::the_sandbox_judges_the_path_the_reading_returns_and_refuses_for_the_reason_it_gives`
+`verified-by: bravebot_sandbox::rules::a_directory_anchors_an_absolute_entry_only_where_no_name_in_it_holds_a_wildcard`
+`verified-by: bravebot_sandbox::rules::a_windows_prefix_does_not_count_as_a_name_holding_a_wildcard`
+`verified-by: bravebot_sandbox::rules::the_absolute_spelling_of_an_entry_is_read_the_same_exactly_where_the_directory_can_anchor_it`
 `verified-by: bravebot_sandbox::rules::an_entry_that_starts_with_a_variable_is_refused_in_every_list`
 `verified-by: bravebot_sandbox::rules::a_link_is_judged_by_where_it_leads`
 `verified-by: bravebot_sandbox::rules::a_write_row_over_the_home_or_the_root_is_refused`
@@ -3649,6 +3766,8 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_agent::permissions::a_denial_the_backend_cannot_subtract_is_not_in_force_and_nothing_else_changes`
 `verified-by: bravebot_agent::permissions::a_denial_beneath_an_allowance_is_not_in_force_where_the_backend_cannot_subtract`
 `verified-by: bravebot_cli::doctor::doctor_reports_a_denial_the_backend_cannot_subtract_as_not_in_force`
+`verified-by: bravebot_cli::doctor::doctor_still_shows_the_text_of_an_entry_a_checkout_wrote`
+`verified-by: bravebot_ui_bridge::rules::the_window_still_lists_the_text_of_an_entry_a_checkout_wrote`
 `verified-by: bravebot_agent::confine::a_refusal_of_the_persons_is_not_lifted_by_the_scope_a_stage_carries`
 `verified-by: bravebot_agent::confine::what_the_default_leaves_every_stage_is_withheld_by_the_persons_lists`
 `verified-by: bravebot_agent::confine::every_kind_of_stage_holds_the_lists`
@@ -3657,6 +3776,7 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_agent::confirm::the_persons_filesystem_lists_are_said_once_and_only_where_they_exist`
 `verified-by: bravebot_config::settings::the_home_layer_may_write_every_filesystem_list`
 `verified-by: bravebot_config::settings::a_checkout_may_add_a_refusal_and_never_an_allowance`
+`verified-by: bravebot_config::settings::a_sandbox_block_that_is_not_an_object_takes_no_setting_away`
 `verified-by: bravebot_config::settings::a_named_file_may_widen_wherever_it_sits`
 `verified-by: bravebot_config::settings::a_misshapen_filesystem_list_is_reported_and_a_blank_entry_is_left_out`
 `verified-by: bravebot_config::settings::the_sandbox_block_is_unread_unless_it_holds_only_the_filesystem_lists`
@@ -3675,11 +3795,22 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_agent::confine::a_denied_write_holds_back_a_file_inside_a_session_directory`
 `verified-by: bravebot_agent::confine::a_denied_read_written_through_a_link_holds_where_the_link_leads`
 `verified-by: bravebot_agent::confine::a_denial_that_cannot_be_applied_stops_the_stage`
+`verified-by: bravebot_agent::tools::tests::confinement::a_refusal_for_a_checkouts_unapplied_entry_does_not_repeat_its_spelling`
+`verified-by: bravebot_agent::tools::tests::confinement::a_checkouts_refused_write_entry_is_named_by_its_list_reason_and_file`
+`verified-by: bravebot_config::settings::an_entry_is_marked_as_a_checkouts_by_the_layer_that_wrote_it`
+`verified-by: bravebot_config::settings::a_withheld_named_files_entries_are_marked_as_a_checkouts`
+`verified-by: bravebot_agent::tools::tests::confinement::a_checkouts_home_entry_without_a_home_is_told_by_its_reason_in_both_starts`
+`verified-by: bravebot_agent::tools::tests::confinement::a_background_line_refused_for_a_checkouts_entry_does_not_repeat_its_spelling`
+`verified-by: bravebot_agent::permissions::every_reason_an_entry_is_refused_for_has_its_own_sentence`
 `verified-by: bravebot_cli::running::doctor_names_each_filesystem_rule_with_where_it_came_from`
 `verified-by: bravebot_cli::running::a_denied_write_reaches_the_programs_a_run_starts`
 `verified-by: bravebot_ui_bridge::sandbox_filesystem::a_denied_write_in_the_settings_reaches_the_programs_a_window_runs`
 `verified-by: bravebot_ui_bridge::sandbox_filesystem::a_denied_write_in_the_settings_reaches_the_programs_an_editor_runs`
 `verified-by: bravebot_ui_bridge::rules::the_filesystem_lists_are_reported_with_the_file_and_what_became_of_each`
+`verified-by: bravebot_sandbox::macos::a_directory_above_a_refused_path_is_not_renamed_away`
+`verified-by: bravebot_sandbox::macos::a_directory_above_a_refusal_spelled_as_a_link_is_not_renamed_away`
+`verified-by: bravebot_agent::confine::a_stage_cannot_rename_the_directory_above_a_credential_or_a_persistence_location`
+`verified-by: bravebot_agent::confine::a_bypass_stage_cannot_rename_the_directory_above_a_listed_refusal`
 
 <a id="SANDBOX-26"></a>
 ### SANDBOX-26: a `run` call may ask for a credential scope, a toolchain list or loopback by name, and the person is asked every time
@@ -3737,8 +3868,11 @@ of the line that has no `NAME=value` in front of it. A name outside the menu, co
 - A stage with a `NAME=value` in front of it gets no requested scope, for the reason it gets no
   carried one. A person's deny rules still beat the rows it adds ([SANDBOX-25](#SANDBOX-25)).
 - The trail records the names and the stage each was added to under `requested_scopes`, built from
-  menu words and stage numbers and nothing the plan chose. The desktop sends the names as
-  `requestedScopes`, beside the confinement it draws, and offers no standing answer for such a line.
+  menu words and stage numbers and nothing the plan chose. The credential scopes a person kept at an
+  earlier prompt that a stage is lent are recorded apart, under the gate `kept_scopes`, so the trail
+  never says the planner asked for what a person kept ([SANDBOX-27](#SANDBOX-27)). The desktop sends
+  the names as `requestedScopes`, beside the confinement it draws, and offers no standing answer for
+  such a line, nor for a line lent a kept scope.
 - A delegate's `run` has the same argument, the same refusals and the same question.
 
 **Why.** Scopes follow the operation an argv names, so a script that shells out to `gh` reaches
@@ -3791,6 +3925,7 @@ connect, and that it is not asked for from a line that has network access
 `verified-by: bravebot_agent::turn::scopes_are_refused_unattended_unless_the_mode_that_asks_nothing_was_given`
 `verified-by: bravebot_agent::turn::a_scope_outside_the_menu_is_an_error`
 `verified-by: bravebot_ui_bridge::wire::a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent`
+`verified-by: bravebot_core::policy::a_kept_scope_leaves_a_trail_apart_from_a_requested_one`
 
 <a id="SANDBOX-27"></a>
 ### SANDBOX-27: a person may answer a request for a credential scope by remembering it as reach for the programs it was added to
@@ -3800,7 +3935,8 @@ runs the line and remembers each requested scope, read only, for the session, an
 for every session started in this checkout. What is remembered is what `/reach` writes
 ([SANDBOX-23](#SANDBOX-23)): one grant for each distinct program and operation word among the line's
 stages and each requested scope, so the next plan for those programs carries the scope as a row the
-person reads, and a session that asks for nothing is not asked about it.
+person reads. A later line for those programs is put to the person every time with that row shown,
+whether or not it asked for the scope, and its output is not trusted.
 
 - Offered only where a record of reach can be written (a session that keeps state and is not
   incognito) and every stage that was given the scope can be keyed: it has an operation word, or no
@@ -3813,6 +3949,16 @@ person reads, and a session that asks for nothing is not asked about it.
 - The line that asked is still asked about every time, with the remembered scope shown on it, and
   neither key vouches for a program, records the line or stops the asking; what it prints is
   quarantined as it was ([SANDBOX-26](#SANDBOX-26)).
+- A later line whose stage is lent a remembered credential scope is asked about every time as a line
+  that asked for it is, before any vouched entry, remembered line or rule is read
+  ([RUN-5](tools/run.md#RUN-5)). The prompt draws the remembered scope row, offers no `a` or `r`, and
+  records no entry and no line, and what the line prints is quarantined as an unvouched line's is
+  ([RUN-4](tools/run.md#RUN-4)). A grant counts only where it is lent to a stage: a grant for
+  another program or operation word, for another checkout or another session, and a stage with a
+  `NAME=value` in front of it, leave the line as it was. Only a credential scope counts. A directory
+  made reachable with `/reach <dir> -- <command>` does not change the question and is held to the
+  directory-trust road ([SANDBOX-23](#SANDBOX-23)). The mode that asks nothing approves such a line,
+  as it approves any run.
 - A grant for a program the scope table gives that scope to (`gh` and the remote scope) is for
   every checkout. Every other grant is bound to the checkout the answer was given in
   ([SANDBOX-23](#SANDBOX-23)). The prompt names the programs, the scopes, the lifetimes and the file
@@ -3837,6 +3983,21 @@ more than the person read.
 `verified-by: bravebot_tui::confirm::run::the_keep_keys_are_unbound_where_the_prompt_does_not_offer_them`
 `verified-by: bravebot_tui::confirm::run::the_keep_keys_wait_for_the_rows_saying_what_they_remember`
 `verified-by: bravebot_tui::confirm::run::a_prompt_offering_to_keep_a_request_names_what_would_be_kept`
+`verified-by: bravebot_agent::turn::a_kept_credential_scope_asks_about_a_later_vouched_line_and_quarantines_its_output`
+`verified-by: bravebot_agent::turn::a_kept_scope_asks_about_a_remembered_line_in_a_later_session`
+`verified-by: bravebot_agent::turn::a_kept_scope_asks_about_a_line_an_allow_rule_answers`
+`verified-by: bravebot_agent::turn::a_grant_that_is_not_lent_to_a_vouched_line_does_not_ask_about_it`
+`verified-by: bravebot_agent::turn::a_standing_answer_to_a_line_lent_a_kept_scope_remembers_nothing`
+`verified-by: bravebot_agent::confine::a_remembered_scope_is_listed_only_for_a_line_it_is_lent_to`
+`verified-by: bravebot_agent::confine::a_scope_kept_in_another_checkout_is_not_listed_for_this_one`
+`verified-by: bravebot_agent::confine::a_global_scope_is_not_listed_for_an_argv_the_table_refuses`
+`verified-by: bravebot_agent::confine::remembered_scopes_leave_the_refusal_of_a_stage_lent_a_grant_in_place`
+`verified-by: bravebot_agent::confirm::a_line_lent_a_kept_scope_may_not_be_recorded_even_with_a_record_path`
+`verified-by: bravebot_core::policy::a_line_lent_a_kept_scope_is_asked_about_whatever_covers_the_line_without_it`
+`verified-by: bravebot_core::policy::the_approval_entry_for_a_kept_scope_names_the_menu_words_and_nothing_the_plan_chose`
+`verified-by: bravebot_tui::confirm::run::a_run_lent_a_kept_scope_offers_no_standing_permission_and_says_why`
+`verified-by: bravebot_ui_bridge::wire::a_run_prompt_lent_a_kept_scope_has_no_standing_answer_and_names_nothing_the_planner_asked`
+`verified-by: bravebot_cli::one_shot::a_run_lent_a_kept_scope_is_not_put_to_a_program_that_approves_everything`
 
 <a id="SANDBOX-28"></a>
 ### SANDBOX-28: a planner may ask for reach to one path, and the person is asked every time it is new
@@ -4271,7 +4432,8 @@ person's access to `~/.ssh`, `~/.aws` and `~/.bravebot`, are the AWS CLI (`aws`)
 tools, `osascript`, the inhibitor `/caffeinate` starts, a hook's program, the `crontab`, `launchctl` and `systemctl` that `bravebot schedule` and `/schedule` run and the destination program of a scheduled entry ([SCHEDULE-7](schedule.md#SCHEDULE-7), [SCHEDULE-8](schedule.md#SCHEDULE-8)), a language server, the
 editor Ctrl-G opens, which `v` uses as well and a ctrl-click on a file path starts without this agent's own credentials ([CRED-14](credential-protection.md#CRED-14)), the browser opener that `auth login chatgpt` and a click on a link in the terminal
 interface start (`open`, `xdg-open` or `rundll32`, [CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13)), the credential authority ([CONNECTOR-2](connectors.md#CONNECTOR-2)), the `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` runs
-([SANDBOX-16](#SANDBOX-16)), and what `doctor --sandbox-check` runs with no sandbox
+([SANDBOX-16](#SANDBOX-16)), the `git` that `/plugin add` runs to fetch a plugin source
+([PLUGIN-3](plugins.md#PLUGIN-3)), and what `doctor --sandbox-check` runs with no sandbox
 ([SANDBOX-21](#SANDBOX-21)): the `gh` of the stored-login row, the programs of a workflow's setup
 stages, and the programs of a workflow run again without the sandbox as the control, `git`, `sh`,
 `cat` and `touch` among them. Each is resolved to an absolute path before it is started, from the
@@ -4369,7 +4531,7 @@ file. A new spawn that looks a name up through
   The editor Ctrl-G opens, a hook's program, the credential authority, the inhibitor `/caffeinate`
   starts, a clipboard tool or `osascript`, the browser opener that `auth login chatgpt` and a
   click on a link start, the
-  `ssh-keygen`, `ssh` and `git` of `doctor --push-identity`, and the AWS CLI are started with
+  `ssh-keygen`, `ssh` and `git` of `doctor --push-identity`, the `git` of `/plugin add`, and the AWS CLI are started with
   bravebot's `PATH` reduced to the entries the lookup searches, in the order
   they were written, so a `#!/usr/bin/env` shebang in the editor, the hook, a clipboard tool, the
   browser opener or an `aws` that is a script, a launcher script, an `$EDITOR` of `env vim`, a `ProxyCommand` in the
@@ -4499,15 +4661,19 @@ file. A new spawn that looks a name up through
   `~/.local/share/applications` itself holds a row on that location and is not covered, which
   SANDBOX-18 records as a known cost. The generic table does not list `HOME`. The AWS CLI lists it as a directory (below), and gcloud, `ssh`
   and `git` keep it. The AWS CLI, the gcloud launcher and the `ssh-keygen`, `ssh` and `git` of
-  `doctor --push-identity` list `BROWSER` and the four `XDG_` directories,
+  `doctor --push-identity` list `BROWSER`, the four `XDG_` directories, `XDG_RUNTIME_DIR` and
+  `DBUS_SESSION_BUS_ADDRESS`, the last two as the opener judges them
+  (`selectors::XDG_RUNTIME_DIR` and `selectors::DBUS_SESSION_BUS_ADDRESS` in
+  `crates/sandbox/src/programs.rs`: 18 names for the AWS CLI, 18 for gcloud and 13 for
+  `doctor --push-identity`),
   since `aws sso login` and `gcloud auth application-default login` open the sign-in page through
   Python's `webbrowser`, which runs each entry of `BROWSER` and then `xdg-open`, and a credential
   helper that git's configuration names can do the same. `xdg-open` itself reads `BROWSER` only in
   its generic path, so under GNOME with `gio` installed it is not read. The desktop application
   deletes `BROWSER`, `GIO_LAUNCH_DESKTOP`, the four `XDG_` directories, `XDG_CACHE_HOME` and the GIO,
   Qt and KDE names of the opener's table below from its own environment (`OPENER_SELECTORS`, 16
-  names: the opener's 30 without `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which the
-  application leaves set, and without the eleven Windows names, as `APPLICATION_EXCEPTIONS` in
+  names: the opener's 30 without `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which are
+  handled as described below, and without the eleven Windows names, as `APPLICATION_EXCEPTIONS` in
   `contrib/check-code-selectors.py` records), and `XDG_CURRENT_DESKTOP` and
   `XDG_MENU_PREFIX` when the value contains a `/` (`FILE_NAME_PREFIXES` in
   `ui/src/main/external-open.ts`, tested by `a file-name prefix is deleted only when it has a slash,
@@ -4515,12 +4681,33 @@ file. A new spawn that looks a name up through
   `Expected values to be strictly deep-equal: actual [] expected ['XDG_CURRENT_DESKTOP',
   'XDG_MENU_PREFIX']` when the `/` test never matches. Electron was not run for these two names),
   before it asks Electron to open an address or a file, since
-  it starts the opener through Electron and not through this start. It does not delete `HOME`,
-  `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`: the
-  application reads `HOME` itself, Electron reaches the session bus through the other two, the
-  agent's allowed-hosts proxy makes its socket directory under `XDG_RUNTIME_DIR`
-  ([SANDBOX-24](#SANDBOX-24)), `process.env` is shared with the agent it starts, and a value
-  put back after the call cannot be shown to follow the moment Electron starts `xdg-open`.
+  it starts the opener through Electron and not through this start. It does not delete `HOME`: the
+  application reads it itself and `process.env` is shared with the agent it starts.
+  `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` are not deleted whatever they hold, because
+  Electron reaches the session bus through them and the agent's allowed-hosts proxy makes its
+  socket directory under `XDG_RUNTIME_DIR` ([SANDBOX-24](#SANDBOX-24)). The directories a session
+  may write are recorded in the agent's process and not in the application's, so before each call
+  to `shell.openExternal`, `shell.openPath` and `shell.showItemInFolder` the application sends the
+  two values it holds to the agent (`opener.judge` in `crates/ui-bridge/src/opener_names.rs`, not
+  offered to a client of the host). The agent applies `may_be_run` to them, the check the opener
+  applies (`XDG_RUNTIME_DIR` as one directory and `DBUS_SESSION_BUS_ADDRESS` as a
+  `Names::BusAddress`), and answers which of the two to delete. A value that holds `U+FFFD` is
+  answered as one to delete, since Node renders bytes that are not UTF-8 that way and the path is
+  not read from the rendering. The application deletes those names from `process.env`, and its
+  caller awaits that before it calls Electron, so the names are deleted when Electron is called. The
+  wait for the agent's answer is bounded (`JUDGE_TIMEOUT_MS`, five seconds), and an agent that does
+  not answer in that time is treated as one that cannot be asked. When the agent cannot be asked, or its
+  answer is not a list of those two names, every one of the two the application holds is
+  deleted. A name that was deleted stays deleted for the rest of the process, as the names of
+  `OPENER_SELECTORS` do, so an agent started after an open and Electron's later calls to the
+  session bus are without it. This lasts for the whole run of the application: with the agent not
+  running, both names are deleted at the first open, and an agent started afterwards has no
+  `XDG_RUNTIME_DIR`, so its proxy socket directory is made in the temporary directory
+  (`socket_parents` in `crates/sandbox/src/proxy.rs`). That Electron's portal and file manager calls
+  still work without `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`, and that the proxy socket
+  directory falls back as stated, was not run. For a person whose runtime directory and bus are
+  outside every directory a session
+  may write, nothing is deleted.
   For `HOME` there is a further reason. GLib takes the home directory from `HOME` and, when `HOME`
   is unset, from the account's passwd entry (`g_get_home_dir`, `g_get_user_data_dir` and
   `g_get_user_config_dir` of GLib 2.90.1 on macOS return the passwd home and its `.local/share` and
@@ -4528,8 +4715,8 @@ file. A new spawn that looks a name up through
   directories under the account's real home. The application's `HOME` comes from the person's login
   session, which a stage cannot change, so the opener reads a directory a stage may write only when
   the account's home is one, and removing `HOME` does not change that.
-  On Linux under a GNOME session the application's opener therefore reads a runtime
-  directory or a bus address that a stage may write. The opener does not read a handler a stage
+  On Linux under a GNOME session the application's opener reads a `HOME` that the sandbox let a
+  program write only where the account's home is one. The opener does not read a handler a stage
   wrote through `HOME`: `~/.config/mimeapps.list`, the `~/.config/<desktop>-mimeapps.list` files of the
   desktops named in [SANDBOX-18](#SANDBOX-18) and `~/.local/share/applications` are persistence
   locations, so a stage is refused writing them in a session opened on the home directory, on
@@ -4540,17 +4727,14 @@ file. A new spawn that looks a name up through
   with `HOME` removed was observed for `gio open` (see the run under a GNOME session below) and
   agrees with the GLib source, and the opener's start through Electron under a GNOME session with a
   file manager on the bus is not observed.
-  [#3904](https://github.com/brave/bravebot/issues/3904) is the issue for `HOME` and
-  [#3940](https://github.com/brave/bravebot/issues/3940) tracks the other two, which are recorded
-  in the bullet "The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`" under
-  "What a checked start does not cover". The names another program
+  [#3904](https://github.com/brave/bravebot/issues/3904) is the issue for `HOME`. The names another program
   reads are added to its start when that program is audited. The usability suite's list
   (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 85 names) adds the names `git`, `make`
   (the programs and flags of its built-in rules, `MAKE_COMMAND`, `CPP`, `TARGET_MACH`, and `COMPILER_PATH` and
   `GCC_EXEC_PREFIX` of the compiler driver it starts), `cargo` (with `rustc`, `rustdoc`, `rustup`,
   the `BROWSER` and `CARGO_DOC_BROWSER` of `cargo doc --open`, the credential providers, and the
   `CROSS_COMPILE`, `RANLIB`, `NVCC`, `ARFLAGS` and `RANLIBFLAGS` the `cc` crate reads),
-  `npm` (`NODE_PATH`), `python3` (`PYTHONEXECUTABLE`, `_PYTHON_SYSCONFIGDATA_NAME`, and `OPENSSL_CONF`,
+  `npm` (`NODE_PATH`), `python3` (`_PYTHON_SYSCONFIGDATA_NAME`, and `OPENSSL_CONF`,
   `OPENSSL_MODULES` and
   `OPENSSL_ENGINES` through the constants in `programs::selectors`) and `go` (with the C
   compiler, `pkg-config`, `GOAUTH` and the linker and compiler flags a cgo build reads) read to
@@ -4559,7 +4743,7 @@ file. A new spawn that looks a name up through
   `PREPROCESS.<suffix>`, `LEX.<suffix>`, `YACC.<suffix>` and `LINT.<suffix>`, `.SHELLFLAGS`, the
   per-target names below, and every `npm_config_` name in any case. `python3` is also given the
   generic table, which holds
-  `PYTHONPLATLIBDIR` beside `PYTHONHOME`. `CL`, `_CL_`, `LINK` and `_LINK_`, which the Visual C++
+  `PYTHONPLATLIBDIR` and `PYTHONEXECUTABLE` beside `PYTHONHOME`. `CL`, `_CL_`, `LINK` and `_LINK_`, which the Visual C++
   compiler and linker read, are not listed: the suite starts `make`, `cargo`, `go` and `python3`
   only on Unix (`crates/agent/src/usability.rs` is compiled under `cfg(unix)`), the generic table
   applies to every checked start (`gcloud`, `aws`, `ssh` and `git` among them), none of which reads
@@ -4835,12 +5019,25 @@ file. A new spawn that looks a name up through
     `MANPAGER` (for `aws s3 help` with output piped), `PYTHONPATH` (a `sitecustomize`, also with
     `PYTHONSAFEPATH=1`) and `PYTHONWARNINGS` (`ignore::<module>.<Class>` imported the module that
     `PYTHONPATH` placed). It ran nothing under `PYTHONWARNINGS` alone, `PYTHONHOME`,
-    `PYTHONEXECUTABLE`, `PYTHONUSERBASE`, `PYTHONBREAKPOINT`, `PYTHONSTARTUP` with piped streams,
+    `PYTHONUSERBASE`, `PYTHONBREAKPOINT`, `PYTHONSTARTUP` with piped streams,
     `BOTOCORE_EXPERIMENTAL__PLUGINS`, `AWS_PAGER` with piped streams, or `EDITOR`, `VISUAL` and
     `BROWSER` for `aws configure list`. Under a pseudo-terminal, with a local HTTP endpoint,
     `AWS_PAGER` and `PAGER` ran for the output of `aws sts get-caller-identity`, and
     `--no-cli-pager` stopped them. `PYTHONSTARTUP` ran only with `PYTHONINSPECT=1` and a
     pseudo-terminal. Every `aws` this program starts has its streams piped, so neither is listed.
+    `PYTHONEXECUTABLE` naming only an interpreter path ran nothing, which is the value this probe
+    tried; it did not name a venv.
+  - **`PYTHONEXECUTABLE`, a venv**: CPython takes `sys.executable` from this variable, reads the
+    `pyvenv.cfg` beside or above it, and makes that venv's prefix `sys.prefix`, so `site` runs the
+    `.pth` files of its `site-packages`. With a venv made by `python3 -m venv` and an `evil.pth`
+    written into its `site-packages`, `PYTHONEXECUTABLE=<venv>/bin/python` ran the `.pth` file
+    ahead of the Homebrew `aws` script's own import of `awscli`, both as an absolute path and as
+    one relative to the working directory; a bare name such as `python` did not, raising the same
+    `ModuleNotFoundError` the venv's missing `awscli` site-packages gives either way.
+    `__PYVENV_LAUNCHER__` naming the same venv ran nothing. `PYTHONEXECUTABLE` is in the generic
+    `CODE_SELECTORS` as [`Names::Program`](../../crates/sandbox/src/programs.rs), so a bare name
+    is kept, resolved on the reduced `PATH`, and an absolute or relative path is removed unless it
+    names a file outside every directory a stage may write.
   - **Run, pip**: `awscli` 1.46.3 from pip in a virtualenv of Python 3.15.0 (Homebrew), with the
     same method. The results match the Homebrew run, with these differences: version 1 ignores
     `cli_legacy_plugin_path`, and loads a `[plugins]` entry `name = module` only when `PYTHONPATH`
@@ -4910,7 +5107,8 @@ file. A new spawn that looks a name up through
   That is 30 names, the `CODE_SELECTORS` list in `crates/tui/src/opener.rs`. The desktop
   application's `OPENER_SELECTORS` in `ui/src/main/external-open.ts` holds the same names without
   `HOME`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS` and the eleven Windows names, 16, and
-  `make check-code-selectors` fails when the two differ in anything else.
+  `make check-code-selectors` fails when the two differ in anything else. The application judges
+  `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` through the agent instead of listing them.
 
   What was run and what was read for these names is in "What a checked start does not cover".
 
@@ -4933,12 +5131,37 @@ file. A new spawn that looks a name up through
   | `SSH_ASKPASS_REQUIRE` | options | `force` makes `ssh` run `SSH_ASKPASS` even with a terminal |
   | `SSH_SK_PROVIDER` | options | the library `ssh` and `ssh-keygen` load for a hardware key |
   | `SSH_SK_HELPER` | options | the program `ssh` runs for a hardware key |
+  | `SSH_PKCS11_HELPER` | options | the program `ssh-pkcs11-client` execs for a PKCS#11 provider |
   | `DEVELOPER_DIR` | a directory | where the macOS `/usr/bin/git` shim finds the toolchain it runs, such as `usr/bin/xcrun` |
 
   `started` also sets `SHELL` to `/bin/sh` whatever the person's is, because `ssh` runs a
   `ProxyCommand` or a `LocalCommand` with `$SHELL -c`. `SHELL` is set and not checked, since the
   person's shell has no use here. The tests in `crates/cli/src/push_identity.rs` hand `started` an
   environment and read the one it gives the program, so they start no real `ssh`.
+
+  The `git` that `/plugin add` starts to fetch a plugin source ([PLUGIN-3](plugins.md#PLUGIN-3)) is
+  found with `Resolved::find_on`, started with `programs::start_against`, and given
+  `Inherits::Without` this agent's own credentials, `SearchPath::Reduced` and `CodeSelectors::Checked`
+  with the list `CODE_SELECTORS` in `crates/agent/src/plugin_git.rs`. A `git` found only in a directory
+  a stage may write reads as not installed, and the install is refused before the host is asked
+  about. The list is the generic table and:
+
+  | Variable | Names | Why it selects code |
+  |---|---|---|
+  | `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_PROXY_COMMAND` | options | the program `git` runs to reach a host |
+  | `GIT_ASKPASS` | options | the program `git` runs to ask for a credential |
+  | `GIT_EDITOR`, `GIT_PAGER`, `GIT_EXTERNAL_DIFF` | options | a program `git` runs to edit, page or compare |
+  | `SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE`, `SSH_SK_PROVIDER`, `SSH_SK_HELPER`, `SSH_PKCS11_HELPER` | options | as in the table above, for the `ssh` that `git` starts |
+  | `GIT_TEMPLATE_DIR` | a directory | a directory whose `hooks` are copied into a repository `git init` makes |
+  | `XDG_CONFIG_HOME` | a directory | the directory holding the `git/config` `git` reads, which can name a program |
+
+  `GIT_SSL_*` name a certificate or a key and no program, so they are left as set. The start removes
+  `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`,
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES` and `GIT_COMMON_DIR` by name, so each step works in the
+  directories it names itself, and sets `GIT_TERMINAL_PROMPT=0`. The tests in
+  `crates/agent/src/plugin_git.rs` and `crates/agent/src/plugin_git/safety_tests/environment_tests.rs` hand the
+  start an environment and read the one the program gets, and one of them starts a real `git` with a
+  marker-writing selector set to show the marker is not written.
 
   The `powershell` that the clipboard tool and `/caffeinate` start on Windows is started by
   `powershell::start` in `crates/tui/src/powershell.rs`, which both call. It gives a program whose
@@ -5989,33 +6212,44 @@ shown by running the program, or not entirely:
   the launchers read is therefore complete only for `xdg-open` and `xdg-mime` 1.2.1 and, for the
   files named above, `gio open` and `kde-open`.
   They are tracked by #3822.
-- **The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`.** The desktop
-  application, the AWS CLI (`crates/bedrock/src/credentials.rs`), the gcloud launcher
-  (`crates/agent/src/gcloud.rs`) and the programs of `doctor --push-identity`
-  (`crates/cli/src/push_identity.rs`) do not judge either name. The application cannot delete
-  them: Electron reaches the session bus through them, the agent's proxy directory is made under
-  `XDG_RUNTIME_DIR` and the agent is started with the application's environment. Deleting them for
-  the span of one call is not shown to reach the moment Electron starts `xdg-open`. The other three
-  start `xdg-open` through Python's `webbrowser` or a credential helper, so under a GNOME session
-  `gio open` connects to the bus the value names, and the run in the `gio open` text above shows
-  that a service there receives the address being opened, which for a sign-in is the sign-in page's.
-  The code gives one reason per start. The tests of the AWS start (`credentials.rs`) and the
-  gcloud start (`gcloud.rs`) say the sign-in or login is run to read `DISPLAY` and
-  `XDG_RUNTIME_DIR`, and the code does not say which program reads `XDG_RUNTIME_DIR` or why. The
-  test of `doctor --push-identity` (`push_identity.rs`) says `HOME`, `SSH_AUTH_SOCK`,
-  `XDG_RUNTIME_DIR` and `DISPLAY` are variables the programs started there are run to read, and
-  gives no reason specific to `XDG_RUNTIME_DIR`. None of the three judges
-  `DBUS_SESSION_BUS_ADDRESS` or says why it is passed on. The sandbox usability suite
-  (`crates/agent/src/usability.rs`) lists neither name, and its list has `BROWSER` for the
-  commands `cargo doc --open` opens the documentation with. The person's own runtime directory is
-  normally outside every directory a stage may write. The cost is that a person whose value leads
-  into such a directory
-  has the address received by a stage that listens there, and whether more than that can happen
-  was not shown. [#3940](https://github.com/brave/bravebot/issues/3940) tracks removing this
-  cost. The tests
-  `the_aws_start_keeps_the_variables_a_sign_in_is_run_to_read`,
-  `the_gcloud_start_keeps_the_display_and_runtime_directory_a_login_reads` and
-  `the_variables_the_programs_started_here_are_run_to_read_are_kept` hold the kept names.
+- **The reach of the session bus judgment.** The terminal browser opener, the AWS CLI
+  (`crates/bedrock/src/credentials.rs`), the gcloud launcher (`crates/agent/src/gcloud.rs`), the
+  programs of `doctor --push-identity` (`crates/cli/src/push_identity.rs`) and the desktop
+  application judge `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` by where the socket is. The
+  four Rust starts share `selectors::XDG_RUNTIME_DIR` and `selectors::DBUS_SESSION_BUS_ADDRESS`, and
+  the application asks the agent for the same judgment (`opener.judge`), as described in the
+  browser opener bullet above. What is left:
+  - Which program reads these names on each start was not shown. The AWS and gcloud starts are run
+    to open a sign-in page through Python's `webbrowser`, which runs `xdg-open`, and a credential
+    helper that git's configuration names can do the same for `doctor --push-identity`. Under a
+    GNOME session `xdg-open` runs `gio open`, which reads both names (the run in the `gio open`
+    text above). That the real `aws`, `gcloud`, `ssh-keygen`, `ssh` or `git` read either name
+    themselves was not run or read from their source, and the tests of the starts say only that a
+    value outside every directory a stage may write is kept.
+  - What each removal costs. Without `DBUS_SESSION_BUS_ADDRESS`, `gio` finds the bus at
+    `$XDG_RUNTIME_DIR/bus`; without `XDG_RUNTIME_DIR` as well it has no session bus to find. A
+    Wayland client the sign-in starts that finds the compositor's socket through `XDG_RUNTIME_DIR`
+    cannot find it without that name. The values are removed only where they lead into a directory
+    a stage may write, or do not exist, or are not text, so a person whose runtime directory is
+    outside every such directory is unaffected. This cost was not run on Linux.
+  - Whether a service a stage runs on such a socket can make `gio open` run code or choose a
+    handler was not shown, as in the opener bullet.
+  - The desktop application deletes a name the agent lists from the shared `process.env`, and it
+    stays deleted. Whether Electron's own portal, file manager and notification calls, which are
+    made earlier in start-up, and the agent's proxy socket directory (`socket_parents` in
+    `crates/sandbox/src/proxy.rs`, which falls back to the temporary directory) are affected was
+    not run; no Linux host ran it. The Electron test (`ui/scripts/external-open-electron.test.mjs`)
+    stands in for the agent with a judge that keeps both names, so it shows the other sixteen
+    names and not these two.
+  - The sandbox usability suite (`crates/agent/src/usability.rs`) lists neither name, and its list
+    has `BROWSER` for the commands `cargo doc --open` opens the documentation with.
+
+  The tests
+  `the_aws_start_removes_a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write`,
+  `a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write_is_not_the_one_the_gcloud_login_uses`
+  and
+  `a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write_is_not_handed_to_the_programs_started_here`
+  hold the judgment of the three starts.
 - `osascript` was run on macOS 26.6 (arm64) with `/usr/bin/osascript` and `env -i
   PATH=/usr/bin:/bin`. A compiled script library `Marker3809.scpt` (built with `osacompile`) in
   `<home>/Library/Script Libraries`, whose handler appends to a marker file, was used with
@@ -6402,6 +6636,13 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_cli::push_identity::the_start_is_given_bin_sh_for_shell_whatever_the_person_has`
 `verified-by: bravebot_cli::push_identity::a_developer_directory_a_stage_may_write_is_not_handed_to_the_start`
 `verified-by: bravebot_cli::push_identity::a_developer_directory_outside_every_directory_a_stage_may_write_still_reaches_the_start`
+`verified-by: bravebot_agent::plugin_git::the_variables_that_name_a_program_for_git_or_ssh_are_removed`
+`verified-by: bravebot_agent::plugin_git::the_generic_selectors_apply_and_a_certificate_variable_is_left_alone`
+`verified-by: bravebot_agent::plugin_git::this_agents_credentials_and_the_repository_variables_are_not_passed`
+`verified-by: bravebot_agent::plugin_git::a_git_found_only_where_a_stage_may_write_reads_as_not_installed`
+`verified-by: bravebot_agent::plugin_git::safety_tests::environment_tests::variables_that_select_code_set_in_the_persons_environment_do_not_reach_the_clone`
+`verified-by: bravebot_agent::plugin_git::safety_tests::environment_tests::a_template_directory_in_the_persons_environment_is_not_used_by_the_clone`
+`verified-by: bravebot_agent::plugin_git::safety_tests::environment_tests::an_ssh_a_stage_planted_first_on_the_persons_path_is_not_run_by_the_clone`
 `verified-by: bravebot_connector::lib::an_authority_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_agent::lsp::a_server_found_only_where_a_stage_may_write_is_not_installed`
 `verified-by: bravebot_tui::caffeinate::the_inhibitor_runs_the_installed_cat_and_never_one_a_stage_may_have_written`
@@ -6477,13 +6718,13 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_tui::opener::a_bus_socket_is_judged_by_where_it_leads_on_the_disk`
 `verified-by: bravebot_tui::opener::a_bus_address_that_is_not_text_is_removed_and_not_judged_by_its_lossy_rendering`
 `verified-by: bravebot_sandbox::programs::a_bus_address_that_is_not_text_is_not_judged_by_its_lossy_rendering`
-`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open.test.mjs asserts that HOME, XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS are not in OPENER_SELECTORS and are still set after the deletion; make check-ui runs it)`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open.test.mjs asserts that HOME is not in OPENER_SELECTORS and is still set after the deletion, that the two session bus names are asked about through opener.judge before each of the three calls and deleted only when the agent lists them or cannot be asked, that an agent that does not answer within the bound is one that cannot be asked, and that nothing else is deleted on the agent's word; make check-ui runs it)`
 `verified-by: bravebot_tui::opener::the_opener_removes_a_windows_name_that_selects_code_a_stage_may_write`
 `verified-by: bravebot_tui::opener::comspec_is_removed_for_a_program_a_stage_may_write_and_kept_for_an_installed_one`
 `verified-by: bravebot_tui::opener::a_windows_name_is_removed_in_whatever_case_it_is_set`
 `verified-by: bravebot_tui::opener::the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`
 `verified-by: bravebot_tui::opener::a_handler_that_expands_a_name_the_opener_removed_does_not_run_a_stage_written_helper`
-`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open-electron.test.mjs starts Electron under xvfb-run with a logging xdg-open first on PATH and asserts that openExternal and openPath of external-open.ts start it with none of the sixteen names set and the same calls on Electron's shell start it with all sixteen; it runs only on Linux with Electron and xvfb-run installed and prints skipped elsewhere; make check-ui-build runs it; make check-code-selectors holds its list and OPENER_SELECTORS to the opener's apart from HOME, XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS and the ten Windows names, which the application keeps)`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open-electron.test.mjs starts Electron under xvfb-run with a logging xdg-open first on PATH and asserts that openExternal and openPath of external-open.ts start it with none of the sixteen names set and the same calls on Electron's shell start it with all sixteen; it runs only on Linux with Electron and xvfb-run installed and prints skipped elsewhere; make check-ui-build runs it; make check-code-selectors holds its list and OPENER_SELECTORS to the opener's apart from HOME, XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS and the ten Windows names, which the application keeps; the run stands in for the agent with a judge that keeps both session bus names, so it does not cover them)`
 `verified-by: bravebot_tui::opener::a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde`
 `verified-by: bravebot_tui::opener::kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes`
 `verified-by: bravebot_tui::powershell::a_module_path_with_a_directory_a_stage_may_write_is_removed_whole_and_a_safe_one_is_kept`
@@ -6499,12 +6740,22 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_schedule::schedule::a_unixexec_session_bus_address_runs_a_helper_through_systemctl_unless_the_start_removes_it`
 `verified-by: bravebot_bedrock::credentials::the_aws_start_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write`
 `verified-by: bravebot_bedrock::credentials::the_aws_start_keeps_the_variables_a_sign_in_is_run_to_read`
+`verified-by: bravebot_bedrock::credentials::the_aws_start_removes_a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write`
+`verified-by: bravebot_bedrock::credentials::an_aws_runtime_directory_or_bus_address_that_is_not_text_is_judged_by_its_bytes`
 `verified-by: bravebot_bedrock::credentials::an_aws_browser_entry_that_is_not_text_is_removed`
 `verified-by: bravebot_agent::gcloud::a_browser_or_xdg_directory_a_stage_may_write_is_not_the_one_the_gcloud_login_is_told_to_use`
 `verified-by: bravebot_agent::gcloud::a_gcloud_browser_entry_that_is_not_text_is_removed`
-`verified-by: bravebot_agent::gcloud::the_gcloud_start_keeps_the_display_and_runtime_directory_a_login_reads`
+`verified-by: bravebot_agent::gcloud::the_gcloud_start_keeps_the_display_a_login_reads`
+`verified-by: bravebot_agent::gcloud::a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write_is_not_the_one_the_gcloud_login_uses`
+`verified-by: bravebot_agent::gcloud::a_gcloud_runtime_directory_or_bus_address_that_is_not_text_is_judged_by_its_bytes`
 `verified-by: bravebot_cli::push_identity::a_browser_or_xdg_directory_a_stage_may_write_is_not_handed_to_the_programs_started_here`
 `verified-by: bravebot_cli::push_identity::the_variables_the_programs_started_here_are_run_to_read_are_kept`
+`verified-by: bravebot_cli::push_identity::a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write_is_not_handed_to_the_programs_started_here`
+`verified-by: bravebot_cli::push_identity::a_runtime_directory_or_bus_address_that_is_not_text_is_judged_by_its_bytes_here`
+`verified-by: bravebot_ui_bridge::opener_names::a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write_is_to_be_deleted`
+`verified-by: bravebot_ui_bridge::opener_names::a_runtime_directory_and_bus_address_outside_every_directory_a_stage_may_write_are_kept`
+`verified-by: bravebot_ui_bridge::opener_names::a_value_holding_a_replacement_character_is_deleted_whatever_it_spells`
+`verified-by: bravebot_ui_bridge::opener_names::the_directories_a_session_here_may_write_are_the_ones_judged`
 `verified-by: bravebot_cli::push_identity::a_browser_entry_that_is_not_text_is_removed_from_the_programs_started_here`
 `verified-by: bravebot_cli::push_identity::a_list_of_xdg_directories_outside_every_directory_a_stage_may_write_is_kept_for_the_programs_started_here`
 `verified-by: bravebot_bedrock::credentials::an_aws_xdg_list_of_directories_outside_every_directory_a_stage_may_write_is_kept`

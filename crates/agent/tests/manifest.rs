@@ -517,6 +517,78 @@ fn the_planner_is_shown_capabilities_and_no_tool_names() {
     );
 }
 
+/// BACKEND-15: both planning requests of a manifest run go out with no tool list even when the model
+/// they are sent to states one in its own `options`, and the options that name no tool still
+/// arrive. The regression it rejects is a gateway client that adds each option key the body lacks:
+/// the test above runs through an endpoint that merges no options, so it cannot see it.
+#[test]
+fn the_planning_requests_through_a_gateway_carry_no_tool_list_the_models_options_state() {
+    let scratch = Scratch::new("catalogue-gateway-options");
+    std::fs::write(scratch.path.join("a.md"), "hello").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "doc"}},
+            {"capability": "ANSWER", "args": {"from_slot": "doc"}},
+        ])),
+    ]);
+    let mut config = config_for(&endpoint);
+    let root = json!({"provider": {"gw": {
+        "options": {"baseURL": endpoint, "apiKey": "SYNTHETIC_TOKEN"},
+        "models": {"a-model": {"options": {
+            "tools": [{"type": "function", "function": {
+                "name": "OPTION-SUPPLIED-TOOL",
+                "parameters": {"type": "object"}
+            }}],
+            "tool_choice": "required",
+            "functions": [{"name": "OPTION-SUPPLIED-FUNCTION"}],
+            "function_call": "auto",
+            "parallel_tool_calls": true,
+            "top_k": 7
+        }}}
+    }}});
+    config.providers = bravebot_config::provider::Provider::all(root.as_object().unwrap());
+    let mut sink = RecordingSink::new();
+
+    manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("show me a.md").with_model(Some("gw/a-model".to_string())),
+        skipping_permissions!(),
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("runs");
+
+    for round in ["shape", "fit"] {
+        let body: serde_json::Value =
+            serde_json::from_str(&received.recv().expect("a planning request"))
+                .expect("a JSON request");
+        for key in [
+            "tools",
+            "tool_choice",
+            "functions",
+            "function_call",
+            "parallel_tool_calls",
+        ] {
+            assert!(
+                body.get(key).is_none(),
+                "the {round} request carried `{key}` from the model's options: {body}"
+            );
+        }
+        assert_eq!(
+            body["top_k"],
+            json!(7),
+            "the {round} request lost an option that names no tool: {body}"
+        );
+    }
+}
+
 /// A screenshot of the thing to be built is the task, so it goes to the planner with the words it
 /// was pasted beside. Both calls carry it: the plan comes out of the second, and a planner fitting
 /// steps to a picture it had been shown and then had taken away would be planning from a memory of
@@ -830,6 +902,94 @@ fn injected_text_in_a_file_cannot_add_a_step() {
     assert!(
         received.try_recv().is_err(),
         "the injection bought another model call"
+    );
+}
+
+/// The driver starts exactly the steps the plan holds, once each and in the plan's order, and no
+/// other. `Outcome::steps` is the plan's length, so it cannot tell a skipped, repeated, reordered
+/// or appended step from a faithful run: the order and the count are read from what the driver
+/// announced as it started each step and from the record it kept of each.
+///
+/// Three reads of files with different contents and an answer about the middle one, so a driver
+/// that skips a step that "nobody reads" (the first and last read), runs the steps in another
+/// order, or appends a step of its own is told apart from one that walks the plan.
+#[test]
+fn the_driver_runs_every_step_of_the_plan_once_and_in_plan_order() {
+    let scratch = Scratch::new("every-step-in-order");
+    std::fs::write(scratch.path.join("a.md"), "first file").unwrap();
+    std::fs::write(scratch.path.join("b.md"), "second file").unwrap();
+    std::fs::write(scratch.path.join("c.md"), "third file").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "one"}},
+            {"capability": "FILE_READ", "args": {"path": "b.md", "out_slot": "two"}},
+            {"capability": "FILE_READ", "args": {"path": "c.md", "out_slot": "three"}},
+            {"capability": "ANSWER", "args": {"from_slot": "two"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("read the three files and answer with the second"),
+        skipping_permissions!(),
+        &mut reporter,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the run");
+
+    let planned = [
+        "read a.md into one",
+        "read b.md into two",
+        "read c.md into three",
+        "answer from two",
+    ];
+    let started: Vec<&str> = reporter
+        .started
+        .iter()
+        .map(|activity| activity.target.as_str())
+        .collect();
+    assert_eq!(started, planned, "the steps the driver started");
+    let finished: Vec<&str> = reporter
+        .finished
+        .iter()
+        .map(|activity| activity.target.as_str())
+        .collect();
+    assert_eq!(finished, planned, "the steps the driver finished");
+
+    let attempt = outcome.attempt.as_ref().expect("the run's record");
+    assert_eq!(attempt.steps.len(), planned.len(), "{:?}", attempt.steps);
+    for (index, (recorded, expected)) in attempt.steps.iter().zip(planned).enumerate() {
+        assert!(
+            recorded.starts_with(&format!("{}. [", index + 1)) && recorded.contains(expected),
+            "step {} was recorded as {recorded:?}, the plan said {expected:?}",
+            index + 1
+        );
+    }
+    assert_eq!(outcome.steps, planned.len());
+    assert!(
+        outcome.reply_for_display().contains("second file"),
+        "the answer was not the middle read: {}",
+        outcome.reply_for_display()
+    );
+
+    // The plan and the shape were the only model calls: a step the driver made up would not have
+    // asked either, but a step that ran twice or a transform it added would have.
+    for _ in 0..2 {
+        let _ = received.recv();
+    }
+    assert!(
+        received.try_recv().is_err(),
+        "the run made a model call the plan did not hold"
     );
 }
 

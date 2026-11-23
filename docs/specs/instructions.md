@@ -196,6 +196,7 @@ as though a person had just said them.
 `verified-by: bravebot_agent::turn::the_preamble_is_not_stored_in_the_conversation`
 `verified-by: bravebot_agent::turn::a_trusted_workspace_agents_file_reaches_the_system_prompt`
 `verified-by: bravebot_agent::turn::an_untrusted_workspace_agents_file_never_reaches_the_system_prompt`
+`verified-by: bravebot_agent::turn::the_standing_instructions_and_the_skill_listing_are_in_the_system_message_alone`
 
 <a id="INSTR-6"></a>
 ### INSTR-6: a source that is not there is not an error
@@ -221,6 +222,8 @@ reload and no session to restart.
 cannot see, and the fix for that would be to restart, which loses the conversation.
 
 `verified-by: bravebot_agent::preamble::a_file_written_after_one_turn_is_read_by_the_next`
+`verified-by: bravebot_agent::turn::an_agents_file_written_between_two_turns_reaches_the_second_turns_system_prompt`
+`verified-by: bravebot_agent::turn::a_skill_written_between_two_turns_is_named_to_the_planner_in_the_second_request`
 
 <a id="INSTR-8"></a>
 ### INSTR-8: an instructions file that only names another one is followed, once
@@ -459,6 +462,10 @@ gate and reads each import through it, so nothing untrusted decides what is read
 `verified-by: bravebot_agent::preamble::an_import_back_to_the_file_a_pointer_was_read_from_is_a_cycle`
 `verified-by: bravebot_agent::preamble::a_shorter_fence_inside_a_longer_one_does_not_end_it`
 `verified-by: bravebot_agent::preamble::an_import_outside_the_workspace_is_left_as_written`
+`verified-by: bravebot_agent::preamble::a_leading_slash_import_is_not_read_as_relative_to_the_project`
+`verified-by: bravebot_agent::preamble::an_import_of_a_distrusted_file_stays_as_written_and_is_reported_by_name`
+`verified-by: bravebot_agent::preamble::the_home_agents_file_is_not_expanded`
+`verified-by: bravebot_agent::preamble::one_refusal_is_reported_once_however_often_the_file_is_named`
 `verified-by: bravebot_agent::preamble::an_untrusted_project_loads_no_import`
 `verified-by: bravebot_agent::turn::a_denied_file_an_agents_file_imports_does_not_reach_the_system_prompt`
 
@@ -648,6 +655,7 @@ which file is read.
 `verified-by: bravebot_agent::preamble::a_path_outside_the_root_does_not_make_its_directory_a_source`
 `verified-by: bravebot_agent::preamble::the_directories_worked_in_stop_at_sixty_four`
 `verified-by: bravebot_agent::preamble::a_link_in_a_touched_name_is_not_followed_to_where_it_lands`
+`verified-by: bravebot_agent::turn::a_checkout_with_changes_names_a_redirection_through_a_link_by_the_typed_spelling`
 `verified-by: bravebot_agent::preamble::a_nested_agents_file_is_not_followed_to_a_pointer_or_expanded_for_an_import`
 `verified-by: bravebot_agent::preamble::a_nested_file_spelled_in_another_case_is_an_ordinary_file`
 `verified-by: bravebot_agent::preamble::only_the_exactly_spelled_nested_file_loads_beside_a_differently_spelled_one`
@@ -862,6 +870,7 @@ for a record as for a live session.
 `verified-by: bravebot_agent::workspace::a_name_typed_with_at_records_the_file_and_not_its_directory`
 `verified-by: bravebot_agent::workspace::a_name_typed_with_at_that_is_a_directory_or_nothing_is_not_a_file`
 `verified-by: bravebot_agent::workspace::a_touched_file_is_recorded_by_the_spelling_the_planner_typed`
+`verified-by: bravebot_agent::turn::a_checkout_with_changes_names_a_redirection_through_a_link_by_the_typed_spelling`
 `verified-by: bravebot_agent::workspace::a_workspace_given_what_the_session_kept_has_the_files_it_touched`
 `verified-by: bravebot_agent::workspace::the_files_touched_stop_at_a_thousand_and_twenty_four`
 `verified-by: bravebot_agent::safe::a_safe_session_reads_no_rule_file`

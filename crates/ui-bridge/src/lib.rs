@@ -40,32 +40,42 @@ pub mod acp_loop;
 pub mod allowlist;
 mod answerers;
 pub mod arguments;
+pub mod aside;
 pub mod attached;
+pub mod background;
 pub mod bots;
 pub mod bridge;
 pub mod bug_report;
+pub mod compaction;
 pub mod connectors;
+pub mod crash_notice;
 // Public so the integration tests and the persistent host can reach it, and hidden from the
 // documentation until a caller outside the tests settles what it offers.
 #[cfg(unix)]
 #[doc(hidden)]
 pub mod control_link;
+pub mod crash_reports;
 pub mod definitions;
 pub mod effort;
 pub mod emit;
 pub mod enhance;
 pub mod fork;
+pub mod handoff;
 pub mod help;
 pub mod hooks;
 #[cfg(unix)]
 pub mod host;
+#[cfg(unix)]
+pub mod host_trust;
 mod key_entry;
 pub mod language;
 pub mod manifest;
 pub mod mentions;
 pub mod models;
+pub mod opener_names;
 mod project_questions;
 pub mod protocol;
+pub mod reports;
 pub mod rules;
 pub mod running;
 mod schedule_command;
@@ -75,8 +85,10 @@ pub mod store;
 pub mod turn;
 pub mod update_status;
 pub mod usage_ping;
+pub mod variant;
 pub mod view;
 pub mod window_fault;
+pub mod window_title;
 pub mod wire;
 pub mod workers;
 

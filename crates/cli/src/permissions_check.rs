@@ -18,6 +18,8 @@ enum Call {
     Command(Vec<String>),
     Host(String),
     Tool(String, String),
+    /// A web search, which has no routing a rule could name (PERM-1).
+    Search,
 }
 
 impl Call {
@@ -34,6 +36,7 @@ impl Call {
             (Subject::WebFetch, [target]) => Some(Self::Host(
                 bravebot_core::url::host_of(target).unwrap_or_else(|| target.clone()),
             )),
+            (Subject::WebSearch, []) => Some(Self::Search),
             (Subject::Mcp, [target]) => {
                 let (alias, tool) = target.split_once(':')?;
                 Some(Self::Tool(alias.to_string(), tool.to_string()))
@@ -58,6 +61,7 @@ impl Call {
             Self::Command(argv) => permissions.rule_for_command(argv),
             Self::Host(host) => permissions.rule_for_host(host),
             Self::Tool(alias, tool) => permissions.rule_for_mcp(alias, tool),
+            Self::Search => permissions.rule_for_search(),
         }
     }
 }

@@ -39,7 +39,9 @@
     "drive:rules": "pnpm run bridge && electron-vite build && node scripts/drive-rules.mjs",
     "drive:permission-mode": "pnpm run bridge && electron-vite build && node scripts/drive-permission-mode.mjs",
     "drive:sandbox-mode": "pnpm run bridge && electron-vite build && node scripts/drive-sandbox-mode.mjs",
-    "drive:remembered-trust": "pnpm run bridge && electron-vite build && node scripts/drive-remembered-trust.mjs",
+    "drive:spend-limit": "pnpm run bridge && electron-vite build && node scripts/drive-spend-limit.mjs",
+    "drive:variant-picker": "pnpm run bridge && electron-vite build && node scripts/drive-variant-picker.mjs",
+    "drive:remembered-trust":"pnpm run bridge && electron-vite build && node scripts/drive-remembered-trust.mjs",
     "drive:run": "pnpm run bridge && electron-vite build && node scripts/drive-run.mjs",
     "drive:ask": "pnpm run bridge && electron-vite build && node scripts/drive-ask.mjs",
     "drive:at-mentions": "pnpm run bridge && electron-vite build && node scripts/drive-at-mentions.mjs",
@@ -48,7 +50,9 @@
     "package": "pnpm run bridge && electron-vite build && node scripts/package.mjs",
     "drive:menu": "pnpm run bridge && electron-vite build && node scripts/drive-menu.mjs",
     "drive:session-list": "pnpm run bridge && electron-vite build && node scripts/drive-session-list.mjs",
+    "drive:background-sessions": "pnpm run bridge && electron-vite build && node scripts/drive-background-sessions.mjs",
     "drive:window-fault": "pnpm run bridge && electron-vite build && node scripts/drive-window-fault.mjs",
+    "drive:pointer-crash": "pnpm run bridge && electron-vite build && node scripts/drive-pointer-crash.mjs",
     "drive:project-actions": "pnpm run bridge && electron-vite build && node scripts/drive-project-actions.mjs",
     "drive:about": "pnpm run build && node scripts/drive-about.mjs",
     "drive:update-bug-report": "pnpm run build && node scripts/drive-update-bug-report.mjs",
@@ -57,6 +61,7 @@
     "drive:tree": "pnpm run bridge && electron-vite build && node scripts/drive-tree.mjs",
     "drive:theme": "pnpm run bridge && electron-vite build && node scripts/drive-theme.mjs",
     "drive:language": "pnpm run bridge && electron-vite build && node scripts/drive-language.mjs",
+    "drive:crash-reports": "BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 BACKTRACE_SUBMIT_URL=https://127.0.0.1:1/x cargo build -p bravebot-ui-bridge --bin bravebot-rpc && electron-vite build && node scripts/drive-crash-reports.mjs",
     "drive:bots": "pnpm run bridge && electron-vite build && node scripts/drive-bots.mjs",
     "drive:bot-turn": "pnpm run bridge && electron-vite build && node scripts/drive-bot-turn.mjs",
     "drive:bot-memory": "pnpm run bridge && electron-vite build && node scripts/drive-bot-memory.mjs",
@@ -70,7 +75,8 @@
     "drive:rewind": "pnpm run build && node scripts/drive-rewind.mjs",
     "drive:note-changelog-awake": "pnpm run build && node scripts/drive-note-changelog-awake.mjs",
     "drive:agent-settings": "pnpm run build && node scripts/drive-agent-settings.mjs",
-    "drive:agent-rpc": "pnpm run bridge && node scripts/drive-agent-rpc.mjs"
+    "drive:agent-rpc": "pnpm run bridge && node scripts/drive-agent-rpc.mjs",
+    "drive:prototype": "pnpm run bridge && pnpm --dir ../packages/agent-client run build && electron-vite build && node scripts/drive-prototype.mjs"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",

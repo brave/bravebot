@@ -313,7 +313,8 @@ option carrying a value, such as `--include=*.md`, is the program's to match, so
 written and never looked up. And the expansion is capped, because
 an approval prompt with a thousand paths in it is a prompt nobody reads: a word may stand for at
 most a hundred arguments, and working out one pattern may read at most four thousand directories.
-Past either, the compile fails and says the count. `**` steps over the same directories a listing
+Past either, the compile fails. It names the cap, and it names a count only for the braces of the
+line itself, which are the planner's own text. `**` steps over the same directories a listing
 steps over, so it does not descend into `.git` or `node_modules`.
 
 ---

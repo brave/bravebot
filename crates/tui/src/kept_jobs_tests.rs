@@ -111,6 +111,33 @@ fn a_stop_between_turns_ends_the_program_and_the_row() {
     );
 }
 
+/// RUN-15. `/clear` begins another conversation, and the jobs of the one that is gone end with it:
+/// the program is killed, the list is empty, and the session goes on keeping jobs for the new
+/// conversation. A reset that emptied the list and kept the old set would leave the program
+/// running with nothing in the session that lists it or can stop it.
+#[test]
+fn clearing_the_session_ends_the_program_a_kept_job_was_running() {
+    let root = a_checkout("kept-job-ended-by-clear");
+    let mut session = Session::new("none");
+    let pid = a_turn_that_started_a_job(&mut session, &root);
+    session.complete("started", Vec::new(), 0);
+    assert!(is_alive(&pid), "the job did not outlive its turn");
+    assert_eq!(session.jobs_running(), 1);
+
+    session.clear();
+
+    assert_eq!(session.jobs().count(), 0);
+    assert_eq!(session.jobs_running(), 0);
+    assert!(
+        session.kept_jobs().is_some(),
+        "the new conversation keeps jobs"
+    );
+    assert!(
+        !is_alive(&pid),
+        "`/clear` left the program of the conversation it ended running"
+    );
+}
+
 /// WATCH-22. The next turn's first round reports the finish of a job stopped between turns, and
 /// what the job printed lands on its row; neither that report nor a later look adds a row. The
 /// next turn's list starts past a job that is no longer running, so a search for the row within

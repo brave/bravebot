@@ -223,6 +223,22 @@ pub(super) fn manifest_animated(
                 crate::remote_confirm::ToMain::McpCall(request) => {
                     answer_mcp_call_in_a_turn(terminal, session, &replying, &request);
                 }
+                // The calls an apply step resolved to, as one list: a yes makes every call drawn,
+                // and nothing but the person answers it (`docs/design/manifest-apply.md`).
+                crate::remote_confirm::ToMain::Apply(request) => {
+                    let answer = crate::confirm::ask_apply(terminal, &request);
+                    let every: Vec<usize> = (0..request.calls.len()).collect();
+                    replying.plainly(session, answer, |decision| {
+                        crate::remote_confirm::Reply::Apply(match decision {
+                            bravebot_agent::confirm::Decision::Approve => {
+                                bravebot_agent::confirm::ApplyDecision::keep(every)
+                            }
+                            bravebot_agent::confirm::Decision::Reject => {
+                                bravebot_agent::confirm::ApplyDecision::reject()
+                            }
+                        })
+                    });
+                }
                 // The questions a turn asks that this mode cannot. There is no shell and no `run` in
                 // the schema (MANIFEST-5), so no pipeline is proposed and no output is read back;
                 // there is no step that asks to be shown a slot; and there is no planner left to pose
@@ -337,13 +353,16 @@ pub(super) fn say_how_a_manifest_run_ended(
     stopped_by_the_person: bool,
 ) {
     match outcome {
-        Ok(finished) => {
-            // Released for a screen, exactly as a turn's reply is, and into the transcript rather
-            // than into the conversation: what this run said is not something a later turn holds.
-            // Nothing is said about that here. A reply that arrived is the run having worked, and a
-            // line under it announcing what did not happen reads as a complaint about the run.
-            session.narrate(finished.reply_for_display());
-        }
+        // The branch is on the reply's label, which is metadata the run settled, and never on its
+        // words. An answer that is not trusted is a file's or a page's text, and drawing it as
+        // the assistant's reply would let it read as bravebot's own (MANIFEST-11, VIEW-3). It goes
+        // behind the quarantine bar as an entry of its own, and `reasoning::spoken`, which reads
+        // the text, is not run on it.
+        Ok(finished) => say_what_a_manifest_run_answered(
+            session,
+            finished.reply.label(),
+            finished.reply_for_display(),
+        ),
         // Stopped by the person, so there is nothing to report. The transcript already holds the
         // steps that ran, and a complaint about a run they turned off themselves is noise.
         Err(_) if stopped_by_the_person => {}
@@ -351,6 +370,36 @@ pub(super) fn say_how_a_manifest_run_ended(
             session.note(t!(manifest_failed, problem = failure.to_string()));
         }
     }
+}
+
+/// Draw a manifest run's reply according to its label.
+///
+/// The branch is on the label's integrity, which the run settled, and never on the words. A trusted
+/// reply is the assistant's; any other is drawn behind the quarantine bar as an entry of its own
+/// (MANIFEST-11). Apart from [`say_how_a_manifest_run_ended`] so a test can give it each label,
+/// since an outcome cannot be built outside the agent crate.
+pub(super) fn say_what_a_manifest_run_answered(
+    session: &mut Session,
+    label: bravebot_core::label::Label,
+    reply: &str,
+) {
+    if label.is_trusted() {
+        say_what_a_manifest_run_replied(session, reply);
+    } else {
+        session.show_a_runs_answer(label.to_string(), reply);
+    }
+}
+
+/// Put a manifest run's reply into the transcript.
+///
+/// Released for a screen, exactly as a turn's reply is, and into the transcript rather than into
+/// the conversation: what this run said is not something a later turn holds. Nothing is said about
+/// that here. A reply that arrived is the run having worked, and a line under it announcing what
+/// did not happen reads as a complaint about the run. Marked as released for the screen alone, so
+/// an export does not carry it (SESSION-17). Apart from the run so a test can say what an export
+/// holds of it.
+pub(super) fn say_what_a_manifest_run_replied(session: &mut Session, reply: &str) {
+    session.narrate_displayed_only(reply);
 }
 
 /// The record of lines remembered past a session for this workspace, and what it holds now.
@@ -532,10 +581,7 @@ pub(super) fn run_turn_animated(
     // And what the session is working towards, where a person set a condition. Every turn under a
     // goal carries it, the first one included: the round that sets the direction is the one that
     // most needs to know what it is aiming at.
-    // A goal the person has held still is not aimed at: the turn is told nothing about it.
-    let working_towards = session
-        .goal_in_force()
-        .map(|goal| goal.condition().to_string());
+    let working_towards = goal_to_work_towards(session);
     // And whether this turn may arm a standing watch. Read here for the reason the mode is read
     // here: only the session can count what is live, and a tool answering out of a stale count
     // would tell the planner about a watch the session then refused.
@@ -850,9 +896,10 @@ pub(super) fn run_turn_animated(
     ))
 }
 
-/// The level a turn was sent with, kept for the record the turn's save writes, so the Sessions
-/// screen can say how hard the model was asked to think. It is nothing for a model that reads no
-/// level, since none was sent, and it follows `/effort` from one turn to the next.
+/// The level in force when a turn finishes, kept for the record the turn's save writes, so the
+/// Sessions screen can say how hard the model was asked to think. It is the level the turn was sent
+/// with unless `/effort` or `/effort session` chose another while the turn ran. It is nothing for a
+/// model that reads no level, since none is sent, and it follows `/effort` from one turn to the next.
 pub(super) fn keep_the_effort_of(
     stored: &mut bravebot_session::sessions::Handle,
     session: &Session,
@@ -1130,6 +1177,10 @@ fn answer_in_a_turn(
             let answer = crate::confirm::ask_path(terminal, &request);
             replying.plainly(session, answer, crate::remote_confirm::Reply::Path);
         }
+        crate::remote_confirm::ToMain::Hook(request) => {
+            let answer = crate::confirm::ask_hook(terminal, &request);
+            replying.plainly(session, answer, crate::remote_confirm::Reply::Hook);
+        }
         crate::remote_confirm::ToMain::Host(request) => {
             let answer = crate::confirm::ask_host(terminal, &request);
             replying.plainly(session, answer, crate::remote_confirm::Reply::Host);
@@ -1334,6 +1385,36 @@ pub(super) enum Wrote {
     ThePerson,
     /// This program, carrying the work on towards a condition the person set.
     TheDriver,
+}
+
+/// Whose line the prompt `App::submit` was handed is, which decides whether a `@path` in it
+/// vouches for a file.
+///
+/// Everything the person typed or queued is theirs. The sentence a goal carries the work on with
+/// is this program's, and so is the one a watch fires with (FSWATCH-4), so a session whose watch
+/// is firing answers [`Wrote::TheDriver`]. A fire must also not leave a loop behind repeating
+/// itself, which is the other thing this answers.
+///
+/// Split out from `App::submit` so it can be tested: that function needs a terminal.
+pub(super) fn whose_line(session: &Session) -> Wrote {
+    if session.watch_is_firing() {
+        Wrote::TheDriver
+    } else {
+        Wrote::ThePerson
+    }
+}
+
+/// The condition a turn starting now is told it is working towards, where there is one.
+///
+/// A goal the person has held still is not aimed at (GOAL-14, GOAL-18): the turn is told nothing
+/// about it, so this reads the goal in force and not the goal that is set.
+///
+/// Split out from the turn's start so it can be tested: the function that builds the turn's task
+/// needs a terminal and a backend.
+pub(super) fn goal_to_work_towards(session: &Session) -> Option<String> {
+    session
+        .goal_in_force()
+        .map(|goal| goal.condition().to_string())
 }
 
 /// The wait that starts a loop nobody typed `/loop` for, where there is one.

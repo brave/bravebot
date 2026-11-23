@@ -239,6 +239,15 @@ server wrote, so the hop is refused unasked ([SERVERS-11](mcp-servers.md#SERVERS
 Whether programs may reach a host the allowed-hosts list does not cover is not answered either: the
 host is a name a program chose and a yes would open the network to it for every later command, so
 `onUnlisted: ask` behaves as `refuse` here ([SANDBOX-24](sandboxing.md#SANDBOX-24)).
+The question before a hook an installed plugin carries first fires is not answered either, and neither
+is the first-use question of a server a plugin carries: a yes is recorded against a program somebody
+else wrote, so only a person's `y` approves either, and where nobody can be asked no plugin hook fires
+and no plugin server starts ([HOOK-11](hooks.md#HOOK-11),
+[SERVERS-27](mcp-servers.md#SERVERS-27)).
+
+**A web search is answered as a fetch is.** A search the planner proposed is approved without
+being put to anybody, and in auto it is not put to the classifier, so the question goes to the person
+([WEBSEARCH-2](tools/web-search.md#WEBSEARCH-2), [AUTO-3](auto-mode.md#AUTO-3)).
 
 **A program's write is answered in advance.** Under the sandbox mode `workspace-write` on macOS and Linux,
 in a workspace the person has trusted, the stages of a `run`, a delegate's included, are given at the start
@@ -333,6 +342,9 @@ prompts, which in practice means a container with no network and nothing in it w
 the wrong mode everywhere else, and it is named `--dangerously-skip-permissions` for that reason.
 
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`
+`verified-by: bravebot_agent::web_search::bypass_answers_a_search_and_auto_leaves_it_to_the_person_without_a_classifier_word`
+`verified-by: bravebot_agent::permission_mode::no_mode_answers_the_question_about_a_plugins_hook`
+`verified-by: bravebot_agent::servers::plugin_tests::nothing_but_a_yes_to_that_server_approves_it`
 `verified-by: bravebot_agent::turn::under_bypass_the_file_tools_reach_a_sibling_directory_with_no_request`
 `verified-by: bravebot_agent::turn::outside_bypass_a_sibling_directory_is_refused_and_no_refusal_names_request_path`
 `verified-by: bravebot_agent::turn::under_bypass_a_reference_to_a_listed_file_beside_the_session_is_opened`
@@ -632,6 +644,9 @@ directories that sitting held, since the mode answered for them ([TRUST-6](trust
 `verified-by: bravebot_cli::auto_start::a_resumed_session_asks_unless_the_line_or_the_setting_says_auto`
 `verified-by: bravebot_session::sessions::a_resumed_session_asks_about_writes_whatever_the_record_says`
 `verified-by: bravebot_session::sessions::a_record_does_not_keep_a_permission_mode`
+
+The trail names the mode of the sitting and each change of it ([TRACE-12](trace.md#TRACE-12)), so a
+person can read back what the record does not keep.
 
 <a id="MODE-11"></a>
 ### MODE-11: the desktop offers asking, accepting edits, planning and auto, one mode per open session

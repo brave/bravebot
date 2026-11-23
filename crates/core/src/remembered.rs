@@ -53,8 +53,16 @@
 use crate::command::{Joiner, Plan, Route, Step, Steps, quoted};
 use std::path::PathBuf;
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// One argument of a remembered step: a value to be equal to, or a slot a number fills.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub enum RememberedArg {
     /// This text and no other.
     Literal(String),
@@ -64,10 +72,15 @@ pub enum RememberedArg {
 
 impl RememberedArg {
     /// Whether `seen`, an argument of a step about to run, is what this one admits.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::arg_admits(*self, seen@),
+    ))]
     fn admits(&self, seen: &str) -> bool {
         match self {
-            Self::Literal(text) => text == seen,
-            Self::Number => is_number(seen),
+            Self::Literal(text) => crate::compare::same_text(text, seen),
+            // Digits only, so a slot cannot admit a flag or a name.
+            Self::Number => crate::compare::is_number(seen),
         }
     }
 
@@ -94,6 +107,11 @@ pub fn is_number(text: &str) -> bool {
 /// name for the same binary is a line they have not seen. Equality of both is what says the name
 /// still resolves to the same binary.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub struct RememberedStep {
     /// The name the line used.
     pub program: String,
@@ -173,6 +191,10 @@ impl RememberedStep {
     ///
     /// Every field [`Self::of`] carried across is part of the question, and the arguments are
     /// compared one for one: a literal by equality, a slot by being a number.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::remembered_step_matches(*self, *step),
+    ))]
     pub fn matches(&self, step: &Step) -> bool {
         let Step {
             program,
@@ -195,16 +217,12 @@ impl RememberedStep {
         } = self;
         // An entry holds no expansion, so a step with one is a line nobody answered for.
         expansions.is_empty()
-            && held_program == program
-            && held_resolved == resolved
-            && held_started_as == started_as
-            && held_environment == environment
-            && held_routes == routes
-            && held_args.len() == args.len()
-            && held_args
-                .iter()
-                .zip(args)
-                .all(|(held, seen)| held.admits(seen))
+            && crate::compare::same_text(held_program, program)
+            && crate::compare::same_path_buf(held_resolved, resolved)
+            && crate::compare::same_path_buf(held_started_as, started_as)
+            && crate::compare::same_environment(held_environment, environment)
+            && crate::compare::same_routes(held_routes, routes)
+            && every_arg_admits(held_args, args)
     }
 
     /// The step as it was drawn at the prompt.
@@ -231,11 +249,65 @@ impl RememberedStep {
     }
 }
 
+/// Whether each held argument admits the argument in the same place, and there are as many.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::args_admit(held@, seen@),
+))]
+fn every_arg_admits(held: &[RememberedArg], seen: &[String]) -> bool {
+    if held.len() != seen.len() {
+        return false;
+    }
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            held.len() == seen.len(),
+            at <= held.len(),
+            forall|i: int| 0 <= i < at ==> crate::spec::arg_admits(#[trigger] held@[i], seen@[i]@),
+        decreases held.len() - at,
+    ))]
+    while at < held.len() {
+        if !held[at].admits(&seen[at]) {
+            return false;
+        }
+        at += 1;
+    }
+    true
+}
+
+/// Whether each held step matches the step in the same place, and there are as many.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::steps_match(held@, seen@),
+))]
+fn every_step_matches(held: &[RememberedStep], seen: &[Step]) -> bool {
+    if held.len() != seen.len() {
+        return false;
+    }
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            held.len() == seen.len(),
+            at <= held.len(),
+            forall|i: int|
+                0 <= i < at ==> crate::spec::remembered_step_matches(#[trigger] held@[i], seen@[i]),
+        decreases held.len() - at,
+    ))]
+    while at < held.len() {
+        if !held[at].matches(&seen[at]) {
+            return false;
+        }
+        at += 1;
+    }
+    true
+}
+
 /// How the steps of a remembered line are joined.
 ///
 /// The same shape [`Steps`] has. Kept rather than flattened because two lines running the same
 /// programs in different arrangements are two lines, and a person answered about one of them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub enum Shape {
     /// Steps feeding one another, and a single step where the line had no pipe.
     Pipeline(Vec<RememberedStep>),
@@ -247,6 +319,27 @@ pub enum Shape {
     },
     /// `( … )`, which groups and starts nothing of its own.
     Group(Box<Shape>),
+}
+
+// Written out rather than derived, for the reason `Steps`' is: a derived `Clone` calls itself
+// through `Box<Shape>`, which Verus refuses as a cycle. No contract reads a clone.
+impl Clone for Shape {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn clone(&self) -> Self {
+        match self {
+            Self::Pipeline(steps) => Self::Pipeline(steps.clone()),
+            Self::Join {
+                left,
+                joiner,
+                right,
+            } => Self::Join {
+                left: left.clone(),
+                joiner: *joiner,
+                right: right.clone(),
+            },
+            Self::Group(inner) => Self::Group(inner.clone()),
+        }
+    }
 }
 
 impl Shape {
@@ -268,12 +361,14 @@ impl Shape {
     }
 
     /// Whether the steps about to run are the ones this shape holds, joined the same way.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::shape_matches(*self, *steps),
+        decreases self,
+    ))]
     pub fn matches(&self, steps: &Steps) -> bool {
         match (self, steps) {
-            (Self::Pipeline(held), Steps::Pipeline(seen)) => {
-                held.len() == seen.len()
-                    && held.iter().zip(seen).all(|(held, seen)| held.matches(seen))
-            }
+            (Self::Pipeline(held), Steps::Pipeline(seen)) => every_step_matches(held, seen),
             (
                 Self::Join {
                     left: held_left,
@@ -285,7 +380,10 @@ impl Shape {
                     joiner,
                     right,
                 },
-            ) => held_joiner == joiner && held_left.matches(left) && held_right.matches(right),
+            ) => {
+                let joined = *held_joiner == *joiner;
+                joined && held_left.matches(left) && held_right.matches(right)
+            }
             (Self::Group(held), Steps::Group(seen)) => held.matches(seen),
             _ => false,
         }
@@ -336,6 +434,11 @@ impl Shape {
 
 /// One command line a person asked to be remembered past the session.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub struct RememberedLine {
     /// What runs, and how the parts are joined.
     pub steps: Shape,
@@ -353,6 +456,10 @@ impl RememberedLine {
     ///
     /// Every field of every step, and the shape they are joined in. Nothing partial: a line
     /// matching in all but one argument is a different line, and this is the whole of what says so.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::shape_matches(self.steps, plan.steps),
+    ))]
     pub fn covers(&self, plan: &Plan) -> bool {
         self.steps.matches(&plan.steps)
     }
@@ -363,12 +470,91 @@ impl RememberedLine {
     }
 }
 
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::some_line_covers(lines@, *plan),
+))]
+fn some_line_covers(lines: &[RememberedLine], plan: &Plan) -> bool {
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= lines.len(),
+            forall|i: int|
+                0 <= i < at ==> !crate::spec::shape_matches(#[trigger] lines@[i].steps, plan.steps),
+        decreases lines.len() - at,
+    ))]
+    while at < lines.len() {
+        if lines[at].covers(plan) {
+            return true;
+        }
+        at += 1;
+    }
+    false
+}
+
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == (exists|i: int|
+            0 <= i < entries@.len()
+                && crate::spec::shape_matches(#[trigger] entries@[i].line.steps, plan.steps)),
+))]
+fn some_entry_covers(entries: &[Entry], plan: &Plan) -> bool {
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= entries.len(),
+            forall|i: int| 0 <= i < at ==> !crate::spec::shape_matches(
+                #[trigger] entries@[i].line.steps,
+                plan.steps,
+            ),
+        decreases entries.len() - at,
+    ))]
+    while at < entries.len() {
+        if entries[at].line.covers(plan) {
+            return true;
+        }
+        at += 1;
+    }
+    false
+}
+
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == (exists|i: int|
+            0 <= i < scopes@.len()
+                && crate::spec::some_line_covers(#[trigger] scopes@[i].scope.lines@, *plan)),
+))]
+fn some_scope_covers(scopes: &[ScopeEntry], plan: &Plan) -> bool {
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= scopes.len(),
+            forall|i: int| 0 <= i < at ==> !crate::spec::some_line_covers(
+                #[trigger] scopes@[i].scope.lines@,
+                *plan,
+            ),
+        decreases scopes.len() - at,
+    ))]
+    while at < scopes.len() {
+        if scopes[at].scope.covers(plan) {
+            return true;
+        }
+        at += 1;
+    }
+    false
+}
+
 /// One entry, and the session whose answer put it there.
 ///
 /// The session is not part of the key and decides nothing. It is there because the reading back of
 /// this record has to say which answers a person is still carrying from an earlier session, and a
 /// flat list cannot tell them.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub struct Entry {
     pub line: RememberedLine,
     /// The session the key was pressed in.
@@ -384,6 +570,11 @@ pub struct Entry {
 ///
 /// [RUN-20]: ../../../docs/specs/tools/run.md
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub struct Scope {
     pub kind: scopes::Kind,
     /// The repository every line names, as the prompt wrote it. Said where the scope is read back
@@ -394,8 +585,12 @@ pub struct Scope {
 
 impl Scope {
     /// Whether a plan about to run is one of the lines this scope holds.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::some_line_covers(self.lines@, *plan),
+    ))]
     pub fn covers(&self, plan: &Plan) -> bool {
-        self.lines.iter().any(|line| line.covers(plan))
+        some_line_covers(&self.lines, plan)
     }
 }
 
@@ -403,6 +598,11 @@ impl Scope {
 ///
 /// The session decides nothing, as [`Entry::answered_in`] does not.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub struct ScopeEntry {
     pub scope: Scope,
     /// The session the key was pressed in.
@@ -418,6 +618,11 @@ pub struct ScopeEntry {
 ///
 /// [CRED-13]: ../../../docs/specs/credential-protection.md
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub struct FileEntry {
     pub file: PathBuf,
     /// The session the key was pressed in. Decides nothing, as [`Entry::answered_in`] does not.
@@ -430,10 +635,28 @@ pub struct FileEntry {
 /// recorded a minute ago in another session is covered by this one. Empty is the ordinary state and
 /// means every run asks.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub struct Remembered {
     entries: Vec<Entry>,
     scopes: Vec<ScopeEntry>,
     files: Vec<FileEntry>,
+}
+
+// What a contract may say about the record: its entries and its scopes, read as `spec_label_of` is
+// for a labelled value.
+#[cfg(verus_keep_ghost)]
+verus! {
+pub closed spec fn spec_entries(remembered: Remembered) -> Seq<Entry> {
+    remembered.entries@
+}
+
+pub closed spec fn spec_scopes(remembered: Remembered) -> Seq<ScopeEntry> {
+    remembered.scopes@
+}
 }
 
 impl Remembered {
@@ -463,9 +686,18 @@ impl Remembered {
     /// Answers whether to ask and nothing else. A caller that has not already refused a line
     /// releasing private data, naming a file to write, or running outside the root must not reach
     /// this: those are asked about whatever is recorded, and an entry cannot speak for them.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::remembered_covers(*self, *plan),
+    ))]
     pub fn covers(&self, plan: &Plan) -> bool {
-        self.entries.iter().any(|entry| entry.line.covers(plan))
-            || self.scopes.iter().any(|entry| entry.scope.covers(plan))
+        let Self {
+            entries,
+            scopes,
+            // A file a write may create a credential in, which says nothing about a line.
+            files: _,
+        } = self;
+        some_entry_covers(entries, plan) || some_scope_covers(scopes, plan)
     }
 
     /// Every entry, in the order they were recorded. A line a scope holds is not one of them: it
@@ -539,6 +771,9 @@ impl FromIterator<Entry> for Remembered {
 /// [RUN-20]: ../../../docs/specs/tools/run.md
 /// [CMDLINE-8]: ../../../docs/specs/tools/command-line.md
 pub mod scopes {
+    #[cfg(verus_keep_ghost)]
+    use vstd::prelude::*;
+
     use super::{RememberedArg, RememberedLine, RememberedStep, Scope, Shape, is_number};
     use crate::command::{Plan, Step, Steps};
 
@@ -547,6 +782,7 @@ pub mod scopes {
     /// A name for the words the prompt and the reading back put to it, which live with the
     /// interface that draws them and not here.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[cfg_attr(verus_keep_ghost, verus_verify)]
     pub enum Kind {
         /// Viewing a pull request or an issue, and reading a pull request's diff and checks, on one
         /// repository.
@@ -984,6 +1220,36 @@ mod tests {
         assert!(
             !record.covers(&one("make", &["check"])),
             "an entry made with the streams merged covered the same program with them apart"
+        );
+    }
+
+    /// RUN-19, RUN-6: a line that discards its output is its own record. `r` at
+    /// `make check > /dev/null` leaves the bare `make check` asked about, and a record made at the
+    /// bare line does not cover the discarding one. Rejects a record keyed on the program and
+    /// arguments alone, which is the shape the vouch key had before it held routes.
+    #[test]
+    fn discarding_the_output_makes_a_different_line() {
+        let discarding = plan_of(Steps::Pipeline(vec![Step {
+            routes: vec![Route::Stdout {
+                path: "/dev/null".into(),
+                append: false,
+            }],
+            ..step("make", &["check"])
+        }]));
+        let record = remembering(&discarding);
+        assert!(
+            record.covers(&discarding),
+            "the control line is not covered"
+        );
+        assert!(
+            !record.covers(&one("make", &["check"])),
+            "a record made at a line that discarded its output covered the bare line"
+        );
+
+        let record = remembering(&one("make", &["check"]));
+        assert!(
+            !record.covers(&discarding),
+            "a record made at the bare line covered the line that discards its output"
         );
     }
 

@@ -247,6 +247,10 @@ const CONDITIONAL = {
     request: CASES.vet.request,
     phrases: ['1 character in this text draws as nothing'],
   },
+  vouch: {
+    request: CASES.vouch.request,
+    phrases: ['1 character in this text draws as nothing'],
+  },
   // The sentences that say what a yes does come after the last token in their cards.
   exposure: { request: CASES.exposure.request, phrases: ['Keeping it back keeps this file’s text from the model'] },
   host: { request: CASES.host.request, phrases: ['A yes lets every command the model runs'] },
@@ -264,8 +268,8 @@ test('the warnings and closing sentences no case token sits in are rows the card
   }
 })
 
-test('a write, an output or a vetted read the agent sent no sentence for says nothing about characters that draw as nothing', () => {
-  for (const kind of ['confirm', 'output', 'vet']) {
+test('a write, an output, a vetted read or a vouch preview the agent sent no sentence for says nothing about characters that draw as nothing', () => {
+  for (const kind of ['confirm', 'output', 'vet', 'vouch']) {
     for (const [hidden, hiddenNote] of [[undefined, undefined], [0, null]]) {
       const markup = draw(ENTRY[kind]({ ...CASES[kind].request, hidden, hiddenNote }))
       assert.ok(!markup.includes('draw as nothing') && !markup.includes('draws as nothing'), `${kind}: a count of ${hidden} drew the sentence\n${markup}`)
@@ -275,7 +279,7 @@ test('a write, an output or a vetted read the agent sent no sentence for says no
 })
 
 test('the sentence the agent sent is drawn as sent, with no wording of the card’s own', () => {
-  for (const kind of ['confirm', 'output', 'vet']) {
+  for (const kind of ['confirm', 'output', 'vet', 'vouch']) {
     const note = 'Zq9 sentence the agent worded, in whatever language'
     const markup = draw(ENTRY[kind]({ ...CASES[kind].request, hiddenNote: note }))
     assert.equal(texts(markup).filter((run) => run.text === note && run.deciding === 'all').length, 1, `${kind}: the sentence is drawn once, as a deciding row\n${markup}`)

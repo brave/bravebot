@@ -300,6 +300,8 @@ each checkout, and the carry holds one capture across copying the rules and the 
 `verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_with_changes_holds_the_tree_the_planner_has`
 `verified-by: bravebot_agent::turn::a_checkout_with_changes_carries_only_recorded_writes_where_the_status_is_not_answered`
 `verified-by: bravebot_agent::turn::a_checkout_with_changes_leaves_a_file_a_later_rule_covers_and_says_so`
+`verified-by: bravebot_agent::turn::a_checkout_with_changes_names_a_redirection_through_a_link_by_the_typed_spelling`
+`verified-by: bravebot_agent::turn::a_redirection_spelled_absolute_or_with_a_parent_is_recorded_by_the_typed_spelling`
 `verified-by: bravebot_agent::turn::each_checkout_of_a_fan_out_is_given_the_changes`
 `verified-by: bravebot_agent::turn::a_spawn_asking_for_a_checkout_it_may_not_have_starts_nothing`
 `verified-by: bravebot_agent::workspace::the_changes_carried_into_a_checkout_read_as_the_working_directorys_status_does`
@@ -363,7 +365,21 @@ Git for Windows refuses: one holding a control character or one of `<>:"|?*`, wh
 drive prefix such as `C:x`, one ending in a dot or a space, or a device name such as `CON` or
 `LPT1`.
 
-Each refusal says which of these it was.
+Each refusal says which of these it was, except one caused by an entry at or under a path the map
+does not trust. That refusal is one fixed sentence, the same whichever check the entry failed: its
+name, a name held twice, a name the file system takes for another or cannot hold, a count of files or
+directories, a size in bytes, or an object that cannot be read. An entry's name and size are content
+of its path, so saying which check failed would tell the planner something the map does not let it
+read ([GIT-3](tools/read-git.md#GIT-3)). Whether the sentence is the fixed one is decided from the
+map's answer for the entry's path, never from the name or size. A name that cannot be keyed (empty,
+`.`, `..`, one holding a separator or a NUL, or one that is not UTF-8) is asked about under the path
+of the tree that holds it. A bound passed by a tree that holds trusted and distrusted entries
+together is the fixed sentence once any distrusted entry has been counted, since the trusted entries
+alone may not pass it. A `.gitattributes` file the map does not trust is the fixed sentence too,
+including one a deny rule also covers, since the sentence for a covered file would say that the
+file exists. A failure while writing an entry, whatever its cause (a name too long, a full disk, a
+permission error), is the fixed sentence where the entry's path is not trusted, so that the sentence
+does not say which kind of failure it was.
 
 **Why all of `.git`.** Writing a tree means following ids: a ref names a commit, the commit its
 tree, the tree its entries. Following them over bytes nobody vouched for is the driver branching on
@@ -386,6 +402,7 @@ Built, and a spawn is refused where a checkout is.
 `verified-by: bravebot_agent::git::an_attributes_file_a_deny_rule_covers_refuses_the_checkout`
 `verified-by: bravebot_agent::git::an_attributes_file_the_map_does_not_trust_refuses_the_checkout_unread`
 `verified-by: bravebot_agent::workspace::an_attributes_file_the_map_does_not_trust_refuses_a_checkout`
+`verified-by: bravebot_agent::workspace::a_spawn_refused_for_an_entry_under_a_distrusted_path_gets_one_fixed_sentence`
 `verified-by: bravebot_agent::git::a_tree_past_the_bound_refuses_the_checkout`
 `verified-by: bravebot_agent::git::a_name_git_refuses_to_check_out_refuses_the_checkout`
 `verified-by: bravebot_agent::git::two_paths_the_file_system_takes_for_one_refuse_the_checkout`
@@ -395,7 +412,16 @@ Built, and a spawn is refused where a checkout is.
 `verified-by: bravebot_agent::git::an_attributes_file_past_the_byte_bound_is_not_read`
 `verified-by: bravebot_agent::git::a_tree_past_a_bound_is_refused_for_it_before_an_attributes_file_is_read`
 `verified-by: bravebot_agent::git::an_attributes_file_named_in_another_case_is_taken_for_one`
+`verified-by: bravebot_agent::git::a_refusal_caused_by_an_entry_under_a_distrusted_path_does_not_say_which_check_failed`
+`verified-by: bravebot_agent::git::a_bound_passed_over_trusted_and_distrusted_entries_together_is_the_fixed_refusal`
+`verified-by: bravebot_agent::git::an_unreadable_object_under_a_distrusted_path_is_the_fixed_refusal`
+`verified-by: bravebot_agent::git::a_refusal_while_writing_under_a_distrusted_path_is_the_fixed_refusal`
+`verified-by: bravebot_agent::git::a_refused_name_is_asked_about_under_its_own_path_or_its_trees`
+`verified-by: bravebot_agent::git::a_tree_nested_past_the_depth_bound_is_the_fixed_refusal_under_a_distrusted_path`
+`verified-by: bravebot_agent::git::a_distrusted_attributes_file_a_deny_rule_also_covers_is_the_fixed_refusal`
+`verified-by: bravebot_agent::git::the_fixed_refusal_names_no_check_and_differs_from_the_ones_that_do`
 `verified-by: bravebot_agent::git::a_setting_in_config_worktree_does_not_refuse_the_checkout`
+`verified-by: bravebot_agent::git::a_config_naming_an_attributes_file_elsewhere_refuses_the_checkout`
 
 <a id="CHECKOUT-5"></a>
 ### CHECKOUT-5: a checkout is HEAD's tree written by the driver, and nothing is started to write it
@@ -671,6 +697,8 @@ one is given no definition memory. The answer to the spawn says so.
 `verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_reads_the_working_directorys_instructions`
 `verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory`
 `verified-by: bravebot_agent::turn::a_deny_rule_with_an_absolute_specifier_holds_in_a_delegates_checkout`
+`verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_is_not_told_of_its_definitions_memory`
+`verified-by: bravebot_agent::turn::a_line_in_a_checkout_does_not_write_a_memory_nothing_could_record`
 `verified-by: bravebot_core::permissions::a_rule_under_the_working_directory_is_copied_to_the_checkout`
 `verified-by: bravebot_core::permissions::a_rule_outside_the_working_directory_is_not_copied_to_the_checkout`
 `verified-by: bravebot_core::permissions::a_refusal_is_copied_by_the_full_fold_and_a_grant_by_the_simple_fold`
@@ -773,10 +801,12 @@ Half built. The driver records the name the planner typed for each file a `write
 `edit_file` wrote in the checkout. It records a redirection's name once the line has ended, where
 the line left a file there and the credential scan did not take it back out. A name is placed by
 its spelling, with `.` and `..` resolved and nothing on disk read, so a link is recorded by its own
-name and not by its target's. A write through a reference is counted. A name outside the checkout,
-in scratch or an added directory, is not recorded. A path a deny rule covered when it was written is
-never recorded, since that write was refused. One a rule added later covers stays recorded, and
-that rule would refuse bringing it back ([CHECKOUT-14](#CHECKOUT-14)). The report and
+name and not by its target's. A redirection is recorded under its directory as the planner typed
+it, followed by the rest of the path, and not under where a link in that directory led. A write
+through a reference is counted. A name outside the checkout, in scratch or an added directory, is
+not recorded. A path a deny rule covered when it was written is never recorded, since that write
+was refused. One a rule added later covers stays recorded, and that rule would refuse bringing it
+back ([CHECKOUT-14](#CHECKOUT-14)). The report and
 `/checkouts` give only these names. `apply_checkout` and `/checkouts apply` also read a status over
 the checkout each time they are used, as `Workspace::checkout_status`, on the terms of
 [CHECKOUT-12](#CHECKOUT-12) with the map's trust over the whole checkout asked of the checkout's own
@@ -792,6 +822,7 @@ printed.
 
 `verified-by: bravebot_agent::workspace::a_checkout_records_the_paths_written_in_it`
 `verified-by: bravebot_agent::turn::a_kept_checkout_is_named_with_the_paths_written_in_it`
+`verified-by: bravebot_agent::turn::a_kept_checkouts_redirection_through_a_link_is_named_by_the_typed_spelling`
 `verified-by: bravebot_agent::workspace::a_checkouts_status_lists_what_changed_there_and_what_was_deleted`
 `verified-by: bravebot_agent::workspace::a_checkouts_status_is_declined_where_a_path_is_distrusted_and_says_what_it_left_out`
 
@@ -877,6 +908,7 @@ not text, is named and left.
 `verified-by: bravebot_agent::turn::a_checkout_file_whose_directory_leaves_the_working_directory_is_refused_before_the_person_is_asked`
 `verified-by: bravebot_agent::turn::a_checkout_file_that_cannot_land_does_not_stop_the_files_after_it`
 `verified-by: bravebot_agent::turn::a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status`
+`verified-by: bravebot_agent::turn::a_kept_checkouts_redirection_through_a_link_is_named_by_the_typed_spelling`
 `verified-by: bravebot_ui_bridge::checkouts::a_later_turn_is_told_the_working_directory_was_written_since_the_checkout`
 
 ## How long one lasts
@@ -1270,6 +1302,18 @@ Built.
 - **Checkouts share one stash.** A `git stash pop` a delegate runs in one can apply an entry the
   person or another checkout stashed, and drop it ([CHECKOUT-5](#CHECKOUT-5)). Each delegate is
   told not to use `git stash` ([CHECKOUT-7](#CHECKOUT-7)), and nothing stops one stashing anyway.
+- **A checkout refused for an entry under a distrusted path still tells the planner one bit.** The
+  fixed sentence says the checkout was refused and not why, and the refusal decision reads names,
+  counts and sizes under that path. Whether a spawn is refused or made is therefore one bit per call
+  about those entries, as the planner learns whether a path exists from whether a read of it
+  succeeds. The choice between the fixed sentence and a sentence that names a check for a tree that
+  holds trusted and distrusted entries depends on the order the walk meets them: a distrusted entry
+  met earlier gives the fixed sentence for a bound the trusted entries alone would also pass. The
+  bit is listed in [labels.md](labels.md#known-costs).
+- **A write failure under a distrusted path is reported as the fixed sentence.** A full disk or a
+  permission error while writing an entry the map does not trust reads as a refusal for an entry
+  under a distrusted path, and the person has to look at the disk to find the cause
+  ([CHECKOUT-4](#CHECKOUT-4)).
 - **A repository with a filter or an end-of-line conversion gets no checkout**, and that includes
   every repository using LFS.
 - **A worker's first build is asked about.** A command vouched for in the working directory is not

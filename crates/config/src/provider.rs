@@ -2,16 +2,18 @@
 //!
 //! The `provider` block in `~/.bravebot/settings.json`, in opencode's shape, so a block copied out
 //! of `opencode.json` configures this agent unedited. That constraint decides most of what follows:
-//! nothing is required that opencode does not require, no field is added however useful it would be,
-//! and a field this crate does not know is read past rather than refused.
+//! nothing is required that opencode does not require, a field this crate adds is optional and is
+//! written inside `options` (`options.keyFile` is one), and a field this crate does not know is read
+//! past rather than refused.
 //!
 //! What this does not hold is a resolved credential. A block says where a token lives, in the
-//! variables `env` names or in `options.apiKey`, and it is read when a request needs signing. A key
-//! `bravebot auth login gateway` stored for the block's id is a third place. A block with none of the
-//! three names no credential and is asked without one, which is what a local Ollama wants.
+//! variables `env` names, in the file `options.keyFile` names or in `options.apiKey`, and it is read
+//! when a request needs signing. A key `bravebot auth login gateway` stored for the block's id is a
+//! further place. A block with none of them names no credential and is asked without one, which is
+//! what a local Ollama wants.
 
-use crate::Secret;
 use crate::settings::{object, positive};
+use crate::{Secret, key_file};
 use std::fmt;
 use std::time::Duration;
 
@@ -166,6 +168,27 @@ const RESPONSES_ONLY_MODELS: &[&str] = &[
     "gpt-5.3-codex",
     "gpt-5.4-pro",
     "gpt-5.4-pro-2026-03-05",
+];
+
+/// The models that search the web before every reply when they are asked over chat completions
+/// ([LABEL-8], [BACKEND-19]).
+///
+/// A reply is labelled from the context this process built, which holds only where the model answers
+/// from that context. A model on this list adds the pages its provider's search returns, so its
+/// reply is not a function of the context and is not offered or requested over chat completions.
+///
+/// OpenAI's web search guide, read on 2026-11-13, says that the Chat Completions search models
+/// always search before responding and that search over the Responses API is a tool. Nothing in
+/// this tree has exercised the claim against the service. `gpt-5-search-api` answered a chat
+/// completion with 200 on 2026-10-27 ([BACKEND-19]). The two `-search-preview` ids answered that
+/// they are deprecated on the same day and are listed because the guide names them.
+///
+/// [LABEL-8]: ../../../docs/specs/labels.md#LABEL-8
+/// [BACKEND-19]: ../../../docs/specs/backends.md#BACKEND-19
+const RETRIEVING_MODELS: &[&str] = &[
+    "gpt-5-search-api",
+    "gpt-4o-search-preview",
+    "gpt-4o-mini-search-preview",
 ];
 
 /// The id a model of the ChatGPT account is qualified by
@@ -459,6 +482,9 @@ impl Model {
     /// wins: it is the more specific thing somebody said. A name the model has no variant for adds
     /// nothing, so a pick made for one model does not reach another. `None` where there is nothing
     /// to add.
+    ///
+    /// Nothing is reserved here: the keys come back as the person wrote them. A client skips the
+    /// ones that name a request's tools (BACKEND-15), since only it knows the names its wire uses.
     pub fn request_options(
         &self,
         variant: Option<&str>,
@@ -648,6 +674,75 @@ fn a_field_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c))
 }
 
+/// The file a block's `options.keyFile` names, which holds the gateway token.
+///
+/// Held as written and read when a request needs the token ([`Provider::credential_and_source`]),
+/// so a file replaced in an open session is the one the next request reads. The value is a string
+/// the person wrote, and one pasted into the wrong field is the key itself, so a `Debug` prints
+/// nothing of it and the buffer is overwritten when the block goes, as a token's is
+/// ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)).
+#[derive(Clone)]
+pub struct KeyFile(String);
+
+impl KeyFile {
+    fn new(written: &str) -> Self {
+        Self(written.to_string())
+    }
+
+    /// The token the file holds, read by [`key_file::read`].
+    ///
+    /// A value that is not an absolute path is refused before anything is read: it would otherwise
+    /// name a file relative to wherever the program was started, which is not a place the person
+    /// chose, and `~` is not expanded.
+    pub fn read(&self) -> Result<Secret, KeyFileFault> {
+        let path = std::path::Path::new(&self.0);
+        if !path.is_absolute() {
+            return Err(KeyFileFault::NotAbsolute);
+        }
+        key_file::read(path).map_err(KeyFileFault::from)
+    }
+}
+
+impl Drop for KeyFile {
+    fn drop(&mut self) {
+        crate::scrub(&mut self.0);
+    }
+}
+
+impl fmt::Debug for KeyFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("KeyFile(<withheld>)")
+    }
+}
+
+/// Why the file a block's `options.keyFile` names gives no token.
+///
+/// Holds neither the path nor any text of the file, so a report of it cannot carry the key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyFileFault {
+    /// The value is not an absolute path.
+    NotAbsolute,
+    /// The file is missing, is not a regular file, cannot be read, or is not text.
+    Unreadable,
+    /// The file holds more than 4,096 bytes.
+    TooLarge,
+    /// The file holds nothing but whitespace.
+    Empty,
+    /// The file holds whitespace, a control character or a character outside ASCII inside the key.
+    NotAKey,
+}
+
+impl From<key_file::Problem> for KeyFileFault {
+    fn from(problem: key_file::Problem) -> Self {
+        match problem {
+            key_file::Problem::Unreadable => Self::Unreadable,
+            key_file::Problem::TooLarge => Self::TooLarge,
+            key_file::Problem::Empty => Self::Empty,
+            key_file::Problem::NotAKey => Self::NotAKey,
+        }
+    }
+}
+
 /// One gateway, and the models it was configured to offer.
 ///
 /// Not comparable, because one field is a credential and `Secret` refuses equality: an operator
@@ -675,6 +770,13 @@ pub struct Provider {
     /// printed, and so that the buffer holding it is cleared when the block goes
     /// ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)).
     pub api_key: Option<Secret>,
+    /// The file `options.keyFile` names, which holds the token alone.
+    ///
+    /// A block naming one has said where its credential lives, so a file that gives no token is a
+    /// token that is missing and the request is refused, with `options.apiKey` not read in its
+    /// place ([`Credential::KeyFileUnusable`]). Read when a request needs it, after a variable and
+    /// a stored key and before `apiKey`. The managed layer drops it where it drops `apiKey`.
+    pub key_file: Option<KeyFile>,
     /// The key `bravebot auth login gateway` stored for this id, where one is.
     ///
     /// Never read out of the block: the store is a file of its own ([`crate::keys`]), and
@@ -923,11 +1025,20 @@ impl Provider {
         }
         // A stated endpoint wins, so a block pointing a known name at a proxy or a private
         // deployment reaches the host it named rather than the one compiled in.
+        //
+        // The file a token is read from. A blank value or one that is not a string is read as not
+        // written, as a blank `apiKey` is. Any other value names a credential, even one that is not
+        // a path a file can be read from, so that it is refused when a request needs it and never
+        // read as the person saying the gateway wants none.
+        let key_file = options
+            .and_then(|options| string(options.get("keyFile")))
+            .map(|written| KeyFile::new(&written));
         // The credential header is this provider's own, whichever one `credential_header` chooses,
         // and a block naming a credential has already said how the request authenticates. Settled
         // here rather than in the parse so that Vertex refuses `x-goog-api-key` and nothing else
         // has to know that is the name.
         let names_a_credential = !names(entry.get("env")).is_empty()
+            || key_file.is_some()
             || options
                 .and_then(|options| string(options.get("apiKey")))
                 .is_some();
@@ -988,6 +1099,7 @@ impl Provider {
             api_key: options
                 .and_then(|options| string(options.get("apiKey")))
                 .map(Secret::new),
+            key_file,
             stored_key: None,
             endpoint_compiled_in,
             models: models(entry.get("models")),
@@ -1043,6 +1155,7 @@ impl Provider {
             base_url,
             env: vec![crate::env_var::GOOGLE_API_KEY.to_string()],
             api_key: token,
+            key_file: None,
             stored_key: None,
             endpoint_compiled_in: false,
             models: Vec::new(),
@@ -1091,6 +1204,7 @@ impl Provider {
             base_url: format!("https://{}", bedrock.host()),
             env: Vec::new(),
             api_key: None,
+            key_file: None,
             stored_key: None,
             endpoint_compiled_in: false,
             models,
@@ -1395,6 +1509,29 @@ impl Provider {
         }
     }
 
+    /// The ids of the models that search the web before they reply, which this service is not
+    /// offered and does not request ([LABEL-8], [BACKEND-19]).
+    ///
+    /// Empty for an entry reached in the Responses protocol, where search is a tool a request has
+    /// to ask for and a model's options cannot add. Every entry reached over chat completions has
+    /// the list, whatever its host: a proxy that relays a search model searches as OpenAI's own
+    /// API does, and the entry that names the model is the person's own configuration.
+    ///
+    /// [LABEL-8]: ../../../docs/specs/labels.md#LABEL-8
+    /// [BACKEND-19]: ../../../docs/specs/backends.md#BACKEND-19
+    pub fn retrieving_models(&self) -> &'static [&'static str] {
+        if self.protocol == Protocol::ChatCompletions {
+            RETRIEVING_MODELS
+        } else {
+            &[]
+        }
+    }
+
+    /// Whether `wire`, the name this service is sent, is one of [`Provider::retrieving_models`].
+    pub fn retrieves(&self, wire: &str) -> bool {
+        self.retrieving_models().contains(&wire)
+    }
+
     /// Whether a request to this service carries `cache_control` marks on the prefix it will send
     /// again ([BACKEND-32]).
     ///
@@ -1516,7 +1653,9 @@ impl Provider {
     ///
     /// A variable first, so that a file naming one does not have the value read out from under it by
     /// a stale `apiKey`. A stored key next, since storing one is a thing somebody did on purpose and
-    /// later than writing a block, and a key left in the block is what it replaces.
+    /// later than writing a block, and a key left in the block is what it replaces. The file
+    /// `options.keyFile` names comes after both, being out of the settings file as a stored key is
+    /// and a place the block names rather than a thing somebody did later, and before `apiKey`.
     pub fn credential(&self, lookup: impl Fn(&str) -> Option<String>) -> Credential {
         self.credential_and_source(lookup).0
     }
@@ -1558,17 +1697,32 @@ impl Provider {
             });
         let found = exported
             .map(|token| (token, Source::Variable))
-            .or_else(|| self.stored_key.clone().map(|token| (token, Source::Stored)))
-            .or_else(|| self.api_key.clone().map(|token| (token, Source::File)));
-        match found {
-            Some((token, source)) => (Credential::Token(token), Some(source)),
+            .or_else(|| self.stored_key.clone().map(|token| (token, Source::Stored)));
+        if let Some((token, source)) = found {
+            return (Credential::Token(token), Some(source));
+        }
+        // Read here, after the two sources above, so a file is read only when nothing before it
+        // holds a token. A block naming a file has said where its credential lives: one that gives
+        // no token is a token that is missing, and `apiKey` is not read in its place, since a stale
+        // value left behind would be sent to the gateway instead of refusing the request.
+        if let Some(file) = &self.key_file {
+            return match file.read() {
+                Ok(token) => (Credential::Token(token), Some(Source::KeyFile)),
+                Err(fault) => (Credential::KeyFileUnusable(fault), None),
+            };
+        }
+        match self.api_key.clone() {
+            Some(token) => (Credential::Token(token), Some(Source::File)),
             None => (Credential::Absent, None),
         }
     }
 
     /// Whether anywhere a token could live is named, by the block or by a key stored for its id.
     pub(crate) fn names_a_credential(&self) -> bool {
-        !self.env.is_empty() || self.api_key.is_some() || self.stored_key.is_some()
+        !self.env.is_empty()
+            || self.api_key.is_some()
+            || self.key_file.is_some()
+            || self.stored_key.is_some()
     }
 
     /// Refuse a header named for the credential now that a stored key makes this block one that
@@ -1602,22 +1756,28 @@ impl Provider {
 
 /// What a gateway block says about the credential its requests carry.
 ///
-/// Three answers rather than two, because "no token" is two different situations and only one of
-/// them is a mistake. A block naming variables or an `apiKey` has said where a credential lives, so
-/// nothing holding one is a token that is missing or has gone stale. A block naming neither has said
-/// none is needed, which is how the tool this shape is borrowed from configures a local Ollama.
+/// Four answers rather than two, because "no token" is three different situations and only two of
+/// them are a mistake. A block naming variables, a key file or an `apiKey` has said where a
+/// credential lives, so nothing holding one is a token that is missing or has gone stale. A block
+/// naming none of them has said none is needed, which is how the tool this shape is borrowed from
+/// configures a local Ollama.
 ///
-/// One answer rather than a pair the callers combine, because there are three of them and each has a
-/// different remedy: a request, a roster, and a diagnostic. Read as a bare `Option`, the second
+/// One answer rather than a pair the callers combine, because there are several of them and each has
+/// a different remedy: a request, a roster, and a diagnostic. Read as a bare `Option`, the second
 /// situation is indistinguishable from the first, and every caller reports a gateway that needs
 /// nothing as one somebody has to go and configure.
 /// Not comparable, for the reason [`Provider`] is not: the token it carries is a [`Secret`].
 #[derive(Clone)]
 pub enum Credential {
-    /// The token to attach, from the first variable that held one or from the file.
+    /// The token to attach, from the first variable that held one, a stored key, the file or the
+    /// block.
     Token(Secret),
     /// The block names where a token lives and nothing there holds one.
     Absent,
+    /// The block names a file for the token, no variable and no stored key held one, and the file
+    /// gives none. Kept apart from [`Credential::Absent`] so the refusal can name the file and why,
+    /// and so `apiKey` is not mistaken for a source that was tried.
+    KeyFileUnusable(KeyFileFault),
     /// The block names nowhere for a token to live, so its requests carry none.
     NotNeeded,
 }
@@ -1629,6 +1789,8 @@ pub enum Source {
     Variable,
     /// The key `bravebot auth login gateway` stored for the block's id.
     Stored,
+    /// The file the block's `options.keyFile` names.
+    KeyFile,
     /// The block's own `options.apiKey`.
     File,
 }
@@ -1640,6 +1802,7 @@ impl fmt::Debug for Credential {
         match self {
             Self::Token(_) => f.write_str("Token(<redacted>)"),
             Self::Absent => f.write_str("Absent"),
+            Self::KeyFileUnusable(fault) => write!(f, "KeyFileUnusable({fault:?})"),
             Self::NotNeeded => f.write_str("NotNeeded"),
         }
     }
@@ -2076,7 +2239,7 @@ mod tests {
     fn token(credential: &Credential) -> Option<&str> {
         match credential {
             Credential::Token(token) => Some(token.expose()),
-            Credential::Absent | Credential::NotNeeded => None,
+            Credential::Absent | Credential::KeyFileUnusable(_) | Credential::NotNeeded => None,
         }
     }
 
@@ -2343,6 +2506,69 @@ mod tests {
             Provider::bearer_header("placeholder-t"),
             ("authorization", "Bearer placeholder-t".to_string())
         );
+    }
+
+    /// BACKEND-65: a `google-vertex` block whose `options.keyFile` names a file that gives no key has
+    /// no key resolving, as an unset variable has none, so the Google Cloud token is asked for and
+    /// the request is not refused as BACKEND-16 refuses it for another gateway. An `options.apiKey`
+    /// in the same block does not stand in for the file. A file that holds a usable key is the key,
+    /// read from the file and sent in the key header, and the token is not asked for. The
+    /// regressions it rejects are a Vertex block that reads an unusable file as a credential that is
+    /// present, which refuses the request of a person signed in with the CLI, and one that asks the
+    /// CLI although the file gave a key.
+    #[test]
+    fn a_vertex_key_file_gives_the_key_or_leaves_the_google_cloud_token_in_use() {
+        let (directory, file) = a_key_file("vertex", "");
+        let path = file.to_str().expect("a path");
+        let project = format!(r#""project": "{PLACEHOLDER_PROJECT}""#);
+        let block = |key_file: &str, api_key: Option<&str>| {
+            let api_key = api_key
+                .map(|key| format!(r#", "apiKey": "{key}""#))
+                .unwrap_or_default();
+            one_entry(&format!(
+                r#"{{"options": {{{project}, "keyFile": {}{api_key}}}}}"#,
+                serde_json::json!(key_file)
+            ))
+        };
+        let none = |_: &str| None;
+        let long = "k".repeat(4097);
+        for (contents, written) in [
+            (None, path),
+            (Some("\n"), path),
+            (Some("two words"), path),
+            (Some(long.as_str()), path),
+            (Some("a-key"), "~/key.txt"),
+        ] {
+            match contents {
+                Some(text) => std::fs::write(&file, text).expect("a file"),
+                None => std::fs::remove_file(&file).expect("a file to remove"),
+            }
+            for api_key in [Some("stale-api-key"), None] {
+                let provider = block(written, api_key);
+                assert!(
+                    matches!(provider.credential(none), Credential::KeyFileUnusable(_)),
+                    "{contents:?} with {api_key:?}"
+                );
+                assert!(
+                    provider.needs_google_cloud_token(none),
+                    "{contents:?} with {api_key:?}"
+                );
+            }
+        }
+
+        std::fs::write(&file, "from-the-vertex-key-file\n").expect("a file");
+        for api_key in [Some("stale-api-key"), None] {
+            let provider = block(path, api_key);
+            let (credential, source) = provider.credential_and_source(none);
+            assert_eq!(token(&credential), Some("from-the-vertex-key-file"));
+            assert_eq!(source, Some(Source::KeyFile));
+            assert!(!provider.needs_google_cloud_token(none), "{api_key:?}");
+            assert_eq!(
+                provider.credential_header("from-the-vertex-key-file"),
+                (VERTEX_KEY_HEADER, "from-the-vertex-key-file".to_string())
+            );
+        }
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[test]
@@ -2649,6 +2875,48 @@ mod tests {
             .env
             .is_empty()
         );
+    }
+
+    /// BACKEND-16, BACKEND-67: a Cloudflare entry that names a `keyFile` has said where its key
+    /// lives, so the variable it reads where it names no credential is not read: with
+    /// `CLOUDFLARE_API_KEY` exported, the file's key is the credential, and a file that gives no key
+    /// is refused with the variable not standing in. The same entry without a `keyFile` reads the
+    /// variable. The regression it rejects is a block whose file is not counted as naming a
+    /// credential, which adds the default variable, and a variable is read before a file.
+    #[test]
+    fn a_cloudflare_entry_naming_a_key_file_does_not_read_its_default_variable() {
+        let (directory, file) = a_key_file("cloudflare", "from-the-cloudflare-file\n");
+        let exported = |name: &str| {
+            (name == "CLOUDFLARE_API_KEY").then(|| "placeholder-from-the-variable".to_string())
+        };
+        let entry = |extra: String| {
+            cloudflare(
+                "cloudflare-workers-ai",
+                &format!(r#"{{"options": {{"accountId": "abc123"{extra}}}}}"#),
+            )
+        };
+        let named = entry(format!(
+            r#", "keyFile": {}"#,
+            serde_json::json!(file.to_str().expect("a path"))
+        ));
+        assert_eq!(
+            token(&named[0].credential(exported)),
+            Some("from-the-cloudflare-file")
+        );
+        assert!(named[0].env.is_empty());
+        std::fs::remove_file(&file).expect("a file to remove");
+        assert!(matches!(
+            named[0].credential(exported),
+            Credential::KeyFileUnusable(KeyFileFault::Unreadable)
+        ));
+
+        let unnamed = entry(String::new());
+        assert_eq!(unnamed[0].env, ["CLOUDFLARE_API_KEY"]);
+        assert_eq!(
+            token(&unnamed[0].credential(exported)),
+            Some("placeholder-from-the-variable")
+        );
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     /// The point of the block: a `provider` entry copied out of `opencode.json` configures this
@@ -4154,6 +4422,250 @@ mod tests {
             token(&provider.credential(|_| None)),
             Some("stored-placeholder")
         );
+    }
+
+    /// A scratch directory holding `key.txt` with `text`, for the key file tests.
+    fn a_key_file(name: &str, text: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let directory = crate::testutil::scratch_dir(&format!("provider-key-file-{name}"));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a directory");
+        let file = directory.join("key.txt");
+        std::fs::write(&file, text).expect("a file");
+        (directory, file)
+    }
+
+    /// A gateway block naming the sources given, so a test varies the sources and nothing else.
+    fn gateway_with(env: &[&str], key_file: Option<&str>, api_key: Option<&str>) -> Provider {
+        let mut options = serde_json::json!({"baseURL": "https://example.invalid/v1"});
+        if let Some(path) = key_file {
+            options["keyFile"] = path.into();
+        }
+        if let Some(key) = api_key {
+            options["apiKey"] = key.into();
+        }
+        one(&serde_json::json!({"provider": {"gw": {"env": env, "options": options}}}).to_string())
+    }
+
+    /// BACKEND-16: a variable, then a stored key, then the file `options.keyFile` names, then
+    /// `options.apiKey`, and the place each was found is what is reported. The block holds all four
+    /// with a different token in each, so a token tells which source was read. The regressions it
+    /// rejects are any other order of the four: a key file read before a stored key, an `apiKey`
+    /// read before a key file, and a variable that a file outranks.
+    #[test]
+    fn the_four_sources_of_a_gateway_token_are_read_in_order() {
+        let (directory, file) = a_key_file("order", "from-the-key-file\n");
+        let mut provider = gateway_with(&["PRESENT_ONE"], file.to_str(), Some("from-the-api-key"));
+        provider.stored_key = Some(Secret::new("from-the-stored-key"));
+        let exported =
+            |name: &str| (name == "PRESENT_ONE").then(|| "from-the-variable".to_string());
+
+        let (credential, source) = provider.credential_and_source(exported);
+        assert_eq!(token(&credential), Some("from-the-variable"));
+        assert_eq!(source, Some(Source::Variable));
+
+        let (credential, source) = provider.credential_and_source(|_| None);
+        assert_eq!(token(&credential), Some("from-the-stored-key"));
+        assert_eq!(source, Some(Source::Stored));
+
+        provider.stored_key = None;
+        let (credential, source) = provider.credential_and_source(|_| None);
+        assert_eq!(token(&credential), Some("from-the-key-file"));
+        assert_eq!(source, Some(Source::KeyFile));
+
+        provider.key_file = None;
+        let (credential, source) = provider.credential_and_source(|_| None);
+        assert_eq!(token(&credential), Some("from-the-api-key"));
+        assert_eq!(source, Some(Source::File));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A variable the block names is read before the file it names, so a key exported for one
+    /// session outranks a file left in the settings, and a variable that holds nothing lets the file
+    /// answer. The regression it rejects is reading the file first.
+    #[test]
+    fn a_named_variable_holds_the_token_before_a_key_file_does() {
+        let (directory, file) = a_key_file("variable", "from-the-key-file\n");
+        let provider = gateway_with(&["PRESENT_ONE"], file.to_str(), None);
+        let exported =
+            |name: &str| (name == "PRESENT_ONE").then(|| "from-the-variable".to_string());
+        assert_eq!(
+            token(&provider.credential(exported)),
+            Some("from-the-variable")
+        );
+        assert_eq!(
+            token(&provider.credential(|_| Some("  ".to_string()))),
+            Some("from-the-key-file")
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// The file a block names is read before a token written into the same block, since a stale
+    /// `apiKey` left behind is what naming a file replaces. The regression it rejects is reading
+    /// `apiKey` first, which would send the stale token.
+    #[test]
+    fn a_key_file_is_read_before_a_token_written_into_the_block() {
+        let (directory, file) = a_key_file("before-api-key", "from-the-key-file\n");
+        let provider = gateway_with(&[], file.to_str(), Some("from-the-api-key"));
+        let (credential, source) = provider.credential_and_source(|_| None);
+        assert_eq!(token(&credential), Some("from-the-key-file"));
+        assert_eq!(source, Some(Source::KeyFile));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// The file is read when a credential is asked for, so a file replaced in an open session is the
+    /// one the next request reads. The regression it rejects is reading the file once, when the
+    /// block is parsed or first used, which sends a key the person has since replaced.
+    #[test]
+    fn a_key_file_is_read_again_when_a_request_needs_it() {
+        let (directory, file) = a_key_file("replaced", "the-first-key\n");
+        let provider = gateway_with(&[], file.to_str(), None);
+        assert_eq!(token(&provider.credential(|_| None)), Some("the-first-key"));
+        std::fs::write(&file, "the-second-key\n").expect("a file");
+        assert_eq!(
+            token(&provider.credential(|_| None)),
+            Some("the-second-key")
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A block that names a file has said where its credential lives, so a file that gives no key is
+    /// a key that is missing: nothing else stands in, `options.apiKey` included, and the block is not
+    /// read as the person saying the gateway wants none. A variable or a stored key that gives a
+    /// token still wins, and the file is then not looked at. The regressions it rejects are falling
+    /// through to `apiKey`, which sends a stale token, and reading the block as naming no
+    /// credential, which sends the request with none.
+    #[test]
+    fn a_key_file_that_gives_no_key_is_refused_and_no_other_source_stands_in() {
+        let (directory, file) = a_key_file("unusable", "");
+        let long = "k".repeat(4097);
+        for (contents, fault) in [
+            (None, KeyFileFault::Unreadable),
+            (Some("\n"), KeyFileFault::Empty),
+            (Some("two words"), KeyFileFault::NotAKey),
+            (Some(long.as_str()), KeyFileFault::TooLarge),
+        ] {
+            match contents {
+                Some(text) => std::fs::write(&file, text).expect("a file"),
+                None => std::fs::remove_file(&file).expect("a file to remove"),
+            }
+            for api_key in [Some("stale-api-key"), None] {
+                let provider = gateway_with(&[], file.to_str(), api_key);
+                assert!(provider.names_a_credential());
+                let (credential, source) = provider.credential_and_source(|_| None);
+                assert!(
+                    matches!(credential, Credential::KeyFileUnusable(found) if found == fault),
+                    "{fault:?} with {api_key:?}: {credential:?}"
+                );
+                assert_eq!(source, None);
+                assert_eq!(token(&credential), None);
+            }
+            // A variable that holds a token is read first, so the file is not looked at.
+            let provider = gateway_with(&["PRESENT_ONE"], file.to_str(), Some("stale-api-key"));
+            let exported = |name: &str| (name == "PRESENT_ONE").then(|| "from-the-variable".into());
+            assert_eq!(
+                token(&provider.credential(exported)),
+                Some("from-the-variable")
+            );
+        }
+        // A directory is not a regular file.
+        let provider = gateway_with(&[], directory.to_str(), None);
+        assert!(matches!(
+            provider.credential(|_| None),
+            Credential::KeyFileUnusable(KeyFileFault::Unreadable)
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A value that is not an absolute path names a credential that cannot be used. It is refused
+    /// and is neither read as not written, which would send no credential, nor read relative to the
+    /// directory the program started in: `Cargo.toml` is a file there in this test, and reading it
+    /// would report text that is not a key instead of a path that is not absolute.
+    #[test]
+    fn a_key_file_that_is_not_an_absolute_path_names_a_credential_that_cannot_be_used() {
+        for written in ["~/key.txt", "key.txt", "./key.txt", "Cargo.toml"] {
+            let provider = gateway_with(&[], Some(written), None);
+            assert!(provider.names_a_credential(), "{written}");
+            assert!(
+                matches!(
+                    provider.credential(|_| None),
+                    Credential::KeyFileUnusable(KeyFileFault::NotAbsolute)
+                ),
+                "{written}"
+            );
+        }
+    }
+
+    /// A blank value, and one that is not a string, are read as not written, as a blank `apiKey` is,
+    /// so a placeholder left in a file does not turn a gateway that wants no key into one that
+    /// refuses every request.
+    #[test]
+    fn a_blank_key_file_setting_is_read_as_not_written() {
+        for written in ["   ", ""] {
+            let provider = gateway_with(&[], Some(written), None);
+            assert!(provider.key_file.is_none(), "{written:?}");
+            assert!(matches!(
+                provider.credential(|_| None),
+                Credential::NotNeeded
+            ));
+        }
+        let provider = one(r#"{"provider": {"gw": {"options": {
+                "baseURL": "https://example.invalid/v1", "keyFile": 7
+            }}}}"#);
+        assert!(provider.key_file.is_none());
+        assert!(matches!(
+            provider.credential(|_| None),
+            Credential::NotNeeded
+        ));
+    }
+
+    /// A block naming a key file names a credential, so a header named for the credential is refused
+    /// as it is where a variable or an `apiKey` is named, and one that is not the credential's name
+    /// is kept. The regression it rejects is a block whose file is not counted, which would send two
+    /// credentials on one request.
+    #[test]
+    fn a_block_naming_a_key_file_refuses_the_header_its_credential_goes_in() {
+        let block = |options: &str| {
+            one(&format!(
+                r#"{{"provider": {{"gw": {{"options": {{
+                    "baseURL": "https://example.invalid/v1", {options}
+                    "headers": {{"Authorization": "Bearer mine", "X-Tenant": "team-7"}}
+                }}}}}}}}"#
+            ))
+        };
+        let named = block(r#""keyFile": "/a/key.txt","#);
+        assert!(
+            named
+                .headers_refused
+                .iter()
+                .any(|(name, fault)| name == "Authorization" && *fault == HeaderFault::Reserved),
+            "{:?}",
+            named.headers_refused
+        );
+        assert!(named.headers.iter().any(|held| held.name == "x-tenant"));
+        let unnamed = block("");
+        assert!(unnamed.headers_refused.is_empty());
+    }
+
+    /// Nothing a block prints carries the path it names or a token read from it: the setting is a
+    /// string the person wrote, and one pasted into the wrong field is the key itself.
+    #[test]
+    fn printing_a_block_does_not_print_the_key_file_it_names_or_the_key_in_it() {
+        let (directory, file) = a_key_file("printing-marker-31c7", "placeholder-printed-key\n");
+        let provider = gateway_with(&[], file.to_str(), None);
+        let (credential, _) = provider.credential_and_source(|_| None);
+        let missing = gateway_with(&[], Some("/no/such/marker-9d2e/key.txt"), None);
+        let (unusable, _) = missing.credential_and_source(|_| None);
+        for printed in [
+            format!("{provider:?}"),
+            format!("{credential:?}"),
+            format!("{missing:?}"),
+            format!("{unusable:?}"),
+        ] {
+            for held in ["marker-31c7", "marker-9d2e", "placeholder-printed-key"] {
+                assert!(!printed.contains(held), "{held} is in: {printed}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     /// Supported because it is opencode's field. A copied block that authenticates this way has to

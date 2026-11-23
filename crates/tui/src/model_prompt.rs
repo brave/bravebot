@@ -29,7 +29,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use std::cell::Cell;
 use std::sync::mpsc;
 
-use crate::list_picker::Placed;
+use crate::list_picker::{self, Placed};
 use crate::select::{self, Click};
 use crate::theme;
 use crate::wrap::display_width;
@@ -49,6 +49,29 @@ pub enum Arrival {
     Rows(Vec<String>),
     /// There is no list to choose from. This is why.
     Failed(String),
+}
+
+/// How long a pick lasts: the models every later session opens on, or the one session it is made in.
+///
+/// Chosen by the word the person typed after `/model` and by Tab in the picker, and by nothing
+/// else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Scope {
+    /// The pick is recorded, so the next session opens on it. What `/model` does.
+    #[default]
+    EverySession,
+    /// The pick is in force here and recorded nowhere. What `/model session` does.
+    ThisSession,
+}
+
+impl Scope {
+    /// The other scope, which is what Tab moves to from this one.
+    pub fn other(self) -> Self {
+        match self {
+            Scope::EverySession => Scope::ThisSession,
+            Scope::ThisSession => Scope::EverySession,
+        }
+    }
 }
 
 /// What the picker is showing and where the cursor is.
@@ -78,6 +101,8 @@ pub struct Picker {
     /// How many rows tall the list was when it was last drawn, for a page key to move by. Set by
     /// [`draw`], the one place that knows how much room the panel came out with.
     page: Cell<usize>,
+    /// How long the pick lasts, which Enter takes along with the row.
+    scope: Scope,
 }
 
 impl Picker {
@@ -93,9 +118,21 @@ impl Picker {
             wanted: None,
             folded: Vec::new(),
             page: Cell::new(0),
+            scope: Scope::EverySession,
         };
         picker.select_current();
         picker
+    }
+
+    /// Open in `scope`, which Tab changes while the picker is open.
+    pub fn starting_in(mut self, scope: Scope) -> Self {
+        self.scope = scope;
+        self
+    }
+
+    /// How long the pick lasts if Enter is pressed now.
+    pub fn scope(&self) -> Scope {
+        self.scope
     }
 
     /// Open with no rows, to take them from `listing` when the endpoints have answered.
@@ -550,6 +587,11 @@ pub fn handle_key(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -
 
     match code {
         KeyCode::Esc => Outcome::Cancel,
+        // Either direction, since there are two scopes and the picker has no other use for Tab.
+        KeyCode::Tab | KeyCode::BackTab => {
+            picker.scope = picker.scope.other();
+            Outcome::Continue
+        }
         // The cursor is in a section folded away, so there is no model drawn to take, and leaving
         // the picker as taking nothing does would close it on a key meant to do something.
         KeyCode::Enter if picker.is_loading() || picker.is_hidden() => Outcome::Continue,
@@ -694,20 +736,20 @@ fn model_at(picker: &Picker, list: Rect, cell: Position) -> Option<usize> {
 /// Where [`draw`] draws the panel in a frame of `frame`: the panel with its border, and the rows of
 /// the list in it.
 pub fn placed(frame: Rect, picker: &Picker) -> Placed {
-    let area = centred(frame, picker.rows_needed());
+    let area = centred(frame, picker);
     let inside = Block::default().borders(Borders::ALL).inner(area);
     Placed {
         area,
-        list: split(inside)[2],
+        list: split(inside, footer_height(picker.scope, area.width))[2],
     }
 }
 
-/// The search, the list and the keys inside the border of the panel.
-fn split(inside: Rect) -> std::rc::Rc<[Rect]> {
+/// The search, the list and the footer inside the border of the panel, the footer `footer` rows.
+fn split(inside: Rect, footer: u16) -> std::rc::Rc<[Rect]> {
     // The blank rows are given up where keeping them would leave the list one row: that row cannot
     // hold a heading and the row under the cursor, and VIEW-15 wants no row on screen without the
-    // name of its service. The blank above the key line goes first.
-    let blanks = inside.height.saturating_sub(4).min(2);
+    // name of its service. The blank above the key lines goes first.
+    let blanks = inside.height.saturating_sub(3 + footer).min(2);
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -715,14 +757,14 @@ fn split(inside: Rect) -> std::rc::Rc<[Rect]> {
             Constraint::Length(blanks.min(1)),            // blank
             Constraint::Min(1),                           // list
             Constraint::Length(blanks.saturating_sub(1)), // blank
-            Constraint::Length(1),                        // keys
+            Constraint::Length(footer),                   // scope rows, keys
         ])
         .split(inside)
 }
 
 /// Draw the panel.
 pub fn draw(frame: &mut Frame, picker: &Picker) {
-    let area = centred(frame.area(), picker.rows_needed());
+    let area = centred(frame.area(), picker);
     frame.render_widget(Clear, area);
 
     // The theme's own colours rather than the terminal's. `Clear` only empties the cells, so without
@@ -733,7 +775,7 @@ pub fn draw(frame: &mut Frame, picker: &Picker) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme::brand_primary()))
         .title(Span::styled(
-            format!(" {} ", t!(model_picker_heading)),
+            format!(" {} ", heading(picker.scope)),
             Style::default()
                 .fg(theme::brand_primary())
                 .add_modifier(Modifier::BOLD),
@@ -742,7 +784,7 @@ pub fn draw(frame: &mut Frame, picker: &Picker) {
     let inside = block.inner(area);
     frame.render_widget(block, area);
 
-    let layout = split(inside);
+    let layout = split(inside, footer_height(picker.scope, area.width));
 
     let search = match picker.search.is_empty() {
         true => Span::styled(
@@ -766,13 +808,49 @@ pub fn draw(frame: &mut Frame, picker: &Picker) {
     picker.page.set(usize::from(layout[2].height));
     frame.render_widget(Paragraph::new(list_lines(picker, layout[2])), layout[2]);
 
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!(" {}", t!(model_picker_keys)),
-            Style::default().fg(theme::muted()),
-        ))),
-        layout[4],
-    );
+    // The footer is what Enter and Tab do in the scope in force, then the keys that do not depend
+    // on it. The scope has its own row because both of them with the keys are wider than the widest
+    // panel, and it takes a second row where the panel is too narrow for the scope alone.
+    let mut footer: Vec<Line> = list_picker::scope_rows(
+        &scope_keys(picker.scope),
+        list_picker::scope_room(area.width),
+    )
+    .into_iter()
+    .map(|row| {
+        Line::from(Span::styled(
+            format!(" {row}"),
+            Style::default().fg(theme::text()),
+        ))
+    })
+    .collect();
+    footer.push(Line::from(Span::styled(
+        format!(" {}", t!(model_picker_keys)),
+        Style::default().fg(theme::muted()),
+    )));
+    frame.render_widget(Paragraph::new(footer), layout[4]);
+}
+
+/// The panel's title, which names how long a pick lasts.
+fn heading(scope: Scope) -> String {
+    match scope {
+        Scope::EverySession => t!(model_picker_heading_every_session),
+        Scope::ThisSession => t!(model_picker_heading_this_session),
+    }
+    .to_string()
+}
+
+/// What Enter does in `scope`, and the Tab that switches to the other.
+fn scope_keys(scope: Scope) -> String {
+    match scope {
+        Scope::EverySession => t!(model_picker_scope_every_session),
+        Scope::ThisSession => t!(model_picker_scope_this_session),
+    }
+    .to_string()
+}
+
+/// How many rows the footer takes in a panel `panel_width` wide: the scope rows and the keys row.
+fn footer_height(scope: Scope, panel_width: u16) -> u16 {
+    list_picker::footer_height(Some(scope_keys(scope).as_str()), panel_width)
 }
 
 /// One drawn row of the list.
@@ -1081,15 +1159,16 @@ fn clipped(name: &str, room: usize) -> String {
 ///
 /// Wider than the theme picker, since a gateway slug is a good deal longer than a theme's name, and
 /// tall enough to show the list where the terminal has the room.
-fn centred(area: Rect, rows: usize) -> Rect {
+fn centred(area: Rect, picker: &Picker) -> Rect {
     let available = area.width.saturating_sub(4);
     let width = available.min(76).max(available.min(28));
-    // Borders, the search box and the blank under it, and the key line under its own blank.
+    // Borders, the search box and the blank under it, and the footer rows under their own blank.
     let outside = area.height.saturating_sub(2).max(1);
-    let height = (rows as u16)
-        .saturating_add(6)
+    let around = 5 + footer_height(picker.scope, width);
+    let height = (picker.rows_needed() as u16)
+        .saturating_add(around)
         .min(outside)
-        .max(outside.min(8));
+        .max(outside.min(around + 2));
 
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
@@ -1272,6 +1351,49 @@ mod tests {
             handle_key(&mut picker, KeyCode::Esc, KeyModifiers::NONE),
             Outcome::Cancel
         );
+    }
+
+    /// R19. Tab moves the scope from the one the picker opened in to the other, and Tab again, or
+    /// Shift-Tab, moves it back, whichever scope it began in. Nothing else about the picker moves:
+    /// the cursor and the rows stay, and the key does not take or leave the picker. The faults it
+    /// rejects are a Tab that only goes one way, one that does nothing, and one that takes the row.
+    #[test]
+    fn tab_switches_the_scope_in_both_directions_and_touches_nothing_else() {
+        for (start, other) in [
+            (Scope::EverySession, Scope::ThisSession),
+            (Scope::ThisSession, Scope::EverySession),
+        ] {
+            let mut picker = Picker::new(offered(), None).starting_in(start);
+            assert_eq!(picker.scope(), start);
+            let before = named(&picker).map(str::to_string);
+
+            assert_eq!(
+                handle_key(&mut picker, KeyCode::Tab, KeyModifiers::NONE),
+                Outcome::Continue
+            );
+            assert_eq!(picker.scope(), other, "Tab did not switch from {start:?}");
+            assert_eq!(named(&picker).map(str::to_string), before);
+
+            assert_eq!(
+                handle_key(&mut picker, KeyCode::Tab, KeyModifiers::NONE),
+                Outcome::Continue
+            );
+            assert_eq!(picker.scope(), start, "Tab did not switch back");
+
+            handle_key(&mut picker, KeyCode::BackTab, KeyModifiers::SHIFT);
+            assert_eq!(picker.scope(), other, "Shift-Tab did not switch");
+            handle_key(&mut picker, KeyCode::BackTab, KeyModifiers::SHIFT);
+            assert_eq!(picker.scope(), start, "Shift-Tab did not switch back");
+        }
+    }
+
+    /// R1 and R5. A picker not told a scope is the every-session one `/model` has always opened, so
+    /// the bare command is unchanged. A default of the other scope would record nothing for it.
+    #[test]
+    fn a_picker_opens_in_the_every_session_scope_unless_told_otherwise() {
+        assert_eq!(Picker::new(offered(), None).scope(), Scope::EverySession);
+        let (_answer, listing) = mpsc::channel();
+        assert_eq!(Picker::loading(None, listing).scope(), Scope::EverySession);
     }
 
     /// Ctrl-C is what a user reaches for to get out of anything, and leaving the model alone is the
@@ -1984,7 +2106,7 @@ mod tests {
     fn the_panel_stays_inside_a_tiny_terminal() {
         let picker = Picker::new(offered(), None);
         let area = Rect::new(0, 0, 20, 6);
-        let panel = centred(area, picker.rows_needed());
+        let panel = centred(area, &picker);
         assert!(panel.width <= area.width, "{panel:?}");
         assert!(panel.height <= area.height, "{panel:?}");
         // Drawn rather than only measured, since a panel wider than the frame panics on render.
@@ -2807,13 +2929,13 @@ mod tests {
 
     /// VIEW-41. Rejects: a page counted in models, which carries the cursor further than the list
     /// shows wherever a heading or a gap is in the way and leaves models that were never on the
-    /// screen. At 60 by 14 the list is six rows and a page is five: from the automatic model on
+    /// screen. At 60 by 15 the list is six rows and a page is five: from the automatic model on
     /// the second row, past the gap and OpenRouter's heading, to the third of its models. Counting
     /// five models lands two models further on, and counting six rows lands on the fourth.
     #[test]
     fn a_page_moves_the_cursor_a_screenful_less_a_row_counting_headings_and_gaps() {
         let mut picker = Picker::new(a_roster_longer_than_the_panel(), None);
-        let (shown, _) = shown_in(&picker, 60, 14);
+        let (shown, _) = shown_in(&picker, 60, 15);
         assert_eq!(shown.list.height, 6, "the arithmetic below is for six rows");
         assert_eq!(named(&picker), Some("Automatic"));
 
@@ -2916,7 +3038,7 @@ mod tests {
         pressed(&mut picker, &[KeyCode::Up]);
         assert_eq!(named(&picker), Some("Automatic"));
 
-        let (shown, _) = shown_in(&picker, 60, 14);
+        let (shown, _) = shown_in(&picker, 60, 15);
         assert_eq!(shown.list.height, 6);
         pressed(&mut picker, &[KeyCode::PageDown]);
         assert_eq!(named(&picker), Some("llama3.2"));
@@ -2986,11 +3108,206 @@ mod tests {
     }
 
     /// VIEW-40. Rejects: a key line longer than the widest panel, which the terminal cuts off, so
-    /// the last words, the one that says how to leave, are the ones that are lost.
+    /// the last words, the one that says how to leave, are the ones that are lost. Also rejects the
+    /// same for the scope line, whose Tab half is the only place the second scope is named.
     #[test]
     fn the_key_line_is_drawn_whole_in_the_widest_panel() {
         let keys = t!(model_picker_keys).to_string();
-        let output = rendered_at(&Picker::new(offered(), None), 120, 24);
-        assert!(output.contains(&keys), "{keys} was cut: {output}");
+        for scope in [Scope::EverySession, Scope::ThisSession] {
+            let picker = Picker::new(offered(), None).starting_in(scope);
+            let output = rendered_at(&picker, 120, 24);
+            assert!(output.contains(&keys), "{keys} was cut: {output}");
+            let scope_line = scope_keys(scope);
+            assert!(
+                output.contains(&scope_line),
+                "{scope_line} was cut in {scope:?}: {output}"
+            );
+        }
+    }
+
+    /// The row of `screen` that holds `text`, with the panel's own border cells around it.
+    fn row_holding(screen: &[String], text: &str) -> usize {
+        screen
+            .iter()
+            .position(|row| row.contains(text))
+            .unwrap_or_else(|| panic!("{text:?} is not drawn: {screen:#?}"))
+    }
+
+    /// The scope a picker is in is told on the top border of its panel and on the first footer row,
+    /// and the second footer row says nothing of it.
+    fn assert_scope_is_drawn(screen: &[String], title: &str, footer: &str, absent: [&str; 2]) {
+        let top = row_holding(screen, title);
+        assert!(
+            screen[top].contains('╭'),
+            "the title is not on the border: {screen:#?}"
+        );
+        let at = row_holding(screen, footer);
+        assert!(at > top, "the footer is not under the title: {screen:#?}");
+        let keys = row_holding(screen, t!(model_picker_keys));
+        assert_eq!(
+            keys,
+            at + 1,
+            "the keys are not under the scope: {screen:#?}"
+        );
+        for other in absent {
+            assert!(
+                screen.iter().all(|row| !row.contains(other)),
+                "{other:?} is drawn: {screen:#?}"
+            );
+        }
+    }
+
+    /// R9, R10, R11, R15, R16. Rejects: a footer that does not say Enter records the pick for every
+    /// session, one that names no Tab target, a scope drawn nowhere but the footer, and a title
+    /// that is the same words in both scopes.
+    #[test]
+    fn a_picker_opened_by_bare_model_draws_the_every_session_scope_in_title_and_footer() {
+        let picker = Picker::new(offered(), None);
+        let screen = screen_at(&picker, 80, 24);
+        assert_scope_is_drawn(
+            &screen,
+            t!(model_picker_heading_every_session),
+            t!(model_picker_scope_every_session),
+            [
+                t!(model_picker_heading_this_session),
+                t!(model_picker_scope_this_session),
+            ],
+        );
+        let footer = &screen[row_holding(&screen, t!(model_picker_scope_every_session))];
+        assert!(footer.contains("Enter: every session"), "{footer}");
+        assert!(footer.contains("Tab: this session only"), "{footer}");
+    }
+
+    /// R12, R13, R14, R15, R16. Rejects: a picker opened in the session-only scope that still draws
+    /// the every-session words, a Tab hint that names the scope already in force, and a title that
+    /// does not change with the scope.
+    #[test]
+    fn a_picker_opened_by_model_session_draws_the_this_session_scope_in_title_and_footer() {
+        let picker = Picker::new(offered(), None).starting_in(Scope::ThisSession);
+        assert_eq!(picker.scope(), Scope::ThisSession);
+        let screen = screen_at(&picker, 80, 24);
+        assert_scope_is_drawn(
+            &screen,
+            t!(model_picker_heading_this_session),
+            t!(model_picker_scope_this_session),
+            [
+                t!(model_picker_heading_every_session),
+                t!(model_picker_scope_every_session),
+            ],
+        );
+        let footer = &screen[row_holding(&screen, t!(model_picker_scope_this_session))];
+        assert!(footer.contains("Enter: this session only"), "{footer}");
+        assert!(footer.contains("Tab: every session"), "{footer}");
+    }
+
+    /// R11, R19. Rejects: a draw that reads the scope the picker was opened with and not the one
+    /// Tab left it in, so the footer says what Enter no longer does.
+    #[test]
+    fn tab_changes_what_the_title_and_footer_say_in_both_directions() {
+        let mut picker = Picker::new(offered(), None);
+        pressed(&mut picker, &[KeyCode::Tab]);
+        let output = rendered_at(&picker, 80, 24);
+        assert!(
+            output.contains(t!(model_picker_heading_this_session)),
+            "{output}"
+        );
+        assert!(
+            output.contains(t!(model_picker_scope_this_session)),
+            "{output}"
+        );
+        assert!(
+            !output.contains(t!(model_picker_scope_every_session)),
+            "{output}"
+        );
+
+        pressed(&mut picker, &[KeyCode::Tab]);
+        let output = rendered_at(&picker, 80, 24);
+        assert!(
+            output.contains(t!(model_picker_heading_every_session)),
+            "{output}"
+        );
+        assert!(
+            output.contains(t!(model_picker_scope_every_session)),
+            "{output}"
+        );
+        assert!(
+            !output.contains(t!(model_picker_scope_this_session)),
+            "{output}"
+        );
+    }
+
+    /// Rejects: a scope line wider than a 60 column terminal's panel, which cuts the Tab half
+    /// off and leaves a picker that never says how to leave the scope it is in.
+    #[test]
+    fn the_scope_line_is_drawn_whole_at_sixty_columns() {
+        for scope in [Scope::EverySession, Scope::ThisSession] {
+            let picker = Picker::new(offered(), None).starting_in(scope);
+            let output = rendered_at(&picker, 60, 20);
+            let line = scope_keys(scope);
+            assert!(
+                output.contains(&line),
+                "{line} was cut in {scope:?}: {output}"
+            );
+        }
+    }
+
+    /// The Enter half and the Tab half of the scope line, as the catalog words them.
+    fn halves_of(scope: Scope) -> Vec<String> {
+        scope_keys(scope)
+            .split('·')
+            .map(|half| half.trim().to_string())
+            .collect()
+    }
+
+    /// R8 (narrow terminals). At 40 columns the scope line is wider than the panel, so it is drawn on
+    /// a second row instead of being cut after "Tab: thi". Rejects: a scope line left on one row,
+    /// which the terminal cuts so the Tab half is lost, a wrapped line that drops a half, and a
+    /// panel not made a row taller for it, which hides the last model behind the footer.
+    #[test]
+    fn the_scope_line_wraps_whole_at_forty_columns() {
+        for scope in [Scope::EverySession, Scope::ThisSession] {
+            let picker = Picker::new(offered(), None).starting_in(scope);
+            let screen = screen_at(&picker, 40, 24);
+            let halves = halves_of(scope);
+            assert_eq!(halves.len(), 2, "{halves:?}");
+            let enter = row_holding(&screen, &halves[0]);
+            let tab = row_holding(&screen, &halves[1]);
+            assert!(enter < tab, "the halves are not on two rows: {screen:#?}");
+            let keys = row_holding(&screen, "PgUp PgDn");
+            assert_eq!(
+                keys,
+                tab + 1,
+                "the keys are not under the scope: {screen:#?}"
+            );
+            for name in ["Automatic", "Claude 4 Sonnet", "Llama 3 8B"] {
+                row_holding(&screen, name);
+            }
+        }
+    }
+
+    /// R8. At 60 columns the whole scope line fits one row and is not wrapped: both halves are on
+    /// the one row, directly above the keys. Rejects: a wrap that is made whether or not the line
+    /// fits, which takes a row from the list in every panel.
+    #[test]
+    fn the_scope_line_stays_on_one_row_at_sixty_columns() {
+        for scope in [Scope::EverySession, Scope::ThisSession] {
+            let picker = Picker::new(offered(), None).starting_in(scope);
+            let screen = screen_at(&picker, 60, 24);
+            let halves = halves_of(scope);
+            let enter = row_holding(&screen, &halves[0]);
+            assert_eq!(enter, row_holding(&screen, &halves[1]), "{screen:#?}");
+            assert_eq!(enter + 1, row_holding(&screen, "PgUp PgDn"), "{screen:#?}");
+        }
+    }
+
+    /// Rejects: a panel one row too short for the second footer row, which leaves the list the row
+    /// the keys are drawn over, so the last model is hidden behind the footer on a tall terminal.
+    #[test]
+    fn the_second_footer_row_takes_no_row_from_a_list_that_fits() {
+        let picker = Picker::new(offered(), None);
+        let screen = screen_at(&picker, 80, 24);
+        for name in ["Automatic", "Claude 4 Sonnet", "Llama 3 8B"] {
+            row_holding(&screen, name);
+        }
     }
 }

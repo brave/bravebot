@@ -246,6 +246,68 @@ pub trait ExSink {
 }
 }
 
+// What a contract may say about a policy's release plan, which is fixed before any content is
+// seen: whether it names a slot, and whether it names a slot with a destination. Uninterpreted, and
+// `Policy::precommitted` and `Policy::precommitted_into` are assumed to answer them.
+#[cfg(verus_keep_ghost)]
+verus! {
+pub uninterp spec fn spec_precommitted<'sink, S: Sink>(
+    policy: Policy<'sink, S>,
+    slot: SlotId,
+) -> bool;
+
+pub uninterp spec fn spec_precommitted_into<'sink, S: Sink>(
+    policy: Policy<'sink, S>,
+    slot: SlotId,
+    destination: Seq<char>,
+) -> bool;
+}
+
+// Whether a policy holds a single-use endorsement for a tool's field at an exact value, which only
+// a person's answer, or a mode answering in their place, issues. The endorsements are the
+// policy's `Grants`, which Verus proves `spend` against; `Policy` is opaque to Verus, so which
+// endorsements it holds is uninterpreted, and `Policy::consume_grant` is assumed to spend from
+// them.
+#[cfg(verus_keep_ghost)]
+verus! {
+pub uninterp spec fn spec_grants<'sink, S: Sink>(policy: Policy<'sink, S>) -> Seq<Grant>;
+
+/// An endorsement is for one tool's field at one exact value, compared as the texts are.
+pub closed spec fn grant_is_for(grant: Grant, tool: Seq<char>, field: Seq<char>, value: Seq<char>) -> bool {
+    grant.tool@ == tool && grant.field@ == field && grant.value@ == value
+}
+
+/// Some unspent endorsement is for this tool's field at this exact value.
+pub open spec fn granted(
+    pending: Seq<Grant>,
+    tool: Seq<char>,
+    field: Seq<char>,
+    value: Seq<char>,
+) -> bool {
+    exists|i: int| 0 <= i < pending.len() && grant_is_for(#[trigger] pending[i], tool, field, value)
+}
+
+pub open spec fn spec_granted<'sink, S: Sink>(
+    policy: Policy<'sink, S>,
+    tool: Seq<char>,
+    field: Seq<char>,
+    value: Seq<char>,
+) -> bool {
+    granted(spec_grants(policy), tool, field, value)
+}
+
+pub uninterp spec fn spec_slot_name(slot: SlotId) -> Seq<char>;
+}
+
+// What a contract may say about a policy: the integrity of the context the planner writes from,
+// which is the integrity of what it writes. `Policy` is opaque to Verus, so this is uninterpreted:
+// `Policy::context_integrity` is assumed to return it, and `Policy::absorb` to meet it, each by
+// handing the call to its `Context`, whose functions Verus proves.
+#[cfg(verus_keep_ghost)]
+verus! {
+pub uninterp spec fn spec_context<'sink, S: Sink>(policy: Policy<'sink, S>) -> Integrity;
+}
+
 // A refusal's message is a `String` built by `format!`, which Verus does not read, so a contract
 // says only whether a gate refused. Opaque to Verus, and unchanged in a build.
 #[cfg(verus_keep_ghost)]
@@ -412,10 +474,87 @@ impl Routing {
 /// Issued after a human confirms. Consumed by the first matching action check, so an
 /// endorsement cannot authorise a second action or a different value.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Grant {
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
+pub struct Grant {
     tool: String,
     field: String,
     value: String,
+}
+
+/// The endorsements a person's answers issued this turn and no action has spent yet.
+///
+/// [`Grants::issue`] adds one and [`Grants::spend`] takes one out, and those are the only ways to
+/// change the list. An endorsement is for one tool's field at one exact value, so spending one for
+/// any other value finds nothing, and one spent is gone, so a second action finds nothing either.
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
+struct Grants {
+    pending: Vec<Grant>,
+}
+
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+impl Grants {
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        ensures
+            final(self).pending@ == old(self).pending@.push(grant),
+    ))]
+    fn issue(&mut self, grant: Grant) {
+        self.pending.push(grant);
+    }
+
+    /// Take out an endorsement for exactly this tool, field and value, and say whether one was
+    /// there.
+    #[cfg_attr(verus_keep_ghost, verus_spec(spent =>
+        ensures
+            spent == granted(old(self).pending@, tool@, field@, value@),
+            spent ==> exists|i: int|
+                0 <= i < old(self).pending@.len() && grant_is_for(
+                    #[trigger] old(self).pending@[i],
+                    tool@,
+                    field@,
+                    value@,
+                ) && final(self).pending@ == old(self).pending@.remove(i),
+            !spent ==> final(self).pending@ == old(self).pending@,
+    ))]
+    fn spend(&mut self, tool: &str, field: &str, value: &str) -> bool {
+        let mut at = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant
+                at <= self.pending.len(),
+                self.pending@ == old(self).pending@,
+                forall|j: int| 0 <= j < at ==> !grant_is_for(
+                    #[trigger] self.pending@[j],
+                    tool@,
+                    field@,
+                    value@,
+                ),
+            decreases self.pending.len() - at,
+        ))]
+        while at < self.pending.len() {
+            let grant = &self.pending[at];
+            let matches = crate::compare::same_text(&grant.tool, tool)
+                && crate::compare::same_text(&grant.field, field)
+                && crate::compare::same_text(&grant.value, value);
+            if matches {
+                self.pending.remove(at);
+                return true;
+            }
+            at += 1;
+        }
+        false
+    }
+
+    fn len(&self) -> usize {
+        self.pending.len()
+    }
 }
 
 /// What a turn is allowed to release, fixed before any untrusted content is observed.
@@ -508,6 +647,7 @@ pub enum AfterSpendLimit {
 /// What a person said ahead of time about whether a call to a server's tool is asked about, apart
 /// from a rule (SERVERS-7, SERVERS-21).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify, derive(Structural))]
 pub enum McpStanding {
     /// Nothing, so the default question is asked.
     Nothing,
@@ -516,6 +656,9 @@ pub enum McpStanding {
     /// The server's declaration says every call is asked about, so no rule and no earlier answer
     /// is read.
     AskedEveryCall,
+    /// The person approved the manifest plan whose line showed this call with every argument it
+    /// sends, which answers the default question as a standing answer would (MANIFEST-15).
+    PlanApproved,
 }
 
 /// Where the words of an output style came from (INSTR-12).
@@ -547,6 +690,552 @@ pub enum Containment {
     Held,
 }
 
+/// What the planner's context has met and what it holds.
+///
+/// The integrity is the meet of everything [`Policy::present`] let through, so it starts trusted
+/// and falls the moment the planner is shown something untrusted (LABEL-9). The confidentiality
+/// starts public and rises when private content is let out of quarantine. Neither ever goes back:
+/// [`Context::absorb`] and [`Context::hold`] are the only ways to change either, and each only
+/// degrades, so nothing shown later restores what was already lost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+struct Context {
+    integrity: Integrity,
+    confidentiality: Confidentiality,
+}
+
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+impl Context {
+    /// A turn's start: the task is the person's own words, and nothing private has been shown.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r.integrity == Integrity::Trusted,
+            r.confidentiality == Confidentiality::Public,
+    ))]
+    fn fresh() -> Self {
+        Self {
+            integrity: Integrity::Trusted,
+            confidentiality: Confidentiality::Public,
+        }
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == self.integrity,
+    ))]
+    fn integrity(&self) -> Integrity {
+        self.integrity
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == self.confidentiality,
+    ))]
+    fn confidentiality(&self) -> Confidentiality {
+        self.confidentiality
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r.integrity == self.integrity,
+            r.confidentiality == self.confidentiality,
+    ))]
+    fn label(&self) -> Label {
+        Label::new(self.integrity, self.confidentiality)
+    }
+
+    /// Meet what the context has met with `observed`, and say whether that lowered it.
+    #[cfg_attr(verus_keep_ghost, verus_spec(lowered =>
+        ensures
+            final(self).integrity == crate::spec::meet(old(self).integrity, observed),
+            final(self).confidentiality == old(self).confidentiality,
+            lowered == (final(self).integrity != old(self).integrity),
+    ))]
+    fn absorb(&mut self, observed: Integrity) -> bool {
+        let met = self.integrity.meet(observed);
+        let lowered = met != self.integrity;
+        self.integrity = met;
+        lowered
+    }
+
+    /// Join what the context holds with `shown`, and say whether that raised it.
+    #[cfg_attr(verus_keep_ghost, verus_spec(raised =>
+        ensures
+            final(self).confidentiality == crate::spec::join(old(self).confidentiality, shown),
+            final(self).integrity == old(self).integrity,
+            raised == (final(self).confidentiality != old(self).confidentiality),
+    ))]
+    fn hold(&mut self, shown: Confidentiality) -> bool {
+        let joined = self.confidentiality.join(shown);
+        let raised = joined != self.confidentiality;
+        self.confidentiality = joined;
+        raised
+    }
+}
+
+/// Whether [`Policy::present`] puts content in front of the planner rather than a reference to it.
+///
+/// Decided from the label alone, and only trusted content is shown (LABEL-3). A picture is never
+/// shown however it is labelled, because the planner is never shown a picture it did not receive
+/// from a person (VET-4).
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::shown_to_the_planner(label, picture),
+))]
+fn shown_to_the_planner(label: Label, picture: bool) -> bool {
+    let trusted = label.integrity == Integrity::Trusted;
+    trusted && !picture
+}
+
+/// Which question decided whether a fetch is put to a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub(crate) enum FetchReason {
+    Ruled(crate::permissions::Ruling),
+    Unanswered,
+}
+
+impl FetchReason {
+    /// Whether the fetch is put to a person.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::fetch_reason_asks(self),
+    ))]
+    fn asks(self) -> bool {
+        match self {
+            Self::Ruled(ruling) => {
+                let fetch_allowed = ruling == crate::permissions::Ruling::Allow;
+                !fetch_allowed
+            }
+            Self::Unanswered => true,
+        }
+    }
+}
+
+/// The question that decides whether a fetch from a host is put to a person: a rule about the
+/// host, and where none matched, the default question. A `deny` rule has refused the fetch before
+/// this is asked ([`Policy::before_fetch_rules`]).
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        crate::spec::fetch_reason_is_sound(rule, r),
+))]
+fn fetch_reason(rule: crate::permissions::Decision) -> FetchReason {
+    if let crate::permissions::Decision::Ruled(ruling) = rule {
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let ruled = FetchReason::Ruled(ruling);
+        return ruled;
+    }
+    FetchReason::Unanswered
+}
+
+/// Which question decided whether a call to a server's tool is put to a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub(crate) enum McpReason {
+    AskedEveryCall,
+    Private,
+    Ruled(crate::permissions::Ruling),
+    PlanApproved,
+    StoppedAsking,
+    Unanswered,
+}
+
+impl McpReason {
+    /// Whether the call is put to a person.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::mcp_reason_asks(self),
+    ))]
+    fn asks(self) -> bool {
+        match self {
+            // The declaration asks about every call, the arguments are private, or nothing
+            // answers for the tool.
+            Self::AskedEveryCall | Self::Private | Self::Unanswered => true,
+            Self::Ruled(ruling) => {
+                let call_allowed = ruling == crate::permissions::Ruling::Allow;
+                !call_allowed
+            }
+            Self::PlanApproved | Self::StoppedAsking => false,
+        }
+    }
+}
+
+/// The question that decides whether a call to a server's tool is put to a person, in the order
+/// they are asked.
+///
+/// A declaration that every call is asked about is read first, and private arguments next, before
+/// any rule or standing answer (SERVERS-21, SERVERS-7, PERM-9). A rule then decides, and only where
+/// none matched does a standing answer: an approved plan or having said to stop asking.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        crate::spec::mcp_reason_is_sound(standing, public_arguments, rule, r),
+))]
+fn mcp_reason(
+    standing: McpStanding,
+    public_arguments: bool,
+    rule: crate::permissions::Decision,
+) -> McpReason {
+    if standing == McpStanding::AskedEveryCall {
+        return McpReason::AskedEveryCall;
+    }
+    // Private arguments are the person's data, which a rule about the tool is not consent to send.
+    let private_arguments = !public_arguments;
+    if private_arguments {
+        return McpReason::Private;
+    }
+    if let crate::permissions::Decision::Ruled(ruling) = rule {
+        return McpReason::Ruled(ruling);
+    }
+    if standing == McpStanding::PlanApproved {
+        return McpReason::PlanApproved;
+    }
+    if standing == McpStanding::StoppedAsking {
+        return McpReason::StoppedAsking;
+    }
+    McpReason::Unanswered
+}
+
+/// Which question decided whether a web search is put to a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub(crate) enum SearchReason {
+    Private,
+    Ruled(crate::permissions::Ruling),
+    Unanswered,
+}
+
+impl SearchReason {
+    /// Whether the search is put to a person.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::search_reason_asks(self),
+    ))]
+    fn asks(self) -> bool {
+        match self {
+            // The planner's context holds private content, or nothing answers for a search.
+            Self::Private | Self::Unanswered => true,
+            Self::Ruled(ruling) => {
+                let search_allowed = ruling == crate::permissions::Ruling::Allow;
+                !search_allowed
+            }
+        }
+    }
+}
+
+/// The question that decides whether a web search is put to a person, in the order they are asked.
+///
+/// A context that holds private content is read first, before any rule: a query is the planner's
+/// own words and may carry that content, and an `allow` rule is a person agreeing in advance to
+/// searches nobody has read (WEBSEARCH-2). A rule about the family then decides, and where none
+/// matched the default question does. A `deny` rule has refused the search before this is asked
+/// ([`Policy::before_search_rules`]).
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        crate::spec::search_reason_is_sound(public_context, rule, r),
+))]
+fn search_reason(public_context: bool, rule: crate::permissions::Decision) -> SearchReason {
+    // Private content is the person's data, which a rule about searching is not consent to send.
+    let private_context = !public_context;
+    if private_context {
+        return SearchReason::Private;
+    }
+    if let crate::permissions::Decision::Ruled(ruling) = rule {
+        return SearchReason::Ruled(ruling);
+    }
+    SearchReason::Unanswered
+}
+
+/// What [`Policy::write_needs_approval`] knows about a write, gathered before it decides.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub(crate) struct WriteFacts {
+    /// The data being written is trusted.
+    pub(crate) data_trusted: bool,
+    /// The destination came out of a reference, so nobody has read it yet.
+    pub(crate) by_reference: bool,
+    /// The destination is a path where a write runs code later (PERM-9).
+    pub(crate) protected: bool,
+    /// What the settings file's `Edit` rules say about the destination.
+    pub(crate) rule: crate::permissions::Decision,
+    /// What the trust map says about the destination, or `None` where nobody has said.
+    pub(crate) in_force: Option<Integrity>,
+}
+
+/// Which question decided whether a write is put to a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub(crate) enum WriteReason {
+    Reference,
+    Protected,
+    Ruled(crate::permissions::Ruling),
+    Undecided,
+    LowersTrust,
+    KeepsTrust,
+    RaisesTrust,
+    AlreadyUntrusted,
+}
+
+impl WriteReason {
+    /// Whether the write is put to a person.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::write_reason_asks(self),
+    ))]
+    fn asks(self) -> bool {
+        match self {
+            // Nobody has read the path, it runs code later, nobody has vouched for it, or the
+            // write would make a trusted path untrusted.
+            Self::Reference | Self::Protected | Self::Undecided | Self::LowersTrust => true,
+            Self::Ruled(ruling) => {
+                let write_allowed = ruling == crate::permissions::Ruling::Allow;
+                !write_allowed
+            }
+            Self::KeepsTrust | Self::RaisesTrust | Self::AlreadyUntrusted => false,
+        }
+    }
+}
+
+/// The question that decides whether a write is put to a person, in the order they are asked.
+///
+/// A destination out of a reference and a protected path are asked about before any rule is read,
+/// since no rule can put a path in front of somebody and no rule may answer for a path that runs
+/// code later. A rule is read before the trust map. The map asks where nobody has said anything
+/// about the path, and where untrusted data would make a trusted path untrusted.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        crate::spec::write_reason_is_sound(facts, r),
+))]
+fn write_reason(facts: WriteFacts) -> WriteReason {
+    if facts.by_reference {
+        return WriteReason::Reference;
+    }
+    if facts.protected {
+        return WriteReason::Protected;
+    }
+    if let crate::permissions::Decision::Ruled(ruling) = facts.rule {
+        return WriteReason::Ruled(ruling);
+    }
+    let Some(in_force) = facts.in_force else {
+        // Nobody has said anything about this path, so the first write is the moment to ask.
+        return WriteReason::Undecided;
+    };
+    let into_trusted = in_force == Integrity::Trusted;
+    if into_trusted && facts.data_trusted {
+        return WriteReason::KeepsTrust;
+    }
+    // The one irreversible case: a trusted path is about to stop being trusted.
+    if into_trusted {
+        return WriteReason::LowersTrust;
+    }
+    // Already untrusted. Trusted data only raises it; untrusted data changes nothing.
+    if facts.data_trusted {
+        return WriteReason::RaisesTrust;
+    }
+    WriteReason::AlreadyUntrusted
+}
+
+/// The reply [`Policy::record_answers`] records, in the words [`ask::describe_series`] gives it.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+fn describe_the_answers(asked: &crate::ask::Series, answers: &[Answer]) -> String {
+    ask::describe_series(asked, answers)
+}
+
+/// What [`Policy::plan_needs_approval_held`] knows about a line, gathered before it decides.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate fact about the line, and run_reason reads each on its own"
+)]
+pub(crate) struct RunFacts {
+    /// Private input is fed to a program (RUN-6).
+    pub(crate) releases_private: bool,
+    /// The planner asked for a credential scope or a toolchain list, or a stage is lent a scope a
+    /// person kept at an earlier prompt (SANDBOX-26, SANDBOX-27).
+    pub(crate) requested: bool,
+    /// The line names a file to write.
+    pub(crate) writes: bool,
+    /// The line runs in the workspace root.
+    pub(crate) at_root: bool,
+    /// Every step is on the session's vouched list, in the tree the line runs in (RUN-8).
+    pub(crate) vouched: bool,
+    /// A step carries an environment assignment.
+    pub(crate) assignment: bool,
+    /// What the settings file's rules say about the line.
+    pub(crate) rule: crate::permissions::Decision,
+    /// The audited table proves every step reads only paths the person vouched for.
+    pub(crate) read_proven_trusted: bool,
+    /// The line is fed a reference.
+    pub(crate) fed: bool,
+    /// The line is held to a closed sandbox in the directory the person trusted, and their yes
+    /// said such lines run without asking (RUN-5).
+    pub(crate) held: bool,
+    /// The person asked for this exact line to be remembered past the session (RUN-19).
+    pub(crate) remembered: bool,
+}
+
+/// Which question decided whether a line is put to a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub(crate) enum RunReason {
+    Private,
+    Requested,
+    Writes,
+    OutsideRoot,
+    Assignment,
+    Ruled(crate::permissions::Ruling),
+    ReadProven,
+    Fed,
+    DirectoryTrust,
+    Vouched,
+    Remembered,
+    Unanswered,
+}
+
+impl RunReason {
+    /// Whether the line is put to a person.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::reason_asks(self),
+    ))]
+    fn asks(self) -> bool {
+        match self {
+            Self::Private
+            | Self::Requested
+            | Self::Writes
+            | Self::OutsideRoot
+            | Self::Assignment
+            | Self::Fed
+            | Self::Unanswered => true,
+            Self::Ruled(ruling) => {
+                let allowed = ruling == crate::permissions::Ruling::Allow;
+                !allowed
+            }
+            Self::ReadProven | Self::DirectoryTrust | Self::Vouched | Self::Remembered => false,
+        }
+    }
+}
+
+/// The question that decides whether a line is put to a person, in the order they are asked.
+///
+/// Private input, a requested scope, a write, another tree and an assignment are asked about
+/// before any rule is read, since a rule is matched against programs and arguments and none of
+/// those is in either. A rule is read before the audited table and before any standing answer,
+/// so an `ask` rule is not overturned by one. A fed reference is asked about past the rules and
+/// the table and before the standing answers, none of which records what was fed.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        crate::spec::run_reason_is_sound(facts, r),
+))]
+fn run_reason(facts: RunFacts) -> RunReason {
+    if facts.releases_private {
+        return RunReason::Private;
+    }
+    if facts.requested {
+        return RunReason::Requested;
+    }
+    if facts.writes {
+        return RunReason::Writes;
+    }
+    if !facts.at_root && !facts.vouched {
+        return RunReason::OutsideRoot;
+    }
+    if facts.assignment {
+        return RunReason::Assignment;
+    }
+    if let crate::permissions::Decision::Ruled(ruling) = facts.rule {
+        return RunReason::Ruled(ruling);
+    }
+    if facts.read_proven_trusted {
+        return RunReason::ReadProven;
+    }
+    if facts.fed {
+        return RunReason::Fed;
+    }
+    if facts.held {
+        return RunReason::DirectoryTrust;
+    }
+    if facts.vouched {
+        return RunReason::Vouched;
+    }
+    if facts.remembered {
+        return RunReason::Remembered;
+    }
+    RunReason::Unanswered
+}
+
+/// What [`Policy::measure_a_run`] knows about a line, gathered before it labels the output.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub(crate) struct OutputFacts {
+    /// The line asked for `scopes` or `unconfined`, or a stage is lent a scope a person kept at an
+    /// earlier prompt (SANDBOX-26, SANDBOX-27, SANDBOX-29).
+    pub(crate) requesting: bool,
+    /// The label the audited table proves, where it proves a trusted one.
+    pub(crate) proven: Option<Label>,
+    /// Every step is on the session's vouched list, in the tree the line runs in (RUN-8).
+    pub(crate) vouched: bool,
+    /// A step carries an environment assignment.
+    pub(crate) assignment: bool,
+    /// The integrity of a reference fed to the line, where one is.
+    pub(crate) fed: Option<Integrity>,
+}
+
+/// Which road a line's output label was taken by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub(crate) enum OutputRoad {
+    Requested,
+    Proven,
+    Vouched,
+    VouchedButFed,
+    Opaque,
+}
+
+/// The label a line's output carries, and the road that gave it.
+///
+/// A request gets `opaque` whatever covers the line. Otherwise a proof from the audited table
+/// gives the label it proved, a vouch for every step with no assignment gives `(T,priv)` unless
+/// the line is fed untrusted content, and everything else gets `opaque`.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    requires
+        opaque.integrity == Integrity::Untrusted,
+    ensures
+        crate::spec::output_label_is_sound(facts, opaque, r.0),
+))]
+pub(crate) fn output_label(facts: OutputFacts, opaque: Label) -> (Label, OutputRoad) {
+    if facts.requesting {
+        return (opaque, OutputRoad::Requested);
+    }
+    if let Some(label) = facts.proven {
+        return (label, OutputRoad::Proven);
+    }
+    if facts.vouched && !facts.assignment {
+        // Met with what was fed in, exactly as [`Policy::read_proven_label`] meets it on the
+        // other road. Vouching for a command is an assertion about what that command does, and
+        // it is not and cannot be an assertion about bytes the user has never seen: `sed` over
+        // a fetched page prints what the page said, so a vouch for `sed` that reached `(T,priv)`
+        // here would put a page into the planner's context as trusted content.
+        //
+        // A `<` redirection is not in this and takes nothing away from it: it names a file, and
+        // a file read under a vouched-for line is already what the vouch is an assertion about.
+        return match facts.fed {
+            Some(Integrity::Untrusted) => {
+                let printed = opaque;
+                (printed, OutputRoad::VouchedButFed)
+            }
+            Some(Integrity::Trusted) | None => (
+                Label {
+                    integrity: Integrity::Trusted,
+                    confidentiality: Confidentiality::Private,
+                },
+                OutputRoad::Vouched,
+            ),
+        };
+    }
+    (opaque, OutputRoad::Opaque)
+}
+
 /// The reference monitor for exactly one turn.
 ///
 /// Not `Clone`. [`Policy::finish`] takes `self`, so a policy cannot outlive its turn. The one copy
@@ -565,7 +1254,7 @@ pub struct Policy<'sink, S: Sink> {
     routing: Routing,
     release: ReleasePlan,
     capabilities: CapabilitySet,
-    grants: Vec<Grant>,
+    grants: Grants,
     sink: &'sink mut S,
     /// Every refusal this turn, in order, each as `gate: reason`.
     refusals: Vec<String>,
@@ -725,6 +1414,12 @@ pub struct Policy<'sink, S: Sink> {
     /// A host other than `fetching` that a person approved this one fetch to be redirected to,
     /// while it is in flight. Set by [`Policy::before_fetch_via`], cleared with `fetching`.
     fetching_via: Option<String>,
+    /// The host a `web_search` call is approved for, while one is in flight.
+    ///
+    /// Set by [`Policy::before_search`] and cleared by [`Policy::search_finished`]. A hop of the
+    /// request that leaves it is refused at the egress gate with no question asked: the search host
+    /// is fixed in source, so a redirect off it is not a destination anybody could have approved.
+    searching: Option<String>,
     /// The host and port a declared MCP server is at, while a request to it is in flight.
     ///
     /// Set by [`Policy::before_server_request`] and cleared by
@@ -745,25 +1440,8 @@ pub struct Policy<'sink, S: Sink> {
     ///
     /// [PROMPT-12]: ../../../docs/specs/prompting.md
     told: Option<Labelled<String>>,
-    /// The integrity of every observation this turn has made, met together.
-    ///
-    /// Starts trusted, since the task is the user's own words, and drops to untrusted the moment
-    /// the turn observes anything untrusted. It never recovers: a later trusted read does not
-    /// un-see what was already read.
-    ///
-    /// This is not a way to make untrusted data trusted. It is the record of what the model's
-    /// context contains, which is the only thing that can say whether text the model produced
-    /// is derived from trusted input. See [`Policy::label_model_output`].
-    context: Integrity,
-    /// Whether the planner's context holds private content that was let out of quarantine.
-    ///
-    /// Starts public and only ever rises, like [`Policy::context`] only ever falls. What raises it
-    /// is private bytes a person or a check let through to the planner: `vet_content`,
-    /// `read_output`, and a delegate that was given or reported such bytes. A workspace file or a
-    /// vouched program's output the planner is shown does not, though both are private: that is
-    /// the project's own data, and counting it would make the context private at the first read
-    /// and every call to a server ask from then on.
-    holds: Confidentiality,
+    /// What the planner's context has met and holds, which only ever degrades ([`Context`]).
+    context: Context,
 }
 
 /// Everything a person has vouched for, taken together.
@@ -787,8 +1465,8 @@ impl<S: Sink> fmt::Debug for Policy<'_, S> {
             .field("routing_fields", &self.routing.keys().collect::<Vec<_>>())
             .field("pending_grants", &self.grants.len())
             .field("refusals", &self.refusals.len())
-            .field("context", &self.context)
-            .field("holds", &self.holds)
+            .field("context", &self.context.integrity())
+            .field("holds", &self.context.confidentiality())
             .finish_non_exhaustive()
     }
 }
@@ -830,7 +1508,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             routing,
             release,
             capabilities,
-            grants: Vec::new(),
+            grants: Grants::default(),
             sink,
             refusals: Vec::new(),
             call_began_at: 0,
@@ -877,17 +1555,37 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             fetching: None,
             fetch_hop: None,
             fetching_via: None,
+            searching: None,
             calling_server: None,
             calling_socket: None,
             server_hop: None,
             told: None,
-            context: Integrity::Trusted,
-            holds: Confidentiality::Public,
+            context: Context::fresh(),
         })
     }
 
     pub fn routing(&self) -> &Routing {
         &self.routing
+    }
+
+    /// Whether the release plan names `slot` as a source.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_precommitted(*self, *slot),
+    ))]
+    fn precommitted(&self, slot: &SlotId) -> bool {
+        self.release.contains(slot)
+    }
+
+    /// Whether the release plan names `slot` with `destination`.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_precommitted_into(*self, *slot, destination@),
+    ))]
+    fn precommitted_into(&self, slot: &SlotId, destination: &str) -> bool {
+        self.release.allows_into(slot, destination)
     }
 
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
@@ -1073,6 +1771,24 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             }
         }
 
+        if let Some(approved) = self.searching.clone() {
+            // The search host is fixed in source, so a hop to any other host is a `Location`
+            // header's choice and nobody was shown it. Refused without a question, and the host it
+            // named is not kept: no person could approve it (WEBSEARCH-7). The refusal names the host
+            // of the request, which this program wrote.
+            let host = crate::url::host_of(url).unwrap_or_default();
+            if host != approved {
+                return Err(self.deny(
+                    "network",
+                    Principle::IntegrityGate,
+                    format!(
+                        "this search was sent to {approved} and redirected somewhere else, which \
+                         is refused without asking"
+                    ),
+                ));
+            }
+        }
+
         if let Some(declared) = self.calling_server.clone() {
             // What a `Location` header names is a server's own bytes, so a refusal repeating it
             // would be writing them into whatever formats that refusal. The declared destination
@@ -1146,23 +1862,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             return true;
         };
 
-        match self.permissions.for_host(&host) {
-            crate::permissions::Decision::Ruled(ruling) => {
-                let needed = ruling != crate::permissions::Ruling::Allow;
-                self.allow(
-                    "approval",
-                    format!(
-                        "a rule in the settings file says {ruling} for {host}, {}",
-                        if needed { "asking" } else { "no prompt" }
-                    ),
-                );
-                needed
-            }
-            crate::permissions::Decision::Unmatched => {
-                self.allow("approval", format!("nothing says who {host} is, asking"));
-                true
-            }
-        }
+        let reason = fetch_reason(self.permissions.for_host(&host));
+        let needed = reason.asks();
+        let said = match reason {
+            FetchReason::Ruled(ruling) => format!(
+                "a rule in the settings file says {ruling} for {host}, {}",
+                if needed { "asking" } else { "no prompt" }
+            ),
+            FetchReason::Unanswered => format!("nothing says who {host} is, asking"),
+        };
+        self.allow("approval", said);
+        needed
     }
 
     /// Record that a person approved fetching this exact URL.
@@ -1249,7 +1959,88 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// [`Policy::before_network`] scopes its host confinement: to the fetch, not to the
     /// connections a person set up themselves.
     pub fn fetch_in_flight(&self) -> bool {
-        self.fetching.is_some()
+        self.fetching.is_some() || self.searching.is_some()
+    }
+
+    /// Refuse a web search a `deny` rule covers, before anybody is asked about it, for the reason
+    /// [`Policy::before_fetch_rules`] refuses a fetch: a rule that refuses is a statement that the
+    /// search does not happen, so a prompt would put a question to somebody that their settings file
+    /// has already closed.
+    pub fn before_search_rules(&mut self) -> Gated<()> {
+        let decision = self.permissions.for_search();
+        self.refuse_if_denied("search", decision, "a web search")
+    }
+
+    /// Whether a person has to approve this search.
+    ///
+    /// Every search asks unless an `allow` rule for the family answers it (WEBSEARCH-2). The destination
+    /// is fixed in source, so the question is about what is sent: the planner's own words. Once the
+    /// planner's context holds private content those words may carry it, and an allow rule is a person
+    /// agreeing in advance to searches nobody has read, so it does not cover a search made then. Which
+    /// of the two holds is the context's label and nothing the query says.
+    pub fn search_needs_approval(&mut self) -> bool {
+        let reason = search_reason(
+            self.context_label().is_public(),
+            self.permissions.for_search(),
+        );
+        let needed = reason.asks();
+        let said = match reason {
+            SearchReason::Ruled(crate::permissions::Ruling::Allow) => {
+                "a rule in the settings file says allow for web searches, no prompt"
+            }
+            SearchReason::Private => {
+                "the planner has been shown private content, which a query may carry, so the \
+                 search asks whatever a rule says"
+            }
+            SearchReason::Ruled(_) | SearchReason::Unanswered => {
+                "nothing says a web search is allowed, asking"
+            }
+        };
+        self.allow("approval", said.to_string());
+        needed
+    }
+
+    /// Record that a person approved this exact request, or that a rule answered for it.
+    ///
+    /// Bound to the URL as it will be sent, so an approval cannot be spent on a different query or
+    /// service, and spent once (WEBSEARCH-3).
+    pub fn endorse_search(&mut self, url: &str) {
+        self.issue_grant("web_search", "url", url.to_string());
+    }
+
+    /// The gate a search passes immediately before the request goes out. Returns the label the
+    /// results will carry.
+    ///
+    /// Always `(U,pub)`, from [`Capability::WebSearch`] (WEBSEARCH-1). While the call is in flight the
+    /// egress gate also holds every hop to the host of `url`.
+    pub fn before_search(&mut self, url: &str) -> Gated<Label> {
+        self.before_capability(Capability::WebSearch)?;
+        self.consume_grant("web_search", "url", url)?;
+        self.searching = Some(crate::url::host_of(url).unwrap_or_default());
+        let label = Capability::WebSearch.output_label().ok_or_else(|| Denial {
+            principle: Principle::Capability,
+            message: "search results must have a label".to_string(),
+        })?;
+        self.allow(
+            "provenance",
+            format!(
+                "web_search: results labelled {label}, because an index may return anything and \
+                 approving a query says nothing about what comes back"
+            ),
+        );
+        Ok(label)
+    }
+
+    /// Say that the search has finished, however it went, so a failed request does not leave the
+    /// turn's later egress held to the search host.
+    pub fn search_finished(&mut self) {
+        self.searching = None;
+    }
+
+    /// Record that a search was put to the person and not approved, so nothing was sent
+    /// (TRACE-1). Fixed text, naming nothing the call carried (TRACE-2).
+    pub fn refuse_unapproved_search(&mut self, call: &str) {
+        self.refuse_unapproved(call, "search", "nothing was sent");
     }
 
     /// Confine egress to where a declared server is, until the request reports back.
@@ -1314,6 +2105,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// prompt, which a yes rewrites the declaration to, so a server's bytes become a url somebody
     /// wrote down only once somebody has read them. `(T,pub)`, so the url may be parsed, written
     /// and connected to from then on.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> spec_granted(*old(self), "mcp_move"@, "alias"@, alias@),
+            r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
+    ))]
     pub fn promote_a_server_move(
         &mut self,
         alias: &str,
@@ -1324,15 +2120,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let proof =
             Declassification::authorise("a destination a person approved a server moving to");
         let url = destination.clone().declassify(&proof);
-        let label = Label::trusted_public();
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let approved_move = Label::new(Integrity::Trusted, Confidentiality::Public);
         self.allow(
             "mcp_move",
             format!(
                 "where {alias} was redirected was {was}; the user approved it as where the server \
-                 now is, so it is declared at {label}"
+                 now is, so it is declared at {approved_move}"
             ),
         );
-        Ok(Labelled::new(url, label))
+        Ok(Labelled::new(url, approved_move))
     }
 
     /// Refuse a call to a server's tool a `deny` rule covers, before anybody is asked about it.
@@ -1355,8 +2152,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// which tool may be called is not consent to hand a server the person's data, which is
     /// PERM-9's reason, and a server is further from the person than a local program is. Then a
     /// rule decides, and only where none matched does `standing` answer, which is the person
-    /// having said at an earlier call to stop asking for this tool in this project: a standing
-    /// answer removes the default prompt and does not overrule a rule somebody wrote (SERVERS-7).
+    /// having said at an earlier call to stop asking for this tool in this project, or having
+    /// approved the plan whose line showed this call: a standing answer removes the default prompt
+    /// and does not overrule a rule somebody wrote (SERVERS-7, MANIFEST-15).
     ///
     /// The arguments' label and nothing of their bytes. They are the planner's words, which
     /// [`Policy::label_model_output`] labels at [`Policy::context_label`]: private once the
@@ -1368,56 +2166,57 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         arguments: Label,
         standing: McpStanding,
     ) -> bool {
-        if standing == McpStanding::AskedEveryCall {
-            self.allow(
+        let reason = mcp_reason(
+            standing,
+            arguments.is_public(),
+            self.permissions.for_mcp(alias, tool),
+        );
+        let needed = reason.asks();
+        match reason {
+            McpReason::AskedEveryCall => self.allow(
                 "approval",
                 format!(
                     "the declaration of {alias} says every call is asked about, so {alias}:{tool} \
                      asks whatever a rule or an earlier answer says"
                 ),
-            );
-            return true;
-        }
-        if !arguments.is_public() {
-            self.allow(
+            ),
+            McpReason::Private => self.allow(
                 "approval",
                 format!(
                     "private arguments to {alias}:{tool}, which releases them to a server past \
                      this policy, asking"
                 ),
-            );
-            return true;
+            ),
+            McpReason::Ruled(ruling) => self.allow(
+                "approval",
+                format!(
+                    "a rule in the settings file says {ruling} for {alias}:{tool}, {}",
+                    if needed { "asking" } else { "no prompt" }
+                ),
+            ),
+            McpReason::PlanApproved => self.record_plan_covered_call(alias, tool),
+            McpReason::StoppedAsking => self.allow(
+                "approval",
+                format!(
+                    "the user said to stop asking for {alias}:{tool} in this project, no \
+                     prompt"
+                ),
+            ),
+            McpReason::Unanswered => self.allow(
+                "approval",
+                format!("nothing answers for {alias}:{tool}, asking"),
+            ),
         }
-        match self.permissions.for_mcp(alias, tool) {
-            crate::permissions::Decision::Ruled(ruling) => {
-                let needed = ruling != crate::permissions::Ruling::Allow;
-                self.allow(
-                    "approval",
-                    format!(
-                        "a rule in the settings file says {ruling} for {alias}:{tool}, {}",
-                        if needed { "asking" } else { "no prompt" }
-                    ),
-                );
-                needed
-            }
-            crate::permissions::Decision::Unmatched if standing == McpStanding::StoppedAsking => {
-                self.allow(
-                    "approval",
-                    format!(
-                        "the user said to stop asking for {alias}:{tool} in this project, no \
-                         prompt"
-                    ),
-                );
-                false
-            }
-            crate::permissions::Decision::Unmatched => {
-                self.allow(
-                    "approval",
-                    format!("nothing answers for {alias}:{tool}, asking"),
-                );
-                true
-            }
-        }
+        needed
+    }
+
+    /// Record that a person's approval of the plan answered this call to `tool` of `alias`, so
+    /// nobody was asked at its step (MANIFEST-15, MANIFEST-17).
+    pub fn record_plan_covered_call(&mut self, alias: &str, tool: &str) {
+        self.allow(
+            "approval",
+            format!("approving the plan covered {alias}:{tool}, no prompt at the step"),
+        );
     }
 
     /// Record that a call to `tool` of `alias` was answered by the question about an earlier call of
@@ -1630,6 +2429,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// server's reply besides: the client drew it, and dropped what was not a name, a sentence or
     /// an argument. `(T,pub)`, so the driver may name the tools from it: the list is what the
     /// server tells whoever connects, and nothing of the person's.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> spec_granted(*old(self), "mcp_tools"@, "alias"@, alias@),
+            r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
+    ))]
     pub fn promote_a_tool_list(
         &mut self,
         alias: &str,
@@ -1640,15 +2444,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let was = list.label();
         let proof = Declassification::authorise("a tool list somebody vouched for as drawn");
         let text = list.clone().declassify(&proof);
-        let label = Label::trusted_public();
-        self.allow(
-            "mcp_tools",
-            format!(
-                "the tools {alias} offers were {was}; {}, so the planner is offered them at {label}",
-                by.describe()
-            ),
-        );
-        Ok(Labelled::new(text, label))
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let vouched_list = Label::new(Integrity::Trusted, Confidentiality::Public);
+        self.allow_a_tool_list(alias, was, vouched_list, &by);
+        Ok(Labelled::new(text, vouched_list))
     }
 
     /// Record that a capability produced an observation, returning the label it must
@@ -1782,13 +2581,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             fetching: self.fetching.clone(),
             fetch_hop: self.fetch_hop.clone(),
             fetching_via: self.fetching_via.clone(),
+            searching: self.searching.clone(),
             calling_server: self.calling_server.clone(),
             calling_socket: self.calling_socket.clone(),
             server_hop: self.server_hop.clone(),
             // A note belongs to the one answer it was typed at, so a branch starts with none.
             told: None,
             context: self.context,
-            holds: self.holds,
         }
     }
 
@@ -2405,7 +3204,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The tree is in the trail as well as in the entry, because an entry that covers one tree and
     /// a trail that says which command was vouched for would leave a reader unable to tell which
     /// of two entries for one command a later run spent.
-    pub fn remember_command(&mut self, command: crate::programs::Command) {
+    pub fn remember_vouch(&mut self, vouch: crate::command::Vouch) {
+        for command in vouch.into_entries() {
+            self.remember_command(command);
+        }
+    }
+
+    /// One entry of [`Policy::remember_vouch`]. Private, so an entry reaches the list only
+    /// through a [`crate::command::Vouch`].
+    fn remember_command(&mut self, command: crate::programs::Command) {
         let shown = command.display();
         let tree = command.directory.display().to_string();
         self.programs.trust(command);
@@ -2437,8 +3244,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Only what [`Policy::present`] let through counts. A reference is not its content: a slot
     /// id, a line count and a byte count carry no instruction, so being told about quarantined
     /// bytes is not the same as meeting them.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_context(*self),
+    ))]
     pub fn context_integrity(&self) -> Integrity {
-        self.context
+        self.context.integrity()
     }
 
     /// Begin holding what an earlier turn's context held, for the reason [`Policy::resuming`]
@@ -2457,12 +3269,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// [`Policy::promote_vetted`], [`Policy::promote_vetted_picture`], [`Policy::read_output`]
     /// and a delegate raise it.
     pub fn context_confidentiality(&self) -> Confidentiality {
-        self.holds
+        self.context.confidentiality()
     }
 
     /// Both axes of the context together, for a conversation recording what this run met.
     pub fn context_label(&self) -> Label {
-        Label::new(self.context, self.holds)
+        self.context.label()
     }
 
     /// Say that the run is not offered `vet_content`, so a reference made from here on does not
@@ -2582,9 +3394,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// One way: [`Confidentiality::join`] cannot lower it, so nothing shown later makes a
     /// context public again.
     fn hold(&mut self, shown: Confidentiality, how: &str) {
-        let raised = self.holds.join(shown);
-        if raised != self.holds {
-            self.holds = raised;
+        if self.context.hold(shown) {
             self.allow(
                 "context",
                 format!("{how}; what the planner writes is private from here"),
@@ -2604,10 +3414,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// One-way: [`Integrity::meet`] cannot raise it, so nothing shown later restores integrity
     /// already lost.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        ensures
+            spec_context(*final(self)) == crate::spec::meet(spec_context(*old(self)), observed),
+    ))]
     fn absorb(&mut self, observed: Integrity) {
-        let lowered = self.context.meet(observed);
-        if lowered != self.context {
-            self.context = lowered;
+        if self.context.absorb(observed) {
             self.allow(
                 "context",
                 "untrusted data entered the context; output is untrusted from here".to_string(),
@@ -2974,6 +3787,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// It absorbs [`Integrity::Trusted`], which cannot raise a context that has already fallen,
     /// so answering a question never restores integrity the turn had lost.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> crate::value::spec_label_of(series).integrity == Integrity::Trusted,
+            r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::value::spec_label_of(
+                series,
+            ),
+    ))]
     pub fn record_answers(
         &mut self,
         tool: &str,
@@ -2981,7 +3801,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         answers: &[Answer],
     ) -> Gated<Labelled<String>> {
         let label = series.label();
-        if !label.is_trusted() {
+        // A person cannot vouch for a question they did not write.
+        let asked_from_trust = label.is_trusted();
+        if !asked_from_trust {
             return Err(self.deny(
                 "answer",
                 Principle::IntegrityGate,
@@ -2993,9 +3815,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
 
         let proof = Declassification::authorise("questions the user answered");
-        let asked = series.clone().declassify(&proof);
-        let text = ask::describe_series(&asked, answers);
+        let text = describe_the_answers(&series.clone().declassify(&proof), answers);
 
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
         let replied = Label::new(Integrity::Trusted, label.confidentiality);
         self.allow(
             "answer",
@@ -3020,6 +3842,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// offered an edit, and this is the second place that says so.
     ///
     /// The edited text is never given back to the planner, and nothing here reads it.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> crate::value::spec_label_of(proposed) == crate::spec::trusted_public(),
+            r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
+            r is Ok ==> crate::value::spec_value_of(&r->Ok_0) == saved,
+    ))]
     pub fn adopt_edited_body(
         &mut self,
         tool: &str,
@@ -3027,7 +3855,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         saved: String,
     ) -> Gated<Labelled<String>> {
         let was = proposed.label();
-        if !was.is_trusted() || !was.is_public() {
+        // A body the person edits keeps what they read in it, so it is adopted only from (T,pub).
+        let editable = was.is_trusted() && was.is_public();
+        if !editable {
             return Err(self.deny(
                 "answer",
                 Principle::IntegrityGate,
@@ -3038,7 +3868,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 ),
             ));
         }
-        let edited = Label::trusted_public();
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let edited = Label::new(Integrity::Trusted, Confidentiality::Public);
         self.allow(
             "answer",
             format!("{tool}: the person edited the proposed body, recorded {edited}"),
@@ -3094,8 +3925,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// So this must only ever be reached from a line a human typed. Never point it at argv the
     /// planner proposed, never at a line reconstructed from a transcript, and never at anything a
     /// processor produced: each of those is content, and this would launder it.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            crate::value::spec_label_of(&r) == (Label {
+                integrity: Integrity::Trusted,
+                confidentiality: Confidentiality::Private,
+            }),
+    ))]
     pub fn label_user_command_output(&mut self, command: &str, text: String) -> Labelled<String> {
-        let label = Label::trusted_private();
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let typed_output = Label::new(Integrity::Trusted, Confidentiality::Private);
+        let label = typed_output;
         self.allow(
             "provenance",
             format!(
@@ -3123,8 +3963,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// `~/.bravebot/skills` is trusted on the same footing as a configuration file someone pasted.
     /// Putting a file there is the grant. What this does not do is assume trust from silence,
     /// since an empty directory yields nothing at all.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            crate::value::spec_label_of(&r) == crate::spec::trusted_public(),
+    ))]
     pub fn label_user_configuration(&mut self, origin: &str, text: String) -> Labelled<String> {
-        let label = Label::trusted_public();
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let own_configuration = Label::new(Integrity::Trusted, Confidentiality::Public);
+        let label = own_configuration;
         self.allow(
             "provenance",
             format!("{origin}: labelled {label}, from the user's own configuration directory"),
@@ -3147,13 +3993,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// road to a label and never this one, which would trust it for sitting beside a fact.
     ///
     /// The trail records where the fact came from and the label it was given, and none of its words.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            crate::value::spec_label_of(&r) == (Label {
+                integrity: Integrity::Trusted,
+                confidentiality,
+            }),
+    ))]
     pub fn label_kept_fact(
         &mut self,
         origin: &str,
         text: String,
         confidentiality: Confidentiality,
     ) -> Labelled<String> {
-        let label = Label::new(Integrity::Trusted, confidentiality);
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let kept_fact = Label::new(Integrity::Trusted, confidentiality);
+        let label = kept_fact;
         self.allow(
             "provenance",
             format!("{origin}: labelled {label}, from a fact kept in the user's own memory"),
@@ -3465,14 +4320,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// [`Policy::observe`], the planner's context is this, and conflating the two is how a
     /// design like this stops being able to describe itself.
     pub fn before_planning(&mut self, round: &str) -> Gated<()> {
-        if self.context != Integrity::Trusted {
+        if self.context.integrity() != Integrity::Trusted {
             return Err(self.deny(
                 "planning",
                 Principle::IntegrityGate,
                 format!(
                     "{round}: the planner's context is {:?}, and nothing that has been shown \
                      untrusted content may be asked to plan",
-                    self.context
+                    self.context.integrity()
                 ),
             ));
         }
@@ -4377,6 +5232,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         picture: Option<&str>,
     ) -> Gated<crate::reference::Presentation> {
         let label = content.label();
+        let shown = shown_to_the_planner(label, picture.is_some());
 
         if picture.is_some() {
             self.allow(
@@ -4388,7 +5244,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             );
         }
 
-        if label.is_trusted() && picture.is_none() {
+        if shown {
             self.allow(
                 "present",
                 format!("{tool}: {origin} is {label}, so the planner may read it"),
@@ -4537,7 +5393,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// and what it can reach was fixed by the session's configuration rather than by the value.
     /// The answer is labelled from the context the advisor was shown ([`Policy::adopt_model_output`]),
     /// which is private where the question is.
+    ///
+    /// The release is recorded with the label the question carried and none of its words. It
+    /// is not refused for any label, and not in a context that has met something untrusted,
+    /// because the advisor is shown that context either way.
     pub fn before_advice(&mut self, question: &Labelled<String>) -> Gated<String> {
+        self.allow(
+            "advice",
+            format!(
+                "the question the planner put to its advisor, {}, released to be sent",
+                question.label()
+            ),
+        );
         let proof = Declassification::authorise("the question the planner put to its advisor");
         Ok(question.clone().declassify(&proof))
     }
@@ -4602,7 +5469,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         target: &Labelled<String>,
         text: &Labelled<String>,
     ) -> Gated<crate::message::SessionMessage> {
-        if self.context != Integrity::Trusted {
+        if self.context.integrity() != Integrity::Trusted {
             return Err(self.deny(
                 "message",
                 Principle::IntegrityGate,
@@ -4932,7 +5799,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ));
         }
 
-        if self.context != Integrity::Trusted {
+        if self.context.integrity() != Integrity::Trusted {
             return Err(self.deny(
                 "delegate",
                 Principle::IntegrityGate,
@@ -5215,7 +6082,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
 
         let spec = crate::delegate::DelegateSpec::new(id, &selected, task, held, rounds, place)
-            .holding(self.holds)
+            .holding(self.context.confidentiality())
             .limited_to(limits)
             .started_without(without)
             .budgeted_to(asked)
@@ -5556,10 +6423,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     pub fn adopt_from_delegate(&mut self, since: &Vouched, ended: &Vouched) {
         let mut vouched = 0;
         for command in ended.programs.iter() {
-            if since.programs.contains(
+            if since.programs.contains_routed(
                 &command.program,
                 &command.started_as,
                 &command.args,
+                &command.routes,
                 &command.directory,
             ) {
                 continue;
@@ -5792,6 +6660,246 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         ))
     }
 
+    /// The spec of a processor asked for the rows of an `apply` step, and nothing else.
+    ///
+    /// The same checks as [`Policy::before_processor`] on what it reads and what it is told, and
+    /// the same label by taint over the inputs. It takes no `about`, because its answer is rows
+    /// and no document. Its answer is read only by [`Policy::resolve_proposal`], which refuses a
+    /// spec built by any other gate.
+    pub fn before_proposer(
+        &mut self,
+        id: &str,
+        reads: &[SlotId],
+        instruction: &Labelled<String>,
+        slots: &crate::slot::SlotStore,
+    ) -> Gated<crate::processor::ProcessorSpec> {
+        let (out_label, instruction) =
+            self.what_a_processor_is_given(id, reads, instruction, slots)?;
+        let spec = crate::processor::ProcessorSpec::new(
+            id,
+            reads.to_vec(),
+            instruction,
+            out_label,
+            None,
+            None,
+            &SpecAuthority::mint(),
+        )
+        .proposing_rows();
+        self.allow(
+            "processor",
+            format!(
+                "{}, asked for the rows of an apply step, with no tools, no memory and nothing \
+                 to write but those rows",
+                spec.describe()
+            ),
+        );
+        Ok(spec)
+    }
+
+    /// Number the entries of the list in `list` for a processor, into the slot `into`, and give
+    /// back the entries as the rows will be resolved against them. `at` is where in the reply the
+    /// list is, as the plan wrote it: a JSON pointer such as `/items`, or nothing for the reply
+    /// itself.
+    ///
+    /// A release to another crate's reader, as [`Policy::read_a_number`] is: the list's text goes to
+    /// `reader`, which decides which entries count, from the fields the plan's arguments take, and
+    /// numbers them. The numbered text is quarantined at the list's label for the processor to
+    /// read, so text inside an entry cannot shift the count, and the entries keep that label. The
+    /// driver holds neither as text. The trail line names the slots and the label, and no count.
+    pub fn number_a_list(
+        &mut self,
+        list: &SlotId,
+        at: &str,
+        fields: &BTreeSet<String>,
+        into: &SlotId,
+        slots: &mut crate::slot::SlotStore,
+        reader: fn(&str, &str, &str, &BTreeSet<String>) -> crate::apply::Numbered,
+    ) -> Gated<Labelled<crate::apply::Entries>> {
+        let content = slots.take_for_reading(list).map_err(|e| Denial {
+            principle: Principle::Confinement,
+            message: format!("apply: {e}"),
+        })?;
+        let label = content.label();
+        let proof = Declassification::authorise(
+            "a list, read for its entries by a reader outside the driver",
+        );
+        let numbered = reader(&content.declassify(&proof), at, &list.to_string(), fields);
+        let shown = Labelled::new(numbered.shown, label);
+        self.store_in_slot(
+            "apply",
+            into.clone(),
+            &format!("the entries of {list}"),
+            &shown,
+            slots,
+        )?;
+        self.allow(
+            "apply",
+            format!("{list} was numbered for a processor into {into}, labelled {label}"),
+        );
+        Ok(Labelled::new(numbered.entries, label))
+    }
+
+    /// Read a processor's answer for the rows of an `apply` step, and resolve them against the
+    /// plan's shape and the list's entries.
+    ///
+    /// The one release of such an answer, to `reader`, which `bravebot-choice` holds. What comes
+    /// back is the resolved list: the calls the rows name, each value labelled with everything it
+    /// derives from, and the count of rows dropped for each reason of a closed set. The driver
+    /// carries it to the person and never reads it. The label is the spec's met with the answer's
+    /// and every list's, so a list resolved after a page is untrusted and private whatever it holds.
+    ///
+    /// Refused for a spec that was not built to propose rows. The trail line holds the
+    /// processor's name and the label, and no count.
+    pub fn resolve_proposal(
+        &mut self,
+        spec: &crate::processor::ProcessorSpec,
+        answer: Labelled<String>,
+        lists: &[Labelled<crate::apply::Entries>],
+        shape: &crate::apply::Shape,
+        reader: fn(&str, &[crate::apply::Entries], &crate::apply::Shape) -> crate::apply::Resolved,
+    ) -> Gated<Labelled<crate::apply::Resolved>> {
+        if !spec.proposes_rows() {
+            return Err(self.deny(
+                "processor",
+                Principle::Confinement,
+                format!(
+                    "{}: this processor was not asked for rows, so none are read from its answer",
+                    spec.id()
+                ),
+            ));
+        }
+        let label = crate::label::taint_all(
+            [spec.out_label(), answer.label()]
+                .into_iter()
+                .chain(lists.iter().map(Labelled::label)),
+        );
+        self.allow(
+            "processor",
+            format!(
+                "{}: the answer was read for the rows it was asked for, labelled {label}",
+                spec.id()
+            ),
+        );
+        let proof = Declassification::authorise(
+            "a processor's answer and a list's entries, read for rows outside the driver",
+        );
+        let entries: Vec<crate::apply::Entries> = lists
+            .iter()
+            .map(|list| list.clone().declassify(&proof))
+            .collect();
+        let resolved = reader(&answer.declassify(&proof), &entries, shape);
+        Ok(Labelled::new(resolved, label))
+    }
+
+    /// A resolved list as the person who is asked about it reads it.
+    ///
+    /// A display release, as [`Policy::choice_for_display`] is: the values go onto lines a person
+    /// reads, drawn as untrusted content, and no gate takes them back to anything an effect uses.
+    /// The calls are made from the labelled list, through [`Policy::carry_applied_call`].
+    pub fn proposal_for_display(
+        &mut self,
+        resolved: &Labelled<crate::apply::Resolved>,
+    ) -> crate::apply::Resolved {
+        let label = resolved.label();
+        self.allow(
+            "display",
+            format!("a resolved list, labelled {label}, shown to the person it is put to"),
+        );
+        let proof = Declassification::authorise("a resolved list, drawn for the person asked");
+        resolved.clone().declassify(&proof)
+    }
+
+    /// Whether a resolved list holds no call, and if so whether any row was dropped: no row at all
+    /// is the processor saying nothing needed a call, and rows that were all dropped are a
+    /// proposal nothing could be made of. Counts only, read in the policy layer.
+    pub fn proposes_nothing(
+        &mut self,
+        resolved: &Labelled<crate::apply::Resolved>,
+    ) -> Option<bool> {
+        let proof = Declassification::authorise("whether a resolved list holds any call");
+        let resolved = resolved.clone().declassify(&proof);
+        resolved
+            .calls
+            .is_empty()
+            .then_some(!resolved.dropped.is_empty())
+    }
+
+    /// The calls of a resolved list the person ticked, kept only where every call each depends on
+    /// is kept too, in an [`crate::apply::Applying`] the driver makes them through. A grant is
+    /// minted for each kept call, bound to the server, the tool and the call's place in the list,
+    /// so an approval cannot be spent on another call or reused. Refused where no call is kept.
+    /// `ticked` is the person's answer to the list, or, for a step whose tools are all
+    /// plan-covered, every call, by their answer to the plan (MANIFEST-17).
+    pub fn keep_applied(
+        &mut self,
+        alias: &str,
+        resolved: &Labelled<crate::apply::Resolved>,
+        ticked: &[usize],
+    ) -> Gated<crate::apply::Applying> {
+        let proof = Declassification::authorise(
+            "which calls of a resolved list depend on which, and the tools a person approved",
+        );
+        let calls = resolved.clone().declassify(&proof).calls;
+        let applying =
+            crate::apply::Applying::new(calls.iter().map(|call| call.after).collect(), ticked);
+        if applying.is_empty() {
+            return Err(self.deny(
+                "apply",
+                Principle::Confinement,
+                format!("the person declined every call to {alias}"),
+            ));
+        }
+        for (index, call) in calls.iter().enumerate() {
+            if applying.came()[index] == crate::apply::Came::Unmade {
+                self.issue_grant("apply", "call", format!("{alias}:{}#{index}", call.name));
+            }
+        }
+        Ok(applying)
+    }
+
+    /// The gate a call of a resolved list passes before it is sent. Returns its tool and its
+    /// arguments.
+    ///
+    /// The grant the person's answer minted for this call is consumed. The arguments are not
+    /// refused for being untrusted or private, as [`Policy::before_mcp_call`] would refuse them:
+    /// each value is one the person was shown resolved, with where it came from, and approved for
+    /// this call and this server, or one of a step whose tools they marked plan-covered, within the
+    /// bound the plan they approved stated. That approval is the trusted selector, the second under
+    /// LABEL-5's named exception. The trail line holds the alias, the tool, the call's place and
+    /// the label, and no value.
+    pub fn carry_applied_call(
+        &mut self,
+        alias: &str,
+        index: usize,
+        resolved: &Labelled<crate::apply::Resolved>,
+    ) -> Gated<(String, Vec<(String, crate::apply::Sent)>)> {
+        let label = resolved.label();
+        let proof =
+            Declassification::authorise("a call a person approved in a list, sent to its server");
+        let Some(call) = resolved
+            .clone()
+            .declassify(&proof)
+            .calls
+            .into_iter()
+            .nth(index)
+        else {
+            return Err(self.deny(
+                "apply",
+                Principle::Confinement,
+                format!("apply: no call {index} in the list approved for {alias}"),
+            ));
+        };
+        self.consume_grant("apply", "call", &format!("{alias}:{}#{index}", call.name))?;
+        self.allow(
+            "mcp_call",
+            format!(
+                "call {index} of an approved list, labelled {label}, sent to {alias}:{}",
+                call.name
+            ),
+        );
+        Ok((call.name, call.sent))
+    }
+
     /// Give back the last newline where the document had one and the answer does not.
     ///
     /// A model handing back a file it was asked to return unchanged returns it without the final
@@ -5904,19 +7012,24 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let home = if spec.reads().iter().all(|read| slots.is_no_file(read)) {
             crate::slot::Home::Scratch
         } else {
-            match about
-                .filter(|about| !slots.is_decoded(about))
-                .and_then(|about| {
-                    slots
-                        .path_of(about, &PathAuthority::mint())
-                        .map(|path| (path.to_string(), about.clone()))
-                }) {
+            match about.and_then(|about| {
+                slots
+                    .path_of(about, &PathAuthority::mint())
+                    .map(|path| (path.to_string(), about.clone()))
+            }) {
+                Some((path, named_by)) if slots.is_decoded(&named_by) => {
+                    crate::slot::Home::Decoded { path, named_by }
+                }
                 Some((path, named_by)) => crate::slot::Home::Only { path, named_by },
                 None => crate::slot::Home::Unsaid,
             }
         };
         let said = match &home {
             crate::slot::Home::Only { path, .. } => format!("{slot} answers for {path}"),
+            crate::slot::Home::Decoded { path, .. } => format!(
+                "{slot} answers for {path}, a decoding of another encoding, so it may be \
+                 written nowhere"
+            ),
             crate::slot::Home::Scratch => format!(
                 "{slot} answers for references that are no file, so it may be written only to a \
                  new file in the scratch directory"
@@ -6006,6 +7119,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                     "{slot} came from a processor that was never told which document its answer \
                      is for, so it may be written nowhere. Ask about the one document you mean, \
                      and one answer will have one destination."
+                ),
+            )),
+            // Named by its reference, as Home::Only's own refusal is, and for the same reason:
+            // the planner may not be able to name the file, which this does not do either. Chosen
+            // from the slot's own bit (SlotStore::is_decoded), so the sentence is accurate however
+            // the processor's answer reads.
+            crate::slot::Home::Decoded { named_by, .. } => Err(self.deny(
+                "write",
+                Principle::IntegrityGate,
+                format!(
+                    "{slot} is the answer for {named_by}, a document that is a decoding of \
+                     another encoding, so the answer cannot be written over it."
                 ),
             )),
         }
@@ -6553,14 +7678,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         slots: &crate::slot::SlotStore,
         by: crate::vetting::Endorsed,
     ) -> Gated<Labelled<String>> {
-        if slots.is_a_picture(slot) {
-            return Err(self.deny(
-                "vet_content",
-                Principle::Confinement,
-                format!("{slot} is a picture, and a picture is attached rather than given as text"),
-            ));
-        }
-        self.consume_grant("vet_content", "ref", slot.as_str())?;
+        self.endorsed_for_reading(
+            "vet_content",
+            slot,
+            !slots.is_a_picture(slot),
+            "is a picture, and a picture is attached rather than given as text",
+        )?;
 
         let content = slots.take_for_effect(slot).map_err(|e| Denial {
             principle: Principle::Confinement,
@@ -6609,14 +7732,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         slots: &crate::slot::SlotStore,
         by: crate::vetting::Endorsed,
     ) -> Gated<crate::vetting::Attached> {
-        let Some(media) = slots.picture_of(slot).map(str::to_string) else {
-            return Err(self.deny(
-                "vet_content",
-                Principle::Confinement,
-                format!("{slot} is not a picture, so there is nothing to attach"),
-            ));
-        };
-        self.consume_grant("vet_content", "ref", slot.as_str())?;
+        let media = slots.picture_of(slot).map(str::to_string);
+        self.endorsed_for_reading(
+            "vet_content",
+            slot,
+            media.is_some(),
+            "is not a picture, so there is nothing to attach",
+        )?;
+        let media = media.unwrap_or_default();
 
         let content = slots.take_for_effect(slot).map_err(|e| Denial {
             principle: Principle::Confinement,
@@ -6800,18 +7923,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         slots: &crate::slot::SlotStore,
         by: crate::vetting::Endorsed,
     ) -> Gated<Labelled<String>> {
-        if !slots.is_from_command(slot) {
-            return Err(self.deny(
-                "read_output",
-                Principle::Confinement,
-                format!(
-                    "{slot} is not something a program printed. Only command output may be read \
-                     this way; what a file is worth is the trust map's answer"
-                ),
-            ));
-        }
-
-        self.consume_grant("read_output", "ref", slot.as_str())?;
+        self.endorsed_for_reading(
+            "read_output",
+            slot,
+            slots.is_from_command(slot),
+            "is not something a program printed. Only command output may be read this way; \
+             what a file is worth is the trust map's answer",
+        )?;
 
         let content = slots.take_for_effect(slot).map_err(|e| Denial {
             principle: Principle::Confinement,
@@ -6904,6 +8022,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// Never for a network body, a command line, or a message to someone. Those leave, and
     /// [`Policy::before_action`] refusing them is exactly right.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            crate::value::spec_label_of(&r) == crate::spec::released(
+                crate::value::spec_label_of(&value),
+            ),
+    ))]
     pub fn declassify_into_workspace(
         &mut self,
         slot: &SlotId,
@@ -6911,7 +8035,137 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         value: Labelled<String>,
     ) -> Labelled<String> {
         let from = value.label();
-        let to = Label::new(from.integrity, crate::label::Confidentiality::Public);
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let to_its_workspace = Label::new(from.integrity, Confidentiality::Public);
+        let to = to_its_workspace;
+        self.record_into_workspace(slot, path, from, to);
+        let proof = Declassification::authorise("written back inside the workspace it came from");
+        Labelled::new(value.declassify(&proof), to)
+    }
+
+    /// The question every gate that hands a slot's bytes to the planner asks first: the slot is
+    /// the kind the gate serves, and a single-use endorsement for this slot is held, which only a
+    /// person's answer, a safe verdict where auto-vetting is on, or a mode answering in a person's
+    /// place issues. The endorsement is spent.
+    ///
+    /// `wrong_kind` says why a slot of the wrong kind is refused, after the slot's name.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> (right_kind && spec_granted(
+                *old(self),
+                tool@,
+                "ref"@,
+                spec_slot_name(*slot),
+            )),
+    ))]
+    fn endorsed_for_reading(
+        &mut self,
+        tool: &'static str,
+        slot: &SlotId,
+        right_kind: bool,
+        wrong_kind: &'static str,
+    ) -> Gated<()> {
+        if !right_kind {
+            return Err(self.refuse_wrong_kind(tool, slot, wrong_kind));
+        }
+        self.consume_grant(tool, "ref", slot.as_str())
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn refuse_wrong_kind(&mut self, tool: &'static str, slot: &SlotId, why: &str) -> Denial {
+        self.deny(tool, Principle::Confinement, format!("{slot} {why}"))
+    }
+
+    /// The trail line for [`Policy::promote_a_tool_list`].
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn allow_a_tool_list(
+        &mut self,
+        alias: &str,
+        was: Label,
+        label: Label,
+        by: &crate::vetting::Endorsed,
+    ) {
+        self.allow(
+            "mcp_tools",
+            format!(
+                "the tools {alias} offers were {was}; {}, so the planner is offered them at {label}",
+                by.describe()
+            ),
+        );
+    }
+
+    /// The refusal of a release the plan did not name, to `destination` where one was asked for.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn refuse_unplanned_release(&mut self, slot: &SlotId, destination: Option<&str>) -> Denial {
+        let message = match destination {
+            Some(destination) => {
+                format!("slot '{slot}' was not precommitted as releasable to {destination}")
+            }
+            None => format!("slot '{slot}' was not precommitted as releasable"),
+        };
+        self.deny("declassify", Principle::Confinement, message)
+    }
+
+    /// The event for [`Policy::declassify`].
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn record_release(&mut self, slot: &SlotId, from: Label, to: Label) {
+        self.sink.emit(Event::Declassified {
+            slot: slot.clone(),
+            from,
+            to,
+            reason: "precommitted release source",
+        });
+    }
+
+    /// The event and trail line for [`Policy::declassify_into_place`].
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn record_into_place(&mut self, slot: &SlotId, destination: &str, from: Label, to: Label) {
+        self.sink.emit(Event::Declassified {
+            slot: slot.clone(),
+            from,
+            to,
+            reason: "precommitted release to a connector place",
+        });
+        self.allow(
+            "declassify",
+            format!("{slot} released to {destination}, as its plan named"),
+        );
+    }
+
+    /// The trail line for [`Policy::declassify_written_into_workspace`].
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn allow_written_into_workspace(&mut self, tool: &str, path: &str, from: Label, to: Label) {
+        self.allow(
+            "declassify",
+            format!(
+                "{tool}: what the planner wrote, {from}, released into {path}, which is inside \
+                 the workspace, as {to}"
+            ),
+        );
+    }
+
+    /// The trail line for [`Policy::declassify_checkout_into_workspace`].
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn allow_checkout_into_workspace(
+        &mut self,
+        checkout_path: &str,
+        path: &str,
+        from: Label,
+        to: Label,
+    ) {
+        self.allow(
+            "declassify",
+            format!(
+                "{checkout_path}, which is {from}, released into {path}, which is inside the \
+                 workspace, as {to}"
+            ),
+        );
+    }
+
+    /// The trail lines for [`Policy::declassify_into_workspace`]. Apart from the gate so a contract
+    /// on the gate states its label, which is all the gate decides.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn record_into_workspace(&mut self, slot: &SlotId, path: &str, from: Label, to: Label) {
         self.sink.emit(Event::Declassified {
             slot: slot.clone(),
             from,
@@ -6922,8 +8176,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             "declassify",
             format!("{slot} released into {path}, which is inside the workspace"),
         );
-        let proof = Declassification::authorise("written back inside the workspace it came from");
-        Labelled::new(value.declassify(&proof), to)
     }
 
     /// Release a quarantined value into the connector destination its plan named for it.
@@ -6937,30 +8189,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The witness unwraps the bytes for one place: the standard input of the credential
     /// authority, which carries them into the HTTP body it sends (LABEL-6). The caller unwraps
     /// them there and nowhere else, exactly as [`Policy::authorise_program_input`]'s caller does.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> spec_precommitted_into(*old(self), *slot, destination@),
+    ))]
     pub fn declassify_into_place(
         &mut self,
         slot: &SlotId,
         destination: &str,
         from: Label,
     ) -> Gated<Declassification> {
-        if !self.release.allows_into(slot, destination) {
-            return Err(self.deny(
-                "declassify",
-                Principle::Confinement,
-                format!("slot '{slot}' was not precommitted as releasable to {destination}"),
-            ));
+        let precommitted_here = self.precommitted_into(slot, destination);
+        if !precommitted_here {
+            return Err(self.refuse_unplanned_release(slot, Some(destination)));
         }
         let to = Label::new(from.integrity, Confidentiality::Public);
-        self.sink.emit(Event::Declassified {
-            slot: slot.clone(),
-            from,
-            to,
-            reason: "precommitted release to a connector place",
-        });
-        self.allow(
-            "declassify",
-            format!("{slot} released to {destination}, as its plan named"),
-        );
+        self.record_into_place(slot, destination, from, to);
         Ok(Declassification::authorise(
             "precommitted release to a connector place",
         ))
@@ -6973,6 +8217,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// confidentiality. Integrity is untouched, so the write is decided exactly as it was before
     /// the planner was shown anything. A public value comes back as it went in and records
     /// nothing.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            crate::value::spec_label_of(&r) == crate::spec::released(
+                crate::value::spec_label_of(&value),
+            ),
+    ))]
     pub fn declassify_written_into_workspace(
         &mut self,
         tool: &str,
@@ -6983,14 +8233,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         if from.is_public() {
             return value;
         }
-        let to = Label::new(from.integrity, Confidentiality::Public);
-        self.allow(
-            "declassify",
-            format!(
-                "{tool}: what the planner wrote, {from}, released into {path}, which is inside \
-                 the workspace, as {to}"
-            ),
-        );
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let to_the_workspace = Label::new(from.integrity, Confidentiality::Public);
+        let to = to_the_workspace;
+        self.allow_written_into_workspace(tool, path, from, to);
         let proof = Declassification::authorise("the planner's words written into the workspace");
         Labelled::new(value.declassify(&proof), to)
     }
@@ -7002,6 +8248,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// confidentiality that stops content crossing a bridge is not in play. Integrity is untouched:
     /// the label is the one the checkout's path has, and completing the file effect that
     /// writes them records the destination as untrusted where the bytes are.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            crate::value::spec_label_of(&r) == crate::spec::released(
+                crate::value::spec_label_of(&value),
+            ),
+    ))]
     pub fn declassify_checkout_into_workspace(
         &mut self,
         checkout_path: &str,
@@ -7009,14 +8261,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         value: Labelled<String>,
     ) -> Labelled<String> {
         let from = value.label();
-        let to = Label::new(from.integrity, Confidentiality::Public);
-        self.allow(
-            "declassify",
-            format!(
-                "{checkout_path}, which is {from}, released into {path}, which is inside the \
-                 workspace, as {to}"
-            ),
-        );
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let to_the_checkouts_workspace = Label::new(from.integrity, Confidentiality::Public);
+        let to = to_the_checkouts_workspace;
+        self.allow_checkout_into_workspace(checkout_path, path, from, to);
         let proof =
             Declassification::authorise("a checkout's file written back into its workspace");
         Labelled::new(value.declassify(&proof), to)
@@ -7054,74 +8302,50 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         contents: Label,
         destination: Destination,
     ) -> bool {
-        let data_trusted = contents.is_trusted();
-
-        // A destination taken out of a reference is shown whatever the table says, because the
-        // approval is the only moment the path exists anywhere a person can see it. The table
-        // below reasons about a path somebody named; this one nobody has.
-        if destination == Destination::Reference {
-            self.allow(
-                "approval",
-                format!("{path}: named only by a reference, so it is shown, asking"),
-            );
-            return true;
-        }
-
-        // A path where a write runs code later is put to the person whatever a rule or the trust
-        // map says. Read off the routing path alone, as a deny rule is (PERM-9, MODE-2).
-        if crate::protected::is_protected(path) {
-            self.allow(
-                "approval",
-                format!("{path}: a path where a write runs code later, asking"),
-            );
-            return true;
-        }
-
-        // A rule the user wrote in advance answers before the table below, which is what a rule
-        // is for. It cannot reach the case above: nothing a pattern says can put a path in front
-        // of somebody, and that prompt is the only place a reference's path is ever seen.
-        match self
-            .permissions
-            .for_path(crate::permissions::Subject::Edit, path)
-        {
-            crate::permissions::Decision::Ruled(ruling) => {
-                let needed = ruling != crate::permissions::Ruling::Allow;
-                self.allow(
-                    "approval",
-                    format!(
-                        "{path}: a rule in the settings file says {ruling}, {}",
-                        if needed { "asking" } else { "no prompt" }
-                    ),
-                );
-                return needed;
-            }
-            crate::permissions::Decision::Unmatched => {}
-        }
-
-        let (needed, reason) = match self.integrity_in_force(path) {
-            // Nobody has said anything about this path, so the first write is the moment to ask.
-            None => (true, "a path nobody has vouched for either way"),
-            // The one irreversible case: a trusted path is about to stop being trusted.
-            Some(Integrity::Trusted) if !data_trusted => (
-                true,
-                "untrusted data into a trusted path, which it will make untrusted",
-            ),
-            Some(Integrity::Trusted) => (false, "trusted data to a trusted path"),
-            // Already untrusted. Trusted data only raises it; untrusted data changes nothing.
-            Some(Integrity::Untrusted) if data_trusted => (
-                false,
-                "trusted data into an untrusted path, which it will make trusted",
-            ),
-            Some(Integrity::Untrusted) => (false, "untrusted data to an already untrusted path"),
+        let facts = WriteFacts {
+            data_trusted: contents.is_trusted(),
+            by_reference: destination == Destination::Reference,
+            protected: crate::protected::is_protected(path),
+            rule: self
+                .permissions
+                .for_path(crate::permissions::Subject::Edit, path),
+            in_force: self.integrity_in_force(path),
         };
-
-        self.allow(
-            "approval",
-            format!(
-                "{path}: {reason}, {}",
+        let reason = write_reason(facts);
+        let needed = reason.asks();
+        let said = match reason {
+            // A destination taken out of a reference is shown whatever the table says, because the
+            // approval is the only moment the path exists anywhere a person can see it.
+            WriteReason::Reference => {
+                format!("{path}: named only by a reference, so it is shown, asking")
+            }
+            // A path where a write runs code later is put to the person whatever a rule or the
+            // trust map says. Read off the routing path alone, as a deny rule is (PERM-9, MODE-2).
+            WriteReason::Protected => {
+                format!("{path}: a path where a write runs code later, asking")
+            }
+            WriteReason::Ruled(ruling) => format!(
+                "{path}: a rule in the settings file says {ruling}, {}",
                 if needed { "asking" } else { "no prompt" }
             ),
-        );
+            WriteReason::Undecided => {
+                format!("{path}: a path nobody has vouched for either way, asking")
+            }
+            WriteReason::LowersTrust => format!(
+                "{path}: untrusted data into a trusted path, which it will make untrusted, asking"
+            ),
+            WriteReason::KeepsTrust => {
+                format!("{path}: trusted data to a trusted path, no prompt")
+            }
+            WriteReason::RaisesTrust => format!(
+                "{path}: trusted data into an untrusted path, which it will make trusted, no \
+                 prompt"
+            ),
+            WriteReason::AlreadyUntrusted => {
+                format!("{path}: untrusted data to an already untrusted path, no prompt")
+            }
+        };
+        self.allow("approval", said);
         needed
     }
 
@@ -7607,11 +8831,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// reads, so one such step makes the whole line's output untrusted however familiar the steps
     /// either side of it are.
     ///
-    /// An entry holds a resolved program, its arguments and the tree it was given in, so this
-    /// answers about all three: the plan's directory has to be the entry's directory exactly, and
-    /// an entry given in `sub/` covers neither the root above it nor a `nested/` below it
-    /// ([RUN-8]). `sh check.sh` names a different file in every tree it is read in, which is why
-    /// the tree is part of the key rather than beside it.
+    /// An entry holds a resolved program, its arguments, where its streams go and the tree it was
+    /// given in, so this answers about all four: the plan's directory has to be the entry's
+    /// directory exactly, and an entry given in `sub/` covers neither the root above it nor a
+    /// `nested/` below it ([RUN-8]). `sh check.sh` names a different file in every tree it is read
+    /// in, which is why the tree is part of the key rather than beside it. The routes are compared
+    /// too, so an entry made at `sh check.sh > /dev/null` does not cover `sh check.sh`.
     ///
     /// [`crate::command::Plan::carries_an_assignment`] is still the separate question, and every
     /// gate that consults this one has to ask that one too.
@@ -7625,29 +8850,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// [RUN-8]: ../../../docs/specs/tools/run.md
     fn every_step_vouched(&self, plan: &crate::command::Plan) -> bool {
-        self.root.is_some()
-            && plan.steps().iter().all(|step| {
-                // Destructured so that a field added to `Step` stops the build here. This key holds
-                // four of the six deliberately, and the two it leaves out are only safe because
-                // something else refuses them first: an assignment is refused by
-                // `Plan::carries_an_assignment`, which every gate consulting this one has to ask
-                // separately, and a route by the write question. A seventh field would have no
-                // such refusal behind it, and left out of this key silently it would be a line
-                // differing from the one that was answered for.
-                let crate::command::Step {
-                    program: _,
-                    resolved,
-                    started_as,
-                    args,
-                    // The person vouched for the expanded arguments, whichever a pattern produced.
-                    matched: _,
-                    environment: _,
-                    expansions: _,
-                    routes: _,
-                } = step;
-                self.programs
-                    .contains(resolved, started_as, args, &plan.directory)
-            })
+        self.root.is_some() && self.programs.covers_every_step(plan)
     }
 
     /// Whether the person's trust of the workspace root said that lines held to a closed sandbox
@@ -7760,7 +8963,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// resolved to lies outside the workspace and the rest of the set
     /// [`Policy::resolves_inside_the_project`] compares against, and is started by a path outside
     /// them under its own file name, the audited table answers for that file's name and for the exact argv, every
-    /// argument a filename pattern produced is one the audited entry reads as a path ([CMDLINE-4]),
+    /// argument a filename pattern produced, matched or passed through as written, is one the
+    /// audited entry reads as a path ([CMDLINE-4]),
     /// the step carries no environment assignment, and it opens no file for a stream. `2>&1`
     /// renames a descriptor and opens nothing, so it is not one.
     ///
@@ -7818,8 +9022,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // path, the trust map's answer for that path is the label, as for any other operand.
             // Anywhere else it is handed to the program as text the program may print, such as
             // `basename`'s operand, an option's value or grep's pattern, and no path in the read
-            // set answers for it. So the step proves nothing. Decided from where the compiler put
-            // the word, never from its bytes, and here for every audited program at once.
+            // set answers for it. So the step proves nothing. A pattern that matched nothing is
+            // marked the same way, because whether a name exists in a directory is itself decided
+            // by the names in it. Decided from where the compiler put the word, never from its
+            // bytes, and here for every audited program at once.
             //
             // [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
             if (0..step.args.len())
@@ -7888,7 +9094,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             if climbs_out(word) {
                 return true;
             }
-            let mut keys = keys_for_the_map(&plan.directory, word);
+            let mut keys = keys_for_the_map(&plan.directory, word, self.backslash_separates);
             match &self.operand_names {
                 None => {}
                 Some(found) => match found.get(word.as_str()) {
@@ -7949,7 +9155,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             let answer = match climbs_out(path) {
                 true => Integrity::Untrusted,
                 false => {
-                    let mut keys = keys_for_the_map(&plan.directory, path);
+                    let mut keys =
+                        keys_for_the_map(&plan.directory, path, self.backslash_separates);
                     // The other names the file has (TRUST-2), found by the caller from the file
                     // system, which this crate does not reach. A line whose operands the caller
                     // did not look up is judged by spelling, and one it looked up for and left an
@@ -7962,19 +9169,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                             _ => keys.clear(),
                         },
                     }
-                    keys.iter()
-                        // A key nothing answers is the answer "nobody has said", which is the weakest
-                        // of them and not an absence to skip over. Dropping it would let one name's
-                        // rule decide for a name it was never written about: an operand holding the
-                        // workspace is asked about the project as well, and the project's rule alone
-                        // would hand back a tree nobody vouched for as trusted. No keys at all is
-                        // the same answer.
-                        .map(|key| {
-                            self.integrity_beneath_in_force(key)
-                                .unwrap_or(Integrity::Untrusted)
-                        })
-                        .reduce(Integrity::meet)
-                        .unwrap_or(Integrity::Untrusted)
+                    // A key nothing answers is the answer "nobody has said", which is the weakest
+                    // of them and not an absence to skip over. Dropping it would let one name's
+                    // rule decide for a name it was never written about: an operand holding the
+                    // workspace is asked about the project as well, and the project's rule alone
+                    // would hand back a tree nobody vouched for as trusted. No keys at all is the
+                    // same answer.
+                    let answers: Vec<Option<Integrity>> = keys
+                        .iter()
+                        .map(|key| self.integrity_beneath_in_force(key))
+                        .collect();
+                    weakest_name(&answers)
                 }
             };
             integrity = integrity.meet(answer);
@@ -8086,176 +9291,119 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         requested: &[&str],
         containment: Containment,
     ) -> bool {
+        self.plan_needs_approval_lent(plan, requested, &[], containment)
+    }
+
+    /// [`Policy::plan_needs_approval_held`] for a line a stage of which is also lent the credential
+    /// scopes `remembered` names, each a word of the fixed menu, because a person kept them at an
+    /// earlier prompt (SANDBOX-27).
+    ///
+    /// A remembered scope is asked about as a requested one is, before any rule and any standing
+    /// answer is read, because a vouched entry and a remembered line hold a program, its arguments
+    /// and a tree and were made for the line without the credential. The caller works the scopes out
+    /// from the person's own record and the compiled steps, never from what a program printed.
+    pub fn plan_needs_approval_lent(
+        &mut self,
+        plan: &crate::command::Plan,
+        requested: &[&str],
+        remembered: &[&str],
+        containment: Containment,
+    ) -> bool {
         self.answered_by_directory_trust = false;
-        if plan.releases_private() {
-            self.allow(
-                "approval",
+        let at_root = self.runs_at_the_root(plan);
+        let vouched = self.every_step_vouched(plan);
+        let facts = RunFacts {
+            releases_private: plan.releases_private(),
+            requested: !requested.is_empty() || !remembered.is_empty(),
+            writes: !plan.writes.is_empty(),
+            at_root,
+            vouched,
+            assignment: plan.carries_an_assignment(),
+            rule: self.permissions.for_pipeline(&Self::plan_words(plan)),
+            read_proven_trusted: self
+                .read_proven_label(plan)
+                .is_some_and(|label| label.is_trusted()),
+            fed: plan.stdin.is_some(),
+            held: containment == Containment::Held
+                && self.confined_lines_were_allowed(plan)
+                && (self.read_proven(plan).is_some() || !self.names_a_distrusted_path(plan)),
+            remembered: self.remembered.covers(plan),
+        };
+        let reason = run_reason(facts);
+        if reason == RunReason::DirectoryTrust {
+            self.answered_by_directory_trust = true;
+        }
+        let said = match reason {
+            RunReason::Private => {
                 "private input into a program, which releases it past this policy, asking"
-                    .to_string(),
-            );
-            return true;
-        }
-
-        if !requested.is_empty() {
-            self.allow(
-                "approval",
-                format!(
-                    "the planner asked for {} on this line, which no vouched entry, remembered line or rule \
-                     records, asking",
-                    requested.join(", ")
-                ),
-            );
-            return true;
-        }
-
-        // A plan that writes has a destination as well as a program, and vouching for a command is
-        // not vouching for where this line sends its output. Asked every time, so a write cannot
-        // arrive unseen behind a program somebody once said yes to.
-        if !plan.writes.is_empty() {
-            self.allow(
-                "approval",
+                    .to_string()
+            }
+            RunReason::Requested if requested.is_empty() => format!(
+                "a stage of this line is lent {}, which a person kept at an earlier prompt and \
+                 which no vouched entry, remembered line or rule records, asking",
+                remembered.join(", ")
+            ),
+            RunReason::Requested if remembered.is_empty() => format!(
+                "the planner asked for {} on this line, which no vouched entry, remembered line or rule \
+                 records, asking",
+                requested.join(", ")
+            ),
+            RunReason::Requested => format!(
+                "the planner asked for {} on this line and a stage is lent {}, which a person kept at an \
+                 earlier prompt, which no vouched entry, remembered line or rule records, asking",
+                requested.join(", "),
+                remembered.join(", ")
+            ),
+            RunReason::Writes => {
                 "the line names files to write, which is a destination of its own, asking"
-                    .to_string(),
-            );
-            return true;
-        }
-
-        // A plan that runs outside the root has a tree as well as a program, and the only standing
-        // answer that can cover one is an entry that names that tree: `git clean -fd` is a
-        // different proposition in two different trees, and `git log` prints whatever commit
-        // messages the repository it is pointed at happens to hold. Everything else a person
-        // settled in advance is spelled against the root (a rule in the settings file, a line
-        // remembered past the session), so none of it reaches a tree of its own, and the question
-        // is put before the rules for the reason private input is: a rule saying which commands
-        // may run answers the question about running one, not the one about which tree it lands in.
-        if !self.runs_at_the_root(plan) && !self.every_step_vouched(plan) {
-            self.allow(
-                "approval",
+                    .to_string()
+            }
+            RunReason::OutsideRoot => {
                 "the line runs outside the workspace root, in a tree no vouched entry names and \
                  no answer spelled against the root covers, asking"
-                    .to_string(),
-            );
-            return true;
-        }
-
-        // A plan carrying an environment assignment has a load and a search path of its own as well
-        // as a program, and a vouched entry records neither: `LD_PRELOAD=./evil.so git log` matches
-        // an entry made for `git log`. An assignment decides what the program loads and reads before
-        // its own arguments are looked at, so it is asked about every time, for the same reason a
-        // write and a tree are.
-        if plan.carries_an_assignment() {
-            self.allow(
-                "approval",
+                    .to_string()
+            }
+            RunReason::Assignment => {
                 "the line writes an assignment in front of a program, which decides what it loads \
                  before its arguments are read and which no standing answer covers, asking"
-                    .to_string(),
-            );
-            return true;
-        }
-
-        match self.permissions.for_pipeline(&Self::plan_words(plan)) {
-            crate::permissions::Decision::Ruled(ruling) => {
-                let needed = ruling != crate::permissions::Ruling::Allow;
-                self.allow(
-                    "approval",
-                    format!(
-                        "a rule in the settings file says {ruling} for this line, {}",
-                        if needed { "asking" } else { "no prompt" }
-                    ),
-                );
-                return needed;
+                    .to_string()
             }
-            crate::permissions::Decision::Unmatched => {}
-        }
-
-        if self
-            .read_proven_label(plan)
-            .is_some_and(|label| label.is_trusted())
-        {
-            self.allow(
-                "approval",
+            RunReason::Ruled(ruling) => format!(
+                "a rule in the settings file says {ruling} for this line, {}",
+                if reason.asks() { "asking" } else { "no prompt" }
+            ),
+            RunReason::ReadProven => {
                 "every step is an audited call that reads what the line names and the user \
                  vouched for every path it reads, no prompt"
-                    .to_string(),
-            );
-            return false;
-        }
-
-        // A plan fed a reference has an input as well as a program, and neither a vouched entry
-        // nor a remembered line records it: both are spelled against the program and its arguments,
-        // so one made for `python3 -` fed one page would cover `python3 -` fed another. Asked every
-        // time, whatever the reference's label, because a public body is the one an attacker wrote.
-        // Past the rules, which the person wrote knowing what a line may be fed, and past the proof
-        // road, which has already met the reference's integrity into its label and answers only for
-        // a line that writes nothing.
-        if plan.stdin.is_some() {
-            self.allow(
-                "approval",
+                    .to_string()
+            }
+            RunReason::Fed => {
                 "the line is fed a reference, which no vouched entry or remembered line records, \
                  asking"
-                    .to_string(),
-            );
-            return true;
-        }
-
-        // Past every question above, which is what keeps this answer to the line it was given
-        // for: private input, a scope, an unconfined start, a write, another tree, an assignment, a
-        // rule and a fed reference all asked before it was reached. What remains is a plain line.
-        // And past the question of whether the line is given a path the map holds untrusted: the
-        // file tools put the same copy to the person (TRUST-4), and a held line that copies an
-        // untrusted file over a trusted one has made the same move. Such a line falls through to
-        // the vouched entry and the remembered line, which a person gave for that exact line.
-        //
-        // A line the audited table proves read-only is not asked about its paths: it copies
-        // nothing, and what it prints keeps the label of the paths it read ([`Policy::before_plan`]),
-        // so `cat /etc/hosts` adds a question that protects nothing. `read_proven` answers from
-        // program names and argv alone and is `None` for a renamed, assigned or redirecting step
-        // and for a program the table does not list, so every other line is still asked about.
-        if containment == Containment::Held
-            && self.confined_lines_were_allowed(plan)
-            && (self.read_proven(plan).is_some() || !self.names_a_distrusted_path(plan))
-        {
-            self.answered_by_directory_trust = true;
-            self.allow(
-                "approval",
+                    .to_string()
+            }
+            RunReason::DirectoryTrust => {
                 "the line is held to a closed sandbox in the directory the person trusted, and \
                  their yes said such lines run without asking, no prompt"
-                    .to_string(),
-            );
-            return false;
-        }
-
-        if self.every_step_vouched(plan) {
-            self.allow(
-                "approval",
+                    .to_string()
+            }
+            RunReason::Vouched => {
                 "every step is a command the user vouched for in this tree this session, no prompt"
-                    .to_string(),
-            );
-            return false;
-        }
-
-        // Last of the four, and the only one whose answer was given in another session. It is
-        // reached only past the questions above it, which is what keeps an entry honest about what
-        // it covers: a recorded line met here with private input fed to it, with a file to write, in
-        // another tree, or with an assignment in front of a program is asked about like any other,
-        // because those were refused before this was consulted.
-        if self.remembered.covers(plan) {
-            self.allow(
-                "approval",
+                    .to_string()
+            }
+            RunReason::Remembered => {
                 "the user asked at a prompt for this exact line to be remembered past the \
                  session, no prompt"
-                    .to_string(),
-            );
-            return false;
-        }
-
-        self.allow(
-            "approval",
-            "nothing can establish that a program changes nothing, and not every step was \
-             vouched for, asking"
-                .to_string(),
-        );
-        true
+                    .to_string()
+            }
+            RunReason::Unanswered => {
+                "nothing can establish that a program changes nothing, and not every step was \
+                 vouched for, asking"
+                    .to_string()
+            }
+        };
+        self.allow("approval", said);
+        reason.asks()
     }
 
     /// Whether a prompt for this plan may offer to record its answer past the session.
@@ -8438,6 +9586,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("requested_scopes", detail);
     }
 
+    /// Record the credential scopes a person kept at an earlier prompt that stages of a `run` are
+    /// lent, and the stages each was lent to, apart from what the planner asked for.
+    ///
+    /// `detail` is built from menu words and stage numbers, so it holds nothing the plan or a
+    /// program wrote.
+    pub fn record_kept_scopes(&mut self, detail: String) {
+        self.allow("kept_scopes", detail);
+    }
+
     /// Record the permission mode a turn begins with, by its name.
     ///
     /// The mode decides whether the next prompt is drawn, and it is the one thing that changes
@@ -8446,6 +9603,31 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// skipped permissions. The name is the mode's own static text, never anything a turn read.
     pub fn record_permission_mode(&mut self, mode: &'static str) {
         self.allow("permission_mode", format!("the turn began in {mode} mode"));
+    }
+
+    /// Record the permission mode a session opened in and what chose it (TRACE-12).
+    ///
+    /// Written by the first turn or manifest run of a sitting, since nothing is written to the
+    /// trail before one. `mode` and `cause` are the driver's own static text, never anything a turn
+    /// read.
+    pub fn record_permission_mode_opened(&mut self, mode: &'static str, cause: &'static str) {
+        self.allow(
+            "permission_mode_opened",
+            format!("the session opened in {mode} mode {cause}"),
+        );
+    }
+
+    /// Record one change of permission mode, the mode before it and what caused it (TRACE-12).
+    pub fn record_permission_mode_changed(
+        &mut self,
+        from: &'static str,
+        to: &'static str,
+        cause: &'static str,
+    ) {
+        self.allow(
+            "permission_mode_changed",
+            format!("the permission mode changed from {from} to {to} {cause}"),
+        );
     }
 
     /// [`Policy::record_permission_mode`] for a manifest run, which is not a turn and is not
@@ -8757,50 +9939,34 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 .read_proven_label(plan)
                 .filter(|label| label.is_trusted()),
         };
-
-        let (label, why) = if requesting {
-            (
-                opaque,
+        let facts = OutputFacts {
+            requesting,
+            proven,
+            vouched: self.every_step_vouched(plan),
+            assignment: plan.carries_an_assignment(),
+            fed: plan.stdin.map(|label| label.integrity),
+        };
+        let (label, road) = output_label(facts, opaque);
+        let why = match road {
+            OutputRoad::Requested => {
                 "the line asked for `scopes` or `unconfined`, and neither a vouch nor an audited \
-                 call makes what it prints trusted",
-            )
-        } else if let Some(label) = proven {
-            (
-                label,
-                "every step is an audited call whose output is a function of paths the user \
-                 vouched for",
-            )
-        } else if self.every_step_vouched(plan) && !plan.carries_an_assignment() {
-            // Met with what was fed in, exactly as [`Policy::read_proven_label`] meets it on the
-            // other road. Vouching for a command is an assertion about what that command does, and
-            // it is not and cannot be an assertion about bytes the user has never seen: `sed` over
-            // a fetched page prints what the page said, so a vouch for `sed` that reached `(T,priv)`
-            // here would put a page into the planner's context as trusted content. That is the one
-            // thing this repository exists to prevent, and it is the reason the supplied label is
-            // read here rather than only at the prompt.
-            //
-            // A `<` redirection is not in this and takes nothing away from it: it names a file, and
-            // a file read under a vouched-for line is already what the vouch is an assertion about.
-            match plan
-                .stdin
-                .map_or(Integrity::Trusted, |label| label.integrity)
-            {
-                Integrity::Trusted => (
-                    Label::trusted_private(),
-                    "every step is a command the user vouched for in this tree, output and all",
-                ),
-                Integrity::Untrusted => (
-                    opaque,
-                    "every step was vouched for, but the line is fed content nobody vouched \
-                     for, and a program prints what it was given",
-                ),
+                 call makes what it prints trusted"
             }
-        } else {
-            (
-                opaque,
+            OutputRoad::Proven => {
+                "every step is an audited call whose output is a function of paths the user \
+                 vouched for"
+            }
+            OutputRoad::Vouched => {
+                "every step is a command the user vouched for in this tree, output and all"
+            }
+            OutputRoad::VouchedButFed => {
+                "every step was vouched for, but the line is fed content nobody vouched \
+                 for, and a program prints what it was given"
+            }
+            OutputRoad::Opaque => {
                 "a program may print anything, and not every step of this line was vouched for as \
-                 written, where it runs",
-            )
+                 written, where it runs"
+            }
         };
         Ok(PlanLabelled { label, why })
     }
@@ -8831,7 +9997,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             "grant",
             format!("endorsed {}.{} at an exact value", grant.tool, grant.field),
         );
-        self.grants.push(grant);
+        self.grants.issue(grant);
     }
 
     /// Authorise reading a slot's untrusted content.
@@ -8839,21 +10005,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Only slots named in the precommitted [`ReleasePlan`] may be released, and the
     /// plan was fixed before any content was observed, so content cannot nominate
     /// itself for release.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> spec_precommitted(*old(self), *slot),
+    ))]
     pub fn declassify(&mut self, slot: &SlotId, from: Label) -> Gated<Declassification> {
-        if !self.release.contains(slot) {
-            return Err(self.deny(
-                "declassify",
-                Principle::Confinement,
-                format!("slot '{slot}' was not precommitted as releasable"),
-            ));
+        let precommitted = self.precommitted(slot);
+        if !precommitted {
+            return Err(self.refuse_unplanned_release(slot, None));
         }
-        let to = Label::new(from.integrity, crate::label::Confidentiality::Public);
-        self.sink.emit(Event::Declassified {
-            slot: slot.clone(),
-            from,
-            to,
-            reason: "precommitted release source",
-        });
+        let to = Label::new(from.integrity, Confidentiality::Public);
+        self.record_release(slot, from, to);
         Ok(Declassification::authorise("precommitted release source"))
     }
 
@@ -8886,6 +10048,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// private content still names paths and commands, and refusing every argument after a vet
     /// would end the turn. The arguments that hand the planner's words to a server are labelled
     /// from the context instead, and [`Policy::mcp_call_needs_approval`] asks about them.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> crate::spec::the_planner_may_decide(
+                crate::value::spec_label_of(value),
+                spec_context(*old(self)),
+            ),
+    ))]
     pub fn read_planner_argument(
         &mut self,
         tool: &str,
@@ -8893,7 +10062,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         value: &Labelled<String>,
     ) -> Gated<String> {
         let label = value.label();
-        if !label.is_public() {
+        // A private argument is the person's data in a field the driver reads.
+        let private_argument = !label.is_public();
+        if private_argument {
             return Err(self.deny(
                 "argument",
                 Principle::Confinement,
@@ -8903,7 +10074,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 ),
             ));
         }
-        if self.context != Integrity::Trusted {
+        // A fallen context writes untrusted words, which must not decide anything.
+        let fallen_argument = self.context_integrity() != Integrity::Trusted;
+        if fallen_argument {
             return Err(self.deny(
                 "argument",
                 Principle::IntegrityGate,
@@ -8956,6 +10129,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// Every promotion is recorded, so the audit trail shows which choices were the
     /// model's rather than the user's.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> crate::spec::the_planner_may_decide(
+                crate::value::spec_label_of(proposed),
+                spec_context(*old(self)),
+            ),
+            r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
+    ))]
     pub fn promote_confined_read(
         &mut self,
         tool: &str,
@@ -8966,7 +10147,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         // Private content is not promotable: reading it back out would launder the
         // user's data into a value the model can steer.
-        if !label.is_public() {
+        let private_proposal = !label.is_public();
+        if private_proposal {
             return Err(self.deny(
                 "promote",
                 Principle::Confinement,
@@ -8976,7 +10158,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 ),
             ));
         }
-        if self.context != Integrity::Trusted {
+        // A fallen context proposes untrusted paths, which must not decide anything.
+        let fallen_proposal = self.context_integrity() != Integrity::Trusted;
+        if fallen_proposal {
             return Err(self.deny(
                 "promote",
                 Principle::IntegrityGate,
@@ -9250,7 +10434,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 format!("{tool}.{field} cannot name a reference from {label}"),
             ));
         }
-        if self.context != Integrity::Trusted {
+        if self.context.integrity() != Integrity::Trusted {
             return Err(self.deny(
                 "reference",
                 Principle::IntegrityGate,
@@ -9466,19 +10650,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// as plain strings a person read, and the grant match is the whole of its authority. Keeping
     /// the lookup in one place is what stops its callers drifting apart on what counts as a
     /// match.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> spec_granted(*old(self), tool@, field@, concrete@),
+            r is Ok ==> exists|i: int|
+                0 <= i < spec_grants(*old(self)).len() && grant_is_for(
+                    #[trigger] spec_grants(*old(self))[i],
+                    tool@,
+                    field@,
+                    concrete@,
+                ) && spec_grants(*final(self)) == spec_grants(*old(self)).remove(i),
+            r is Err ==> spec_grants(*final(self)) == spec_grants(*old(self)),
+    ))]
     fn consume_grant(&mut self, tool: &str, field: &str, concrete: &str) -> Gated<()> {
-        let found = self
-            .grants
-            .iter()
-            .position(|g| g.tool == tool && g.field == field && g.value == concrete);
-
-        match found {
-            Some(index) => {
-                self.grants.remove(index);
+        match self.grants.spend(tool, field, concrete) {
+            true => {
                 self.allow("grant", format!("consumed endorsement for {tool}.{field}"));
                 Ok(())
             }
-            None => Err(self.deny(
+            false => Err(self.deny(
                 "grant",
                 Principle::IntegrityGate,
                 format!(
@@ -9604,9 +10795,26 @@ fn names_a_path(program: &str) -> bool {
 /// Nothing is resolved, only re-spelled, so a name outside the root keeps just its own and the rule
 /// about the directory holding it decides.
 ///
+/// Where a backslash separates, the root and the operand are compared as keys. The root arrives as
+/// the host resolved it, `\\?\C:\work`, and a line spells the same directory `C:\work`, whose first
+/// component is not the root's, so compared as paths the two never nest (TRUST-18).
+///
 /// [TRUST-9]: ../../../docs/specs/trust-map.md
-fn keys_for_the_map(root: &std::path::Path, operand: &str) -> Vec<String> {
-    let named = std::path::Path::new(operand);
+/// [TRUST-18]: ../../../docs/specs/trust-map.md
+fn keys_for_the_map(
+    root: &std::path::Path,
+    operand: &str,
+    backslash_separates: bool,
+) -> Vec<String> {
+    let (root, named) = match backslash_separates {
+        true => (
+            std::path::PathBuf::from(&*crate::spelling::to_key(&root.to_string_lossy(), true)),
+            std::path::PathBuf::from(&*crate::spelling::to_key(operand, true)),
+        ),
+        false => (root.to_path_buf(), std::path::PathBuf::from(operand)),
+    };
+    let root = root.as_path();
+    let named = named.as_path();
     let mut keys = vec![operand.to_string()];
     match named.strip_prefix(root) {
         Ok(inside) => keys.push(inside.to_string_lossy().into_owned()),
@@ -9621,6 +10829,34 @@ fn keys_for_the_map(root: &std::path::Path, operand: &str) -> Vec<String> {
 /// The trust map is keyed on names and compares them by segment, so a rule about a directory
 /// answers about `../secret` as readily as about a file inside it. A path that climbs is therefore
 /// one no rule was written about, whatever a rule appears to say.
+/// The integrity of a file asked about under each of its names: trusted only where it has a name
+/// and every name answers trusted. A name nothing answers counts as untrusted, and so does a file
+/// with no name to ask under.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == Integrity::Trusted <==> (answers@.len() > 0 && forall|i: int|
+            0 <= i < answers@.len() ==> #[trigger] answers@[i] == Some(Integrity::Trusted)),
+))]
+fn weakest_name(answers: &[Option<Integrity>]) -> Integrity {
+    if answers.is_empty() {
+        return Integrity::Untrusted;
+    }
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= answers.len(),
+            forall|i: int| 0 <= i < at ==> #[trigger] answers@[i] == Some(Integrity::Trusted),
+        decreases answers.len() - at,
+    ))]
+    while at < answers.len() {
+        if answers[at] != Some(Integrity::Trusted) {
+            return Integrity::Untrusted;
+        }
+        at += 1;
+    }
+    Integrity::Trusted
+}
+
 fn climbs_out(path: &str) -> bool {
     std::path::Path::new(path)
         .components()
@@ -9701,10 +10937,53 @@ mod tests {
             Capability::FileWrite,
             Capability::ShellExec,
             Capability::WebFetch,
+            Capability::WebSearch,
             Capability::LanguageServer,
         ]
         .into_iter()
         .collect()
+    }
+
+    /// MANIFEST-16. Each call of an approved list is carried once, and only a call the person's
+    /// ticks kept: a call they left out, a call past the list and a call carried twice are refused.
+    /// The regressions it rejects are a grant not bound to the call's place, and one spent twice.
+    #[test]
+    fn an_applied_call_is_carried_once_and_only_where_the_person_kept_it() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let call = |name: &str| crate::apply::Call {
+            tool: 0,
+            name: name.to_string(),
+            arguments: Vec::new(),
+            sent: Vec::new(),
+            after: None,
+        };
+        let resolved = Labelled::new(
+            crate::apply::Resolved {
+                calls: vec![call("make"), call("move")],
+                dropped: Default::default(),
+            },
+            Label::untrusted_public(),
+        );
+        policy
+            .keep_applied("brave", &resolved, &[0])
+            .expect("one call kept");
+        assert!(
+            policy.carry_applied_call("brave", 1, &resolved).is_err(),
+            "left out"
+        );
+        assert!(
+            policy.carry_applied_call("brave", 2, &resolved).is_err(),
+            "past the list"
+        );
+        assert!(
+            policy.carry_applied_call("brave", 0, &resolved).is_ok(),
+            "kept"
+        );
+        assert!(
+            policy.carry_applied_call("brave", 0, &resolved).is_err(),
+            "carried twice"
+        );
     }
 
     fn open_policy(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
@@ -9806,6 +11085,81 @@ mod tests {
                 .before_advice(&public)
                 .expect("a public question passes"),
             "which file first?"
+        );
+    }
+
+    /// The question is released to the advisor, so the trail says so with the label the question
+    /// carried, and says nothing of its words.
+    #[test]
+    fn an_advice_question_is_released_with_a_record_naming_its_label() {
+        let advice_lines = |sink: &RecordingSink| -> Vec<String> {
+            sink.events()
+                .iter()
+                .filter_map(|e| match e {
+                    Event::GatePassed {
+                        gate: "advice",
+                        detail,
+                    } => Some(detail.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let private = Labelled::new(
+            "quoted secret words".to_string(),
+            Label::untrusted_private(),
+        );
+        policy
+            .before_advice(&private)
+            .expect("a private question is put to the advisor");
+        drop(policy);
+        let lines = advice_lines(&sink);
+        assert_eq!(lines.len(), 1, "{:?}", sink.events());
+        assert!(lines[0].contains("(U,priv)"), "{}", lines[0]);
+        assert!(!lines[0].contains("(U,pub)"), "{}", lines[0]);
+        assert!(
+            !lines[0].contains("secret") && !lines[0].contains("quoted"),
+            "the line carries the question's words: {}",
+            lines[0]
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let public = Labelled::new("which file first?".to_string(), Label::untrusted_public());
+        policy
+            .before_advice(&public)
+            .expect("a public question passes");
+        drop(policy);
+        let lines = advice_lines(&sink);
+        assert_eq!(lines.len(), 1, "{:?}", sink.events());
+        assert!(lines[0].contains("(U,pub)"), "{}", lines[0]);
+        assert!(!lines[0].contains("(U,priv)"), "{}", lines[0]);
+        assert!(!lines[0].contains("which file"), "{}", lines[0]);
+    }
+
+    /// The advisor is shown the planner's context whatever it holds, so a context that has met
+    /// something untrusted still puts its question, and the release is recorded.
+    #[test]
+    fn a_question_is_put_to_the_advisor_after_the_context_has_met_something_untrusted() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).resuming(Integrity::Untrusted);
+        let question = Labelled::new("is this right?".to_string(), Label::untrusted_private());
+        assert_eq!(
+            policy
+                .before_advice(&question)
+                .expect("a fallen context still asks its advisor"),
+            "is this right?"
+        );
+        drop(policy);
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "advice", detail } if detail.contains("(U,priv)")
+            )),
+            "{:?}",
+            sink.events()
         );
     }
 
@@ -10884,19 +12238,28 @@ five
             .write("the answer")
             .unwrap();
         policy.answers_for(&answer, &spec, &mut slots);
+        let refused = policy
+            .write_belongs_here(
+                "wide.txt",
+                &WriteSite {
+                    landing: "/work/wide.txt".to_string(),
+                    is_new: false,
+                },
+                &answer,
+                &slots,
+            )
+            .expect_err(
+                "an answer about a decoding may be written over the file it was decoded from",
+            );
         assert!(
-            policy
-                .write_belongs_here(
-                    "wide.txt",
-                    &WriteSite {
-                        landing: "/work/wide.txt".to_string(),
-                        is_new: false
-                    },
-                    &answer,
-                    &slots
-                )
-                .is_err(),
-            "an answer about a decoding may be written over the file it was decoded from"
+            !refused.message.contains("never told which document"),
+            "the decoded-document refusal borrowed Home::Unsaid's wording: {}",
+            refused.message
+        );
+        assert!(
+            refused.message.contains("another encoding"),
+            "unhelpful refusal: {}",
+            refused.message
         );
     }
 
@@ -11807,6 +13170,9 @@ five
                 Capability::ShellExec => Some(Label::untrusted_private()),
                 Capability::LanguageServer => Some(Label::untrusted_private()),
                 Capability::WebFetch => Some(Label::untrusted_public()),
+                // Its own capability, labelled as a fetch is: an index returns what the owners of
+                // the pages wrote.
+                Capability::WebSearch => Some(Label::untrusted_public()),
                 // Whichever server: what a call to one produces is a property of the
                 // protocol, and the alias decides who may make the call rather than what
                 // the answer is labelled.
@@ -13112,6 +14478,31 @@ five
         );
     }
 
+    /// The output label of a line run outside the root. A line whose reads are all vouched for is
+    /// trusted when it runs at the root, and the same line run in a subdirectory is the opaque
+    /// default, untrusted and private, whatever the map says about the name `lib.js` there. An
+    /// implementation that checked the directory only where a person is asked would give the
+    /// output of a line it asked about a trusted label.
+    #[test]
+    fn a_line_running_outside_the_project_root_has_the_opaque_output_label() {
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &[]);
+
+        let at_the_root = reading_in("/work", "lib.js");
+        assert_eq!(
+            label_of(&mut policy, &at_the_root),
+            Label::trusted_private(),
+            "the proof road is shut for the control that runs at the root"
+        );
+
+        let outside = reading_in("/work/vendor", "lib.js");
+        assert_eq!(
+            label_of(&mut policy, &outside),
+            Label::untrusted_private(),
+            "the output of a line run outside the root was labelled from its reads"
+        );
+    }
+
     /// A plan with no steps establishes nothing, and the proof road must not report that as an
     /// empty read set: the answer to what it read is that there was no proof.
     #[test]
@@ -13780,6 +15171,51 @@ five
             ),
             "a standing answer overruled an ask rule somebody wrote"
         );
+    }
+
+    /// MANIFEST-15. Approving a plan answers the default question of a call it fixed and nothing that
+    /// asks in spite of a standing answer: an `ask` rule and private arguments still ask, and the
+    /// trail says what covered the call. The regression it rejects is a plan's approval read as an
+    /// `allow` rule, which would silence a rule somebody wrote and hand a server private data.
+    #[test]
+    fn approving_a_plan_answers_the_default_question_of_a_call_it_fixed_and_nothing_else() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &[],
+            &["Mcp(weather:get_alerts)"],
+            &[],
+        ));
+        let public = Label::trusted_public();
+
+        assert!(!policy.mcp_call_needs_approval(
+            "weather",
+            "get_forecast",
+            public,
+            McpStanding::PlanApproved
+        ));
+        assert!(
+            policy.mcp_call_needs_approval(
+                "weather",
+                "get_alerts",
+                public,
+                McpStanding::PlanApproved
+            ),
+            "the plan's approval overruled an ask rule somebody wrote"
+        );
+        assert!(
+            policy.mcp_call_needs_approval(
+                "weather",
+                "get_forecast",
+                Label::trusted_private(),
+                McpStanding::PlanApproved
+            ),
+            "the plan's approval handed a server private arguments"
+        );
+        assert!(sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "approval", detail }
+                if detail == "approving the plan covered weather:get_forecast, no prompt at the step"
+        )));
     }
 
     /// SERVERS-21. A call to a server declared to ask every call asks though a rule allows the tool,
@@ -15940,6 +17376,170 @@ five
         );
     }
 
+    /// SANDBOX-27: a line a stage of which is lent a scope a person kept at an earlier prompt is
+    /// asked about whatever covers the same line without it: a vouched entry, a remembered line and
+    /// an allow rule. Each control is the same line with no remembered scope, which the road
+    /// answers, so the line is asked because of the scope and not because the road does not cover
+    /// it. The regression it rejects: the kept scope read for the prompt and the label but not
+    /// passed to the question, so the vouched entry made for the line without it answers.
+    #[test]
+    fn a_line_lent_a_kept_scope_is_asked_about_whatever_covers_the_line_without_it() {
+        let held = Containment::Unknown;
+        let plan = plan_of(vec![step_named("git", &["apply"])]);
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_root(std::path::Path::new("/work"))
+            .with_programs(crate::programs::TrustedPrograms::from_iter([vouched(
+                "/usr/bin/git",
+                &["apply"],
+            )]));
+        assert!(
+            !policy.plan_needs_approval_lent(&plan, &[], &[], held),
+            "the vouched control was asked about, so the line below proves nothing"
+        );
+        assert!(
+            policy.plan_needs_approval_lent(&plan, &[], &["aws"], held),
+            "a vouched line lent a kept scope was not asked about"
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(recalling(&plan));
+        assert!(
+            !policy.plan_needs_approval_lent(&plan, &[], &[], held),
+            "the remembered control was asked about, so the line below proves nothing"
+        );
+        assert!(
+            policy.plan_needs_approval_lent(&plan, &[], &["aws"], held),
+            "a remembered line lent a kept scope was not asked about"
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_root(std::path::Path::new("/work"))
+            .with_permissions(permissions(&[], &[], &["Bash(git *)"]));
+        assert!(
+            !policy.plan_needs_approval_lent(&plan, &[], &[], held),
+            "the allow-rule control was asked about, so the line below proves nothing"
+        );
+        assert!(
+            policy.plan_needs_approval_lent(&plan, &[], &["aws"], held),
+            "a line an allow rule covers, lent a kept scope, was not asked about"
+        );
+    }
+
+    /// SANDBOX-27: the trail says why a kept scope was asked about, and when the planner also asked
+    /// for a scope it names both sets apart, each by menu words. The line's own words are not in
+    /// the message: the plan's `line` holds a marker the message must not carry.
+    #[test]
+    fn the_approval_entry_for_a_kept_scope_names_the_menu_words_and_nothing_the_plan_chose() {
+        let approval = |requested: &[&str], remembered: &[&str]| -> String {
+            let mut plan = plan_of(vec![step_named("git", &["apply"])]);
+            plan.line = "git apply MARKER-FROM-THE-PLAN".to_string();
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+            assert!(policy.plan_needs_approval_lent(
+                &plan,
+                requested,
+                remembered,
+                Containment::Unknown
+            ));
+            drop(policy);
+            sink.events()
+                .iter()
+                .find_map(|event| match event {
+                    Event::GatePassed {
+                        gate: "approval",
+                        detail,
+                    } => Some(detail.clone()),
+                    _ => None,
+                })
+                .expect("an approval entry")
+        };
+
+        let kept = approval(&[], &["aws", "docker"]);
+        assert!(
+            kept.contains("aws, docker") && kept.contains("kept at an earlier prompt"),
+            "{kept}"
+        );
+        assert!(
+            !kept.contains("planner asked"),
+            "a kept scope was said to be asked for by the planner: {kept}"
+        );
+
+        let both = approval(&["kubernetes"], &["aws"]);
+        assert!(
+            both.contains("planner asked for kubernetes") && both.contains("lent aws"),
+            "{both}"
+        );
+        for said in [&kept, &both] {
+            assert!(!said.contains("MARKER-FROM-THE-PLAN"), "{said}");
+        }
+    }
+
+    /// SANDBOX-27: the scopes lent from the record are recorded under their own gate, apart from
+    /// `requested_scopes`, so the trail does not say the planner asked for what a person kept. The
+    /// regression it rejects: a kept scope recorded as a requested one.
+    #[test]
+    fn a_kept_scope_leaves_a_trail_apart_from_a_requested_one() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.record_kept_scopes("a person kept aws at an earlier prompt".to_string());
+        drop(policy);
+        let events = sink.events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "kept_scopes", detail } if detail.contains("aws")
+            )),
+            "{events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                Event::GatePassed {
+                    gate: "requested_scopes",
+                    ..
+                }
+            )),
+            "a kept scope was recorded as one the planner asked for: {events:?}"
+        );
+    }
+
+    /// TRACE-12: the opening mode and a change of mode are recorded under their own gates, with the
+    /// words the driver chose and nothing else.
+    #[test]
+    fn a_permission_mode_opening_and_change_leave_a_trail() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        policy.record_permission_mode_opened("auto", "by the startInAuto setting");
+        policy.record_permission_mode_changed("auto", "plan", "by the mode key");
+        drop(policy);
+        let details: Vec<(&str, String)> = sink
+            .events()
+            .iter()
+            .filter_map(|e| match e {
+                Event::GatePassed { gate, detail } => Some((*gate, detail.clone())),
+                _ => None,
+            })
+            .filter(|(gate, _)| gate.starts_with("permission_mode"))
+            .collect();
+        assert_eq!(
+            details,
+            [
+                (
+                    "permission_mode_opened",
+                    "the session opened in auto mode by the startInAuto setting".to_string()
+                ),
+                (
+                    "permission_mode_changed",
+                    "the permission mode changed from auto to plan by the mode key".to_string()
+                ),
+            ]
+        );
+    }
+
     /// RUN-19: a line naming a file to write is asked about however often it was answered, since a
     /// write has a destination as well as a program.
     #[test]
@@ -16439,6 +18039,152 @@ five
         let mut sink = RecordingSink::new();
         let mut policy = open_policy(&mut sink);
         assert!(policy.fetch_needs_approval("https://example.com/docs"));
+    }
+
+    /// WEBSEARCH-2: a search nobody has ruled on is put to a person, and an `allow` rule for the family
+    /// answers it. The regression it rejects: a search that goes out unasked because nothing denied
+    /// it, and a `WebFetch` allow rule read as covering a search.
+    #[test]
+    fn a_search_asks_unless_a_websearch_rule_allows_it() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        assert!(policy.search_needs_approval());
+
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&[], &[], &["WebSearch"]));
+        assert!(!policy.search_needs_approval());
+
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&[], &[], &["WebFetch"]));
+        assert!(
+            policy.search_needs_approval(),
+            "a WebFetch rule answered for a search"
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&[], &["WebSearch"], &[]));
+        assert!(policy.search_needs_approval());
+    }
+
+    /// WEBSEARCH-2: once the planner has been shown private content its query may carry some, and an
+    /// allow rule written in advance does not cover that. The regression it rejects: the allow rule
+    /// answering whatever the context holds.
+    #[test]
+    fn an_allow_rule_does_not_cover_a_search_made_after_private_content_was_shown() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_permissions(permissions(&[], &[], &["WebSearch"]))
+            .holding(Confidentiality::Private);
+        assert!(
+            policy.search_needs_approval(),
+            "an allow rule let a query out after private content was shown"
+        );
+    }
+
+    /// WEBSEARCH-2: a `deny` rule for the family refuses before anybody is asked, and a `WebFetch` deny
+    /// rule does not. The regression it rejects: the families sharing one answer.
+    #[test]
+    fn a_websearch_deny_rule_refuses_and_a_webfetch_deny_rule_does_not() {
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&["WebSearch"], &[], &[]));
+        assert!(policy.before_search_rules().is_err());
+
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&["WebFetch"], &[], &[]));
+        assert!(policy.before_search_rules().is_ok());
+    }
+
+    /// WEBSEARCH-1, WEBSEARCH-3: the label comes from the capability and nothing a person says changes
+    /// it, and an approval is for one exact request and is spent once. The regressions it rejects:
+    /// a trusted label after an approval, an approval spent on another query, and one spent twice.
+    #[test]
+    fn approving_a_search_never_trusts_what_comes_back_and_covers_one_request() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let url = "https://api.search.brave.com/res/v1/web/search?q=rust";
+
+        assert!(
+            policy.before_search(url).is_err(),
+            "a search went out with no approval"
+        );
+        policy.endorse_search(url);
+        assert!(
+            policy
+                .before_search("https://api.search.brave.com/res/v1/web/search?q=other")
+                .is_err(),
+            "an approval was spent on another query"
+        );
+        let label = policy.before_search(url).expect("approved");
+        assert_eq!(label, Label::untrusted_public());
+        assert!(
+            policy.before_search(url).is_err(),
+            "an approval was spent twice"
+        );
+    }
+
+    /// WEBSEARCH-7: while a search is in flight every hop must be on the search host, whatever rules
+    /// allow, and the hop is not kept for a question. The regression it rejects: a redirect off the
+    /// host put to a person, or let through by a `WebFetch` allow rule.
+    #[test]
+    fn a_search_cannot_be_redirected_to_another_host_and_the_host_is_not_asked_about() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &[],
+            &[],
+            &["WebFetch(domain:elsewhere.test)"],
+        ));
+        let url = "https://api.search.brave.com/res/v1/web/search?q=x";
+        policy.endorse_search(url);
+        policy.before_search(url).expect("approved");
+
+        assert!(
+            policy
+                .before_network("https://api.search.brave.com/res/x")
+                .is_ok()
+        );
+        assert!(
+            policy
+                .before_network("https://elsewhere.test/landed")
+                .is_err(),
+            "a hop off the search host was let through"
+        );
+        assert!(
+            policy.take_fetch_hop().is_none(),
+            "a hop off the search host was kept to be asked about"
+        );
+
+        policy.search_finished();
+        assert!(
+            policy
+                .before_network("https://elsewhere.test/landed")
+                .is_ok(),
+            "a finished search went on confining the turn's egress"
+        );
+        assert!(!policy.fetch_in_flight());
+    }
+
+    /// WEBSEARCH-7: the egress path scopes its check of what a name resolves to by
+    /// `fetch_in_flight`, so it has to be true for a search from its approval until it finishes.
+    /// The regression it rejects: the flag set for a fetch only, which leaves a search's hops
+    /// resolved without the address check.
+    #[test]
+    fn a_search_is_in_flight_from_its_approval_until_it_finishes() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        assert!(!policy.fetch_in_flight());
+
+        let url = "https://api.search.brave.com/res/v1/web/search?q=x";
+        policy.endorse_search(url);
+        policy.before_search(url).expect("approved");
+        assert!(policy.fetch_in_flight());
+
+        policy.search_finished();
+        assert!(!policy.fetch_in_flight());
     }
 
     /// A rule that refuses is a statement that the fetch does not happen, so there is nothing
@@ -17421,6 +19167,32 @@ five
         assert!(
             policy.before_vetting(&slot, Some(&private), &slots).is_ok(),
             "a private expectation was refused"
+        );
+    }
+
+    /// The expectation is released into the spec whatever its label, and the trail names the
+    /// check by its slot and origin, so none of the planner's words about the slot reach it.
+    #[test]
+    fn the_trail_line_for_a_check_carries_no_word_of_the_expectation() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let (slots, slot) = fetched("a page");
+        let private = Labelled::new(
+            "quoted ledger passphrase".to_string(),
+            Label::untrusted_private(),
+        );
+
+        let spec = policy
+            .before_vetting(&slot, Some(&private), &slots)
+            .expect("a private expectation is put to the check");
+        assert_eq!(spec.expects(), Some("quoted ledger passphrase"));
+        drop(policy);
+
+        let trail = format!("{:?}", sink.events());
+        assert!(trail.contains("a check over"), "{trail}");
+        assert!(
+            !trail.contains("ledger") && !trail.contains("passphrase"),
+            "the trail carries the planner's expectation: {trail}"
         );
     }
 
@@ -18556,6 +20328,129 @@ five
         );
     }
 
+    /// One entry out of a quarantined listing, reserved as `ref:1`. The name is the one thing no
+    /// formatted value may carry.
+    fn reserve_a_listed_file(
+        policy: &mut Policy<'_, RecordingSink>,
+        slots: &mut SlotStore,
+    ) -> SlotId {
+        let slot = SlotId::new("ref:1");
+        let entries = Labelled::new(
+            vec!["secret-plans.md".to_string()],
+            Label::untrusted_private(),
+        );
+        policy
+            .defer_entries(
+                "list_files",
+                "an entry in \".\"",
+                &entries,
+                0,
+                std::slice::from_ref(&slot),
+                slots,
+            )
+            .expect("one entry may be reserved");
+        slot
+    }
+
+    /// Formatting a store that holds a slot waiting on a listed file shows the slot and not the
+    /// file. A derived `Debug` on the store, its entries or the deferral prints the filename
+    /// whoever can create a file in the listed directory chose.
+    #[test]
+    fn formatting_a_store_with_a_reserved_listing_does_not_print_the_filename() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        reserve_a_listed_file(&mut policy, &mut slots);
+
+        let rendered = format!("{slots:?}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+        assert!(rendered.contains("ref:1"), "{rendered}");
+        assert!(rendered.contains("Unread"), "{rendered}");
+    }
+
+    /// Reading the file copies the name into the slot's path, its verbatim path and its origin.
+    /// None of the three is printed, and the slot is still told apart by id and kind.
+    #[test]
+    fn formatting_a_store_after_the_listed_file_is_read_does_not_print_the_filename() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        let slot = reserve_a_listed_file(&mut policy, &mut slots);
+        policy
+            .materialise("read_file", &slot, &mut slots, |_| {
+                Ok::<String, String>("body".to_string())
+            })
+            .expect("the file is read when something needs the bytes");
+
+        let rendered = format!("{slots:?}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+        assert!(!rendered.contains("body"), "{rendered}");
+        assert!(rendered.contains("ref:1"), "{rendered}");
+        assert!(rendered.contains("Read"), "{rendered}");
+        assert!(!rendered.contains("Unread"), "{rendered}");
+    }
+
+    /// The spec a check is built from carries where the bytes came from. Formatting it shows that
+    /// there is an origin and not what it is, which a derived `Debug` on the spec or on its origin
+    /// prints as `Recorded("secret-plans.md")`. Only this module can build one, so the pin sits
+    /// here.
+    #[test]
+    fn formatting_a_vetting_spec_does_not_print_the_filename_it_was_built_from() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        let slot = reserve_a_listed_file(&mut policy, &mut slots);
+        policy
+            .materialise("vet_content", &slot, &mut slots, |_| {
+                Ok::<String, String>("body".to_string())
+            })
+            .expect("the file is read when the check needs the bytes");
+        let spec = policy
+            .before_vetting(&slot, None, &slots)
+            .expect("a slot with bytes in it");
+
+        let rendered = format!("{spec:?}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+        assert!(!rendered.contains("body"), "{rendered}");
+        assert!(rendered.contains("VettingSpec"), "{rendered}");
+        assert!(rendered.contains("Recorded"), "{rendered}");
+    }
+
+    /// The check over a file read directly names the path the planner gave, which is a filename
+    /// out of a listing wherever a listed file was what it named, and a check from a slot carries
+    /// the planner's own expectation of it. A derived `Debug` on the spec prints both whatever its
+    /// origin prints.
+    #[test]
+    fn formatting_a_vetting_spec_does_not_print_what_it_names_or_what_was_expected_of_it() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        let by_path = policy.before_vetting_a_path(
+            "secret-plans.md",
+            Labelled::new("body".to_string(), Label::untrusted_private()),
+        );
+        let rendered = format!("{by_path:?}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+        assert!(!rendered.contains("body"), "{rendered}");
+        assert!(rendered.contains("VettingSpec"), "{rendered}");
+        assert!(rendered.contains("TheFileItself"), "{rendered}");
+
+        let mut slots = SlotStore::new();
+        let slot = reserve_a_listed_file(&mut policy, &mut slots);
+        policy
+            .materialise("vet_content", &slot, &mut slots, |_| {
+                Ok::<String, String>("body".to_string())
+            })
+            .expect("the file is read when the check needs the bytes");
+        let expects = Labelled::new("secret-expectation".to_string(), Label::untrusted_private());
+        let by_slot = policy
+            .before_vetting(&slot, Some(&expects), &slots)
+            .expect("a slot with bytes in it");
+        let rendered = format!("{by_slot:?}");
+        assert!(!rendered.contains("secret-expectation"), "{rendered}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+    }
+
     /// The other route, which is where saying it twice would be noise: a read of a file says the
     /// path once, because a path is its own origin and the driver knows that without comparing
     /// anything.
@@ -19603,6 +21498,41 @@ five
             )
             .is_trusted(),
             "a line reading a file in the project came back untrusted"
+        );
+    }
+
+    /// The root arrives as the host resolved it and a line spells the same directory without the
+    /// `\\?\`, so compared as paths the operand is never inside the root and the key the project's
+    /// own rules are spelled against is not asked (TRUST-9, TRUST-18).
+    #[test]
+    fn an_operand_on_a_drive_letter_is_also_named_relative_to_the_project() {
+        let root = std::path::Path::new(r"\\?\C:\work\project");
+
+        for operand in [
+            r"C:\work\project\secrets\x.txt",
+            r"\\?\C:\work\project\secrets\x.txt",
+            "C:/work/project/secrets/x.txt",
+        ] {
+            assert_eq!(
+                keys_for_the_map(root, operand, true),
+                [operand, "secrets/x.txt"],
+                "{operand} was not named relative to the project"
+            );
+        }
+        assert_eq!(
+            keys_for_the_map(root, r"C:\work", true),
+            [r"C:\work", ""],
+            "a directory holding the project was not named as the project"
+        );
+        assert_eq!(
+            keys_for_the_map(root, r"C:\work\project-other\x.txt", true),
+            [r"C:\work\project-other\x.txt"],
+            "a sibling directory sharing the project's name as a prefix was named inside it"
+        );
+        assert_eq!(
+            keys_for_the_map(root, r"D:\work\project\x.txt", true),
+            [r"D:\work\project\x.txt"],
+            "the same path on another drive was named inside the project"
         );
     }
 
@@ -23785,6 +25715,42 @@ five
             );
         }
 
+        /// TRACE-1, WEBSEARCH-2: a web search put to the person and not approved is a refusal under
+        /// `approval`, naming the tool, in fixed words that carry nothing the query held (TRACE-2),
+        /// and the turn does not end as clean. The regression it rejects is a no that leaves the
+        /// question in the trail and nothing about its answer.
+        #[test]
+        fn a_search_the_person_did_not_approve_is_a_refusal_under_approval() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.refuse_unapproved_search("web_search");
+            assert!(
+                !turn.finish(),
+                "a turn with an unapproved search ended clean"
+            );
+            let refused: Vec<(&str, Principle, &str)> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GateBlocked {
+                        gate,
+                        reason,
+                        principle,
+                        ..
+                    } => Some((*gate, *principle, reason.as_str())),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                refused,
+                [(
+                    "approval",
+                    Principle::Capability,
+                    "web_search: the search was not approved, so nothing was sent"
+                )]
+            );
+        }
+
         /// TRACE-1: a call to a server's tool put to the person and not approved is a refusal under
         /// `approval`, naming the tool as the alias the person gave the server and the word on its
         /// list, in fixed words that carry nothing the call or the server held (TRACE-2), and the
@@ -24811,7 +26777,7 @@ five
         use crate::delegate::{ADDRESSED, Definition, Definitions, Kind};
 
         /// Every tool name a turn might be offered that the tests below turn on.
-        const OFFERED: [&str; 18] = [
+        const OFFERED: [&str; 19] = [
             "read_file",
             "list_files",
             "write_file",
@@ -24823,6 +26789,7 @@ five
             "todo_write",
             "schedule_next",
             "fetch_url",
+            "web_search",
             "download_url",
             "vet_content",
             "remember",
@@ -24863,6 +26830,7 @@ five
                         "todo_write",
                         "schedule_next",
                         "fetch_url",
+                        "web_search",
                         "download_url",
                         "vet_content",
                         "remember",
@@ -25050,7 +27018,7 @@ five
             let trail = trail(&sink);
             assert!(
                 trail.contains(
-                    "asks for file_write, shell_exec, language_server which this turn does not hold"
+                    "asks for file_write, shell_exec, web_search, language_server which this turn does not hold"
                 ),
                 "the trail does not say what the kind asked for and did not get: {trail}"
             );

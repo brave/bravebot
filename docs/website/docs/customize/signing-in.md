@@ -152,7 +152,8 @@ it in the block's `env` to have it used. Nothing is written where a block or the
 the id. A settings file that cannot take the entry, because it is not a settings document, is past
 the size bravebot reads, or names the id as something that is not a provider block, is said before
 the key is asked for, and nothing is stored. A variable the block's `env` names wins over a stored
-key while it is set, and the sign-in says so when one is set. A session reads the files when it
+key while it is set, and the sign-in says so when one is set. A stored key wins over the file the
+block's `options.keyFile` names and over `options.apiKey`. A session reads the files when it
 starts, so one already open keeps what it had.
 
 A key stored with no block naming its id is sent by no session. Running the sign-in for that id

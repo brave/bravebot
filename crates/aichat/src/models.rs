@@ -979,7 +979,9 @@ struct GatewayListing {
 /// with a list of ([`bravebot_config::provider::Provider::responses_only_models`]): a route that
 /// cannot reach a model does not offer it, and, where the provider reads them
 /// ([`bravebot_config::provider::Provider::lists_shutdown_dates`]), a model whose listed
-/// `shutdown_date` is `now` or earlier, which the service no longer serves. The block's `whitelist`
+/// `shutdown_date` is `now` or earlier, which the service no longer serves. A model that searches
+/// the web before it replies is left out of a chat completions route
+/// ([`bravebot_config::provider::Provider::retrieving_models`]). The block's `whitelist`
 /// then `blacklist` narrow what remains ([BACKEND-68](../../../docs/specs/backends.md#BACKEND-68)).
 /// The ids are compared with those lists only, and the rows go to a picker, as those the capability filter keeps do.
 fn offered_by_gateway(
@@ -988,6 +990,7 @@ fn offered_by_gateway(
     now: i64,
 ) -> Vec<Model> {
     let left_out = provider.responses_only_models();
+    let retrieving = provider.retrieving_models();
     let reads_shutdown_dates = provider.lists_shutdown_dates();
     listed
         .into_iter()
@@ -997,6 +1000,7 @@ fn offered_by_gateway(
         })
         .filter(|entry| !entry.id.trim().is_empty())
         .filter(|entry| !left_out.contains(&entry.id.as_str()))
+        .filter(|entry| !retrieving.contains(&entry.id.as_str()))
         .filter(|entry| {
             provider
                 .whitelist
@@ -1959,6 +1963,44 @@ mod tests {
             .len(),
             17,
             "a proxy keyed openai was left out of models it may serve"
+        );
+    }
+
+    /// LABEL-8, BACKEND-19: a model that searches the web before it replies is not offered over
+    /// chat completions, because its reply is labelled from the context this process built and
+    /// holds pages that context does not. The route that reaches the same id as a tool-less
+    /// Responses request keeps the row, and so does every other row of the listing. The regression
+    /// it rejects is an offered `gpt-5-search-api`, which a person can then name as `summaryModel`
+    /// or `advisorModel` from the picker.
+    #[test]
+    fn a_listing_is_not_offered_a_model_that_searches_the_web_over_chat_completions() {
+        let listing = r#"{"data": [
+            {"id": "gpt-5.5"}, {"id": "gpt-5-search-api"},
+            {"id": "gpt-4o-search-preview"}, {"id": "gpt-4o-mini-search-preview"}
+        ]}"#;
+        let keys = |block: &str| -> Vec<String> {
+            from_gateway(&entry(block), listing)
+                .into_iter()
+                .map(|model| model.key)
+                .collect()
+        };
+
+        assert_eq!(
+            keys(r#"{"openai": {"npm": "@ai-sdk/openai-compatible", "env": ["OPENAI_API_KEY"]}}"#),
+            ["openai/gpt-5.5"]
+        );
+        assert_eq!(
+            keys(
+                r#"{"openai": {"npm": "@ai-sdk/openai-compatible", "env": ["OPENAI_API_KEY"],
+                    "options": {"baseURL": "https://proxy.example.invalid/v1"}}}"#
+            ),
+            ["openai/gpt-5.5"],
+            "a proxy that relays chat completions relays the search too"
+        );
+        assert_eq!(
+            keys(r#"{"openai": {"env": ["OPENAI_API_KEY"]}}"#).len(),
+            4,
+            "the Responses route does not search unless a request asks for the tool"
         );
     }
 

@@ -5,6 +5,8 @@ import { flushSync } from 'react-dom'
 import type { SessionSummary } from '../../shared/protocol'
 import type { ContextTarget } from '../../shared/commands'
 import { keyOf } from '../../shared/forks'
+import { heldInBackground } from '../session-list'
+import { BackgroundSessions } from './BackgroundSessions'
 import { Fold } from './Fold'
 import { ForkIcon } from './ForkIcon'
 import { BotFace } from './BotAvatar'
@@ -18,8 +20,11 @@ import { Icon, Menu, ProgressRing } from '../nala'
 import { PullRequestMark, PullRequestRoom } from './PullRequestMark'
 import { pullRequestLink } from '../../shared/pull-request'
 
-/** What a row says about a session that is open somewhere: only what asks something of the reader. */
-export type SessionStatus = 'working' | 'answer' | 'approval' | 'failed'
+/**
+ * What a row says about a session: what asks something of the reader in a chat open here, or, for
+ * `background`, that a background process is running it and it cannot be opened here.
+ */
+export type SessionStatus = 'working' | 'answer' | 'approval' | 'failed' | 'background'
 
 export interface SessionInfoValue {
   bot?: { name: string; avatar: string }
@@ -32,6 +37,7 @@ const STATUS_WORDS: Record<SessionStatus, string> = {
   answer: 'Waiting for your answer',
   approval: 'Waiting for your approval',
   failed: 'The last turn failed',
+  background: 'Running in the background',
 }
 
 interface Props {
@@ -47,6 +53,8 @@ interface Props {
   onPurge: (directory: string, project: string) => void
   /** Offer the project's Claude Code sessions for copying here. */
   onImport: (directory: string, project: string) => void
+  /** Show what the project's recorded sessions spent, in tokens (CLI-37). */
+  onStats: (directory: string, project: string) => void
   /** Start a chat in the project used last. */
   onNewChat: () => void
   /**
@@ -136,6 +144,7 @@ export function Sessions({
   onNew,
   onPurge,
   onImport,
+  onStats,
   onNewChat,
   grouped,
   onGroup,
@@ -232,6 +241,7 @@ export function Sessions({
       </header>
 
       <div className="session-list">
+        <BackgroundSessions />
         {sessions.length === 0 && (
           <p className="sidebar-empty">
             No chats yet. Open a project to begin, or start one in a terminal with{' '}
@@ -277,6 +287,7 @@ export function Sessions({
               onNew={onNew}
               onPurge={onPurge}
               onImport={onImport}
+              onStats={onStats}
             />
           ))}
         {archivedShown && (
@@ -358,6 +369,7 @@ function Group({
   onNew,
   onPurge,
   onImport,
+  onStats,
 }: {
   group: Group
   shown: number
@@ -372,6 +384,7 @@ function Group({
   onNew: (directory: string) => void
   onPurge: (directory: string, project: string) => void
   onImport: (directory: string, project: string) => void
+  onStats: (directory: string, project: string) => void
 }): React.JSX.Element {
   const drawn = page(group.sessions, shown, keep)
   return (
@@ -405,6 +418,9 @@ function Group({
           tooltip={false} data-test="session-group-menu">
           <leo-menu-item onClick={() => onImport(group.directory, group.project)}>
             <span className="menu-icon-row"><Icon name="import-arrow" />Import from Claude Code…</span>
+          </leo-menu-item>
+          <leo-menu-item data-test="session-group-stats" onClick={() => onStats(group.directory, group.project)}>
+            <span className="menu-icon-row"><Icon name="bar-chart" />Token spend in {group.project}…</span>
           </leo-menu-item>
           <leo-menu-item className="session-delete" onClick={() => onPurge(group.directory, group.project)}>
             <span className="menu-icon-row"><Icon name="trash" />Delete all chats in {group.project}…</span>
@@ -479,11 +495,11 @@ const Session = memo(function Session({
   const pr = pullRequestLink(session.pullRequest)
   return <div className={`session-row${current ? ' current' : ''}${menu ? ' menu-open' : ''}`} data-session={key}>
     <button type="button" className={`session${current ? ' current' : ''}`} aria-current={current ? 'true' : undefined}
-      onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
+      onClick={() => onOpen(session)} onContextMenu={contextMenu(heldInBackground(session) ? 'session-background' : 'session', session.id)}>
       <span className="session-meta">
         <span className="session-status" data-status={status} data-tooltip={status ? STATUS_WORDS[status] : info?.bot?.name}>
           {status === 'working' ? <ProgressRing className="session-spinner" />
-            : status ? <Icon name="dot" className={`status-dot ${status === 'failed' ? 'error' : 'warning'}`} />
+            : status ? <Icon name="dot" className={`status-dot ${status === 'failed' ? 'error' : status === 'background' ? 'info' : 'warning'}`} />
               : info?.bot ? <BotFace seed={info.bot.avatar} size={16} /> : <Icon name="folder-open" className="session-folder" />}
         </span>
         <span className="session-project">{session.project}</span>

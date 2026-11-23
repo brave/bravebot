@@ -698,6 +698,9 @@ pub(super) fn draw_vouch(
         Style::default().fg(theme::muted()),
         inside.width as usize,
     ));
+    // Above the first row of the preview, so it is one of the rows a yes waits on, as it is over
+    // a command's output.
+    lines.extend(hidden_rows(request.hidden, inside.width as usize));
     lines.push(Line::raw(""));
 
     // A file with nothing to show is asked about like any other, so the prompt has to say that is
@@ -1629,6 +1632,49 @@ mod tests {
             drawn.matches(BAR).count(),
             2,
             "the one line of preview and the check's sentence, each inside a bar: {drawn}"
+        );
+    }
+
+    /// PROMPT-13, PROMPT-1: a preview holding characters that draw as nothing is shown with each
+    /// one written out, and the prompt says how many there are above it. A preview with none says
+    /// nothing about any. The fault it rejects: a vouch prompt that draws the preview and not the
+    /// count, so a short file reads as whole and the hidden text goes to the planner on a yes.
+    #[test]
+    fn the_vouch_prompt_says_how_many_characters_draw_as_nothing_and_shows_each() {
+        let text = "plain \u{2039}U+E0041 A\u{203A}\u{2039}U+200B\u{203A} text";
+        let mut request = a_vouch("notes.md", text, false);
+        request.hidden = 2;
+        let rows = rows_of(100, 40, |frame| {
+            draw_vouch(frame, &request, 0, &mut Seen::default());
+        });
+        let drawn = box_text(&rows);
+        assert!(
+            drawn.contains(&squeezed(&t!(hidden_characters, count = 2usize))),
+            "the prompt did not say characters drew as nothing: {rows:#?}"
+        );
+        assert!(
+            drawn.replace('┃', "").contains(&squeezed(text)),
+            "the characters were not written out in the preview: {rows:#?}"
+        );
+        let said = rows
+            .iter()
+            .position(|row| row.contains("draw as nothing"))
+            .expect("the sentence is drawn");
+        let previewed = rows
+            .iter()
+            .position(|row| row.contains("plain"))
+            .expect("the preview is drawn");
+        assert!(
+            said < previewed,
+            "the sentence is not above the preview: {rows:#?}"
+        );
+        request.hidden = 0;
+        let rows = rows_of(100, 40, |frame| {
+            draw_vouch(frame, &request, 0, &mut Seen::default());
+        });
+        assert!(
+            !box_text(&rows).contains("drawasnothing"),
+            "a prompt with nothing hidden in it said something was: {rows:#?}"
         );
     }
 

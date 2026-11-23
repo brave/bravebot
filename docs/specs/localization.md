@@ -116,7 +116,8 @@ nothing that parses, matches, or interpolates a catalog.
 whose whole premise is that it does not interpret what it was given, is the sort of thing that is
 only ever noticed afterwards.
 
-`verified-by: by-construction (the build script writes Rust, and the crate links no parser: the catalog module is declared #[cfg(test)] in crates/i18n/src/lib.rs and the build script reaches the file through an include! of its own, so what ships are string constants and the code that concatenates them; the absence is pinned by the compile_fail doctest calling bravebot_i18n::catalog::parse in crates/i18n/src/lib.rs, beside an ordinary doctest calling the sibling plural::category that does ship, since a compile_fail block alone passes for any compile error at all)`
+`verified-by: bravebot_i18n::lib::the_library_a_binary_links_has_no_catalog_parser`
+`verified-by: by-construction (the build script writes Rust, and the crate links no parser: the catalog module is declared #[cfg(test)] in crates/i18n/src/lib.rs and the build script reaches the file through an include! of its own, so what ships are string constants and the code that concatenates them; the test above reads the source of crates/i18n/src/lib.rs and fails when the module is declared without the gate, is exported, is declared twice or is reached by a path attribute, which is a scan of the source and not a build of the library without the gate; the compile_fail doctest calling bravebot_i18n::catalog::parse in crates/i18n/src/lib.rs, beside an ordinary doctest calling the sibling plural::category that does ship, pins only that the parser is not an exported function, since a compile_fail block alone passes for any compile error at all)`
 
 <a id="LOCALE-7"></a>
 ### LOCALE-7: the locale is chosen once, by the program, and not by the library

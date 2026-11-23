@@ -23,8 +23,6 @@ import importlib.util
 import sys
 from pathlib import Path
 
-SCRIPT = "python3 agents/skills/rebase/rebase.py"
-
 
 def _load_shared():
     path = Path(__file__).resolve().parents[2] / "pr_worktree.py"
@@ -36,6 +34,10 @@ def _load_shared():
 
 # The skill scripts are not an importable package, so the module they share is loaded by path.
 pr_worktree = _load_shared()
+
+# Every next step this script prints names the file that is running by its absolute path. A session whose
+# directory is a pull request's worktree would otherwise run that worktree's copy of the script.
+SCRIPT = pr_worktree.script_command(__file__)
 
 die = pr_worktree.die
 run = pr_worktree.run

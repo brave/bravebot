@@ -303,3 +303,20 @@ fn a_herdr_that_never_answers_holds_the_way_out_up_only_briefly() {
     assert_eq!(herdr.next(), "pane.release_agent");
     assert!(took < Duration::from_secs(1), "the way out took {took:?}");
 }
+
+/// HERDR-15. Leaving for good clears the status herdr's core keeps after the run exits to the
+/// shell, after the terminal is handed back so the clear reaches the shell's screen, and nothing
+/// the title marks afterwards puts it back.
+#[test]
+fn leaving_clears_the_status_after_the_terminal_is_handed_back() {
+    crate::herdr::status::hold_inside();
+    let mut title = Title::new();
+    title.adopt(Some(false), false);
+    title.mark(&mut Vec::new(), State::Working).unwrap();
+    let mut out = Vec::new();
+    leave(&mut out, |out: &mut Vec<u8>| out.write_all(b"handed back;")).unwrap();
+    assert_eq!(out, b"handed back;\x1b]7501;state=clear\x1b\\");
+    let mut after = Vec::new();
+    title.mark(&mut after, State::Ready).unwrap();
+    assert!(after.is_empty());
+}

@@ -9,9 +9,17 @@ governs:
   - crates/backtrace/src/send.rs
   - crates/backtrace/src/store.rs
   - crates/tui/src/crash_notice.rs
+  - crates/tui/src/crash_reports_command.rs
+  - crates/ui-bridge/src/crash_notice.rs
+  - ui/src/renderer/components/CrashReportsNotice.tsx
+  - crates/config/src/crash_reports.rs
+  - crates/ui-bridge/src/crash_reports.rs
+  - crates/ui-bridge/src/acp.rs
 documented-by:
   - docs/website/docs/customize/configuration.md
+  - docs/website/docs/reference/commands.md
   - docs/website/docs/security/security.md
+  - docs/website/docs/using/editors.md
 ---
 
 ## Scope
@@ -120,6 +128,7 @@ clone is not the person's statement about what their machine sends.
 `verified-by: bravebot_backtrace::lib::either_switch_stops_a_launch_that_would_report`
 `verified-by: bravebot_backtrace::lib::the_settings_file_is_not_read_when_another_answer_has_already_said_no`
 `verified-by: bravebot_backtrace::lib::a_managed_false_outranks_the_persons_own_file`
+`verified-by: bravebot_backtrace::lib::the_launch_and_the_windows_switch_agree_for_every_combination_of_layers`
 `verified-by: bravebot_config::managed::a_managed_crash_reports_false_is_a_pin_and_nothing_else_is`
 `verified-by: bravebot_backtrace::incognito::the_environment_switch_leaves_no_state_directory_and_sends_nothing`
 `verified-by: bravebot_backtrace::incognito::the_persons_settings_file_stops_a_launch_and_a_string_does_not`
@@ -227,19 +236,32 @@ somebody else edited is sent as it is, to the person who owns the project, and d
 `verified-by: by-construction (the manifest depends on bravebot-net and on no crate that speaks to a network, and the layering test holds the manifest to this crate's row in layering.md)`
 
 <a id="CRASH-9"></a>
-### CRASH-9: the terminal says once that reports are sent
+### CRASH-9: the terminal and the desktop window say once that reports are sent
 
-The first launch of the terminal interface that is reporting says so on its startup screen: what a
-report holds, that it goes to Brave, and the two ways to turn it off. No launch after it says it
-again, and a launch that is not reporting says nothing. The line is a catalog message with no
-argument.
+The first launch of the terminal interface that is reporting says so on its startup screen, and the
+first desktop window whose `bravebot-rpc` is reporting shows it as a banner: what a report holds,
+that it goes to Brave, and how to turn it off. The terminal's line names `/crash-reports off`
+([CRASH-13](#CRASH-13)), the `crashReports` key and the variable, and the window's banner names
+Settings and the variable. The window asks `crash_reports.notice_due`
+and, when the answer is due, calls `crash_reports.mark_notice_shown` as it draws the banner. Both
+front ends record the notice in the one `crash-reports/notice` file in the state directory, so a
+person told by one is not told again by the other or by a later launch of either. A launch that is
+not reporting says nothing and answers that the notice is not due. A client of `bravebot-host` may
+call neither method. The line is a catalog message with no argument.
 
 **Why.** Reports are on by default, so the person is told when the first one could be written, not
 after one is sent. A launch that is not reporting has nothing to disclose, and a line about it
-would read as though something was happening.
+would read as though something was happening. A client of the host has no screen to show the
+notice on, and whether the host process reports is decided in the host's process, not the client's.
 
 `verified-by: bravebot_tui::crash_notice::the_first_launch_that_reports_says_so_once_and_a_launch_that_does_not_says_nothing`
 `verified-by: bravebot_backtrace::store::the_notice_is_recorded_once_and_is_not_a_report`
+`verified-by: bravebot_backtrace::lib::with_nothing_started_no_notice_is_recorded`
+`verified-by: bravebot_ui_bridge::crash_notice::the_window_is_told_once_only_while_reporting`
+`verified-by: bravebot_ui_bridge::crash_notice::a_record_left_by_the_terminal_stops_the_window`
+`verified-by: bravebot_ui_bridge::crash_notice::the_bridge_says_nothing_while_it_is_not_reporting`
+`verified-by: bravebot_ui_bridge::allowlist::a_method_the_host_does_not_name_is_refused_whether_or_not_the_bridge_has_it`
+`verified-by: by-construction (the renderer is not a crate this workspace compiles, so ui/scripts/crash-reports-notice.test.mjs asserts that the banner names what a report holds, Brave, the Settings switch and BRAVEBOT_CRASH_REPORTS=0, that App.tsx asks crash_reports.notice_due before it marks the notice shown and marks nothing unless the answer is due, and that the main process allows both methods; make check-ui runs it)`
 
 <a id="CRASH-10"></a>
 ### CRASH-10: nothing identifies an installation across reports
@@ -256,7 +278,141 @@ that the project's count of distinct `guid`s is a count of reports.
 `verified-by: bravebot_backtrace::report::the_identifier_is_a_version_four_uuid`
 `verified-by: by-construction (the state directory holds the pending reports and one file recording that the notice was said, and no code writes an identifier to it)`
 
+<a id="CRASH-11"></a>
+### CRASH-11: the desktop switch is the person's own key, and shows what holds reports off
+
+Settings, under General, Privacy, has a switch for crash reports. It reads and writes `crashReports`
+in the person's own `~/.bravebot/settings.json`, keeps every other key in the file, and writes
+`true` as `true` and not by removing the key, so the value it writes turns on nothing a stronger
+layer turned off. A file that is not a settings document is left as it was, and the answer says
+nothing was kept. A checkout's settings files are neither read nor written for the key.
+
+The answer is the order [CRASH-4](#CRASH-4) gives, with the session's own state first: an incognito
+session ([CRASH-5](#CRASH-5)), then the managed file's `false`, then `BRAVEBOT_CRASH_REPORTS=0`,
+then the person's own `false`. For each of the first three the window shows the switch as off with
+that reason, naming the variable where it is the reason, and refuses a change in either direction
+without writing. The person's own `false` is the switch's own answer, so it is shown as off and can
+be changed. Only a boolean `false` and the exact value `0` count.
+
+The window asks the bridge with `crash_reports.get`, `crash_reports.set`, which takes `enabled`, a
+boolean, and `crash_reports.notice_due` and `crash_reports.mark_notice_shown` ([CRASH-12](#CRASH-12)).
+The window's main process passes only `enabled` for a set. A client of the local host may call none
+of them.
+
+**Why.** A switch shown as changeable where a stronger layer decides would do nothing when used, and
+a person who sees reports off with no reason cannot tell what to change. The decision is one function
+in `bravebot-config` that the launch and the window both call, so the two cannot rank the switches
+differently. The window writes the file the launch reads, so one choice holds in every front end.
+
+`verified-by: bravebot_config::crash_reports::reports_are_on_when_nothing_turned_them_off`
+`verified-by: bravebot_config::crash_reports::each_switch_alone_turns_reports_off_and_is_named`
+`verified-by: bravebot_config::crash_reports::a_setting_of_true_cannot_turn_reports_back_on_over_a_stronger_layer`
+`verified-by: bravebot_config::crash_reports::the_strongest_layer_is_named_when_several_turned_reports_off`
+`verified-by: bravebot_config::crash_reports::only_the_exact_value_zero_turns_reports_off_through_the_variable`
+`verified-by: bravebot_backtrace::lib::saving_writes_the_one_key_and_keeps_the_rest_of_the_file`
+`verified-by: bravebot_backtrace::lib::saving_leaves_a_file_that_is_not_a_document_and_makes_a_missing_one`
+`verified-by: bravebot_backtrace::lib::saving_replaces_a_value_the_reader_ignores`
+`verified-by: bravebot_ui_bridge::crash_reports::reports_are_on_and_changeable_when_nothing_turned_them_off`
+`verified-by: bravebot_ui_bridge::crash_reports::the_window_reads_crash_reports_from_the_persons_settings_file`
+`verified-by: bravebot_ui_bridge::crash_reports::the_window_writes_crash_reports_into_the_persons_settings_file`
+`verified-by: bravebot_ui_bridge::crash_reports::the_first_choice_makes_the_settings_file`
+`verified-by: bravebot_ui_bridge::crash_reports::a_file_that_is_not_a_document_is_left_alone_and_reported_unsaved`
+`verified-by: bravebot_ui_bridge::crash_reports::a_change_that_is_not_true_or_false_is_refused`
+`verified-by: bravebot_ui_bridge::crash_reports::the_variable_locks_the_switch_names_itself_and_refuses_a_change`
+`verified-by: bravebot_ui_bridge::crash_reports::only_the_exact_value_zero_locks_the_switch`
+`verified-by: bravebot_ui_bridge::crash_reports::only_a_boolean_false_in_the_file_counts_and_a_true_turns_nothing_back_on`
+`verified-by: bravebot_ui_bridge::crash_reports::a_checkouts_settings_file_is_neither_read_nor_written_for_the_switch`
+`verified-by: bravebot_ui_bridge::crash_reports_locks::a_managed_false_locks_the_switch_and_refuses_a_change`
+`verified-by: bravebot_ui_bridge::crash_reports_locks::a_managed_true_does_not_override_the_persons_choice`
+`verified-by: bravebot_ui_bridge::crash_reports_locks::an_incognito_session_shows_the_switch_off_and_writes_nothing`
+`verified-by: bravebot_ui_bridge::allowlist::the_crash_report_methods_are_denied_to_a_client_of_the_host`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/crash-reports-notice.test.mjs pins its half: the four methods are in its allowed list and a crash_reports.set that carries a path, a directory or a session reaches the bridge with only enabled; ui/scripts/crash-reports.test.mjs pins that the row names what holds the switch and cannot be changed while it is held; make check-ui runs both)`
+
+<a id="CRASH-12"></a>
+### CRASH-12: no front end asks before the first report; the terminal, the window and the editor say once
+
+No front end asks the person whether reports may be sent. The terminal ([CRASH-9](#CRASH-9)), the
+desktop window and the editor integration each say once, at the first launch that is reporting,
+what a report holds and how to turn reports off, and all three share one record: the marker the
+terminal reads, so a person told in one is not told in another. The window asks
+`crash_reports.notice_due`, draws the notice, then calls `crash_reports.mark_notice_shown`. The
+editor integration, `bravebot-acp` and `bravebot acp`, has no screen and its standard output is the
+protocol ([ACP-6](acp.md#ACP-6)), so it says the catalog message as a message of the session, at
+the first prompt of a session because the editor does not know the session's id before `session/new`
+has answered, and records it as it is sent. It writes nothing about reports to standard output
+outside a protocol message. A launch that is not reporting says nothing in any of them and records
+nothing. Reports are on from the first launch, as [CRASH-4](#CRASH-4) says, whether or not the
+notice was read.
+
+**Why.** Reports are on by default so that a released build tells its maintainers about the crashes
+people have. A question before the first report needs a state in which nothing has been answered,
+and in that state a panic is either not reported or reported without an answer, and a person who
+never answers would send nothing. The terminal and the window decide this one way, so the answer
+does not depend on which front end a person happens to start first. Changing it to ask first means
+changing the default in CRASH-4 and the places that say reports are on, which are the README, the
+security page and the changelog.
+
+`verified-by: bravebot_backtrace::lib::a_launch_with_a_directory_an_address_and_no_switch_reports`
+`verified-by: bravebot_tui::crash_notice::the_first_launch_that_reports_says_so_once_and_a_launch_that_does_not_says_nothing`
+`verified-by: bravebot_backtrace::store::the_notice_is_recorded_once_and_is_not_a_report`
+`verified-by: bravebot_ui_bridge::crash_reports_notice::the_first_launch_that_reports_is_due_and_recording_it_writes_the_terminals_marker`
+`verified-by: bravebot_ui_bridge::crash_reports_notice::a_person_the_terminal_told_is_not_told_again_by_the_window`
+`verified-by: bravebot_ui_bridge::crash_reports_notice::a_launch_that_is_not_reporting_says_nothing_and_records_nothing`
+`verified-by: bravebot_ui_bridge::crash_reports_editor::the_first_prompt_of_a_launch_that_reports_tells_the_editor_once`
+`verified-by: bravebot_ui_bridge::crash_reports_editor::a_person_the_terminal_or_the_window_told_is_not_told_again_by_the_editor`
+`verified-by: bravebot_ui_bridge::crash_reports_editor::a_launch_that_is_not_reporting_says_nothing_to_the_editor`
+`verified-by: bravebot_ui_bridge::acp::the_binary_writes_only_protocol_messages_to_stdout`
+`verified-by: by-construction (the bridge has no method that holds a report back or takes an answer to a question about sending one: the four methods of CRASH-11 are the whole of it, and ui/scripts/crash-reports-notice.test.mjs pins that the window draws the notice only after notice_due said it was due and marks it after drawing it)`
+
+<a id="CRASH-13"></a>
+### CRASH-13: the terminal's `/crash-reports` reads and writes the person's own key and says what holds it off
+
+`/crash-reports` with no word says whether crash reports are on and, when they are off, what holds
+them off, in the order [CRASH-11](#CRASH-11) gives: an incognito session, which is a session with no
+state directory, then the managed file's `false`, then `BRAVEBOT_CRASH_REPORTS=0`, named as the
+variable, then the person's own `false`. A second line says whether this session itself sends
+reports, since a build with no address ([CRASH-3](#CRASH-3)) or a session started while reports were
+off sends none whatever the key now says.
+
+`/crash-reports on` and `/crash-reports off` write `crashReports` in the person's own
+`~/.bravebot/settings.json` with the writer the desktop switch uses, so the file is written as
+CRASH-11 says: every other key is kept, `true` is written as `true`, a file that is not a settings
+document is left as it was and the answer says nothing was kept, and a checkout's settings files are
+neither read nor written. Where an incognito session, a managed `false` or the variable decides, the
+command refuses a change in either direction, names what decides, and writes nothing. A saved choice
+takes effect from the next start, and the answer says so. Only `on` and `off`, whole and in lower
+case, change anything. Any other word says what the command takes and changes nothing
+([CMD-2](commands.md#CMD-2)). The command touches nothing a running turn holds, so typed during one
+it is carried out as it is typed ([CMD-8](commands.md#CMD-8)).
+
+**Why.** A person in the terminal has no Settings window, and the notice ([CRASH-9](#CRASH-9)) tells
+them how to turn reports off. The command reads the state with the function the desktop switch
+reads it with and writes with the same writer, so the two front ends cannot rank the switches
+differently or write the file differently. A choice made in one is the other's answer at its next
+read. The hook and the sender are installed once when the process starts, so a change applies from
+the next start, the cost the desktop switch has too.
+
+`verified-by: bravebot_tui::crash_reports_command::the_bare_command_says_on_when_nothing_turned_reports_off`
+`verified-by: bravebot_tui::crash_reports_command::each_holding_layer_is_named_and_a_change_is_refused_without_writing`
+`verified-by: bravebot_tui::crash_reports_command::the_persons_own_off_is_shown_and_can_be_changed`
+`verified-by: bravebot_tui::crash_reports_command::a_file_that_is_not_a_document_is_reported_unsaved`
+`verified-by: bravebot_tui::crash_reports_command::a_word_that_is_not_on_or_off_changes_nothing`
+`verified-by: bravebot_tui::crash_reports_command::the_command_refuses_exactly_where_the_shared_rule_says_the_person_does_not_decide`
+`verified-by: bravebot_tui::crash_reports_command::the_command_writes_the_persons_key_and_refuses_where_the_environment_decides`
+`verified-by: bravebot_tui::crash_reports_incognito::an_incognito_session_is_refused_and_leaves_no_settings_file`
+`verified-by: bravebot_tui::app::the_crash_reports_command_carries_its_word`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_crash_reports_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_backtrace::lib::saving_writes_the_one_key_and_keeps_the_rest_of_the_file`
+`verified-by: bravebot_backtrace::lib::saving_leaves_a_file_that_is_not_a_document_and_makes_a_missing_one`
+`verified-by: by-construction (no test covers the line on whether this session sends: it reads bravebot_backtrace::notice_due and notice_recorded, and one of them is true only in a launch that bravebot_backtrace::start started reporting in, as bravebot_backtrace::lib::with_nothing_started_no_notice_is_recorded pins)`
+
 ## Known costs
+
+- **A choice saved mid-session applies from the next start.** The desktop switch and
+  `/crash-reports` write the key the launch reads, and the hook is installed once, so a process
+  that was reporting can still write a report until it exits after reports were turned off.
+
 
 - **A panic is all that is reported.** A fault the process dies of without one, a bad pointer in
   a library, a stack overflow, running out of memory or being killed, leaves nothing. A minidump
@@ -277,10 +433,12 @@ that the project's count of distinct `guid`s is a count of reports.
   held to calling it by reading their sources. What an executable does with a baked address once
   it has called the function is what the child processes show.
 
-- **The desktop application and the editor integration send without saying so.** `bravebot-host`,
-  `bravebot-rpc` and `bravebot-acp` have no startup screen, and the one-shot and `--plain` modes
-  print nothing there either. The README and the documentation say it, and the terminal says it
-  once, but a person who only uses the desktop application reads it nowhere in the product.
+- **`bravebot-host`, `-p` and `--plain` send without saying so.** The terminal, the window and the
+  editor integration say it once ([CRASH-12](#CRASH-12)). `bravebot-host` has no screen, and the
+  one-shot and `--plain` modes write a reply a script reads and say nothing about reports. The README
+  and the documentation say it, so a person who only uses those modes reads it nowhere in the
+  product. The editor integration says it at the first prompt of a session, so a panic before that
+  prompt can leave a report the person was not yet told about.
 
 - **The service sees the sender's network address.** Nothing in a report holds it, and what the
   service keeps of the connection is the service's.

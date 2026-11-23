@@ -275,6 +275,12 @@ pub enum Reason {
     WithheldVariable(String),
     /// A word standing for more arguments than a person can be shown at one prompt.
     TooMany { found: usize, cap: usize },
+    /// A word whose patterns matched more names than a person can be shown at one prompt. It
+    /// carries the cap and no count: how many names a pattern matched is read from a directory
+    /// nobody may have vouched for, and the sentence reaches the planner ([CMDLINE-4]).
+    ///
+    /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+    TooManyMatched { cap: usize },
     /// A walk that read more directories than the ceiling allows.
     TooDeep { cap: usize },
     /// A `~` where this user has no home directory.
@@ -324,6 +330,33 @@ fn write_shell_builtin(f: &mut fmt::Formatter<'_>, word: &str) -> fmt::Result {
             "It only means something between commands of one shell. Where a script needs it, write the whole script as `sh -c '...'`, which is approved as one line"
         }
     })
+}
+
+/// The sentence for a word whose braces stand for `found` arguments, more than the `cap`.
+fn write_too_many(f: &mut fmt::Formatter<'_>, found: usize, cap: usize) -> fmt::Result {
+    write!(
+        f,
+        "stands for {found} arguments, and at most {cap} can be put to a person at one prompt"
+    )
+}
+
+/// The sentence for a word whose patterns matched more than `cap` names. It carries the cap and
+/// no count ([CMDLINE-4]).
+///
+/// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+fn write_too_many_matched(f: &mut fmt::Formatter<'_>, cap: usize) -> fmt::Result {
+    write!(
+        f,
+        "stands for more than the {cap} arguments that can be put to a person at one prompt. Name a narrower pattern"
+    )
+}
+
+/// The sentence for a pattern that would read more than `cap` directories.
+fn write_too_deep(f: &mut fmt::Formatter<'_>, cap: usize) -> fmt::Result {
+    write!(
+        f,
+        "would read more than {cap} directories to work out what it matches. Name a narrower pattern"
+    )
 }
 
 impl fmt::Display for Reason {
@@ -390,14 +423,9 @@ impl fmt::Display for Reason {
                 f,
                 "`{name}` is withheld from the programs this agent starts, so its value cannot be put in a command's environment"
             ),
-            Self::TooMany { found, cap } => write!(
-                f,
-                "stands for {found} arguments, and at most {cap} can be put to a person at one prompt"
-            ),
-            Self::TooDeep { cap } => write!(
-                f,
-                "would read more than {cap} directories to work out what it matches. Name a narrower pattern"
-            ),
+            Self::TooMany { found, cap } => write_too_many(f, *found, *cap),
+            Self::TooManyMatched { cap } => write_too_many_matched(f, *cap),
+            Self::TooDeep { cap } => write_too_deep(f, *cap),
             Self::NoHome => f.write_str("this user has no home directory to stand for"),
             Self::NotOneProgram => f.write_str(
                 "a step's program has to be one named thing, so that the plan can say what will run. A program worked out from what is on disk is a program that changes when the tree does",
@@ -738,6 +766,8 @@ impl<'a> Scan<'a> {
         let next = self.peek();
         if next.is_some() {
             self.at += 1;
+            #[cfg(test)]
+            counted::read();
         }
         next
     }
@@ -1748,11 +1778,13 @@ pub fn expand(word: &Word, directory: &Path, home: Option<&Path>) -> Result<Vec<
         .collect())
 }
 
-/// [`expand`], with each argument paired with whether a pattern matched it on disk.
+/// [`expand`], with each argument paired with whether a pattern produced it.
 ///
-/// `true` only for a name [`walk`] found. A word with no pattern, an option carrying its value and
-/// a pattern that matched nothing and is passed through as written are `false`. Decided from
-/// whether the walk matched, never from the names it returned ([CMDLINE-4]).
+/// `true` for a word that came from an unquoted pattern: a name [`walk`] found, and the pattern
+/// itself where it matched nothing and is passed through as written. A word with no pattern and an
+/// option carrying its value are `false`. Decided from the shape of the word, never from whether
+/// the walk matched or from the names it returned, so the mark does not depend on what a directory
+/// holds ([CMDLINE-4]).
 ///
 /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
 fn expand_marked(
@@ -1799,18 +1831,19 @@ fn expand_marked(
         let matched = walk(directory, &candidate).map_err(refused)?;
         if matched.is_empty() {
             // As a shell without failglob does, so `find . -name *.md` reaches `find` as written
-            // when no file here matches. The plan shows the word the program receives.
-            out.push((render(&candidate), false));
+            // when no file here matches. The plan shows the word the program receives. It is
+            // marked as a pattern's word all the same, so that whether a name exists where the
+            // pattern points does not decide whether the proof of a read is refused.
+            out.push((render(&candidate), true));
             continue;
         }
         out.extend(matched.into_iter().map(|name| (name, true)));
     }
 
+    // What the patterns matched comes from directories nobody may have vouched for, and the
+    // refusal is told to the planner, so it states the cap and no count ([CMDLINE-4]).
     if out.len() > MAX_ARGUMENTS {
-        return Err(refused(Reason::TooMany {
-            found: out.len(),
-            cap: MAX_ARGUMENTS,
-        }));
+        return Err(refused(Reason::TooManyMatched { cap: MAX_ARGUMENTS }));
     }
     Ok(out)
 }
@@ -2328,12 +2361,15 @@ pub fn compile_with(
 /// A pattern in the line is replaced by the names it matched when the line is compiled, and those
 /// names come out of a directory nobody may have vouched for, so a sentence addressed to the planner
 /// cannot spell them ([CMDLINE-4]). The program is named by the path the planner typed and not the
-/// file a link leads to, for the same reason (RUN-2).
+/// file a link leads to, for the same reason (RUN-2): where the name the line used is a relative
+/// path, [`Plan::directory`] is where it landed and `told_directory` is the planner's own spelling
+/// of that directory, `None` at the root, so the program word is respelled under `told_directory`
+/// and not under the landing, exactly as a redirection's target already is.
 /// A plan whose steps this walk cannot pair with the line's commands is told as the line itself,
 /// which is the planner's own text.
 ///
 /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
-pub fn display_as_written(plan: &Plan) -> String {
+pub fn display_as_written(plan: &Plan, told_directory: Option<&str>) -> String {
     // The plan was compiled from this line, so a value worked out at spawn is there to be read
     // past, whichever mode compiled it. Nothing here runs it.
     let Ok(node) = parse_with(&plan.line, Expansions::Assignments) else {
@@ -2343,7 +2379,7 @@ pub fn display_as_written(plan: &Plan) -> String {
     let mut targets = Vec::new();
     operands_as_written(&node, &mut written, &mut targets);
     plan.steps
-        .display_with_operands(&written, &targets)
+        .display_with_operands(&written, &targets, &plan.directory, told_directory)
         .unwrap_or_else(|| plan.line.clone())
 }
 
@@ -2507,11 +2543,13 @@ impl Compiler<'_, '_> {
                 // An operand naming the terminal device, judged after expansion so that a pattern
                 // or a `~` working out to the device is caught as the plain spelling is. The
                 // operand is quoted back rather than the program, since the program is usually an
-                // ordinary one and the device is the word that has to change.
+                // ordinary one and the device is the word that has to change. Worded from the
+                // operand the planner wrote, not the name a pattern matched in `/dev`, which
+                // nobody vouched for (CMDLINE-4).
                 if names_a_terminal(Path::new(&expanded)) {
                     return Err(Refused {
                         span: operand.span,
-                        text: expanded,
+                        text: render(&operand.pieces),
                         reason: Reason::Interactive(TERMINAL_DEVICE),
                     }
                     .into());
@@ -2520,7 +2558,8 @@ impl Compiler<'_, '_> {
                 matched.push(from_a_pattern);
             }
         }
-        // Empty where no pattern matched, which is what a step built anywhere else holds.
+        // Empty where no word came from a pattern, which is what a step built anywhere else
+        // holds. A pattern that matched nothing is a word from a pattern, so it keeps the list.
         if !matched.contains(&true) {
             matched.clear();
         }
@@ -3743,36 +3782,50 @@ mod tests {
         assert!(parse(&format!("echo {}", "x".repeat(4096))).is_ok());
     }
 
-    /// A `{` that opens nothing is literal text, and answering for it has to cost a read of the
-    /// line, not the product of every brace in it. The test would hang rather than fail slowly if
-    /// a brace could be read twice at the same depth, or deeper than the grammar goes.
+    /// A `{` that opens nothing is literal text, and answering for it has to cost a bounded number
+    /// of reads of the line, not the product of every brace in it. A brace is read at most once at
+    /// each depth up to [`MAX_NESTING`], and each reading reads at most the line, so a line costs
+    /// at most `MAX_NESTING + 1` reads of itself for each of its characters. The work is counted
+    /// and not timed, and the shortest line is asked first, so a brace read again at the same
+    /// depth fails at 25 braces rather than hanging at 1000.
     #[test]
     fn a_line_of_unclosed_braces_is_answered_at_once() {
-        let started = std::time::Instant::now();
         for braces in [25, 100, 1000] {
-            assert!(parse(&format!("echo {}", "{".repeat(braces))).is_ok());
-            assert!(parse(&format!("echo {}", "{a,".repeat(braces))).is_ok());
+            for line in [
+                format!("echo {}", "{".repeat(braces)),
+                format!("echo {}", "{a,".repeat(braces)),
+            ] {
+                let (parsed, read) = counted::during(|| parse(&line));
+                assert!(parsed.is_ok(), "{braces} braces: {parsed:?}");
+                let bound = (MAX_NESTING + 1) * line.len() * line.len();
+                assert!(
+                    read <= bound,
+                    "{braces} braces: {read} characters were read for a line of {}, past {bound}",
+                    line.len()
+                );
+            }
         }
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(10),
-            "answering for unclosed braces took {:?}",
-            started.elapsed()
-        );
     }
 
     /// An outer brace that gives up on its own reading meets the same `{` again as text. The
     /// reading is the reading of the line, which does not change underneath the scan, so a brace
-    /// that offered no expansion at a depth never offers one there.
+    /// that offered no expansion at a depth never offers one there. The line is one command of
+    /// such braces, refused at its end for the pipe with no program after it, so every brace is
+    /// met again from each brace outside it before the refusal. The shortest line is asked first,
+    /// so a brace read twice fails at 8 repeats rather than hanging at 600.
     #[test]
     fn a_brace_reached_twice_is_answered_twice_not_read_twice() {
-        let started = std::time::Instant::now();
-        let line = format!("echo {}", "{a,{a|".repeat(600));
-        assert!(parse(&line).is_err());
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(10),
-            "answering for a brace met twice took {:?}",
-            started.elapsed()
-        );
+        for repeats in [8, 100, 600] {
+            let line = format!("echo {}|", "{a,{a".repeat(repeats));
+            let (parsed, read) = counted::during(|| parse(&line));
+            assert!(parsed.is_err(), "{repeats} repeats: {parsed:?}");
+            let bound = (MAX_NESTING + 1) * line.len() * line.len();
+            assert!(
+                read <= bound,
+                "{repeats} repeats: {read} characters were read for a line of {}, past {bound}",
+                line.len()
+            );
+        }
     }
 
     /// Braces deeper than `(` may nest stand for themselves, like an unclosed brace, rather than
@@ -3989,9 +4042,10 @@ mod tests {
     }
 
     /// An approval prompt long enough that nobody reads it is a prompt that grants everything and
-    /// asks nothing. The count is in the refusal so the planner knows how much narrower to be.
+    /// asks nothing. The count of alternatives comes from the planner's own word, so the refusal
+    /// may say it and the planner knows how much narrower to be.
     #[test]
-    fn expansion_is_bounded_and_the_refusal_says_the_count() {
+    fn a_brace_count_past_the_bound_is_refused_with_the_count() {
         let tree = Tree::new("bounded");
         let refusal = expansion_refused("echo {1..500}", 1, &tree.root);
         assert_eq!(
@@ -4002,6 +4056,89 @@ mod tests {
             }
         );
         assert!(refusal.to_string().contains("500"));
+    }
+
+    /// The digit runs of a sentence, in order.
+    fn numbers_in(text: &str) -> Vec<&str> {
+        text.split(|c: char| !c.is_ascii_digit())
+            .filter(|run| !run.is_empty())
+            .collect()
+    }
+
+    /// What a pattern matched is read from a directory nobody may have vouched for, and the
+    /// refusal is told to the planner, so it states the cap and no count ([CMDLINE-4]). The
+    /// padded form `{p*,{1..99}}` is the one that recovered the count of a prefix by
+    /// subtraction.
+    ///
+    /// The wrong implementation spells how many names matched, which the planner reads back as 150
+    /// for `*` and as 189, hence 90, for the padded word. The 101st and the 150th name give the
+    /// same sentence, so what is told does not vary with how many matched.
+    ///
+    /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+    #[test]
+    fn names_past_the_bound_are_refused_without_a_count() {
+        let tree = Tree::new("bounded-matches");
+        for n in 1..=90 {
+            tree.file(&format!("incoming/p{n:03}"));
+        }
+        for n in 1..=60 {
+            tree.file(&format!("incoming/q{n:03}"));
+        }
+        let all = expansion_refused("echo incoming/*", 1, &tree.root);
+        assert_eq!(all.reason, Reason::TooManyMatched { cap: MAX_ARGUMENTS });
+        assert_eq!(numbers_in(&all.reason.to_string()), ["100"]);
+
+        let padded = expansion_refused("echo incoming/{p*,{1..99}}", 1, &tree.root);
+        assert_eq!(padded.reason, all.reason);
+        assert_eq!(padded.reason.to_string(), all.reason.to_string());
+
+        // 101 names, one over the bound, is told as 150 names are.
+        let barely = Tree::new("bounded-matches-barely");
+        for n in 1..=101 {
+            barely.file(&format!("d/f{n:03}"));
+        }
+        let one_over = expansion_refused("echo d/*", 1, &barely.root);
+        assert_eq!(one_over.reason.to_string(), all.reason.to_string());
+    }
+
+    /// The bound is on the names a word stands for, so a line at or under it still expands and
+    /// is run. The wrong implementation moves the bound to every pattern, or refuses a word that
+    /// the padded form brings to exactly the cap.
+    #[test]
+    fn names_up_to_the_bound_still_expand() {
+        let tree = Tree::new("bounded-matches-under");
+        for n in 1..=90 {
+            tree.file(&format!("incoming/p{n:03}"));
+        }
+        assert_eq!(expanded("echo incoming/p*", 1, &tree.root).len(), 90);
+        let at_the_cap = Tree::new("bounded-matches-at");
+        for n in 1..=MAX_ARGUMENTS {
+            at_the_cap.file(&format!("f{n:03}"));
+        }
+        assert_eq!(
+            expanded("echo f*", 1, &at_the_cap.root).len(),
+            MAX_ARGUMENTS
+        );
+    }
+
+    /// The ceiling on directories read is pinned: `*/*` reads the root and then each directory
+    /// under it. The refusal states the cap, which is a constant, and the count of directories read
+    /// is not in it. The wrong implementation never refuses, so a pattern over a large tree holds
+    /// the turn open.
+    #[test]
+    fn a_walk_past_the_directory_ceiling_is_refused_with_the_cap_only() {
+        let tree = Tree::new("ceiling");
+        for n in 0..=MAX_DIRECTORIES {
+            std::fs::create_dir(tree.root.join(format!("d{n}"))).expect("a scratch directory");
+        }
+        let refusal = expansion_refused("echo */*", 1, &tree.root);
+        assert_eq!(
+            refusal.reason,
+            Reason::TooDeep {
+                cap: MAX_DIRECTORIES
+            }
+        );
+        assert_eq!(numbers_in(&refusal.reason.to_string()), ["4096"]);
     }
 
     /// The same names a listing steps over, so that one idea of what the tree contains serves
@@ -4109,7 +4246,7 @@ mod tests {
         let plan = compile(line, &tree.root, None, &mut without_rules).expect("a plan");
 
         let shown = plan.display();
-        let told = display_as_written(&plan);
+        let told = display_as_written(&plan, None);
 
         assert!(
             shown.contains("one-HOSTILE.rs"),
@@ -4138,7 +4275,7 @@ mod tests {
         let plan = compile(line, &tree.root, None, &mut without_rules).expect("a plan");
 
         let shown = plan.display();
-        let told = display_as_written(&plan);
+        let told = display_as_written(&plan, None);
 
         let root = tree.root.display().to_string();
         assert!(
@@ -4187,11 +4324,12 @@ mod tests {
         }
     }
 
-    /// Each argument of a compiled step records whether a pattern produced it, from whether the
-    /// pattern matched on disk. The proof that a line reads only vouched files depends on it, since
-    /// a name a pattern matched is text out of a directory listing ([CMDLINE-4]). The wrong
-    /// implementation marks nothing, marks a quoted pattern, marks a pattern passed through because
-    /// it matched nothing, or loses which argument is which.
+    /// Each argument of a compiled step records whether an unquoted pattern produced it, whether
+    /// the pattern matched a name or was passed through as written because nothing matched. The
+    /// proof that a line reads only vouched files depends on it, since a name a pattern matched is
+    /// text out of a directory listing and whether a name exists there is decided by the names in
+    /// it ([CMDLINE-4]). The wrong implementation marks nothing, marks a quoted pattern, leaves a
+    /// pattern that matched nothing unmarked, or loses which argument is which.
     ///
     /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
     #[test]
@@ -4203,22 +4341,59 @@ mod tests {
             panic!("one step");
         };
         assert_eq!(step.args, ["-n", "a.rs", "b.rs", "*.rs", "*.zzz", "a.rs"]);
-        assert_eq!(step.matched, [false, true, true, false, false, false]);
+        assert_eq!(step.matched, [false, true, true, false, true, false]);
         assert_eq!(
             (0..step.args.len())
                 .map(|index| step.from_a_pattern(index))
                 .collect::<Vec<_>>(),
-            [false, true, true, false, false, false]
+            [false, true, true, false, true, false]
         );
 
-        // A line no pattern of which matched anything holds no record at all, as a step built
-        // anywhere else does.
+        // A line whose only pattern matched nothing still marks that argument and no other.
         let plan = compiled("./bin/cmd '*.rs' *.zzz a.rs", &tree.root);
+        let [step] = plan.steps.steps()[..] else {
+            panic!("one step");
+        };
+        assert_eq!(step.args, ["*.rs", "*.zzz", "a.rs"]);
+        assert_eq!(step.matched, [false, true, false]);
+        assert_eq!(
+            (0..step.args.len())
+                .map(|index| step.from_a_pattern(index))
+                .collect::<Vec<_>>(),
+            [false, true, false]
+        );
+
+        // A line with no unquoted pattern holds no record at all, as a step built anywhere else
+        // does, and an option carrying a pattern value is no pattern.
+        let plan = compiled("./bin/cmd '*.rs' --include=*.zzz a.rs", &tree.root);
         let [step] = plan.steps.steps()[..] else {
             panic!("one step");
         };
         assert!(step.matched.is_empty(), "{:?}", step.matched);
         assert!((0..step.args.len()).all(|index| !step.from_a_pattern(index)));
+    }
+
+    /// Braces multiply a word into alternatives and each is marked by its own shape: in `{a*,b}`
+    /// the pattern alternative is marked whether or not it matched and the literal one never is.
+    /// The wrong implementation marks the whole word from one alternative, or marks a literal
+    /// alternative because a pattern sits beside it.
+    #[test]
+    fn brace_alternatives_are_marked_one_by_one() {
+        let tree = Tree::new("marked-braces");
+        tree.executable("bin/cmd").file("a1");
+        let plan = compiled("./bin/cmd {a*,b}", &tree.root);
+        let [step] = plan.steps.steps()[..] else {
+            panic!("one step");
+        };
+        assert_eq!(step.args, ["a1", "b"]);
+        assert_eq!(step.matched, [true, false]);
+
+        let plan = compiled("./bin/cmd {z*,b}", &tree.root);
+        let [step] = plan.steps.steps()[..] else {
+            panic!("one step");
+        };
+        assert_eq!(step.args, ["z*", "b"]);
+        assert_eq!(step.matched, [true, false]);
     }
 
     /// Outside bypass mode every spelling of a computed assignment value is the refusal it always
@@ -4569,7 +4744,7 @@ mod tests {
                 expected.matches(&bin).count() + 1,
                 "{line}"
             );
-            assert_eq!(display_as_written(&plan), expected, "{line}");
+            assert_eq!(display_as_written(&plan, None), expected, "{line}");
             let written = plan_as_written(&plan, None).unwrap_or_else(|| panic!("{line}"));
             assert_eq!(
                 written.steps.steps().len(),
@@ -5052,12 +5227,18 @@ mod tests {
         // is refused as the plain spelling is. Guarded on the device, because the pattern is matched
         // against this machine's `/dev` and a build container need not have one.
         if Path::new("/dev/tty").exists() {
+            let refusal = compile_refused("cat /dev/tt?", &tree.root);
             assert!(
-                matches!(
-                    compile_refused("cat /dev/tt?", &tree.root).reason,
-                    Reason::Interactive(_)
-                ),
+                matches!(refusal.reason, Reason::Interactive(_)),
                 "a pattern working out to the device was not refused"
+            );
+            // `/dev` is a directory nobody vouched for (CMDLINE-4): the refusal is decided from
+            // the name the pattern matched there, but it is worded from the operand the planner
+            // wrote, not the name read out of `/dev`, which could differ from it.
+            assert_eq!(
+                refusal.text, "/dev/tt?",
+                "the refusal quoted the device name the pattern matched rather than the \
+                 planner's own operand: {refusal}"
             );
         }
     }
@@ -5116,5 +5297,29 @@ mod tests {
         let other = compiled("cat \"a b\"", &tree.root);
         assert_eq!(one.steps, other.steps);
         assert_ne!(one.line, other.line);
+    }
+}
+
+/// Counts the characters a scan reads, so a test can bound the work a line costs and not the time
+/// it takes. A clock reading includes whatever else the machine was running, so a bound on elapsed
+/// time fails under load on code that did no more work.
+#[cfg(test)]
+mod counted {
+    use std::cell::Cell;
+
+    thread_local! {
+        static READ: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) fn read() {
+        READ.set(READ.get() + 1);
+    }
+
+    /// Runs `body` and returns what it returned with the characters it read, counting from nothing
+    /// on this thread.
+    pub(super) fn during<R>(body: impl FnOnce() -> R) -> (R, usize) {
+        READ.set(0);
+        let result = body();
+        (result, READ.get())
     }
 }
