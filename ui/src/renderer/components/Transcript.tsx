@@ -48,7 +48,8 @@ import { showToast } from '../toasts'
 import { EMPTY_STAGING, named, stageDrop, stagePaste, stageSummon, stageText, withoutMarker, type Staging, type SummonedBot } from '../staging'
 import { placeCards, summonedIn, summonMarker, type Placement, type Summon } from '../../shared/summons'
 import type { Drop } from '../../shared/drops'
-import type { Paste } from '../../shared/pastes'
+import type { Paste, PastedText } from '../../shared/pastes'
+import { PastedTextPreview } from './PastedTextPreview'
 
 interface Live {
   model: string | null
@@ -393,6 +394,7 @@ export function Transcript({
   const [watches, setWatches] = useState(false)
   const [permissions, setPermissions] = useState(false)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
+  const [peeking, setPeeking] = useState<PastedText | null>(null)
   useEffect(() => {
     const preview = (event: Event) => setPreviewPath((event as CustomEvent<string>).detail)
     document.addEventListener('bravebot:preview-file', preview)
@@ -592,6 +594,11 @@ export function Transcript({
   const [dragging, setDragging] = useState(false)
   const carriesFiles = (event: React.DragEvent): boolean => event.dataTransfer.types.includes('Files')
   const preview = useEvent((path: string) => setPreviewPath(path))
+  /** Open a folded paste whole. The viewer holds a copy, so the draft and the staging stay as they are (PASTE-13). */
+  const peek = useEvent((marker: string) => {
+    const item = live?.staging?.staged.find((entry) => entry.via === 'text' && entry.marker === marker)
+    if (item?.via === 'text') setPeeking({ ...item.pasted })
+  })
   const resumeQueued = useEvent(onResumeQueued)
   const removeQueued = useEvent(onRemoveQueued)
   const dismissRefusal = useEvent(onDismissRefusal)
@@ -980,6 +987,7 @@ export function Transcript({
           summonable={summonable}
           onSummon={summon}
           onPreview={preview}
+          onPeek={peek}
           queued={queued}
           queuePaused={queuePaused}
           onResumeQueued={resumeQueued}
@@ -1000,6 +1008,7 @@ export function Transcript({
       {watches && <Watches session={live.handle} onClose={() => setWatches(false)} />}
       {permissions && <Permissions session={live.handle} onClose={() => setPermissions(false)} onRemembered={(kept) => onTrustRemembered(live.handle, kept)} />}
       {previewPath && <FilePreview session={live.handle} path={previewPath} onClose={() => setPreviewPath(null)} />}
+      {peeking && <PastedTextPreview pasted={peeking} onClose={() => setPeeking(null)} />}
     </main>
   )
 }

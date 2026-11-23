@@ -89,6 +89,8 @@ export interface ComposerProps {
   /** Stage a bot picked from the list, replacing the half-typed `word`. */
   onSummon?: (bot: SummonedBot, word: string | null) => void
   onPreview: (path: string) => void
+  /** Open a folded paste whole, read-only, by its marker. Changes nothing in the draft (PASTE-13). */
+  onPeek: (marker: string) => void
   /** The rewrite of the box that is out or standing in it, and what the person was last told of it (INPUT-50). */
   enhancement?: Enhancement
   /** Ask for the box to be made more specific, which puts the rewrite in the box and sends nothing. */
@@ -151,7 +153,7 @@ export interface ComposerFooterProps {
 export const Composer = memo(function Composer(props: ComposerProps): React.JSX.Element {
   const {
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
-    draft, onDraft, onCancel, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview,
+    draft, onDraft, onCancel, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview, onPeek,
     interjected, queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
     canAttach = true, footer, notice, starting = false, summonable = NO_BOTS,
     enhancement, onEnhance, onStopEnhance, onDismissEnhancement,
@@ -390,7 +392,8 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                   return (
                     <span className="attachment-chip dropped" key={item.marker} data-test="pasted-text-chip">
                       <FileGlyph name="pasted.txt" />
-                      <span className="attachment-label words" data-tooltip="Pasted text">Pasted text</span>
+                      <button type="button" className="attachment-name words" data-tooltip={`View ${item.marker}`}
+                        data-test="pasted-text-peek" onClick={() => onPeek(item.marker)}>Pasted text</button>
                       <span className="attachment-marker">{item.marker}</span>
                       <IconButton icon="close" size="tiny" label={`Remove ${item.marker} Pasted text`} tooltip="Remove"
                         onClick={() => onRemoveStaged(item.marker)} />

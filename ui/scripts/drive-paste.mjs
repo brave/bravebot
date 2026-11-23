@@ -256,11 +256,54 @@ try {
   await menuPaste()
   await textChips.first().waitFor()
   assert.equal(await reopened.inputValue(), 'Read this: [Pasted text #2 +5 lines] ')
+
+  // ---- the chip opens the paste whole, and closing it changes nothing (PASTE-13) -------------
+  const folded = 'Read this: [Pasted text #2 +5 lines] '
+  const selection = () => reopened.evaluate((field) => [field.selectionStart, field.selectionEnd])
+  await reopened.evaluate((field) => field.setSelectionRange(5, 5))
+  const peekDialog = (number) => page.getByRole('dialog', { name: `Pasted text #${number}`, exact: true })
+  const peekAndClose = async (number, how) => {
+    await page.locator('[data-test="pasted-text-peek"]').filter({ hasText: 'Pasted text' }).last().click()
+    const dialog = peekDialog(number)
+    await dialog.waitFor()
+    assert.equal(await dialog.locator('[data-test="pasted-text-preview"] pre').innerText(), five, 'the viewer shows every line')
+    await how(dialog)
+    await dialog.waitFor({ state: 'hidden' })
+  }
+  await page.locator('[data-test="pasted-text-peek"]').click()
+  const viewer = peekDialog(2)
+  await viewer.waitFor()
+  assert.equal(await viewer.locator('pre').innerText(), five, 'the viewer shows all five lines')
+  assert.match(await viewer.innerText(), /5 lines/, 'and says how many')
+  assert.equal(await reopened.inputValue(), folded, 'opening the viewer leaves the draft alone')
+  await page.screenshot({ path: join(output, 'paste-text-peek-light.png') })
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: join(output, 'paste-text-peek-dark.png') })
+  await page.emulateMedia({ colorScheme: 'light' })
+  await viewer.getByRole('button', { name: 'Done', exact: true }).click()
+  await viewer.waitFor({ state: 'hidden' })
+  await peekAndClose(2, () => page.keyboard.press('Escape'))
+  await peekAndClose(2, (dialog) => dialog.getByRole('button', { name: 'Close Pasted text #2', exact: true }).click())
+  assert.equal(await reopened.inputValue(), folded, 'closing the viewer leaves the draft as it was')
+  assert.deepEqual(await selection(), [5, 5], 'and the caret where it was')
+  assert.equal(await textChips.count(), 1, 'and the paste still staged')
+  await reopened.focus()
+  await reopened.press('End')
   const foldedBefore = requests.length
   await page.locator(COMPOSER_SEND).click()
   await page.locator('.composer .stop').waitFor({ state: 'visible' })
-  await page.locator('.composer .stop').waitFor({ state: 'hidden', timeout: 60000 })
   assert.equal(await textChips.count(), 0, 'sending clears the folded paste')
+  // While the turn runs, a new paste folds and opens the same way.
+  await reopened.focus()
+  await menuPaste()
+  await textChips.first().waitFor()
+  assert.equal(await reopened.inputValue(), '[Pasted text #3 +5 lines] ')
+  await peekAndClose(3, (dialog) => dialog.getByRole('button', { name: 'Done', exact: true }).click())
+  assert.ok(await page.locator('.composer .stop').isVisible(), 'the viewer opened while the turn was running')
+  assert.equal(await reopened.inputValue(), '[Pasted text #3 +5 lines] ', 'and closing it during a turn leaves the draft')
+  await reopened.fill('')
+  await page.locator('.composer .stop').waitFor({ state: 'hidden', timeout: 60000 })
   const textOf = (message) => typeof message.content === 'string' ? message.content
     : message.content.map((part) => part.text ?? '').join('')
   const foldedSent = requests.slice(foldedBefore).map((body) => JSON.parse(body).messages)
@@ -272,7 +315,7 @@ try {
   assert.ok(!foldedRows.includes('[Pasted text #'), 'and not the marker')
   assert.deepEqual(errors, [])
 
-  console.log(`PASS: a trusted paste stages a marker and a chip numbered with drops, a forged paste does nothing, an oversized one is refused with the bridge's note, the send carries the picture as PNG data, and a long text paste folds to a marker and sends its words. Screenshots in ${output}/paste-*.png`)
+  console.log(`PASS: a trusted paste stages a marker and a chip numbered with drops, a forged paste does nothing, an oversized one is refused with the bridge's note, the send carries the picture as PNG data, and a long text paste folds to a marker, opens whole from its chip without changing the draft, and sends its words. Screenshots in ${output}/paste-*.png`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'paste-failure.png') }).catch(() => undefined)
   throw error
