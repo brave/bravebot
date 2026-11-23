@@ -2767,18 +2767,27 @@ names map to incomplete. Retry eligibility is unchanged.
 A streamed Bedrock reply that stops arriving once any of its body has arrived is incomplete, and
 never a request that did not get through, whatever the transport said about the read that failed.
 A read that fails before any of the body has arrived stays a transport failure and is not sent
-again. A Bedrock reply that never began is therefore not sent again, and a delegate that met it on
-every request is told it ended transport, so the planner splits the task rather than starting the
-same delegate again. A reply that stopped is sent again where its request asked for tool arguments as they are
-written ([BACKEND-44](#BACKEND-44)) or offered no tool, and not where it offered one without the ask:
-there the silence may be the service holding an argument back until the model has finished it, and a
-second request waits out the same silence and is billed for it.
+again, although the transport marks a reply that stopped arriving as worth another attempt
+([NET-6](network-egress.md#NET-6)): the Bedrock client clears that mark on a transport failure it
+meets before the body began. A Bedrock reply that never began is therefore not sent again, and a
+delegate that met it on every request is told it ended transport, so the planner splits the task
+rather than starting the same delegate again. A reply that stopped is sent again where its request
+asked for tool arguments as they are written ([BACKEND-44](#BACKEND-44)) or offered no tool, and not
+where it offered one without the ask: there the silence may be the service holding an argument back
+until the model has finished it, and a second request waits out the same silence and is billed for
+it.
+
+A Bedrock reply asked for whole is read the same way: a read that fails before any of the body has
+arrived is a transport failure and is not sent again, so the whole-reply path is covered as the
+streamed one is.
 
 A streamed reply from an OpenAI-compatible service that stops arriving once any of its body has
 arrived is incomplete in the same way, and is sent again as any reply that ended early is. A read
-that fails before any of its body has arrived stays a transport failure. That client has no ask for
-arguments as they are written, so nothing tells it a service holding one back from a connection
-that died, and it sends the request again as it did before either was told apart.
+that fails before any of its body has arrived stays a transport failure, and is sent again where the
+transport marks it worth another attempt ([NET-6](network-egress.md#NET-6)), as a reply that went
+quiet is. That client has no ask for arguments as they are written, so nothing tells it a service
+holding one back from a connection that died, and it sends the request again as it did before
+either was told apart.
 
 A reply cut at the time its request stated for it ([NET-5](network-egress.md#NET-5)) is incomplete
 too, streamed or asked for whole, and never a request that did not get through: the service had the
@@ -2923,10 +2932,12 @@ planner.
 `verified-by: bravebot_aichat::call::a_wait_nobody_stops_finishes_and_says_so`
 `verified-by: bravebot_aichat::call::a_wait_started_after_a_stop_does_not_sleep`
 `verified-by: bravebot_bedrock::lib::a_reply_that_never_began_is_still_a_request_that_did_not_get_through`
+`verified-by: bravebot_bedrock::lib::a_whole_reply_that_never_began_is_not_sent_again`
 `verified-by: bravebot_bedrock::lib::a_reply_that_went_quiet_while_an_argument_was_held_back_is_not_asked_for_again`
 `verified-by: bravebot_bedrock::lib::only_a_request_whose_arguments_are_held_back_stalls_rather_than_stopping`
 `verified-by: bravebot_aichat::client::a_stream_that_breaks_after_it_began_is_a_reply_that_stopped`
 `verified-by: bravebot_aichat::client::a_stream_that_breaks_before_any_of_it_arrived_is_still_a_connection_failure`
+`verified-by: bravebot_aichat::client::a_reply_that_went_quiet_before_its_body_arrived_is_sent_again`
 `verified-by: bravebot_aichat::lib::a_body_read_in_the_background_says_what_arrived_and_whether_it_began`
 `verified-by: bravebot_agent::backend::a_reply_that_stopped_arriving_is_reported_as_unfinished_and_not_as_unreachable`
 `verified-by: bravebot_net::egress::a_reply_outlasting_the_time_its_request_stated_is_given_up_on`

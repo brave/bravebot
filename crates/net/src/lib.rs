@@ -1566,6 +1566,10 @@ fn is_transient_call(error: &ureq::Error) -> bool {
 /// ureq names the reply's own deadline, [`Timeouts::reply`] or the bound its request stated, as
 /// the wait for the response, which it keeps counting from the headers while the body arrives. Any
 /// other failure, the gap bound among them, is the connection's.
+///
+/// ureq wraps the gap bound ([`ureq::Timeout::RecvBody`]) in an I/O error of kind `Other`, which
+/// [`is_transient_io`] does not name, so a wrapped ureq error is classified by its variant as a
+/// failed call is. An I/O error that wraps nothing keeps being classified by its kind alone.
 fn body_failure(url: &str, error: &std::io::Error) -> EgressError {
     let cause = error
         .get_ref()
@@ -1583,7 +1587,7 @@ fn body_failure(url: &str, error: &std::io::Error) -> EgressError {
         detail: cause
             .map_or_else(|| io_failure(error), call_failure)
             .to_string(),
-        transient: is_transient_io(error),
+        transient: is_transient_io(error) || cause.is_some_and(is_transient_call),
     }
 }
 
@@ -2208,6 +2212,45 @@ mod tests {
             let body = body_failure(url, &std::io::Error::from(kind));
             assert!(!body.is_transient(), "{kind:?} on a body was asked again");
         }
+    }
+
+    /// ureq reports a body that went quiet past the gap bound as an I/O error of kind `Other`
+    /// wrapping its own error, which the kind alone cannot name. A reply that stopped arriving is a
+    /// connection that gave out, while a wrapped error that is the request being wrong, and the
+    /// reply's own deadline, are not.
+    #[test]
+    fn a_body_that_went_quiet_is_worth_another_attempt() {
+        let url = "https://example.com/";
+        let wrapped = |error: ureq::Error| std::io::Error::other(error);
+
+        let quiet = body_failure(url, &wrapped(ureq::Error::Timeout(ureq::Timeout::RecvBody)));
+        assert!(
+            quiet.is_transient(),
+            "a quiet body was sent once: {quiet:?}"
+        );
+        assert!(
+            matches!(&quiet, EgressError::Transport { detail, .. } if detail == "the request timed out"),
+            "a quiet body was worded as {quiet:?}"
+        );
+
+        let late = body_failure(
+            url,
+            &wrapped(ureq::Error::Timeout(ureq::Timeout::RecvResponse)),
+        );
+        assert!(
+            matches!(late, EgressError::OutOfTime { .. }),
+            "a reply past its deadline was reported as {late:?}"
+        );
+        assert!(
+            !late.is_transient(),
+            "a reply past its deadline was sent again"
+        );
+
+        let malformed = body_failure(url, &wrapped(ureq::Error::BadUri("x".into())));
+        assert!(
+            !malformed.is_transient(),
+            "a wrapped error that is not the connection was sent again: {malformed:?}"
+        );
     }
 
     /// How a lookup fails. An I/O error is what ureq reports for the system's: its kind is

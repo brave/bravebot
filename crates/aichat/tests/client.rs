@@ -327,6 +327,9 @@ enum Attempt {
     BrokenFrames(Vec<String>),
     /// Headers for a chunked stream, then hang up before any of the body.
     BrokenBeforeBody,
+    /// A status of 200 with this content type and a length of body that never comes, the
+    /// connection left open: a reply that is up and quiet.
+    QuietBody(&'static str),
 }
 
 /// Serve one behaviour per connection, in order, recording what each request carried.
@@ -450,6 +453,19 @@ fn serve_attempts(attempts: Vec<Attempt>) -> (String, mpsc::Receiver<Captured>) 
                         b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
                     );
                     let _ = stream.flush();
+                }
+                Attempt::QuietBody(content_type) => {
+                    let _ = stream.write_all(
+                        format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: 1000\r\n\r\n")
+                            .as_bytes(),
+                    );
+                    let _ = stream.flush();
+                    // Held rather than dropped: a connection that closed would be a socket that
+                    // went away, and this one is open and says nothing.
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_secs(10));
+                        drop(stream);
+                    });
                 }
                 Attempt::Frames(frames) => {
                     let _ = stream.write_all(
@@ -4678,6 +4694,48 @@ fn a_gateway_stating_a_shorter_idle_gap_gives_up_on_a_quiet_reply_sooner() {
         matches!(result, Err(ChatError::Incomplete)),
         "a quiet reply was waited on past the stated 300 ms: {result:?}"
     );
+}
+
+/// A reply whose headers came and whose body then went quiet past the gap is a connection that gave
+/// out, so the request is sent again and the second answer is the one returned. Asked on the whole
+/// path and the streamed one, since each has a retry loop of its own that reads the failure's mark.
+/// Rejects a body that goes quiet being reported as a failure not worth another attempt, which
+/// gives up after the first request.
+#[test]
+fn a_reply_that_went_quiet_before_its_body_arrived_is_sent_again() {
+    let model = "a-model-whose-reply-went-quiet";
+    let egress = Egress::with_timeouts(bravebot_net::Timeouts {
+        idle: Duration::from_millis(300),
+        reply: Duration::from_secs(30),
+        ..bravebot_net::Timeouts::default()
+    });
+
+    for streaming in [false, true] {
+        let content_type = if streaming {
+            "text/event-stream"
+        } else {
+            "application/json"
+        };
+        let (endpoint, received) = serve_attempts(vec![
+            Attempt::QuietBody(content_type),
+            answer_for(streaming),
+        ]);
+        let config = config_for(&endpoint);
+        let gateway = gateway_stating(&endpoint, model, r#""maxRetries": 2"#);
+
+        let (result, attempts) = asked_of(&gateway, &config, &egress, model, streaming);
+
+        let completion = result.unwrap_or_else(|error| {
+            panic!("streaming {streaming}: a quiet reply was not sent again: {error:?}")
+        });
+        assert_eq!(completion.model, "served-model", "streaming {streaming}");
+        assert_eq!(attempts, 2, "streaming {streaming}");
+        assert_eq!(
+            received.try_iter().count(),
+            2,
+            "streaming {streaming}: the server read one request per attempt"
+        );
+    }
 }
 
 /// A model on this machine is waited on through any silence while a person can stop the turn, and a
