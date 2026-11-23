@@ -450,8 +450,10 @@ check(
   for (const size of [1200, 900]) {
     await app.evaluate(({ BrowserWindow }, w) => { for (const win of BrowserWindow.getAllWindows()) win.setSize(w, 900) }, size)
     await page.setViewportSize({ width: size, height: 900 })
-    // The window may fold the column as it narrows, so the resize settles before the fold is read.
-    await page.waitForTimeout(600)
+    // The window folds the column on the resize that takes it to 1120px or less, and only then.
+    const folds = size <= 1120
+    check(await eventually(async () => (await folded(page)) === folds),
+      `at ${size}px the column is ${folds ? 'folded' : 'unfolded'} (folded: ${await folded(page)})`)
     if (await folded(page)) await page.getByRole('button', { name: 'Context panel', exact: true }).click()
     const inside = async () => {
       if (!(await sections(page).isVisible())) return false
