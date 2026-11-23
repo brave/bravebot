@@ -1307,7 +1307,7 @@ jobs:
             stage_record::tests::a_missing_record_reads_as_empty
             stage_record::tests::lines_appended_are_read_back_in_order
             stage_record::tests::a_record_at_the_size_bound_takes_no_more_and_is_read_to_a_whole_line
-            stage_record::tests::a_record_with_bytes_that_are_not_text_still_gives_its_lines
+            stage_record::tests::a_record_with_bytes_that_are_not_text_is_handed_on_as_it_is
             stage_record::tests::a_directory_that_is_or_holds_the_home_is_not_recorded
             stage_record::tests::a_record_at_the_byte_bound_alone_takes_no_more
             stage_record::tests::a_record_at_the_line_bound_alone_takes_no_more

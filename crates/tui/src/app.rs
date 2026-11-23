@@ -21794,10 +21794,10 @@ mod tests {
     /// through what starts a tick and what sends a goal round, so the task built for either reads
     /// the same style a typed prompt's does. The second scans the source for what makes those two
     /// turns the typed one's: the tick and the goal round both go out as `Action::Submit`, `submit`
-    /// runs each through `run_turn_animated`, and that function is where the style is put on the
-    /// task. A task built for a tick or a round anywhere else, or without that helper, fails the
-    /// scan. It does not run the worker: that the helper's call is reached is reasoned from the
-    /// source, not observed.
+    /// runs each through `run_turn_animated`, that function builds its task with `the_turn_task`,
+    /// and that builder is where the style is put on the task. A task built for a tick or a round
+    /// anywhere else, or without that helper, fails the scan. It does not run the worker: that the
+    /// helper's call is reached is reasoned from the source, not observed.
     #[test]
     fn every_turn_the_terminal_starts_carries_the_style_in_force_ticks_and_goal_rounds_included() {
         let named = |session: &Session| {
@@ -21853,8 +21853,13 @@ mod tests {
 
         let run = function(turns, "run_turn_animated");
         assert!(
-            run.contains("task = with_session_style(task, session);"),
-            "`run_turn_animated` builds a turn's task without the session's style"
+            run.contains("let task = the_turn_task("),
+            "`run_turn_animated` builds a turn's task somewhere other than `the_turn_task`"
+        );
+        let built = function(turns, "the_turn_task");
+        assert!(
+            built.contains("task = with_session_style(task, session);"),
+            "`the_turn_task` builds a turn's task without the session's style"
         );
         let submit = function(actions, "submit");
         assert!(
