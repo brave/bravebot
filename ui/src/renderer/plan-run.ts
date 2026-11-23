@@ -77,7 +77,6 @@ export async function planRun(on: PlanRunning, handle: string, task: string, lin
   on.update(handle, (old) => ({ ...old, planDropped: pictures, entries: [...old.entries, row] }))
   try {
     await on.call('manifest.run', { session: handle, task, model: asking?.model ?? null, drops, markers, files })
-    // What was sent leaves the composer.
     if (!queuedAlready) on.update(handle, (old) => ({ ...old, staging: sent(old.staging) }))
   } catch (error) {
     if (error instanceof RequestFailed && error.code === 'turn_in_flight' && !queuedAlready) {
