@@ -1589,6 +1589,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            spec_context(*final(self)) == spec_context(*old(self)),
+    ))]
     fn deny(&mut self, gate: &'static str, principle: Principle, message: String) -> Denial {
         self.refusals.push(format!("{gate}: {message}"));
         self.sink.emit(Event::GateBlocked {
@@ -1601,6 +1605,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        ensures
+            spec_context(*final(self)) == spec_context(*old(self)),
+    ))]
     fn allow(&mut self, gate: &'static str, detail: String) {
         self.sink.emit(Event::GatePassed { gate, detail });
     }
@@ -3793,6 +3801,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::value::spec_label_of(
                 series,
             ),
+            spec_context(*final(self)) == spec_context(*old(self)),
     ))]
     pub fn record_answers(
         &mut self,
@@ -13313,6 +13322,53 @@ five
             .declassify(&SlotId::new("other"), Label::untrusted_private())
             .expect_err("unlisted slot must be refused");
         assert_eq!(err.principle, Principle::Confinement);
+    }
+
+    /// A release records the label the bytes leave with: public, at the integrity they had. A
+    /// release recorded as private would tell the trail the bytes never left.
+    #[test]
+    fn a_release_is_recorded_public_at_the_integrity_it_had() {
+        let mut sink = RecordingSink::new();
+        let summary = SlotId::new("summary");
+        let issue = SlotId::new("issue");
+        {
+            let mut policy = Policy::begin(
+                routing_with("path", "out.txt"),
+                ReleasePlan::new()
+                    .allow(summary.clone())
+                    .allow_into(issue.clone(), "github brave/bravebot"),
+                all_capabilities(),
+                &mut sink,
+            )
+            .unwrap();
+
+            policy
+                .declassify(&summary, Label::untrusted_private())
+                .unwrap();
+            policy
+                .declassify_into_place(&issue, "github brave/bravebot", Label::trusted_private())
+                .unwrap();
+        }
+
+        let recorded: Vec<(&str, Label, Label)> = sink
+            .events()
+            .iter()
+            .filter_map(|e| match e {
+                Event::Declassified { slot, from, to, .. } => Some((slot.as_str(), *from, *to)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            recorded,
+            [
+                (
+                    "summary",
+                    Label::untrusted_private(),
+                    Label::untrusted_public()
+                ),
+                ("issue", Label::trusted_private(), Label::trusted_public()),
+            ]
+        );
     }
 
     /// A connector act's slot leaves only to the one place its plan named, fixed before anything

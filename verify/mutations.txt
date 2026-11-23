@@ -453,6 +453,10 @@ mutation: record_answers records a private reply as public
 file: crates/core/src/policy.rs
 replace: let replied = Label::new(Integrity::Trusted, label.confidentiality); => let replied = Label::new(Integrity::Trusted, Confidentiality::Public);
 
+mutation: record_answers lowers the context it was asked from
+file: crates/core/src/policy.rs
+replace: self.absorb(Integrity::Trusted); => self.absorb(Integrity::Untrusted);
+
 mutation: label_user_command_output labels what a person's own command printed as public
 file: crates/core/src/policy.rs
 replace: let typed_output = Label::new(Integrity::Trusted, Confidentiality::Private); => let typed_output = Label::new(Integrity::Trusted, Confidentiality::Public);
