@@ -34,6 +34,12 @@ fn main() {
         );
     }
 
+    // The directories an earlier process let a stage write are left out of the search for the
+    // programs this one starts, and each directory a session here opens is added to that record
+    // for the next. Before a program is looked up. See SANDBOX-30.
+    bravebot_agent::stage_record::load();
+    bravebot_agent::stage_record::follow();
+
     // Not a security decision. The only argument is `--settings <path>`, which names a settings
     // file for a developer driving this by hand, and what that file may grant is decided by the
     // policy layer rather than here. Nothing is authorised by an argument.
@@ -67,6 +73,11 @@ fn main() {
     );
     bravebot_ui_bridge::settings::settle_for_process(&process);
     bravebot_ui_bridge::settings::start_the_sweep_for_process(&process);
+    // No `bravebot_ui_bridge::usage_ping::start` call and no `take_usage_ping_notice` belong here,
+    // unlike `bravebot acp`. An editor starts this program and nobody reads its standard error, so
+    // taking the notice would record it as shown in the marker every front end shares, and the
+    // desktop window would never say it. With no notice shown, no ping may be sent. See PING-6 and
+    // PING-7.
 
     // EOF on stdin ends the loop with every session closed, which refuses anything waiting on an
     // answer from an editor that has gone away and fires `session-ended`.

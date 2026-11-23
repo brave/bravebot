@@ -1923,6 +1923,259 @@ mod tests {
         assert!(said.contains("aws configure sso"), "{said}");
     }
 
+    /// Set in a run of the test binary that has a stand-in `aws` first on `PATH`, to the directory
+    /// the stand-in writes its calls into.
+    #[cfg(unix)]
+    const STAND_IN_SESSION: &str = "BRAVEBOT_TEST_STAND_IN_AWS_SESSION";
+
+    /// What the stand-in prints for an export it refuses and for an export that succeeds.
+    #[cfg(unix)]
+    const EXPORT_REFUSED: &str = "echo refused >&2; exit 255";
+    #[cfg(unix)]
+    const EXPORT_GOOD: &str =
+        "echo '{\"Version\":1,\"AccessKeyId\":\"AKIA\",\"SecretAccessKey\":\"x\"}'";
+
+    /// What the stand-in prints for the profile listing: two profiles, or a failure.
+    #[cfg(unix)]
+    const LISTS_WORK_AND_PERSONAL: &str = "printf 'work\\npersonal\\n'";
+    #[cfg(unix)]
+    const LISTING_FAILS: &str = "echo no listing >&2; exit 1";
+
+    /// Runs the test binary again as `test`, with an `aws` first on `PATH` that appends the
+    /// arguments of each call to `calls` in the session directory and answers an export, the
+    /// listing and a sign-in as given (a sign-in always succeeds). The run writes what each call
+    /// under test returned to `results`. Returns the session directory.
+    #[cfg(unix)]
+    fn run_again_under_stand_in_aws(
+        test: &str,
+        name: &str,
+        export: &str,
+        listing: &str,
+    ) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let session = fresh_directory(&format!("{name}-session"));
+        let installed = fresh_directory(&format!("{name}-installed"));
+        let aws = installed.join("aws");
+        let script = format!(
+            "#!/bin/sh\necho \"$*\" >> '{calls}'\ncase \"$1 $2\" in\n\
+             \"configure export-credentials\") {export};;\n\
+             \"configure list-profiles\") {listing};;\n\
+             \"sso login\") : ;;\nesac\n",
+            calls = session.join("calls").display()
+        );
+        std::fs::write(&aws, script).unwrap();
+        std::fs::set_permissions(&aws, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths([
+            installed.clone(),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ])
+        .unwrap();
+
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--test-threads=1", "--nocapture"])
+            .env(STAND_IN_SESSION, &session)
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+
+        let said = String::from_utf8_lossy(&child.stderr).into_owned();
+        assert!(
+            session.join("results").exists(),
+            "the child did not finish the test: {said}"
+        );
+        assert!(child.status.success(), "{said}");
+        session
+    }
+
+    #[cfg(unix)]
+    fn calls_and_results(session: &Path) -> (String, String) {
+        let read = |name: &str| std::fs::read_to_string(session.join(name)).unwrap();
+        (read("calls"), read("results"))
+    }
+
+    /// A report on a profile the CLI does not list says so and names the ones it has, and the
+    /// list comes from asking the CLI for it after the export is refused. An implementation that
+    /// reports every refusal as a missing profile, one that never asks, and one that reads the
+    /// export's error text instead of asking all fail: the stand-in's refusal says nothing about
+    /// a profile, and the profile it lists is reported as refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_report_on_a_profile_the_cli_does_not_list_names_the_profiles_it_has() {
+        const TEST: &str = "credentials::tests::a_report_on_a_profile_the_cli_does_not_list_names_the_profiles_it_has";
+
+        if let Some(directory) = std::env::var_os(STAND_IN_SESSION) {
+            let results = [
+                format!("missing: {:?}", session(Some("missing"))),
+                format!("work: {:?}", session(Some("work"))),
+            ];
+            std::fs::write(PathBuf::from(directory).join("results"), results.join("\n")).unwrap();
+            return;
+        }
+
+        let directory = run_again_under_stand_in_aws(
+            TEST,
+            "credentials-report-profile",
+            EXPORT_REFUSED,
+            LISTS_WORK_AND_PERSONAL,
+        );
+        let (calls, results) = calls_and_results(&directory);
+        assert_eq!(
+            results,
+            "missing: Err(NoSuchProfile { profile: \"missing\", available: [\"work\", \"personal\"] })\n\
+             work: Err(Refused { detail: \"refused\" })"
+        );
+        // The listing follows each refused export and nothing is asked before one.
+        assert_eq!(
+            calls,
+            "configure export-credentials --format process --profile missing\n\
+             configure list-profiles\n\
+             configure export-credentials --format process --profile work\n\
+             configure list-profiles\n"
+        );
+    }
+
+    /// No sign-in starts for a profile the CLI does not list, by either way in: the one a window
+    /// can stop and the plain one, which reaches the sign-in itself. The profile the CLI lists
+    /// does get its sign-in. An implementation that lists the profiles and then signs in anyway
+    /// starts `sso login --profile missing`, which the recorded calls show.
+    #[cfg(unix)]
+    #[test]
+    fn a_sign_in_for_a_profile_the_cli_does_not_list_never_runs_the_login() {
+        const TEST: &str = "credentials::tests::a_sign_in_for_a_profile_the_cli_does_not_list_never_runs_the_login";
+
+        if let Some(directory) = std::env::var_os(STAND_IN_SESSION) {
+            let results = [
+                format!(
+                    "until missing: {:?}",
+                    sign_in_if_needed_until(Some("missing"), |_| {}, &Stop::new())
+                ),
+                format!("login missing: {:?}", login(Some("missing"), |_| {})),
+                format!(
+                    "sign in missing: {:?}",
+                    sign_in_if_needed(Some("missing"), |_| {})
+                ),
+                format!(
+                    "until work: {:?}",
+                    sign_in_if_needed_until(Some("work"), |_| {}, &Stop::new())
+                ),
+            ];
+            std::fs::write(PathBuf::from(directory).join("results"), results.join("\n")).unwrap();
+            return;
+        }
+
+        let directory = run_again_under_stand_in_aws(
+            TEST,
+            "credentials-sign-in-profile",
+            EXPORT_REFUSED,
+            LISTS_WORK_AND_PERSONAL,
+        );
+        let (calls, results) = calls_and_results(&directory);
+        let absent = "NoSuchProfile { profile: \"missing\", available: [\"work\", \"personal\"] }";
+        assert_eq!(
+            results,
+            format!(
+                "until missing: Err(Failed({absent}))\n\
+                 login missing: Err({absent})\n\
+                 sign in missing: Err({absent})\n\
+                 until work: Ok(())"
+            )
+        );
+        assert_eq!(
+            calls,
+            "configure export-credentials --format process --profile missing\n\
+             configure list-profiles\n\
+             configure list-profiles\n\
+             configure export-credentials --format process --profile missing\n\
+             configure list-profiles\n\
+             configure export-credentials --format process --profile work\n\
+             configure list-profiles\n\
+             sso login --profile work\n"
+        );
+    }
+
+    /// A session the export shows to be good costs that export and nothing else, whether it is
+    /// asked about for a report or before a sign-in. An implementation that lists the profiles
+    /// before it exports, or on every check, adds a `configure list-profiles` call.
+    #[cfg(unix)]
+    #[test]
+    fn a_good_session_costs_the_export_and_no_listing() {
+        const TEST: &str = "credentials::tests::a_good_session_costs_the_export_and_no_listing";
+
+        if let Some(directory) = std::env::var_os(STAND_IN_SESSION) {
+            let results = [
+                format!("report: {:?}", session(Some("good-report"))),
+                format!(
+                    "sign in: {:?}",
+                    sign_in_if_needed_until(Some("good-sign-in"), |_| {}, &Stop::new())
+                ),
+            ];
+            std::fs::write(PathBuf::from(directory).join("results"), results.join("\n")).unwrap();
+            return;
+        }
+
+        let directory = run_again_under_stand_in_aws(
+            TEST,
+            "credentials-good-session",
+            EXPORT_GOOD,
+            LISTS_WORK_AND_PERSONAL,
+        );
+        let (calls, results) = calls_and_results(&directory);
+        assert_eq!(results, "report: Ok(())\nsign in: Ok(())");
+        assert_eq!(
+            calls,
+            "configure export-credentials --format process --profile good-report\n\
+             configure export-credentials --format process --profile good-sign-in\n"
+        );
+    }
+
+    /// A CLI that fails to list its profiles has not said any is missing, so the sign-in goes
+    /// ahead and a report keeps the refusal it already had. An implementation that reads a failed
+    /// listing as an empty one withholds the sign-in and reports no profiles configured.
+    #[cfg(unix)]
+    #[test]
+    fn a_listing_the_cli_fails_to_give_does_not_withhold_the_sign_in() {
+        const TEST: &str =
+            "credentials::tests::a_listing_the_cli_fails_to_give_does_not_withhold_the_sign_in";
+
+        if let Some(directory) = std::env::var_os(STAND_IN_SESSION) {
+            let results = [
+                format!("report: {:?}", session(Some("unlisted-one"))),
+                format!(
+                    "until: {:?}",
+                    sign_in_if_needed_until(Some("unlisted-two"), |_| {}, &Stop::new())
+                ),
+                format!("login: {:?}", login(Some("unlisted-three"), |_| {})),
+            ];
+            std::fs::write(PathBuf::from(directory).join("results"), results.join("\n")).unwrap();
+            return;
+        }
+
+        let directory = run_again_under_stand_in_aws(
+            TEST,
+            "credentials-listing-fails",
+            EXPORT_REFUSED,
+            LISTING_FAILS,
+        );
+        let (calls, results) = calls_and_results(&directory);
+        assert_eq!(
+            results,
+            "report: Err(Refused { detail: \"refused\" })\nuntil: Ok(())\nlogin: Ok(())"
+        );
+        assert_eq!(
+            calls,
+            "configure export-credentials --format process --profile unlisted-one\n\
+             configure list-profiles\n\
+             configure export-credentials --format process --profile unlisted-two\n\
+             configure list-profiles\n\
+             sso login --profile unlisted-two\n\
+             configure list-profiles\n\
+             sso login --profile unlisted-three\n"
+        );
+    }
+
     /// A credential can stop working before the expiry it stated. Kept anyway, the check before
     /// every turn goes on answering yes from that stale note, so the sign-in a person can see never
     /// runs and each turn fails to a login reporting to nobody.

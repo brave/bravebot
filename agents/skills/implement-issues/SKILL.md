@@ -388,11 +388,12 @@ hand that group's combine to a worker with the integration branch, the group's b
 of both, and check the result as in step 4. Group branches and their worktrees stay where they are;
 only the integration branch is pushed.
 
-## 6. Verify once, on the tree that is pushed
+## 6. Verify once, before the first push
 
-The tree gated is the tree pushed. A gate result describes one tree, so rebase first, gate once, and
-touch nothing after. Running the suite twice, because a rebase landed on top of a green one, is the
-costliest thing this skill can do.
+A gate result describes one tree, so rebase first and gate once. A rebase after the gates is not
+followed by another gate: the rebased branch is pushed, and CI checks it while the rest of the work
+goes on (item 10). CI runs the same checks on the pushed branch, so a second local run repeats them
+while the work waits.
 
 1. `git fetch upstream`, then `git rebase upstream/main` in the integration worktree. Note
    `git rev-parse upstream/main` as the gated base.
@@ -460,11 +461,16 @@ costliest thing this skill can do.
    and cite that issue in a `<details>` block
    ([GAP-001](../../../docs/best-practices/gaps.md#GAP-001)). A compile error, a lint or a formatting diff is never
    a flake. Never re-run the whole gate hoping for green.
-10. A rebase after the gates leaves the result standing only when it had no conflict, upstream
-    gained nothing in a file the branch touches or the interface it calls, and nothing in
-    manifests, lockfiles or build config. Say in the test plan that the gates ran on `<sha>` and the
-    branch was then rebased onto `<sha>` over changes that do not reach the diff. Otherwise re-run
-    what the new changes reach.
+10. A rebase after the gates is followed by neither the per-commit build of item 3 nor the gates of
+    item 6, whatever upstream gained. `... open` refuses a branch that is not on `upstream/main`, so
+    when `upstream/main` has moved since item 1, run `git fetch upstream` and
+    `git rebase upstream/main`, then go on to step 7. CI checks the rebased tree after the push, in
+    parallel with the work that is left. A failure it reports is fixed in a fix round
+    ([step 8](#8-wait-for-the-checks-and-the-review)) as a new commit on top, and `... push <pr>`
+    pushes it over the head it fetched with `--force-with-lease`, as it does a rebase that rewrote
+    the pushed commits. After a conflict, run only what the resolved files reach, as step 4, item 5
+    says. Say in the test plan that the gates ran on `<sha>`, that the branch was then rebased onto
+    `<sha>` and pushed without them, and that CI is the check of the rebased tree.
 11. For a change under `crates/tui/`, capture the screen it produces: drive the client with
     `python3 contrib/drive_tui.py --raw` and replay the capture with
     `python3 contrib/terminal-screenshot.py --strict` at the same `--cols` and `--rows`. Paste
@@ -493,8 +499,9 @@ title as one sentence naming what changes for a person, with no prefix, issue nu
 the integration branch and opens the pull request, not a draft, with no labels, assigned to `@me`.
 `<first-line-issue>` is the number on the body's first line. It stops when the worktree is dirty,
 the branch is not on `upstream/main`, or the body lacks the shape; fix
-what it says. Where a commit bypassed the hook, the body opens with the callout, and a comment on
-the pull request repeats it once the pull request is open
+what it says. A branch that is not on `upstream/main` is rebased as step 6, item 10 says, with no
+new gate, and `open` is run again. Where a commit bypassed the hook, the body opens with the
+callout, and a comment on the pull request repeats it once the pull request is open
 ([Dependency changes](#dependency-changes-and-hook-bypasses), item 5).
 
 Check the body first where a brave-dev-loop checkout exists, from the worktree:
@@ -733,5 +740,5 @@ this order:
   it and the replies posted, and how the loop ended (approved, the review limit, a round that pushed
   nothing, a timeout with the review still pending, or merged or closed);
 - the pull requests in the list that were left alone;
-- the gates that ran and the ones skipped, each flake named, and each test's evidence as
-  demonstrated or reasoned only.
+- the gates that ran and the ones skipped, each flake named, each test's evidence as
+  demonstrated or reasoned only, and any rebase that was pushed after the gates without them.

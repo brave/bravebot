@@ -379,6 +379,10 @@ pub struct Running {
     /// `None` where the line named neither, which is every loop but one somebody dropped on or
     /// pasted into.
     settled: Option<String>,
+    /// Where the names of every tick are read from: the line the box showed when this was typed,
+    /// markers included, so a tick reads the names the person typed and not the words a paste stood
+    /// for (NAME-12). Nothing for a loop no box line started.
+    names: crate::state::NamesFrom,
     pacing: Pacing,
     began: Instant,
     /// When the next tick is due, or `None` while a tick is in flight or a self-paced turn has
@@ -405,6 +409,7 @@ impl Running {
             pasted: Vec::new(),
             attached: Vec::new(),
             settled: None,
+            names: crate::state::NamesFrom::nothing(),
             pacing: request.pacing,
             began: Instant::now(),
             due: None,
@@ -430,6 +435,17 @@ impl Running {
     /// Whether this sends its line once and goes, rather than repeating it.
     pub fn once(&self) -> bool {
         matches!(self.pacing, Pacing::Once(_))
+    }
+
+    /// Keep where the names of every tick are read from (NAME-12).
+    pub fn names_as(mut self, names: crate::state::NamesFrom) -> Self {
+        self.names = names;
+        self
+    }
+
+    /// Where the names of every tick are read from.
+    pub fn names(&self) -> &crate::state::NamesFrom {
+        &self.names
     }
 
     /// Carry what the line named, for the first tick and no other.
@@ -473,6 +489,7 @@ impl Running {
             pasted: Vec::new(),
             attached: Vec::new(),
             settled: None,
+            names: crate::state::NamesFrom::nothing(),
             pacing: Pacing::SelfPaced,
             began: now,
             due: now.checked_add(wakeup.after),

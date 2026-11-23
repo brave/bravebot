@@ -25,6 +25,11 @@ Fetching an http or https URL. `url` is routing; the only content argument is th
 reference, unless that release is asked for and made. Where a rule about a host is written and how one is matched is
 [permissions.md](../permissions.md); what a label means is [labels.md](../labels.md).
 
+`web_search` ([web-search.md](web-search.md)) is a separate tool with its own capability and its own
+rule family. Where it is held to [FETCH-8](#FETCH-8) and [FETCH-9](#FETCH-9), and where it differs
+from [FETCH-4](#FETCH-4) by refusing a redirect off its host without a question, is
+[WEBSEARCH-7](web-search.md#WEBSEARCH-7) and [WEBSEARCH-9](web-search.md#WEBSEARCH-9).
+
 ## Why a URL is admissible as routing
 
 A URL is one destination, and a person can read it and say yes or no to it. That is the whole test
@@ -174,7 +179,8 @@ liked, and the answer a person gave would be covering a destination they never s
 the same gate. It is this program operating rather than something a turn asked for, so a `WebFetch`
 rule does not apply to it: a rule about a website must not be able to stop the agent from talking to
 its own backend. The distinction is whether a `fetch_url` call is in flight, which the policy layer
-knows because it set it, and which no reply can influence.
+knows because it set it, and which no reply can influence. A `web_search` call in flight is held to
+its own host by [WEBSEARCH-7](web-search.md#WEBSEARCH-7).
 
 `verified-by: bravebot_core::policy::a_fetch_cannot_be_redirected_to_a_host_nobody_approved`
 `verified-by: bravebot_core::policy::a_denied_host_is_refused_at_the_egress_gate_so_a_redirect_cannot_reach_it`
@@ -309,9 +315,10 @@ The failure names the URL that was asked for, as every failure does ([FETCH-6](#
 address stays inside `bravebot-net`, in the result, the log and the trail alike.
 
 A host written as an address is not a name, and a person approving it approved that address. It is
-fetched, and `localhost` is a name. The check is the fetch's, as [FETCH-4](#FETCH-4)'s is: it does not
-apply to the configured model endpoint or to anything else that is not a `fetch_url` call, so a
-model on loopback is reached.
+fetched, and `localhost` is a name. The check is the fetch's, as [FETCH-4](#FETCH-4)'s is, and a
+`web_search` call is held to it as well ([WEBSEARCH-7](web-search.md#WEBSEARCH-7)): it does not
+apply to the configured model endpoint or to anything else that is not a `fetch_url` or a
+`web_search` call, so a model on loopback is reached.
 
 **Why.** [FETCH-4](#FETCH-4) holds the chain to the host a person was shown, and a host is a string.
 Without this, `docs.example.com` can be made to answer with `169.254.169.254` and reach a service
@@ -353,6 +360,7 @@ proxy need not resolve the world's names.
 `verified-by: bravebot_net::egress::the_same_name_is_reached_when_no_fetch_is_in_flight`
 `verified-by: bravebot_net::egress::an_approved_address_literal_on_this_machine_is_fetched`
 `verified-by: bravebot_core::policy::a_fetch_is_in_flight_from_its_approval_until_it_finishes`
+`verified-by: bravebot_core::policy::a_search_is_in_flight_from_its_approval_until_it_finishes`
 `verified-by: bravebot_agent::turn::a_fetch_to_a_name_that_resolves_to_this_machine_fails_without_reaching_it`
 `verified-by: bravebot_core::permissions::a_domain_rule_and_a_fetched_host_are_compared_in_one_form`
 `verified-by: bravebot_core::permissions::a_rule_and_the_metadata_warning_read_a_host_the_same_way`
@@ -373,6 +381,8 @@ slot, so `read` has nothing to release, and the failure is reported as it is wit
 
 A `read` that is neither `true` nor `false` is refused before the host is asked about, so a person
 is not shown a question for a call that was going to be refused. Absent and null are `false`.
+`web_search` takes the same `read` and is held to the same refusal
+([WEBSEARCH-9](web-search.md#WEBSEARCH-9)).
 
 **Why.** A planner that wants a page it will read has nothing to decide between the fetch and the
 `vet_content` call that follows it where the mode or a check answers that call, and the second round

@@ -425,6 +425,7 @@ dependencies = [
  "bravebot-config",
  "bravebot-core",
  "bravebot-i18n",
+ "bravebot-sandbox",
  "rand 0.8.7",
  "rustix 1.1.6",
  "serde",

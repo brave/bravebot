@@ -24,7 +24,7 @@ guards:
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 19
       - crates/agent/tests/incognito.rs: 1
-      - crates/agent/tests/workspace.rs: 44
+      - crates/agent/tests/workspace.rs: 45
       - crates/aichat/src/anthropic.rs: 6
       - crates/aichat/src/call.rs: 1
       - crates/aichat/src/generate_content.rs: 5
@@ -64,7 +64,7 @@ guards:
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 4
-      - crates/agent/tests/workspace.rs: 71
+      - crates/agent/tests/workspace.rs: 72
       - crates/aichat/tests/client.rs: 14
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
@@ -97,7 +97,7 @@ guards:
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
-      - crates/agent/tests/workspace.rs: 306
+      - crates/agent/tests/workspace.rs: 308
       - crates/core/src/policy.rs: 31
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -172,8 +172,9 @@ guards:
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/servers.rs: 1
       - crates/agent/src/skills.rs: 2
-      - crates/agent/src/tools.rs: 42
+      - crates/agent/src/tools.rs: 43
       - crates/agent/src/tools/recall.rs: 4
+      - crates/agent/src/tools/web_search.rs: 1
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
@@ -240,6 +241,7 @@ guards:
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 18
       - crates/agent/src/tools/link.rs: 1
+      - crates/agent/src/tools/web_search.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
   - symbol: Policy::promote_confined_read
@@ -910,6 +912,17 @@ arrives at all.
     ([PROC-12](processors.md#PROC-12)). The residue is that a plausible remark might still
     persuade somebody to skim the diff it sits above.
   - **Add or drop a trailing newline.**
+  - **Make the processor's request fail.** By content the service refuses, by an answer cut at the
+    token ceiling, by one the service reports as incomplete, or by answering with no bytes at all,
+    which the transport refuses for every processor. The planner is told in a sentence the driver
+    wrote that the request failed, with one word of a closed set the driver wrote (`refused`,
+    `too-long`, `incomplete` or `undecodable`), as it is for every processor. In a manifest, where
+    there is no planner to ask again, a refused, too-long or incomplete request fails the step at
+    once, which ends the run. An undecodable one is an empty reply, asked for once more as it
+    stands instead ([MANIFEST-8](manifest.md#MANIFEST-8)), sharing the one further try the mark
+    left out above already spends: only a second failure, of either kind, ends the run there,
+    which costs an attacker a second paid call for every file they can make the processor answer
+    with nothing.
 
   What is not on the list is the thing that would matter: choosing *which* file is written. That
   stays the planner's choice plus a person's approval, and no amount of steering the text changes
@@ -1289,7 +1302,9 @@ arrives at all.
   the processor was given. The gate compares nothing, its uses are pinned in `guards` as the other
   gates' are, and a second reader of an answer is a moved count. Everything else the crate does is
   `number_in`, and a second comparison of an answer's text elsewhere in it is found by reading the
-  diff.
+  diff. The `fn` does not capture the caller's state, and what stops it keeping a copy of the text
+  for a later call is `the_reader_of_a_number_keeps_nothing_between_calls`, which fails on a
+  `static`, a `thread_local!`, interior mutability, a lock or an atomic in the crate's source.
 
   The driver carries the byte and decides nothing from it. It is stored as a labelled number under
   a reference of its own kind, drawn to the person as digits beside the call it will fill, and put
@@ -1374,32 +1389,46 @@ arrives at all.
   by nothing here. A header, a path suffix or a byte of the body that selects a trigger, an event, a
   flag, a directory or a limit is a violation, and not one of these four.
 
-- **A bounded listing's count of the files left out of each directory it cut is not one of the
-  ten.** A listing with a depth takes at most 200 files from any one directory
-  ([LIST-5](tools/list-files.md#LIST-5)). The walk sorts a directory's files by name, drops each
-  file the include pattern does not match or a permission rule covers, and keeps the first 200 of
-  the rest, so which 200 are kept is decided by the name order that already decides what the cap
-  over the whole walk keeps. The count of files left out is taken after the include pattern and the
-  rules, which the walk applies to every file it reports whether or not a cap applies. A cut
-  directory is recorded under the name its caller passes to `walk_filtered`: `Workspace::list`
-  passes the walk root's name once, `.` when the resolved directory argument is the workspace root
-  and its relative name otherwise, and each recursive call passes the relative name it built for the
-  subdirectory, so no name read from a directory entry is tested to tell the root from a
-  subdirectory. Each cut directory counts as one entry against the cap over the whole walk, in
+- **A bounded listing's counts of the files and the subdirectories left out of each directory it
+  cut are not one of the ten.** A listing with a depth takes at most 200 files and at most 200
+  subdirectories from any one directory ([LIST-5](tools/list-files.md#LIST-5)). The walk sorts a
+  directory's files by name, drops each file the include pattern does not match or a permission
+  rule covers, and keeps the first 200 of the rest, so which 200 are kept is decided by the name
+  order that already decides what the cap over the whole walk keeps. It sorts the directory's
+  subdirectories by name in the same way, and keeps the first 200 of those the walk's existing
+  filters leave (ignored directory names, links, the stores and the permission rules), whether it
+  goes into them or stops at them, from a budget the files do not spend. The count of files left
+  out is taken after the include pattern and the rules, which the walk applies to every file it
+  reports whether or not a cap applies. The count of subdirectories left out is taken after the
+  rules, so a subdirectory a rule covers is not counted, and the include pattern does not apply to
+  directories. A cut directory is recorded under the name its caller passes to `walk_filtered`:
+  `Workspace::list` passes the walk root's name once, `.` when the resolved directory argument is
+  the workspace root and its relative name otherwise, and each recursive call passes the relative
+  name it built for the subdirectory, so no name read from a directory entry is tested to tell the
+  root from a subdirectory. A directory has one record in `partly_listed` however it was cut. The
+  pass over its files adds the record when files were left out, and the pass over its
+  subdirectories adds it when none exists and otherwise adds to the subdirectory count of the one
+  that does. Each cut directory counts as one entry against the cap over the whole walk, in
   `Collected::len` during the walk and in `at_the_cap` after it. `Workspace::list` sets
   `at_the_cap` when the files, the directories stopped at and the cut directories together pass
   that cap, and sets `truncated` to `at_the_cap || !partly_listed.is_empty()`. It sorts the cut
   directories by name and truncates them to what the cap leaves after the files and the directories
-  stopped at, the same sort by name and truncation it applies to those two lists. Each count and
-  `at_the_cap` are released inside the existing release in `list_files`, and each count reaches
-  the planner as a number beside the directory's reference, with no name. The driver branches on
-  the comparison of the files taken from a directory with 200 and on whether its count is above
-  zero, in the walk; on whether any directory was cut and on `at_the_cap`, which together choose
-  the sentences in `list_files` and in `listing_capped_note` (`cut.is_empty() || at_the_cap`); and
-  on each count's value, which `tally` compares with 1 to write "file" or "files". Apart from the
-  include pattern, the rules, the resolved directory argument and the name order above, no name is
-  in any of these conditions. A name in that sentence, or a choice of which directory to cut or how
-  to word the sentence made from a name, is a violation and not covered here.
+  stopped at, the same sort by name and truncation it applies to those two lists. Each pair of
+  counts and `at_the_cap` are released inside the existing release in `list_files`, as a pair of
+  numbers for each directory, and each pair reaches the planner as numbers beside the directory's
+  reference, with no name. The driver branches on the comparison of the files taken from a
+  directory with 200, the comparison of the subdirectories taken from it with 200
+  (`taken_directories >= most` in `walk_filtered`, a count of directory entries kept by the filters
+  above, no name read), whether the count of files left out is above zero, and whether a directory
+  already has a record, in the walk; on whether any directory was cut, whether any cut left files
+  out, whether any left subdirectories out and
+  `at_the_cap`, which together choose the sentences in `list_files` and in `listing_capped_note`
+  (`cut.is_empty() || at_the_cap`); and on each count's value, which `left_out_clause` compares
+  with zero to decide whether to say it and `tally` compares with 1 to write "file" or "files" and
+  "subdirectory" or "subdirectories". Apart from the include pattern, the rules, the fixed list of
+  ignored directory names, the resolved directory argument and the name order above, no name is in
+  any of these conditions. A name in that sentence, or a choice of which directory to cut or how to
+  word the sentence made from a name, is a violation and not covered here.
 
 - **The reason a checkout's refused filesystem entry is named is chosen from the entry's spelling,
   and is not one of the ten.** A `run` is not started while an entry of `sandbox.filesystem.denyRead`

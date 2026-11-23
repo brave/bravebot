@@ -7,7 +7,10 @@
 use crate::command::{Asked, Expansion, Plan, Route, Step, Steps, ValuePart};
 use crate::label::{Confidentiality, Integrity, Label};
 use crate::permissions::{Decision, Ruling};
-use crate::policy::{OutputFacts, RunFacts, RunReason, WriteFacts, WriteReason};
+use crate::policy::{
+    FetchReason, McpReason, McpStanding, OutputFacts, RunFacts, RunReason, SearchReason,
+    WriteFacts, WriteReason,
+};
 use crate::programs::Command;
 use crate::remembered::{Remembered, RememberedArg, RememberedLine, RememberedStep, Shape};
 use std::path::PathBuf;
@@ -693,6 +696,84 @@ pub(crate) open spec fn write_reason_is_sound(facts: WriteFacts, reason: WriteRe
 /// Everything else reaches it as a reference, which names the content and holds none of it.
 pub open spec fn shown_to_the_planner(label: Label, picture: bool) -> bool {
     label.integrity == Integrity::Trusted && !picture
+}
+
+pub(crate) open spec fn fetch_reason_asks(reason: FetchReason) -> bool {
+    match reason {
+        FetchReason::Ruled(ruling) => ruling != Ruling::Allow,
+        FetchReason::Unanswered => true,
+    }
+}
+
+/// A fetch goes unasked only on an `allow` rule for its host. Every other host is asked about,
+/// since nothing else says who a host is (FETCH-2).
+pub(crate) open spec fn fetch_reason_is_sound(rule: Decision, reason: FetchReason) -> bool {
+    (!fetch_reason_asks(reason) <==> rule == Decision::Ruled(Ruling::Allow)) && match reason {
+        FetchReason::Ruled(ruling) => rule == Decision::Ruled(ruling),
+        FetchReason::Unanswered => rule == Decision::Unmatched,
+    }
+}
+
+pub(crate) open spec fn mcp_reason_asks(reason: McpReason) -> bool {
+    match reason {
+        McpReason::Ruled(ruling) => ruling != Ruling::Allow,
+        McpReason::PlanApproved | McpReason::StoppedAsking => false,
+        _ => true,
+    }
+}
+
+/// What deciding whether to ask about a call to a server's tool has to hold.
+///
+/// A server whose declaration asks about every call is asked about whatever a rule or a standing
+/// answer says (SERVERS-21). A call with private arguments is asked about whatever a rule or a
+/// standing answer says, since a rule about which tool may be called is not consent to hand a
+/// server the person's data (SERVERS-7, PERM-9). An `ask` or `deny` rule is never overturned by a
+/// standing answer. A call goes unasked only on an `allow` rule, or, where no rule matched, on an
+/// approved plan or on the person having said to stop asking.
+pub(crate) open spec fn mcp_reason_is_sound(
+    standing: McpStanding,
+    public_arguments: bool,
+    rule: Decision,
+    reason: McpReason,
+) -> bool {
+    let unasked = !mcp_reason_asks(reason);
+    (standing == McpStanding::AskedEveryCall ==> !unasked)
+        && (!public_arguments ==> !unasked)
+        && (rule == Decision::Ruled(Ruling::Ask) || rule == Decision::Ruled(Ruling::Deny)
+        ==> !unasked)
+        && (unasked ==> match reason {
+            McpReason::Ruled(ruling) => rule == Decision::Ruled(ruling) && ruling == Ruling::Allow,
+            McpReason::PlanApproved => rule == Decision::Unmatched
+                && standing == McpStanding::PlanApproved,
+            McpReason::StoppedAsking => rule == Decision::Unmatched
+                && standing == McpStanding::StoppedAsking,
+            _ => false,
+        })
+}
+
+pub(crate) open spec fn search_reason_asks(reason: SearchReason) -> bool {
+    match reason {
+        SearchReason::Ruled(ruling) => ruling != Ruling::Allow,
+        SearchReason::Private | SearchReason::Unanswered => true,
+    }
+}
+
+/// What deciding whether to ask about a web search has to hold.
+///
+/// A search goes unasked only on an `allow` rule while the planner's context is public. A context
+/// that holds private content is asked about whatever a rule says, since a query is the planner's
+/// own words and a rule about searching is not consent to send the person's data (WEBSEARCH-2).
+pub(crate) open spec fn search_reason_is_sound(
+    public_context: bool,
+    rule: Decision,
+    reason: SearchReason,
+) -> bool {
+    (!search_reason_asks(reason) <==> rule == Decision::Ruled(Ruling::Allow) && public_context)
+        && match reason {
+        SearchReason::Private => !public_context,
+        SearchReason::Ruled(ruling) => public_context && rule == Decision::Ruled(ruling),
+        SearchReason::Unanswered => public_context && rule == Decision::Unmatched,
+    }
 }
 
 } // verus!

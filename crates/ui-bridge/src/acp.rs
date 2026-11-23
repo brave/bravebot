@@ -51,9 +51,10 @@ struct Session {
     /// How many prompts this session has sent, which names the next one's `messageId`.
     sent: u64,
     /// What to tell the editor before the first prompt's answer: the file `--settings` named is read
-    /// as a checkout's file (#2599). Said once, because the editor does not know the session id
-    /// until `session/new` has answered, so nothing can be sent to it before then.
-    opening_note: Option<String>,
+    /// as a checkout's file (#2599), and each key the settings dropped or combined (BACKEND-36,
+    /// RETRIEVE-23). Said once, because the editor does not know the session id until `session/new`
+    /// has answered, so nothing can be sent to it before then.
+    opening_notes: Vec<String>,
 }
 
 /// A question put to the editor and not yet answered.
@@ -303,15 +304,25 @@ impl Acp {
         // window's in auto (AUTO-1). An editor's modes are asking, accepting edits and planning, the
         // editor is the person who answers its questions (ACP-5), and it is not offered auto to move
         // back to.
-        let opening_note = made["settingsRules"]["namedWithheld"]
+        let rules = &made["settingsRules"];
+        let opening_notes: Vec<String> = rules["namedWithheld"]
             .as_str()
-            .map(str::to_string);
+            .into_iter()
+            .chain(
+                rules["droppedKeys"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str),
+            )
+            .map(str::to_string)
+            .collect();
         let mut shared = self.lock();
         shared.sessions.insert(
             handle.clone(),
             Session {
                 directory: cwd.to_string(),
-                opening_note,
+                opening_notes,
                 ..Session::default()
             },
         );
@@ -365,9 +376,10 @@ impl Acp {
             held.sent += 1;
             turn["messageId"] = json!(format!("acp-{}", held.sent));
             let directory = held.directory.clone();
-            if let Some(note) = held.opening_note.take() {
+            for note in std::mem::take(&mut held.opening_notes) {
                 say(&mut shared, &session, &note);
             }
+            say_crash_reports_once(&mut shared, &session);
             shared
                 .unasked
                 .remove(&session)
@@ -758,6 +770,8 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
                 .into_iter()
                 .flatten()
                 .map(|row| {
+                    // ACP has pending, in_progress and completed. Any other status, a waiting task
+                    // among them, is sent as pending: it is not being worked on and not finished.
                     let status = match row["status"].as_str() {
                         Some("active") => "in_progress",
                         Some("done") => "completed",
@@ -885,6 +899,22 @@ fn say(shared: &mut Shared, session: &str, text: &str) {
     );
 }
 
+/// Tell the editor's person that crash reports are sent, once (CRASH-12).
+///
+/// A message in the session, because this program has no screen and its standard output is the
+/// protocol: the words reach the editor as a string inside a notification and are never written
+/// outside one. Whether it is due is the answer the terminal and the window ask, which is yes only
+/// for a launch that is reporting and has not said it in any front end, so a person told in one is
+/// not told here. Recorded as it is sent, as the terminal records it, because nothing here learns
+/// whether the editor drew it and the alternative is a line said on every prompt.
+fn say_crash_reports_once(shared: &mut Shared, session: &str) {
+    if !bravebot_backtrace::notice_due() {
+        return;
+    }
+    bravebot_backtrace::notice_given();
+    say(shared, session, bravebot_i18n::t!(crash_reports_notice));
+}
+
 /// Put a bridge question to the editor, or refuse it where it cannot be put.
 fn question(shared: &mut Shared, session: &str, name: &str, data: &Value) {
     let Some(request) = data["request"].as_u64() else {
@@ -999,6 +1029,12 @@ fn text_of<'a>(data: &'a Value, key: &str) -> &'a str {
 /// carried it. Absent from a request an older agent sent, which drew none.
 fn hidden_of(data: &Value) -> usize {
     data["hidden"].as_u64().map_or(0, |n| n as usize)
+}
+
+/// Whether the file has more lines than the preview the bridge carried. Absent from a request that
+/// did not cut a preview, which has nothing more to say.
+fn truncated_of(data: &Value) -> bool {
+    data["truncated"].as_bool().unwrap_or(false)
 }
 
 /// What a check made of the content, read from the verdict word the bridge sent. The checker's own
@@ -1208,6 +1244,7 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
                 text("rule"),
                 check_of(data),
                 text("preview"),
+                truncated_of(data),
                 hidden_of(data),
             )
             .join("\n"),
@@ -2248,6 +2285,40 @@ mod tests {
         assert_eq!(shared.lock().unwrap().unasked.get("t"), Some(&None));
     }
 
+    /// ACP plan entries have three statuses. A task that waits is open work, so it is sent as
+    /// `pending` and never as `in_progress` or `completed`.
+    ///
+    /// Rejects a mapping that sends a waiting task as `in_progress`, which tells the editor work is
+    /// going on, or as `completed`.
+    #[test]
+    fn a_waiting_task_is_sent_to_the_editor_as_pending() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&written);
+        let shared = Arc::new(Mutex::new(Shared {
+            write: Box::new(move |message| sink.lock().unwrap().push(message)),
+            wake: Box::new(|| {}),
+            sessions: HashMap::from([("s".to_string(), Session::default())]),
+            unasked: HashMap::new(),
+            asked: HashMap::new(),
+            next: 0,
+            queued: Vec::new(),
+        }));
+        let rows = json!({ "rows": [
+            { "content": "a", "status": "active" },
+            { "content": "b", "status": "waiting" },
+            { "content": "c", "status": "done" },
+        ] });
+        on_event(&shared, Event::new("todos", "s", rows));
+        let written = written.lock().unwrap();
+        let statuses: Vec<&str> = written[0]["params"]["update"]["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .map(|entry| entry["status"].as_str().expect("status"))
+            .collect();
+        assert_eq!(statuses, ["in_progress", "pending", "completed"]);
+    }
+
     /// PROMPT-1: the title of a call in the editor is the bridge's spelling of the file it names,
     /// so a name that ends in a space is not shown as the one without, and the call still closes.
     #[test]
@@ -2495,6 +2566,41 @@ mod tests {
                         "`{stem}` did not say {hidden} characters drew as nothing above the text: {shown}"
                     ),
                 }
+            }
+        }
+    }
+
+    /// PROMPT-13: the editor's text for a vouch request says the file continues, below the preview
+    /// rows, when the request's preview is the head of a longer file, and says nothing of the kind
+    /// when it is the whole file. The regression it rejects is an editor arm that does not read
+    /// `truncated` from the request, so a 20-line head reads the same as a short file.
+    #[test]
+    fn the_editors_vouch_text_says_the_file_continues_only_when_the_preview_is_cut() {
+        let said = bravebot_i18n::t!(vouch_continues).to_string();
+        for truncated in [true, false] {
+            let vouch = bravebot_agent::confirm::VouchRequest {
+                path: "big.md".to_string(),
+                rule: "/work/big.md".to_string(),
+                preview: "line 1\nline 2".to_string(),
+                label: String::new(),
+                truncated,
+                hidden: 0,
+                verdict: bravebot_core::vetting::Verdict::Safe,
+                reason: None,
+                reason_label: None,
+            };
+            let (_, _, shown) = shown("vouch", crate::wire::vouch_request(6, &vouch));
+            let rows: Vec<&str> = shown.lines().collect();
+            let saying = rows.iter().position(|row| *row == said);
+            let margin = format!("{} line 2", bravebot_approval::QUARANTINE_BAR);
+            let last_preview = rows.iter().rposition(|row| *row == margin);
+            assert!(last_preview.is_some(), "{shown}");
+            match truncated {
+                false => assert!(saying.is_none(), "{shown}"),
+                true => assert!(
+                    saying.is_some() && saying > last_preview,
+                    "the editor did not say the file continues below the preview: {shown}"
+                ),
             }
         }
     }

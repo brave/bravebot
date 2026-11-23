@@ -30,6 +30,9 @@ pub enum Status {
     Pending,
     /// Being worked on now.
     Active,
+    /// Open, and the next step is not the planner's: it waits on a person, a build or another
+    /// outside event. Still outstanding, so it is not struck through.
+    Waiting,
     /// Finished.
     Done,
     /// Dropped without being finished.
@@ -44,6 +47,7 @@ impl Status {
     pub fn parse(text: &str) -> Self {
         match text.trim() {
             "in_progress" | "active" => Self::Active,
+            "waiting" => Self::Waiting,
             "completed" | "done" => Self::Done,
             "cancelled" | "canceled" => Self::Cancelled,
             _ => Self::Pending,
@@ -51,7 +55,13 @@ impl Status {
     }
 
     /// The values the model is told to use.
-    pub const NAMES: [&'static str; 4] = ["pending", "in_progress", "completed", "cancelled"];
+    pub const NAMES: [&'static str; 5] = [
+        "pending",
+        "in_progress",
+        "waiting",
+        "completed",
+        "cancelled",
+    ];
 }
 
 impl fmt::Display for Status {
@@ -59,6 +69,7 @@ impl fmt::Display for Status {
         match self {
             Self::Pending => write!(f, "pending"),
             Self::Active => write!(f, "in_progress"),
+            Self::Waiting => write!(f, "waiting"),
             Self::Done => write!(f, "completed"),
             Self::Cancelled => write!(f, "cancelled"),
         }
@@ -123,6 +134,17 @@ impl List {
             .count()
     }
 
+    /// How many tasks are open and wait on something outside the planner's hands.
+    ///
+    /// Counted apart from [`List::done`] and [`List::cancelled`], and a subset of [`List::open`]:
+    /// a waiting task is still outstanding.
+    pub fn waiting(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|i| i.status == Status::Waiting)
+            .count()
+    }
+
     /// How many tasks are neither finished nor dropped: the rows [`Row::struck`] leaves unstruck.
     ///
     /// Said as what is not struck, so a status added later counts as outstanding, as an
@@ -172,6 +194,8 @@ const DONE_MARKER: &str = "✓";
 const PENDING_MARKER: &str = "■";
 /// Marker for a task dropped without being finished.
 const CANCELLED_MARKER: &str = "✗";
+/// Marker for a task that is open and waits on something outside the planner's hands.
+const WAITING_MARKER: &str = "◇";
 
 /// Shape a list into rows for display.
 ///
@@ -188,6 +212,7 @@ pub fn rows(list: &List) -> Vec<Row> {
             marker: match item.status {
                 Status::Done => DONE_MARKER,
                 Status::Cancelled => CANCELLED_MARKER,
+                Status::Waiting => WAITING_MARKER,
                 Status::Pending | Status::Active => PENDING_MARKER,
             },
             status: item.status,
@@ -295,6 +320,53 @@ mod tests {
         ]);
         assert_eq!(list.open(), 3);
         assert_eq!(List::default().open(), 0);
+    }
+
+    /// TURN-12. Waiting is counted apart from finished and dropped, and is a subset of open: a
+    /// count that folded it into either would tell the planner the list was settled or would hide
+    /// that the open tasks are waiting.
+    #[test]
+    fn a_waiting_task_is_counted_apart_from_done_and_cancelled() {
+        let list = List::new(vec![
+            Item::new("finished", Status::Done),
+            Item::new("dropped", Status::Cancelled),
+            Item::new("waits on a person", Status::Waiting),
+            Item::new("waits on a build", Status::Waiting),
+            Item::new("started", Status::Active),
+        ]);
+        assert_eq!(list.waiting(), 2);
+        assert_eq!(list.open(), 3);
+        assert_eq!(list.done(), 1);
+        assert_eq!(list.cancelled(), 1);
+        assert_eq!(List::default().waiting(), 0);
+    }
+
+    /// A waiting task is outstanding work whose next step is not the planner's, so it stays open
+    /// and unstruck, and it parses from its own name rather than falling to pending.
+    #[test]
+    fn a_waiting_task_is_open_and_not_struck() {
+        assert_eq!(Status::parse("waiting"), Status::Waiting);
+        assert_ne!(Status::parse("waiting"), Status::Pending);
+        assert!(Status::NAMES.contains(&"waiting"));
+        assert_eq!(Status::Waiting.to_string(), "waiting");
+        let list = List::new(vec![
+            Item::new("rerun CI", Status::Waiting),
+            Item::new("finished", Status::Done),
+        ]);
+        assert_eq!(list.open(), 1);
+        let rows = rows(&list);
+        assert_eq!(rows[0].marker, WAITING_MARKER);
+        assert!(!rows[0].struck());
+        assert_eq!(list.done(), 1);
+        assert_eq!(list.cancelled(), 0);
+    }
+
+    /// The waiting mark is its own glyph, so it is not read as running, finished or dropped.
+    #[test]
+    fn the_waiting_marker_differs_from_every_other_marker() {
+        for other in [PENDING_MARKER, DONE_MARKER, CANCELLED_MARKER] {
+            assert_ne!(WAITING_MARKER, other);
+        }
     }
 
     fn with_a_cancelled_task() -> List {

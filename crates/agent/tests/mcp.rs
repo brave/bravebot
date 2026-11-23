@@ -388,6 +388,9 @@ struct Answering {
     /// How long the list questions took, measured here. A loaded machine wakes the sleep late, so
     /// each can take longer than `list_delay`.
     listed_for: std::time::Duration,
+    /// Run while the person is asked about a move, as an edit of the declaration made in another
+    /// window while the question is open.
+    while_moving: Option<Box<dyn FnMut() + Send>>,
 }
 
 impl Answering {
@@ -408,6 +411,7 @@ impl Answering {
             stop: None,
             list_delay: std::time::Duration::ZERO,
             listed_for: std::time::Duration::ZERO,
+            while_moving: None,
         }
     }
 }
@@ -498,6 +502,9 @@ impl Confirmer for Answering {
 
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
         self.moves.push(request.clone());
+        if let Some(edit) = self.while_moving.as_mut() {
+            edit();
+        }
         self.moved
     }
 
@@ -2882,6 +2889,92 @@ fn a_call_answer_two_lets_through_is_drawn_with_what_it_sends() {
     );
 }
 
+/// SERVERS-7: the description a call is put with is the one on the list the person vouched for,
+/// for that server. Two servers list a tool under the same word with different descriptions, and
+/// the second's carries a control character the list drew as a space. Each call is put with the
+/// description its own server's list showed, as that list showed it.
+///
+/// A wrong implementation finds the description by the tool's word alone, so the second server's
+/// call shows the first server's words, or reads the server's own text and not the list the
+/// person vouched for, so the control character reaches the prompt.
+#[test]
+fn a_call_is_put_with_the_description_on_the_list_the_person_vouched_for() {
+    let scratch = Scratch::new("vouched-description");
+    let (weather, weather_bodies) = serve_weather();
+    let (forecasts, forecasts_bodies) = serve_with(
+        Some(json!([{
+            "name": "get_forecast",
+            "description": "The other forecast.\u{1b}[31m Sent red.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        }])),
+        None,
+    );
+    let session = Session::new(
+        vec![
+            reach_as("weather", &weather),
+            reach_as("forecasts", &forecasts),
+        ],
+        scratch.project(),
+        Some(scratch.state()),
+        true,
+        Managed::default(),
+    );
+    let _ = (methods(&weather_bodies), methods(&forecasts_bodies));
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_requests(&[
+            (FORECAST, r#"{"city":"Paris"}"#),
+            ("mcp__forecasts__get_forecast", r#"{"city":"Lyon"}"#),
+        ]),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris and Lyon").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+
+    let vouched = |alias: &str| -> Option<String> {
+        let lists: Vec<_> = confirmer
+            .lists
+            .iter()
+            .filter(|list| list.alias == alias)
+            .collect();
+        let [list] = lists.as_slice() else {
+            panic!("{alias}'s list was not put to the person once: {lists:?}");
+        };
+        let [tool] = list.tools.as_slice() else {
+            panic!("{alias}'s list was drawn as {:?}", list.tools);
+        };
+        tool.description.clone()
+    };
+    assert_eq!(vouched("weather").as_deref(), Some(DESCRIPTION));
+    assert_eq!(
+        vouched("forecasts").as_deref(),
+        Some("The other forecast. [31m Sent red."),
+        "the list drew the control character as a space"
+    );
+    let described: Vec<(String, Option<String>)> = confirmer
+        .calls
+        .iter()
+        .map(|call| (call.name(), call.description.clone()))
+        .collect();
+    assert_eq!(
+        described,
+        [
+            ("weather:get_forecast".to_string(), vouched("weather")),
+            ("forecasts:get_forecast".to_string(), vouched("forecasts")),
+        ],
+        "a call was put with a description other than the one its server's vouched list showed"
+    );
+}
+
 /// A call to a server's tool that no offer holds is answered as an unknown name, and drawn from
 /// the name alone. That is how a resumed session draws every recorded call to a server's tool,
 /// since the record keeps no offer, so the live row and the resumed one describe it alike.
@@ -2954,6 +3047,72 @@ fn a_call_carrying_a_credential_is_drawn_without_its_arguments() {
     );
 }
 
+/// SERVERS-7, VIEW-25. A call an `allow` rule decides and a call made under bypass put no prompt
+/// in front of the person either, so the transcript row is the one place they see which server's
+/// tool was called and what it was sent. Each road draws `alias:tool` and the arguments of the
+/// call, from the moment it is announced to the moment it is summarised, as an asked call does.
+/// The regression it rejects is a row for a call nobody was asked about that names only the tool
+/// or leaves the arguments off.
+#[test]
+fn an_allow_ruled_or_bypassed_call_is_drawn_with_the_alias_and_what_it_sends() {
+    for bypassing in [false, true] {
+        let case = if bypassing { "bypass" } else { "allow rule" };
+        let scratch = Scratch::new(if bypassing {
+            "bypass-drawn"
+        } else {
+            "allow-drawn"
+        });
+        let (url, server) = serve_weather();
+        let session = session(&url, &scratch, true);
+        let _ = methods(&server);
+
+        let (endpoint, _chat) = serve_chat(vec![
+            tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+            reply_with("done"),
+        ]);
+        let list = if bypassing {
+            Decision::Reject
+        } else {
+            Decision::Approve
+        };
+        let mut inner = Answering::new(list, CallDecision::reject());
+        let task = Task::new("the forecast").with_mcp(Some(session));
+        let reporter = if bypassing {
+            let mut confirmer =
+                bravebot_agent::Confining::new(&mut inner, PermissionMode::Bypass, false);
+            reported_turn(
+                &endpoint,
+                &scratch.project(),
+                task.with_permission_mode(PermissionMode::Bypass),
+                &mut confirmer,
+            )
+        } else {
+            reported_turn(
+                &endpoint,
+                &scratch.project(),
+                task.with_permissions(allowing_the_weather()),
+                &mut inner,
+            )
+        };
+        assert!(
+            inner.calls.is_empty(),
+            "{case}: the call was put to the person, so this is not the unasked road"
+        );
+        let called: Vec<String> = server.try_iter().collect();
+        assert!(
+            called
+                .last()
+                .is_some_and(|sent| sent.contains(r#""city":"Lyon""#)),
+            "{case}: the server was sent {called:?}"
+        );
+        assert_eq!(
+            drawn_calls(&reporter),
+            vec![r#"MCP(weather:get_forecast {"city":"Lyon"})"#.to_string(); 2],
+            "{case}"
+        );
+    }
+}
+
 /// Answer 2 is about the project the session is in when it is read, so once the session has moved
 /// to another one the next call asks again and its answer 2 names the new project.
 #[test]
@@ -2995,6 +3154,94 @@ fn answer_two_follows_the_session_to_another_project() {
     let recorded = Standing::read(&scratch.state());
     assert!(recorded.covers("weather", "get_forecast", &scratch.project()));
     assert!(recorded.covers("weather", "get_forecast", &elsewhere));
+}
+
+/// SERVERS-7. The project answer 2 records is the workspace root with its links followed, so a
+/// session started through a link to the project files its answer under the real path, and the
+/// call covered by it is the one made from that path. The session here is reached as a start
+/// reaches it, from a root that is a link; the regression it rejects is a start that keeps the
+/// root as it was given, which files the answer under the link.
+#[cfg(unix)]
+#[test]
+fn answer_two_is_filed_under_the_workspace_root_with_its_links_followed() {
+    let scratch = Scratch::new("standing-linked");
+    let link = scratch.path.join("linked");
+    std::os::unix::fs::symlink(scratch.project(), &link).expect("link the project");
+    let resolved = scratch
+        .project()
+        .canonicalize()
+        .expect("the project resolves");
+    assert_ne!(
+        link, resolved,
+        "the root is not a link, so nothing is shown"
+    );
+    let (url, server) = serve_weather();
+
+    let declared = Declaration::http(url.clone()).expect("http declaration");
+    let mut declarations = Declarations::default();
+    declarations.insert("weather", &declared);
+    std::fs::write(declarations_file(&scratch.state()), declarations.to_text())
+        .expect("write mcp.json");
+    let mut approvals = Approvals::default();
+    approvals.approve("weather", declared.digest());
+    std::fs::write(approvals_file(&scratch.state()), approvals.to_text())
+        .expect("write mcp-approved");
+    std::fs::create_dir_all(scratch.project().join(".bravebot")).expect("settings directory");
+    std::fs::write(
+        scratch.project().join(".bravebot/settings.json"),
+        r#"{"mcp": {"request": ["weather"]}}"#,
+    )
+    .expect("write settings");
+
+    let settings = bravebot_config::Settings::layered(None, Some(&scratch.project()), None);
+    let machine = bravebot_agent::servers::Machine {
+        home: bravebot_agent::servers::Home {
+            directory: Some(scratch.state()),
+            writable: true,
+        },
+        managed: Managed::default(),
+    };
+    let mut person = bravebot_agent::servers::Person {
+        answers: &b""[..],
+        screen: Vec::new(),
+        present: true,
+    };
+    let reached = bravebot_agent::servers::reconnect_on(
+        &settings,
+        &link,
+        &["weather".to_string()],
+        &machine,
+        bravebot_agent::servers::Asking::Bypass,
+        &mut person,
+        bravebot_sandbox::Stream::Null,
+    );
+    let session = reached
+        .session()
+        .expect("the session reached the requested server");
+    let _ = methods(&server);
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut standing = Answering::new(Decision::Approve, CallDecision::approve_and_stand());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(session)),
+        &mut standing,
+    );
+    assert_eq!(standing.calls.len(), 1, "the call was not asked about");
+
+    let recorded = Standing::read(&scratch.state());
+    assert!(
+        recorded.covers("weather", "get_forecast", &resolved),
+        "answer 2 was not filed under the path with its links followed"
+    );
+    assert!(
+        !recorded.covers("weather", "get_forecast", &link),
+        "answer 2 was filed under the link the session was started through"
+    );
 }
 
 /// A record that is there and cannot be read is left as it is. A yes still offers the list and
@@ -3044,6 +3291,72 @@ fn a_record_that_cannot_be_read_is_not_written_over() {
             file.display()
         );
     }
+}
+
+/// SERVERS-7. A call whose answer 2 could not be recorded is still made, and the person is told
+/// once that it was and that the next call asks again. The control is the same answer 2 over a
+/// record that can be written, which says nothing of the kind: the notice is what tells a person
+/// the stop-asking answer was not kept, and a turn without it leaves them expecting not to be
+/// asked.
+#[test]
+fn a_call_whose_answer_two_could_not_be_recorded_says_the_next_call_asks_again() {
+    let flat = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let noticed = |name: &str, unreadable: bool| {
+        let scratch = Scratch::new(name);
+        if unreadable {
+            let too_large = " ".repeat(64 * 1024 + 1);
+            for file in [
+                approvals_file(&scratch.state()),
+                tools_file(&scratch.state()),
+            ] {
+                std::fs::write(file, &too_large).expect("write the record");
+            }
+        }
+        let (url, server) = serve_weather();
+        let session = session(&url, &scratch, true);
+        let _ = methods(&server);
+        let (endpoint, _chat) = serve_chat(vec![
+            tool_request(FORECAST, r#"{"city":"Paris"}"#),
+            reply_with("done"),
+        ]);
+        let mut standing = Answering::new(Decision::Approve, CallDecision::approve_and_stand());
+        let notices = noticed_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new("the forecast").with_mcp(Some(session)),
+            &mut standing,
+        );
+        assert_eq!(
+            standing.calls.len(),
+            1,
+            "the call was not put to the person"
+        );
+        assert_eq!(
+            server.try_iter().count(),
+            1,
+            "the call was not made, so the notice would be about nothing"
+        );
+        notices
+            .iter()
+            .map(|notice| flat(notice))
+            .filter(|notice| notice.contains("weather:get_forecast was called"))
+            .collect::<Vec<_>>()
+    };
+
+    let writable = noticed("not-recorded-control", false);
+    assert!(
+        writable.is_empty(),
+        "a recorded answer 2 was reported as not recorded: {writable:?}"
+    );
+
+    let unreadable = noticed("not-recorded", true);
+    let [notice] = unreadable.as_slice() else {
+        panic!("the notices naming the call were {unreadable:?}");
+    };
+    assert!(
+        notice.contains("the next call asks again"),
+        "the notice does not say the next call asks again: {notice}"
+    );
 }
 
 /// A list is put to the person every session: a yes records nothing, and a `tools` line that
@@ -3126,6 +3439,7 @@ fn bypassing_answers_both_prompts_and_records_nothing() {
         reply_with("done"),
     ]);
     let mut refusing = Answering::new(Decision::Reject, CallDecision::approve_and_stand());
+    let approvals_before = std::fs::read(approvals_file(&scratch.state())).ok();
     let mut confirmer =
         bravebot_agent::Confining::new(&mut refusing, PermissionMode::Bypass, false);
     run_turn(
@@ -3153,11 +3467,10 @@ fn bypassing_answers_both_prompts_and_records_nothing() {
             .any(|body| body.contains(A_CHECK_ASKING) && body.contains(DESCRIPTION)),
         "a list nobody reads was checked"
     );
-    assert!(
-        !std::fs::read_to_string(approvals_file(&scratch.state()))
-            .unwrap_or_default()
-            .contains("tools"),
-        "bypassing recorded a vouch for the list"
+    assert_eq!(
+        std::fs::read(approvals_file(&scratch.state())).ok(),
+        approvals_before,
+        "bypassing wrote to the approvals file, which was absent before the turn"
     );
     assert!(
         !tools_file(&scratch.state()).exists(),
@@ -3181,6 +3494,7 @@ fn screening_asked_for_makes_no_check_of_a_servers_list_under_bypass() {
         reply_with("done"),
     ]);
     let mut refusing = Answering::new(Decision::Reject, CallDecision::approve_and_stand());
+    let approvals_before = std::fs::read(approvals_file(&scratch.state())).ok();
     let mut confirmer = bravebot_agent::Confining::new(&mut refusing, PermissionMode::Bypass, true);
     run_turn(
         &endpoint,
@@ -3204,16 +3518,118 @@ fn screening_asked_for_makes_no_check_of_a_servers_list_under_bypass() {
         "a list nobody reads was checked because the run asked for screening"
     );
     assert_eq!(methods(&server), ["tools/call"], "the call was not made");
-    assert!(
-        !std::fs::read_to_string(approvals_file(&scratch.state()))
-            .unwrap_or_default()
-            .contains("tools"),
-        "bypassing recorded a vouch for the list"
+    assert_eq!(
+        std::fs::read(approvals_file(&scratch.state())).ok(),
+        approvals_before,
+        "bypassing wrote to the approvals file, which was absent before the turn"
     );
     assert!(
         !tools_file(&scratch.state()).exists(),
         "bypassing recorded a standing answer"
     );
+}
+
+/// A mock chat server like [`serve_chat`], except that a check whose request holds the server's
+/// [`DESCRIPTION`] (the check of a list) is answered with `list_check`, a `reply_with` body.
+fn serve_chat_checking_the_list(
+    replies: Vec<String>,
+    list_check: String,
+) -> (String, mpsc::Receiver<String>) {
+    let listener = open_files::bind_mock_server();
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut replies = replies.into_iter();
+        while let Ok((mut stream, _)) = listener.accept() {
+            let body = body_of(&stream);
+            let _ = sender.send(body.clone());
+            let reply = if body.contains(A_CHECK_ASKING) && body.contains(DESCRIPTION) {
+                list_check.clone()
+            } else if body.contains(A_CHECK_ASKING) {
+                reply_with(
+                    r#"{\"verdict\": \"safe\", \"reason\": \"nothing addressed to a reader\"}"#,
+                )
+            } else {
+                match replies.next() {
+                    Some(reply) => reply,
+                    None => {
+                        let refusal = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                        let _ = stream.write_all(refusal.as_bytes());
+                        continue;
+                    }
+                }
+            };
+            let frames = as_sse(&reply);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                frames.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+/// In a mode that asks, a server's list is sent whole to a check before the person is asked about
+/// it, and the question carries the word and the sentence that check gave (CHECK-10).
+///
+/// The wrong implementation stops checking a list where the person is asked, so the question
+/// carries the driver's own `inconclusive` filler and no check request holds the list. The check
+/// says `unsafe` with a sentence so that the word on the question can only be the check's: a
+/// question built from the `safe` that every other check here gets, or from the filler, differs.
+#[test]
+fn a_servers_list_is_checked_whole_before_it_is_asked_about() {
+    for mode in [PermissionMode::Ask, PermissionMode::AcceptEdits] {
+        let scratch = Scratch::new(&format!("list-checked-{mode:?}"));
+        let (url, server) = serve_weather();
+        let session = session(&url, &scratch, true);
+        let _ = methods(&server);
+
+        let (endpoint, chat) = serve_chat_checking_the_list(
+            vec![reply_with("done")],
+            reply_with(
+                r#"{\"verdict\": \"unsafe\", \"reason\": \"REASON-MARKER-FROM-THE-LIST-CHECK\"}"#,
+            ),
+        );
+        let mut asking = Answering::new(Decision::Reject, CallDecision::reject());
+        run_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new("the forecast")
+                .with_mcp(Some(session))
+                .with_permission_mode(mode),
+            &mut asking,
+        );
+
+        let sent: Vec<String> = chat.try_iter().collect();
+        let checks_of_the_list = sent
+            .iter()
+            .filter(|body| body.contains(A_CHECK_ASKING) && body.contains(DESCRIPTION))
+            .count();
+        assert_eq!(
+            checks_of_the_list, 1,
+            "{mode:?}: the list was not sent whole to one check before it was asked about"
+        );
+        let [put] = asking.lists.as_slice() else {
+            panic!(
+                "{mode:?}: expected one list question, got {}",
+                asking.lists.len()
+            );
+        };
+        assert_eq!(
+            put.verdict,
+            bravebot_core::vetting::Verdict::Unsafe,
+            "{mode:?}: the question does not carry the word the check gave"
+        );
+        assert!(
+            put.reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("REASON-MARKER-FROM-THE-LIST-CHECK")),
+            "{mode:?}: the question does not carry the sentence the check wrote: {:?}",
+            put.reason
+        );
+    }
 }
 
 /// A list offered in bypass stays offered once the session cycles out of the mode, since its words
@@ -3300,6 +3716,67 @@ fn a_session_that_writes_nothing_records_neither_answer() {
         !tools_file(&scratch.state()).exists(),
         "answer 2 was written"
     );
+}
+
+/// SERVERS-7. A session that may write but has no state directory has nowhere to keep answer 2, so
+/// the call prompt does not offer it, an answer that asks for it records nothing, and the next
+/// call is asked again. The control is the same turn over a session with a state directory, where
+/// answer 2 is offered, which makes the missing directory the thing under test.
+#[test]
+fn a_session_with_no_state_directory_does_not_offer_or_record_answer_two() {
+    let scratch = Scratch::new("no-state-directory");
+    let (url, server) = serve_weather();
+    let with_directory = session(&url, &scratch, true);
+    let without_directory = Session::new(
+        vec![reach(&url)],
+        scratch.project(),
+        None,
+        true,
+        Managed::default(),
+    );
+    let _ = methods(&server);
+
+    let mut offered = Answering::new(Decision::Approve, CallDecision::approve());
+    forecast_over(
+        &with_directory,
+        &server,
+        &scratch,
+        bravebot_core::permissions::Permissions::default(),
+        &mut offered,
+    );
+    assert!(
+        offered.calls[0].may_stand,
+        "control: answer 2 was not offered where a state directory can keep it"
+    );
+
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve_and_stand());
+    for turn in 1..=2 {
+        let made = forecast_over(
+            &without_directory,
+            &server,
+            &scratch,
+            bravebot_core::permissions::Permissions::default(),
+            &mut confirmer,
+        );
+        assert_eq!(
+            made,
+            ["tools/call"],
+            "turn {turn}: the approved call was not made"
+        );
+    }
+    assert_eq!(
+        confirmer.calls.len(),
+        2,
+        "the second call was not asked again: {:?}",
+        confirmer.calls
+    );
+    for (turn, request) in confirmer.calls.iter().enumerate() {
+        assert!(
+            !request.may_stand,
+            "call {}: answer 2 was offered where there is no state directory",
+            turn + 1
+        );
+    }
 }
 
 /// One turn calling the forecast in `scratch`'s project over `session`, with `permissions` laid
@@ -3444,6 +3921,120 @@ fn a_deny_rule_refuses_a_call_to_a_server_asked_every_call_before_anybody_is_ask
     }
 }
 
+/// SERVERS-13, SERVERS-21. A `deny` rule still refuses a call to a server under bypass, for a server
+/// asked every call and for one not. The mode answers questions and a rule is not one: the call is
+/// refused before anything is asked, the server is sent no `tools/call`, the planner is told
+/// `refused:`, and the trail holds the rule's refusal under `mcp_call`. The control for each is the
+/// same server with no rule under the same mode, where the call is made (and put to the person
+/// once for the server asked every call, since bypassing does not answer that one), so the refusal
+/// is the rule's and not a mode that calls nothing.
+///
+/// Rejects a bypass that drops the rules of the settings, which a person's `deny` entry is.
+#[test]
+fn a_deny_rule_refuses_a_call_to_a_server_under_bypass_before_anybody_is_asked() {
+    struct Bypassed {
+        trail: RecordingSink,
+        told: Vec<String>,
+        asked: usize,
+        reached: usize,
+    }
+    let turn = |name: &str,
+                asking_every_call: bool,
+                permissions: bravebot_core::permissions::Permissions| {
+        let scratch = Scratch::new(name);
+        let (url, server) = serve_weather();
+        let session = match asking_every_call {
+            true => session_asking_every_call(&url, &scratch, true),
+            false => session(&url, &scratch, true),
+        };
+        let _ = methods(&server);
+        let (endpoint, chat) = serve_chat(vec![
+            tool_request(FORECAST, r#"{"city":"Paris"}"#),
+            reply_with("fine"),
+        ]);
+        let mut inner = Answering::new(Decision::Approve, CallDecision::approve());
+        let mut confirmer =
+            bravebot_agent::Confining::new(&mut inner, PermissionMode::Bypass, false);
+        let workspace = Workspace::new(scratch.project()).expect("workspace");
+        let mut trail = RecordingSink::new();
+        turns::run(
+            &config_for(&endpoint),
+            &Egress::new(),
+            &workspace,
+            &Task::new("what is the forecast")
+                .with_mcp(Some(session))
+                .with_permissions(permissions)
+                .with_permission_mode(PermissionMode::Bypass),
+            &mut confirmer,
+            &mut trail,
+        )
+        .expect("the turn runs");
+        let sent = rounds(&chat);
+        Bypassed {
+            trail,
+            told: tool_results(sent.last().expect("the last round")),
+            asked: inner.calls.len(),
+            reached: methods(&server)
+                .iter()
+                .filter(|method| *method == "tools/call")
+                .count(),
+        }
+    };
+    let deny = || {
+        let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+            &["Mcp(weather:get_forecast)".to_string()],
+            &[],
+            &[],
+            &bravebot_core::permissions::Anchors::none(),
+        );
+        assert!(rejected.is_empty(), "the rule in this test did not parse");
+        permissions
+    };
+
+    for (name, asking_every_call) in [
+        ("bypass-denied-every-call", true),
+        ("bypass-denied-ordinary", false),
+    ] {
+        let control = turn(
+            &format!("{name}-no-rule"),
+            asking_every_call,
+            Default::default(),
+        );
+        assert_eq!(
+            control.reached, 1,
+            "asking_every_call {asking_every_call}: bypassing did not make the call with no rule, so this says nothing"
+        );
+        assert_eq!(
+            control.asked,
+            usize::from(asking_every_call),
+            "asking_every_call {asking_every_call}: the control was asked a different number of times"
+        );
+
+        let denied = turn(name, asking_every_call, deny());
+        assert_eq!(
+            denied.asked, 0,
+            "asking_every_call {asking_every_call}: a denied call was put to the person under bypass"
+        );
+        assert_eq!(
+            denied.reached, 0,
+            "asking_every_call {asking_every_call}: a denied call reached the server under bypass"
+        );
+        assert_eq!(
+            refused_under(&denied.trail, "mcp_call").len(),
+            1,
+            "asking_every_call {asking_every_call}: the rule's refusal was not recorded once"
+        );
+        assert!(
+            denied
+                .told
+                .iter()
+                .any(|said| said.contains("\n\nrefused: ")),
+            "asking_every_call {asking_every_call}: the planner was not told the call was refused: {:?}",
+            denied.told
+        );
+    }
+}
+
 /// SERVERS-21. An answer 2 given at a call to a server declared to ask every call is a yes to that
 /// call and records nothing, so the next call asks again. The regression it rejects is a prompt
 /// that does not offer answer 2 while the turn still writes it down when one arrives.
@@ -3515,6 +4106,67 @@ fn bypassing_does_not_answer_a_call_to_a_server_asked_every_call() {
     }
 }
 
+/// SERVERS-13, SERVERS-9. A capability is configuration and not a prompt, so bypassing does not
+/// call a server the run holds no grant naming. The session reached the weather and the docs
+/// servers and the turn holds a grant for the weather one only. The planner calls both tools in
+/// one round: the docs tool is not offered, so its call is answered as any unknown name is and the
+/// docs server is sent no call. The control is the weather call of the same round, which bypassing
+/// answers unasked, so the refusal is the missing grant's and not a mode that calls nothing.
+///
+/// Rejects a bypass that grants every server the session reached.
+#[test]
+fn bypassing_does_not_call_a_server_the_run_holds_no_grant_for() {
+    let scratch = Scratch::new("bypass-no-grant");
+    let (session, [weather, docs]) = two_servers(&scratch);
+    let _ = (methods(&weather), methods(&docs));
+    let (endpoint, chat) = serve_chat(vec![
+        tool_requests(&[
+            (DOCS_TOOL, r#"{"query":"x"}"#),
+            (FORECAST, r#"{"city":"Paris"}"#),
+        ]),
+        reply_with("done"),
+    ]);
+    let mut inner = Answering::new(Decision::Reject, CallDecision::reject());
+    let mut confirmer = bravebot_agent::Confining::new(&mut inner, PermissionMode::Bypass, false);
+
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast")
+            .with_mcp(Some(session))
+            .with_servers(vec![ServerAlias::new("weather")])
+            .with_permission_mode(PermissionMode::Bypass),
+        &mut confirmer,
+    );
+
+    assert_eq!(
+        methods(&weather)
+            .iter()
+            .filter(|method| *method == "tools/call")
+            .count(),
+        1,
+        "the weather call was not answered by bypassing, so this says nothing"
+    );
+    assert_eq!(
+        methods(&docs),
+        Vec::<String>::new(),
+        "the docs server was sent something though the run holds no grant for it"
+    );
+    assert!(
+        inner.calls.is_empty() && inner.lists.is_empty(),
+        "bypassing put a question to the person: {:?} {:?}",
+        inner.lists,
+        inner.calls
+    );
+    let sent = rounds(&chat);
+    let told = tool_results(sent.last().expect("the last round"));
+    assert!(
+        told.iter()
+            .any(|said| said.contains("docs") && said.contains("error:")),
+        "the docs call was not answered with a refusal: {told:?}"
+    );
+}
+
 /// SERVERS-21. A run with nobody to ask refuses a call to a server declared to ask every call even
 /// where answer 2 was given for the tool in this project, which carries through such a run for a
 /// server not declared so (SERVERS-7). Nothing is sent to the server.
@@ -3564,6 +4216,117 @@ fn a_run_with_nobody_to_ask_refuses_a_call_to_a_server_asked_every_call() {
     assert!(
         made.is_empty(),
         "a call nobody could be asked was made: {made:?}"
+    );
+}
+
+/// SERVERS-7. A run with nobody to ask refuses a call that would ask, to a server not declared to
+/// ask every call: no rule names it and no answer 2 covers it, so the call is the person's to
+/// decide and nobody is there. Nothing is sent to the server. The list was vouched for by a person
+/// first, who then refused the call, so the offered tool is what the later run decides about. The
+/// control is the same run under a rule naming the server, which makes the call, so the refusal is
+/// the answer to the question and not a tool that was never offered.
+#[test]
+fn a_run_with_nobody_to_ask_refuses_a_call_that_would_ask_to_an_ordinary_server() {
+    let scratch = Scratch::new("one-shot-asks");
+    let (url, server) = serve_weather();
+    let ordinary = session(&url, &scratch, true);
+
+    let mut vouching = Answering::new(Decision::Approve, CallDecision::reject());
+    let made = forecast_over(
+        &ordinary,
+        &server,
+        &scratch,
+        Default::default(),
+        &mut vouching,
+    );
+    assert_eq!(
+        vouching.calls.len(),
+        1,
+        "the call was not one that asks, so the rows below prove nothing"
+    );
+    assert!(made.is_empty(), "the refused call was made: {made:?}");
+
+    let made = forecast_over(
+        &ordinary,
+        &server,
+        &scratch,
+        allowing_the_weather(),
+        &mut Unattended,
+    );
+    assert_eq!(made, ["tools/call"], "the control was refused");
+
+    let made = forecast_over(
+        &ordinary,
+        &server,
+        &scratch,
+        Default::default(),
+        &mut Unattended,
+    );
+    assert!(
+        made.is_empty(),
+        "a call nobody could be asked about was made: {made:?}"
+    );
+}
+
+/// SERVERS-7, PERM-9. A call asked because its arguments are private is refused in a run with nobody to
+/// ask, in the turn after the answer was vetted and where a rule allows the server. The vet turn
+/// is answered by a person who says yes to everything, so the server's answer is private and the
+/// next turn of the conversation holds it; its call is the one that asks whatever the rule says,
+/// and no server is reached for it.
+#[test]
+fn a_run_with_nobody_to_ask_refuses_a_call_asked_for_private_arguments() {
+    let scratch = Scratch::new("one-shot-private");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        tool_request(
+            "vet_content",
+            r#"{"ref":"ref:1","expects":"the forecast for Paris"}"#,
+        ),
+        reply_with("done"),
+        tool_request(FORECAST, r#"{"city":"Nice"}"#),
+        reply_with("done again"),
+    ]);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut vetting = Answering::new(Decision::Approve, CallDecision::approve());
+    vetting.vetted = Decision::Approve;
+    trusted_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast")
+            .with_mcp(Some(session.clone()))
+            .with_permissions(allowing_the_weather()),
+        &mut conversation,
+        &mut vetting,
+    );
+    assert_eq!(vetting.vets, 1, "the answer was not put to the person");
+    assert_eq!(
+        methods(&server),
+        ["tools/call"],
+        "the call before the vet was not made under the rule"
+    );
+
+    trusted_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("and for Nice")
+            .with_mcp(Some(session))
+            .with_permissions(allowing_the_weather()),
+        &mut conversation,
+        &mut Unattended,
+    );
+    assert_eq!(
+        rounds(&chat).len(),
+        5,
+        "the second turn did not ask for the call"
+    );
+    let made = methods(&server);
+    assert!(
+        made.is_empty(),
+        "a call asked for private arguments was made with nobody to ask: {made:?}"
     );
 }
 
@@ -3673,6 +4436,12 @@ fn a_rule_decides_a_call_before_the_prompt() {
         if !reached {
             let sent = rounds(&chat);
             assert!(sent[1].contains("refused"), "{}", sent[1]);
+            // The planner is told not to try the call again (SERVERS-7).
+            assert!(
+                sent[1].contains("Do not retry weather:get_forecast"),
+                "the refusal did not tell the planner not to retry: {}",
+                sent[1]
+            );
         }
     }
 }
@@ -3687,6 +4456,92 @@ fn allowing_the_weather() -> bravebot_core::permissions::Permissions {
     );
     assert!(rejected.is_empty(), "the rule in this test did not parse");
     permissions
+}
+
+/// The rules named, as `deny` and `ask` lists of `Mcp(..)` specifiers.
+fn weather_rules(deny: &[&str], ask: &[&str]) -> bravebot_core::permissions::Permissions {
+    let owned = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &owned(deny),
+        &owned(ask),
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "a rule in this test did not parse");
+    permissions
+}
+
+/// SERVERS-7. A rule somebody wrote is not undone by answer 2: an `ask` rule puts a call to the
+/// person though the tool was stood for in this project, and a `deny` rule refuses it with nobody
+/// asked and nothing sent to the server. The control is the same record with no rule, where the
+/// call is made with nobody asked, so the rules are the thing under test.
+#[test]
+fn a_rule_wins_over_a_standing_answer_for_the_tool() {
+    let scratch = Scratch::new("rule-over-standing");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+
+    let mut recording = Answering::new(Decision::Approve, CallDecision::approve_and_stand());
+    forecast_over(
+        &session,
+        &server,
+        &scratch,
+        Default::default(),
+        &mut recording,
+    );
+    assert!(
+        Standing::read(&scratch.state()).covers("weather", "get_forecast", &scratch.project()),
+        "answer 2 was not recorded, so the rows below prove nothing"
+    );
+
+    let mut control = Answering::new(Decision::Reject, CallDecision::reject());
+    let made = forecast_over(
+        &session,
+        &server,
+        &scratch,
+        Default::default(),
+        &mut control,
+    );
+    assert!(
+        control.calls.is_empty(),
+        "the control was asked: {:?}",
+        control.calls
+    );
+    assert_eq!(made, ["tools/call"], "the control was not made");
+
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    let made = forecast_over(
+        &session,
+        &server,
+        &scratch,
+        weather_rules(&[], &["Mcp(weather:get_forecast)"]),
+        &mut asked,
+    );
+    assert_eq!(
+        asked.calls.len(),
+        1,
+        "a standing answer overruled an ask rule: the call was put to the person {} times",
+        asked.calls.len()
+    );
+    assert_eq!(made, ["tools/call"], "the approved call was not made");
+
+    let mut refused = Answering::new(Decision::Approve, CallDecision::approve());
+    let made = forecast_over(
+        &session,
+        &server,
+        &scratch,
+        weather_rules(&["Mcp(weather:get_forecast)"], &[]),
+        &mut refused,
+    );
+    assert!(
+        refused.calls.is_empty(),
+        "a call a deny rule covers was put to the person: {:?}",
+        refused.calls
+    );
+    assert!(
+        made.is_empty(),
+        "a standing answer overruled a deny rule: the server was sent {made:?}"
+    );
 }
 
 /// One turn over `conversation`, with the whole project trusted, so a file the planner reads
@@ -3717,6 +4572,83 @@ fn trusted_turn<C: Confirmer + Send>(
     )
     .outcome
     .expect("the turn runs");
+}
+
+/// SERVERS-13, SERVERS-7, PERM-9. A call asked for private arguments is answered by bypassing as
+/// bypassing answers any other call, with answer 1 and no question, and is put to the person in the
+/// mode that asks. The conversation has had content let out (the vet between the calls), so the
+/// second call's arguments are private, and an allow rule covers the server in both runs. The
+/// first call, made before anything private was read, is the control.
+///
+/// Rejects a bypass that refuses a private-argument call or puts it to the person, and a mode that
+/// asks which lets one through. This pins what the spec states for bypass; the egress gate and the
+/// digest still applying under bypass are not asserted here.
+#[test]
+fn a_call_asked_for_private_arguments_is_made_under_bypass_and_asked_under_ask() {
+    for (mode, case, inner_answer, asked, vets) in [
+        (
+            PermissionMode::Bypass,
+            "bypass",
+            CallDecision::reject(),
+            0,
+            0,
+        ),
+        (PermissionMode::Ask, "ask", CallDecision::approve(), 1, 1),
+    ] {
+        let scratch = Scratch::new(&format!("private-call-{case}"));
+        let (url, server) = serve_weather();
+        let session = session(&url, &scratch, true);
+        let _ = methods(&server);
+        let (endpoint, _chat) = serve_chat(vec![
+            tool_request(FORECAST, r#"{"city":"Paris"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the forecast for Paris"}"#,
+            ),
+            tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+            reply_with("done"),
+        ]);
+        let mut inner = Answering::new(Decision::Approve, inner_answer);
+        inner.vetted = Decision::Approve;
+        let mut conversation = bravebot_agent::Conversation::new();
+        let mut confirmer = bravebot_agent::Confining::new(&mut inner, mode, false);
+        trusted_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new("the forecast")
+                .with_mcp(Some(session))
+                .with_permissions(allowing_the_weather())
+                .with_permission_mode(mode),
+            &mut conversation,
+            &mut confirmer,
+        );
+
+        assert_eq!(
+            inner.vets, vets,
+            "{case}: the vet was not answered as the mode answers it, so the second call was not private"
+        );
+        assert_eq!(
+            inner.calls.len(),
+            asked,
+            "{case}: the number of calls put to the person"
+        );
+        if let [call] = inner.calls.as_slice() {
+            assert!(
+                call.asked_for_private_arguments,
+                "{case}: the call asked about was not asked for private arguments"
+            );
+            assert_eq!(
+                call.arguments,
+                [("city".to_string(), "\"Lyon\"".to_string())],
+                "{case}: the call asked about was not the one after the vet"
+            );
+        }
+        assert_eq!(
+            methods(&server),
+            ["tools/call", "tools/call"],
+            "{case}: the two calls were not both made"
+        );
+    }
 }
 
 /// PERM-9's fourth prompt, reached from a turn. A server's answer is private, and once a person
@@ -3805,6 +4737,149 @@ fn a_call_after_a_servers_answer_was_vetted_asks_though_a_rule_allows_it() {
     );
     let called: Vec<String> = methods(&server);
     assert_eq!(called.len(), 3, "the server was sent {called:?}");
+}
+
+/// SERVERS-7. A call written in a context that has met untrusted content reaches no server: a
+/// session resumed from a record that says its planner read untrusted content is refused the call
+/// an allow rule would otherwise make, with nobody asked and nothing sent. The control is the same
+/// call over a conversation resumed from a trusted record, which is made, so the context is what
+/// the refusal turns on.
+#[test]
+fn a_call_written_in_a_context_that_met_untrusted_content_reaches_no_server() {
+    let scratch = Scratch::new("fallen-context");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    for (context, reached) in [("trusted", true), ("untrusted", false)] {
+        let (endpoint, chat) = serve_chat(vec![
+            tool_request(FORECAST, r#"{"city":"Paris"}"#),
+            reply_with("done"),
+        ]);
+        let mut snapshot = bravebot_agent::Conversation::new().snapshot();
+        snapshot.context = context.to_string();
+        let mut conversation = bravebot_agent::Conversation::restored(snapshot);
+        let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+        trusted_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new("the forecast")
+                .with_mcp(Some(session.clone()))
+                .with_permissions(allowing_the_weather()),
+            &mut conversation,
+            &mut confirmer,
+        );
+        assert!(
+            confirmer.calls.is_empty(),
+            "{context}: the call was put to the person: {:?}",
+            confirmer.calls
+        );
+        let made = methods(&server);
+        assert_eq!(
+            made.len(),
+            usize::from(reached),
+            "{context}: the server was sent {made:?}"
+        );
+        if !reached {
+            let sent = rounds(&chat);
+            assert!(
+                sent.iter()
+                    .any(|round| round.contains("refused: ") && round.contains(FORECAST)),
+                "{context}: the planner was not told the call was refused: {sent:?}"
+            );
+        }
+    }
+}
+
+/// SERVERS-7, PERM-9's fourth prompt. The private arm survives a resume: a conversation whose
+/// planner was shown a server's vetted answer is written down, read back and resumed, and the next
+/// call to a tool an allow rule covers is still put to the person. The control is the same round
+/// trip of a conversation that vetted nothing, where the same call under the same rule is made
+/// unasked, so what the record says about what the planner was shown is what the question turns on.
+#[test]
+fn the_private_arm_survives_a_resume_and_an_allow_ruled_call_still_asks() {
+    let scratch = Scratch::new("private-resume");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    for (vetted, word, asked) in [(true, "private", 1), (false, "public", 0)] {
+        let first = if vetted {
+            vec![
+                tool_request(FORECAST, r#"{"city":"Paris"}"#),
+                tool_request(
+                    "vet_content",
+                    r#"{"ref":"ref:1","expects":"the forecast for Paris"}"#,
+                ),
+                reply_with("done"),
+            ]
+        } else {
+            vec![
+                tool_request(FORECAST, r#"{"city":"Paris"}"#),
+                reply_with("done"),
+            ]
+        };
+        let (endpoint, _chat) = serve_chat(first);
+        let mut conversation = bravebot_agent::Conversation::new();
+        let mut before = Answering::new(Decision::Approve, CallDecision::approve());
+        before.vetted = Decision::Approve;
+        trusted_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new("the forecast")
+                .with_mcp(Some(session.clone()))
+                .with_permissions(allowing_the_weather()),
+            &mut conversation,
+            &mut before,
+        );
+        assert_eq!(
+            before.vets,
+            usize::from(vetted),
+            "{word}: the server's answer was put to the person the wrong number of times"
+        );
+        assert!(
+            before.calls.is_empty(),
+            "{word}: the first call, written before anything private was read, was asked: {:?}",
+            before.calls
+        );
+        assert_eq!(methods(&server), ["tools/call"], "{word}: first call");
+
+        let written = serde_json::to_string(&conversation.snapshot()).expect("the record writes");
+        let record: bravebot_agent::conversation::Snapshot =
+            serde_json::from_str(&written).expect("the record reads back");
+        assert_eq!(
+            record.holds, word,
+            "{word}: the record does not say what the planner was shown"
+        );
+        let mut resumed = bravebot_agent::Conversation::restored(record);
+
+        let (endpoint, _chat) = serve_chat(vec![
+            tool_request(FORECAST, r#"{"city":"Nice"}"#),
+            reply_with("done again"),
+        ]);
+        let mut next = Answering::new(Decision::Approve, CallDecision::approve());
+        trusted_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new("and for Nice")
+                .with_mcp(Some(session.clone()))
+                .with_permissions(allowing_the_weather()),
+            &mut resumed,
+            &mut next,
+        );
+        assert_eq!(
+            next.calls.len(),
+            asked,
+            "{word}: the resumed conversation put the allow-ruled call to the person the wrong \
+             number of times: {:?}",
+            next.calls
+        );
+        assert_eq!(
+            methods(&server),
+            ["tools/call"],
+            "{word}: the approved call was not made"
+        );
+    }
 }
 
 /// SERVERS-7, PROMPT-6. A call asked because its arguments are private is drawn with answer 2 not
@@ -4629,7 +5704,25 @@ fn delegate_the_forecast_recorded(
     kind: &str,
     asking_every_call: bool,
 ) -> (Delegated, RecordingSink) {
+    delegate_the_forecast_under(name, kind, asking_every_call, None, false)
+}
+
+/// [`delegate_the_forecast_recorded`] under the rules `permissions` where there are any, and with
+/// answer 2 already recorded for the forecast tool in the project where `standing` says so.
+fn delegate_the_forecast_under(
+    name: &str,
+    kind: &str,
+    asking_every_call: bool,
+    permissions: Option<bravebot_core::permissions::Permissions>,
+    standing: bool,
+) -> (Delegated, RecordingSink) {
     let scratch = Scratch::new(name);
+    if standing {
+        let mut recorded = Standing::to_change(&scratch.state()).expect("the record reads");
+        assert!(recorded.add("weather", "get_forecast", &scratch.project()));
+        std::fs::write(tools_file(&scratch.state()), recorded.to_text())
+            .expect("record answer 2 for the tool");
+    }
     let (url, server) = serve_weather();
     let session = match asking_every_call {
         true => session_asking_every_call(&url, &scratch, true),
@@ -4656,13 +5749,11 @@ fn delegate_the_forecast_recorded(
     ]);
     let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
     let mut trail = RecordingSink::new();
-    run_turn_recording(
-        &endpoint,
-        &scratch.project(),
-        Task::new(PARENT).with_mcp(Some(session)),
-        &mut asked,
-        &mut trail,
-    );
+    let mut task = Task::new(PARENT).with_mcp(Some(session));
+    if let Some(permissions) = permissions {
+        task = task.with_permissions(permissions);
+    }
+    run_turn_recording(&endpoint, &scratch.project(), task, &mut asked, &mut trail);
     let delegate = rounds(&chat)
         .into_iter()
         .filter(|body| body.contains(DELEGATED) && !body.contains(PARENT))
@@ -4942,6 +6033,207 @@ fn a_workers_call_to_a_server_asked_every_call_is_refused_unasked() {
         refused_under(&trail, "approval").is_empty(),
         "the control left a refusal: {:?}",
         refused_under(&trail, "approval")
+    );
+}
+
+/// DELEGATE-10. A rule decides a delegate's call to a server's tool as it decides the turn's. An
+/// allow rule makes the call with nobody asked, and a deny rule refuses it with nobody asked and
+/// nothing sent to the server, recorded under the rule's gate and not as an approval the person
+/// withheld. The control is the same delegation under no rule, where the call is put to the person.
+/// It rejects a delegate whose policy holds none of the turn's rules, which asks about the allowed
+/// call and sends the denied one.
+#[test]
+fn a_rule_decides_a_workers_call_to_a_servers_tool_as_the_turns_own() {
+    let (
+        Delegated {
+            asked: control_asked,
+            called: control_called,
+            ..
+        },
+        _,
+    ) = delegate_the_forecast_under("delegate-no-rule", "worker", false, None, false);
+    assert_eq!(
+        control_asked.calls.len(),
+        1,
+        "the call under no rule was not put to the person"
+    );
+    assert_eq!(control_called, ["tools/call"], "the control was not made");
+
+    let (
+        Delegated {
+            asked,
+            called,
+            delegate,
+        },
+        trail,
+    ) = delegate_the_forecast_under(
+        "delegate-allow-rule",
+        "worker",
+        false,
+        Some(allowing_the_weather()),
+        false,
+    );
+    assert!(
+        asked.calls.is_empty(),
+        "a call an allow rule decides was put to the person: {:?}",
+        asked.calls
+    );
+    assert_eq!(
+        called,
+        ["tools/call"],
+        "the allowed call did not reach the server"
+    );
+    assert!(
+        delegate.len() >= 2,
+        "the delegate made {} requests",
+        delegate.len()
+    );
+    assert!(
+        refused_under(&trail, "mcp_call").is_empty(),
+        "the allowed call was refused: {:?}",
+        refused_under(&trail, "mcp_call")
+    );
+
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &["Mcp(weather:get_forecast)".to_string()],
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "the rule in this test did not parse");
+    let (
+        Delegated {
+            asked,
+            called,
+            delegate,
+        },
+        trail,
+    ) = delegate_the_forecast_under(
+        "delegate-deny-rule",
+        "worker",
+        false,
+        Some(permissions),
+        false,
+    );
+    let [_, second, ..] = delegate.as_slice() else {
+        panic!("the delegate made {} requests", delegate.len());
+    };
+    assert!(
+        asked.calls.is_empty(),
+        "a call a deny rule refuses was put to the person: {:?}",
+        asked.calls
+    );
+    assert!(
+        called.is_empty(),
+        "the server heard a call a deny rule refuses: {called:?}"
+    );
+    assert!(
+        second.contains("refused"),
+        "the delegate was not told the call was refused: {second}"
+    );
+    assert_eq!(
+        refused_under(&trail, "mcp_call").len(),
+        1,
+        "the rule's refusal was not recorded once"
+    );
+    assert!(
+        refused_under(&trail, "approval").is_empty(),
+        "a call a rule refused was recorded as one the person did not approve: {:?}",
+        refused_under(&trail, "approval")
+    );
+}
+
+/// DELEGATE-10. An answer that stops asking for the weather server's tool in the project decides a
+/// delegate's call to it as it decides the turn's: nobody is asked and the server hears the call.
+/// The control is the same delegation with no answer recorded, where the call is put to the person.
+/// It rejects a delegate whose calls always ask whatever answer 2 recorded.
+#[test]
+fn a_standing_answer_for_a_servers_tool_decides_a_workers_call_unasked() {
+    let (
+        Delegated {
+            asked: control_asked,
+            ..
+        },
+        _,
+    ) = delegate_the_forecast_under("delegate-no-answer", "worker", false, None, false);
+    assert_eq!(
+        control_asked.calls.len(),
+        1,
+        "the call with no answer recorded was not put to the person"
+    );
+
+    let (Delegated { asked, called, .. }, trail) =
+        delegate_the_forecast_under("delegate-answer-two", "worker", false, None, true);
+    assert!(
+        asked.calls.is_empty(),
+        "a call answer 2 stands for was put to the person: {:?}",
+        asked.calls
+    );
+    assert_eq!(
+        called,
+        ["tools/call"],
+        "the call answer 2 stands for did not reach the server"
+    );
+    assert!(
+        refused_under(&trail, "approval").is_empty()
+            && refused_under(&trail, "mcp_call").is_empty(),
+        "the call was refused"
+    );
+}
+
+/// DELEGATE-10. An approval is for the one call it was given to: the turn's call to the forecast
+/// tool, a delegate's call to it and the turn's next call to it are each put to the person, in that
+/// order, though the person said yes every time. It rejects a delegate answered from the turn's
+/// earlier approval and a turn whose later call is answered from the delegate's approval, which
+/// each leave two questions asked.
+#[test]
+fn an_approval_given_to_a_turn_or_a_worker_decides_no_other_call() {
+    let scratch = Scratch::new("delegate-approval-not-shared");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let spawn = format!(r#"{{"kind":"worker","task":"{DELEGATED}"}}"#);
+    let (endpoint, _chat) = serve_chat_by_marker(vec![
+        (
+            PARENT,
+            vec![
+                tool_request(FORECAST, r#"{"city":"Paris"}"#),
+                tool_request("spawn_agent", &spawn),
+                reply_with("waiting"),
+                tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+                reply_with("done"),
+            ],
+        ),
+        (
+            DELEGATED,
+            vec![
+                tool_request(FORECAST, r#"{"city":"Paris"}"#),
+                reply_with("looked it up"),
+            ],
+        ),
+    ]);
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    let mut trail = RecordingSink::new();
+    let task = Task::new(PARENT).with_mcp(Some(session));
+    run_turn_recording(&endpoint, &scratch.project(), task, &mut asked, &mut trail);
+    let cities: Vec<_> = asked
+        .calls
+        .iter()
+        .map(|call| call.arguments.clone())
+        .collect();
+    assert_eq!(
+        cities,
+        [
+            vec![("city".to_string(), "\"Paris\"".to_string())],
+            vec![("city".to_string(), "\"Paris\"".to_string())],
+            vec![("city".to_string(), "\"Lyon\"".to_string())],
+        ],
+        "the turn, the delegate and the turn again were not each asked about their own call"
+    );
+    assert_eq!(
+        methods(&server),
+        ["tools/call", "tools/call", "tools/call"],
+        "the server did not hear the three approved calls"
     );
 }
 
@@ -5403,6 +6695,25 @@ fn serve_moving(to: String) -> (String, mpsc::Receiver<String>) {
     (format!("http://127.0.0.1:{port}"), receiver)
 }
 
+/// A server answering every request, the handshake's included, with a 500, and reporting every
+/// body: a destination that cannot complete a handshake (SERVERS-11).
+fn serve_failing_every_request() -> (String, mpsc::Receiver<String>) {
+    let listener = open_files::bind_mock_server();
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let body = body_of(&stream);
+            let _ = sender.send(body);
+            let _ = stream.write_all(
+                b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
 /// A weather server whose calls point to a second one, declared and approved at the first in the
 /// scratch's state directory, and a session holding it reached under that declaration.
 struct Moving {
@@ -5641,6 +6952,333 @@ fn a_hop_the_person_says_is_a_move_is_declared_and_the_call_reaches_it() {
         "a call after the move went where the server was"
     );
     assert_eq!(methods(&moving.second), ["tools/call"]);
+}
+
+/// SERVERS-11: after a move is recorded, the next session starts the server where it moved to and
+/// puts its list to the person again. The first session moves the server and the person vouches
+/// for its list. The second session is started from the files the first left, as a start reaches
+/// them, with no answer to give to a question about the declaration, so it starts the server only
+/// where the move left the new declaration approved. It then puts the list to the person, who
+/// declines it: nothing the first session was told stands in for the answer. The regressions it
+/// rejects are a move that leaves the old digest approved or the new one unapproved, a move that
+/// is not recorded, which starts the next session at the address the server moved from, and a
+/// session that moves a server and stops offering the list it already offered.
+#[test]
+fn the_next_session_after_a_recorded_move_starts_the_server_there_and_asks_for_its_list_again() {
+    let scratch = Scratch::new("move-next-session");
+    let moving = moving(&scratch, true, Managed::default());
+    std::fs::create_dir_all(scratch.project().join(".bravebot")).expect("settings directory");
+    std::fs::write(
+        scratch.project().join(".bravebot/settings.json"),
+        r#"{"mcp": {"request": ["weather"]}}"#,
+    )
+    .expect("write settings");
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+        reply_with("two"),
+    ]);
+    let mut vouching = Answering::new(Decision::Approve, CallDecision::approve());
+    vouching.moved = Decision::Approve;
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(moving.session.clone())),
+        &mut vouching,
+    );
+    assert_eq!(
+        vouching.lists.len(),
+        1,
+        "the first session was not asked for its list"
+    );
+    assert_eq!(
+        vouching.moves.len(),
+        1,
+        "the first session was not asked about the move"
+    );
+    let moved = Declaration::http(moving.moved_to.clone()).expect("the moved declaration");
+    assert_eq!(declared_now(&scratch), moved, "the move was not recorded");
+    let _ = methods(&moving.first);
+    let _ = methods(&moving.second);
+    assert_eq!(
+        moving.session.offering(),
+        [("weather".to_string(), Offering::Tools(1))],
+        "the session that moved the server stopped offering the list it offered"
+    );
+    let approvals = Approvals::read(&scratch.state());
+    assert!(
+        approvals.approves(&moved.digest()),
+        "the move was not approved in the same write"
+    );
+    assert!(
+        !approvals.approves(&moving.declared.digest()),
+        "the declaration the server moved from is still approved"
+    );
+
+    let settings = bravebot_config::Settings::layered(None, Some(&scratch.project()), None);
+    let machine = bravebot_agent::servers::Machine {
+        home: bravebot_agent::servers::Home {
+            directory: Some(scratch.state()),
+            writable: true,
+        },
+        managed: Managed::default(),
+    };
+    let mut person = bravebot_agent::servers::Person {
+        answers: &b""[..],
+        screen: Vec::new(),
+        present: true,
+    };
+    let reached = bravebot_agent::servers::reconnect_on(
+        &settings,
+        &scratch.project(),
+        &["weather".to_string()],
+        &machine,
+        bravebot_agent::servers::Asking::Person,
+        &mut person,
+        bravebot_sandbox::Stream::Null,
+    );
+    let drawn = String::from_utf8_lossy(&person.screen).into_owned();
+    assert_eq!(
+        reached.aliases(),
+        ["weather"],
+        "the next session did not start the server: {:?} {drawn}",
+        reached.notes
+    );
+    assert!(
+        drawn.is_empty(),
+        "the next session asked about the declaration: {drawn}"
+    );
+    assert_eq!(
+        methods(&moving.second),
+        ["initialize", "tools/list"],
+        "the next session did not start the server where it moved to"
+    );
+    assert!(
+        methods(&moving.first).is_empty(),
+        "the next session reached the address the server moved from"
+    );
+
+    let next = reached.session().expect("the next session has the server");
+    let mut refusing = Answering::new(Decision::Reject, CallDecision::reject());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the next session").with_mcp(Some(next.clone())),
+        &mut refusing,
+    );
+    assert_eq!(
+        refusing.lists.len(),
+        1,
+        "the next session did not put the list to the person again"
+    );
+    assert_eq!(refusing.lists[0].alias, "weather");
+    assert_eq!(
+        next.offering(),
+        [("weather".to_string(), Offering::Declined)]
+    );
+}
+
+/// SERVERS-11: after a first yes, a second hop off the new destination is refused and not asked
+/// about. The server the declaration moved to answers its handshake and answers the call with a
+/// redirect to a third, so the person is asked once, is told the server was redirected again,
+/// nothing is sent to the third, and the declaration stays where the first yes put it.
+#[test]
+fn a_second_hop_off_where_a_server_was_just_moved_is_refused_and_not_asked_about() {
+    let scratch = Scratch::new("move-twice-refused");
+    let (third_url, third) = serve_weather();
+    let moving = moving_with(
+        &scratch,
+        true,
+        Managed::default(),
+        serve_moving(format!("{third_url}/mcp")),
+        |server| server,
+    );
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.moved = Decision::Approve;
+    let notices = noticed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(moving.session.clone())),
+        &mut confirmer,
+    );
+
+    assert_eq!(
+        confirmer.moves.len(),
+        1,
+        "the second hop was put to the person: {:?}",
+        confirmer.moves
+    );
+    assert_eq!(confirmer.moves[0].destination, moving.moved_to);
+    assert!(
+        notices.iter().any(|notice| notice
+            == "weather was redirected again, off where it was just moved, so that was refused"),
+        "the person was not told the second hop was refused: {notices:?}"
+    );
+    let sent: Vec<String> = third.try_iter().collect();
+    assert!(
+        sent.is_empty(),
+        "something was sent where the second hop pointed: {sent:?}"
+    );
+    let reached: Vec<String> = moving.second.try_iter().collect();
+    assert!(
+        reached.iter().any(|body| body.contains(r#""tools/call""#)),
+        "the first hop was not followed, so the rows above prove nothing: {reached:?}"
+    );
+    assert_eq!(
+        declared_now(&scratch),
+        Declaration::http(moving.moved_to.clone()).expect("the first move's declaration"),
+        "the declaration is not where the first yes put it"
+    );
+}
+
+/// SERVERS-11: a declaration edited while the person is asked about a move is left alone and the
+/// server is not moved. The person says yes, and the declaration is rewritten to another address
+/// while the question is open (the double does it inside `confirm_move`), so the person is told it
+/// changed, the file keeps the edit, the address the reply pointed to is not approved, and the call
+/// is not sent where the reply pointed.
+#[test]
+fn a_declaration_edited_while_a_move_is_asked_about_is_left_alone_and_the_server_is_not_moved() {
+    let scratch = Scratch::new("move-edited-while-asking");
+    let moving = moving(&scratch, true, Managed::default());
+    let edited = Declaration::http("http://127.0.0.1:9/mcp".to_string()).expect("edited");
+    assert_ne!(edited.digest(), moving.declared.digest());
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.moved = Decision::Approve;
+    let state = scratch.state();
+    let rewrite = edited.clone();
+    confirmer.while_moving = Some(Box::new(move || {
+        let mut declarations = Declarations::default();
+        declarations.insert("weather", &rewrite);
+        std::fs::write(declarations_file(&state), declarations.to_text()).expect("mcp.json");
+    }));
+    let notices = noticed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(moving.session.clone())),
+        &mut confirmer,
+    );
+
+    assert_eq!(
+        confirmer.moves.len(),
+        1,
+        "the person was not asked once about the hop: {:?}",
+        confirmer.moves
+    );
+    assert!(
+        notices.iter().any(|notice| notice
+            == "weather was not moved: its declaration changed while you were asked, so it was left as it is"),
+        "the person was not told the declaration changed: {notices:?}"
+    );
+    assert!(
+        !notices
+            .iter()
+            .any(|notice| notice == "weather was moved where its reply pointed"),
+        "the person was told the server moved: {notices:?}"
+    );
+    assert_eq!(
+        declared_now(&scratch),
+        edited,
+        "the edit made while the person was asked was written over"
+    );
+    let moved_to = Declaration::http(moving.moved_to.clone()).expect("the moved declaration");
+    assert!(
+        !Approvals::read(&scratch.state()).approves(&moved_to.digest()),
+        "where the reply pointed was approved though the declaration changed"
+    );
+    let reached: Vec<String> = moving.second.try_iter().collect();
+    assert!(
+        !reached.iter().any(|body| body.contains(r#""tools/call""#)),
+        "the call was sent where the reply pointed: {reached:?}"
+    );
+}
+
+/// SERVERS-11: a destination that does not complete its handshake is not recorded. The person says
+/// yes to the hop, the handshake is tried where the reply pointed and answered with a 500, so the
+/// person is told it did not complete, the declaration and its approval are as they were, and no
+/// call is sent where the reply pointed.
+#[test]
+fn a_destination_that_does_not_complete_its_handshake_is_not_recorded() {
+    let scratch = Scratch::new("move-no-handshake");
+    let moving = moving_with(
+        &scratch,
+        true,
+        Managed::default(),
+        serve_failing_every_request(),
+        |server| server,
+    );
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.moved = Decision::Approve;
+    let notices = noticed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(moving.session.clone())),
+        &mut confirmer,
+    );
+
+    assert_eq!(
+        confirmer.moves.len(),
+        1,
+        "the person was not asked once about the hop: {:?}",
+        confirmer.moves
+    );
+    assert_eq!(confirmer.moves[0].destination, moving.moved_to);
+    let told = notices
+        .iter()
+        .filter(|notice| {
+            notice.starts_with("weather did not complete its handshake where its reply pointed: ")
+        })
+        .count();
+    assert_eq!(
+        told, 1,
+        "the person was not told once that the handshake did not complete: {notices:?}"
+    );
+    assert!(
+        !notices
+            .iter()
+            .any(|notice| notice == "weather was moved where its reply pointed"),
+        "the person was told the server moved: {notices:?}"
+    );
+    let tried: Vec<String> = methods(&moving.second);
+    assert_eq!(
+        tried.first().map(String::as_str),
+        Some("initialize"),
+        "the handshake was not tried where the reply pointed: {tried:?}"
+    );
+    assert!(
+        !tried.contains(&"tools/call".to_string()),
+        "a call was sent where the handshake failed: {tried:?}"
+    );
+    assert_eq!(
+        declared_now(&scratch),
+        moving.declared,
+        "a destination that did not answer was written down"
+    );
+    let approvals = Approvals::read(&scratch.state());
+    assert!(
+        approvals.approves(&moving.declared.digest()),
+        "the approval of the declaration was removed"
+    );
+    let destination = Declaration::http(moving.moved_to.clone()).expect("the destination");
+    assert!(
+        !approvals.approves(&destination.digest()),
+        "a destination that did not answer was approved"
+    );
 }
 
 /// SERVERS-11: a no sends nothing where the reply pointed and leaves both files as they were, and
@@ -8779,4 +10417,115 @@ fn a_line_a_local_server_wrote_that_cannot_be_read_is_told_in_the_fixed_sentence
         !told.contains("could not read a reply") && !told.contains("utf-8"),
         "the reader's own words reached the planner: {told}"
     );
+}
+
+/// Installs the plugin `demo` into `scratch`'s state directory, carrying one remote server at `url`.
+fn a_plugin_carrying_the_server_at(scratch: &Scratch, url: &str) {
+    let source = scratch.path.join("plugin-source");
+    std::fs::create_dir_all(&source).expect("source");
+    std::fs::write(
+        source.join("plugin.toml"),
+        "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nservers = \"servers.json\"\n",
+    )
+    .expect("manifest");
+    std::fs::write(
+        source.join("servers.json"),
+        format!(r#"{{"servers":{{"weather":{{"transport":"http","url":"{url}"}}}}}}"#),
+    )
+    .expect("servers");
+    bravebot_agent::plugins::install(&source, &scratch.state()).expect("install");
+}
+
+/// PLUGIN-7, S17 to S21: a server an installed plugin carries is reached through the first-use
+/// question and then offered in a turn; once a file of the plugin changes, the next turn stops it,
+/// puts nothing of it to the person, offers none of its tools, and names the plugin once in the
+/// session, in the turn that found the change and not in the turns after.
+///
+/// Rejects: a turn that offers the changed plugin's server, one that asks for its list again, one
+/// that says nothing to the person, and one that says it at every turn.
+#[test]
+fn a_plugins_server_is_stopped_by_a_changed_tree_and_the_plugin_is_named_once() {
+    let scratch = Scratch::new("plugin-server-changed");
+    let (url, _server) = serve_two_tools();
+    a_plugin_carrying_the_server_at(&scratch, &format!("{url}/mcp"));
+    let state = scratch.state();
+    let home = bravebot_agent::servers::Home {
+        directory: Some(state.clone()),
+        writable: true,
+    };
+    let requested = bravebot_agent::plugin_servers::PluginServers::requests(&state, &[]);
+    let mut person = bravebot_agent::servers::Person {
+        answers: &b"1\n"[..],
+        screen: Vec::new(),
+        present: true,
+    };
+    let reached = bravebot_agent::servers::reach(
+        &requested,
+        &scratch.project(),
+        &home,
+        &Managed::default(),
+        bravebot_agent::servers::Asking::Person,
+        &mut person,
+        bravebot_sandbox::Stream::Null,
+    );
+    let session = reached
+        .session()
+        .unwrap_or_else(|| panic!("the plugin's server was not reached: {:?}", reached.notes));
+    let screen = String::from_utf8(person.screen).expect("screen");
+    assert!(screen.contains("demo_weather"), "{screen}");
+
+    let (endpoint, chat) = serve_chat(vec![
+        reply_with("one"),
+        reply_with("two"),
+        reply_with("three"),
+    ]);
+    let account = bravebot_agent::chatgpt::AccountSession::begin();
+    let turn = |confirmer: &mut Answering| {
+        run_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new("what is the weather")
+                .with_mcp(Some(session.clone()))
+                .in_account_session(account.clone()),
+            confirmer,
+        )
+    };
+    let named = |outcome: &bravebot_agent::Outcome| {
+        outcome
+            .notices
+            .iter()
+            .filter(|notice| notice.contains("demo") && notice.contains("stopped"))
+            .count()
+    };
+
+    let mut first = Answering::new(Decision::Approve, CallDecision::approve());
+    let outcome = turn(&mut first);
+    assert_eq!(
+        first.lists.len(),
+        1,
+        "control: the list is put to the person"
+    );
+    assert_eq!(named(&outcome), 0);
+
+    std::fs::write(
+        bravebot_agent::plugins::installed_dir(&state, "demo").join("added.txt"),
+        "a file the install did not hold",
+    )
+    .expect("edit the plugin");
+    let mut second = Answering::new(Decision::Approve, CallDecision::approve());
+    let found = turn(&mut second);
+    let mut third = Answering::new(Decision::Approve, CallDecision::approve());
+    let after = turn(&mut third);
+
+    assert!(second.lists.is_empty(), "{:?}", second.lists);
+    assert!(third.lists.is_empty(), "{:?}", third.lists);
+    assert_eq!(named(&found), 1, "{:?}", found.notices);
+    assert_eq!(named(&after), 0, "{:?}", after.notices);
+    let sent = rounds(&chat);
+    let [with, without, still_without] = sent.as_slice() else {
+        panic!("one round for each turn: {}", sent.len());
+    };
+    assert!(with.contains("mcp__demo_weather__get_forecast"), "control");
+    assert!(!without.contains("demo_weather"), "{without}");
+    assert!(!still_without.contains("demo_weather"), "{still_without}");
 }

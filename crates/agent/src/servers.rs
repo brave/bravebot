@@ -19,6 +19,7 @@ use crate::SessionScratch;
 use crate::confine::developer_directory;
 use crate::confirm::MoveRequest;
 use crate::mcp::{Connection, Session, Unmoved, managed_refusal, shown, unreadable};
+use crate::plugin_servers::{self, Listed, PluginServers, Stop};
 use bravebot_config::mcp::{
     self, Approvals, ChoiceArguments, Declaration, Declarations, Digest, Problem, Projects,
     Timeouts,
@@ -46,6 +47,9 @@ use std::time::{Duration, Instant};
 /// wait for its thread ends later, so a handshake that was stuck somewhere no request bound
 /// reaches, a name that will not resolve for one, is still given up on.
 const HANDSHAKE_SLACK: Duration = Duration::from_secs(5);
+
+#[cfg(test)]
+mod plugin_tests;
 
 /// Who answers for a server no answer of the person's covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,7 +201,7 @@ pub fn reconnect_on<A: Asker + ?Sized>(
     asker: &mut A,
     diagnostics: Stream,
 ) -> Reached {
-    let wanted = only_named(requested_by(settings), aliases);
+    let wanted = only_named(requested_with_plugins(settings, &machine.home), aliases);
     let project = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     reach(
         &wanted,
@@ -238,6 +242,23 @@ fn only_named(requested: Vec<(PathBuf, String)>, aliases: &[String]) -> Vec<(Pat
         .collect()
 }
 
+/// What the settings request, and then each server the installed, enabled plugins carry that they
+/// do not (PLUGIN-7). Only the state directory is read for the second part, so no checkout adds
+/// to it.
+fn requested_with_plugins(
+    settings: &bravebot_config::Settings,
+    home: &Home,
+) -> Vec<(PathBuf, String)> {
+    let mut requested = requested_by(settings);
+    if let Some(directory) = home.directory.as_deref()
+        && !bravebot_core::safe::engaged()
+    {
+        let carried = PluginServers::requests(directory, &requested);
+        requested.extend(carried);
+    }
+    requested
+}
+
 /// Reach the servers `requested` names for the workspace at `root`, on this machine's state
 /// directory and managed settings, putting a question to `asker` where one is needed.
 ///
@@ -252,6 +273,13 @@ pub fn reach_requested<A: Asker + ?Sized>(
 ) -> Reached {
     let project = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let machine = Machine::current();
+    let mut requested = requested;
+    if let Some(directory) = machine.home.directory.as_deref()
+        && !bravebot_core::safe::engaged()
+    {
+        let carried = PluginServers::requests(directory, &requested);
+        requested.extend(carried);
+    }
     reach(
         &requested,
         &project,
@@ -308,7 +336,14 @@ pub fn reach<A: Asker + ?Sized>(
     // An entry of the administrator's lists that cannot be used refuses nothing, so a session says
     // so before it starts anything (SERVERS-12).
     notes.extend(crate::mcp::managed_entries_unusable(managed));
-    let plans = settle(
+    // What the installed, enabled plugins declare, read beside `mcp.json` (PLUGIN-7).
+    let carried = answering
+        .directory
+        .as_deref()
+        .map(PluginServers::read)
+        .unwrap_or_default();
+    let mut from_plugins = Vec::new();
+    let plans = settle_with(
         requested,
         project,
         answering,
@@ -317,10 +352,30 @@ pub fn reach<A: Asker + ?Sized>(
         asker,
         &|name| std::env::var_os(name),
         Prelude::current(),
+        (&carried, &mut from_plugins),
         &mut notes,
     );
     let mut hops = Vec::new();
+    // The plugin's directory is hashed again as the last step before anything of it starts, since
+    // the question above may have waited and a file can change meanwhile (PLUGIN-7). A server of a
+    // plugin whose tree differs from the record, or whose plugin was turned off, is not started.
+    let plans = still_matching_their_plugin(
+        plans,
+        &from_plugins,
+        answering.directory.as_deref(),
+        &mut notes,
+    );
     let mut started = start(plans, home, diagnostics, &mut notes, &mut hops);
+    // A server of a plugin is never rewritten by a move: that would write the plugin's alias into
+    // the person's `mcp.json`, where it would then shadow the plugin's server. It is left unstarted,
+    // as a move nobody can be asked about is (SERVERS-11).
+    hops.retain(|hop| {
+        let own = from_plugins.iter().any(|(alias, _)| *alias == hop.alias);
+        if own {
+            notes.push(t!(mcp_move_not_started, alias = hop.alias.as_str()).to_string());
+        }
+        !own
+    });
     let moving = moves(hops, answering, managed, asking, asker, &mut notes);
     if !moving.is_empty() {
         let plans = moving
@@ -352,6 +407,9 @@ pub fn reach<A: Asker + ?Sized>(
         }
         started.sort_by(|one, other| one.alias().cmp(other.alias()));
     }
+    // Each server a plugin carries is held as that plugin's, so a turn hashes the plugin's
+    // directory again before it offers the server and before a call reaches it (PLUGIN-7).
+    let started = held_as_their_plugins(started, &from_plugins);
     let session = (!started.is_empty()).then(|| {
         Session::new(
             started,
@@ -362,6 +420,53 @@ pub fn reach<A: Asker + ?Sized>(
         )
     });
     Reached { session, notes }
+}
+
+/// The planned servers a plugin carries are kept only while the plugin is enabled and its directory,
+/// hashed again, is the recorded one. The question may have waited, and a file can change meanwhile
+/// (PLUGIN-7). A server that is not the plugin's is kept as it is.
+fn still_matching_their_plugin(
+    mut plans: Vec<(String, Plan)>,
+    from_plugins: &[(String, String)],
+    directory: Option<&Path>,
+    notes: &mut Vec<String>,
+) -> Vec<(String, Plan)> {
+    plans.retain(|(alias, _)| {
+        let Some((_, plugin)) = from_plugins.iter().find(|(held, _)| held == alias) else {
+            return true;
+        };
+        let Some(directory) = directory else {
+            return false;
+        };
+        match plugin_servers::may_start(directory, plugin) {
+            Ok(()) => true,
+            Err(stop) => {
+                notes.push(stopped_note(stop, alias, plugin));
+                false
+            }
+        }
+    });
+    plans
+}
+
+/// Each server a plugin carries is held as that plugin's, so a turn hashes the plugin's directory
+/// again before it offers the server and before a call reaches it (PLUGIN-7).
+fn held_as_their_plugins(
+    started: Vec<crate::mcp::Reached>,
+    from_plugins: &[(String, String)],
+) -> Vec<crate::mcp::Reached> {
+    started
+        .into_iter()
+        .map(|server| {
+            match from_plugins
+                .iter()
+                .find(|(alias, _)| alias == server.alias())
+            {
+                Some((_, plugin)) => server.of_plugin(plugin),
+                None => server,
+            }
+        })
+        .collect()
 }
 
 /// A remote server whose handshake was redirected off where it is declared (SERVERS-11).
@@ -565,6 +670,10 @@ enum Plan {
 ///
 /// Returns the servers to start. Every request that will not be is a line in `notes` saying why.
 /// `prelude` is this platform's confinement base, and a local server is not asked about without one.
+///
+/// [`settle_with`] with no plugin's servers, which is what the tests of the person's own
+/// declarations settle. A session reaches the servers a plugin carries through [`reach`].
+#[cfg(test)]
 #[expect(
     clippy::too_many_arguments,
     reason = "environment is injected so tests fix PATH, beside the request, the person's state, the asker and the notes"
@@ -578,6 +687,42 @@ fn settle<A: Asker + ?Sized>(
     asker: &mut A,
     environment: &dyn Fn(&str) -> Option<OsString>,
     prelude: Option<Prelude>,
+    notes: &mut Vec<String>,
+) -> Vec<(String, Plan)> {
+    settle_with(
+        requested,
+        project,
+        home,
+        managed,
+        asking,
+        asker,
+        environment,
+        prelude,
+        (&PluginServers::default(), &mut Vec::new()),
+        notes,
+    )
+}
+
+/// [`settle`] with the servers the installed plugins carry beside the person's own declarations
+/// (PLUGIN-7). `plugins` is what they declare, and the aliases of the ones this settles, each with
+/// the plugin that carries it, are added to the second.
+///
+/// A requested alias the person's `mcp.json` declares is that declaration, whatever a plugin
+/// carries under the name. One it does not declare is looked for among the plugins' servers.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "settle's, with the plugins' servers and the list of the ones taken from them"
+)]
+fn settle_with<A: Asker + ?Sized>(
+    requested: &[(PathBuf, String)],
+    project: &Path,
+    home: &Home,
+    managed: &Managed,
+    asking: Asking,
+    asker: &mut A,
+    environment: &dyn Fn(&str) -> Option<OsString>,
+    prelude: Option<Prelude>,
+    plugins: (&PluginServers, &mut Vec<(String, String)>),
     notes: &mut Vec<String>,
 ) -> Vec<(String, Plan)> {
     if requested.is_empty() {
@@ -609,20 +754,63 @@ fn settle<A: Asker + ?Sized>(
     };
     let mut approvals = Approvals::read(directory);
     let mut projects = Projects::read(directory);
+    let (carried, taken) = plugins;
 
     let mut plans = Vec::new();
     for (file, alias) in requested {
         let Some(entry) = declarations.get(alias) else {
+            match carried.find(alias) {
+                Some(Listed::Server(server)) => {
+                    let mut ways = PluginWays {
+                        file,
+                        project,
+                        home,
+                        directory,
+                        managed,
+                        asking,
+                        environment,
+                        prelude,
+                    };
+                    if let Some(plan) = settle_plugin(
+                        &mut ways,
+                        server,
+                        asker,
+                        (&mut approvals, &mut projects),
+                        notes,
+                    ) {
+                        taken.push((server.alias.clone(), server.plugin.clone()));
+                        plans.push((server.alias.clone(), plan));
+                    }
+                }
+                Some(Listed::Disabled(plugin)) => notes.push(
+                    t!(
+                        servers_plugin_disabled,
+                        alias = shown(alias),
+                        plugin = plugin
+                    )
+                    .to_string(),
+                ),
+                None => notes.push(
+                    t!(
+                        servers_not_declared,
+                        file = named(file, project),
+                        alias = shown(alias)
+                    )
+                    .to_string(),
+                ),
+            }
+            continue;
+        };
+        if let Some(Listed::Server(server)) = carried.find(alias) {
             notes.push(
                 t!(
-                    servers_not_declared,
-                    file = named(file, project),
-                    alias = shown(alias)
+                    servers_plugin_shadowed,
+                    alias = shown(alias),
+                    plugin = server.plugin.as_str()
                 )
                 .to_string(),
             );
-            continue;
-        };
+        }
         let declaration = match entry.declaration {
             Ok(declaration) => declaration,
             Err(found) => {
@@ -691,6 +879,7 @@ fn settle<A: Asker + ?Sized>(
                     Plan::OpenShell { .. } | Plan::Http { .. } => None,
                 },
                 changed,
+                plugin: None,
             };
             match asker.ask_to_start(&question) {
                 Answer::No => {
@@ -728,6 +917,358 @@ pub enum Unstarted {
     Unconfined,
 }
 
+/// What a plugin's server is settled against: where the request came from and the machine.
+struct PluginWays<'a> {
+    file: &'a Path,
+    project: &'a Path,
+    home: &'a Home,
+    directory: &'a Path,
+    managed: &'a Managed,
+    asking: Asking,
+    environment: &'a dyn Fn(&str) -> Option<OsString>,
+    prelude: Option<Prelude>,
+}
+
+/// The note for a plugin's server that is not started because its plugin is turned off or no longer
+/// matches its record. A session's notes and a listing both use it, so they say it in the same words.
+///
+/// The alias is the key the plugin's own file chose and nothing has checked it where this is made,
+/// so it is drawn as a name a checkout wrote is.
+pub fn stopped_note(stop: Stop, alias: &str, plugin: &str) -> String {
+    match stop {
+        Stop::Disabled => t!(
+            servers_plugin_disabled,
+            alias = shown(alias),
+            plugin = plugin
+        )
+        .to_string(),
+        Stop::Changed => t!(
+            servers_plugin_changed,
+            alias = shown(alias),
+            plugin = plugin
+        )
+        .to_string(),
+    }
+}
+
+/// What is wrong with a server a plugin carries whose entry cannot be used, as a person reads it.
+///
+/// A joined alias, `<plugin>_<alias>`, that is an alias in every way but its length says so, because
+/// [`problem`] would say the alias is not one, which is untrue of the name the plugin gave. Every
+/// other problem is worded by [`problem`]. A session's note and a listing both call this, so they
+/// word one state the same way.
+pub fn plugin_problem(server: &plugin_servers::Server, found: &Problem) -> String {
+    match server.joined_too_long() {
+        true => t!(mcp_plugin_too_long).to_string(),
+        false => problem(found),
+    }
+}
+
+/// What a session decides about one server a plugin carries before it asks anybody anything.
+///
+/// The one place that is decided, so a session (`settle_plugin`) and a listing
+/// ([`held_by_plugins`]) cannot disagree. Approval is [`Approvals::approves_plugin`] on the digest
+/// that names the plugin and its directory, and never [`grant`] or `assess`, which count a home
+/// approval of the declaration and a recorded project, and neither approves a plugin's server
+/// (SERVERS-27). Fields after the first thing found are left empty.
+pub struct PluginHeld {
+    /// The plugin is turned off or its directory no longer matches the install.
+    pub stop: Option<Stop>,
+    /// The entry cannot be used, and why. [`plugin_problem`] words it.
+    pub unusable: Option<Problem>,
+    /// Why it would not start here, found before anybody is asked.
+    pub unstarted: Option<Unstarted>,
+    /// What a yes to this server is recorded against, where the entry can be used.
+    pub digest: Option<Digest>,
+    /// The person's yes to this server by name is recorded.
+    pub approved: bool,
+    /// A session would put the question: it would start, nothing approves it and somebody can be asked.
+    pub asks: bool,
+    plan: Option<Plan>,
+}
+
+/// Written by hand because `plan` can hold a bearer token read from the environment, in the headers
+/// of an HTTP server. It is printed as present or absent and its contents are left out.
+impl std::fmt::Debug for PluginHeld {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PluginHeld")
+            .field("stop", &self.stop)
+            .field("unusable", &self.unusable)
+            .field("unstarted", &self.unstarted)
+            .field("digest", &self.digest)
+            .field("approved", &self.approved)
+            .field("asks", &self.asks)
+            .field(
+                "plan",
+                &format_args!(
+                    "{}",
+                    if self.plan.is_some() {
+                        "Some(..)"
+                    } else {
+                        "None"
+                    }
+                ),
+            )
+            .finish()
+    }
+}
+
+/// [`PluginHeld`] for `server`, given what [`plugin_servers::may_start`] said of its plugin.
+///
+/// `can_ask` says whether a question could be put: a person is asking and somebody is there. It is
+/// called only for a server nothing approves, as a session asks nobody about one that is. `stop` is
+/// taken as an argument so a caller that holds several servers of one plugin hashes its directory
+/// once, and `approvals` is taken so the approvals file is read once.
+///
+/// This reads the environment through `environment`, and looks on disk for the program of a local
+/// server and for a repository holding the directory it would run in. It reads no file of the
+/// plugin, because its servers file is already read into `server`, and no approvals file, because
+/// `approvals` is given. It starts no server, asks no question and writes nothing.
+pub fn hold_plugin_server(
+    server: &plugin_servers::Server,
+    stop: Result<(), Stop>,
+    approvals: &Approvals,
+    managed: &Managed,
+    environment: &dyn Fn(&str) -> Option<OsString>,
+    prelude: Option<Prelude>,
+    can_ask: &dyn Fn() -> bool,
+) -> PluginHeld {
+    let digest = server.digest();
+    let approved = digest
+        .as_ref()
+        .is_some_and(|digest| approvals.approves_plugin(digest));
+    let mut held = PluginHeld {
+        stop: stop.err(),
+        unusable: None,
+        unstarted: None,
+        digest,
+        approved,
+        asks: false,
+        plan: None,
+    };
+    if held.stop.is_some() {
+        return held;
+    }
+    let declaration = match &server.declaration {
+        Ok(declaration) => declaration,
+        Err(found) => {
+            held.unusable = Some(found.clone());
+            return held;
+        }
+    };
+    match plan_of(declaration, managed, environment, prelude) {
+        Ok(plan) => held.plan = Some(plan),
+        Err(unstarted) => {
+            held.unstarted = Some(unstarted);
+            return held;
+        }
+    }
+    held.asks = !held.approved && can_ask();
+    held
+}
+
+/// [`PluginHeld`] for each server `carried` holds, as a session would hold it where `asking` says who
+/// answers, for the state directory `directory`.
+///
+/// It reads the approvals file in `directory` once and hashes the installed directory of each
+/// plugin once for all of its servers ([`plugin_servers::may_start`]). It starts no server, asks no
+/// question and writes nothing. [`held_by_plugin_server`] is the same decision for one server.
+pub fn held_by_plugins<'a>(
+    carried: &'a PluginServers,
+    directory: &Path,
+    asking: Asking,
+    managed: &Managed,
+) -> Vec<(&'a plugin_servers::Server, PluginHeld)> {
+    let approvals = Approvals::read(directory);
+    let mut stops: Vec<(&str, Result<(), Stop>)> = Vec::new();
+    carried
+        .servers()
+        .iter()
+        .map(|server| {
+            let stop = match stops.iter().find(|(plugin, _)| *plugin == server.plugin) {
+                Some((_, stop)) => *stop,
+                None => {
+                    let stop = plugin_servers::may_start(directory, &server.plugin);
+                    stops.push((&server.plugin, stop));
+                    stop
+                }
+            };
+            (server, hold_here(server, stop, &approvals, asking, managed))
+        })
+        .collect()
+}
+
+/// [`PluginHeld`] for the one server `server`, as [`held_by_plugins`] holds it, for a caller that
+/// answers for a single alias and so has no use for the other servers.
+///
+/// It hashes only the installed directory of the plugin that carries `server`, once, and reads the
+/// approvals file in `directory` once. It starts no server, asks no question and writes nothing.
+pub fn held_by_plugin_server(
+    server: &plugin_servers::Server,
+    directory: &Path,
+    asking: Asking,
+    managed: &Managed,
+) -> PluginHeld {
+    hold_here(
+        server,
+        plugin_servers::may_start(directory, &server.plugin),
+        &Approvals::read(directory),
+        asking,
+        managed,
+    )
+}
+
+/// [`hold_plugin_server`] with what this process gives it: its environment, the confinement this
+/// platform has, and a person asked only where `asking` is [`Asking::Person`]. The one body behind
+/// [`held_by_plugins`] and [`held_by_plugin_server`], so the two cannot decide differently.
+fn hold_here(
+    server: &plugin_servers::Server,
+    stop: Result<(), Stop>,
+    approvals: &Approvals,
+    asking: Asking,
+    managed: &Managed,
+) -> PluginHeld {
+    hold_plugin_server(
+        server,
+        stop,
+        approvals,
+        managed,
+        &|name| std::env::var_os(name),
+        Prelude::current(),
+        &|| asking == Asking::Person,
+    )
+}
+
+/// The note for a plugin's server that does not start here: its plan could not be made, the managed
+/// layer refuses it, or this platform has no confinement for it.
+fn unstarted_note(alias: &str, unstarted: Unstarted) -> String {
+    match unstarted {
+        Unstarted::Unplanned(reason) => {
+            t!(servers_not_reached, alias = alias, reason = reason).to_string()
+        }
+        Unstarted::Refused(reason) => t!(
+            servers_refused_by_managed,
+            alias = shown(alias),
+            reason = reason
+        )
+        .to_string(),
+        Unstarted::Unconfined => t!(servers_no_confinement_here, alias = alias).to_string(),
+    }
+}
+
+/// Settle one server an installed plugin carries, as [`settle_with`] settles one declared in
+/// `mcp.json`: the same plan, the same managed layer, the same question and the same answers
+/// (SERVERS-4), keyed on the digest that names the plugin and its directory
+/// ([`bravebot_config::mcp::Declaration::plugin_digest`]).
+///
+/// What differs is only what a plugin's own files cannot be trusted for. The plugin's directory is
+/// hashed again first and a tree that is not the recorded one refuses (PLUGIN-7). A project
+/// recorded by answer 2 and a mode that skips prompts do not approve it: a person's yes to this
+/// server by name is the only approval, so a run that cannot ask starts none. The yes is recorded
+/// as a line of its own kind beside the person's, and the question is drawn as any other is.
+fn settle_plugin<A: Asker + ?Sized>(
+    ways: &mut PluginWays<'_>,
+    server: &plugin_servers::Server,
+    asker: &mut A,
+    (approvals, projects): (&mut Approvals, &mut Projects),
+    notes: &mut Vec<String>,
+) -> Option<Plan> {
+    let alias = server.alias.as_str();
+    let plugin = server.plugin.as_str();
+    let mut held = hold_plugin_server(
+        server,
+        plugin_servers::may_start(ways.directory, plugin),
+        approvals,
+        ways.managed,
+        ways.environment,
+        ways.prelude,
+        &|| ways.asking == Asking::Person && asker.anybody_there(),
+    );
+    if let Some(stop) = held.stop {
+        notes.push(stopped_note(stop, alias, plugin));
+        return None;
+    }
+    if let Some(found) = &held.unusable {
+        notes.push(
+            t!(
+                mcp_unusable,
+                alias = shown(alias),
+                problem = plugin_problem(server, found)
+            )
+            .to_string(),
+        );
+        return None;
+    }
+    if let Some(unstarted) = held.unstarted.take() {
+        notes.push(unstarted_note(alias, unstarted));
+        return None;
+    }
+    // Reached only where `hold_plugin_server` returned neither a stop, an unusable declaration nor
+    // an unstarted reason, and then the declaration is usable, which is also when it has a digest
+    // and a plan, so the else below cannot be taken and drops no server.
+    let (Ok(declaration), Some(plan), Some(digest)) =
+        (&server.declaration, held.plan.take(), held.digest)
+    else {
+        return None;
+    };
+    if held.approved {
+        return Some(plan);
+    }
+    // Neither a mode that answers every question nor a project's standing answer approves a
+    // server a plugin carries: a person says yes to this one, here.
+    if !held.asks {
+        notes.push(t!(servers_plugin_nobody, alias = alias, plugin = plugin).to_string());
+        return None;
+    }
+    let question = Question {
+        alias,
+        file: &named(ways.file, ways.project),
+        declaration,
+        program: match &plan {
+            Plan::Stdio { program, .. } => Some(program),
+            Plan::OpenShell { .. } | Plan::Http { .. } => None,
+        },
+        changed: approvals.plugin_changed(plugin, &server.named, &digest),
+        plugin: Some((plugin, digest)),
+    };
+    // Answer 2 records the project as it says it does. That is a standing answer for the person's
+    // own servers: it never approves a server a plugin carries, here or later.
+    let answer = asker.ask_to_start(&question);
+    if answer == Answer::No {
+        notes.push(t!(servers_declined, alias = alias).to_string());
+        return None;
+    }
+    if !ways.home.writable {
+        notes.push(t!(servers_for_this_session_only, alias = alias));
+        return Some(plan);
+    }
+    approvals.approve_plugin(plugin, &server.named, digest);
+    let path = mcp::approvals_file(ways.directory);
+    if let Err(error) = crate::home::replace(&path, approvals.to_text()) {
+        notes.push(t!(
+            servers_not_kept,
+            alias = alias,
+            reason = t!(
+                mcp_not_written,
+                path = crate::confirm::shown_path(&path),
+                error = error.to_string()
+            )
+        ));
+    }
+    if answer == Answer::Project {
+        let recorded = projects.add(ways.project)
+            && crate::home::replace(&mcp::projects_file(ways.directory), projects.to_text())
+                .is_ok();
+        if !recorded {
+            notes.push(t!(
+                servers_project_not_kept,
+                path = shown(&ways.project.display().to_string())
+            ));
+        }
+    }
+    Some(plan)
+}
+
 /// A requested server as a session in `project` finds it before a question is put: how it would
 /// start, and whether an answer the person already gave covers it.
 ///
@@ -750,6 +1291,21 @@ fn assess(
     environment: &dyn Fn(&str) -> Option<OsString>,
     prelude: Option<Prelude>,
 ) -> Result<(Plan, bool), Unstarted> {
+    let plan = plan_of(declaration, managed, environment, prelude)?;
+    let digest = declaration.digest();
+    let covered = approvals.approves(&digest)
+        || (projects.contains(project) && !approvals.changed(alias, &digest));
+    Ok((plan, covered))
+}
+
+/// How `declaration` would start here, before anybody is asked about it: what [`assess`] finds of
+/// the declaration itself, and the whole of what is found for a server a plugin carries.
+fn plan_of(
+    declaration: &Declaration,
+    managed: &Managed,
+    environment: &dyn Fn(&str) -> Option<OsString>,
+    prelude: Option<Prelude>,
+) -> Result<Plan, Unstarted> {
     let plan = planned(declaration, environment).map_err(Unstarted::Unplanned)?;
     if let Plan::Stdio {
         directory: Some(directory),
@@ -768,10 +1324,7 @@ fn assess(
     if matches!(plan, Plan::Stdio { .. }) && prelude.is_none() {
         return Err(Unstarted::Unconfined);
     }
-    let digest = declaration.digest();
-    let covered = approvals.approves(&digest)
-        || (projects.contains(project) && !approvals.changed(alias, &digest));
-    Ok((plan, covered))
+    Ok(plan)
 }
 
 /// The repository git opens when it is run in `directory`, if it opens one: the nearest of it and the
@@ -1495,6 +2048,9 @@ pub struct Question<'a> {
     pub program: Option<&'a PathBuf>,
     /// Whether the person approved this alias as something else.
     pub changed: bool,
+    /// Where the server is one an installed plugin carries: the plugin's name and the digest an
+    /// approval of it binds to, which is the one drawn (PLUGIN-7).
+    pub plugin: Option<(&'a str, Digest)>,
 }
 
 /// The line saying which path a local server's program resolved to, drawn only where that differs
@@ -1530,15 +2086,30 @@ pub fn resolved_program_line(
 }
 
 impl Question<'_> {
+    /// The digest an answer to this question is recorded against: the declaration's own, or the
+    /// one that also names the plugin and its directory for a server a plugin carries.
+    pub fn digest(&self) -> Digest {
+        match self.plugin {
+            Some((_, digest)) => digest,
+            None => self.declaration.digest(),
+        }
+    }
+
     /// Every line drawn above the answers.
     pub fn lines(&self) -> Vec<String> {
-        let digest = self.declaration.digest();
+        let digest = self.digest();
         let indent = indent(self.alias);
         let mut lines = drawn(self.alias, self.declaration, &digest.short());
         let mut under = vec![format!(
             "{indent}{}",
             t!(servers_requested_by, file = self.file)
         )];
+        if let Some((plugin, _)) = self.plugin {
+            under.push(format!(
+                "{indent}{}",
+                t!(servers_carried_by, plugin = plugin)
+            ));
+        }
         if let Some(program) = self.program {
             under.extend(runs(self.alias, self.declaration, program));
         }
@@ -3420,8 +3991,10 @@ fn nameable(
 /// starts itself (SANDBOX-30).
 ///
 /// A server is code bravebot did not write, so a file it writes in its home or its declared
-/// directory is not one bravebot may start. The record lasts for the process, as a stage's does,
-/// because a server that has stopped has not taken its files with it. It is made from the policy
+/// directory is not one bravebot may start. The record is never removed from, as a stage's is not,
+/// because a server that has stopped has not taken its files with it, and each directory in it is
+/// handed on to the record in the state directory, so a later process leaves it out too
+/// ([`crate::stage_record`]). It is made from the policy
 /// the server is launched under, once the rows the backend cannot name are dropped, and before
 /// the launch, so it holds what the server can write and is complete before it runs.
 fn keep_out_what_it_may_write(policy: &SandboxPolicy) {
@@ -3713,6 +4286,114 @@ mod tests {
         assert!(note.contains("state\u{241b}[2J"), "{note:?}");
     }
 
+    /// SERVERS-10: a server whose own directory cannot be made is not started, and the one note
+    /// says which server, where the directory was to be made and the reason the system gave.
+    /// `start_under` takes no way to put a question to the person, so none is put at this step.
+    ///
+    /// Rejects an error from making the directory being ignored, the note naming the directory
+    /// keyed by the digest instead of the `mcp-home` directory that could not be made, and the note
+    /// leaving the reason out.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_whose_own_directory_cannot_be_made_is_not_started_and_the_note_says_where_and_why()
+    {
+        let root = scratch("server-home-not-made");
+        let state = root.join("state");
+        std::fs::create_dir_all(&state).expect("state");
+        std::fs::write(state.join("mcp-home"), "").expect("a file where the directory goes");
+        let home = Home {
+            directory: Some(state.clone()),
+            writable: true,
+        };
+        let declared = digested(&["weather-mcp"]);
+
+        // The directory itself: the error names the one that stands in the way, and says why.
+        let Err((place, error)) = own_home(&home, &declared) else {
+            panic!("a directory was made where a file stands in the way");
+        };
+        assert_eq!(place, state.join("mcp-home"));
+        assert!(
+            !error.to_string().trim().is_empty(),
+            "the error says nothing: {error:?}"
+        );
+        // The same state directory with nothing in the way gives the directory keyed by the digest.
+        let open = root.join("open");
+        std::fs::create_dir_all(&open).expect("open");
+        let (made, throwaway) = own_home(
+            &Home {
+                directory: Some(open.clone()),
+                writable: true,
+            },
+            &declared,
+        )
+        .expect("a directory can be made where nothing is in the way");
+        assert_eq!(made, mcp::server_home(&open, &declared));
+        assert!(made.is_dir(), "{made:?} was not made");
+        assert!(throwaway.is_none(), "a throwaway directory was made");
+
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let program = installed(&root.join("bin"), "weather-mcp");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let plan = Plan::Stdio {
+            program,
+            arguments: Vec::new(),
+            variables: Variables::new(),
+            searched: Vec::new(),
+            reads: Vec::new(),
+            directory: Some(work),
+            declared,
+            timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
+            allowed_hosts: None,
+            ask_every_call: false,
+            choice_arguments: ChoiceArguments::new(),
+            apply_arguments: Default::default(),
+            covered_tools: Default::default(),
+        };
+        let mut notes = Vec::new();
+
+        let started = start_under(
+            None,
+            (Network::Open, None),
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        assert!(started.is_empty(), "the server started: {notes:?}");
+        let sentinel = "REASON-SENTINEL";
+        let drawn = t!(
+            servers_no_home,
+            alias = "weather",
+            path = crate::confirm::shown_path(&state.join("mcp-home")),
+            reason = sentinel
+        )
+        .to_string();
+        let (before, after) = drawn.split_once(sentinel).expect("the reason is drawn");
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        let reason = notes[0]
+            .strip_prefix(before)
+            .and_then(|rest| rest.strip_suffix(after))
+            .unwrap_or_else(|| {
+                panic!(
+                    "the note does not name the server and the directory the way {drawn:?} does: {:?}",
+                    notes[0]
+                )
+            });
+        assert!(
+            !reason.trim().is_empty(),
+            "the note gives no reason: {:?}",
+            notes[0]
+        );
+    }
+
     /// A checkout can make `.bravebot/settings.json` a link to a file inside it whose name holds
     /// control characters, and the question names the file the link leads to. The question is
     /// printed to the terminal as it is, so the name is drawn when it is made.
@@ -3965,6 +4646,85 @@ mod tests {
         assert!(person.screen.is_empty());
     }
 
+    /// SERVERS-13, SERVERS-1: a request nobody declared starts nothing in any mode, bypassing
+    /// included. `weather` is declared and a checkout asks for `docs`, which is not, so skipping the
+    /// questions has no declaration to answer them for. At a terminal, in a one-shot run and
+    /// bypassing the request is reported once and starts nothing, draws no question and records
+    /// nothing. The control asks for `weather`, which bypassing starts unasked, so the refusal is
+    /// the missing declaration's and not a platform that cannot start anything.
+    ///
+    /// Rejects a bypass that resolves an undeclared request to a declared server.
+    #[test]
+    fn a_request_nobody_declared_starts_nothing_in_any_mode_bypassing_included() {
+        for asking in [Asking::Person, Asking::OneShot, Asking::Bypass] {
+            let (home, project, declaration) =
+                declared("cli-servers-undeclared-modes", &["/bin/cat"]);
+            let file = project.join(".bravebot/settings.json");
+            let requested = vec![(file.clone(), "docs".to_string())];
+
+            let settled = settled_on_asking(
+                &requested,
+                &project,
+                &home,
+                asking,
+                "1\n",
+                Prelude::current(),
+            );
+
+            assert!(
+                settled.plans.is_empty(),
+                "{asking:?} started a server nobody declared: {:?}",
+                started(&settled)
+            );
+            assert_eq!(
+                settled.notes,
+                vec![
+                    t!(
+                        servers_not_declared,
+                        file = ".bravebot/settings.json",
+                        alias = "docs"
+                    )
+                    .to_string()
+                ],
+                "{asking:?}"
+            );
+            assert_eq!(settled.screen, "", "{asking:?} drew a question");
+            assert!(
+                !Approvals::read(&home).approves(&declaration.digest()),
+                "{asking:?} recorded an approval"
+            );
+            assert!(
+                !mcp::approvals_file(&home).exists(),
+                "{asking:?} wrote an approvals file"
+            );
+            assert_eq!(
+                recorded_projects(&home),
+                "",
+                "{asking:?} recorded a project"
+            );
+
+            let requested = vec![(file, "weather".to_string())];
+            let settled = settled_on_asking(
+                &requested,
+                &project,
+                &home,
+                asking,
+                "1\n",
+                Prelude::current(),
+            );
+            let expected = match asking {
+                Asking::OneShot => Vec::new(),
+                _ => vec!["weather"],
+            };
+            assert_eq!(
+                started(&settled),
+                expected,
+                "the control, {asking:?}: {:?}",
+                settled.notes
+            );
+        }
+    }
+
     #[test]
     fn an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one() {
         let (home, project, declaration) = declared("cli-servers-standing", &["weather-mcp"]);
@@ -4086,6 +4846,91 @@ mod tests {
         assert!(settled.screen.is_empty(), "{}", settled.screen);
         assert!(!mcp::approvals_file(&home).exists());
         assert_eq!(recorded_projects(&home), "");
+    }
+
+    /// SERVERS-13: skipping the question about a server does not widen what the server is started
+    /// with. This process holds a value for every name it is asked about, and the environment the
+    /// plan carries is the names the declaration lists and the values it stores, the same as where
+    /// a person answered the question. The regression it rejects is a bypassed start that hands the
+    /// server more of this process's environment than the declaration names.
+    #[test]
+    fn a_server_started_in_bypass_gets_the_named_variables_and_the_stored_values_and_no_more() {
+        let root = scratch("cli-servers-bypass-environment");
+        let home = root.join("home");
+        let project = root.join("project");
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project.join(".bravebot")).expect("project");
+        let bin = root.join("bin");
+        installed(&bin, "weather-mcp");
+        let stored = [("WEATHER_TOKEN".to_string(), "stored".to_string())].into();
+        let declaration =
+            Declaration::stdio(words(&["weather-mcp"]), words(&["PATH", "REGION"]), None)
+                .and_then(|declaration| declaration.storing(stored))
+                .expect("a declaration");
+        let mut declarations = Declarations::default();
+        declarations.insert("weather", &declaration);
+        std::fs::write(mcp::declarations_file(&home), declarations.to_text()).expect("mcp.json");
+        let requested = vec![(
+            project.join(".bravebot/settings.json"),
+            "weather".to_string(),
+        )];
+        let managed = Managed::at(&managed_beside(&home));
+        let state = Home {
+            directory: Some(home.clone()),
+            writable: true,
+        };
+        let path = bin.as_os_str().to_owned();
+        let asked = std::cell::RefCell::new(std::collections::BTreeSet::new());
+        let environment = |name: &str| {
+            asked.borrow_mut().insert(name.to_string());
+            Some(match name {
+                "PATH" => path.clone(),
+                other => OsString::from(format!("from {other}")),
+            })
+        };
+        let expected = Variables::new()
+            .with("PATH", &bin)
+            .with("REGION", "from REGION")
+            .with("WEATHER_TOKEN", "stored");
+
+        // Bypass first: it records nothing, so the person's yes after it is still asked for.
+        for (asking, typed) in [(Asking::Bypass, ""), (Asking::Person, "1\n")] {
+            let mut person = Person {
+                answers: typed.as_bytes(),
+                screen: Vec::new(),
+                present: true,
+            };
+            let mut notes = Vec::new();
+            let plans = settle(
+                &requested,
+                &project,
+                &state,
+                &managed,
+                asking,
+                &mut person,
+                &environment,
+                Prelude::current(),
+                &mut notes,
+            );
+
+            assert_eq!(plans.len(), 1, "{asking:?}: {notes:?}");
+            let Plan::Stdio { variables, .. } = &plans[0].1 else {
+                panic!("{asking:?}: a stdio plan");
+            };
+            assert_eq!(variables, &expected, "{asking:?}");
+            assert_eq!(
+                person.screen.is_empty(),
+                asking == Asking::Bypass,
+                "{asking:?}: the question was drawn or skipped as the mode says"
+            );
+        }
+        let asked = asked.into_inner();
+        assert!(
+            asked
+                .iter()
+                .all(|name| ["PATH", "PATHEXT", "REGION"].contains(&name.as_str())),
+            "this process's environment was read for a name the declaration does not list: {asked:?}"
+        );
     }
 
     /// An administrator's refusal is not a question put to the person running the program, so no
@@ -5083,6 +5928,18 @@ mod tests {
         typed: &str,
         prelude: Option<Prelude>,
     ) -> Settled {
+        settled_on_asking(requested, project, home, Asking::Person, typed, prelude)
+    }
+
+    /// [`settled_on`], the session asking as `asking` says.
+    fn settled_on_asking(
+        requested: &[(PathBuf, String)],
+        project: &Path,
+        home: &Path,
+        asking: Asking,
+        typed: &str,
+        prelude: Option<Prelude>,
+    ) -> Settled {
         let home = Home {
             directory: Some(home.to_path_buf()),
             writable: true,
@@ -5099,7 +5956,7 @@ mod tests {
             project,
             &home,
             &Managed::default(),
-            Asking::Person,
+            asking,
             &mut person,
             &environment,
             prelude,
@@ -5132,6 +5989,63 @@ mod tests {
 
         let settled = settled_on(&requested, &project, &home, "1\n", Prelude::current());
         assert_eq!(started(&settled), vec!["weather"], "{:?}", settled.notes);
+    }
+
+    /// SERVERS-13, MCP-3: a stdio server nothing can confine is not started in any mode, and
+    /// skipping the prompts is one of them. At a terminal, in a one-shot run and bypassing, a
+    /// platform with no confinement starts nothing, draws no question, says so once and records no
+    /// approval. The control is the same declaration where a confinement base exists, which
+    /// bypassing starts unasked, so the refusal is the platform's and not the mode's.
+    #[test]
+    fn bypassing_does_not_start_a_server_nothing_can_confine() {
+        for asking in [Asking::Person, Asking::OneShot, Asking::Bypass] {
+            let (home, project, declaration) =
+                declared("cli-servers-unconfinable-modes", &["/bin/cat"]);
+            let requested = vec![(
+                project.join(".bravebot/settings.json"),
+                "weather".to_string(),
+            )];
+
+            let settled = settled_on_asking(&requested, &project, &home, asking, "1\n", None);
+
+            assert!(
+                settled.plans.is_empty(),
+                "{asking:?} started a server nothing can confine"
+            );
+            assert_eq!(settled.screen, "", "{asking:?} drew a question");
+            assert_eq!(
+                settled.notes,
+                vec![t!(servers_no_confinement_here, alias = "weather").to_string()],
+                "{asking:?}"
+            );
+            assert!(
+                !Approvals::read(&home).approves(&declaration.digest()),
+                "{asking:?} recorded an approval"
+            );
+            assert!(
+                !mcp::approvals_file(&home).exists(),
+                "{asking:?} wrote an approvals file"
+            );
+
+            let settled = settled_on_asking(
+                &requested,
+                &project,
+                &home,
+                asking,
+                "1\n",
+                Prelude::current(),
+            );
+            let expected = match asking {
+                Asking::OneShot => Vec::new(),
+                _ => vec!["weather"],
+            };
+            assert_eq!(
+                started(&settled),
+                expected,
+                "the control, {asking:?}: {:?}",
+                settled.notes
+            );
+        }
     }
 
     /// A name a checkout wrote is drawn at the person's terminal. Left bare, a name with an escape
@@ -6206,6 +7120,40 @@ mod tests {
         assert_eq!(asked.into_inner(), ["REGION"]);
     }
 
+    /// SERVERS-10: a named variable this process holds is handed to the server, and one it does
+    /// not hold is left out of the server's environment. The regression it rejects is an
+    /// environment that sets the missing variable to an empty value, which a server reads as
+    /// configured with nothing.
+    #[test]
+    fn a_named_variable_the_process_does_not_hold_is_left_out_and_not_set_empty() {
+        let root = scratch("cli-servers-unheld");
+        let bin = root.join("bin");
+        let program = installed(&bin, "weather-mcp");
+        let env = [("PATH".to_string(), bin.to_str().unwrap().to_string())].into();
+        let declaration =
+            Declaration::stdio(words(&["weather-mcp"]), words(&["HELD", "REGION"]), None)
+                .and_then(|declaration| declaration.storing(env))
+                .expect("a declaration");
+        let environment = |name: &str| (name == "HELD").then(|| OsString::from("from HELD"));
+
+        let Ok(Plan::Stdio {
+            program: found,
+            variables,
+            ..
+        }) = planned(&declaration, &environment)
+        else {
+            panic!("no local plan");
+        };
+
+        assert_eq!(found, program);
+        assert_eq!(
+            variables,
+            Variables::new()
+                .with("HELD", "from HELD")
+                .with("PATH", &bin)
+        );
+    }
+
     fn digested(argv: &[&str]) -> Digest {
         Declaration::stdio(words(argv), vec!["PATH".to_string()], None)
             .expect("declaration")
@@ -7017,6 +7965,192 @@ while {answering}"#
         assert!(!approvals.approves(&redirected.declared.digest()));
     }
 
+    /// SERVERS-11: a server the person moved at its handshake whose new address redirects it again
+    /// is not asked about a second time. The title is drawn once, the second hop is refused with a
+    /// note that names the server, nothing is sent to the third server, the server is not started
+    /// and the declaration stays as it was. The regression it rejects is a second hop put through
+    /// the same question, which a server could repeat to walk a person's yes to an address they
+    /// were never shown.
+    #[test]
+    fn a_handshake_redirected_again_off_where_it_was_moved_is_refused_and_not_asked_about() {
+        let (third_url, third) = serving(weather, String::new());
+        let (moved_to, second) = serving(redirecting, third_url.clone());
+        let (declared_url, first) = serving(redirecting, moved_to.clone());
+        let redirected = redirected_at(
+            "cli-servers-move-twice",
+            |declared| declared,
+            declared_url,
+            moved_to,
+            first,
+            second,
+        );
+
+        let (reached, screen) =
+            reached_redirected(&redirected, Asking::Person, true, true, "y\ny\n");
+
+        assert_eq!(
+            screen.matches(t!(mcp_move_title)).count(),
+            1,
+            "the second hop was put to the person: {screen}"
+        );
+        assert!(
+            reached.aliases().is_empty(),
+            "a server redirected twice was started: {:?}",
+            reached.aliases()
+        );
+        assert_eq!(
+            reached.notes,
+            vec![t!(mcp_move_again, alias = "weather").to_string()]
+        );
+        let sent: Vec<String> = third.try_iter().collect();
+        assert!(
+            sent.is_empty(),
+            "something was sent where the second hop pointed: {sent:?}"
+        );
+        let second: Vec<String> = redirected.second.try_iter().collect();
+        assert!(
+            second
+                .first()
+                .is_some_and(|body| body.contains(r#""initialize""#)),
+            "the first hop was not followed, so the rows above prove nothing: {second:?}"
+        );
+        assert_eq!(
+            declared_in(&redirected.home),
+            redirected.declared,
+            "the declaration was rewritten"
+        );
+        assert!(
+            Approvals::read(&redirected.home).approves(&redirected.declared.digest()),
+            "the declaration lost its approval"
+        );
+    }
+
+    /// SERVERS-11, SERVERS-12: a yes to a move does not start the server at a destination the
+    /// machine's managed layer denies. The declaration is at `127.0.0.1` and its handshake points
+    /// at `localhost`, which the layer denies, so the person is asked, the answer is yes, and the
+    /// note is the layer's own reason. Nothing is sent where the reply pointed, the server is not
+    /// started and nothing is written. The control is the same layer over a reply pointing at
+    /// `127.0.0.1`, which the layer does not name, where the same yes moves the server.
+    #[test]
+    fn a_handshake_redirected_to_a_host_the_managed_layer_denies_is_not_moved_on_a_yes() {
+        let (second_url, second) = serving(weather, String::new());
+        let port = second_url
+            .rsplit(':')
+            .next()
+            .and_then(|rest| rest.strip_suffix("/mcp"))
+            .expect("the port of the second server")
+            .to_string();
+        let denied = format!("http://localhost:{port}/mcp");
+        let (declared_url, first) = serving(redirecting, denied.clone());
+        let redirected = redirected_at(
+            "cli-servers-move-managed-denied",
+            |declared| declared,
+            declared_url,
+            denied.clone(),
+            first,
+            second,
+        );
+        let managed = managed_beside(&redirected.home);
+        std::fs::write(&managed, r#"{"mcp": {"deny": [{"host": "localhost"}]}}"#)
+            .expect("managed.json");
+
+        let (reached, screen) = reached_redirected(&redirected, Asking::Person, true, true, "y\n");
+
+        let reason = crate::mcp::managed_refusal(&Managed::at(&managed), Server::Remote(&denied))
+            .expect("the layer denies localhost, so the test proves nothing otherwise");
+        assert_eq!(
+            reached.notes,
+            vec![
+                t!(
+                    mcp_move_refused_by_managed,
+                    alias = "weather",
+                    reason = reason
+                )
+                .to_string()
+            ]
+        );
+        assert!(
+            screen.contains(t!(mcp_move_title)),
+            "the move was not put to the person: {screen}"
+        );
+        assert!(
+            reached.aliases().is_empty(),
+            "a server the layer denies was started: {:?}",
+            reached.aliases()
+        );
+        let sent: Vec<String> = redirected.second.try_iter().collect();
+        assert!(
+            sent.is_empty(),
+            "something was sent where the reply pointed: {sent:?}"
+        );
+        assert_eq!(declared_in(&redirected.home), redirected.declared);
+        assert!(Approvals::read(&redirected.home).approves(&redirected.declared.digest()));
+
+        let control =
+            redirected_declaring("cli-servers-move-managed-not-denied", |declared| declared);
+        std::fs::write(
+            managed_beside(&control.home),
+            r#"{"mcp": {"deny": [{"host": "localhost"}]}}"#,
+        )
+        .expect("managed.json");
+        let (reached, _) = reached_redirected(&control, Asking::Person, true, true, "y\n");
+        assert_eq!(
+            reached.aliases(),
+            vec!["weather"],
+            "the control was refused: {:?}",
+            reached.notes
+        );
+    }
+
+    /// SERVERS-11: a destination that names no socket cannot be declared, so a yes to it moves
+    /// nothing. The reply points at an address carrying a user and a password, which a declaration
+    /// never holds, so the person is asked, the answer is yes, and the note says the address
+    /// cannot be declared and why. The server is not started and nothing is written.
+    #[test]
+    fn a_handshake_redirected_to_an_address_carrying_credentials_is_not_moved_on_a_yes() {
+        let (second_url, second) = serving(weather, String::new());
+        let credentialed = second_url.replacen("http://", "http://user:pw@", 1);
+        let (declared_url, first) = serving(redirecting, credentialed.clone());
+        let redirected = redirected_at(
+            "cli-servers-move-userinfo-destination",
+            |declared| declared,
+            declared_url,
+            credentialed,
+            first,
+            second,
+        );
+
+        let (reached, screen) = reached_redirected(&redirected, Asking::Person, true, true, "y\n");
+
+        assert_eq!(
+            reached.notes,
+            vec![
+                t!(
+                    mcp_move_undeclarable,
+                    alias = "weather",
+                    problem = t!(mcp_problem_credentials)
+                )
+                .to_string()
+            ]
+        );
+        assert!(
+            screen.contains(t!(mcp_move_title)),
+            "the move was not put to the person: {screen}"
+        );
+        assert!(
+            reached.aliases().is_empty(),
+            "a server at an address that cannot be declared was started: {:?}",
+            reached.aliases()
+        );
+        let sent: Vec<String> = redirected.second.try_iter().collect();
+        assert!(
+            sent.is_empty(),
+            "something was sent where the reply pointed: {sent:?}"
+        );
+        assert_eq!(declared_in(&redirected.home), redirected.declared);
+        assert!(Approvals::read(&redirected.home).approves(&redirected.declared.digest()));
+    }
+
     /// SERVERS-21: a server moved where its reply pointed is still asked about at every call, in
     /// the session that moved it and in the declaration the move rewrites. The regression it
     /// rejects is a rewrite that keeps the bounds and drops the property, which would leave the
@@ -7198,6 +8332,63 @@ while {answering}"#
         assert_eq!(
             std::fs::read_to_string(mcp::approvals_file(&redirected.home)).expect("approvals"),
             approved
+        );
+    }
+
+    /// SERVERS-11: `y` is the only yes to a move at a handshake. The call road's yes is answer 1 or
+    /// 2, and a person who types either here, or a longer word that starts with `y`, or nothing,
+    /// has not agreed to declare the server where its reply pointed. Each of those starts nothing,
+    /// sends nothing where the reply pointed and rewrites neither the declaration nor its
+    /// approval; `y` is the control that the move is made. The regression it rejects is a move
+    /// that reads a yes more loosely than a lone `y`, which lets a reflex answer rewrite a
+    /// declaration to an address nobody read.
+    #[test]
+    fn only_a_y_moves_a_server_on_the_handshake_road() {
+        for typed in ["1\n", "2\n", "yes\n", "ok\n", "\n", ""] {
+            let redirected = redirected("cli-servers-move-only-y");
+            let approved =
+                std::fs::read_to_string(mcp::approvals_file(&redirected.home)).expect("approvals");
+
+            let (reached, screen) =
+                reached_redirected(&redirected, Asking::Person, true, true, typed);
+
+            assert!(
+                screen.contains(t!(mcp_move_title)),
+                "{typed:?}: the move was not put to the person: {screen}"
+            );
+            assert!(
+                reached.aliases().is_empty(),
+                "{typed:?} moved the server: {:?}",
+                reached.notes
+            );
+            assert_eq!(
+                reached.notes,
+                vec![t!(mcp_move_not_started, alias = "weather").to_string()],
+                "{typed:?}"
+            );
+            assert!(
+                redirected.second.try_iter().next().is_none(),
+                "{typed:?}: something was sent where the reply pointed"
+            );
+            assert_eq!(
+                declared_in(&redirected.home),
+                redirected.declared,
+                "{typed:?}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(mcp::approvals_file(&redirected.home)).expect("approvals"),
+                approved,
+                "{typed:?}"
+            );
+        }
+
+        let control = redirected("cli-servers-move-only-y-control");
+        let (reached, _) = reached_redirected(&control, Asking::Person, true, true, "y\n");
+        assert_eq!(
+            reached.aliases(),
+            vec!["weather"],
+            "the control was not moved: {:?}",
+            reached.notes
         );
     }
 
@@ -7634,6 +8825,147 @@ done
             !notes.iter().any(|note| note.contains("handshake")),
             "{notes:?}"
         );
+    }
+
+    /// Declares prompts and answers `initialize`, each `tools/list` page and each `prompts/list`
+    /// page after the seconds `initialize`, `tools` and `prompts` give, so a bound on one request
+    /// decides whether that request's answer is read.
+    #[cfg(unix)]
+    fn listing_server(initialize: &str, tools: &str, prompts: &str) -> String {
+        format!(
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      sleep {initialize}
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocolVersion":"2025-06-18","capabilities":{{"prompts":{{}}}},"serverInfo":{{"name":"fake","version":"1"}}}}}}\n' "$id"
+      ;;
+    *'"tools/list"'*)
+      sleep {tools}
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"tools":[]}}}}\n' "$id"
+      ;;
+    *'"prompts/list"'*)
+      sleep {prompts}
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"prompts":[]}}}}\n' "$id"
+      ;;
+  esac
+done
+"#
+        )
+    }
+
+    /// The startup bound is given to `tools/list` and not only to `initialize`: a server that
+    /// answers `initialize` at once and never answers `tools/list` is left out at the startup
+    /// bound, with the request named.
+    ///
+    /// A wrong implementation switches to the call bound, 120 seconds here, after `initialize`.
+    /// The handshake is then given up on at three times the startup bound and five seconds, 14
+    /// seconds for the 3 seconds given here, and the note says only that the handshake was too
+    /// slow. The startup bound leaves `initialize` a wide margin under load, and the elapsed
+    /// ceiling of 10 seconds is between the 3 seconds `tools/list` is held to and the 14 seconds
+    /// of that give-up.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_not_answering_tools_list_within_its_startup_bound_is_left_out_at_that_bound() {
+        let root = scratch("cli-servers-startup-bound-tools-list");
+        let mut notes = Vec::new();
+        let timeouts = Timeouts::new(Some(3), None).expect("timeouts");
+
+        let started = std::time::Instant::now();
+        let Some(reached) =
+            started_slow(&root, &listing_server("0", "30", "0"), timeouts, &mut notes)
+        else {
+            return;
+        };
+
+        assert!(reached.is_empty(), "a server that never listed was kept");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "tools/list was waited on past the startup bound: {:?}",
+            started.elapsed()
+        );
+        let about_handshake: Vec<&String> = notes
+            .iter()
+            .filter(|note| note.contains("handshake"))
+            .collect();
+        let [note] = about_handshake.as_slice() else {
+            panic!("notes were {notes:?}");
+        };
+        assert!(
+            note.contains("weather") && note.contains("tools/list timed out after 3 seconds"),
+            "{note}"
+        );
+    }
+
+    /// The startup bound is given to `prompts/list` for a server that declared prompts: one that
+    /// answers `initialize` and `tools/list` and never answers `prompts/list` is left out at the
+    /// startup bound, with the request named.
+    ///
+    /// A wrong implementation switches to the call bound once the tools are listed. The startup
+    /// bound is 3 seconds, which leaves `initialize` a wide margin under load, and the elapsed
+    /// ceiling of 10 seconds is below the 14 seconds at which the handshake is given up on.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_not_answering_prompts_list_within_its_startup_bound_is_left_out_at_that_bound() {
+        let root = scratch("cli-servers-startup-bound-prompts-list");
+        let mut notes = Vec::new();
+        let timeouts = Timeouts::new(Some(3), None).expect("timeouts");
+
+        let started = std::time::Instant::now();
+        let Some(reached) =
+            started_slow(&root, &listing_server("0", "0", "30"), timeouts, &mut notes)
+        else {
+            return;
+        };
+
+        assert!(reached.is_empty(), "a server that never listed was kept");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "prompts/list was waited on past the startup bound: {:?}",
+            started.elapsed()
+        );
+        let about_handshake: Vec<&String> = notes
+            .iter()
+            .filter(|note| note.contains("handshake"))
+            .collect();
+        let [note] = about_handshake.as_slice() else {
+            panic!("notes were {notes:?}");
+        };
+        assert!(
+            note.contains("weather") && note.contains("prompts/list timed out after 3 seconds"),
+            "{note}"
+        );
+    }
+
+    /// A handshake is given up on after three times the startup bound and five seconds, for a
+    /// declared bound and for the default of 60 seconds.
+    ///
+    /// A wrong implementation waits twice the bound, no slack, a different slack, four times the
+    /// bound, or the call bound, and each of those is a different instant here.
+    #[test]
+    fn a_handshake_is_given_up_on_after_three_times_its_startup_bound_and_five_seconds() {
+        for (startup, bound, given_up_after) in [
+            (Some(1), 1, 8),
+            (Some(10), 10, 35),
+            (Some(100), 100, 305),
+            (None, 60, 185),
+        ] {
+            let timeouts = Timeouts::new(startup, Some(7)).expect("timeouts");
+            let before = Instant::now();
+            let (alias, deadline, seconds) = wait_for("weather", timeouts);
+            let after = Instant::now();
+
+            let wait = Duration::from_secs(given_up_after);
+            assert_eq!(alias, "weather");
+            assert_eq!(seconds, bound, "the bound the note names, for {startup:?}");
+            assert!(
+                deadline >= before + wait && deadline <= after + wait,
+                "a handshake with a startup bound of {startup:?} is given up on after \
+                 {:?}, not {wait:?}",
+                deadline.saturating_duration_since(before)
+            );
+        }
     }
 
     /// Once the handshake is done a server is held to the call bound its declaration gives, which

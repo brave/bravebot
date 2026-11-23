@@ -23,6 +23,7 @@ const load = (contents) => {
 const lines = load("export * from './src/renderer/interjecting'")
 const events = load("export { apply } from './src/renderer/apply'")
 const main = load("export * from './src/main/sanitise'")
+const staging = load("export * from './src/renderer/staging'")
 
 const line = (id, prompt) => ({ id, prompt, attachments: [], staged: [] })
 const live = (over = {}) => ({
@@ -49,6 +50,22 @@ test('a line sent into the turn waits, undrawn in the transcript, until the plan
   const read = heard(sent, { event: 'turn.interjected', session: 's', data: { prompt: 'no, the other one' } })
   assert.deepEqual(read.interjected, [])
   assert.deepEqual(said(read), ['opening prompt', 'no, the other one'])
+})
+
+test('a line holding a folded paste goes into the turn as the pasted words, and is queued as them if declined', () => {
+  const picture = { id: 'p', noun: 'Image', thumbnail: 'data:image/png;base64,c21hbGw=' }
+  const shot = staging.stagePaste(staging.EMPTY_STAGING, picture, '', 0)
+  const folded = staging.stageText(shot.staging, 'a\nb\nc\nd', shot.draft, shot.caret)
+  const exit = staging.exitOf(folded.staging, folded.draft)
+  const words = '[Image #1] a\nb\nc\nd'
+  const sent = lines.sentInto(live({ staging: folded.staging }), { id: 'x', prompt: exit.line, attachments: [], staged: exit.staged })
+  assert.equal(sent.interjected[0].prompt, words)
+  assert.deepEqual(sent.staging.staged, [], 'the composer holds nothing after the line leaves')
+  assert.deepEqual(lines.markersOf(sent.interjected[0].staged), { files: [], pictures: ['[Image #1]'] }, 'a folded paste is no marker the bridge is told of')
+  const back = lines.declined(sent, 'x')
+  assert.equal(back.queued[0].prompt, words)
+  const read = heard(sent, { event: 'turn.interjected', session: 's', data: { prompt: words } })
+  assert.deepEqual(said(read), ['opening prompt', words])
 })
 
 test('lines are read in the order they were sent, one event each', () => {

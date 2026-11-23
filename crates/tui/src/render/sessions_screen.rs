@@ -194,27 +194,14 @@ pub(super) fn draw_sessions_screen(frame: &mut Frame, session: &Session) -> Laid
     laid
 }
 
+/// The word for a status, which is [`Status::word`], shared with the desktop list.
 pub(crate) fn status_word(status: Status) -> &'static str {
-    match status {
-        Status::NeedsInput => t!(sessions_screen_status_needs_input),
-        Status::Interrupted => t!(sessions_screen_status_interrupted),
-        Status::Working => t!(sessions_screen_status_working),
-        Status::Ready => t!(sessions_screen_status_ready),
-        Status::OpenElsewhere => t!(sessions_screen_status_open_elsewhere),
-        Status::Stopped => t!(sessions_screen_status_stopped),
-        Status::Saved => t!(sessions_screen_status_saved),
-    }
+    status.word()
 }
 
-/// A status as a row says it: its word, and for a session holding a prompt the one word for the kind
-/// of prompt held, in brackets (BG-5, SCREEN-16).
+/// A status as a row says it, which is [`Status::in_words`] (BG-5, SCREEN-16).
 pub(crate) fn status_in_words(status: Status, held: Option<Held>) -> String {
-    match (status, held) {
-        (Status::NeedsInput, Some(held)) => {
-            format!("{} ({})", status_word(status), held.label())
-        }
-        _ => status_word(status).to_string(),
-    }
+    status.in_words(held)
 }
 
 /// The dot before a row and the colour it is drawn in.

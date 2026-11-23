@@ -253,6 +253,15 @@ fn questions_of(kind: Kind) -> Vec<Row> {
             };
             format!("{:?}", ask_host(terminal, &request))
         })],
+        Kind::Hook => vec![row("hook", vec![interrupt()], |terminal| {
+            let request = bravebot_agent::confirm::HookRequest {
+                plugin: "demo-plugin".to_string(),
+                moment: "turn-started",
+                argv: vec!["/home/x/.bravebot/plugins/demo-plugin/hook.sh".to_string()],
+                records: true,
+            };
+            format!("{:?}", ask_hook(terminal, &request))
+        })],
         Kind::Ask => vec![
             row(
                 "a question the planner puts",
@@ -308,6 +317,7 @@ fn other_questions() -> Vec<Row> {
             declaration: &declaration,
             program: None,
             changed: false,
+            plugin: None,
         };
         format!("{:?}", ask_to_start(terminal, &question))
     });

@@ -47,7 +47,8 @@ directory is the one `BRAVEBOT_HOME` names, which the hook reads once, as the sh
 `~/.bravebot` where the variable is empty, is not an absolute path or is not set. A command that spans lines is recorded as one line, with its
 newlines as spaces. The line is recorded as submitted, so what a command printed and whether it
 succeeded are not recorded. A line that is `@bravebot`, or begins with `@bravebot` and a space, is
-not recorded, so a question is not part of the next one. The state directory, the shell directory
+not recorded, so a question is not part of the next one. The line is judged after the white space
+before it is taken off, in every shell, so an indented question is skipped as well. The state directory, the shell directory
 and the file are mode 0700, 0700 and 0600 whatever the shell's umask is and however the state
 directory was created ([STATE-1](state-directory.md#STATE-1)). A directory that is a link is
 stepped over rather than followed, as every writer into the state directory steps over one, so the
@@ -64,7 +65,9 @@ which is the behaviour a person who set them wants. A terminal keeps
 recording in the directory `BRAVEBOT_HOME` named when its hook was sourced, so a change to the
 variable in that terminal moves a question's run and leaves the record where it was. The tests
 run the bash hook in a real `bash`; the zsh and fish hooks are the same design written for those
-shells and are not run by the suite.
+shells and are not run by the suite. A test reads the text of both hooks and requires the skip of an
+empty line, of `@bravebot` alone and of `@bravebot` and a space ahead of the write, and the removal of
+the white space before the line is judged.
 
 `verified-by: bravebot_cli::running::a_question_carries_the_commands_since_the_last_one_on_stdin`
 `verified-by: bravebot_cli::running::the_recorded_lines_are_private_and_end_with_the_terminal`
@@ -73,6 +76,9 @@ shells and are not run by the suite.
 `verified-by: bravebot_cli::running::the_hook_narrows_a_named_directory_and_nothing_above_it`
 `verified-by: bravebot_cli::running::the_hook_steps_over_a_named_directory_that_is_a_link`
 `verified-by: bravebot_cli::running::the_hook_passes_over_a_value_that_names_no_directory`
+`verified-by: bravebot_cli::running::a_question_with_no_words_after_the_name_is_not_recorded`
+`verified-by: bravebot_cli::running::an_indented_question_is_not_recorded`
+`verified-by: bravebot_cli::running::the_zsh_and_fish_hooks_skip_a_question_line_before_they_record`
 
 <a id="SHELLINT-3"></a>
 ### SHELLINT-3: `BRAVEBOT_INCOGNITO` set and not empty stops the recording

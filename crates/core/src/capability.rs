@@ -79,6 +79,15 @@ pub enum Capability {
     /// Fetch a URL. Output is untrusted and public: it is attacker-influenceable but
     /// carries no confidentiality of ours.
     WebFetch,
+    /// Search the web through the first-party Brave Search API. Separate from
+    /// [`Capability::WebFetch`] for the reason [`Capability::LanguageServer`] is separate from
+    /// [`Capability::FileRead`]: the destination is one host fixed in source and the thing sent is
+    /// the planner's own query, so a person's answer about a search is not an answer about
+    /// fetching a page, and a rule about one says nothing about the other.
+    ///
+    /// Output is untrusted and public, exactly as a fetched page is: what the index returns was
+    /// written by whoever owns the pages, and none of it is ours.
+    WebSearch,
     /// Call a tool on the MCP server declared under this alias. Output is untrusted;
     /// confidentiality depends on the server, so this label is the conservative floor and
     /// a server may raise it.
@@ -121,7 +130,7 @@ impl Capability {
     /// The alias in the MCP variant stands for every server. What a capability observes is a
     /// property of the protocol, and that is the question a walk over this list asks. Which
     /// server a grant is about is [`CapabilitySet`]'s question rather than this one.
-    pub fn all() -> [Self; 9] {
+    pub fn all() -> [Self; 10] {
         [
             Self::FileRead,
             Self::FileWrite,
@@ -129,6 +138,7 @@ impl Capability {
             Self::GitRead,
             Self::GitWrite,
             Self::WebFetch,
+            Self::WebSearch,
             Self::McpCall(ServerAlias::new("any")),
             Self::LanguageServer,
             Self::Connector(ConnectorName::new("any")),
@@ -147,7 +157,7 @@ impl Capability {
                 Some(Label::untrusted_private())
             }
             // Remote content is attacker-influenceable but not confidential to us.
-            Self::WebFetch => Some(Label::untrusted_public()),
+            Self::WebFetch | Self::WebSearch => Some(Label::untrusted_public()),
             // A server may hold the person's own data, a mailbox or a calendar, and this client
             // cannot tell what a given call read from it.
             Self::McpCall(_) => Some(Label::untrusted_private()),
@@ -171,6 +181,7 @@ impl Capability {
             Self::GitRead => "git_read",
             Self::GitWrite => "git_write",
             Self::WebFetch => "web_fetch",
+            Self::WebSearch => "web_search",
             Self::McpCall(_) => "mcp_call",
             Self::LanguageServer => "language_server",
             Self::Connector(_) => "connector",
@@ -315,6 +326,22 @@ mod tests {
     fn pure_effects_have_no_output_label() {
         assert_eq!(Capability::FileWrite.output_label(), None);
         assert_eq!(Capability::GitWrite.output_label(), None);
+    }
+
+    /// WEBSEARCH-1: a search is its own capability, labelled as a fetch is, and a grant of one is no
+    /// grant of the other. The regression it rejects: searching folded into `WebFetch`, which a
+    /// rule or a delegate's set could not then tell apart.
+    #[test]
+    fn a_search_is_its_own_capability_with_a_fetched_body_label() {
+        assert_eq!(
+            Capability::WebSearch.output_label(),
+            Some(Label::untrusted_public())
+        );
+        assert_eq!(Capability::WebSearch.to_string(), "web_search");
+        let fetching = CapabilitySet::from_iter([Capability::WebFetch]);
+        assert!(!fetching.contains(&Capability::WebSearch));
+        let searching = CapabilitySet::from_iter([Capability::WebSearch]);
+        assert!(!searching.contains(&Capability::WebFetch));
     }
 
     #[test]

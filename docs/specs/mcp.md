@@ -234,6 +234,11 @@ call, such as a handshake or a listing.
 `verified-by: bravebot_agent::mcp::a_byte_count_a_server_chose_never_reaches_the_planner_over_http`
 `verified-by: bravebot_agent::mcp::a_line_a_local_server_wrote_that_cannot_be_read_is_told_in_the_fixed_sentence`
 `verified-by: bravebot_mcp::stdio::a_servers_diagnostics_go_where_its_caller_sent_them`
+`verified-by: bravebot_cli::running::a_session_in_lines_shows_nothing_a_servers_stderr_writes`
+`verified-by: bravebot_cli::running::a_one_shot_run_shows_nothing_a_servers_stderr_writes`
+`verified-by: bravebot_cli::terminal_modes::the_interface_that_draws_shows_nothing_a_servers_stderr_writes`
+`verified-by: bravebot_tui::mcp_command::reconnect_draws_nothing_a_servers_stderr_writes_and_shows_a_failed_handshake`
+`verified-by: bravebot_sandbox::openshell::a_discarded_stderr_is_the_null_device_for_the_program_in_the_sandbox`
 
 <a id="MCP-9"></a>
 ### MCP-9: a stdio server is started with none of this process's environment

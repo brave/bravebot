@@ -30,6 +30,9 @@ the session says so as it opens, a new yes is not kept and the question says so,
 changes nothing and names the file so you can remove it yourself.
 The record of AWS Bedrock models that refused the request for their thinking to be shown is read too,
 so a model known to refuse it is not sent it, and a refusal this session finds is not written.
+The record of directories a confined program may write, `~/.bravebot/stage-writes`, is read too, so
+a program an earlier session let a stage write is still left out of the search for the programs
+bravebot starts itself, and a directory this session opens or grants is not added to it.
 
 **One thing is not read: your standing answer about [vetting](../security/vetting.md).** If you have
 pressed the key that stops bravebot asking before content nobody vouched for reaches the planner,

@@ -33,9 +33,20 @@ to ([SANDBOX-20](sandboxing.md#SANDBOX-20), [SANDBOX-25](sandboxing.md#SANDBOX-2
 [SANDBOX-24](sandboxing.md#SANDBOX-24)), so a session an editor hosts is confined as one in a
 window is.
 
+The usage ping is the one thing the two launchers do differently before `acp_loop::serve`.
+`bravebot acp` writes the usage-ping notice to standard error and sends the ping as `cli`
+([PING-6](usage-ping.md#PING-6), [PING-7](usage-ping.md#PING-7)). `bravebot-acp` does neither.
+It ships with the desktop app and an editor starts it, so nobody reads its standard error. If it
+took the notice, the shared marker would record it as shown and the desktop window would never say
+it, so the notice stays due for the window.
+
 The agent advertises `loadSession: false`, no authentication methods, and prompt capabilities for
 text, links and images. It does not call the editor's file or terminal methods, so bytes an editor
 holds reach the agent only as a prompt or an attachment.
+
+The first prompt of a launch that is reporting crashes is preceded by one message of the session
+saying so, as [CRASH-12](crash-reports.md#CRASH-12) has it. It is a notification like any other
+text, so it is subject to [ACP-6](#ACP-6), and the program writes nothing about it outside one.
 
 ## Clauses
 
@@ -227,3 +238,29 @@ service wrote, as the category's name does not.
 `verified-by: bravebot_ui_bridge::acp::a_turn_that_failed_on_the_xai_account_tells_the_editor_which_command_signs_in`
 `verified-by: bravebot_ui_bridge::acp::a_summary_that_failed_on_the_chatgpt_account_is_told_to_the_editor_in_the_windows_words`
 `verified-by: bravebot_ui_bridge::acp::an_editor_is_told_the_wait_a_refusal_asked_for_and_no_status`
+
+<a id="ACP-10"></a>
+### ACP-10: a session an editor opens is told the settings keys that were not read
+
+Before the reply to its first prompt, a session says as messages each key of the settings in force
+that nothing reads, each key a settings file or the managed file wrote twice and a managed
+`retrieval` value that pins nothing, once each. The sentences are the ones `doctor` uses, made from
+the key path or the value and the file and never from what a key was set to, with each control
+character drawn as its picture. They come with the file `--settings` names being read as a
+checkout's file where the platform cannot hold it back ([PERM-14](permissions.md#PERM-14) has the
+reason), which is said in the same place.
+
+**Why.** An editor has no terminal and its person does not run `doctor`, so a misspelled key in a
+file the editor's session reads would otherwise read to its writer as a restriction in force.
+
+`verified-by: bravebot_ui_bridge::acp::a_session_an_editor_opens_is_told_the_keys_its_settings_dropped`
+
+<a id="ACP-11"></a>
+### ACP-11: a task that is waiting reaches the editor as pending
+
+The editor's plan has three statuses: pending, in progress and completed. A task the planner marked
+`waiting` is open and is not being worked on, so it is sent as pending. It is not sent as in progress,
+which would tell the editor work is going on, and not as completed. Any other status the bridge does
+not name is sent as pending.
+
+`verified-by: bravebot_ui_bridge::acp::a_waiting_task_is_sent_to_the_editor_as_pending`

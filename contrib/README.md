@@ -82,6 +82,24 @@ wakes and on Refresh Now. A failed refresh keeps the cached list and adds `!` to
 that ends with pull requests still not computed as mergeable shows `review-ready.py`'s `incomplete:`
 line in the menu. Nothing in CI builds this app.
 
+## alien-wallpaper
+
+An animated macOS desktop background drawn with Core Graphics: the bravebot bots march across a nebula
+sky with three layers of stars, a ringed planet and a planet horizon. The orange mascot at the bottom
+leads its shots at the formation, bots burst into tiles when hit, a mothership crosses the top now and
+then, and a cleared wave returns in new colours. One window per screen sits at desktop level under
+the icons, on every Space, and ignores the mouse. It pauses while the desktop is covered or the
+displays sleep. A menu bar item pauses and quits it.
+
+```sh
+contrib/alien-wallpaper/install.sh [--fps N] [--login] [--dir DIRECTORY]
+contrib/alien-wallpaper/install.sh --uninstall
+```
+
+`install.sh` builds `AlienWallpaper.swift` with `swiftc` into `~/Applications/AlienWallpaper.app` and
+starts it. `--login` installs a LaunchAgent that starts it at login. `--snapshot FILE.png [--seconds N]
+[--size WxH]` on the binary renders one frame to a PNG. Nothing in CI builds this app.
+
 ## check-toolchain.py
 
 Answers whether clippy on this machine knows the lints CI will fail on.

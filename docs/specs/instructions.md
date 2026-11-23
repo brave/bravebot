@@ -182,11 +182,17 @@ by name rather than merging is what lets a project override one skill without re
 `verified-by: bravebot_agent::plugin_sources::a_plugin_definition_is_shadowed_by_every_other_source_of_its_name`
 
 <a id="INSTR-5"></a>
-### INSTR-5: what is resolved goes into the system prompt, never into the conversation
+### INSTR-5: standing instructions and the skill listing go into the system prompt, not into the conversation
 
-Standing instructions and the catalogue of skill names are put in front of each request as part
-of the system prompt. They are not appended to the stored conversation, so a session running many
-turns carries one copy of them however long it runs.
+Standing instructions and the listing of the built-in skills are put in front of each request as
+part of the system prompt. They are not appended to the stored conversation, so a session running
+many turns carries one copy of them however long it runs.
+
+The one standing text kept in the conversation is the names of the person's own skills and the
+project's skills, which the listing leaves out. A message in the conversation gives them once per
+session and describes none of them ([skills.md](skills.md) gives the reason). What a turn reads or
+is given, such as the body of a skill it loads, a file named with `@` or a picture let through by
+vetting, is also in the conversation, as any result is, and is not standing text.
 
 **Why.** The system prompt belongs to the build rather than to the conversation. Sending the same
 instructions as a message each turn would accumulate a copy per turn, crowding out the task and
@@ -196,6 +202,8 @@ as though a person had just said them.
 `verified-by: bravebot_agent::turn::the_preamble_is_not_stored_in_the_conversation`
 `verified-by: bravebot_agent::turn::a_trusted_workspace_agents_file_reaches_the_system_prompt`
 `verified-by: bravebot_agent::turn::an_untrusted_workspace_agents_file_never_reaches_the_system_prompt`
+`verified-by: bravebot_agent::turn::the_standing_instructions_and_the_skill_listing_are_in_the_system_message_alone`
+`verified-by: bravebot_agent::turn::the_skills_overview_is_said_once_per_session_not_once_per_turn`
 
 <a id="INSTR-6"></a>
 ### INSTR-6: a source that is not there is not an error
@@ -221,6 +229,10 @@ reload and no session to restart.
 cannot see, and the fix for that would be to restart, which loses the conversation.
 
 `verified-by: bravebot_agent::preamble::a_file_written_after_one_turn_is_read_by_the_next`
+`verified-by: bravebot_agent::turn::an_agents_file_written_between_two_turns_reaches_the_second_turns_system_prompt`
+`verified-by: bravebot_agent::turn::a_skill_written_between_two_turns_is_named_to_the_planner_in_the_second_request`
+`verified-by: bravebot_agent::turn::an_agents_file_the_agent_wrote_itself_reaches_the_next_turns_system_prompt`
+`verified-by: bravebot_agent::turn::a_skill_the_agent_wrote_itself_is_named_to_the_planner_in_the_next_turn`
 
 <a id="INSTR-8"></a>
 ### INSTR-8: an instructions file that only names another one is followed, once
@@ -402,7 +414,7 @@ of assistant this is, and leaves the rest of the prompt as it is: the instructio
 tool's output, the facts of INSTR-9, the mode, the goal and every source above.
 
 Both are held by the running process and resolved into each turn's system prompt like every other
-source, so INSTR-5 holds for them: they are never put in the stored conversation, and a session
+source, so INSTR-5 holds for them: they are not put in the stored conversation, and a session
 running many turns carries one copy. A recorded session stores no system prompt, so a resume
 without the flag runs without the words.
 
@@ -459,7 +471,15 @@ gate and reads each import through it, so nothing untrusted decides what is read
 `verified-by: bravebot_agent::preamble::an_import_back_to_the_file_a_pointer_was_read_from_is_a_cycle`
 `verified-by: bravebot_agent::preamble::a_shorter_fence_inside_a_longer_one_does_not_end_it`
 `verified-by: bravebot_agent::preamble::an_import_outside_the_workspace_is_left_as_written`
+`verified-by: bravebot_agent::preamble::a_leading_slash_import_is_not_read_as_relative_to_the_project`
+`verified-by: bravebot_agent::preamble::an_import_of_a_distrusted_file_stays_as_written_and_is_reported_by_name`
+`verified-by: bravebot_agent::preamble::the_home_agents_file_is_not_expanded`
+`verified-by: bravebot_agent::preamble::one_refusal_is_reported_once_however_often_the_file_is_named`
 `verified-by: bravebot_agent::preamble::an_untrusted_project_loads_no_import`
+`verified-by: bravebot_agent::preamble::an_at_token_naming_a_file_that_is_not_markdown_stays_ordinary_text`
+`verified-by: bravebot_agent::preamble::an_at_token_naming_no_file_stays_ordinary_text_and_is_not_reported`
+`verified-by: bravebot_agent::preamble::punctuation_ending_an_import_token_stays_after_the_imported_text`
+`verified-by: bravebot_agent::preamble::an_import_of_a_file_that_cannot_be_read_stays_as_written_and_is_reported_by_name`
 `verified-by: bravebot_agent::turn::a_denied_file_an_agents_file_imports_does_not_reach_the_system_prompt`
 
 <a id="INSTR-12"></a>
@@ -536,6 +556,7 @@ change of the file.
 `verified-by: bravebot_tui::state::the_project_styles_are_read_once_per_style_line_and_held_after_it`
 `verified-by: bravebot_agent::turn::a_style_from_a_file_opens_the_prompt_and_yields_to_system_prompt`
 `verified-by: bravebot_agent::turn::a_turn_records_the_output_style_that_opened_it`
+`verified-by: bravebot_tui::app::every_turn_the_terminal_starts_carries_the_style_in_force_ticks_and_goal_rounds_included`
 `verified-by: bravebot_tui::app::a_style_file_in_the_home_directory_is_listed_and_picked_by_name`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_style`
 `verified-by: bravebot_config::settings::a_style_that_is_blank_or_not_a_string_names_nothing`

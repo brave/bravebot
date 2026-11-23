@@ -184,6 +184,7 @@ them instead.
 `verified-by: bravebot_tui::usage_ping_notice::the_notice_waits_while_the_ping_is_off_and_is_due_once_it_is_turned_on`
 `verified-by: bravebot_tui::usage_ping_notice::a_notice_marked_shown_by_another_front_end_is_not_said_again`
 `verified-by: bravebot_cli::running::a_one_shot_run_says_what_the_usage_ping_sends_once_on_stderr_and_never_on_stdout`
+`verified-by: bravebot_cli::usage_ping::the_agent_client_protocol_says_the_notice_once_on_stderr_and_never_on_stdout`
 `verified-by: bravebot_ui_bridge::usage_ping_notice::the_notice_is_due_until_the_window_marks_it_shown`
 `verified-by: bravebot_ui_bridge::usage_ping_notice::the_notice_is_not_due_while_the_ping_is_off`
 

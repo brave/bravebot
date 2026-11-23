@@ -8,29 +8,49 @@ description: Choose reasoning effort with /effort, understand model support and 
 
 ```
 /effort
+/effort session
 ```
 
 opens a picker of five levels, cheapest first (`low`, `medium`, `high`, `xhigh` and `max`), above a
-row for asking for no level at all. `/effort high` takes one without opening the panel. The choice is
-written to `~/.bravebot/effort`, so it outlives the session and applies in every directory whose own
-settings name no [`effort`](configuration.md#effort), and `/status` reports it beside the model.
+row for asking for no level at all. `/effort high` takes one without opening the panel. The choice made
+with `/effort` is written to `~/.bravebot/effort`, so it outlives the session and applies in every
+directory whose own settings name no [`effort`](configuration.md#effort), and `/status` reports it beside
+the model.
 
-**On a ChatGPT account the level applies from the next session.** A session on a model of a
-[ChatGPT account](providers/chatgpt.md) is sent the level it began with in every request that asks for
-one, because OpenAI's prompt cache was seen to be per level: changing the level inside a session cost one
-miss at each change, and requests hit again after. A level chosen later with `/effort`, or named by a skill,
-changes nothing for that session. The terminal says so in a sentence that names both levels, `/status` names
-the level sent and the level you chose where they differ, and `/clear` begins a session at the level you
-chose. A request that asks for no level, such as a summary or a goal check, sends none, and the desktop
-window offers no way to choose a level, so its sessions send none. A model of the account that refuses a
-level is sent none from then on, as any model is. A level chosen on any other service applies at once.
+**`/effort session` chooses a level for this session only.** It opens the same picker, and
+`/effort session high` takes a level without opening it. Either puts the level in force for the running
+session without writing `~/.bravebot/effort`, so the next session opens on the level it would have had.
+The title of the picker says which scope it is in, `effort · every session` after `/effort` and
+`effort · this session only` after `/effort session`, and the first footer row says what Enter and Tab
+do. Tab switches between the two scopes, so you can change your mind before you press Enter. The row for
+no level, taken in the this-session scope, puts no level in force for this session and leaves the record
+as it is. A level chosen this way outranks the `effort` key in every settings file and
+[`--effort`](../reference/cli.md#--effort-level) for this session. Where it is the level being sent, the
+info panel marks it with a row `this session only` under the effort, and `/status` says so. `/clear`,
+`/handoff` and `/branch` keep it. `/resume` opens another session, which opens on the level a new session
+would have. `session` is the only word `/effort` takes besides the
+levels, and it is matched whole and in lower case. A word after it that names no level changes nothing
+and says so.
+
+**On a ChatGPT account a level applies from the next session, or from `/clear`.** A session on a model
+of a [ChatGPT account](providers/chatgpt.md) is sent the level it began with in every request that asks
+for one, because OpenAI's prompt cache was seen to be per level: changing the level inside a session cost
+one miss at each change, and requests hit again after. A level chosen later with `/effort` or
+`/effort session`, or named by a skill, changes nothing for that session. The terminal says so in a
+sentence that names both levels, and `/status` names the level sent and the level you chose where they
+differ. `/clear` begins a session at the level you chose. A level chosen with `/effort` applies from the
+next session, and the sentence says so. A level chosen with `/effort session` applies from `/clear` and
+is not recorded, so no later session opens on it, and the sentence says that instead. A request that
+asks for no level, such as a summary or a goal check, sends none, and the desktop window offers no way to
+choose a level, so its sessions send none. A model of the account that refuses a level is sent none from
+then on, as any model is. A level chosen on any other service applies at once.
 
 **An xAI account is sent no level.** A model of the [xAI account](providers/xai.md) reads none, because the
 service was not asked with one, so a level chosen in a session does nothing for it, and the terminal says so
 where a level is in force.
 
 **Nothing infers a level.** Until you choose one the request carries no such field at all and each
-service applies its own default. Taking the row for no level removes the record rather than writing an
+service applies its own default. Taking the row for no level in the every-session scope removes the record rather than writing an
 empty one, which puts you back where you were before you ever chose. A word bravebot does not define
 changes nothing and says so.
 

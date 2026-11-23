@@ -45,7 +45,7 @@ pub(crate) use self::transcript::{
 };
 
 use self::beneath::{
-    first_waiting_row, fit_to_room, lines_beneath_the_box, offered_picks, queue_words,
+    first_waiting_row, fit_to_room, lines_beneath_the_box, offered_picks, queue_shown, queue_words,
 };
 use self::hint::draw_hint;
 use self::prompt::{draw_input, draw_status, input_height, status_height};
@@ -105,12 +105,22 @@ fn task_inks(row: &bravebot_core::todo::Row) -> (Style, Style) {
             Style::default().fg(theme::ok()),
             dim().add_modifier(Modifier::CROSSED_OUT),
         )
+    } else if row.status == bravebot_core::todo::Status::Waiting {
+        // Open on purpose: neither the ink and bold of work being done nor the dim of work nobody
+        // is doing. Its own mark keeps it apart from both under `NO_COLOR`.
+        (Style::default(), Style::default())
     } else {
         (
             Style::default().fg(theme::running()),
             Style::default().add_modifier(Modifier::BOLD),
         )
     }
+}
+
+/// Whether `row` is drawn hollow and dim: it is outstanding, no turn is running, and it is not
+/// waiting, which is open on purpose and keeps its own mark whether or not a turn runs (PANEL-10).
+fn drawn_left_open(row: &bravebot_core::todo::Row, left_open: bool) -> bool {
+    left_open && !row.struck() && row.status != bravebot_core::todo::Status::Waiting
 }
 
 /// Draw a task list beneath whatever it belongs to.
@@ -131,7 +141,7 @@ fn todo_lines(todos: &[bravebot_core::todo::Row], left_open: bool) -> Vec<Line<'
             } else {
                 "    ".to_string()
             };
-            let (glyph, marker, text) = if left_open && !row.struck() {
+            let (glyph, marker, text) = if drawn_left_open(row, left_open) {
                 (crate::panel::LEFT_OPEN_MARKER, dim(), dim())
             } else {
                 let (marker, text) = task_inks(row);
@@ -151,6 +161,7 @@ fn status_word(status: bravebot_core::todo::Status) -> &'static str {
     match status {
         Status::Pending => t!(todos_status_pending),
         Status::Active => t!(todos_status_active),
+        Status::Waiting => t!(todos_status_waiting),
         Status::Done => t!(todos_status_done),
         Status::Cancelled => t!(todos_status_cancelled),
     }
@@ -181,6 +192,7 @@ fn status_column() -> usize {
     [
         Status::Pending,
         Status::Active,
+        Status::Waiting,
         Status::Done,
         Status::Cancelled,
     ]
@@ -273,7 +285,7 @@ pub(crate) fn plan_lines(
     let room = width.saturating_sub(margin);
     plan.iter()
         .flat_map(|row| {
-            let (glyph, mark_ink, text_ink) = if left_open && !row.struck() {
+            let (glyph, mark_ink, text_ink) = if drawn_left_open(row, left_open) {
                 (crate::panel::LEFT_OPEN_MARKER, dim(), dim())
             } else {
                 let (mark_ink, text_ink) = task_inks(row);
@@ -997,7 +1009,7 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
         .saturating_sub(status_height)
         .saturating_sub(input_height + 1)
         .saturating_sub(1);
-    let beneath = lines_beneath_the_box(session, width, &offered);
+    let beneath = lines_beneath_the_box(session, width, usize::from(room), &offered);
     let (beneath, offered_first) =
         fit_to_room(session, width, &offered, beneath, usize::from(room));
     let offered_height = (beneath.len() as u16).min(room);
@@ -1045,8 +1057,13 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     laid.targets.extend(draw_input(frame, areas[2], session));
     draw_previews(frame, areas[3], &thumbs);
     frame.render_widget(Paragraph::new(beneath), areas[4]);
-    laid.targets
-        .extend(queued_prompts(session, width, offered_height, areas[4]));
+    laid.targets.extend(queued_prompts(
+        session,
+        width,
+        usize::from(room),
+        offered_height,
+        areas[4],
+    ));
     // Where the frame drew the button that returns to the tail it took a row from the transcript, which
     // is a row more below the view than the session counted before the frame, so the line says the
     // count the button does and the two never differ (VIEW-27, VIEW-45).
@@ -1063,6 +1080,7 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     laid.targets.extend(offered_picks(
         session,
         width,
+        usize::from(room),
         &offered,
         offered_first,
         areas[4],
@@ -1080,11 +1098,12 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
 }
 
 /// The rows a click on a waiting prompt answers on. Each waiting prompt is two rows, and a click on
-/// either takes it back, with the words on the first that remove it (MOUSE-28). Only the rows drawn
-/// are recorded.
+/// either takes it back, with the words on the first that remove it (MOUSE-28). Only the prompts
+/// drawn are recorded, and the row saying how many more wait records none.
 fn queued_prompts(
     session: &Session,
     width: u16,
+    room: usize,
     offered_height: u16,
     area: Rect,
 ) -> Vec<crate::state::Target> {
@@ -1092,7 +1111,7 @@ fn queued_prompts(
         return Vec::new();
     };
     let mut recorded = Vec::new();
-    for place in 0..session.queued.len() {
+    for place in 0..queue_shown(session, width, room).drawn {
         let top = first + 2 * place;
         let Some(rows) = usize::from(offered_height)
             .checked_sub(top)
@@ -1721,6 +1740,83 @@ mod tests {
             assert!(!opened.contains("q closes"), "{opened}");
         }
 
+        /// Where there is more than one row the footer says where the reader is among them and
+        /// names the keys for moving. A footer that drew the position and left the keys out would
+        /// leave a reader of two delegates with no way to find the other one from the screen.
+        #[test]
+        fn the_footer_gives_the_position_and_the_keys_for_moving_where_there_is_more_than_one_row()
+        {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "reader", "find the parser");
+            spawn(&mut session, "checker", "run the build");
+            session.watch();
+            session.open_watched();
+            let footer = |session: &Session| {
+                rows_at(session, 90, 24)
+                    .last()
+                    .expect("a footer")
+                    .trim_start()
+                    .to_string()
+            };
+
+            session.watch_previous();
+            session.watch_previous();
+            let first = footer(&session);
+            assert!(first.contains("1 of 2"), "{first}");
+            assert!(first.contains("n / p another delegate"), "{first}");
+
+            session.watch_next();
+            session.watch_next();
+            let last = footer(&session);
+            assert!(last.contains("2 of 2"), "{last}");
+            assert!(last.contains("n / p another delegate"), "{last}");
+        }
+
+        /// A delegate that reported is neither working nor one that did not finish, and the footer
+        /// says which. A footer that kept the word for work in progress, or drew the failed word
+        /// for every delegate that stopped, would tell a reader the wrong thing about a run that
+        /// ended well.
+        #[test]
+        fn the_footer_says_a_delegate_that_reported_has_answered() {
+            let mut session = Session::new("kernel-enforced");
+            let id = spawn(&mut session, "checker", "run the build");
+            session.watch();
+
+            session.delegate_finished(id, "the build passed".to_string(), false, None);
+            let rows = rows_at(&session, 90, 24);
+            let footer = rows.last().expect("a footer").trim_start().to_string();
+            assert!(
+                footer.starts_with(&format!("checker delegate {id}  ·  answered")),
+                "{footer}"
+            );
+            assert!(!footer.contains("working"), "{footer}");
+            assert!(!footer.contains("did not finish"), "{footer}");
+        }
+
+        /// What a delegate was asked and what it said are text a model wrote, so the footer, which
+        /// is the interface's own voice, holds neither. A footer that named the task to say which
+        /// delegate this is would quote the planner into the one row nothing else marks.
+        #[test]
+        fn the_footer_quotes_neither_what_a_delegate_was_asked_nor_what_it_said() {
+            let mut session = Session::new("kernel-enforced");
+            let id = spawn(&mut session, "checker", "PECULIAR-TASK");
+            session.watch();
+            session.delegate_finished(id, "PECULIAR-REPORT".to_string(), false, None);
+
+            let rows = rows_at(&session, 90, 24);
+            assert!(
+                rows.iter().any(|row| row.contains("PECULIAR-TASK")),
+                "the task was not drawn above the lines: {rows:?}"
+            );
+            let footer = rows.last().expect("a footer").trim_start().to_string();
+            assert!(
+                footer.starts_with(&format!("checker delegate {id}")),
+                "{footer}"
+            );
+            assert!(!footer.contains("PECULIAR-TASK"), "{footer}");
+            assert!(!footer.contains("PECULIAR-REPORT"), "{footer}");
+        }
+
         /// Marked the way every other block the planner was kept from is marked, and marked
         /// structurally: the bar is in the margin on every row, so content saying the block ends
         /// cannot end it.
@@ -2153,6 +2249,50 @@ mod tests {
             );
         }
 
+        /// The list row says whether the record keeps the answer, and it says it per row. An
+        /// implementation that drew one word for every row, or the opposite word, would still draw
+        /// "aside" and the question on each row, so each row is read by what it names.
+        #[test]
+        fn the_list_row_of_an_aside_says_whether_the_record_keeps_its_answer() {
+            let mut session = Session::new("kernel-enforced");
+            asked(&mut session, "KEPT-QUESTION", "because of nesting", true);
+            asked(&mut session, "SCREEN-QUESTION", "it is a leaf", false);
+            session.watch();
+            assert!(
+                session.listing_delegates(),
+                "two rows did not open the list"
+            );
+
+            let panel = listed(&session, 90, 24);
+            let kept = row_naming(&panel, "KEPT-QUESTION");
+            let screen_only = row_naming(&panel, "SCREEN-QUESTION");
+            let kept_word = t!(watching_row_kept_answer).to_string();
+            let screen_only_word = t!(watching_row_screen_only).to_string();
+            assert!(kept.contains(&kept_word), "{kept}");
+            assert!(!kept.contains(&screen_only_word), "{kept}");
+            assert!(screen_only.contains(&screen_only_word), "{screen_only}");
+            assert!(!screen_only.contains(&kept_word), "{screen_only}");
+
+            // A narrow terminal loses the end of the question and never the word beside it.
+            let mut narrow = Session::new("kernel-enforced");
+            let kept_question = "KEPT-LONG-QUESTION-ABOUT-HOW-THE-GRAMMAR-NESTS";
+            let screen_question = "SCREEN-LONG-QUESTION-ABOUT-HOW-THE-LEAVES-ARE-DRAWN";
+            asked(&mut narrow, kept_question, "because of nesting", true);
+            asked(&mut narrow, screen_question, "it is a leaf", false);
+            narrow.watch();
+            assert!(narrow.listing_delegates(), "two rows did not open the list");
+            let panel = listed(&narrow, 50, 24);
+            for (opening, question, word) in [
+                ("KEPT-LONG", kept_question, &kept_word),
+                ("SCREEN-LON", screen_question, &screen_only_word),
+            ] {
+                let row = row_naming(&panel, opening);
+                assert!(row.contains(word.as_str()), "{row}");
+                assert!(!row.contains(question), "{row}");
+                assert!(row.contains('…'), "{row}");
+            }
+        }
+
         /// Both halves, because a question with no answer under it is half of what a person came
         /// here to read, and an answer alone stops making sense as soon as there are two asides.
         #[test]
@@ -2168,6 +2308,27 @@ mod tests {
             let screen = rendered(&session);
             assert!(screen.contains("why is the parser recursive?"), "{screen}");
             assert!(screen.contains("because the grammar nests"), "{screen}");
+        }
+
+        /// The question is the first thing drawn and the answer comes under it. A view that drew
+        /// the answer first would still hold both words, which is all the presence check reads.
+        #[test]
+        fn an_asides_view_draws_the_question_above_the_answer() {
+            let mut session = Session::new("kernel-enforced");
+            asked(&mut session, "PECULIAR-QUESTION", "PECULIAR-ANSWER", true);
+
+            let rows = rows_at(&session, 90, 24);
+            let row_of = |word: &str| {
+                rows.iter()
+                    .position(|row| row.contains(word))
+                    .unwrap_or_else(|| panic!("{word} was not drawn: {rows:?}"))
+            };
+            let question = row_of("PECULIAR-QUESTION");
+            let answer = row_of("PECULIAR-ANSWER");
+            assert!(
+                question < answer,
+                "the question was drawn on row {question} and the answer on row {answer}: {rows:?}"
+            );
         }
 
         /// An answer is usually one paragraph with no line break in it, and a row of the screen
@@ -2430,6 +2591,24 @@ mod tests {
             assert!(
                 screen.contains(&t!(watching_list_title).to_string()),
                 "the panel was not drawn: {screen}"
+            );
+        }
+
+        /// The list names its own keys inside the panel. A panel that drew its rows and no key
+        /// row would leave a person who opened it with no word on the screen for how to pick one
+        /// or leave.
+        #[test]
+        fn the_list_carries_its_own_key_row() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "reader", "find the parser");
+            spawn(&mut session, "checker", "run the build");
+            session.watch();
+            assert!(session.listing_delegates());
+
+            let panel = listed(&session, 90, 24);
+            assert!(
+                panel.contains("up / down moves  ·  enter opens  ·  q closes"),
+                "{panel}"
             );
         }
 
@@ -3731,6 +3910,38 @@ mod tests {
             );
         }
 
+        /// SCROLL-5. The footer names the match the view is on, so it follows `n` and `N` and
+        /// wraps with them. A footer that always said `1 of 3` would pass every assertion on the
+        /// first match, and a person walking the matches would be told they had not moved.
+        #[test]
+        fn the_footer_says_which_match_the_view_is_on_after_it_has_moved() {
+            let mut session = searching("needle");
+            let (_, laid) = lay_out(&session, 90, 24);
+            let rows = laid.matches;
+            assert_eq!(rows.len(), 3, "the fixture holds three matches: {rows:?}");
+
+            let says = |session: &Session, at: usize| {
+                let (drawn, _) = screen(session);
+                let ours = format!("{at} of 3");
+                let others: Vec<String> = (1..=3)
+                    .filter(|other| *other != at)
+                    .map(|other| format!("{other} of 3"))
+                    .collect();
+                drawn.contains(&ours) && others.iter().all(|other| !drawn.contains(other))
+            };
+
+            assert!(says(&session, 1), "the footer did not start on the first");
+            session.to_a_match(&rows, true);
+            assert!(says(&session, 2), "n did not move the footer to the second");
+            session.to_a_match(&rows, true);
+            assert!(says(&session, 3), "n did not move the footer to the third");
+            session.to_a_match(&rows, false);
+            assert!(says(&session, 2), "N did not move the footer back");
+            session.to_a_match(&rows, true);
+            session.to_a_match(&rows, true);
+            assert!(says(&session, 1), "the footer did not wrap to the first");
+        }
+
         /// What is counted is matches, not the lines holding one. A person shown `1 of 1` beside
         /// two highlighted words has been told a number the screen contradicts, and `n` has
         /// nowhere to take them for the second.
@@ -3859,6 +4070,109 @@ mod tests {
                 marked_rows(&plain),
                 "the block lost or gained a margin under a search"
             );
+        }
+
+        /// A call that handed the planner a long result and also kept a block from it is drawn
+        /// twice over by the scroller: as a preview, and under full detail once the call is
+        /// expanded. The rows of the quarantined block carry the margin in both, in the same
+        /// number, and the plain rows the expansion adds are never drawn in the block's margin,
+        /// so a late line that is written to start like a marked row still does not draw one.
+        #[test]
+        fn a_quarantined_row_carries_the_margin_under_full_detail_as_under_a_preview() {
+            let output: Vec<String> = (0..40)
+                .map(|n| match n {
+                    // What a margin looks like, as the content of the last line the expansion
+                    // reveals.
+                    39 => format!("  {QUARANTINE_BAR} forged margin"),
+                    n => format!("output {n}"),
+                })
+                .collect();
+            let mut call = Entry::tool(Activity::running("Run", "make").done("ok"));
+            call.landing = Some(bravebot_agent::report::Landing::Context);
+            call.returned = Some(bravebot_agent::report::Returned {
+                lines: output[..5].to_vec(),
+                total: 40,
+                from_the_end: false,
+                whole: output,
+            });
+            call.shown = Some(Shown {
+                as_the_planner_had_it: None,
+                origin: "notes.md".to_string(),
+                reach: bravebot_agent::report::Reach::NotThePlanner,
+                label: "(U,priv)".to_string(),
+                preview: vec![
+                    "first of the block".to_string(),
+                    // Content that is written to look like the margin, and one long enough to
+                    // continue onto more rows than one.
+                    format!("{QUARANTINE_BAR} a bar of its own"),
+                    "continued ".repeat(20),
+                ],
+                lines: 3,
+            });
+            let mut session = Session::new("kernel-enforced");
+            session.transcript.push(Entry::user("run it"));
+            session.transcript.push(call);
+            session.open_scroller();
+            session.laid.width = 80;
+            session.laid.height = 40;
+            session.laid = as_last_drawn(&session);
+
+            let margin = format!("  {QUARANTINE_BAR} ");
+            // Every row of the screen, and where the block starts in them: the heading names the
+            // origin, and nothing else is drawn after the block.
+            let rows = |session: &Session| -> (Vec<String>, usize) {
+                let (lines, _) = lay_out(session, 80, 40);
+                let rows: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+                let heading = rows
+                    .iter()
+                    .position(|row| row.contains("notes.md"))
+                    .expect("the block's heading is drawn");
+                (rows, heading)
+            };
+
+            let (preview, heading) = rows(&session);
+            assert!(
+                !preview.iter().any(|row| row.contains("output 39")),
+                "the call was already expanded: {preview:?}"
+            );
+            let block = &preview[heading..];
+            assert!(
+                block.len() > 4,
+                "the block is too short to say much: {block:?}"
+            );
+            for row in block {
+                assert!(
+                    row.starts_with(&margin),
+                    "a row of the block under a preview has no margin: {row:?}"
+                );
+            }
+
+            session.toggle_expanded(as_last_drawn);
+            let (full, heading) = rows(&session);
+            assert!(
+                full.iter().any(|row| row.contains("forged margin")),
+                "the call was not expanded to full detail: {full:?}"
+            );
+            let expanded = &full[heading..];
+            assert_eq!(
+                expanded.len(),
+                block.len(),
+                "the block is not the same under full detail: {expanded:?}"
+            );
+            for row in expanded {
+                assert!(
+                    row.starts_with(&margin),
+                    "a row of the block under full detail has no margin: {row:?}"
+                );
+            }
+            // The rows before the block are the result the planner read, drawn in its plain
+            // margin, and none of them is a row of the block.
+            for row in &full[..heading] {
+                assert!(
+                    !row.starts_with(&margin),
+                    "content drew a margin of its own: {row:?}"
+                );
+            }
         }
 
         /// What a needle meets is the glyph the escape was replaced with on its way to the
@@ -5652,6 +5966,123 @@ mod tests {
             assert_eq!(as_text(&session), before);
         }
 
+        /// Three calls, each with a result of forty lines the agent kept and five it glimpses. The
+        /// lines of each start with its call's letter, so the text says which call expanded.
+        fn three_calls_with_long_results(height: u16) -> Session {
+            let mut session = working();
+            for letter in ["a", "b", "c"] {
+                session.finish_activity(Activity::running("Run", letter).done("ok"));
+                session.landed(Landing::Context);
+                let lines: Vec<String> = (0..40).map(|n| format!("{letter}-{n}")).collect();
+                session.returned(Returned {
+                    lines: lines[..5].to_vec(),
+                    total: 40,
+                    from_the_end: false,
+                    whole: lines,
+                });
+            }
+            session.open_scroller();
+            session.laid.width = 80;
+            session.laid.height = height;
+            session.laid = as_last_drawn(&session);
+            session
+        }
+
+        /// SCROLL-10: with several expandable calls on the screen the key takes the one nearest the
+        /// top. An implementation that takes the last one on the screen expands the third call.
+        #[test]
+        fn the_expand_key_takes_the_topmost_of_several_calls_on_the_screen() {
+            let mut session = three_calls_with_long_results(20);
+            session.scroller_to_first_row();
+            let bottom = session.top_row() + session.laid.height;
+            let calls: Vec<_> = session.laid.calls().collect();
+            assert_eq!(calls.len(), 3, "{calls:?}");
+            assert!(
+                calls.iter().all(|(start, _, _)| *start < bottom),
+                "all three calls must start on the screen: {calls:?} in {bottom} rows"
+            );
+
+            session.toggle_expanded(as_last_drawn);
+            let text = as_text(&session);
+            assert!(
+                text.contains("a-39"),
+                "the topmost call did not expand: {text}"
+            );
+            assert!(!text.contains("b-39"), "{text}");
+            assert!(!text.contains("c-39"), "{text}");
+        }
+
+        /// SCROLL-10: a call whose last row is above the view is skipped, and the next one on the
+        /// screen expands. An implementation that takes the first call whose start is above the
+        /// bottom of the view expands the one scrolled out of sight.
+        #[test]
+        fn the_expand_key_skips_a_call_scrolled_above_the_view() {
+            let mut session = three_calls_with_long_results(8);
+            let calls: Vec<_> = session.laid.calls().collect();
+            assert_eq!(calls.len(), 3, "{calls:?}");
+            let (_, first_end, _) = calls[0];
+            session.scroller_to_first_row();
+            session.scroller_on(first_end + 1);
+            let top = session.top_row();
+            let bottom = top + session.laid.height;
+            assert_eq!(
+                top,
+                first_end + 1,
+                "the view did not move past the first call"
+            );
+            assert!(
+                calls[1].1 >= top && calls[1].0 < bottom,
+                "the second call must be on the screen: {calls:?} in rows {top}..{bottom}"
+            );
+
+            session.toggle_expanded(as_last_drawn);
+            let text = as_text(&session);
+            assert!(
+                text.contains("b-39"),
+                "the call on the screen did not expand: {text}"
+            );
+            assert!(
+                !text.contains("a-39"),
+                "a call above the view expanded: {text}"
+            );
+            assert!(!text.contains("c-39"), "{text}");
+        }
+
+        /// SCROLL-10: a write with more than twelve changes is a call the key expands, and a second
+        /// press collapses it. A write is a target only through its change count, so an
+        /// implementation that makes only results with kept lines expandable leaves the key inert
+        /// on a write.
+        #[test]
+        fn the_expand_key_expands_a_write_and_a_second_press_collapses_it() {
+            let mut session = working();
+            session.finish_activity(
+                Activity::running("Write", "out.txt")
+                    .done("wrote 20 lines")
+                    .with_changes(
+                        (0..MAX_DIFF_LINES + 8)
+                            .map(|n| Change::Added(format!("change {n}")))
+                            .collect(),
+                    ),
+            );
+            session.open_scroller();
+            session.laid.width = 80;
+            session.laid.height = 10;
+            session.laid = as_last_drawn(&session);
+            let last = format!("change {}", MAX_DIFF_LINES + 7);
+            let collapsed = as_text(&session);
+            assert!(!collapsed.contains(&last), "{collapsed}");
+            assert!(collapsed.contains("8 more"), "{collapsed}");
+
+            session.toggle_expanded(as_last_drawn);
+            let expanded = as_text(&session);
+            assert!(expanded.contains(&last), "{expanded}");
+            assert!(!expanded.contains("more"), "{expanded}");
+
+            session.laid = as_last_drawn(&session);
+            session.toggle_expanded(as_last_drawn);
+            assert_eq!(as_text(&session), collapsed);
+        }
+
         /// SCROLL-10: a call with nothing past its glimpse is not toggled, and the view stays put.
         #[test]
         fn the_expand_key_does_nothing_where_a_call_has_no_more() {
@@ -6557,6 +6988,209 @@ mod tests {
         );
     }
 
+    /// A session whose turn is running with `count` prompts waiting behind it, named `item 00`
+    /// onwards, and the info panel open.
+    fn working_with_waiting(count: usize, width: u16) -> Session {
+        let mut session = Session::new("none");
+        session.laid.columns = width;
+        session.toggle_panel();
+        session.ctrl_enter_arrives = true;
+        session.type_char('a');
+        session.submit();
+        for at in 0..count {
+            for c in format!("item {at:02}").chars() {
+                session.type_char(c);
+            }
+            assert!(session.queue(), "item {at} was not queued");
+        }
+        session
+    }
+
+    /// The rows of one frame and the rows the transcript was given.
+    fn frame_and_transcript_rows(
+        session: &mut Session,
+        width: u16,
+        height: u16,
+    ) -> (Vec<String>, u16) {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        let mut laid = crate::state::Laid::default();
+        terminal
+            .draw(|frame| laid = draw(frame, session))
+            .expect("draw succeeds");
+        let transcript = laid.window.map_or(0, |window| window.area.height);
+        session.note_layout(laid);
+        let buffer = terminal.backend().buffer();
+        let rows = (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect()
+            })
+            .collect();
+        (rows, transcript)
+    }
+
+    /// INPUT-10: a queue longer than the rows beneath the box hold draws its oldest prompts, and a
+    /// row after them says how many more wait. The regression it rejects is the cut going unsaid,
+    /// or the count not being the prompts left out.
+    #[test]
+    fn a_queue_too_long_for_the_rows_beneath_the_box_says_how_many_more_wait() {
+        let mut session = working_with_waiting(12, 80);
+        let (rows, _) = frame_and_transcript_rows(&mut session, 80, 24);
+
+        let marks = rows.iter().filter(|row| row.contains(" QUEUED ")).count();
+        assert_eq!(marks, 3, "{rows:#?}");
+        for shown in ["item 00", "item 01", "item 02"] {
+            assert!(rows.iter().any(|row| row.contains(shown)), "{rows:#?}");
+        }
+        assert!(!rows.iter().any(|row| row.contains("item 03")), "{rows:#?}");
+        let more: Vec<_> = rows
+            .iter()
+            .filter(|row| row.contains("more waiting"))
+            .collect();
+        assert_eq!(more.len(), 1, "{rows:#?}");
+        assert!(more[0].contains("and 9 more waiting"), "{rows:#?}");
+        assert_eq!(session.queued.len(), 12, "a prompt was lost");
+    }
+
+    /// INPUT-10: the key that sends the queue now is drawn beside the count when the last prompt's
+    /// mark is not drawn, so a long queue can still be hurried. The regression it rejects is the offer
+    /// being drawn only on the last prompt, which a cut queue does not draw.
+    #[test]
+    fn the_offer_to_send_now_moves_to_the_row_counting_the_prompts_left_out() {
+        let mut session = working_with_waiting(12, 120);
+        let (rows, _) = frame_and_transcript_rows(&mut session, 120, 30);
+
+        let offers: Vec<_> = rows
+            .iter()
+            .filter(|row| row.contains("ctrl-enter to stop the turn and send now"))
+            .collect();
+        assert_eq!(offers.len(), 1, "{rows:#?}");
+        assert!(offers[0].contains("more waiting"), "{rows:#?}");
+    }
+
+    /// INPUT-10: the queue takes a bounded number of rows however long it is, and the transcript
+    /// keeps the rest. It rejects a queue that takes every row beneath the box.
+    #[test]
+    fn a_long_queue_leaves_the_transcript_its_rows() {
+        let mut few = working_with_waiting(1, 120);
+        let (_, with_one) = frame_and_transcript_rows(&mut few, 120, 30);
+        let mut many = working_with_waiting(12, 120);
+        let (_, with_twelve) = frame_and_transcript_rows(&mut many, 120, 30);
+
+        assert!(with_twelve > 1, "the queue left {with_twelve} rows");
+        // One prompt takes two rows. Twelve take three prompts and the row counting the rest, seven.
+        assert_eq!(with_one - with_twelve, 7 - 2);
+    }
+
+    /// INPUT-10: the count is true at every size, with a file attached and a line put away above the
+    /// queue, which leave the queue fewer rows. The regression it rejects is a count that is the
+    /// queue's length less a fixed number of prompts, which is right for one size only.
+    #[test]
+    fn the_count_of_prompts_left_out_is_the_prompts_not_drawn_at_every_size() {
+        let directory = crate::testutil::scratch_dir("bravebot-render-queue-count");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("scratch");
+        std::fs::write(directory.join("shot.png"), [0x89u8, 0x50]).expect("write");
+
+        for above in [false, true] {
+            for width in [40u16, 80, 120] {
+                for height in [16u16, 20, 24, 30, 40] {
+                    let mut session = working_with_waiting(12, width).in_workspace(&directory);
+                    if above {
+                        for c in "put away".chars() {
+                            session.type_char(c);
+                        }
+                        session.stash();
+                        session.drop_files(&directory.join("shot.png").to_string_lossy());
+                    }
+                    let (rows, _) = frame_and_transcript_rows(&mut session, width, height);
+                    let drawn = rows.iter().filter(|row| row.contains(" QUEUED ")).count();
+                    let said = format!("and {} more waiting", 12 - drawn);
+                    let at = format!("{width}x{height}, above {above}");
+                    if drawn == 12 {
+                        assert!(
+                            !rows.iter().any(|row| row.contains("more waiting")),
+                            "{at}: {rows:#?}"
+                        );
+                    } else {
+                        assert!(
+                            rows.iter().any(|row| row.contains(&said)),
+                            "{at}: drawn {drawn}: {rows:#?}"
+                        );
+                    }
+                }
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// INPUT-10: the count row and the offer to send now are drawn whole or left out whole, at every
+    /// width. The regression it rejects is a row cut at the edge, which says "and 9 more wa" or
+    /// half of a key.
+    #[test]
+    fn the_count_row_and_the_offer_to_send_now_are_drawn_whole_or_not_at_all() {
+        let (mut counted, mut offered) = (false, false);
+        for width in 8u16..=90 {
+            let mut session = working_with_waiting(12, width);
+            let (rows, _) = frame_and_transcript_rows(&mut session, width, 30);
+            let drawn = rows.iter().filter(|row| row.contains(" QUEUED ")).count();
+            let said = format!("and {} more waiting", 12 - drawn);
+            for row in &rows {
+                if row.contains("more") {
+                    assert!(row.contains(&said), "width {width}: {rows:#?}");
+                    counted = true;
+                }
+                if row.contains("ctrl-enter") {
+                    assert!(
+                        row.contains("ctrl-enter to stop the turn and send now"),
+                        "width {width}: {rows:#?}"
+                    );
+                    offered = true;
+                }
+            }
+        }
+        assert!(
+            counted && offered,
+            "no width drew the row: {counted} {offered}"
+        );
+    }
+
+    /// CMD-6, MOUSE-15: a list of commands offered while a queue too long to draw waits is drawn
+    /// after the queue's bounded rows, and the row a press on an item reaches is the row that names
+    /// it. The regression it rejects is the picks counting the queue's rows as the whole queue would
+    /// draw them, which puts every press a few rows from the item drawn there.
+    #[test]
+    fn a_list_offered_beneath_a_cut_queue_is_picked_on_the_row_that_draws_it() {
+        let mut checked = 0;
+        for height in 14u16..=40 {
+            let mut session = working_with_waiting(12, 120);
+            session.type_char('/');
+            session.type_char('c');
+            let (rows, _) = frame_and_transcript_rows(&mut session, 120, height);
+            let names: Vec<&str> = session
+                .completions()
+                .iter()
+                .map(|command| command.name)
+                .collect();
+            for target in &session.laid.targets {
+                let crate::state::Hit::Item(index) = target.hit else {
+                    continue;
+                };
+                let row = &rows[usize::from(target.area.y)];
+                assert!(
+                    row.contains(names[index]),
+                    "height {height}: item {index} ({}) is not on row {}: {rows:#?}",
+                    names[index],
+                    target.area.y
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 20, "only {checked} picks were checked");
+    }
+
     #[test]
     fn an_empty_session_shows_a_greeting_and_hint() {
         let session = Session::new("kernel-enforced");
@@ -7052,6 +7686,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         // The third is between ticks, where the part is at its longest: the countdown is the widest
         // thing this row ever has to fit, so a sweep that only ever saw the bare word would pass
@@ -7062,6 +7697,7 @@ mod tests {
             crate::loops::request("2d check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         counting_down.complete("done", Vec::new(), 0);
         counting_down.loop_turn_ended(None);
@@ -7114,6 +7750,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         let word = t!(loop_hint).to_string();
         let hint = hint_row_at(&session, 120, 24);
@@ -7138,6 +7775,7 @@ mod tests {
         session.start_after(
             crate::loops::request_after("5m check the deploy"),
             std::time::Instant::now(),
+            crate::state::NamesFrom::nothing(),
         );
         let hint = hint_row_at(&session, 120, 24);
         assert!(
@@ -7156,12 +7794,14 @@ mod tests {
             crate::loops::request("1h check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         session.complete("done", Vec::new(), 0);
         session.loop_turn_ended(None);
         session.start_after(
             crate::loops::request_after("5m tail the log"),
             std::time::Instant::now(),
+            crate::state::NamesFrom::nothing(),
         );
         assert_eq!(session.loops().len(), 2);
         let hint = hint_row_at(&session, 120, 24);
@@ -7194,6 +7834,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         let hint = hint_row_at(&session, 120, 24);
         assert!(hint.contains(&t!(loop_hint).to_string()), "{hint}");
@@ -7317,6 +7958,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         session.complete("done", Vec::new(), 0);
         session.loop_turn_ended(None);
@@ -7412,6 +8054,7 @@ mod tests {
         session.start_after(
             crate::loops::request_after("5m check the deploy"),
             std::time::Instant::now(),
+            crate::state::NamesFrom::nothing(),
         );
         let (row, _) = the_still_active_row(&session, 120).expect("a line is held");
         assert!(row.contains("sending in"), "{row}");
@@ -7441,6 +8084,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         session.status = Status::Working;
         session.turns = 1;
@@ -7532,6 +8176,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         job_event(&mut session, started("job:1"));
         let word = t!(loop_hint).to_string();
@@ -7600,6 +8245,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         let word = t!(loop_hint).to_string();
 
@@ -7752,6 +8398,135 @@ mod tests {
         assert!(labelled(&row_for(&output, 120, "/theme [name]"), "now"));
     }
 
+    /// CMD-8. Every command row reads the label the table of kinds gives its command, with the
+    /// expected labels written out here by command and not read from the table the rows are drawn
+    /// from. Rejects a command whose kind is changed in the table without the spec changing (for
+    /// example `/style` made to wait, which its row would then call `queued`), a label shared by a
+    /// whole group of rows, and a command added to the table that no list here places.
+    #[test]
+    fn every_command_row_reads_the_label_the_spec_table_gives_it() {
+        /// The labels a row carries, read from the row whose first word is `name`.
+        fn labels_on(output: &str, width: u16, name: &str) -> Vec<&'static str> {
+            let cells: Vec<char> = output.chars().collect();
+            let row = cells
+                .chunks(usize::from(width))
+                .map(|row| row.iter().collect::<String>())
+                .find(|row| row.split_whitespace().find(|word| word.starts_with('/')) == Some(name))
+                .unwrap_or_else(|| panic!("{name} has no row"));
+            ["now", "queued", "now/queued"]
+                .into_iter()
+                .filter(|label| labelled(&row, label))
+                .collect()
+        }
+
+        // Carried out as it is typed, whatever waits ahead of it.
+        const NOW: &[&str] = &[
+            "/cost",
+            "/context",
+            "/lsp",
+            "/open",
+            "/limit",
+            "/status",
+            "/copy",
+            "/export",
+            "/issues",
+            "/prs",
+            "/config",
+            "/language",
+            "/crash-reports",
+            "/watch",
+            "/jobs",
+            "/outputs",
+            "/panel",
+            "/sidebar",
+            "/diff",
+            "/todos",
+            "/caffeinate",
+            "/redraw",
+            "/thinking",
+            "/request",
+            "/changelog",
+            "/btw",
+            "/theme",
+            "/sessions",
+        ];
+        // Carried out or waiting, by the words after it and by what already waits.
+        const EITHER: &[&str] = &[
+            "/rename",
+            "/note",
+            "/issue",
+            "/pr",
+            "/forget-trust",
+            "/sandbox",
+            "/model",
+            "/effort",
+            "/advisor",
+            "/variant",
+            "/style",
+            "/loop",
+            "/goal",
+            "/schedule",
+            "/mcp",
+        ];
+        // Waits for the turn to end.
+        const QUEUED: &[&str] = &[
+            "/add-dir",
+            "/cd",
+            "/mode",
+            "/help",
+            "/compact",
+            "/recap",
+            "/clear",
+            "/handoff",
+            "/branch",
+            "/resume",
+            "/bg",
+            "/reach",
+            "/after",
+            "/checkouts",
+            "/plan",
+            "/manifest",
+            "/agent",
+            "/memory",
+            "/unfinished",
+            "/init",
+            "/review",
+            "/commit-message",
+            "/undo",
+            "/rewind",
+            "/hunks",
+            "/exit",
+            "/plugin",
+        ];
+        let commands = crate::command_table::commands();
+        for command in &commands {
+            let placed = [NOW, EITHER, QUEUED]
+                .iter()
+                .filter(|kind| kind.contains(&command.name))
+                .count();
+            assert_eq!(placed, 1, "{} is placed in {placed} lists", command.name);
+        }
+        assert_eq!(
+            NOW.len() + EITHER.len() + QUEUED.len(),
+            commands.len(),
+            "a listed word is no command in the table"
+        );
+
+        let mut session = Session::new("none");
+        session.type_char('a');
+        session.submit().expect("the prompt is sent");
+        session.type_char('/');
+        let width = 200;
+        let height = u16::try_from(commands.len() + 30).expect("a terminal height");
+
+        let output = rendered_at(&session, width, height);
+        for (kind, label) in [(NOW, "now"), (EITHER, "now/queued"), (QUEUED, "queued")] {
+            for name in kind {
+                assert_eq!(labels_on(&output, width, name), [label], "{name}");
+            }
+        }
+    }
+
     /// Rejects: a `now` label on a command that Enter would queue, because a line of the same
     /// command already waits ahead of it.
     #[test]
@@ -7825,7 +8600,7 @@ mod tests {
             session.type_char(c);
         }
         session.submit().expect("the prompt is sent");
-        let title = t!(effort_picker_title);
+        let title = t!(effort_picker_heading_every_session);
         assert!(!rendered_at(&session, 120, 40).contains(title));
 
         session.open_picking(crate::picking::Picking::Effort(
@@ -8508,15 +9283,16 @@ mod tests {
         });
 
         let width = 120;
-        let rows: Vec<String> = lines_beneath_the_box(&session, width, &session.offered())
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect()
-            })
-            .collect();
+        let rows: Vec<String> =
+            lines_beneath_the_box(&session, width, usize::MAX, &session.offered())
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect()
+                })
+                .collect();
 
         assert_eq!(rows.len(), 2, "{rows:?}");
         assert!(rows[0].starts_with("  ❯ /release-check"), "{rows:?}");
@@ -8554,15 +9330,16 @@ mod tests {
             }]
         });
 
-        let rows: Vec<String> = lines_beneath_the_box(&session, 120, &session.offered())
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect()
-            })
-            .collect();
+        let rows: Vec<String> =
+            lines_beneath_the_box(&session, 120, usize::MAX, &session.offered())
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect()
+                })
+                .collect();
 
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert!(rows[0].contains("/review-plan"), "{rows:?}");
@@ -8583,15 +9360,16 @@ mod tests {
     #[test]
     fn a_servers_prompt_row_names_its_server_and_what_it_takes() {
         let session = typed_with_prompts("/mcp__w");
-        let rows: Vec<String> = lines_beneath_the_box(&session, 100, &session.offered())
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect()
-            })
-            .collect();
+        let rows: Vec<String> =
+            lines_beneath_the_box(&session, 100, usize::MAX, &session.offered())
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect()
+                })
+                .collect();
         let [row] = rows.as_slice() else {
             panic!("{rows:?}");
         };
@@ -8658,15 +9436,16 @@ mod tests {
                 .to_vec()
         });
 
-        let rows: Vec<String> = lines_beneath_the_box(&session, 120, &session.offered())
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect()
-            })
-            .collect();
+        let rows: Vec<String> =
+            lines_beneath_the_box(&session, 120, usize::MAX, &session.offered())
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect()
+                })
+                .collect();
 
         assert_eq!(rows.len(), 2, "{rows:?}");
         assert!(rows[0].contains("/ship-it"), "{rows:?}");
@@ -8827,15 +9606,74 @@ mod tests {
         assert!(!input_row(&typed("/compact"), 90).contains("[focus]"));
     }
 
-    /// `/effort` spells out the levels it takes once the word is typed, while the completion list
-    /// keeps `[level]` so its description column does not move.
+    /// `/effort` spells out the word `session` and the levels it takes once the word is typed,
+    /// while the completion list keeps `[level]` so its description column does not move.
     #[test]
     fn the_effort_command_offers_its_levels_after_its_word() {
         let row = input_row(&typed("/effort "), 90);
         assert!(
-            row.ends_with("/effort  [low | medium | high | xhigh | max]"),
+            row.ends_with("/effort  [session | low | medium | high | xhigh | max]"),
             "{row}"
         );
+    }
+
+    /// CMD-21. After `/effort session ` the box draws the five levels, which are the
+    /// words that follow `session`, and not the word `session` again. The hint goes at the first
+    /// character of the level, at the end of the line, outside shell mode, and only after the
+    /// exact word `session`. The faults it rejects are no hint for the second word, so the box
+    /// draws nothing after `/effort session `, the first word's hint repeated there, the hint kept
+    /// over a level being typed or after a finished one, drawn for a longer word or one in another
+    /// case, drawn in shell mode or with the caret moved back into the line, and a hint cut
+    /// across a second row instead of at the row's edge.
+    #[test]
+    fn after_effort_session_the_box_draws_the_levels_alone() {
+        let row = input_row(&typed("/effort session "), 90);
+        assert!(
+            row.ends_with("/effort session  [low | medium | high | xhigh | max]"),
+            "{row}"
+        );
+        assert!(!row.contains("[session"), "{row}");
+
+        for (line, drawn) in [
+            ("/effort session", "/effort session"),
+            ("/effort session h", "/effort session h"),
+            ("/effort session high ", "/effort session high"),
+            ("/effort sessions ", "/effort sessions"),
+            ("/effort Session ", "/effort Session"),
+            ("/effort  session ", "/effort  session"),
+            ("/effort high ", "/effort high"),
+            ("/model session ", "/model session"),
+        ] {
+            assert_eq!(input_row(&typed(line), 90), drawn, "{line:?}");
+        }
+
+        let mut shell = typed("/effort session ");
+        shell.shell = true;
+        assert_eq!(input_row(&shell, 90), "/effort session");
+
+        let mut moved_back = typed("/effort session ");
+        moved_back.move_left();
+        assert_eq!(input_row(&moved_back, 90), "/effort session");
+
+        let narrow = input_row(&typed("/effort session "), 30);
+        assert!(narrow.starts_with("/effort session  [low | m"), "{narrow}");
+        assert!(narrow.ends_with('…'), "{narrow}");
+    }
+
+    /// CMD-21. The first word's hint is one row however narrow the terminal is, cut at the
+    /// row's edge with an ellipsis, and drawn whole at eighty columns, where the longer list with
+    /// `session` in it must still fit. The faults it rejects are the longer hint wrapping onto a
+    /// row the box did not reserve and the longer hint being cut at eighty columns.
+    #[test]
+    fn the_effort_hint_with_session_in_it_fits_eighty_columns_and_is_cut_below_that() {
+        let whole = "/effort  [session | low | medium | high | xhigh | max]";
+        assert!(input_row(&typed("/effort "), 80).ends_with(whole));
+        assert!(input_row(&typed("/effort "), 60).ends_with(whole));
+
+        let narrow = input_row(&typed("/effort "), 30);
+        assert!(narrow.starts_with("/effort  [session | l"), "{narrow}");
+        assert!(narrow.ends_with('…'), "{narrow}");
+        assert!(!narrow.contains("medium"), "{narrow}");
     }
 
     /// `/sandbox` spells out the modes it takes once the word is typed.
@@ -10203,6 +11041,59 @@ mod tests {
         );
     }
 
+    /// A frame of a held view counts its rows from the top of the transcript, so the rows a reply
+    /// adds below the view leave the rows on screen as they were. An offset counted back from the
+    /// end of the transcript, by the number of rows scrolled, moves the view down by as many rows as
+    /// arrived, which a view merely kept off the tail does not show. Only the first rows of the frame
+    /// are compared, since the hint line under the view counts the rows below it.
+    #[test]
+    fn a_frame_of_a_held_view_counts_from_the_top_and_not_back_from_the_end() {
+        let mut session = Session::new("none");
+        for turn in 0..40 {
+            session.type_char('q');
+            session.submit();
+            session.complete(format!("reply number {turn}"), Vec::new(), 0);
+        }
+        // The last column holds the scrollbar, whose thumb moves as rows arrive.
+        let first_rows = |rows: Vec<String>| {
+            rows[..12]
+                .iter()
+                .map(|row| {
+                    row.chars()
+                        .take(89)
+                        .collect::<String>()
+                        .trim_end()
+                        .to_owned()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let tail = first_rows(rows_of_a_frame(&mut session));
+        session.scroll_up(60);
+        // The second frame draws the held view against the layout the first one reported.
+        rows_of_a_frame(&mut session);
+        let held = first_rows(rows_of_a_frame(&mut session));
+        assert_ne!(
+            held, tail,
+            "the view never left the tail, so there is nothing here to hold"
+        );
+
+        session.streaming("l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10");
+
+        // The first frame after the chunk is drawn against the screen laid out before it arrived.
+        let arriving = first_rows(rows_of_a_frame(&mut session));
+        assert_eq!(
+            arriving, held,
+            "rows arriving below moved the rows a held view shows"
+        );
+        let settled = first_rows(rows_of_a_frame(&mut session));
+        assert_eq!(
+            settled, held,
+            "the frame drawn against the new layout moved the rows a held view shows"
+        );
+    }
+
     /// The view is held where it was scrolled to, so the one place that can say so, and how much
     /// has arrived below, is the hint line. It goes when the view reaches the tail.
     #[test]
@@ -11182,6 +12073,77 @@ mod tests {
                 assert_eq!(
                     ended[index], running[index],
                     "row {index} was drawn differently once the turn ended"
+                );
+            }
+        }
+
+        /// A task marked waiting is open on purpose, so neither the transcript's list nor the plan
+        /// `/todos` prints draws it as work being done, and neither dims it as work nobody is doing
+        /// once the turn has ended. Its mark is a glyph of its own, so it differs from the others
+        /// under `NO_COLOR` too, and it is the same whether or not a turn runs.
+        ///
+        /// Rejects: a waiting row drawn with the filled running mark and ink and bold text, one
+        /// that turns hollow and dim when the turn ends, one that shares the mark of a left-open
+        /// row, and either list drawing it unlike the other.
+        #[test]
+        fn a_waiting_task_is_drawn_with_its_own_mark_whether_or_not_a_turn_runs() {
+            let _held = crate::theme::exclusive();
+            let tasks = list(&[
+                ("working on it", Status::Active),
+                ("needs a person", Status::Waiting),
+            ]);
+
+            let running = todo_lines(&tasks, false);
+            let ended = todo_lines(&tasks, true);
+            assert_eq!(
+                ended[1], running[1],
+                "a waiting row was drawn differently once its turn ended"
+            );
+            let waiting = &running[1];
+            let active = &running[0];
+            assert_ne!(waiting.spans[1].content, active.spans[1].content);
+            assert_ne!(
+                waiting.spans[1].content,
+                format!("{} ", crate::panel::LEFT_OPEN_MARKER),
+                "a waiting row carries the mark of a row left open"
+            );
+            assert_ne!(
+                waiting.spans[1].style.fg, active.spans[1].style.fg,
+                "a waiting row has the ink of work being done"
+            );
+            assert!(
+                !waiting.spans[2].style.add_modifier.contains(Modifier::BOLD),
+                "a waiting row is bold, as work being done is"
+            );
+            assert_ne!(
+                ended[1].spans[2].style, ended[0].spans[2].style,
+                "a waiting row is dimmed as a row left open is"
+            );
+            assert!(
+                !waiting.spans[2]
+                    .style
+                    .add_modifier
+                    .contains(Modifier::CROSSED_OUT),
+                "a waiting row is struck through, so it reads as no longer open"
+            );
+
+            // The plan `/todos` prints marks it the same way, and says what it is in words.
+            for left_open in [false, true] {
+                let printed = plan_lines(&tasks, left_open, 60);
+                assert_eq!(
+                    printed[1].spans[1].content.as_ref(),
+                    tasks[1].marker,
+                    "the printed plan marks a waiting row differently from the list under a turn"
+                );
+                assert_eq!(
+                    printed[1].spans[1].content.as_ref(),
+                    waiting.spans[1].content.trim(),
+                );
+                assert_eq!(printed[1].spans[1].style, waiting.spans[1].style);
+                assert!(
+                    printed[1].to_string().contains(t!(todos_status_waiting)),
+                    "the printed plan does not say waiting: {:?}",
+                    printed[1]
                 );
             }
         }

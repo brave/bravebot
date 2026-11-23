@@ -534,6 +534,7 @@ says what a click does and what does the same from the keyboard.
 | a prompt waiting behind a turn | takes it back into the box, with the prompts typed after it | Up, which takes them all |
 | `remove` at the right of a waiting line | removes that line from the queue and puts nothing in the box; a prompt removed is out of the turn's reach, and stays in the history | clearing the box discards the waiting lines |
 | `clear all` on the oldest waiting line, drawn once a second line waits | removes every waiting line, newest first, and leaves the box as it was | clearing the box |
+| `and N more waiting`, under a queue too long to draw | nothing: the prompts it counts are not on screen to choose; a click on the last prompt drawn takes them back too | Up, which takes them all |
 | a command a click on the info panel queued | removes it from the queue, since it has nothing to put in the box | |
 | a web address in the assistant's words, with ctrl held | opens it in your browser, also while a turn runs | `/open 1`, or `/open` and the address |
 | a file path in the assistant's words | shows the file at the end of the transcript, a moment later so a double click still selects the name | `/open 2`, or `/open` and the path |

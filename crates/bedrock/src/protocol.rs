@@ -1290,6 +1290,82 @@ mod tests {
         );
     }
 
+    /// What a service makes of a mark on a picture, a document or a call is not something to guess
+    /// at, so a conversation ending in one is left with the breakpoint on the system prompt alone,
+    /// where the same conversation ending in words is marked on the end as well.
+    #[test]
+    fn a_conversation_ending_in_an_image_a_document_or_a_call_is_marked_nowhere_but_the_prompt() {
+        let attachment = |text_first: bool, url: &str| {
+            let text = Part::Text {
+                text: "what is this".into(),
+            };
+            let file = Part::ImageUrl {
+                image_url: ImageUrl { url: url.into() },
+            };
+            let parts = if text_first {
+                vec![text, file]
+            } else {
+                vec![file, text]
+            };
+            vec![Message::system("be helpful"), Message::user_parts(parts)]
+        };
+        let png = "data:image/png;base64,AAAA";
+        let pdf = "data:application/pdf;base64,AAAA";
+        let tools = offered();
+        let ending_in_a_call = vec![
+            Message::system("be helpful"),
+            Message::user("read it"),
+            Message::assistant_calling("", vec![call("a", "read", "{}")]),
+        ];
+
+        let marked_on_the_end = |request: &ConverseRequest| {
+            request
+                .messages
+                .iter()
+                .flat_map(|message| &message.content)
+                .any(|block| matches!(block, Block::CachePoint(_)))
+        };
+        let prompt_is_marked = |request: &ConverseRequest| {
+            request.system.as_deref().and_then(<[SystemBlock]>::last)
+                == Some(&SystemBlock::CachePoint(CachePoint::new()))
+        };
+
+        let words = request_from(&attachment(false, png), None);
+        assert!(
+            matches!(words.messages[0].content.last(), Some(Block::CachePoint(_))),
+            "a conversation ending in words after a picture was not marked on the end"
+        );
+
+        for (what, request) in [
+            ("a picture", request_from(&attachment(true, png), None)),
+            ("a document", request_from(&attachment(true, pdf), None)),
+            (
+                "a call",
+                request_from(&ending_in_a_call, Some(tools.as_slice())),
+            ),
+        ] {
+            assert!(
+                !marked_on_the_end(&request),
+                "a conversation ending in {what} was marked on the end: {}",
+                body_of(&request)
+            );
+            assert!(
+                prompt_is_marked(&request),
+                "a conversation ending in {what} lost the system prompt's breakpoint"
+            );
+        }
+        assert!(
+            matches!(
+                request_from(&ending_in_a_call, Some(tools.as_slice()))
+                    .messages
+                    .last()
+                    .and_then(|message| message.content.last()),
+                Some(Block::ToolUse(_))
+            ),
+            "the conversation did not end in a call, so the case above says nothing about one"
+        );
+    }
+
     /// The rolling breakpoint is worth a cache write because the next request reads that prefix
     /// back. A request that gives its conversation up once it answers has no next request, so what
     /// the write buys is nothing, and it is charged above the tokens it covers. The system prompt is

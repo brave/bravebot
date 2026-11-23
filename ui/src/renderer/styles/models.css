@@ -24,7 +24,7 @@
   max-height: var(--model-room, 70vh);
   box-sizing: border-box;
 }
-.model-search-row, .model-notices, .model-popover > leo-hr, .model-footnote { flex: none; }
+.model-search-row, .model-notices, .model-popover > leo-hr, .model-kept-note, .model-footnote { flex: none; }
 .model-search-row { display: flex; align-items: center; gap: var(--leo-spacing-m); padding: var(--leo-spacing-m); }
 .model-search-row .model-search { flex: 1; min-width: 0; }
 .model-search-row leo-button { flex: none; flex-grow: 0; }
@@ -119,6 +119,7 @@
 }
 .model-check leo-icon { --leo-icon-size: var(--icon-hero); --leo-icon-color: var(--ink-accent); }
 .model-effort-note { cursor: default; margin: 0; padding: var(--leo-spacing-s) var(--leo-spacing-l); font: var(--type-caption); color: var(--ink-tertiary); text-wrap: pretty; }
+.model-kept-note { padding: var(--leo-spacing-m) var(--leo-spacing-l); border-top: 1px solid var(--border-subtle); }
 
 .model-footnote {
   margin: 0;

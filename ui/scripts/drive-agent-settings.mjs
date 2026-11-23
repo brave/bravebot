@@ -18,7 +18,7 @@ try {
   const errors = []
   page.on('pageerror', e => errors.push(e.message))
   await app.evaluate(({ ipcMain, BrowserWindow }, directory) => {
-    const report = { build: 'bravebot 0.9.0 fixture', configured: true, problem: null, model: 'local/test', brave: false, bedrock: false, providers: [{ name: 'Local', key: 'gateway:local', credential: 'not required' }], selected: null, layers: [], overrides: [], managed: { path: '/etc/bravebot/managed.json', keys: ['provider'] }, network: { roots: ['/test/roots.pem'], problem: null, trustsNothing: false, proxy: 'proxy.example:8080', authenticated: true, unusableProxy: null, noProxy: 'localhost' } }
+    const report = { build: 'bravebot 0.9.0 fixture', configured: true, problem: null, model: 'local/test', brave: false, bedrock: false, providers: [{ name: 'Local', key: 'gateway:local', credential: 'not required' }], selected: null, layers: [], overrides: [], logs: { directory: '/test/.bravebot/logs', writing: true }, managed: { path: '/etc/bravebot/managed.json', keys: ['provider'] }, network: { roots: ['/test/roots.pem'], problem: null, trustsNothing: false, proxy: 'proxy.example:8080', authenticated: true, unusableProxy: null, noProxy: 'localhost' } }
     // Figures that are not the agent's real ones, so a placeholder that held its own would not match them.
     const defaultFor = { 'turn-started': 41, 'tool-finished': 42, 'turn-finished': 43, 'prompt-shown': 44, 'checkout-made': 46, 'compacted': 47, 'session-started': 45, 'session-ended': 7 }
     const accounts = [
@@ -42,6 +42,8 @@ try {
       if (method === 'session.open') return { ok: { session: `s-${params.id}`, model: 'local/test', record: { ...rows.find(r => r.id === params.id), turns: 0, tokens: 0 }, said: [], todos: {}, trust: { known: true, rules: [] }, archived: 0, contextTokens: 0 } }
       if (method === 'models.list') return { ok: { models: [{ id: 'local/test', name: 'Test model', provider: 'Local', premium: false, contextWindow: 32000 }], defaultModel: 'local/test', warnings: [] } }
       if (method === 'settings.inspect') return { ok: report }
+      if (method === 'session.limit') return { ok: { limit: null, spent: 0 } }
+      if (method === 'session.variant') return { ok: { model: 'local/test', offered: [], variant: null } }
       if (method === 'accounts.list') return { ok: { accounts: state.accounts } }
       if (method === 'accounts.signOut') {
         state.signOuts.push(params)
@@ -94,6 +96,46 @@ try {
   await dialog.getByText('Locked by your administrator: provider', { exact: true }).waitFor()
   await dialog.getByText('proxy.example:8080 · authenticated', { exact: true }).waitFor()
   await snap('01-connection')
+  // The diagnostic log directory is named before any log exists. The window shows the bridge's
+  // string, and says why there is none when this process writes no log.
+  const diagnostics = dialog.locator('.settings-block').filter({ has: page.getByRole('heading', { name: 'Diagnostics', exact: true }) })
+  assert.equal(await diagnostics.locator('[data-test="settings-log-directory"]').textContent(), '/test/.bravebot/logs')
+  await diagnostics.getByText('Logs are written here when something fails. The folder may be empty until then.', { exact: true }).waitFor()
+  await diagnostics.scrollIntoViewIfNeeded()
+  // The log box comes first, then the sentence, then the button that sentence is about.
+  assert.deepEqual(await diagnostics.evaluate(block => [...block.children].map(child => child.tagName === 'DIV' ? child.className : child.tagName)),
+    ['H3', 'DL', 'P', 'settings-actions'])
+  // The value's paragraphs carry no outer margin, so the box padding is even and the first line
+  // shares the label's baseline; the path and the note are one spacing step apart.
+  const margins = () => diagnostics.locator('dd.settings-log > p').evaluateAll(ps => ps.map(p => [getComputedStyle(p).marginTop, getComputedStyle(p).marginBottom]))
+  const step = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--leo-spacing-m').trim())
+  assert.deepEqual(await margins(), [['0px', '0px'], [step, '0px']])
+  assert.equal(await diagnostics.locator('.settings-log-note').evaluate(p => getComputedStyle(p).color),
+    await page.evaluate(() => { const probe = document.createElement('span'); probe.style.color = 'var(--ink-secondary)'; document.body.append(probe); const color = getComputedStyle(probe).color; probe.remove(); return color }),
+    'the note under the path is in secondary ink')
+  const shoot = async name => {
+    for (const theme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' })
+      await page.waitForTimeout(300)
+      await diagnostics.screenshot({ path: join(output, `${name}-${theme}.png`) })
+    }
+    await page.emulateMedia({ colorScheme: null, reducedMotion: 'reduce' })
+  }
+  await shoot('01-log-directory')
+  await app.evaluate(() => { globalThis.agentSettingsFixture.state.report.logs.writing = false })
+  await diagnostics.getByRole('button', { name: 'Refresh diagnostics' }).click()
+  await diagnostics.getByText('This session keeps nothing, so no log is written.', { exact: true }).waitFor()
+  assert.equal(await diagnostics.locator('[data-test="settings-log-directory"]').count(), 0, 'a process that writes no log names no folder')
+  assert.deepEqual(await margins(), [['0px', '0px']])
+  await shoot('01-log-not-written')
+  await app.evaluate(() => { const { logs } = globalThis.agentSettingsFixture.state.report; logs.directory = null; logs.writing = false })
+  await diagnostics.getByRole('button', { name: 'Refresh diagnostics' }).click()
+  await diagnostics.getByText('No state directory is set, so no log is kept.', { exact: true }).waitFor()
+  assert.deepEqual(await margins(), [['0px', '0px']])
+  await shoot('01-log-no-state-directory')
+  await app.evaluate(() => { const { logs } = globalThis.agentSettingsFixture.state.report; logs.directory = '/test/.bravebot/logs'; logs.writing = true })
+  await diagnostics.getByRole('button', { name: 'Refresh diagnostics' }).click()
+  await diagnostics.locator('[data-test="settings-log-directory"]').waitFor()
   // The model service and the accounts are the Providers page, the second in the list.
   assert.deepEqual(await dialog.locator('[data-test^="settings-page-"]').evaluateAll((items) => items.map((item) => item.dataset.test)),
     ['settings-page-general', 'settings-page-providers', 'settings-page-connectors', 'settings-page-agent'])
@@ -282,7 +324,8 @@ try {
   await page.keyboard.press('Escape')
   await dialog.waitFor({ state: 'detached' })
   // Focus is on the button Leo draws inside the host, which the page reports as the host itself.
-  assert.equal(await page.locator('.agent-settings-open').evaluate(el => el === document.activeElement || el.getRootNode().host === document.activeElement), true)
+  // The window moves focus after the dialog has gone, so this waits for it rather than looking once.
+  await page.waitForFunction(() => document.activeElement === document.querySelector('.agent-settings-open'), null, { timeout: 2000, polling: 100 })
   await page.locator('.session').filter({ hasText: 'Agent settings a' }).click()
   await page.getByText('Context not yet measured', { exact: true }).waitFor()
   await page.getByRole('button', { name: 'More', exact: true }).click(); await page.getByRole('menuitem', { name: 'File watches…', exact: true }).click()
@@ -341,7 +384,7 @@ try {
   // page used last.
   if (await page.locator('.app.left-folded').count()) await page.getByRole('button', { name: 'Chat list', exact: true }).click()
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
-  await dialog.getByText('Model service configured', { exact: true }).waitFor()
+  await dialog.getByRole('heading', { name: 'Diagnostics', exact: true }).waitFor()
   assert(await dialog.locator('.settings-main').evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'settings page fits narrow layout')
   await snap('06-narrow-settings')
   assert.deepEqual(errors, [])

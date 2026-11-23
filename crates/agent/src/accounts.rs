@@ -60,6 +60,8 @@ pub enum Held {
     KeyStored,
     /// A key a variable the provider block names holds.
     KeyFromEnvironment,
+    /// A key the file the provider block's `options.keyFile` names holds.
+    KeyFromFile,
     /// The provider block names no key.
     KeyNotNeeded,
     /// An account whose access token expires at the instant stated, which a request renews.
@@ -101,6 +103,9 @@ pub enum Why {
     GatewayUnrecorded,
     /// A configured gateway a turn would find no key for.
     GatewayAbsent,
+    /// A configured gateway whose block names a file for its key that gives none, with no variable
+    /// or stored key before it. Storing a key makes it usable, since a stored key is read first.
+    GatewayKeyFileUnusable(bravebot_config::provider::KeyFileFault),
     /// The file of gateway keys cannot be read.
     KeysUnreadable,
     /// Not asked, because the caller said to skip it.
@@ -757,10 +762,16 @@ fn configured(
 ) -> Standing {
     match provider.credential_and_source(lookup) {
         (Credential::Token(_), Some(Source::Stored)) => Standing::SignedIn(Held::KeyStored),
+        (Credential::Token(_), Some(Source::KeyFile)) => Standing::SignedIn(Held::KeyFromFile),
         (Credential::Token(_), _) => Standing::SignedIn(Held::KeyFromEnvironment),
         (Credential::NotNeeded, _) => Standing::SignedIn(Held::KeyNotNeeded),
-        (Credential::Absent, _) if keys_unreadable => Standing::Unusable(Why::KeysUnreadable),
+        (Credential::Absent | Credential::KeyFileUnusable(_), _) if keys_unreadable => {
+            Standing::Unusable(Why::KeysUnreadable)
+        }
         (Credential::Absent, _) => Standing::NotSignedIn(Why::GatewayAbsent),
+        (Credential::KeyFileUnusable(fault), _) => {
+            Standing::NotSignedIn(Why::GatewayKeyFileUnusable(fault))
+        }
     }
 }
 
@@ -1106,6 +1117,62 @@ mod tests {
                 ..
             }]
         ));
+    }
+
+    /// `auth status` and the window: a gateway whose key is read from the file its block names is
+    /// signed in from the file, and one whose file gives no key is not signed in and says why, with a
+    /// key stored for it winning because a stored key is read before the file. The regressions it
+    /// rejects are reading the file as `options.apiKey` is read (reported as an environment key), and
+    /// reporting a key file that gives no key as a gateway that names no credential, which would read
+    /// as signed in.
+    #[test]
+    fn a_key_file_that_gives_no_key_is_not_signed_in_and_one_that_does_is() {
+        let directory = scratch("key-file-standing");
+        let file = directory.join("key.txt");
+        let block = format!(
+            r#"{{"provider": {{"gw": {{"options": {{"baseURL": "https://gw.example/v1",
+                "keyFile": {}}}}}}}}}"#,
+            serde_json::json!(file.to_str().expect("a path"))
+        );
+        let standing = |stored: Result<Keys, keys::Unreadable>| {
+            let rows = gateways(
+                Ok(configured(&block, &stored)),
+                &Managed::default(),
+                &stored,
+                Some("gw"),
+                |_: &str| None,
+            )
+            .expect("rows");
+            rows.into_iter().next().expect("a row").standing
+        };
+
+        // No file: not signed in, with the fault named and no other source standing in.
+        assert!(matches!(
+            standing(Ok(Keys::default())),
+            Standing::NotSignedIn(Why::GatewayKeyFileUnusable(
+                bravebot_config::provider::KeyFileFault::Unreadable
+            ))
+        ));
+        // A key stored for the id is read before the file, so it makes the gateway usable.
+        assert!(matches!(
+            standing(Ok(keys_for(&["gw"]))),
+            Standing::SignedIn(Held::KeyStored)
+        ));
+        // A file that holds a key: signed in from the file.
+        std::fs::write(&file, "placeholder-file-key\n").expect("a file");
+        assert!(matches!(
+            standing(Ok(Keys::default())),
+            Standing::SignedIn(Held::KeyFromFile)
+        ));
+        // A file that holds the wrong thing is the same not-signed-in, with its own fault.
+        std::fs::write(&file, "two words").expect("a file");
+        assert!(matches!(
+            standing(Ok(Keys::default())),
+            Standing::NotSignedIn(Why::GatewayKeyFileUnusable(
+                bravebot_config::provider::KeyFileFault::NotAKey
+            ))
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     /// A gateway's key is stored, from a variable or not needed; a known service no block names is

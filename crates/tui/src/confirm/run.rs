@@ -3448,6 +3448,109 @@ mod tests {
         assert!(waited, "no draw took `y` alone, so nothing here waited");
     }
 
+    /// Pages `request` through an 80x14 box one row at a time, from the top to the end, and checks
+    /// that each key in `keys` is taken only after the first and last words of every sentence in
+    /// `says`, and every text in `also`, were on the screen, where `y` waits for the plan alone.
+    /// The texts are the ones the keys grant by, so a plan that fits is not paged: the first draw
+    /// must not hold them. Ends of the rows that close a key's range are among them, so a range
+    /// that stops short of its last row lets the key through before that row is drawn.
+    fn keys_wait_for_their_sentences_in_a_real_draw(
+        request: &RunRequest,
+        keys: &[char],
+        says: &[&str],
+        also: &[&str],
+    ) {
+        let ends: Vec<String> = says
+            .iter()
+            .flat_map(|sentence| crate::confirm::tests::sentence_ends(sentence))
+            .chain(also.iter().map(|text| squeezed(text)))
+            .collect();
+        let mut shown = RowsShown::default();
+        let mut scroll = 0;
+        let mut read = String::new();
+        let mut waited = false;
+        let mut taken_at_the_end = false;
+        loop {
+            let (rows, drawn) = run_screen(request, (80, 14), scroll, &mut shown);
+            read.push_str(&box_text(&rows));
+            read.push('\n');
+            if scroll == 0 {
+                assert!(
+                    ends.iter().all(|end| !read.contains(end.as_str())),
+                    "the first draw already showed the sentences, so nothing waited: {rows:#?}"
+                );
+            }
+            let take = |key: char| {
+                drawn
+                    .response_to(press(KeyCode::Char(key)), request)
+                    .is_some()
+            };
+            let key_taken: Vec<char> = keys.iter().copied().filter(|key| take(*key)).collect();
+            for key in &key_taken {
+                for end in &ends {
+                    assert!(
+                        read.contains(end.as_str()),
+                        "`{key}` was taken before {end:?} was drawn: {rows:#?}"
+                    );
+                }
+            }
+            if take('y') && key_taken.len() < keys.len() {
+                waited = true;
+            }
+            if key_taken.len() == keys.len() {
+                taken_at_the_end = true;
+                break;
+            }
+            let next = drawn.moved(scroll, 1);
+            if next == scroll {
+                break;
+            }
+            scroll = next;
+        }
+        assert!(
+            waited,
+            "no draw took `y` without {keys:?}, so nothing here waited"
+        );
+        assert!(taken_at_the_end, "{keys:?} were never taken");
+    }
+
+    /// PROMPT-4: `s` records a scope that outlives the session, so it is taken only after the
+    /// rows saying what it grants, the scope's name and the last sentence among them, were on the
+    /// screen, in a box that has to be paged for them. The regression it rejects: `draw_run`
+    /// leaving the scope rows out of the ranges it reports, or ending the range early, so `s` is
+    /// taken once the plan has been drawn.
+    #[test]
+    fn the_scope_key_waits_for_the_scope_rows_in_a_real_draw() {
+        keys_wait_for_their_sentences_in_a_real_draw(
+            &a_scope_run(),
+            &['s'],
+            &[
+                t!(run_remember_scope_explained),
+                t!(run_remember_scope_one_entry),
+            ],
+            &["Read pull requests and issues in brave/bravebot"],
+        );
+    }
+
+    /// PROMPT-4, SANDBOX-27: `m` and `e` remember a reach past this session or every session, so
+    /// each is taken only after the rows saying what it remembers were on the screen, down to the
+    /// last row, which says how to forget it. The regression it rejects: `draw_run` leaving the
+    /// reach rows out of the ranges it reports, or ending the range before the path of the record.
+    #[test]
+    fn the_keep_keys_wait_for_the_reach_rows_in_a_real_draw() {
+        keys_wait_for_their_sentences_in_a_real_draw(
+            &a_run_keeping_remote(),
+            &['m', 'e'],
+            &[
+                t!(run_keep_reach_explained),
+                t!(run_keep_reach_lifetimes),
+                t!(run_keep_reach_where),
+                t!(run_keep_reach_undo),
+            ],
+            &["/home/someone/.bravebot/reach.jsonl"],
+        );
+    }
+
     /// PROMPT-4: having reached the bottom is not having read what was passed over on the way, and
     /// End passes over the plan's arguments, which run as surely as the ones that were drawn.
     #[test]

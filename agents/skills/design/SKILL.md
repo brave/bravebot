@@ -227,6 +227,12 @@ Compose from these before inventing a new pattern.
 - **List rows**: `--session-row-h` rows in the sidebar, three lines of text, a hover control that
   overlays the time, sticky caption-ink group headings.
 - **Menus**: Leo menu items with a leading icon column and a check column (`menus.css`).
+- **Plan row** (`Context.tsx`, `inspector.css`): one icon or ring marks each task, and the status is
+  also hidden text after the task. Pending is `radio-unchecked`, in progress a progress ring, done
+  `check-circle-filled`, cancelled `close`, and waiting `pause-circle` in `--status-warning`. A
+  waiting task is open work whose next step is not the agent's, so it is not struck, has no ring and
+  is not dimmed, whether or not a turn runs. Its marker colour is neither the success nor the
+  running ink.
 - **List beside detail** (`Accounts.tsx`, `settings.css`): inside a settings card, a 240px list box of
   rows (mark, name, a status line in status ink) beside the chosen row's detail, in one bordered box
   with `--radius-control`. The chosen row sits on `--surface-app`; the arrow keys move through the

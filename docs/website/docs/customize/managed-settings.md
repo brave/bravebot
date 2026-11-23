@@ -113,16 +113,22 @@ rest of the list still applies. `allow` is never read from here, because a grant
 A key written twice in one object of this file, at any depth, is read so that the second copy erases
 nothing the first one refused. Two blocks under one key are combined, and a `deny` or `ask` list written
 twice keeps the entries of both, as do `models.deny`, `mcp.deny` and the other lists that only refuse. A
-repeated `models.allow` or `mcp.allow` keeps the entries both lists name. `doctor` names each repeated
-key with this file's path, and never what it was set to.
+repeated `models.allow` or `mcp.allow` keeps the entries both lists name. `doctor` and the session as
+it opens name each repeated key with this file's path, and never what it was set to. They also name a
+`retrieval` value in this file that is not a block with a boolean `enabled`, since such a value pins
+nothing.
 
 A layer that can pin a preference is a layer somebody uses to pin one. What two parties have a
 legitimate say in is where a request goes, whose account pays for it, and what a session on the machine
 may reach; which theme is on and which keys do what are neither.
 
-**No credential is read from this file.** A gateway entry's `apiKey` is dropped and the entry's host,
-models and variable names are honoured without it. Everyone on the machine can read this file, so a
-token in it is a token handed to every account rather than one held by its owner. The service says what
+**No credential is read from this file.** A gateway entry's `apiKey` and `options.keyFile` are dropped
+and the entry's host, models and variable names are honoured without them. Everyone on the machine can
+read this file, so a token in it is a token handed to every account rather than one held by its owner,
+and the layer names the host a token goes to, so it does not also choose which file's content is sent
+there. A key stored with `bravebot auth login gateway` and a variable the entry names still supply the
+credential. An entry that names only an `options.keyFile` therefore names no credential once the key
+file is dropped, as one that names only an `apiKey` does. The service says what
 is missing on the first request. A `headers` block is kept, because a header is how this layer names a
 tenant or a route. Writing a value as `{env:NAME}` keeps it out of a file every account can read.
 

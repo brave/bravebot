@@ -105,6 +105,7 @@ pub fn status(status: Status) -> &'static str {
     match status {
         Status::Pending => "pending",
         Status::Active => "active",
+        Status::Waiting => "waiting",
         Status::Done => "done",
         Status::Cancelled => "cancelled",
     }
@@ -948,7 +949,7 @@ pub fn mcp_server_request(id: u64, question: &Question<'_>) -> Value {
         "variables": variables,
         "reads": declaration.reads(),
         "directory": directory,
-        "digest": declaration.digest().short(),
+        "digest": question.digest().short(),
         "requestedBy": question.file,
         "changed": question.changed,
         // Every line the terminal draws above the answers, worded once in the agent.

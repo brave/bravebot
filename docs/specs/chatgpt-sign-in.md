@@ -1364,10 +1364,19 @@ does not take a level would refuse every request of it.
 The terminal keeps the level chosen: it is the level of the next session, which `/clear` begins, and of
 every model but the account's. A level chosen on a model of the account that is not the one the session
 began with, and a model of the account picked while the chosen level is not the session's, are said in a
-sentence that names both levels. A skill's file that asks for a level where the account answers is said to
+sentence that names both levels. For a level recorded with `/effort` the sentence says the chosen level
+applies from the next session, which `/clear` begins. For a level chosen with `/effort session` it says
+the chosen level applies from `/clear`, which begins the next ChatGPT session, and is not recorded,
+because no later session opens on it. A level chosen with `/effort session` is the level `/clear`
+begins the next ChatGPT session at, and a recorded level chosen afterwards replaces it, so the
+sentence said is the one for the way the level in force was last chosen. A skill's file that asks for
+a level where the account answers is said to
 change nothing, in the notice every front end gets for a skill. The info panel names the level sent, and
-`/status` names it and says which level was chosen where that is another. The sentences are in the message
-catalog, in English and in French.
+`/status` names it and says which level was chosen where that is another, in the words for a recorded
+level or for one chosen with `/effort session`. The info panel draws no `this session only` row under
+a level sent that is not the one chosen with `/effort session`. The sentences are in the message
+catalog, in English and in French. The desktop model picker, on a model of the account that reads a
+level, names the level the conversation is sent and the level chosen, where they differ.
 
 Nothing else a reply, a model or a settings file says is added to a request to this host: a gateway's
 options are carried into its requests, and this service takes none. The sign-in stores no identifier of the
@@ -1447,6 +1456,14 @@ sent would mislead a person about what the session costs.
 `verified-by: bravebot_cli::chatgpt_session::a_one_shot_run_asks_for_the_level_it_was_started_with_and_a_check_of_its_goal_for_none`
 `verified-by: bravebot_cli::chatgpt_session::a_session_in_lines_asks_for_the_level_chosen_in_every_prompt`
 `verified-by: bravebot_tui::app::a_chatgpt_session_keeps_the_level_it_began_with_and_says_so_when_another_is_chosen`
+`verified-by: bravebot_tui::app::a_chatgpt_account_is_sent_the_level_its_session_began_with_when_another_is_chosen_for_this_session_only`
+`verified-by: bravebot_tui::app::a_clear_begins_the_account_session_at_a_session_only_level`
+`verified-by: bravebot_tui::app::a_session_only_level_on_a_chatgpt_account_is_said_to_apply_from_clear_and_not_to_be_recorded`
+`verified-by: bravebot_tui::app::a_recorded_level_on_a_chatgpt_account_is_said_to_apply_from_the_next_session_after_a_session_only_one`
+`verified-by: bravebot_tui::app::picking_a_chatgpt_model_after_a_session_only_level_says_the_session_only_sentence`
+`verified-by: bravebot_tui::app::a_level_picked_on_a_chatgpt_account_says_the_sentence_of_the_scope_it_was_picked_in`
+`verified-by: bravebot_tui::app::the_status_of_a_session_names_the_scope_of_a_level_chosen_with_effort_session`
+`verified-by: bravebot_tui::status::on_the_account_a_session_only_level_is_said_to_apply_from_clear_and_not_the_next_session`
 `verified-by: bravebot_tui::app::picking_a_chatgpt_model_says_which_level_it_is_sent_where_that_is_not_the_one_chosen`
 `verified-by: bravebot_tui::app::the_model_in_force_is_the_accounts_by_the_pick_or_else_by_the_default`
 `verified-by: bravebot_tui::app::a_level_the_account_refused_stops_being_sent_and_is_said`
@@ -1457,6 +1474,9 @@ sent would mislead a person about what the session costs.
 `verified-by: bravebot_agent::chatgpt_effort_in_french::the_sentences_about_a_level_a_chatgpt_session_keeps_are_said_in_the_chosen_catalog`
 `verified-by: bravebot_agent::chatgpt::the_account_is_one_provider_at_the_serving_host`
 `verified-by: bravebot_ui_bridge::account_session_tests::a_session_opens_with_the_level_its_project_settles_on`
+`verified-by: bravebot_ui_bridge::account_session_tests::effort_get_names_the_level_an_open_session_began_with_whatever_is_chosen_after`
+`verified-by: bravebot_ui_bridge::account_session_tests::effort_get_without_an_open_session_carries_no_starting_level`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/drive-models.mjs opens the real picker on a model of the ChatGPT account and holds that no note is drawn at the level the conversation began with, that choosing another level draws a note naming both, that choosing the first level again removes it, and that a model of another service, a model that takes no level and a report that names no open session draw none; pnpm --dir ui drive:models runs it)`
 
 <a id="CHATGPT-11"></a>
 ### CHATGPT-11: logging out, status and doctor never print the sign-in
@@ -2605,8 +2625,9 @@ These are the places where another spec states something about this service, eac
   hit in the other two and in the fourth. A round at `low` that followed another round at `low` missed in
   two sessions. So a miss after a request that asks for none was seen, and is not told apart from the misses
   that happen without one.
-- A level chosen in a session on a model of the account applies from the next session, so a person who
-  wants another level for the account begins one with `/clear` or by starting again. A session that began
+- A level chosen with `/effort` in a session on a model of the account applies from the next session, and
+  one chosen with `/effort session` applies from `/clear`, so a person who wants another level for the
+  account begins one with `/clear` or by starting again. A session that began
   on a model that reads no level was begun at the level chosen all the same, and the account is sent it.
 - A skill's file that asks for a level changes nothing where the account answers, in every front end, and
   the desktop is told so in the notice a skill gets although it offers no way to choose a level.

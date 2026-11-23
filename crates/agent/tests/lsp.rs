@@ -2213,24 +2213,90 @@ fn a_write_of_quarantined_bytes_reports_no_diagnostics() {
     let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
     let (result, _asked, started) = write_result(
         "agent-lsp-write-unvouched",
-        &[
-            a_question_about_a_symbol(),
-            tool_request("read_file", r#"{"path":"vendor/x.rs"}"#),
-            tool_request(
-                "spawn_processor",
-                r#"{"reads":["ref:3"],"instruction":"return the whole file"}"#,
-            ),
-            reply_with(&format!(
-                "{}\\nfn quarantined() {{}}",
-                bravebot_core::processor::ProcessorSpec::NOTE_MARKER
-            )),
-        ],
+        &a_running_server_and_a_processors_rewrite_of_an_unvouched_file(),
         r#"{"path":"vendor/x.rs","contents_ref":"ref:5"}"#,
     );
 
     assert_eq!(started, 1, "the server did not run: {result}");
     assert!(result.contains("replaced vendor/x.rs"), "{result}");
     assert!(!result.contains("language server"), "{result}");
+}
+
+/// The planner's steps before a write of quarantined bytes: a question that starts the server, a
+/// read of a file under the distrusted `vendor/`, and a processor's rewrite of it, which is `ref:5`.
+fn a_running_server_and_a_processors_rewrite_of_an_unvouched_file() -> Vec<String> {
+    vec![
+        a_question_about_a_symbol(),
+        tool_request("read_file", r#"{"path":"vendor/x.rs"}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:3"],"instruction":"return the whole file"}"#,
+        ),
+        reply_with(&format!(
+            "{}\\nfn quarantined() {{}}",
+            bravebot_core::processor::ProcessorSpec::NOTE_MARKER
+        )),
+    ]
+}
+
+/// Every result the planner was given for `tool` in a request body, in the order of the calls.
+fn every_result_of(tool: &str, request: &str) -> Vec<String> {
+    let parsed: serde_json::Value = serde_json::from_str(request).expect("a request body");
+    let prefix = format!("Result of {tool}");
+    parsed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter_map(|message| message["content"].as_str())
+        .filter(|content| content.starts_with(&prefix))
+        .map(str::to_string)
+        .collect()
+}
+
+/// LSP-12 and WRITE-5: what withholds the report is the trust of the bytes written, which a write
+/// records for the file (TRUST-4), and not the trust the path had before the write.
+///
+/// A processor's answer can only be written to the file it was about, so the destination is
+/// `vendor/x.rs`, which the tree distrusts. The planner first writes that file in its own words,
+/// which vouches for the path (the control: that write is reported on), and then writes the
+/// processor's answer over it. The path is vouched when the second write is made and the bytes are
+/// not, so a gate that read the path's trust before the write would report, and one that reads the
+/// file's entry after it does not.
+#[test]
+fn quarantined_bytes_written_over_a_vouched_path_report_no_diagnostics() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let mut replies = a_running_server_and_a_processors_rewrite_of_an_unvouched_file();
+    replies.push(tool_request(
+        "write_file",
+        r#"{"path":"vendor/x.rs","contents":"pub struct Held;\nfn broken( {\n"}"#,
+    ));
+    replies.push(tool_request(
+        "write_file",
+        r#"{"path":"vendor/x.rs","contents_ref":"ref:5"}"#,
+    ));
+    replies.push(reply_with("written"));
+    let (requests, _asked, started) =
+        diagnosing_turn("agent-lsp-write-vouched-path", "write x.rs", &[], replies);
+    assert_eq!(started, 1, "the server did not run");
+
+    let results = every_result_of("write_file", requests.last().expect("a request"));
+    assert_eq!(results.len(), 2, "{results:?}");
+    assert!(
+        results[0].contains("replaced vendor/x.rs"),
+        "{}",
+        results[0]
+    );
+    assert!(
+        results[0].contains("language server: 2 errors at line 2, 4; 1 warning"),
+        "the path the planner's own words vouched for is not reported on: {}",
+        results[0]
+    );
+    assert!(results[1].contains("replaced"), "{}", results[1]);
+    assert!(
+        !results[1].contains("language server"),
+        "quarantined bytes written over a vouched path were reported on: {}",
+        results[1]
+    );
 }
 
 /// The edit the planner makes in the tests below, in its own words.

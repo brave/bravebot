@@ -128,6 +128,8 @@ pub struct Reached {
     /// The sandbox itself, where it runs in one bravebot made for it, held so the
     /// sandbox is removed once the server has stopped and not before.
     sandbox: Option<Box<dyn std::any::Any + Send + Sync>>,
+    /// The installed plugin that carries the server, where one does (PLUGIN-7).
+    plugin: Option<String>,
 }
 
 impl Reached {
@@ -152,6 +154,7 @@ impl Reached {
             headers: Vec::new(),
             sandboxed: None,
             sandbox: None,
+            plugin: None,
         }
     }
 
@@ -220,6 +223,14 @@ impl Reached {
     #[cfg(test)]
     pub(crate) fn sent_headers(&self) -> &[(String, String)] {
         &self.headers
+    }
+
+    /// The same server, held as one the installed plugin called `plugin` carries (PLUGIN-7): a
+    /// turn hashes that plugin's directory again before it offers the server, and a call is refused
+    /// where the directory no longer matches the install's record.
+    pub(crate) fn of_plugin(mut self, plugin: &str) -> Self {
+        self.plugin = Some(plugin.to_string());
+        self
     }
 
     /// The same server, with the policy its process was started under (SERVERS-20). A server with
@@ -403,6 +414,8 @@ struct Server {
     sandboxed: Option<Sandboxed>,
     /// After `connection` for the same reason: the sandbox is removed once the server has stopped.
     _sandbox: Option<Box<dyn std::any::Any + Send + Sync>>,
+    /// The installed plugin that carries the server, where one does (PLUGIN-7).
+    plugin: Option<String>,
 }
 
 struct Shared {
@@ -520,6 +533,7 @@ impl Session {
                     _home: reached.home,
                     sandboxed: reached.sandboxed,
                     _sandbox: reached.sandbox,
+                    plugin: reached.plugin,
                 })
             })
             .collect();
@@ -600,6 +614,39 @@ impl Session {
             held.revoke_mcp_call(&ServerAlias::new(server.alias.as_str()));
         }
         held
+    }
+
+    /// `held` less the grant for each server of an installed plugin that may not run now: the
+    /// plugin is turned off, or its directory, hashed again, is not the one the install recorded
+    /// (PLUGIN-7, PLUGIN-11). A plugin found changed is queued in `answers` to be named once in the
+    /// session. The hash is used only to refuse.
+    pub fn without_plugins_that_may_not_run(
+        &self,
+        mut held: CapabilitySet,
+        answers: &crate::plugin_hooks::Answers,
+    ) -> CapabilitySet {
+        for server in &self.0.servers {
+            if let Some(stop) = self.plugin_stop(server) {
+                held.revoke_mcp_call(&ServerAlias::new(server.alias.as_str()));
+                if stop == crate::plugin_servers::Stop::Changed
+                    && let Some(plugin) = &server.plugin
+                {
+                    answers.stop_server(plugin);
+                }
+            }
+        }
+        held
+    }
+
+    /// Why the server may not be used now, where it is a plugin's that may not: the plugin is turned
+    /// off, or its directory does not hash to the install's record. A session with no state
+    /// directory cannot hold a plugin's server to either, so it refuses one.
+    fn plugin_stop(&self, server: &Server) -> Option<crate::plugin_servers::Stop> {
+        let plugin = server.plugin.as_deref()?;
+        match self.0.directory.as_deref() {
+            Some(directory) => crate::plugin_servers::may_start(directory, plugin).err(),
+            None => Some(crate::plugin_servers::Stop::Changed),
+        }
     }
 
     /// One grant for each server reached, naming it and no other (SERVERS-9).
@@ -1140,6 +1187,11 @@ impl Session {
         arguments: Value,
     ) -> McpResult<ToolOutput> {
         let server = self.reached(alias)?;
+        if self.plugin_stop(server).is_some() {
+            return Err(McpError::Transport(format!(
+                "{alias} may not run now: its plugin is off or no longer matches its record"
+            )));
+        }
         match &mut *held(&server.connection) {
             Connection::Stdio(server) => server.call_tool(policy, tool, arguments),
             Connection::Http(server) => server.call_tool(policy, egress, tool, arguments),
@@ -1156,9 +1208,9 @@ impl Session {
         arguments: &[(String, String)],
     ) -> McpResult<Labelled<String>> {
         let server = self.reached(alias)?;
-        if server.sandboxed.is_some() {
+        if server.sandboxed.is_some() || self.plugin_stop(server).is_some() {
             return Err(McpError::Transport(format!(
-                "{alias} is called by manifest runs alone"
+                "{alias} is called by manifest runs alone, or its plugin may not run now"
             )));
         }
         match &mut *held(&server.connection) {
@@ -2786,6 +2838,79 @@ mod tests {
             !failed.contains("no failure reported"),
             "a failed call was described as reporting no failure: {failed}"
         );
+    }
+
+    /// An offer of two tools, the first under a wire name `padding` characters longer than the
+    /// second tool's, so the length of its definitions changes by one character for each step.
+    fn two_tools_padded_by(padding: usize) -> Offer {
+        let first = format!("mcp__weather__get_forecast{}", "x".repeat(padding));
+        offer_for_test(&[
+            (first.as_str(), "weather", "get_forecast"),
+            ("mcp__weather__get_alerts", "weather", "get_alerts"),
+        ])
+    }
+
+    /// SERVERS-16: the weight of an offer is the length of the definitions a backend is sent for
+    /// all of its tools, at four characters a token, rounded up.
+    ///
+    /// A wrong implementation divides by three or five, rounds down, counts one tool only, or
+    /// weighs a deferred offer by the tools loaded so far, which are none, so an offer past the
+    /// size would weigh nothing once it was deferred.
+    #[test]
+    fn an_offers_weight_is_the_length_of_its_definitions_at_four_characters_a_token_rounded_up() {
+        let mut remainders = BTreeSet::new();
+        for padding in 0..4 {
+            let offer = two_tools_padded_by(padding);
+            let sent: usize = offer
+                .functions()
+                .iter()
+                .map(|tool| {
+                    serde_json::to_string(tool)
+                        .expect("a definition serialises")
+                        .len()
+                })
+                .sum();
+            remainders.insert(sent % 4);
+            assert_eq!(
+                offer.weight(),
+                sent.div_ceil(4) as u64,
+                "{sent} characters of definitions"
+            );
+
+            let deferred = offer.clone().deferring_above(0);
+            assert!(deferred.is_deferred());
+            assert_eq!(deferred.weight(), offer.weight());
+        }
+        assert_eq!(
+            remainders.len(),
+            4,
+            "the lengths tried must leave every remainder of four, or rounding up is not told from \
+             rounding down: {remainders:?}"
+        );
+    }
+
+    /// SERVERS-16: an offer is deferred where its weight is greater than the threshold, so a
+    /// threshold equal to the weight offers every tool in full.
+    ///
+    /// A wrong implementation defers at the threshold (`>=`), or defers below it.
+    #[test]
+    fn an_offer_is_deferred_only_where_its_weight_is_greater_than_the_threshold() {
+        let offer = two_tools_padded_by(0);
+        let weight = offer.weight();
+        assert!(
+            weight > 1,
+            "the fixture must weigh more than one token: {weight}"
+        );
+
+        let deferred_at = |threshold: u64| offer.clone().deferring_above(threshold).is_deferred();
+        assert!(deferred_at(0));
+        assert!(deferred_at(weight - 1));
+        assert!(
+            !deferred_at(weight),
+            "a threshold equal to the weight defers"
+        );
+        assert!(!deferred_at(weight + 1));
+        assert!(!deferred_at(u64::MAX));
     }
 
     fn pairs(typed: &str) -> Vec<(String, String)> {

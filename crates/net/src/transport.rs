@@ -1564,6 +1564,35 @@ mod tests {
         ));
     }
 
+    /// NET-7: the client a transport builds holds the certificates the transport names, and not
+    /// the built-in set. Rejects a config builder that ignores the named roots, which the tests
+    /// reading `root_certs()` on the transport do not reach because they stop before the client.
+    #[test]
+    fn a_client_built_from_named_certificates_trusts_exactly_those() {
+        let dir = scratch("net-client-named-roots");
+        let file = dir.join("ca.pem");
+        std::fs::write(&file, CERTIFICATE).expect("write");
+
+        let config = Transport::stated(
+            TrustRoots::Named {
+                file: Some(file),
+                directory: None,
+            },
+            None,
+            None,
+        )
+        .agent_config_builder()
+        .build();
+
+        assert!(
+            matches!(
+                config.tls_config().root_certs(),
+                RootCerts::Specific(certs) if certs.len() == 1
+            ),
+            "the client trusts the one named certificate and not the built-in set"
+        );
+    }
+
     /// The environment and a settings file as the process resolves them, with the exported proxy
     /// reader stood in for by `exported`, which is what the library's own would have built from the
     /// environment lookup.

@@ -885,6 +885,17 @@ test('the sidebar lists sessions from the record, the open windows and unsent dr
   assert.equal(key('/p', 'quiet') in listing.info, false, 'a row with neither a bot nor a status has no entry')
   assert.equal(listing.attention, 1)
   assert.equal(list({ ...{ sessions: [summary('asks')], opened: [open('asks', { entries: [asking] })] }, currentKey: key('/p', 'asks') }).attention, 0, 'the session on screen does not ask for attention')
+
+  // A chat a background process is running says so; a stopped, interrupted or never-held one says nothing.
+  const held = (id, background) => ({ ...summary(id), background })
+  const backgrounded = list({
+    sessions: [held('working', 'working'), held('needs', 'needs-input'), held('idle', 'idle'), held('stopped', 'stopped'), held('interrupted', 'interrupted'), held('never', null), held('open', 'idle')],
+    opened: [open('open', { running: true })],
+  })
+  for (const id of ['working', 'needs', 'idle']) assert.equal(backgrounded.info[key('/p', id)]?.status, 'background', `${id} is running in the background`)
+  for (const id of ['stopped', 'interrupted', 'never']) assert.equal(key('/p', id) in backgrounded.info, false, `${id} is not running in the background`)
+  assert.equal(backgrounded.info[key('/p', 'open')].status, 'working', 'a chat open in this window says what the window knows')
+  assert.equal(backgrounded.attention, 0, 'running in the background asks nothing of the reader')
 })
 
 test('a bot is thinking only while no tool of the turn is running, whatever follows the tool in the record', () => {

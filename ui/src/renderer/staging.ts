@@ -13,8 +13,10 @@
  */
 
 import type { DropOutcome, DroppedFile } from '../shared/drops'
-import type { PastedPicture } from '../shared/pastes'
+import { FOLDED_TEXT_MAX, type PastedPicture, type PastedText } from '../shared/pastes'
 import { summonMarker } from '../shared/summons'
+import { btwQuestion, isRecap } from '../shared/aside'
+import { scheduleArgument } from '../shared/schedule'
 
 /** A bot picked from the `@` list for one message (MEMORY-14). */
 export interface SummonedBot {
@@ -28,6 +30,7 @@ export type Staged =
   | { marker: string; via: 'drop'; file: DroppedFile }
   | { marker: string; via: 'paste'; picture: PastedPicture }
   | { marker: string; via: 'summon'; bot: SummonedBot }
+  | { marker: string; via: 'text'; pasted: PastedText }
 
 export interface Staging {
   /** How many markers this composer has ever written. */
@@ -79,6 +82,119 @@ export function stagePaste(staging: Staging, picture: PastedPicture, draft: stri
   const made = staging.made + 1
   const marker = `[${picture.noun} #${made}]`
   return { staging: { made, staged: [...staging.staged, { marker, via: 'paste', picture }] }, ...writtenAt(draft, caret, [marker]) }
+}
+
+/**
+ * How many newlines a paste needs before it folds, the terminal's `FOLD_AT_NEWLINES`. Two read fine
+ * in the box; the third is where a paste starts taking the screen.
+ */
+export const FOLD_AT_NEWLINES = 3
+
+/**
+ * How many lines `text` is, as a person reading it would count them, a port of the terminal's
+ * `lines_in`: a trailing newline ends the last line rather than starting another.
+ */
+export function linesIn(text: string): number {
+  const newlines = text.split('\n').length - 1
+  return text.endsWith('\n') ? newlines : newlines + 1
+}
+
+/** The marker for a folded paste, the English form of `paste-folded` in `en-US.ftl`. */
+export function foldedMarker(number: number, lines: number): string {
+  return `[Pasted text #${number} +${lines} ${lines === 1 ? 'line' : 'lines'}]`
+}
+
+/**
+ * Fold a pasted `text` behind a marker written at `caret`, numbered from the counter drops and
+ * pictures share. A selection from `caret` to `end` is replaced by the marker, as the browser's own
+ * paste replaces it. Line endings are normalised first, as the terminal's `normalised` does. `null`
+ * for a paste below the threshold, or longer than `FOLDED_TEXT_MAX`, which the browser inserts.
+ */
+export function stageText(staging: Staging, text: string, draft: string, caret: number, end = caret): StagedPaste | null {
+  const normal = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  if (normal.split('\n').length - 1 < FOLD_AT_NEWLINES || normal.length > FOLDED_TEXT_MAX) return null
+  const made = staging.made + 1
+  const lines = linesIn(normal)
+  const marker = foldedMarker(made, lines)
+  const pasted: PastedText = { marker, text: normal, number: made, lines }
+  const start = Math.max(0, Math.min(caret, end, draft.length))
+  const stop = Math.max(start, Math.min(Math.max(caret, end), draft.length))
+  const kept = draft.slice(0, start) + draft.slice(stop)
+  return { staging: { made, staged: [...staging.staged, { marker, via: 'text', pasted }] }, ...writtenAt(kept, start, [marker]) }
+}
+
+/**
+ * `draft` with every folded paste's marker put back to its words. Every copy of a marker, as the
+ * terminal's `Session::unfolded`: a marker copied twice means the words twice, and a deleted one
+ * drops them.
+ */
+export function unfolded(staging: Staging | undefined, draft: string): string {
+  let words = draft
+  for (const item of staging?.staged ?? []) {
+    if (item.via === 'text') words = words.split(item.marker).join(item.pasted.text)
+  }
+  return words
+}
+
+/**
+ * `words` with each folded paste in `staged` put back behind its marker: the line as the box showed
+ * it, which is where the `@` names are read (NAME-12). The words a person pasted name no file, so
+ * an `@` in them is not surveyed and vouches for nothing. A paste at either end of the line lost its
+ * outer whitespace when the line was trimmed, so its trimmed words are folded too.
+ */
+export function folded(staged: Staged[], words: string): string {
+  let line = words
+  for (const item of staged) {
+    if (item.via !== 'text') continue
+    const text = item.pasted.text
+    for (const spelling of [text, text.trimEnd(), text.trimStart(), text.trim()]) {
+      if (spelling) line = line.split(spelling).join(item.marker)
+    }
+  }
+  return line
+}
+
+/** The folded paste whose marker spans `caret`, from its start to its end, or null. */
+export function markerAt(staging: Staging | undefined, draft: string, caret: number): Extract<Staged, { via: 'text' }> | null {
+  for (const item of staging?.staged ?? []) {
+    if (item.via !== 'text') continue
+    for (let at = draft.indexOf(item.marker); at !== -1; at = draft.indexOf(item.marker, at + 1)) {
+      if (caret >= at && caret <= at + item.marker.length) return item
+    }
+  }
+  return null
+}
+
+/**
+ * What a draft carries when it leaves the composer, by send, queue, interject, `/btw` or
+ * `/schedule`: what it still names, found on the folded draft, and its words with every folded
+ * paste put back (PASTE-1).
+ */
+export function leaving(staging: Staging | undefined, draft: string): { words: string; staged: Staged[] } {
+  return { words: unfolded(staging, draft).trim(), staged: named(staging, draft) }
+}
+
+/**
+ * Where a draft goes when it leaves the composer, and what it carries there: a `/schedule`
+ * argument, a `/btw` or `/recap` question, or a prompt to send, queue or put into the turn. Each is
+ * read from the words, with every folded paste put back, so no exit carries a marker (PASTE-1).
+ * `line` is the words, which is also what goes back into the composer when the exit fails.
+ */
+export type Exit =
+  | { to: 'schedule'; argument: string; line: string; staged: Staged[] }
+  | { to: 'aside'; kind: 'btw' | 'recap'; question: string; line: string; staged: Staged[] }
+  | { to: 'prompt'; line: string; staged: Staged[] }
+
+/** The exit `draft` takes, or null for a blank draft. */
+export function exitOf(staging: Staging | undefined, draft: string): Exit | null {
+  const { words: line, staged } = leaving(staging, draft)
+  if (!line) return null
+  const argument = scheduleArgument(line)
+  if (argument !== null) return { to: 'schedule', argument, line, staged }
+  const question = btwQuestion(line)
+  if (question !== null) return { to: 'aside', kind: 'btw', question, line, staged }
+  if (isRecap(line)) return { to: 'aside', kind: 'recap', question: '', line, staged }
+  return { to: 'prompt', line, staged }
 }
 
 function writtenAt(draft: string, caret: number, written: string[]): { draft: string; caret: number } {
@@ -134,4 +250,24 @@ export function withoutMarker(draft: string, marker: string): string {
 /** After a send: nothing staged, and the counter where it was so no number comes round again. */
 export function sent(staging: Staging | undefined): Staging {
   return { made: staging?.made ?? 0, staged: [] }
+}
+
+/** The folded pastes `draft` still names, as they are saved with it. */
+export function foldedIn(staging: Staging | undefined, draft: string): PastedText[] {
+  return named(staging, draft).flatMap((item) => item.via === 'text' ? [item.pasted] : [])
+}
+
+/**
+ * `staging` with folded pastes saved with a draft staged again, and the counter raised above their
+ * numbers so the next marker does not repeat one. A marker already staged is left as it is.
+ */
+export function restaged(staging: Staging | undefined, folded: PastedText[] | undefined): Staging {
+  const base = staging ?? EMPTY_STAGING
+  const have = new Set(base.staged.map((item) => item.marker))
+  const added = (folded ?? []).filter((pasted) => !have.has(pasted.marker))
+  if (added.length === 0) return base
+  return {
+    made: Math.max(base.made, ...added.map((pasted) => pasted.number)),
+    staged: [...base.staged, ...added.map((pasted) => ({ marker: pasted.marker, via: 'text' as const, pasted }))],
+  }
 }

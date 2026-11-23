@@ -23,6 +23,9 @@ export function ErrorCard({ detail, onRetry, onModel, category, accountMessage, 
   category?: string | null; accountMessage?: string | null; accountCommand?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null
   detail: string; onRetry?: () => void; onModel?: () => void
 }): React.JSX.Element {
+  // A `/plan` line whose mode was not set started no turn, so there is no turn to continue and no
+  // model to change.
+  if (category === 'plan-mode') { onRetry = undefined; onModel = undefined }
   const classified = failureSummary(category ?? '', cutOff, accountMessage)
   const way = accountMessage ? signInWayOf(accountCommand) : null
   const technical = `${detail}${attempts != null ? `\nRequests attempted: ${attempts}` : ''}${status != null ? `\nHTTP status: ${status}` : ''}`

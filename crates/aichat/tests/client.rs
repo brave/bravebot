@@ -3083,6 +3083,179 @@ fn a_vertex_key_is_in_no_error_and_no_recorded_event_on_either_path_for_any_refu
     }
 }
 
+/// Points the process-wide diagnostic log at a directory and away again when it is dropped, a
+/// panic among the assertions included. Held with [`DIAG_LOG`] locked.
+struct DiagnosticLogAt;
+
+impl DiagnosticLogAt {
+    fn begin(dir: &std::path::Path) -> Self {
+        bravebot_diag::configure(bravebot_diag::Level::Debug, Some(dir.to_path_buf()));
+        Self
+    }
+}
+
+impl Drop for DiagnosticLogAt {
+    fn drop(&mut self) {
+        bravebot_diag::configure(bravebot_diag::Level::Error, None);
+    }
+}
+
+/// Everything the diagnostic log wrote under `dir`, and nothing when it wrote no file.
+fn diagnostic_log_under(dir: &std::path::Path) -> String {
+    std::fs::read_dir(dir.join("logs"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+        .collect()
+}
+
+/// A Vertex key is a credential, so it is in no error, no recorded event and no line of the
+/// diagnostic log of a request the service refused, on either path and whatever the status. The
+/// service here repeats the key in the body of its refusal, as a service that echoes a request
+/// does. The Vertex request does not ask for the body of a refusal
+/// ([`bravebot_net::Request::reading_a_refusal`]), so the egress layer does not read it, and a
+/// fault that only quotes a body the layer read into the failure leaves this test passing. The
+/// legs for a body that is read and handed over are in
+/// `bravebot_net::egress::a_key_the_service_repeats_in_a_refusals_body_is_in_no_failure_text_event_or_log_line`.
+#[test]
+fn a_vertex_key_the_service_echoes_in_its_refusal_is_in_no_error_event_or_log_line() {
+    const KEY: &str = "placeholder-key-e41b7d";
+    let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let diagnostic_log = DiagnosticLogAt::begin(dir.path());
+
+    let mut said: Vec<(String, String)> = Vec::new();
+    for status in [401, 403, 404] {
+        for streaming in [false, true] {
+            let (endpoint, received) = serve_attempts(vec![Attempt::Refused(
+                status,
+                format!(r#"{{"error":{{"message":"API key {KEY} not valid"}}}}"#),
+            )]);
+            let config = config_for(&endpoint);
+            let provider = vertex_at(&endpoint);
+            let egress = Egress::new();
+            let mut sink = RecordingSink::new();
+            let error = {
+                let mut policy = Policy::begin(
+                    routing(),
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::WebFetch]),
+                    &mut sink,
+                )
+                .expect("policy");
+                let mut client = AichatClient::new(&config, &egress).for_gateway(
+                    &provider,
+                    "google/gemini-2.5-flash",
+                    Some(bravebot_config::Secret::new(KEY)),
+                );
+                let request = ChatRequest::new(
+                    "google-vertex/google/gemini-2.5-flash",
+                    vec![Message::user("hello")],
+                );
+                if streaming {
+                    client.complete_streaming(&mut policy, &request, |_| {})
+                } else {
+                    client.complete(&mut policy, &request)
+                }
+                .expect_err("the service refused")
+            };
+
+            let sent = received.recv().expect("the request arrived");
+            assert_eq!(sent.header("x-goog-api-key"), Some(KEY));
+            assert_eq!(sent.header("authorization"), None);
+            let what = format!("status {status}, streaming {streaming}");
+            said.push((what.clone(), error.to_string()));
+            said.push((what.clone(), format!("{error:?}")));
+            said.push((what, format!("{:?}", sink.events())));
+        }
+    }
+
+    let log = diagnostic_log_under(dir.path());
+    drop(diagnostic_log);
+    assert!(
+        !log.is_empty(),
+        "nothing was logged, so the log was not read"
+    );
+    said.push(("the diagnostic log".into(), log));
+    for (what, text) in &said {
+        assert!(!text.contains(KEY), "the key is in {what}: {text}");
+    }
+}
+
+/// A Vertex key is in no event, no line of the diagnostic log and nothing a completed reply holds
+/// of a request the service answered, on either path. The refusals above are the only requests the
+/// other tests read the record of, so an implementation that recorded the prepared request's
+/// headers when it was sent, and not only when it failed, would pass them.
+#[test]
+fn a_vertex_key_is_in_no_event_reply_or_log_line_of_an_answered_request() {
+    const KEY: &str = "placeholder-key-0b96f3";
+    let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let diagnostic_log = DiagnosticLogAt::begin(dir.path());
+
+    let mut said: Vec<(String, String)> = Vec::new();
+    for streaming in [false, true] {
+        let reply = if streaming {
+            Attempt::Frames(vec![
+                frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+                frame("[DONE]"),
+            ])
+        } else {
+            Attempt::Json(REPLY.into())
+        };
+        let (endpoint, received) = serve_attempts(vec![reply]);
+        let config = config_for(&endpoint);
+        let provider = vertex_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let (completion, request) = {
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .expect("policy");
+            let mut client = AichatClient::new(&config, &egress).for_gateway(
+                &provider,
+                "google/gemini-2.5-flash",
+                Some(bravebot_config::Secret::new(KEY)),
+            );
+            let request = ChatRequest::new(
+                "google-vertex/google/gemini-2.5-flash",
+                vec![Message::user("hello")],
+            );
+            let completion = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                client.complete(&mut policy, &request)
+            }
+            .expect("the reply was read");
+            (completion, request)
+        };
+
+        let sent = received.recv().expect("the request arrived");
+        assert_eq!(sent.header("x-goog-api-key"), Some(KEY));
+        assert_eq!(sent.header("authorization"), None);
+        let what = format!("streaming {streaming}");
+        said.push((format!("the reply, {what}"), format!("{completion:?}")));
+        said.push((format!("the request, {what}"), format!("{request:?}")));
+        said.push((
+            format!("the events, {what}"),
+            format!("{:?}", sink.events()),
+        ));
+    }
+
+    // An answered request may write no line, so an empty log is read as it is.
+    let log = diagnostic_log_under(dir.path());
+    drop(diagnostic_log);
+    said.push(("the diagnostic log".into(), log));
+    for (what, text) in &said {
+        assert!(!text.contains(KEY), "the key is in {what}: {text}");
+    }
+}
+
 /// The bearer key of an `openai` entry is a credential, so it is in no text a refusal produces, in
 /// no event the run recorded, in no line of the diagnostic log and in nothing a completed reply
 /// holds, on the roster path and on both chat paths. The service here repeats the key in the body
@@ -5208,6 +5381,75 @@ fn an_anthropic_request_refused_on_its_contents_is_asked_again_without_what_nobo
         &provider.completion_url(),
         "claude-test"
     ));
+}
+
+/// BACKEND-27: an `anthropic` entry that refused a breakpoint is not sent one again, and the record
+/// is kept against the service and the name the model goes out under.
+///
+/// The request is refused until the level, the assumed ceiling and the breakpoints have each been
+/// given up, so the fourth is the first without a breakpoint and the one that answers. The next call
+/// to that service starts from it. Another service serving the same model name was never refused, so
+/// its first request is sent whole. The regressions it rejects are the breakpoints kept on the
+/// request that was asked again, a record that is never made or never read back, and a record kept
+/// against the model name alone.
+#[test]
+fn an_anthropic_entry_that_refused_a_breakpoint_is_not_sent_one_again_per_service() {
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Status(400),
+        Attempt::Status(400),
+        Attempt::Json(MESSAGES_REPLY.into()),
+        Attempt::Json(MESSAGES_REPLY.into()),
+    ]);
+    let (other_endpoint, other_received) =
+        serve_attempts(vec![Attempt::Json(MESSAGES_REPLY.into())]);
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let other_config = config_for(&other_endpoint);
+    let other_provider = anthropic_at(&other_endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let slug = "claude-served-by-two-services";
+    let request = asking_with_a_prompt(&format!("anthropic/{slug}"));
+
+    let mut first = AnthropicClient::new(&config, &egress, &provider, slug, None);
+    first
+        .complete(&mut policy, &request)
+        .expect("the fourth request answered");
+    assert_eq!(first.attempts(), 4);
+    let bodies: Vec<serde_json::Value> = received.try_iter().map(|c| json_of(&c)).collect();
+    assert_eq!(
+        bodies.iter().map(carries_a_breakpoint).collect::<Vec<_>>(),
+        [true, true, true, false],
+        "the request asked again after the level and the ceiling went kept its breakpoints"
+    );
+
+    // The next call to the same service and model starts from what was refused.
+    let mut second = AnthropicClient::new(&config, &egress, &provider, slug, None);
+    second
+        .complete(&mut policy, &request)
+        .expect("the remembered shape answered");
+    assert_eq!(second.attempts(), 1);
+    let bodies: Vec<serde_json::Value> = received.try_iter().map(|c| json_of(&c)).collect();
+    assert_eq!(bodies.len(), 1);
+    assert!(
+        !carries_a_breakpoint(&bodies[0]),
+        "a model that refused a breakpoint was sent one again: {}",
+        bodies[0]
+    );
+
+    // Another service under the same model name was not refused, so it is asked as if new.
+    let mut elsewhere = AnthropicClient::new(&other_config, &egress, &other_provider, slug, None);
+    elsewhere
+        .complete(&mut policy, &request)
+        .expect("the other service answered");
+    assert_eq!(elsewhere.attempts(), 1);
+    let sent = json_of(&other_received.recv().expect("the other service's request"));
+    assert!(
+        carries_a_breakpoint(&sent) && sent.get("output_config").is_some(),
+        "one service's refusal was read as the other's: {sent}"
+    );
 }
 
 /// A request can be refused for reasons that have nothing to do with the fields it carried, and a

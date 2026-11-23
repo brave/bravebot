@@ -15,7 +15,21 @@ pub(crate) const MAX_ENTRIES: usize = 2_000;
 /// that holds thousands of files, and every directory after it is missing from a listing whose
 /// purpose is to show the shape of the tree (LIST-5). The directory is named in
 /// [`Listing::partly_listed`] with how many files were left out of it.
+///
+/// Files and subdirectories are bounded by separate budgets, so a directory of 200 files and 200
+/// subdirectories is listed whole. See [`MAX_SUBDIRECTORIES_PER_DIRECTORY`].
 pub(crate) const MAX_FILES_PER_DIRECTORY: usize = 200;
+
+/// How many subdirectories a depth-bounded listing takes from any one directory, whether the walk
+/// goes into them or stops at them.
+///
+/// Without it a directory of thousands of subdirectories at the depth limit spends the whole of
+/// [`MAX_ENTRIES`] on the subdirectories it names, and every directory after it is missing from a
+/// listing whose purpose is to show the shape of the tree (LIST-5). The directory is named in
+/// [`Listing::partly_listed`] with how many subdirectories were left out of it. Separate from
+/// [`MAX_FILES_PER_DIRECTORY`], so the count of files left out does not depend on how many
+/// subdirectories a directory holds.
+pub(crate) const MAX_SUBDIRECTORIES_PER_DIRECTORY: usize = 200;
 
 /// How many files a *search* may walk before it gives up on the rest.
 ///
@@ -215,10 +229,10 @@ pub struct Listing {
     /// nothing said about the directories beside them describes a tree with no branches, and a
     /// planner reading one concludes the project has no source directory.
     pub directories: Vec<String>,
-    /// Whether files were left out because a cap was reached.
+    /// Whether files or directories were left out because a cap was reached.
     pub truncated: bool,
-    /// Whether the cap over the whole walk ([`MAX_ENTRIES`]) was reached, as against files left
-    /// out by the per-directory cap alone. Implies `truncated`.
+    /// Whether the cap over the whole walk ([`MAX_ENTRIES`]) was reached, as against files or
+    /// subdirectories left out by the per-directory caps alone. Implies `truncated`.
     pub at_the_cap: bool,
     /// Whether a directory beneath the one named could not be opened and was left out.
     ///
@@ -232,10 +246,13 @@ pub struct Listing {
     /// links lists as empty without it, and a planner reads an empty listing as an empty
     /// directory (LIST-6).
     pub links: usize,
-    /// Directories a bounded walk took only [`MAX_FILES_PER_DIRECTORY`] files from, each with how
-    /// many of its files were left out. The count comes from directory entries and no file's
-    /// bytes. Empty for an unbounded walk, which the per-directory cap does not apply to.
-    pub partly_listed: Vec<(String, usize)>,
+    /// Directories a bounded walk took only part of, each as its name, how many of its files were
+    /// left out and how many of its subdirectories were left out, in that order. A directory is
+    /// here when it holds more than [`MAX_FILES_PER_DIRECTORY`] files or more than
+    /// [`MAX_SUBDIRECTORIES_PER_DIRECTORY`] subdirectories, once, with a zero for the count that
+    /// does not apply. The counts come from directory entries and no file's bytes. Empty for an
+    /// unbounded walk, which the per-directory caps do not apply to.
+    pub partly_listed: Vec<(String, usize, usize)>,
 }
 
 /// The result of a repository map.

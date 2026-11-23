@@ -1,0 +1,157 @@
+/* The desktop as a client of the host (HOSTCLIENT-2): a list of the host's sessions and one view. */
+
+.prototype {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  height: 100vh;
+  background: var(--leo-color-container-background);
+  color: var(--leo-color-text-primary);
+}
+
+.prototype-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-m);
+  padding: var(--leo-spacing-xl) var(--leo-spacing-l);
+  border-right: 1px solid var(--leo-color-divider-subtle);
+  overflow-y: auto;
+}
+
+.prototype-title {
+  margin: 0;
+  font: var(--leo-font-heading-h4);
+}
+
+.prototype-sub,
+.prototype-meta {
+  margin: 0;
+  color: var(--leo-color-text-secondary);
+  font: var(--leo-font-small-regular);
+  overflow-wrap: anywhere;
+}
+
+.prototype-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prototype-list button {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  grid-template-rows: auto auto;
+  column-gap: var(--leo-spacing-s);
+  width: 100%;
+  padding: var(--leo-spacing-m);
+  border: 0;
+  border-radius: var(--leo-radius-m);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.prototype-list button.selected,
+.prototype-list button:hover:not(:disabled) {
+  background: var(--leo-color-container-highlight);
+}
+
+.prototype-list button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.prototype-list leo-icon {
+  grid-row: 1 / span 2;
+  align-self: center;
+}
+
+.prototype-id {
+  font: var(--leo-font-default-semibold);
+  overflow-wrap: anywhere;
+}
+
+.prototype-empty {
+  color: var(--leo-color-text-secondary);
+  font: var(--leo-font-small-regular);
+}
+
+.prototype-session {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.prototype-session.empty {
+  align-items: center;
+  justify-content: center;
+  padding: var(--leo-spacing-2xl);
+}
+
+.prototype-head {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-l);
+  padding: var(--leo-spacing-l) var(--leo-spacing-2xl);
+  border-bottom: 1px solid var(--leo-color-divider-subtle);
+}
+
+.prototype-status {
+  font: var(--leo-font-default-semibold);
+}
+
+.prototype-actor {
+  flex: 1;
+  color: var(--leo-color-text-secondary);
+  font: var(--leo-font-small-regular);
+}
+
+.prototype-omitted {
+  margin: var(--leo-spacing-m) var(--leo-spacing-2xl) 0;
+  color: var(--leo-color-text-secondary);
+  font: var(--leo-font-small-regular);
+}
+
+.prototype-transcript {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--leo-spacing-xl) var(--leo-spacing-2xl);
+}
+
+.prototype-composer {
+  padding: var(--leo-spacing-l) var(--leo-spacing-2xl) var(--leo-spacing-xl);
+}
+
+.prototype-note {
+  margin: 0 0 var(--leo-spacing-m);
+  color: var(--leo-color-text-secondary);
+  font: var(--leo-font-small-regular);
+}
+
+.prototype-note.refused {
+  color: var(--leo-color-systemfeedback-error-text);
+}
+
+.prototype-box {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--leo-spacing-m);
+}
+
+.prototype-input {
+  flex: 1;
+  min-height: 56px;
+  max-height: 200px;
+  padding: var(--leo-spacing-m);
+  border: 1px solid var(--leo-color-divider-strong);
+  border-radius: var(--leo-radius-m);
+  background: var(--leo-color-container-background);
+  color: inherit;
+  font: var(--leo-font-default-regular);
+  resize: vertical;
+}

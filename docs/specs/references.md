@@ -83,6 +83,8 @@ working directory is a choice made for that run, which is why a one-shot run tru
 
 `verified-by: bravebot_agent::preamble::a_reference_is_reachable_and_nothing_else_is_granted`
 `verified-by: bravebot_agent::preamble::a_reference_that_cannot_open_is_a_notice_and_not_a_line`
+`verified-by: bravebot_agent::preamble::a_reference_that_names_a_file_is_refused_and_opens_nothing`
+`verified-by: bravebot_agent::preamble::a_reference_is_not_opened_where_reads_are_kept_inside_the_workspace`
 `verified-by: bravebot_agent::workspace::a_tilde_reference_under_a_home_that_is_not_text_is_not_opened_by_its_lookalike`
 `verified-by: bravebot_ui_bridge::workspace::a_turn_opens_the_references_the_home_layer_named_and_not_a_projects`
 `verified-by: bravebot_cli::running::a_run_tells_the_planner_about_the_references_only_the_person_declared`

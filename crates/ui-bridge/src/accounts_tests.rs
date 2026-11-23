@@ -171,6 +171,43 @@ fn a_signed_in_row_or_one_with_nothing_stored_has_no_sentence() {
 }
 
 #[test]
+fn a_key_file_that_gives_no_key_is_said_with_its_reason_and_a_key_read_from_a_file_is_a_word_of_its_own()
+ {
+    use bravebot_config::provider::KeyFileFault;
+    for fault in [
+        KeyFileFault::NotAbsolute,
+        KeyFileFault::Unreadable,
+        KeyFileFault::TooLarge,
+        KeyFileFault::Empty,
+        KeyFileFault::NotAKey,
+    ] {
+        let said = detail(&not_signed_in(Why::GatewayKeyFileUnusable(fault))).expect("a sentence");
+        assert!(said.contains(bravebot_agent::backend::key_file_fault_said(fault)));
+        assert!(!said.contains('/'), "{said}");
+    }
+    let row = Row {
+        way: Way::Gateway { id: "g".into() },
+        standing: Standing::SignedIn(Held::KeyFromFile),
+        stored: false,
+    };
+    let rows = worded(&row, &configured("{}"));
+    assert_eq!(rows["keyFrom"], "file");
+    let unusable = Row {
+        way: Way::Gateway { id: "g".into() },
+        standing: not_signed_in(Why::GatewayKeyFileUnusable(KeyFileFault::Empty)),
+        stored: false,
+    };
+    assert!(
+        can_enter_key(&unusable),
+        "a key cannot be stored for a gateway whose file gives none"
+    );
+    assert_eq!(
+        command(&unusable.way, &unusable.standing).as_deref(),
+        Some("bravebot auth login gateway g")
+    );
+}
+
+#[test]
 fn a_sign_in_is_refused_in_order_before_it_starts() {
     let plain = || configured("{}");
     for account in [Account::ChatGpt, Account::Xai] {

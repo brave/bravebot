@@ -49,6 +49,9 @@ pub struct Lent<'a, T: ?Sized> {
     /// it never waits for the lock (DELEGATE-16). `None` for anything that is not a confirmer, and
     /// for a confirmer that answers nothing in advance.
     unasked: Option<crate::permission_mode::Unasked>,
+    /// Whether the lent confirmer puts the question about a plugin's hook to a person, taken before
+    /// it was lent for the reason `unasked` is: reading it never waits on another run's question.
+    asks_about_hooks: bool,
     totals: Mutex<Totals>,
 }
 
@@ -92,6 +95,7 @@ impl<'a, T: ?Sized> Lent<'a, T> {
         Self {
             inner: Mutex::new(inner),
             unasked: None,
+            asks_about_hooks: false,
             totals: Mutex::new(Totals::default()),
         }
     }
@@ -103,8 +107,10 @@ impl<'a, T: ?Sized> Lent<'a, T> {
         T: Confirmer,
     {
         let unasked = inner.answering_unasked();
+        let asks_about_hooks = inner.can_ask_about_a_hook();
         Self {
             unasked,
+            asks_about_hooks,
             ..Self::new(inner)
         }
     }
@@ -577,6 +583,19 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
             |unasked| unasked.moved(),
             |held| held.confirm_move(request),
             |refuse| refuse.confirm_move(request),
+        )
+    }
+
+    fn can_ask_about_a_hook(&self) -> bool {
+        self.lent.asks_about_hooks
+    }
+
+    fn confirm_hook(&mut self, request: &crate::confirm::HookRequest) -> Decision {
+        // No mode answers it (PLUGIN-7), so nothing is decided in advance.
+        self.asked(
+            |_| None,
+            |held| held.confirm_hook(request),
+            |refuse| refuse.confirm_hook(request),
         )
     }
 
@@ -1294,6 +1313,125 @@ mod tests {
                 .answering_unasked()
                 .is_none()
         );
+    }
+
+    /// A reporter and a sink that count the calls open at once. A call opens when the handle says
+    /// whose it is and closes when the line or the record arrives, and each arrival keeps the run
+    /// it was attributed to.
+    #[derive(Default)]
+    struct Interleaving {
+        attributed_to: Option<DelegateId>,
+        open: usize,
+        most_open: usize,
+        arrived: Vec<(Option<DelegateId>, String)>,
+    }
+
+    impl Interleaving {
+        fn opened_for(&mut self, delegate: Option<DelegateId>) {
+            self.attributed_to = delegate;
+            self.open += 1;
+            self.most_open = self.most_open.max(self.open);
+        }
+
+        fn closed_with(&mut self, text: String) {
+            self.arrived.push((self.attributed_to, text));
+            self.open = self.open.saturating_sub(1);
+        }
+    }
+
+    impl Reporter for Interleaving {
+        fn reporting_for(&mut self, delegate: Option<DelegateId>) {
+            self.opened_for(delegate);
+        }
+
+        fn narration(&mut self, text: String) {
+            self.closed_with(text);
+        }
+
+        fn todos(&mut self, _rows: Vec<Row>) {}
+    }
+
+    impl Sink for Interleaving {
+        fn recording_for(&mut self, delegate: Option<DelegateId>) {
+            self.opened_for(delegate);
+        }
+
+        fn emit(&mut self, event: Event) {
+            if let Event::GatePassed { detail, .. } = event {
+                self.closed_with(detail);
+            }
+        }
+    }
+
+    const DELEGATES: u32 = 2;
+    const CALLS_EACH: usize = 100_000;
+
+    /// Delegates on one thread each, started together, each making `CALLS_EACH` calls through its
+    /// own handle on one lent reporter and sink. A call's text names the delegate making it.
+    fn delegates_at_once(
+        call: impl Fn(&mut Borrowed<'_, '_, Interleaving>, DelegateId, usize) + Sync,
+    ) -> Interleaving {
+        let mut shared = Interleaving::default();
+        {
+            let lent = Lent::new(&mut shared);
+            let start = std::sync::Barrier::new(DELEGATES as usize);
+            std::thread::scope(|scope| {
+                for n in 1..=DELEGATES {
+                    let mut handle = lent.delegate(DelegateId::nth(n));
+                    let (start, call) = (&start, &call);
+                    scope.spawn(move || {
+                        start.wait();
+                        for at in 0..CALLS_EACH {
+                            call(&mut handle, DelegateId::nth(n), at);
+                        }
+                    });
+                }
+            });
+        }
+        shared
+    }
+
+    fn assert_taken_one_call_at_a_time(taken: &Interleaving) {
+        assert_eq!(
+            taken.arrived.len(),
+            DELEGATES as usize * CALLS_EACH,
+            "a call did not reach the one reporter or sink"
+        );
+        assert_eq!(
+            taken.most_open, 1,
+            "a second call began before the first had finished"
+        );
+        for (whose, text) in &taken.arrived {
+            assert_eq!(
+                text.split(':').next().map(str::to_string),
+                whose.map(|id| id.to_string()),
+                "a call was recorded as the other delegate's"
+            );
+        }
+    }
+
+    /// DELEGATE-16: the reporter is single, so a line and the run it belongs to are forwarded
+    /// under one hold. The regression it rejects is saying whose a line is and forwarding the line
+    /// under two holds, which lets the other delegate say whose its line is in between and
+    /// attributes each line to whichever delegate spoke last.
+    #[test]
+    fn two_delegates_reporting_at_once_are_taken_one_call_at_a_time() {
+        let taken = delegates_at_once(|handle, id, at| handle.narration(format!("{id}:{at}")));
+        assert_taken_one_call_at_a_time(&taken);
+    }
+
+    /// DELEGATE-16: the audit trail is single, so a record and the run it belongs to are written
+    /// under one hold. The regression it rejects is naming the run and writing the record under two
+    /// holds, which writes a delegate's decision down as the other delegate's.
+    #[test]
+    fn two_delegates_recording_at_once_are_taken_one_call_at_a_time() {
+        let taken = delegates_at_once(|handle, id, at| {
+            handle.emit(Event::GatePassed {
+                gate: "read",
+                detail: format!("{id}:{at}"),
+            });
+        });
+        assert_taken_one_call_at_a_time(&taken);
     }
 
     /// A turn waiting on a delegate completes no round of its own, so the total a person watches

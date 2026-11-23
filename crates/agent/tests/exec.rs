@@ -503,6 +503,94 @@ fn this_agents_own_credentials_do_not_reach_a_program_it_runs() {
     );
 }
 
+/// RUN-12: a line a person typed keeps the whole environment, and the same variables are removed
+/// from the program the planner chose. An implementation that scrubbed the typed line as well, or
+/// one that scrubbed neither, passes every test of the planner's path alone.
+///
+/// The planner's run goes first, in the same environment, so the typed line's output holding the
+/// values means they were handed over and not that the withheld set was empty.
+#[cfg(unix)]
+#[test]
+fn a_line_a_person_typed_keeps_the_credentials_a_program_the_planner_chose_loses() {
+    let scratch = Scratch::new("scrub-typed");
+    let _guard = with_env(&[
+        ("SERVICES_KEY_AICHAT", Some("a-live-signing-key")),
+        ("BRAVE_SERVICES_KEY_ID", Some("a-live-key-id")),
+        (
+            "BACKTRACE_SUBMIT_URL",
+            Some("https://a-live-token.example/post"),
+        ),
+        ("BRAVEBOT_SUBPROCESS_ENV_SCRUB", None),
+    ]);
+
+    let planned = run(
+        Pipeline::new(vec![Stage::new("env", Vec::new())]),
+        &scratch.path,
+    )
+    .expect("env runs");
+    assert!(planned.succeeded());
+    for value in [
+        "a-live-signing-key",
+        "a-live-key-id",
+        "a-live-token.example",
+    ] {
+        assert!(
+            !planned.stdout.contains(value),
+            "{value} reached a program the planner chose, so the typed line below proves nothing"
+        );
+    }
+
+    let typed = bravebot_agent::shell::run("env", &scratch.path, &Cancel::new())
+        .expect("the typed line runs");
+    assert!(typed.succeeded());
+    for (name, value) in [
+        ("SERVICES_KEY_AICHAT", "a-live-signing-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-live-key-id"),
+        ("BACKTRACE_SUBMIT_URL", "https://a-live-token.example/post"),
+    ] {
+        assert!(
+            typed.stdout.contains(&format!("{name}={value}")),
+            "{name} was removed from a line the person typed"
+        );
+    }
+}
+
+/// The variables a provider block names are withheld from the planner's program and kept for a
+/// line a person typed. An implementation that applied the settings-derived names to the typed
+/// line, while keeping the fixed ones, passes the test above.
+#[cfg(unix)]
+#[test]
+fn a_line_a_person_typed_keeps_a_gateways_environment_token_the_planner_loses() {
+    let scratch = Scratch::new("scrub-typed-gateway");
+    let _guard = with_a_gateway_token(&scratch);
+
+    let planned = run(
+        Pipeline::new(vec![Stage::new("env", Vec::new())]),
+        &scratch.path,
+    )
+    .expect("env runs");
+    assert!(planned.succeeded());
+    for value in ["a-live-gateway-token", "a-live-fallback-token"] {
+        assert!(
+            !planned.stdout.contains(value),
+            "{value} reached a program the planner chose, so the typed line below proves nothing"
+        );
+    }
+
+    let typed = bravebot_agent::shell::run("env", &scratch.path, &Cancel::new())
+        .expect("the typed line runs");
+    assert!(typed.succeeded());
+    for line in [
+        "ACME_GATEWAY_TOKEN=a-live-gateway-token",
+        "ACME_GATEWAY_FALLBACK=a-live-fallback-token",
+    ] {
+        assert!(
+            typed.stdout.lines().any(|printed| printed == line),
+            "{line} was removed from a line the person typed"
+        );
+    }
+}
+
 /// A home directory whose settings declare a gateway that reads its token from a variable no
 /// built-in list names, with the variable set to a live-looking value.
 ///
@@ -714,6 +802,85 @@ fn a_variable_no_provider_block_names_still_reaches_a_program() {
     assert!(
         ran.stdout.contains("a-key-no-block-reads"),
         "a variable no block names was withheld"
+    );
+}
+
+/// A home directory whose settings name the variables the web search key is read from, with each
+/// set to a live-looking value, and a variable of the same family that no setting names.
+///
+/// The names are not a gateway's, so a withheld set built from the provider blocks alone passes
+/// none of the tests below.
+#[cfg(unix)]
+fn with_a_search_key_variable(scratch: &Scratch) -> EnvGuard {
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(home.join(".bravebot")).expect("create the home");
+    std::fs::write(
+        home.join(".bravebot").join("settings.json"),
+        r#"{"webSearch": {"env": ["SEARCH_KEY_FIRST", "SEARCH_KEY_SECOND"]}}"#,
+    )
+    .expect("write the settings");
+    with_env(&[
+        ("HOME", Some(home.to_str().expect("a path"))),
+        ("BRAVEBOT_HOME", None),
+        ("SEARCH_KEY_FIRST", Some("a-live-search-key")),
+        ("SEARCH_KEY_SECOND", Some("a-live-second-search-key")),
+        ("SEARCH_KEY_UNNAMED", Some("a-search-key-no-setting-names")),
+        ("BRAVEBOT_SUBPROCESS_ENV_SCRUB", None),
+    ])
+}
+
+/// RUN-12: every variable `webSearch.env` names is withheld from a program the planner chose, in
+/// the first stage and a later one, and a variable of the same family that the setting does not
+/// name still reaches it. The faults this rejects are withholding only the first name the list
+/// holds, leaving the search key in the environment of every program a turn starts, and widening
+/// the set to every variable that looks like a key.
+#[cfg(unix)]
+#[test]
+fn a_variable_web_search_env_names_does_not_reach_a_program_it_runs() {
+    let scratch = Scratch::new("scrub-web-search");
+    let _guard = with_a_search_key_variable(&scratch);
+
+    let ran = run(
+        Pipeline::new(vec![
+            Stage::new("true", Vec::new()),
+            Stage::new("env", Vec::new()),
+        ]),
+        &scratch.path,
+    )
+    .expect("the pipeline runs");
+
+    assert!(ran.succeeded());
+    assert!(
+        !ran.stdout.contains("a-live-search-key"),
+        "the search key reached a program the planner chose"
+    );
+    assert!(
+        !ran.stdout.contains("a-live-second-search-key"),
+        "only the first variable the setting lists was withheld"
+    );
+    assert!(
+        ran.stdout.contains("a-search-key-no-setting-names"),
+        "a variable the setting does not name was withheld"
+    );
+}
+
+/// RUN-12: an assignment in front of a program does not bring a search key's variable back, for the
+/// reason it does not bring a gateway's. The fault this rejects is removing the names before the
+/// line's own assignments are applied.
+#[cfg(unix)]
+#[test]
+fn a_steps_own_assignment_of_a_search_key_variable_does_not_reach_that_step() {
+    let scratch = Scratch::new("scrub-web-search-assigned");
+    let _guard = with_a_search_key_variable(&scratch);
+
+    let ran = line("SEARCH_KEY_FIRST=the-lines-own env", &scratch.path);
+
+    assert!(ran.succeeded(), "{}", ran.stdout);
+    assert_eq!(
+        value_of(&ran.stdout, "SEARCH_KEY_FIRST"),
+        None,
+        "an assignment of a search key's variable reached the program: {}",
+        ran.stdout
     );
 }
 

@@ -35,10 +35,20 @@ export type CommandId =
   | 'session.export-markdown'
   | 'session.export-pdf'
   | 'turn.send'
+  | 'turn.plan'
   | 'turn.cancel'
   | 'mode.cycle'
+  | 'session.plan'
   | 'turn.rewind'
   | 'session.note'
+  | 'session.status'
+  | 'session.cost'
+  | 'session.context'
+  | 'session.request'
+  | 'spend.report'
+  | 'session.compact'
+  | 'session.handoff'
+  | 'session.background'
   | 'view.fold-left'
   | 'view.fold-right'
   | 'view.reset-columns'
@@ -47,6 +57,7 @@ export type CommandId =
   | 'view.theme'
   | 'app.about'
   | 'app.caffeinate'
+  | 'app.sections'
   | 'help.changelog'
   | 'help.doctor'
   | 'help.update'
@@ -59,7 +70,7 @@ export type CommandId =
  * with the rest of the declaration: the main process greys a menu item by it, and anything
  * drawing an in-window menu can grey a row by the same tag rather than by its own opinion.
  */
-export type Requires = 'always' | 'session' | 'running' | 'sendable' | 'exportable' | 'forkable' | 'rewindable'
+export type Requires = 'always' | 'session' | 'running' | 'sendable' | 'startable' | 'exportable' | 'forkable' | 'rewindable'
 
 export interface Command {
   id: CommandId
@@ -102,6 +113,14 @@ export interface WindowState {
    */
   canSend: boolean
   /**
+   * There is a session, nothing is running, it is not waiting on a question asked before its first
+   * turn, and the backend is not known to be unready. This is `canSend` without the draft.
+   *
+   * Plan and Run… writes the start of a line into the composer, so it is offered while the
+   * composer is empty, which `canSend` is not.
+   */
+  canStart: boolean
+  /**
    * There is a session and somebody has said something in it.
    *
    * Sent rather than derived from `hasSession`, for the same reason `canSend` is: a session
@@ -138,6 +157,7 @@ export const NOTHING_OPEN: WindowState = {
   hasSession: false,
   running: false,
   canSend: false,
+  canStart: false,
   canExport: false,
   includeTools: false,
   canRewind: false,
@@ -174,6 +194,9 @@ export const COMMANDS: readonly Command[] = [
   { id: 'session.export-markdown', label: 'Markdown…', requires: 'exportable' },
   { id: 'session.export-pdf', label: 'PDF…', requires: 'exportable' },
   { id: 'turn.send', label: 'Send', accelerator: 'CmdOrCtrl+Enter', requires: 'sendable' },
+  // Writes `/manifest ` into the composer and puts the caret there. The run starts only when the
+  // person sends that line (CMD-1, MANIFEST-9), so the item answers nothing and sends nothing.
+  { id: 'turn.plan', label: 'Plan and Run…', requires: 'startable' },
   { id: 'turn.cancel', label: 'Cancel Turn', accelerator: 'CmdOrCtrl+.', requires: 'running' },
   // Not Shift+Tab, which the terminal uses: in a text field that key moves focus backwards.
   // Offered while a turn runs, since the mode chosen applies to the rest of it.
@@ -183,11 +206,34 @@ export const COMMANDS: readonly Command[] = [
     accelerator: 'CmdOrCtrl+Shift+M',
     requires: 'session',
   },
+  // `/plan [task]` from a dialog (MODE-12): plan mode is set and, with a task, a turn is sent the
+  // task alone. Offered while a turn runs, when the plan waits in the queue for that turn to end.
+  // No command or item chooses bypass (MODE-5). No accelerator, because it asks for the task first.
+  { id: 'session.plan', label: 'Plan a Task…', requires: 'session' },
   // No accelerator: Cmd+Z belongs to the text being edited, and this one asks first anyway.
   { id: 'turn.rewind', label: 'Undo Last Turn…', requires: 'rewindable' },
   // Kept on the record and never sent to the model (SESSION-36). Not while a turn runs: the
   // turn holds the record until it ends.
   { id: 'session.note', label: 'Add Note…', requires: 'forkable' },
+  // The desktop's /status, /cost, /context and /request (CMD-8, CMD-15, CMD-19, TRACE-9). Offered
+  // while a turn runs: the bridge answers them from a store the turn writes into, not from the
+  // state the turn holds (CMD-8). A status asked mid-turn says the rules are held by the turn.
+  { id: 'session.status', label: 'Session Status…', requires: 'session' },
+  { id: 'session.cost', label: 'Token Spend…', requires: 'session' },
+  { id: 'session.context', label: 'Context Breakdown…', requires: 'session' },
+  { id: 'session.request', label: 'Last Request…', requires: 'session' },
+  // `bravebot stats` (CLI-37): what every recorded session spent, in tokens. It reads the records
+  // and belongs to no open chat, so it is offered with nothing open.
+  { id: 'spend.report', label: 'Token Spend Across Chats…', requires: 'always' },
+  // `/compact [focus]` (CMD-34). Not while a turn runs, since the turn holds the conversation. No
+  // accelerator, because it asks for a focus first.
+  { id: 'session.compact', label: 'Compact Conversation…', requires: 'forkable' },
+  // `/handoff <next goal>` (SESSION-34, CMD-34). Not while a turn runs, since the brief is written
+  // from the conversation as it stands. No accelerator, because it asks for the goal first.
+  { id: 'session.handoff', label: 'Hand Off to New Chat…', requires: 'forkable' },
+  // `/bg` (BG-2, CMD-34). Not while a turn runs, since the background session resumes the record
+  // the turn holds. No accelerator, because it asks to confirm first.
+  { id: 'session.background', label: 'Continue in Background…', requires: 'forkable' },
   {
     id: 'view.fold-left',
     label: 'Hide Chat List',
@@ -211,6 +257,9 @@ export const COMMANDS: readonly Command[] = [
   { id: 'app.about', label: 'About Brave Bot', requires: 'always' },
   // App-wide, and the first time it is turned on a dialog says what it does and does not do.
   { id: 'app.caffeinate', label: 'Keep Computer Awake During Turns', requires: 'always', checkbox: true },
+  // The desktop's /sidebar (PANEL-20): unfolds the context column and opens its Choose sections
+  // checklist. Needs a session, because the column draws no panels without one.
+  { id: 'app.sections', label: 'Choose Sections…', requires: 'session' },
   // The release notes compiled into the agent, shown as plain text. Nothing is fetched.
   { id: 'help.changelog', label: 'Release Notes…', requires: 'always' },
   { id: 'help.doctor', label: 'Run Diagnostics…', requires: 'always' },
@@ -240,6 +289,8 @@ export function isEnabled(requires: Requires, state: WindowState): boolean {
       return state.hasSession && state.running
     case 'sendable':
       return state.canSend
+    case 'startable':
+      return state.canStart
     case 'exportable':
       return state.canExport
     case 'forkable':
@@ -278,13 +329,14 @@ export function isChecked(id: CommandId, state: WindowState): boolean {
  */
 export function parseWindowState(value: unknown): WindowState | null {
   if (typeof value !== 'object' || value === null) return null
-  const { hasSession, running, canSend, canExport, includeTools, canRewind, caffeinated, folded } = value as Record<
+  const { hasSession, running, canSend, canStart, canExport, includeTools, canRewind, caffeinated, folded } = value as Record<
     string,
     unknown
   >
   if (typeof hasSession !== 'boolean') return null
   if (typeof running !== 'boolean') return null
   if (typeof canSend !== 'boolean') return null
+  if (typeof canStart !== 'boolean') return null
   if (typeof canExport !== 'boolean') return null
   if (typeof includeTools !== 'boolean') return null
   if (typeof canRewind !== 'boolean') return null
@@ -292,7 +344,7 @@ export function parseWindowState(value: unknown): WindowState | null {
   if (typeof folded !== 'object' || folded === null) return null
   const { left, right } = folded as Record<string, unknown>
   if (typeof left !== 'boolean' || typeof right !== 'boolean') return null
-  return { hasSession, running, canSend, canExport, includeTools, canRewind, caffeinated, folded: { left, right } }
+  return { hasSession, running, canSend, canStart, canExport, includeTools, canRewind, caffeinated, folded: { left, right } }
 }
 
 /**
@@ -321,7 +373,7 @@ export function menuLabel(item: Command, state: WindowState): string {
  * A closed union rather than a free string, because this is what the renderer is allowed to
  * say when it asks for a popup, and the main process builds the menu from it.
  */
-export type ContextTarget = 'session' | 'entry' | 'entry-user' | 'entry-user-rewindable' | 'directory'
+export type ContextTarget = 'session' | 'session-background' | 'entry' | 'entry-user' | 'entry-user-rewindable' | 'directory'
 
 export type ContextCommandId =
   /** Start a session in a project the main process named, from File > Open Recent. */
@@ -329,6 +381,7 @@ export type ContextCommandId =
   | 'context.session.open'
   | 'context.session.close'
   | 'context.session.copy-path'
+  | 'context.session.stop-background'
   | 'context.entry.copy'
   | 'context.entry.fork'
   | 'context.entry.rewind'
@@ -358,6 +411,11 @@ export type ContextCommandId =
  * A prompt whose turn the session can still be put back to before is a kind of its own, so the
  * menu holds a rewind only where one exists. Rewinding decides nothing either: it asks first, in
  * a dialog naming every file it puts back.
+ *
+ * A chat a background process holds is a kind of its own too (BG-11). It offers no Open, because
+ * the bridge refuses to open it while the process runs, and no Close Chat, because nothing of it
+ * is open here. It offers Stop Background Session, which ends the process as `bravebot sessions
+ * stop` does and keeps the record, so the chat opens again afterwards.
  */
 export const CONTEXT: Record<
   ContextTarget,
@@ -370,6 +428,10 @@ export const CONTEXT: Record<
     { id: 'context.session.open', label: 'Open' },
     { id: 'context.session.close', label: 'Close Chat' },
     { id: 'context.session.copy-path', label: 'Copy Project Path' },
+  ],
+  'session-background': [
+    { id: 'context.session.copy-path', label: 'Copy Project Path' },
+    { id: 'context.session.stop-background', label: 'Stop Background Session' },
   ],
   entry: [{ id: 'context.entry.copy', label: 'Copy' }],
   'entry-user': [
