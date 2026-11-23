@@ -49,6 +49,9 @@ pub(crate) struct Walk {
     pub mcp_requested: Vec<(std::path::PathBuf, String)>,
     pub workspace: Workspace,
     pub task: String,
+    /// The pictures and PDFs dropped onto the task, each checked as `turn.send` checks one
+    /// (DROP-10). The agent's runner reads them before the planner's policy exists (DROP-4).
+    pub attachments: Vec<bravebot_agent::turn::Attachment>,
     pub run: usize,
     pub cancel: Cancel,
     pub pending: crate::turn::Pending,
@@ -88,6 +91,7 @@ pub(crate) fn walk(walk: Walk) {
         mcp_requested,
         workspace,
         task: asked,
+        attachments,
         run,
         cancel,
         pending,
@@ -130,8 +134,10 @@ pub(crate) fn walk(walk: Walk) {
         &cancel,
     );
 
-    // No files and no conversation: the planner may be shown the task and nothing else
-    // (MANIFEST-1). No auto-vetting either, since nothing is read before the plan is fixed.
+    // No project files and no conversation: the planner is shown the task and the pictures and
+    // PDFs dropped onto it, and nothing else (MANIFEST-1, DROP-4). The runner reads each drop under
+    // a policy holding only that read, before the planner's policy exists. No auto-vetting either,
+    // since nothing the plan could look at is read before the plan is fixed.
     let task = Task::new(&asked)
         .with_home(bravebot_agent::home::directory())
         .with_cache(bravebot_agent::home::cache())
@@ -149,6 +155,9 @@ pub(crate) fn walk(walk: Walk) {
         .with_permissions(state.answers.rules.permissions.clone())
         .with_permission_mode(permission_mode.clone())
         .with_mcp(mcp);
+    let task = attachments.into_iter().fold(task, |task, dropped| {
+        task.with_attachment(dropped.path, dropped.media)
+    });
 
     // Screening off the task, which asks for none: nothing fills in a verdict before the plan is
     // fixed, so a confirmer told to screen would refuse on a word nobody made.
