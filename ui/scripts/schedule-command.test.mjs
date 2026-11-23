@@ -86,7 +86,7 @@ test('the composer asks for the command only from the text a person typed, throu
   assert.equal([...staging.matchAll(/scheduleArgument\(/g)].length, 1)
   assert.match(staging.slice(staging.indexOf('export function exitOf(')), /= leaving\(staging, draft\)[\s\S]*scheduleArgument\(line\)/)
   // A line leaving the queue is asked again only where the person's line was held for the turn.
-  assert.match(turn, /message\.schedule !== undefined\s*\?\s*schedule\(handle, message\.schedule, message\.prompt, message\.staged, true\)\s*:\s*message\.manifest !== undefined\s*\?\s*planRun\(handle, message\.manifest, message\.prompt, true\)\s*:\s*send\(/)
+  assert.match(turn, /message\.schedule !== undefined\s*\?\s*schedule\(handle, message\.schedule, message\.prompt, message\.staged, true\)\s*:\s*message\.manifest !== undefined\s*\?\s*planRun\(handle, message\.manifest, message\.prompt, true\)\s*:\s*message\.plan !== undefined\s*\?\s*plan\(handle, message\.plan, message\.prompt, message\.staged, true\)\s*:\s*send\(/)
   // The window holds a writing form for the turn on the bridge's refusal, not on a reading of the line.
   assert.match(turn, /error\.code === 'turn_in_flight'/)
   assert.doesNotMatch(turn.slice(turn.indexOf('const schedule = ')), /reads_only|readsOnly|startsWith\('(add|remove)/)
