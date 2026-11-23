@@ -79,6 +79,23 @@ const compactStyles = (): CSSStyleSheet => {
   return compactSheet
 }
 
+/**
+ * The footer one standard gap under the body, for a dialog whose body ends in a box of its own.
+ * Leo's scoped rules for the body and footer padding are more specific than a plain selector in
+ * an adopted sheet, so these are marked important.
+ */
+let snugSheet: CSSStyleSheet | null = null
+const snugStyles = (): CSSStyleSheet => {
+  if (!snugSheet) {
+    snugSheet = new CSSStyleSheet()
+    snugSheet.replaceSync(`
+      .leo-dialog .body { padding-bottom: 0 !important; }
+      .leo-dialog .actions { padding-top: var(--leo-spacing-2xl) !important; }
+    `)
+  }
+  return snugSheet
+}
+
 /** The four widths a dialog comes in: 440, 560, 760 and 1080, each short of the window's edge. */
 export type ModalSize = 'sm' | 'md' | 'lg' | 'xl'
 
@@ -100,6 +117,7 @@ export function Modal({
   headerAction,
   size = 'md',
   compact = false,
+  snug = false,
   onClose,
   children,
   actions,
@@ -115,6 +133,8 @@ export function Modal({
   size?: ModalSize
   /** Tighter vertical spacing, for a dialog of a sentence or two. */
   compact?: boolean
+  /** The footer one standard gap (24) under the body, for a body that ends in a code box. */
+  snug?: boolean
   onClose?: () => void
   children: React.ReactNode
   /** Footer buttons, in Leo's actions slot: pinned under the body, which scrolls on its own. */
@@ -157,9 +177,10 @@ export function Modal({
     if (!shadow) return
     const extra = [frameStyles()]
     if (compact) extra.push(compactStyles())
+    if (snug) extra.push(snugStyles())
     const missing = extra.filter((sheet) => !shadow.adoptedStyleSheets.includes(sheet))
     if (missing.length) shadow.adoptedStyleSheets = [...shadow.adoptedStyleSheets, ...missing]
-  }, [compact])
+  }, [compact, snug])
 
   useLayoutEffect(() => {
     const root = host.current

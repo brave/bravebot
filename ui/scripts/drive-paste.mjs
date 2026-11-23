@@ -239,10 +239,15 @@ try {
   const five = 'line one\nline two\nline three\nline four\nline five'
   await copyWords(five)
   await reopened.focus()
+  // Clearing the two lines shrinks the box with a transition; let it end so the screenshot below
+  // shows the height the fold leaves.
+  await page.waitForTimeout(400)
   await menuPaste()
   await textChips.first().waitFor()
   assert.equal(await reopened.inputValue(), '[Pasted text #1 +5 lines] ', 'a five-line paste folds to its marker')
-  assert.match(await textChips.innerText(), /Pasted text[\s\S]*\[Pasted text #1 \+5 lines\]/)
+  assert.match(await textChips.innerText(), /^\s*Pasted text #1\s*5 lines\s*$/, 'the chip names the paste and its lines once')
+  assert.equal(await textChips.locator('[data-test="pasted-text-peek"]').getAttribute('aria-label'), 'View [Pasted text #1 +5 lines]',
+    'and its button carries the marker it stands for')
   assert.equal(await page.locator('.attachment-trust').count(), 0, 'folded text is not marked as trusted context')
   await page.screenshot({ path: join(output, 'paste-text-folded-light.png') })
   await page.emulateMedia({ colorScheme: 'dark' })
@@ -274,8 +279,14 @@ try {
   const viewer = peekDialog(2)
   await viewer.waitFor()
   assert.equal(await viewer.locator('pre').innerText(), five, 'the viewer shows all five lines')
-  assert.match(await viewer.innerText(), /5 lines/, 'and says how many')
+  assert.match(await viewer.innerText(), /5 lines · Viewing sends nothing; the text goes with your message when you send it\./, 'and says how many')
+  assert.equal((await viewer.locator('.code-toolbar').innerText()).trim(), 'Wrap', 'the code toolbar holds Wrap alone')
   assert.equal(await reopened.inputValue(), folded, 'opening the viewer leaves the draft alone')
+  // A short paste makes a short dialog: Done sits one standard gap (24px) under the code box.
+  const codeBottom = (await viewer.locator('[data-test="pasted-text-preview"]').boundingBox()).y
+    + (await viewer.locator('[data-test="pasted-text-preview"]').boundingBox()).height
+  const doneTop = (await viewer.getByRole('button', { name: 'Done', exact: true }).boundingBox()).y
+  assert.ok(Math.abs(doneTop - codeBottom - 24) <= 1, `Done sits 24px under the code box (${doneTop - codeBottom}px)`)
   await page.screenshot({ path: join(output, 'paste-text-peek-light.png') })
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.waitForTimeout(300)
@@ -315,6 +326,7 @@ try {
   // The chip's tooltip names the chord.
   await page.locator('[data-test="pasted-text-peek"]').hover()
   await page.getByText('⌥V').first().waitFor()
+  await page.getByText(/^View pasted text/).first().waitFor()
   await page.screenshot({ path: join(output, 'paste-text-chord-light.png') })
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.waitForTimeout(300)
@@ -355,6 +367,33 @@ try {
   assert.match(pictured, /^\[Image #\d+\] $/)
   await opensNothing(3, 'Alt-V on an [Image #n] marker opens nothing')
   assert.equal(await reopened.inputValue(), pictured, 'and leaves the draft as it was')
+  await reopened.fill('')
+  // A fold that wraps the draft onto a second line grows the box when the marker is written, not
+  // at the next key.
+  const fieldHeight = () => reopened.evaluate((field) => field.offsetHeight)
+  const nearlyFull = await reopened.evaluate((field) => {
+    const style = getComputedStyle(field)
+    const measure = document.createElement('canvas').getContext('2d')
+    measure.font = style.font
+    const room = field.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 80
+    let text = ''
+    while (measure.measureText(`${text}word `).width < room) text += 'word '
+    return text
+  })
+  await reopened.fill(nearlyFull)
+  await reopened.press('End')
+  await page.waitForTimeout(400)
+  const oneLine = await fieldHeight()
+  await copyWords(five)
+  await menuPaste()
+  await textChips.first().waitFor()
+  await page.waitForTimeout(400)
+  const wrapped = await fieldHeight()
+  assert.ok(wrapped > oneLine, `a fold that wraps grows the box at once (${oneLine}px, then ${wrapped}px)`)
+  await reopened.press('x')
+  await reopened.press('Backspace')
+  await page.waitForTimeout(400)
+  assert.equal(await fieldHeight(), wrapped, 'to the height a keystroke would')
   await reopened.fill('')
   assert.deepEqual(errors, [])
 
