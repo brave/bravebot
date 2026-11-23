@@ -1973,10 +1973,15 @@ Still open:
   put back after it, so a language approved on one message is not asked about on the next and
   its index is built once. They are never written to a record: a reopened or forked session
   starts with none and asks. Closing the session stops them, and so does the process ending.
-- `manifest.run` takes `session`, `task` and an optional `model`, and answers `{ run }` once the
-  run has begun. It is refused with `bad_request` for an empty task, for any `files`, `dropped`,
-  `attachments` or `images`, and before `trust.reply`. It is refused with `turn_in_flight` while a turn
-  or another run is in flight. `turn.cancel` stops a run.
+- `manifest.run` takes `session`, `task`, an optional `model`, and what was dropped on the line,
+  and answers `{ run }` once the run has begun. `attachments` holds absolute paths of pictures and
+  PDFs dropped, checked as `turn.send` checks them (DROP-10) and read before the planner's request
+  under a policy of their own (DROP-4), so each reaches the planner as `Dropped file: <path>` and
+  its bytes (DROP-11). `files` holds `{ marker, name }` pairs that put a dropped text file back
+  into the task as its name. It is refused with `bad_request` for an empty task, for a `files`
+  entry that is a plain string, which names a project file (MANIFEST-9), for any `dropped`, because
+  on a `/manifest` line a text file is its name, for any `images`, and before `trust.reply`. It is
+  refused with `turn_in_flight` while a turn or another run is in flight. `turn.cancel` stops a run.
 - A run is not a turn. The conversation is not sent to the planner and nothing is added to it,
   the session's turn count does not change, and the session's record is not written. The run
   is saved as its own record by `bravebot_session::sessions::record_manifest_run`, and
