@@ -13,7 +13,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { app } from 'electron'
 import { helperPaths } from './helpers'
-import type { BridgeEvent, BridgeFailure } from '../shared/protocol'
+import { isLogLevel, type BridgeEvent, type BridgeFailure, type DiagnosticLogSet, type LogLevel } from '../shared/protocol'
 
 /** A request waiting for its answer. */
 interface Waiting {
@@ -33,6 +33,11 @@ export class Bridge {
   private waiting = new Map<number, Waiting>()
   private nextId = 0
   private buffer = ''
+  /**
+   * The diagnostic log level chosen in this app run (DIAG-11). It is passed to an agent that is
+   * started again, and is not kept across launches.
+   */
+  private logLevel: LogLevel = 'error'
 
   constructor(private readonly onEvent: (event: BridgeEvent) => void, private settingsPath: string | null = null) {}
 
@@ -64,7 +69,11 @@ export class Bridge {
     // The packaged app says so, which is what lets the agent ask the release listing at start
     // (UPDATE-12). A checkout does not, so a development run and a driver ask nothing.
     const env = app.isPackaged ? { ...process.env, BRAVEBOT_INSTALLED_VIA: 'desktop' } : process.env
-    const child = spawn(path, this.settingsPath ? ['--settings', this.settingsPath] : [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env })
+    const args = [
+      ...(this.settingsPath ? ['--settings', this.settingsPath] : []),
+      ...(this.logLevel !== 'error' ? ['--log-level', this.logLevel] : []),
+    ]
+    const child = spawn(path, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env })
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
 
@@ -161,6 +170,21 @@ export class Bridge {
     const report = await this.request<T>('settings.select', { path })
     this.settingsPath = path
     return report
+  }
+
+  /**
+   * Change the running agent's diagnostic log level (DIAG-11).
+   *
+   * A word that is not a level is refused here and never sent. The level is kept for a restart
+   * only once the agent has answered, so a failed change leaves the window and the agent agreeing.
+   */
+  async setLogLevel(level: unknown): Promise<DiagnosticLogSet> {
+    if (!isLogLevel(level)) {
+      throw new BridgeError('bad_request', `unknown log level: ${String(level)}`)
+    }
+    const answer = await this.request<DiagnosticLogSet>('diagnostic_log.set', { level })
+    this.logLevel = level
+    return answer
   }
 
   /**

@@ -525,6 +525,7 @@ const bridge: BravebotApi = {
   searchFiles: async () => ({ paths: ['src/cache.ts', 'src/migrate.ts'], incomplete: false }),
   openFile: async () => ({ status: 'opened' }),
   selectSettings: async () => null,
+  setLogLevel: async (level) => ({ level, writing: true }),
   saveHooks: async () => undefined,
   chooseDirectory: async () => DIRECTORY,
   // The playground has no picker, so a folder is never added.

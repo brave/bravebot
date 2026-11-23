@@ -1209,6 +1209,13 @@ if (primary) app.whenReady().then(() => {
 
   // Choosing a project is a native affair: the renderer cannot see the filesystem and
   // should not be handed a path it invented.
+  // The diagnostic log level of the running agent (DIAG-11). `diagnostic_log.set` is not in
+  // `ALLOWED`: the bridge keeps the level it sets, so an agent started again gets the same one.
+  ipcMain.handle('bravebot:diagnostic-log:set-level', async (_event, level: unknown) => {
+    if (!bridge) throw new BridgeError('no_bridge', 'the agent is not running')
+    return bridge.setLogLevel(level)
+  })
+
   ipcMain.handle('bravebot:settings:select', async (_event, clear: unknown) => {
     if (!bridge || !window) throw new Error('The agent is unavailable.')
     let path: string | null = null
