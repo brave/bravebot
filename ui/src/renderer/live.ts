@@ -20,7 +20,7 @@ import type {
 } from '../shared/protocol'
 import { conversationKey } from '../shared/experience'
 import { type Fork, forkOf } from '../shared/forks'
-import type { Entry } from './transcript'
+import type { DroppedOnTask, Entry } from './transcript'
 import type { Turns } from './turn-details'
 import type { AgentEntry, FolderQuestion, RefusedFolder, RulesQuestion, SessionSettled } from '../shared/protocol'
 import { conversationPreferences, setConversation } from './experience'
@@ -90,6 +90,11 @@ export interface Live {
     directory: string
   }
   entries: Entry[]
+  /**
+   * The pictures and PDFs dropped onto the `/manifest` task this session last started, for its plan
+   * card to show beside the task. Window state only: the bridge is sent the grants, not these.
+   */
+  planDropped?: DroppedOnTask[]
   turns: Turns
   todos: TodoRow[]
   /** The notes kept on this session's record, oldest first. Shown beside it, never sent. */

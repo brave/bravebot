@@ -6,6 +6,7 @@ import { Permissions } from './Permissions'
 import { Fragment, memo, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
 import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
+import { DroppedChip } from './DroppedChip'
 import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
 import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SandboxMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type Hook, type KeptTrust, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
@@ -620,6 +621,8 @@ export function Transcript({
     const slug = live?.running ? t.summonedFor(entries) : undefined
     return slug ? faces.get(slug) ?? null : bot
   }, [live?.running, entries, faces, bot])
+  // A plan card waiting for its answer, during which the working row is not shown.
+  const awaitingPlan = useMemo(() => entries.some((entry) => entry.kind === 'manifest' && entry.decision === null), [entries])
   // Entered and left once per element crossed, so counted rather than toggled.
   const dragDepth = useRef(0)
   const [dragging, setDragging] = useState(false)
@@ -938,7 +941,8 @@ export function Transcript({
           onOpenSummon={openSummon}
         />
 
-        {live.running && (
+        {/* Not while a plan card waits for its answer: nothing is under way until it is given. */}
+        {live.running && !awaitingPlan && (
           <WorkingRow
             key={live.handle}
             bot={answering}
@@ -2677,6 +2681,11 @@ function Card({
           <p className="permission-scope" data-deciding="all">
             <strong>You asked:</strong> {request.task}
           </p>
+          {!!entry.dropped?.length && (
+            <div className="manifest-dropped" data-deciding="all">
+              {entry.dropped.map((item) => <DroppedChip key={item.marker} marker={item.marker} file={item.file} />)}
+            </div>
+          )}
 
           {/* Every step, in order and unshortened. The answer covers the whole plan. The agent
               numbers each line, so the list draws no numbers of its own. */}

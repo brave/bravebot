@@ -64,6 +64,23 @@ try {
     }
     await cdp.send('Input.dispatchDragEvent', { type: 'drop', x, y, data })
   }
+  // A shot is taken once what appeared has finished moving in (the card's rise, the composer
+  // docking), with the pointer off every control, so nothing is caught mid-move or hovered.
+  const settled = async () => {
+    await page.mouse.move(1380, 700)
+    await page.waitForFunction(() => document.getAnimations().every((animation) =>
+      animation.playState !== 'running' || animation.effect?.getComputedTiming().iterations === Infinity))
+    await page.waitForTimeout(300)
+  }
+  const shoot = async (name) => {
+    await page.emulateMedia({ colorScheme: 'light' })
+    await settled()
+    await page.screenshot({ path: join(output, `${name}-light.png`) })
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await settled()
+    await page.screenshot({ path: join(output, `${name}-dark.png`) })
+    await page.emulateMedia({ colorScheme: 'light' })
+  }
   const planned = (task) => requests.find((body) => body.includes(task) && !body.includes('Hold the turn'))
   const carriesPicture = (body) => body.includes(`Dropped file: ${png}`) && body.includes('data:image/png;base64,')
 
@@ -72,6 +89,7 @@ try {
   await drag([png])
   await chips.first().waitFor()
   assert.equal(await composer.inputValue(), '/manifest build the first notes from [Image #1] ')
+  await settled()
   await page.screenshot({ path: join(output, 'manifest-drop-staged.png') })
   await composer.press('Enter')
   await card.first().waitFor({ timeout: 60000 })
@@ -79,12 +97,17 @@ try {
   const first = planned('build the first notes from [Image #1]')
   assert.ok(first, 'the task reached the planner')
   assert.ok(carriesPicture(first), 'with the dropped picture, named by its path before its bytes (DROP-11)')
-  await page.screenshot({ path: join(output, 'manifest-drop-plan-light.png') })
-  await page.emulateMedia({ colorScheme: 'dark' })
-  await page.waitForTimeout(300)
-  await page.screenshot({ path: join(output, 'manifest-drop-plan-dark.png') })
-  await page.emulateMedia({ colorScheme: 'light' })
-  await card.first().getByRole('button', { name: 'Run this plan' }).click()
+  const shown = card.first().locator('[data-test="sent-dropped-chip"]')
+  assert.equal(await shown.count(), 1, 'the plan card shows the picture dropped onto the task')
+  assert.match(await shown.innerText(), /sketch\.png[\s\S]*\[Image #1\]/)
+  await page.locator('.working').waitFor({ state: 'detached' })
+  await shoot('manifest-drop-plan')
+  const approve = card.first().getByRole('button', { name: 'Run this plan' })
+  assert.equal(await approve.isDisabled(), false, 'the plan can be approved')
+  await approve.click()
+  // Once the plan is approved the run is past planning. It may already be over.
+  const word = await page.locator('.working .working-word').innerText({ timeout: 500 }).catch(() => null)
+  assert.ok(word === null || !word.startsWith('Planning'), `the approved run says it is planning: ${word}`)
   await stop.waitFor({ state: 'hidden', timeout: 60000 })
   await page.waitForFunction(() => document.querySelector('.composer .stop') === null, null, { timeout: 60000 })
   for (let i = 0; i < 50 && !existsSync(join(project, 'first.md')); i++) await page.waitForTimeout(100)
@@ -101,7 +124,11 @@ try {
   await page.locator('.queued-messages').waitFor()
   assert.equal(await chips.count(), 0, 'queuing takes the drop with the line')
   assert.equal(planned('build the second notes from'), undefined, 'the run waits for the turn')
-  await page.screenshot({ path: join(output, 'manifest-drop-queued.png') })
+  assert.equal(await page.locator('.queued-messages [data-test="sent-dropped-chip"]').innerText(), 'sketch.png',
+    'the queued line shows the picture that waits with it')
+  // The first run's record is titled with the file's name, not its marker.
+  await page.locator('.session', { hasText: 'build the first notes from sketch.png' }).waitFor()
+  await shoot('manifest-drop-queued')
   await page.waitForFunction(() => document.querySelector('.queued-messages') === null, null, { timeout: 60000 })
   await card.nth(1).waitFor({ timeout: 60000 })
   const second = planned('build the second notes from [Image #')

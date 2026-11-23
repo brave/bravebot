@@ -101,7 +101,7 @@ export function apply(
       case 'server.request':
         return { ...old, entries: [...old.entries, t.askedServer(message.data)] }
       case 'manifest.request':
-        return { ...old, entries: [...t.withoutNarratedPlan(old.entries, message.data.steps), t.askedManifest(message.data, t.narrowing(old.rules))] }
+        return { ...old, entries: [...t.withoutNarratedPlan(old.entries, message.data.steps), t.askedManifest(message.data, t.narrowing(old.rules), old.planDropped)] }
       case 'exposure.request':
         return { ...old, entries: [...old.entries, t.askedExposure(message.data)] }
       case 'mcp-server.request':
@@ -126,11 +126,11 @@ export function apply(
           sandboxMode: message.data.sandbox ?? old.sandboxMode }
       case 'manifest.done':
         refresh()
-        return { ...old, running: false, phase: null, checking: null, hook: null, thinking: '', outcome: 'complete',
+        return { ...old, running: false, phase: null, checking: null, hook: null, thinking: '', outcome: 'complete', planDropped: undefined,
           entries: [...old.entries, t.planReplied(message.data.reply, message.data.record)] }
       case 'manifest.error':
         refresh()
-        return { ...old, running: false, phase: null, checking: null, hook: null, thinking: '', queuePaused: true,
+        return { ...old, running: false, phase: null, checking: null, hook: null, thinking: '', queuePaused: true, planDropped: undefined,
           entries: [...t.interruptPending(old.entries), t.planEnded(message.data)] }
       case 'vouch.request':
         return { ...old, entries: [...old.entries, t.askedVouch(message.data)] }

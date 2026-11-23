@@ -232,6 +232,19 @@ test('every composer path and the queue start a /manifest line as a run, never a
   assert.match(turn, /message\.manifest !== undefined\s*\?\s*planRun\(handle, message\.manifest, message\.prompt, true, message\.staged\)/)
 })
 
+test('the plan card and the queued row show the pictures dropped on the task, in the order the task names them (DROP-4)', async () => {
+  const second = { marker: '[Image #4]', via: 'drop', file: { kind: 'pdf', name: 'spec.pdf', id: 'g4' } }
+  const seen = windowWith(withStaged(second, picture))
+  await running.planRun(seen.on, 's', 'compare [Image #1] with [Image #4]', '/manifest compare [Image #1] with [Image #4]')
+  assert.deepEqual(seen.calls[0].params.drops, ['g1', 'g4'])
+  const card = heard(seen.state, { event: 'manifest.request', session: 's', data: { request: 1, task: 'compare', steps: [] } }).entries.at(-1)
+  assert.deepEqual(card.dropped.map((item) => item.marker), ['[Image #1]', '[Image #4]'])
+  const done = heard(seen.state, { event: 'manifest.done', session: 's', data: { reply: 'ok', record: 'r1' } })
+  assert.equal(done.planDropped, undefined, 'the next run starts with none')
+  const row = composer.queuedRow({ prompt: '/manifest t [Image #1]', attachments: [], staged: [picture], manifest: 't [Image #1]' })
+  assert.deepEqual(row.dropped, [{ marker: '[Image #1]', file: picture.file }])
+})
+
 test('the bridge method is one the window may send', () => {
   const index = readFileSync('src/main/index.ts', 'utf8')
   assert.match(index, /'manifest\.run',/)

@@ -9,6 +9,8 @@ import type { Handoff } from '../handoff'
 import type { Queued } from '../live'
 import { Button, ButtonMenu, Icon, ProgressRing, TextArea } from '../nala'
 import { FileGlyph } from './FileGlyph'
+import { DroppedChip } from './DroppedChip'
+import type { DroppedOnTask } from '../transcript'
 import { IconButton } from './IconButton'
 import { MentionList } from './MentionList'
 import { ModelPicker } from './ModelPicker'
@@ -28,20 +30,26 @@ async function askOffer(session: string, line: string, cursor: number): Promise<
 
 /**
  * A line waiting for the turn to end, as typed. `plan` marks a `/manifest` line, which starts a
- * plan run, and `command` marks any line that starts something other than a turn.
+ * plan run, and `command` marks any line that starts something other than a turn. `dropped` holds
+ * the files dropped on the line, which wait with it.
  */
 export interface QueuedRow {
   text: string
   plan?: boolean
   command?: boolean
+  dropped?: DroppedOnTask[]
 }
 
-/** How a waiting message is drawn in the queue: the line as typed, and what it starts. */
-export const queuedRow = (message: Queued): QueuedRow => ({
-  text: message.prompt,
-  plan: message.manifest !== undefined,
-  command: message.manifest !== undefined || message.schedule !== undefined || message.aside !== undefined,
-})
+/** How a waiting message is drawn in the queue: the line as typed, what it starts, and what was dropped on it. */
+export const queuedRow = (message: Queued): QueuedRow => {
+  const dropped = message.staged.flatMap((item) => item.via === 'drop' ? [{ marker: item.marker, file: item.file }] : [])
+  return {
+    text: message.prompt,
+    plan: message.manifest !== undefined,
+    command: message.manifest !== undefined || message.schedule !== undefined || message.aside !== undefined,
+    ...(dropped.length > 0 ? { dropped } : {}),
+  }
+}
 
 /** The queue's caption. A command starts something other than a turn, so it is not called one. */
 export const queueNote = (rows: QueuedRow[], paused: boolean): string =>
@@ -132,6 +140,7 @@ export interface ComposerProps {
   onDropHandoff: (force?: boolean) => void
   /** Lines sent into the running turn that it has not read yet. */
   interjected: string[]
+  /** Each waiting line, and the files dropped on it that go with it. */
   queued: QueuedRow[]
   queuePaused: boolean
   onResumeQueued: () => void
@@ -342,10 +351,11 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                   isDisabled={running || backendReady === false} onClick={onResumeQueued}>Resume</Button>
               )}
             </div>
-            {queued.map(({ text, plan }, index) => (
+            {queued.map(({ text, plan, dropped = [] }, index) => (
               <div className="tray-row" key={index}>
                 {plan && <span className="tray-mark plan-task-mark">Plan</span>}
                 <span className="tray-text" data-tooltip={text}>{text}</span>
+                {dropped.map((item) => <DroppedChip key={item.marker} file={item.file} />)}
                 <IconButton icon="close" size="tiny" label={`Remove queued message ${index + 1}`} tooltip="Remove"
                   onClick={() => onRemoveQueued(index)} />
               </div>

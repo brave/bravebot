@@ -393,7 +393,13 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
         await call(METHOD[kind], { session: handle, request, decision, remember })
         updateSession(handle, (old) =>
           old
-            ? { ...old, entries: t.decide(old.entries, kind, request, decision, remember) }
+            ? {
+                ...old,
+                entries: t.decide(old.entries, kind, request, decision, remember),
+                // An approved plan is fixed, so the run is past planning: its working row says
+                // it is working until a later phase says what on.
+                ...(kind === 'manifest' && approve && old.phase === 'planning' ? { phase: null } : {}),
+              }
             : old,
         )
       } catch (error) {

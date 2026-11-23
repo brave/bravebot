@@ -405,6 +405,10 @@
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
+/* A dropped file where it was sent (a plan card, a queued line): no remove button, so the chip
+   closes on padding, and its name is set in meta type with the line around it. */
+.attachment-chip.shown { padding-right: var(--leo-spacing-m); }
+.attachment-chip.shown .attachment-label { font: var(--type-meta); }
 .attachment-trust {
   display: inline-flex;
   align-items: center;
