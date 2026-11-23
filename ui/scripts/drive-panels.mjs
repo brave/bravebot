@@ -211,6 +211,28 @@ const stored = () => JSON.parse(readFileSync(join(userData, 'bravebot-ui.json'),
 const HIDEABLE = ['plan', 'read', 'writes', 'confined', 'notes', 'asides']
 
 /**
+ * Whether `condition` comes to hold within `ms`, polled every 50ms, so a check waits for the
+ * state it asserts on and a machine under load fails it only at the deadline.
+ */
+const eventually = async (condition, ms = 5000) => {
+  const deadline = Date.now() + ms
+  for (;;) {
+    if (await condition()) return true
+    if (Date.now() > deadline) return false
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+}
+const not = (condition) => async () => !(await condition())
+/** Whether `bravebot-ui.json` is there, parses, and meets `test`; false while it is being written. */
+const storedHolds = (test) => {
+  try {
+    return test(stored())
+  } catch {
+    return false
+  }
+}
+
+/**
  * Launch on the fixture profile with the fixture bridge through `launchLive`, and open its first
  * conversation. The column is unfolded only when asked, so a relaunch can check the fold it finds.
  */
@@ -240,9 +262,11 @@ const openFixture = async ({ unfold = true } = {}) => {
   })
   await page.reload()
   await page.locator('.session').filter({ hasText: 'Review the sample project' }).click()
-  await page.waitForTimeout(1200)
-  if (unfold && (await folded(page))) await page.getByRole('button', { name: 'Context panel', exact: true }).click()
-  await page.waitForTimeout(600)
+  await page.locator('#panel-plan').waitFor({ state: 'attached', timeout: 10000 })
+  if (unfold && (await folded(page))) {
+    await page.getByRole('button', { name: 'Context panel', exact: true }).click()
+    await eventually(not(() => folded(page)))
+  }
   return { app, page }
 }
 
@@ -266,7 +290,7 @@ let emptyRow
   const start = await width(page)
   await gutter(page).focus()
   await page.keyboard.press('Shift+ArrowLeft')
-  await page.waitForTimeout(300)
+  await eventually(async () => (await width(page)) !== start)
   check((await width(page)) !== start, `the context column's width moves from ${start} to ${await width(page)}`)
 
   check(await sections(page).isVisible(), 'the context head has a Choose sections button')
@@ -279,8 +303,7 @@ let emptyRow
   check(await shown(page, 'notes'), 'Notes shows before anything is turned off')
   emptyRow = await emptyLook(page, '#panel-notes .panel-empty')
   await sections(page).click()
-  await page.waitForTimeout(400)
-  check(await row(page, 'notes').isVisible(), 'the button opens the checklist')
+  check(await eventually(() => row(page, 'notes').isVisible()), 'the button opens the checklist')
   const heading = page.locator('.context-sections .menu-heading')
   check((await heading.isVisible()) && (await heading.textContent()) === 'Sections', 'the checklist opens under a "Sections" heading')
   check((await heading.boundingBox()).y < (await row(page, 'plan').boundingBox()).y, 'above its first row')
@@ -291,8 +314,7 @@ let emptyRow
   await theme(page, 'light')
 
   await row(page, 'notes').click()
-  await page.waitForTimeout(300)
-  check(await hidden(page, 'notes'), 'unticking Notes hides #panel-notes at once')
+  check(await eventually(() => hidden(page, 'notes')), 'unticking Notes hides #panel-notes at once')
   check(!(await shown(page, 'notes')), 'and Notes is no longer drawn')
   check(await row(page, 'plan').isVisible(), 'and the checklist stays open')
   check((await row(page, 'notes').getAttribute('aria-checked')) === 'false', 'and Notes reads as unticked')
@@ -302,8 +324,7 @@ let emptyRow
   await theme(page, 'light')
 
   await page.keyboard.press('Escape')
-  await page.waitForTimeout(400)
-  check(!(await row(page, 'plan').isVisible()), 'Escape closes the checklist')
+  check(await eventually(not(() => row(page, 'plan').isVisible())), 'Escape closes the checklist')
   check(await hidden(page, 'notes'), 'and keeps Notes hidden')
   before = {
     start,
@@ -311,7 +332,7 @@ let emptyRow
     folded: await folded(page),
     box: (await page.locator('#context-column').boundingBox()).width,
   }
-  await page.waitForTimeout(500)
+  await eventually(() => storedHolds((s) => JSON.stringify(s.hidden) === '["notes"]' && s.layout?.right === before.width))
   await app.close()
 }
 
@@ -328,13 +349,13 @@ check(JSON.stringify(stored().hidden) === '["notes"]', `bravebot-ui.json holds "
 
   // Every section off: the column keeps its head, the button and one line saying so.
   await sections(page).click()
-  await page.waitForTimeout(400)
+  await row(page, 'plan').waitFor({ state: 'visible', timeout: 5000 })
   for (const name of HIDEABLE.filter((n) => n !== 'notes')) {
     await row(page, name).click()
-    await page.waitForTimeout(150)
+    await eventually(() => hidden(page, name))
   }
   await page.keyboard.press('Escape')
-  await page.waitForTimeout(400)
+  await row(page, 'plan').waitFor({ state: 'hidden', timeout: 5000 })
   check((await page.locator('.panel:not(.off)').count()) === 0, 'every section off leaves no panel drawn')
   check(await page.locator('.context-head').isVisible(), 'and keeps the column head')
   check(await page.locator('#context-all-off').isVisible(), 'and draws the line saying every section is off')
@@ -352,12 +373,12 @@ check(JSON.stringify(stored().hidden) === '["notes"]', `bravebot-ui.json holds "
   await theme(page, 'light')
 
   // View > Choose Sections, on a folded column showing the Files tab: it unfolds the column, moves
-  // to Overview and opens the checklist with focus on its button, a keyboard path like /sidebar.
+  // to Overview and opens the checklist with focus on its first row, a keyboard path like /sidebar.
+  const selected = () => page.locator('[data-test="inspector-tabs"] [role="tab"][aria-selected="true"]').textContent().then((t) => t?.trim())
   await page.locator('[data-test="inspector-tabs"] [role="tab"]').filter({ hasText: 'Files' }).click()
-  await page.waitForTimeout(300)
+  await eventually(async () => (await selected()) === 'Files')
   await page.getByRole('button', { name: 'Context panel', exact: true }).click()
-  await page.waitForTimeout(600)
-  check(await folded(page), 'the column is folded before View > Choose Sections')
+  check(await eventually(() => folded(page)), 'the column is folded before View > Choose Sections')
   await page.mouse.move(600, 500)
   const viewItem = await app.evaluate(({ Menu }) => {
     const view = Menu.getApplicationMenu()?.items.find((i) => i.label === 'View')
@@ -366,59 +387,53 @@ check(JSON.stringify(stored().hidden) === '["notes"]', `bravebot-ui.json holds "
     return found ? { label: found.label, enabled: found.enabled } : null
   })
   check(viewItem?.label === 'Choose Sections…' && viewItem.enabled, `the View menu has Choose Sections… (${JSON.stringify(viewItem)})`)
-  await page.waitForTimeout(900)
-  check(!(await folded(page)), 'choosing it unfolds the column')
-  check(await row(page, 'plan').isVisible(), 'and opens the checklist')
-  check(
-    (await page.locator('[data-test="inspector-tabs"] [role="tab"][aria-selected="true"]').textContent())?.trim() === 'Overview',
-    'on the Overview tab',
-  )
+  check(await eventually(not(() => folded(page))), 'choosing it unfolds the column')
+  check(await eventually(() => row(page, 'plan').isVisible()), 'and opens the checklist')
+  check(await eventually(async () => (await selected()) === 'Overview'), 'on the Overview tab')
   const focused = () => page.evaluate(() => document.activeElement?.dataset?.panel ?? document.activeElement?.tagName.toLowerCase())
-  check((await focused()) === 'plan', `with focus on its first row, Plan (${await focused()})`)
+  check(await eventually(async () => (await focused()) === 'plan'), `with focus on its first row, Plan (${await focused()})`)
   // The keyboard alone: down to Files read, Enter turns it on (every section is off here), Enter
   // again turns it back off.
   await page.keyboard.press('ArrowDown')
-  await page.waitForTimeout(150)
-  check((await focused()) === 'read', `ArrowDown moves to the next row (${await focused()})`)
+  check(await eventually(async () => (await focused()) === 'read'), `ArrowDown moves to the next row (${await focused()})`)
   await page.keyboard.press('Enter')
-  await page.waitForTimeout(300)
-  check(!(await hidden(page, 'read')) && (await row(page, 'read').getAttribute('aria-checked')) === 'true',
+  check(await eventually(async () => !(await hidden(page, 'read')) && (await row(page, 'read').getAttribute('aria-checked')) === 'true'),
     'Enter ticks it and shows its panel')
   check(await row(page, 'plan').isVisible(), 'and the checklist stays open')
   await page.keyboard.press('Enter')
-  await page.waitForTimeout(300)
-  check(await hidden(page, 'read'), 'Enter again turns it back off')
+  check(await eventually(() => hidden(page, 'read')), 'Enter again turns it back off')
   await page.screenshot({ path: `${SHOTS_DIR}/17-sections-from-menu-light.png` })
   await theme(page, 'dark')
   await page.screenshot({ path: `${SHOTS_DIR}/17-sections-from-menu-dark.png` })
   await theme(page, 'light')
   await page.keyboard.press('Escape')
-  await page.waitForTimeout(400)
-  check(!(await row(page, 'plan').isVisible()), 'Escape closes the checklist the menu opened')
+  check(await eventually(not(() => row(page, 'plan').isVisible())), 'Escape closes the checklist the menu opened')
   // Going to Files and back remounts the button; the checklist does not open again by itself.
   await page.locator('[data-test="inspector-tabs"] [role="tab"]').filter({ hasText: 'Files' }).click()
-  await page.waitForTimeout(200)
+  await eventually(async () => (await selected()) === 'Files')
   await page.locator('[data-test="inspector-tabs"] [role="tab"]').filter({ hasText: 'Overview' }).click()
+  await sections(page).waitFor({ state: 'visible', timeout: 5000 })
+  // This asserts an absence, so it gives a checklist that would open by itself time to.
   await page.waitForTimeout(400)
   check(!(await row(page, 'plan').isVisible()), 'and coming back to Overview leaves it closed')
 
   // Put the profile back as it started: every section on and the column at its default width.
   await sections(page).click()
-  await page.waitForTimeout(400)
+  await row(page, 'plan').waitFor({ state: 'visible', timeout: 5000 })
   for (const name of HIDEABLE) {
     await row(page, name).click()
-    await page.waitForTimeout(150)
+    await eventually(not(() => hidden(page, name)))
   }
   await page.keyboard.press('Escape')
-  await page.waitForTimeout(400)
+  await row(page, 'plan').waitFor({ state: 'hidden', timeout: 5000 })
   await gutter(page).focus()
   await page.keyboard.press('Home')
-  await page.waitForTimeout(500)
+  await eventually(async () => (await width(page)) === before.start)
   const back = []
   for (const name of HIDEABLE) if (await hidden(page, name)) back.push(name)
   check(back.length === 0, `ticking every section again turns every panel back on (still off: ${back.join(', ') || 'none'})`)
   check(!(await page.locator('#context-all-off').isVisible()), 'and takes away the every-section-off line')
-  await page.waitForTimeout(500)
+  await eventually(() => storedHolds((s) => JSON.stringify(s.hidden) === '[]' && s.layout?.right === before.start))
   await app.close()
 }
 
@@ -435,13 +450,16 @@ check(
   for (const size of [1200, 900]) {
     await app.evaluate(({ BrowserWindow }, w) => { for (const win of BrowserWindow.getAllWindows()) win.setSize(w, 900) }, size)
     await page.setViewportSize({ width: size, height: 900 })
+    // The window may fold the column as it narrows, so the resize settles before the fold is read.
     await page.waitForTimeout(600)
     if (await folded(page)) await page.getByRole('button', { name: 'Context panel', exact: true }).click()
-    await page.waitForTimeout(600)
-    const button = await sections(page).boundingBox()
-    const column = await page.locator('#context-column').boundingBox()
-    check(await sections(page).isVisible() && button.x + button.width <= column.x + column.width && button.x > column.x,
-      `at ${size}px the Choose sections button shows inside the column's head`)
+    const inside = async () => {
+      if (!(await sections(page).isVisible())) return false
+      const button = await sections(page).boundingBox()
+      const column = await page.locator('#context-column').boundingBox()
+      return button.x + button.width <= column.x + column.width && button.x > column.x
+    }
+    check(await eventually(inside), `at ${size}px the Choose sections button shows inside the column's head`)
     for (const name of ['light', 'dark']) {
       await theme(page, name)
       await page.screenshot({ path: `${SHOTS_DIR}/18-sections-${size}-${name}.png` })
