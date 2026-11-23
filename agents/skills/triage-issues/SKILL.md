@@ -5,7 +5,8 @@ description:
   which have gone stale, and which still stand. Closes the fixed ones citing the
   commit that fixed them, and labels every issue that stays open with an importance,
   an urgency and a size, and adds a develop-on label to one that can only be developed on Linux,
-  macOS or Windows. Triggers on: triage issues, go through all open issues,
+  macOS or Windows, and a tests-only label to one whose work changes test code alone. Triggers on:
+  triage issues, go through all open issues,
   which issues are already fixed, are these issues still valid, close stale issues,
   label the issues, importance and urgency labels, platform labels, issue backlog.'
 argument-hint: '[issue-number ...] [label:<name>] [dry-run]'
@@ -151,6 +152,25 @@ the whole edit.
 
 ---
 
+## Issues whose work changes only tests
+
+An issue that stays open also gets `tests-only` when every file its fix has to change is test code.
+It is not an axis: an issue with none of it needs production code changed or is not about tests.
+[labelling-issues.md](../../../docs/development/labelling-issues.md#tests-only) has the definition,
+including what does not qualify.
+
+Apply it only on evidence in the tree, cited in the report: the test the issue names, or the clause
+whose `verified-by:` line it asks to pin, and the reason no shipped file has to change. Where the
+fix needs a code change to make the behaviour testable, or the cause of a failing test is in the
+code the test runs, the issue does not get it. A label a person set stays. One that an earlier triage
+run applied and the verdict made wrong is removed, with the reason in the comment.
+
+The label must exist. If `gh label list --repo brave/bravebot --search tests-only` lacks it, skip it,
+say so in the report and give the creation command from labelling-issues.md, because an agent cannot
+create labels.
+
+---
+
 ## Method
 
 ### Step 1: intake
@@ -230,6 +250,7 @@ gh issue edit N --add-label importance/p3,urgency/p3,size/2
 gh issue edit N --add-label urgency/p2 --remove-label urgency/p4   # a value that moved
 gh issue edit N --add-label develop-on/linux                       # only where the work is Linux-only
 gh issue edit N --remove-label develop-on/windows                  # a label the verdict made wrong
+gh issue edit N --add-label tests-only                             # only where the fix changes test code alone
 ```
 
 ### Step 6: check that nothing was left unlabelled
@@ -371,7 +392,8 @@ One table: closed, rescoped, annotated, untouched, with counts. Then the closes 
 their commits, and anything that needs a human decision.
 
 A count per axis by value, too, and the number of every issue whose triple was uncertain. List the
-issues given a `develop-on` label, or one removed, with the evidence for each.
+issues given a `develop-on` label, or one removed, with the evidence for each, and the same for
+`tests-only`.
 The distribution reviews the run as much as it summarises the backlog: `urgency/p2`
 holding a third of the issues means the axis was read as importance a second time, and
 nothing at `size/4` or `size/5` means the large work was sized off issue summaries rather
