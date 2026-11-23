@@ -25932,6 +25932,166 @@ fn a_turn_asks_about_open_tasks_once_however_the_planner_answers() {
     );
 }
 
+/// TURN-12: the question says how many tasks are open and how many of those are marked waiting, and
+/// names `waiting` as the way to keep a task open that waits on someone else. It carries counts and
+/// nothing a task said.
+///
+/// Rejects a line with no waiting figure, a waiting figure that repeats the open count, a line that
+/// does not offer `waiting`, and one that repeats task text.
+#[test]
+fn the_question_about_open_tasks_says_how_many_are_waiting() {
+    let scratch = Scratch::new("open-tasks-waiting-count");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let todos = json!({"todos": [
+        {"content": "zebra-marker-one", "status": "completed"},
+        {"content": "zebra-marker-two", "status": "waiting"},
+        {"content": "zebra-marker-three", "status": "pending"},
+        {"content": "zebra-marker-four", "status": "in_progress"},
+    ]});
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("todo_write", &todos.to_string()),
+        reply_with("the first part is done"),
+        reply_with("the rest is as it was"),
+    ]);
+    let config = config_for(&endpoint);
+
+    take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        Task::new("do the first part"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 3, "{bodies:#?}");
+    let at = bodies[2]
+        .find(OPEN_TASKS_NOTICE)
+        .expect("the question was not put");
+    let line = &bodies[2][at..];
+    assert!(
+        line.starts_with(&format!("{OPEN_TASKS_NOTICE} 3 tasks not marked completed or cancelled (1 of them marked waiting).")),
+        "the line did not give both counts: {line}"
+    );
+    let line = &line[..line.find("full, since").expect("end of the line")];
+    assert!(
+        line.contains("marked waiting"),
+        "the line did not offer waiting as a way to keep a task open: {line}"
+    );
+    assert!(
+        !line.contains("zebra-marker"),
+        "the line repeated a task: {line}"
+    );
+}
+
+/// TURN-12: a list whose open tasks are all marked waiting is not asked about. Each of them is open
+/// because it waits on someone else, which is what the planner said by marking it, so the turn ends
+/// on its first answer and no request carries the question.
+///
+/// Rejects asking whenever any task is open, whatever its status, which is what a driver that has
+/// no waiting figure does.
+#[test]
+fn a_list_whose_open_tasks_are_all_waiting_is_not_asked_about() {
+    let scratch = Scratch::new("open-tasks-all-waiting");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "waiting", "waiting"]),
+        reply_with("rerun CI needs someone with workflow access"),
+    ]);
+    let config = config_for(&endpoint);
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        Task::new("start the build"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(
+        bodies.len(),
+        2,
+        "the turn went on past its answer: {bodies:#?}"
+    );
+    assert!(
+        bodies.iter().all(|body| !body.contains(OPEN_TASKS_NOTICE)),
+        "the planner was asked about a list whose open tasks all wait: {bodies:#?}"
+    );
+    assert_eq!(
+        outcome.reply_for_display(),
+        "rerun CI needs someone with workflow access"
+    );
+}
+
+/// Request bodies of a turn that answers twice, in a conversation whose latest list was counted as
+/// `open` and `waiting` with nothing written this turn. The counts are set on the conversation
+/// directly, so the only thing that can stop the driver acting on them is the gate they are read
+/// through.
+fn bodies_with_counts_of_open_and_waiting_tasks(
+    name: &str,
+    open: bravebot_core::value::Labelled<usize>,
+    waiting: bravebot_core::value::Labelled<usize>,
+) -> Vec<String> {
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.open_tasks_counted(Some(open), false);
+    conversation.waiting_tasks_counted(Some(waiting));
+    bodies_of_a_turn(
+        name,
+        vec![
+            reply_with("all the work is done"),
+            reply_with("the list is as it was"),
+        ],
+        &mut conversation,
+    )
+}
+
+/// TURN-12: counts of open and waiting tasks at a trusted label are read, so a list whose two
+/// counts agree is not asked about. The control for the test below, which differs from it only in
+/// the label on the waiting count.
+#[test]
+fn trusted_counts_saying_every_open_task_is_waiting_are_acted_on() {
+    let bodies = bodies_with_counts_of_open_and_waiting_tasks(
+        "counts-trusted",
+        bravebot_core::value::Labelled::trusted(2usize),
+        bravebot_core::value::Labelled::trusted(2usize),
+    );
+
+    assert!(
+        bodies.iter().all(|body| !body.contains(OPEN_TASKS_NOTICE)),
+        "the planner was asked about a list whose open tasks all wait: {bodies:#?}"
+    );
+}
+
+/// TURN-12: a count of waiting tasks that is not trusted is refused by `Policy::read_trusted_content`
+/// and read as none waiting, so the question is put and says so. The open count is trusted here, so
+/// the label on the waiting count is the only difference from the control above.
+///
+/// Rejects reading the waiting count some other way than through the gate, which would skip the
+/// question on a count nobody vouched for.
+#[test]
+fn an_untrusted_count_of_waiting_tasks_is_refused_by_the_gate() {
+    let bodies = bodies_with_counts_of_open_and_waiting_tasks(
+        "waiting-count-untrusted",
+        bravebot_core::value::Labelled::trusted(2usize),
+        bravebot_core::value::Labelled::new(2usize, Label::untrusted_public()),
+    );
+
+    assert!(
+        bodies.len() >= 2
+            && bodies[1].contains(&format!(
+                "{OPEN_TASKS_NOTICE} 2 tasks not marked completed or cancelled (0 of them marked waiting)."
+            )),
+        "the question did not treat an untrusted waiting count as none: {bodies:#?}"
+    );
+}
+
 /// TURN-12: the question is put once a turn even where the planner answers it with a list of its
 /// own that still has tasks open. That list is a new one, so only the turn's own limit stops the
 /// question being put again, and a planner that rewrote its list at every answer would otherwise
@@ -26597,10 +26757,59 @@ fn the_list_reminder_names_no_task() {
         reminder,
         format!(
             "It has been {ROUNDS_BEFORE_LIST_REMINDER} rounds since you last wrote your task list, \
-             which has 2 tasks not marked completed or cancelled, so the list may be behind the \
-             work. Send the whole list again with todo_write, marking a task completed where it is \
-             done and cancelled where it was dropped. If the list is accurate, "
+             which has 2 tasks not marked completed or cancelled (0 of them marked waiting), so \
+             the list may be behind the work. Send the whole list again with todo_write, marking \
+             a task completed where it is done and cancelled where it was dropped. If the list is \
+             accurate, "
         )
+    );
+}
+
+/// TURN-15: a list whose open tasks are all marked waiting is not reminded about, however long the
+/// turn goes on, as TURN-12 does not ask about it at the end.
+///
+/// Rejects: a reminder that fires for any open task, waiting or not.
+#[test]
+fn a_list_whose_open_tasks_are_all_waiting_is_not_reminded_about() {
+    let mut replies = vec![writing_a_task_list(&["completed", "waiting", "waiting"])];
+    replies.extend(rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER + 2));
+    replies.push(reply_with("waiting on a person"));
+
+    let bodies = bodies_of_a_turn(
+        "list-reminder-all-waiting",
+        replies,
+        &mut bravebot_agent::Conversation::new(),
+    );
+
+    assert!(
+        bodies.iter().all(|body| !body.contains(LIST_REMINDER)),
+        "a list whose open tasks all wait was reminded about: {bodies:#?}"
+    );
+}
+
+/// TURN-15: a list with an open task that is not waiting is reminded about, and the line says how
+/// many of the open tasks are waiting, as a number and nothing the tasks said.
+///
+/// Rejects: a reminder that skips any list with a waiting task, or one that gives no waiting figure.
+#[test]
+fn the_list_reminder_says_how_many_open_tasks_are_waiting() {
+    let mut replies = vec![writing_a_task_list(&["in_progress", "waiting", "pending"])];
+    replies.extend(rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER));
+    replies.push(reply_with("all the work is done"));
+    replies.push(reply_with("the list is as it was"));
+
+    let bodies = bodies_of_a_turn(
+        "list-reminder-some-waiting",
+        replies,
+        &mut bravebot_agent::Conversation::new(),
+    );
+
+    let body = &bodies[ROUNDS_BEFORE_LIST_REMINDER + 1];
+    assert!(
+        body.contains(
+            "which has 3 tasks not marked completed or cancelled (1 of them marked waiting)"
+        ),
+        "the reminder did not give both counts: {body}"
     );
 }
 

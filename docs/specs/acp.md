@@ -254,3 +254,13 @@ reason), which is said in the same place.
 file the editor's session reads would otherwise read to its writer as a restriction in force.
 
 `verified-by: bravebot_ui_bridge::acp::a_session_an_editor_opens_is_told_the_keys_its_settings_dropped`
+
+<a id="ACP-11"></a>
+### ACP-11: a task that is waiting reaches the editor as pending
+
+The editor's plan has three statuses: pending, in progress and completed. A task the planner marked
+`waiting` is open and is not being worked on, so it is sent as pending. It is not sent as in progress,
+which would tell the editor work is going on, and not as completed. Any other status the bridge does
+not name is sent as pending.
+
+`verified-by: bravebot_ui_bridge::acp::a_waiting_task_is_sent_to_the_editor_as_pending`

@@ -514,6 +514,22 @@ for a correction that is not coming. Cut short, the words could say the same wro
 stopping at "into this". The key outranks them on the last row because it is the one way to hurry
 what is waiting, and the rows above it still say where theirs are going.
 
+**A queue that is too long is cut, and a row says how many are left out.** The queue takes at most
+eight rows beneath the box, four prompts of two rows, and no more than the rows the screen has left
+after what is attached to the line and what is put away. A queue that fits is drawn whole. A longer
+one draws its oldest prompts and then one row, `and N more waiting`, where N is the number of prompts
+not drawn, so the count is true at every size. The transcript keeps the rest of the screen, however
+many prompts wait. The oldest are the ones drawn because Up takes everything back from the oldest
+([INPUT-18](#INPUT-18)) and the words that clear the queue are on its row ([MOUSE-28](mouse.md#MOUSE-28)).
+Every prompt stays queued and goes into the turn in order, drawn or not. The key that sends the queue
+now (INPUT-36) moves to the count row, since the last prompt's mark is not drawn. The row is left out
+whole where the width will not hold its words, and the key is left out whole where it does not fit
+beside them.
+
+**Why.** A queue drawn in full takes every row beneath the box and leaves the transcript as little
+as one row, and a queue cut without a count hides how long it is, so a person cannot tell that more
+prompts wait than they see.
+
 **The mark does not say that a wait is running.** While a `job_output` wait runs, a line sent is
 marked like any other behind a turn that will take it, into this turn at its next round, because
 that is what happens: the wait comes back within a tick of the line and the turn takes it at the
@@ -680,6 +696,12 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_tui::app::a_prompt_that_outlived_the_turn_is_sent_once`
 `verified-by: bravebot_tui::app::a_prompt_queued_behind_a_command_is_sent_once_the_command_has_run`
 `verified-by: bravebot_tui::app::what_is_still_waiting_stays_in_step_with_what_is_drawn`
+`verified-by: bravebot_tui::render::a_queue_too_long_for_the_rows_beneath_the_box_says_how_many_more_wait`
+`verified-by: bravebot_tui::render::a_long_queue_leaves_the_transcript_its_rows`
+`verified-by: bravebot_tui::render::the_count_of_prompts_left_out_is_the_prompts_not_drawn_at_every_size`
+`verified-by: bravebot_tui::render::the_offer_to_send_now_moves_to_the_row_counting_the_prompts_left_out`
+`verified-by: bravebot_tui::render::the_count_row_and_the_offer_to_send_now_are_drawn_whole_or_not_at_all`
+`verified-by: bravebot_tui::render::a_list_offered_beneath_a_cut_queue_is_picked_on_the_row_that_draws_it`
 `verified-by: bravebot_agent::turn::a_prompt_typed_mid_turn_reaches_the_planner_on_the_next_round`
 `verified-by: bravebot_agent::turn::a_prompt_typed_mid_turn_is_recorded_as_the_users_own_input`
 `verified-by: bravebot_agent::turn::a_prompt_typed_while_a_delegate_runs_still_reaches_the_turn_that_spawned_it`

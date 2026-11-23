@@ -2417,6 +2417,7 @@ vouch-explained =
     lecture ultérieure.
 vouch-rule = un oui approuve { $rule } et tout ce qui se trouve en dessous
 vouch-nothing = (rien de ce fichier ne peut être affiché)
+vouch-continues = (ceci est le début du fichier, pas le fichier entier)
 vouch-yes = l'approuver
 vouch-no = le laisser en quarantaine
 
@@ -3827,6 +3828,10 @@ queued-a-prompt = l'invite précédente
 queued-a-shell-line = la ligne de shell précédente
 queued-remove = retirer
 queued-clear-all = tout retirer
+queued-more = { $count ->
+    [one] et 1 autre en attente
+   *[other] et { $count } autres en attente
+    }
 
 
 ## Coller, déposer et joindre
@@ -4311,6 +4316,8 @@ panel-cache-given-up = cache désactivé, refusé par le modèle
 # Là où le panneau d'informations n'a pas la place du plan entier, une ligne après celles qu'il dessine dit combien
 # de lignes de chaque sorte il a laissées de côté.
 panel-hidden-to-do = +{ $count } à faire
+# Les lignes marquées en attente sont ouvertes mais leur prochaine étape n'est pas au planificateur : elles sont comptées à part de celles qui restent à faire.
+panel-hidden-waiting = +{ $count } en attente
 panel-hidden-done = { $count ->
     [one] +{ $count } terminée
    *[other] +{ $count } terminées
@@ -4342,6 +4349,7 @@ references-none-prs = Aucune pull request n'a encore été nommée dans cette se
 # L'état que porte chaque tâche d'un plan affiché, à côté de sa marque.
 todos-status-pending = à faire
 todos-status-active = en cours
+todos-status-waiting = en attente
 todos-status-done = terminée
 todos-status-cancelled = annulée
 

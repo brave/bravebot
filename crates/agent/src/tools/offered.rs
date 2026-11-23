@@ -11,7 +11,7 @@ use bravebot_core::todo::Status;
 use serde_json::json;
 
 /// The statuses the schema advertises, taken from the kernel so the two cannot drift.
-const TODO_STATUSES: [&str; 4] = Status::NAMES;
+const TODO_STATUSES: [&str; 5] = Status::NAMES;
 
 /// What a turn may say about when it runs again.
 ///
@@ -1254,9 +1254,13 @@ fn table(
                                     "type": "string",
                                     "enum": TODO_STATUSES,
                                     "description": "Mark exactly one task in_progress while \
-                                                    work remains on it. Use cancelled for a \
-                                                    task you have decided not to do, rather \
-                                                    than dropping it or marking it completed."
+                                                    work remains on it. Use waiting for a \
+                                                    task that is still open but whose next \
+                                                    step is not yours, such as one that needs \
+                                                    a person or an outside event. Use \
+                                                    cancelled for a task you have decided \
+                                                    not to do, rather than dropping it or \
+                                                    marking it completed."
                                 }
                             },
                             "required": ["content", "status"]

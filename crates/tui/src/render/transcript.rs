@@ -3539,6 +3539,43 @@ mod tests {
         );
     }
 
+    /// A finished entry's waiting task is drawn through the same call site with the mark and ink it
+    /// has under a running turn, not hollow and dim like the open rows beside it.
+    ///
+    /// Rejects: a call site that draws every unfinished row left open without asking its status.
+    #[test]
+    fn a_finished_entrys_waiting_task_keeps_its_own_mark_at_its_call_site() {
+        let _held = crate::theme::exclusive();
+        let mut session = Session::new("kernel-enforced");
+        session.transcript.push(Entry::user("run it"));
+
+        let mut call = Entry::tool(Activity::running("Run", "make").done("ok"));
+        call.todos = bravebot_core::todo::rows(&bravebot_core::todo::List::new(vec![
+            bravebot_core::todo::Item::new("needs a person", Status::Waiting),
+        ]));
+        let waiting_mark = call.todos[0].marker;
+        session.transcript.push(call);
+
+        let Drawn { lines, .. } = with_prompts(&session, 90, 24);
+        let row = &lines[position(&lines, "needs a person")];
+
+        assert_eq!(
+            row.spans[1].content,
+            format!("{waiting_mark} "),
+            "the waiting row was drawn left open: {row:?}"
+        );
+        assert_ne!(
+            row.spans[1].content,
+            format!("{LEFT_OPEN_MARKER} "),
+            "the waiting mark is the mark of a row left open"
+        );
+        assert_ne!(
+            row.spans[2].style,
+            dim(),
+            "the waiting row was dimmed as a row left open is: {row:?}"
+        );
+    }
+
     /// VIEW-44. Rejects: a prompt drawn above the view in a pane of fewer than four rows or sixteen
     /// columns, and one drawn where the view a row shorter begins at the next prompt, which at the
     /// tail is the row the prompt's own row would be taken from.

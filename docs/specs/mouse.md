@@ -847,6 +847,15 @@ as it was. The box and what is attached to the line in it are left as they were.
 leave a legible few words of the line draws no word, and `clear all` is left out before `remove`.
 The words are the interface's own and no part of the line: the line is cut short of them.
 
+**Prompts that are not drawn.** A queue too long to draw is cut after its oldest prompts and a row
+says how many more wait ([INPUT-10](terminal-input.md#INPUT-10)). Only the prompts drawn have rows
+to click and words to remove them. The prompts not drawn are newer than every one that is, so a
+click on the last prompt drawn takes it back with all of them, Up takes them all back
+([INPUT-18](terminal-input.md#INPUT-18)), and `clear all` removes every line waiting, drawn or not.
+`remove` on a prompt drawn removes only that one, and the prompts not drawn move up into the rows it
+leaves. The row that says how many more wait has no click target: a click on it takes nothing back
+and removes nothing, since what it counts is not on screen to be chosen.
+
 As for [MOUSE-23](#MOUSE-23), the press and the release are
 on one cell and the press is a single click, so a drag is a selection ([MOUSE-1](#MOUSE-1)). The rows beside the queue, the info panel on the same rows, and a
 picker or a history search open nothing. The rows are recorded as drawn, so a line put away or a file
@@ -869,6 +878,8 @@ the lines back into the box ([INPUT-18](terminal-input.md#INPUT-18)), and cleari
 `verified-by: bravebot_tui::app::the_word_remove_takes_that_prompt_out_of_the_queue_and_out_of_the_turns_reach`
 `verified-by: bravebot_tui::app::the_words_clear_all_remove_every_waiting_line_and_leave_the_box`
 `verified-by: bravebot_tui::app::clear_all_is_drawn_once_two_wait_and_a_narrow_row_draws_no_words`
+`verified-by: bravebot_tui::app::a_click_on_the_last_prompt_drawn_takes_the_ones_not_drawn_back_with_it`
+`verified-by: bravebot_tui::app::remove_and_clear_all_reach_the_prompts_not_drawn`
 `verified-by: bravebot_tui::app::removing_a_prompt_the_turn_took_changes_nothing_and_one_after_it_is_the_one_removed`
 `verified-by: bravebot_tui::state::discarding_removes_a_click_queued_command_and_stops_at_a_prompt_the_turn_took`
 `verified-by: bravebot_agent::interjections::forget_after_drops_the_line_that_many_from_the_newest_and_keeps_the_rest_in_order`

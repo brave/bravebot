@@ -3045,6 +3045,7 @@ vouch-explained =
     this file for the rest of this session, here and in every later read.
 vouch-rule = a yes trusts { $rule } and everything beneath it
 vouch-nothing = (nothing of this file can be shown)
+vouch-continues = (this is the beginning of the file, not all of it)
 vouch-yes = trust it
 vouch-no = leave it quarantined
 
@@ -3748,6 +3749,9 @@ panel-cache-given-up = cache off, model refused it
 # rows of each kind it left out. A kind with none is not named, and the rows still to do come first.
 # The forms of the other two are the same in English and differ in other languages.
 panel-hidden-to-do = +{ $count } to do
+# Rows marked waiting are open but their next step is not the planner's, so they are counted apart
+# from the rows still to do.
+panel-hidden-waiting = +{ $count } waiting
 panel-hidden-done = { $count ->
     [one] +{ $count } done
    *[other] +{ $count } done
@@ -3809,6 +3813,7 @@ unfinished-job = { $name } is still running, for { $seconds }s
 # The status each task of a printed plan carries beside its mark.
 todos-status-pending = pending
 todos-status-active = in progress
+todos-status-waiting = waiting
 todos-status-done = completed
 todos-status-cancelled = cancelled
 
@@ -5017,6 +5022,13 @@ queued-a-shell-line = the shell line before it
 # stay short.
 queued-remove = remove
 queued-clear-all = clear all
+# The row after the last waiting line drawn, said where more lines wait than the rows beneath the box
+# hold. $count is how many are not drawn. It may share the row with the key that sends the queue now,
+# so it stays short.
+queued-more = { $count ->
+    [one] and 1 more waiting
+   *[other] and { $count } more waiting
+    }
 
 ## Pasting, dropping and attaching
 

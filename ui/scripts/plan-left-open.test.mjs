@@ -29,7 +29,7 @@ function load(path) {
   return module.exports
 }
 
-const { Context, todoRowLook } = load('src/renderer/components/Context.tsx')
+const { Context, todoRowLook, TODO_ICONS } = load('src/renderer/components/Context.tsx')
 
 const live = (todos, running) =>
   ({ handle: 'h', summary: { directory: '/work' }, entries: [], todos, quarantine: [], phase: null, tokens: 0, running })
@@ -77,6 +77,56 @@ test('a done or cancelled row draws the same whether or not a turn is running', 
   const idle = renderToStaticMarkup(React.createElement(Context, { live: live(todos, false) }))
   assert.deepEqual(rowsOf(running).map((m) => m[1]), ['done', 'cancelled'])
   assert.deepEqual(rowsOf(idle).map((m) => m[1]), ['done', 'cancelled'])
+})
+
+// A waiting row is open on purpose: it has an icon of its own, no ring, and the same look whether
+// or not a turn is running, so it never reads as work being done or as work nobody is doing.
+const waitingMarkup = (running) => renderToStaticMarkup(React.createElement(Context, {
+  live: live([{ content: 'needs a person', status: 'waiting' }], running),
+}))
+
+test('a waiting row has no ring and says waiting to a screen reader', () => {
+  for (const running of [true, false]) {
+    const markup = waitingMarkup(running)
+    assert.ok(markup.includes('<li class="waiting">'), markup)
+    assert.ok(!markup.includes('leo-progressring'), 'a waiting row has no ring: ' + markup)
+    assert.ok(!markup.includes('left-open'), 'a waiting row is not dimmed as left open: ' + markup)
+    assert.ok(markup.includes('<span class="visually-hidden">, waiting</span>'), markup)
+  }
+})
+
+test('a waiting row has an icon of its own, not one another row draws', () => {
+  const icons = Object.entries(TODO_ICONS)
+  assert.equal(TODO_ICONS[todoRowLook({ content: 'x', status: 'waiting' }, true).marker], 'pause-circle')
+  for (const [marker, icon] of icons) {
+    if (marker !== 'waiting') assert.notEqual(icon, TODO_ICONS.waiting, `waiting shares the icon of ${marker}`)
+  }
+})
+
+test('a waiting row draws the same whether or not a turn is running', () => {
+  assert.equal(waitingMarkup(true), waitingMarkup(false))
+})
+
+test('a waiting row has its own ink, apart from done and running rows', async () => {
+  const { readFileSync } = await import('node:fs')
+  const css = readFileSync('src/renderer/styles/inspector.css', 'utf8')
+  const ink = (name) => {
+    const head = `.todos li.${name} .marker { color: `
+    const at = css.indexOf(head)
+    if (at < 0) return undefined
+    const end = css.indexOf(';', at)
+    return end < 0 ? undefined : css.slice(at + head.length, end) || undefined
+  }
+  assert.ok(ink('waiting'), 'a waiting row sets its mark ink')
+  assert.notEqual(ink('waiting'), ink('done'))
+  assert.notEqual(ink('waiting'), 'var(--accent-text)')
+  assert.ok(!/\.todos li\.waiting[^{]*\{[^}]*text-decoration/.test(css), 'a waiting row is not struck')
+})
+
+test('todoRowLook: waiting is the same running or idle, and is not left open', () => {
+  const waiting = { rowClass: 'waiting', marker: 'waiting', hiddenSuffix: ', waiting' }
+  assert.deepEqual(todoRowLook({ content: 'x', status: 'waiting' }, true), waiting)
+  assert.deepEqual(todoRowLook({ content: 'x', status: 'waiting' }, false), waiting)
 })
 
 test('todoRowLook: only an active row mid-turn gets the ring; anything else open once idle is left open', () => {

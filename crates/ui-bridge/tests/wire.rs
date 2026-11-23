@@ -808,6 +808,22 @@ fn a_cancelled_task_crosses_as_cancelled() {
     );
 }
 
+/// A task that waits crosses as `waiting`. Sent as `pending` or `active` the window would draw it
+/// as work not started or work under way.
+#[test]
+fn a_waiting_task_crosses_as_waiting() {
+    assert_eq!(wire::status(Status::Waiting), "waiting");
+    assert_eq!(
+        wire::row(&Row {
+            content: "rerun CI".into(),
+            as_the_planner_had_it: "rerun CI".into(),
+            marker: "◇",
+            status: Status::Waiting,
+        }),
+        json!({ "content": "rerun CI", "status": "waiting" })
+    );
+}
+
 /// CHECKOUT-14. A front-end is told the working directory's file was written since the checkout the
 /// body comes from was made, so the desktop's question says what the terminal's does.
 #[test]

@@ -5310,6 +5310,8 @@ where
                 let in_answer = state.reminded.list_answers_a_question();
                 state.reminded.list_accepted(state.steps, state.worked.work);
                 conversation.open_tasks_counted(shown_window.then_some(open), in_answer);
+                conversation
+                    .waiting_tasks_counted(output.waiting_tasks.take().filter(|_| shown_window));
             }
             if let Some(cancelled) = cancellation {
                 attach_vetted_pictures(policy, conversation, &mut attached);

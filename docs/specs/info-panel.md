@@ -348,13 +348,14 @@ off with `/sidebar` ([PANEL-17](#PANEL-17)) are rows it has. Turned off itself, 
 A plan longer than that shows the rows that fit less the row after them that says what was left out,
 and less the key row where that is drawn. The rows shown are chosen from each row's status and from
 nothing else, and a status that is not recognised reads as outstanding
-([TODO-2](tools/todo-write.md#TODO-2)). The task in progress comes first, then the pending rows,
-each in the plan's order, and then, where room is left, the finished rows (completed or cancelled)
+([TODO-2](tools/todo-write.md#TODO-2)). The task in progress comes first, then the pending and
+waiting rows, each in the plan's order, and then, where room is left, the finished rows (completed or cancelled)
 nearest the first row still outstanding, or nearest the end of a plan with none. The rows shown are
 drawn in the plan's order. The row after them counts each kind of row left out in words of its own,
-the rows still to do first and a kind with none left out not named (`+6 done`,
-`+3 to do, +40 done, +2 cancelled`), so a count of finished work is not read as work still to come
-and a cancelled row is not counted as done. Where the panel is too narrow for every count the row
+the rows still to do first, then the rows marked waiting, and a kind with none left out not named
+(`+6 done`, `+3 to do, +1 waiting, +40 done, +2 cancelled`), so a count of finished work is not read
+as work still to come, a waiting row is not counted as one still to do, and a cancelled row is not
+counted as done. Where the panel is too narrow for every count the row
 is cut with an ellipsis, and the count of the rows still to do is the last to be cut.
 
 A finished row whose words a click opened ([MOUSE-32](mouse.md#MOUSE-32)) takes the rows its words
@@ -381,16 +382,19 @@ reads `alt-a whole plan` by default and is cut with an ellipsis to the width of 
 the panel cannot draw whole, or draws with its text cut, can be read in full. The row is drawn where
 the section has three rows of room or more, the plan does not fill them exactly, and every row still
 to do is drawn beside it: the plan is shorter than the room, or the room less the key row and the
-row that counts what was left out holds every row still to do. So the row takes the place of no row
-still to do and of no task of a plan that fits the room, and only of finished rows in a plan too
+row that counts what was left out holds every row still to do and every row marked waiting. So the row takes the place of no row
+still to do, of no waiting row, and of no task of a plan that fits the room, and only of finished rows in a plan too
 long for it. The `?` list names the key whatever the plan holds.
 
-A row that is neither completed nor cancelled is drawn as work being done only while a turn is
+A row that is neither completed, cancelled nor waiting is drawn as work being done only while a turn is
 running. While none is, as after the turn that wrote the list has ended and in a resumed session,
 such a row is left open: its mark is hollow (`□`) where work being done has the filled one, so the
 two differ under `NO_COLOR`, and its text is dim. A compaction or another working state that is
-not a turn leaves it open too. Rows that are completed or cancelled are drawn as they are in any
-other plan.
+not a turn leaves it open too. A row marked waiting is open on purpose and is drawn the same
+whether or not a turn is running: a mark of its own (`◇`), different from the filled, hollow, done
+and cancelled marks so it differs under `NO_COLOR` too, in the terminal's own ink, neither dim nor
+in the ink of work being done, and not struck through. Rows that are completed or cancelled are
+drawn as they are in any other plan.
 
 A click on a task moves the view to the turn that wrote it, as the keys that move the view to a
 prompt do ([MOUSE-31](mouse.md#MOUSE-31), [SCROLL-3](scroller.md#SCROLL-3)), and one on the mark of a
@@ -409,6 +413,8 @@ says the work is finished reads as work still going.
 `verified-by: bravebot_tui::panel::the_task_in_progress_is_kept_when_there_are_more_rows_still_to_do_than_room`
 `verified-by: bravebot_tui::panel::room_left_over_goes_to_the_finished_rows_nearest_the_first_one_still_to_do`
 `verified-by: bravebot_tui::panel::the_row_that_counts_what_was_left_out_names_each_kind_in_words_of_its_own`
+`verified-by: bravebot_tui::panel::the_row_that_counts_what_was_left_out_counts_waiting_rows_apart`
+`verified-by: bravebot_tui::panel::a_waiting_row_has_a_mark_of_its_own_whether_or_not_a_turn_runs`
 `verified-by: bravebot_tui::panel::the_panel_draws_a_plan_of_none_one_twelve_and_fifty_rows_and_at_the_least_height`
 `verified-by: bravebot_tui::panel::the_rows_drawn_and_counted_follow_the_status_and_never_the_text`
 `verified-by: bravebot_tui::panel::the_last_row_of_the_plan_names_the_key_that_prints_it_whole`

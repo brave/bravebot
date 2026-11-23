@@ -55,3 +55,25 @@ achieved, and leaving it unstruck would leave it reading as work still to come.
 `verified-by: bravebot_tui::render::a_cancelled_task_is_struck_without_the_finished_colour`
 `verified-by: bravebot_tui::panel::a_cancelled_task_in_the_panel_is_struck_and_marked_apart_from_a_done_one`
 `verified-by: bravebot_ui_bridge::wire::a_cancelled_task_crosses_as_cancelled`
+
+<a id="TODO-4"></a>
+### TODO-4: a waiting task is open and has a status and a marker of its own
+
+`waiting` is one of the statuses the planner is told to use, for a task that is still open and whose
+next step is not the planner's, such as one that needs a person or an outside event. A task
+carrying it is not struck through, is drawn with a marker of its own rather than the running,
+finished or dropped one, counts as open, and is counted apart from the finished and the dropped
+tasks in what the planner is told back. The word `waiting` is read as that status and not as
+pending.
+
+**Why.** A task that waits on someone else is neither being worked on nor abandoned. Drawing it as
+running overstates what is happening, and drawing it as dropped or left open reads as work given up.
+Counting it apart lets the question of [TURN-12](../turns.md#TURN-12) say how many of the open
+tasks are waiting, as counts only.
+
+`verified-by: bravebot_core::todo::a_waiting_task_is_open_and_not_struck`
+`verified-by: bravebot_core::todo::the_waiting_marker_differs_from_every_other_marker`
+`verified-by: bravebot_core::todo::a_waiting_task_is_counted_apart_from_done_and_cancelled`
+`verified-by: bravebot_agent::tools::the_todo_schema_offers_waiting_and_says_what_it_means`
+`verified-by: bravebot_agent::tools::tests::todos::an_accepted_list_carries_the_count_of_its_waiting_tasks_at_its_own_label`
+`verified-by: bravebot_ui_bridge::wire::a_waiting_task_crosses_as_waiting`

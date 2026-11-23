@@ -286,7 +286,9 @@ work with what you were given or say in your reply what you still need.
 When the work takes several steps, call todo_write to record the steps, then call it again as \
 each one finishes so the user can watch progress. Send the whole list every time, keeping \
 finished tasks in it marked completed, and keep exactly one task in_progress while work \
-remains on it. Do not use it for a single step or a question.
+remains on it. Mark a task waiting, not in_progress, when it is still open but its next step is \
+not yours, such as one that needs a person or an outside event. Do not use it for a single step \
+or a question.
 
 A task list records what you are going to do, so write the steps you are going to take rather \
 than one per file you might touch. Asked to fix a bug in a directory of two files, you do not \

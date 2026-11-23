@@ -823,6 +823,7 @@ and how the turn ended rather than in place of any of them.
 `verified-by: bravebot_tui::render::export::a_call_and_a_block_are_exported_as_the_planner_had_them_and_not_as_the_person_read_them`
 `verified-by: bravebot_tui::render::export::a_call_and_a_block_with_nothing_to_substitute_are_exported_as_drawn`
 `verified-by: bravebot_tui::render::export::a_task_is_exported_as_the_model_wrote_it_and_not_as_the_person_read_it`
+`verified-by: bravebot_tui::render::export::a_waiting_task_is_exported_unticked_with_its_status_word`
 `verified-by: bravebot_tui::app::an_export_leaves_out_what_a_private_or_stopped_command_printed`
 `verified-by: bravebot_tui::undo_tests::an_export_writes_a_hunk_by_its_number_and_not_by_its_file`
 `verified-by: bravebot_agent::tools::tests::todos::a_task_list_is_named_inside_the_reshape_that_builds_it`

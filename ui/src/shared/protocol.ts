@@ -34,7 +34,7 @@ export type Checking = { lines: number } | { file: 'picture' | 'pdf' }
 export type AgentEntry = { id: string; kind: string; task: string; state: 'working' | 'finished' | 'failed' }
 export type Reach = 'not_the_planner' | 'no_model'
 export type Landing = 'context' | 'quarantined' | 'reserved'
-export type TodoStatus = 'pending' | 'active' | 'done' | 'cancelled'
+export type TodoStatus = 'pending' | 'active' | 'waiting' | 'done' | 'cancelled'
 
 export type Change =
   | { kind: 'kept'; text: string }

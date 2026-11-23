@@ -1871,9 +1871,10 @@ sources already trusted for skills, and not a way to name a file.
 `/todos` puts the session's plan in the transcript, every task with its status, as
 [VIEW-37](terminal-transcript.md#VIEW-37) draws it. The plan is the one the info panel draws
 ([PANEL-10](info-panel.md#PANEL-10)): the last list the planner reported, and while a turn runs the
-list that turn has reported so far. A task that is neither completed nor cancelled is drawn with
+list that turn has reported so far. A task that is neither completed, cancelled nor waiting is drawn with
 the mark and ink the panel gives it when the command is typed: filled while a turn is running, and
-hollow and dim while none is, when the whole row matches the panel's. A session with no plan says
+hollow and dim while none is, when the whole row matches the panel's. A waiting task is drawn the
+same in both cases, with the mark the panel gives it and its status said as `waiting`. A session with no plan says
 so in a note and prints no heading. Nothing is read, fetched or sent, no turn starts, and the printed plan is not kept with
 the session as the plan of any turn.
 
@@ -1890,6 +1891,7 @@ model is needed to read it out.
 
 `verified-by: bravebot_tui::app::the_todos_command_prints_the_plan_and_starts_no_turn`
 `verified-by: bravebot_tui::app::the_todos_command_says_so_when_there_is_no_plan`
+`verified-by: bravebot_tui::render::a_waiting_task_is_drawn_with_its_own_mark_whether_or_not_a_turn_runs`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_todos_command_or_a_longer_word_is_still_a_prompt`
 `verified-by: bravebot_tui::app::the_todos_command_is_carried_out_while_a_turn_runs`
 `verified-by: bravebot_tui::app::the_todos_key_prints_the_plan_as_the_command_does`

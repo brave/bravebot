@@ -121,111 +121,188 @@ pub(super) fn stashed_lines(session: &Session, width: u16) -> Vec<Line<'static>>
 /// The last one's mark says how to have them all go now, where the key that does it reaches this
 /// program. Beside the mark rather than on a row of its own, so the rows under the box do not grow by
 /// one the moment anything is queued, and dropped whole where the width will not hold it.
-fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
-    const BADGE: &str = " QUEUED ";
-    const SEND_NOW: &str = "  ctrl-enter to stop the turn and send now";
-
+///
+/// A queue too long for [`MAX_QUEUE_ROWS`] or for `room` draws its oldest prompts and then one row
+/// saying how many more wait ([`queue_shown`]). The offer to send now moves to that row, because the
+/// last prompt's mark is not drawn.
+fn queued_lines(session: &Session, width: u16, room: usize) -> Vec<Line<'static>> {
+    let shown = queue_shown(session, width, room);
     let mut lines = Vec::new();
-    for (at, waiting) in session.queued.iter().enumerate() {
-        let words = queue_words(width, at, session.queued.len());
-        // The words that act on the line take the right of its first row, and the line is cut to
-        // the room left, with two blanks between.
-        let room = match &words {
-            Some(words) => usize::from(words.first_column()).saturating_sub(4),
-            None => (width as usize).saturating_sub(4),
-        };
-        let goes = session.where_it_goes(at);
-        let lead = match goes {
-            Bound::Run => "! ",
-            Bound::IntoThisTurn
-            | Bound::ItsOwnTurn
-            | Bound::IntoTheNextTurn
-            | Bound::CarriedOut => "  ",
-        };
-        let shown = printable(&head_of(&waiting.prompt, room));
-        let mut row = vec![Span::styled(
-            lead,
-            Style::default().fg(theme::brand_primary()),
-        )];
-        if let Some(words) = &words {
-            let blanks =
-                usize::from(words.first_column()).saturating_sub(2 + wrap::display_width(&shown));
-            row.push(Span::styled(
-                shown,
-                Style::default().fg(theme::brand_primary()),
-            ));
-            row.push(Span::raw(" ".repeat(blanks)));
-            if words.clear.is_some() {
-                row.push(Span::styled(t!(queued_clear_all).to_string(), dim()));
-                row.push(Span::raw("  "));
-            }
-            row.push(Span::styled(t!(queued_remove).to_string(), dim()));
-        } else {
-            row.push(Span::styled(
-                shown,
-                Style::default().fg(theme::brand_primary()),
-            ));
-        }
-        lines.push(Line::from(row));
-        let mut mark = vec![
-            Span::raw("  "),
-            Span::styled(
-                BADGE,
-                Style::default()
-                    .fg(theme::on_primary())
-                    .bg(theme::brand_primary())
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ];
-        // The offer before the words, where both will not fit, since it is the one way to hurry
-        // what is waiting and the rows above still say where theirs are going.
-        let used = 2 + wrap::display_width(BADGE);
-        let offer = at + 1 == session.queued.len()
-            && session.offers_to_send_now()
-            && used + wrap::display_width(SEND_NOW) <= width as usize;
-        let offered = if offer {
-            wrap::display_width(SEND_NOW)
-        } else {
-            0
-        };
-        let left = (width as usize).saturating_sub(used + offered);
-        // A command that would have been carried out as it was typed, but for a line waiting ahead
-        // of it, names that line (CMD-8). One that waits for the turn on its own account does not,
-        // since the lines ahead of it are not why.
-        let after = (goes == Bound::CarriedOut && runs_while_working(&waiting.prompt))
-            .then(|| held_back_by(session, at, &waiting.prompt))
-            .flatten();
-        // Where the line goes, in the words that name what it waits behind where there are any and
-        // room for them, and in the plain words where there is not.
-        let plain = format!(
-            "  {}",
-            match goes {
-                Bound::IntoThisTurn => t!(queued_into_this_turn),
-                Bound::ItsOwnTurn => t!(queued_its_own_turn),
-                Bound::IntoTheNextTurn => t!(queued_into_the_next_turn),
-                Bound::CarriedOut => t!(queued_carried_out),
-                Bound::Run => t!(queued_run),
-            }
-        );
-        let with_name = after.map(|(ahead, line)| {
-            format!(
-                "  {}",
-                t!(queued_carried_out_after, line = named(ahead, line))
-            )
-        });
-        if let Some(bound) = with_name
-            .into_iter()
-            .chain([plain])
-            .find(|bound| wrap::display_width(bound) <= left)
-        {
-            mark.push(Span::styled(bound, dim()));
-        }
-        if offer {
-            mark.push(Span::styled(SEND_NOW, dim()));
-        }
-        lines.push(Line::from(mark));
+    for (at, waiting) in session.queued.iter().enumerate().take(shown.drawn) {
+        lines.push(queued_prompt_row(session, width, at, &waiting.prompt));
+        lines.push(queued_mark_row(session, width, at, &waiting.prompt));
+    }
+    if shown.says_more {
+        lines.extend(more_waiting_row(
+            session,
+            width,
+            session.queued.len() - shown.drawn,
+        ));
     }
     lines
+}
+
+/// The first row of the prompt at `at`: the line as it was typed, with the words that remove it
+/// at the right where they fit.
+fn queued_prompt_row(session: &Session, width: u16, at: usize, prompt: &str) -> Line<'static> {
+    let words = queue_words(width, at, session.queued.len());
+    // The words that act on the line take the right of its first row, and the line is cut to
+    // the room left, with two blanks between.
+    let room = match &words {
+        Some(words) => usize::from(words.first_column()).saturating_sub(4),
+        None => (width as usize).saturating_sub(4),
+    };
+    let lead = match session.where_it_goes(at) {
+        Bound::Run => "! ",
+        Bound::IntoThisTurn | Bound::ItsOwnTurn | Bound::IntoTheNextTurn | Bound::CarriedOut => {
+            "  "
+        }
+    };
+    let shown = printable(&head_of(prompt, room));
+    let mut row = vec![Span::styled(
+        lead,
+        Style::default().fg(theme::brand_primary()),
+    )];
+    if let Some(words) = &words {
+        let blanks =
+            usize::from(words.first_column()).saturating_sub(2 + wrap::display_width(&shown));
+        row.push(Span::styled(
+            shown,
+            Style::default().fg(theme::brand_primary()),
+        ));
+        row.push(Span::raw(" ".repeat(blanks)));
+        if words.clear.is_some() {
+            row.push(Span::styled(t!(queued_clear_all).to_string(), dim()));
+            row.push(Span::raw("  "));
+        }
+        row.push(Span::styled(t!(queued_remove).to_string(), dim()));
+    } else {
+        row.push(Span::styled(
+            shown,
+            Style::default().fg(theme::brand_primary()),
+        ));
+    }
+    Line::from(row)
+}
+
+/// The second row of the prompt at `at`: the mark, then where the line goes where the width holds
+/// the words, then the offer to send now on the last prompt.
+fn queued_mark_row(session: &Session, width: u16, at: usize, prompt: &str) -> Line<'static> {
+    const BADGE: &str = " QUEUED ";
+
+    let goes = session.where_it_goes(at);
+    let mut mark = vec![
+        Span::raw("  "),
+        Span::styled(
+            BADGE,
+            Style::default()
+                .fg(theme::on_primary())
+                .bg(theme::brand_primary())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+    // The offer before the words, where both will not fit, since it is the one way to hurry
+    // what is waiting and the rows above still say where theirs are going.
+    let used = 2 + wrap::display_width(BADGE);
+    let offer = at + 1 == session.queued.len()
+        && session.offers_to_send_now()
+        && used + wrap::display_width(SEND_NOW) <= width as usize;
+    let offered = if offer {
+        wrap::display_width(SEND_NOW)
+    } else {
+        0
+    };
+    let left = (width as usize).saturating_sub(used + offered);
+    // A command that would have been carried out as it was typed, but for a line waiting ahead
+    // of it, names that line (CMD-8). One that waits for the turn on its own account does not,
+    // since the lines ahead of it are not why.
+    let after = (goes == Bound::CarriedOut && runs_while_working(prompt))
+        .then(|| held_back_by(session, at, prompt))
+        .flatten();
+    // Where the line goes, in the words that name what it waits behind where there are any and
+    // room for them, and in the plain words where there is not.
+    let plain = format!(
+        "  {}",
+        match goes {
+            Bound::IntoThisTurn => t!(queued_into_this_turn),
+            Bound::ItsOwnTurn => t!(queued_its_own_turn),
+            Bound::IntoTheNextTurn => t!(queued_into_the_next_turn),
+            Bound::CarriedOut => t!(queued_carried_out),
+            Bound::Run => t!(queued_run),
+        }
+    );
+    let with_name = after.map(|(ahead, line)| {
+        format!(
+            "  {}",
+            t!(queued_carried_out_after, line = named(ahead, line))
+        )
+    });
+    if let Some(bound) = with_name
+        .into_iter()
+        .chain([plain])
+        .find(|bound| wrap::display_width(bound) <= left)
+    {
+        mark.push(Span::styled(bound, dim()));
+    }
+    if offer {
+        mark.push(Span::styled(SEND_NOW, dim()));
+    }
+    Line::from(mark)
+}
+
+/// The key that has everything waiting go now, drawn after the mark or the count.
+const SEND_NOW: &str = "  ctrl-enter to stop the turn and send now";
+
+/// The most rows the queue takes beneath the box: four prompts of two rows. A longer queue draws three
+/// prompts (six rows) and one row saying how many more wait, seven rows in all.
+pub(super) const MAX_QUEUE_ROWS: usize = 8;
+
+/// How much of the queue is drawn: how many of the oldest prompts, and whether a row says how many
+/// more wait.
+pub(super) struct QueueShown {
+    /// The prompts drawn, oldest first, two rows each.
+    pub drawn: usize,
+    /// A row follows them saying how many of the queue are not drawn.
+    pub says_more: bool,
+}
+
+/// What of the queue is drawn in `room` rows beneath the box, `width` columns wide.
+///
+/// The queue takes at most [`MAX_QUEUE_ROWS`] and no more than `room` leaves after what is attached
+/// and put away above it. The whole queue is drawn where it fits. Otherwise the oldest prompts are
+/// drawn, so the key that takes everything back and the word that clears everything stay on screen,
+/// and the last row says how many are left out.
+pub(super) fn queue_shown(session: &Session, width: u16, room: usize) -> QueueShown {
+    let count = session.queued.len();
+    let before = attached_lines(session, width).len() + stashed_lines(session, width).len();
+    let budget = room.saturating_sub(before).min(MAX_QUEUE_ROWS);
+    if 2 * count <= budget {
+        return QueueShown {
+            drawn: count,
+            says_more: false,
+        };
+    }
+    QueueShown {
+        drawn: budget.saturating_sub(1) / 2,
+        says_more: budget > 0,
+    }
+}
+
+/// The row after the last prompt drawn, saying how many more wait, with the key that sends the queue
+/// now where both fit. Left out whole where the width will not hold the words, like the words beside
+/// a mark. It records no click target: the prompts it counts are not drawn, so nothing there is to
+/// take back or remove, and a click on the row does nothing (MOUSE-28).
+fn more_waiting_row(session: &Session, width: u16, count: usize) -> Option<Line<'static>> {
+    let words = format!("  {}", t!(queued_more, count = count));
+    let used = wrap::display_width(&words);
+    if used > width as usize {
+        return None;
+    }
+    let mut row = vec![Span::styled(words, dim())];
+    if session.offers_to_send_now() && used + wrap::display_width(SEND_NOW) <= width as usize {
+        row.push(Span::styled(SEND_NOW, dim()));
+    }
+    Some(Line::from(row))
 }
 
 /// The columns of the words on a waiting line's first row that remove lines from the queue, counted
@@ -296,6 +373,7 @@ pub(super) fn first_waiting_row(session: &Session, width: u16) -> Option<usize> 
 pub(super) fn lines_beneath_the_box(
     session: &Session,
     width: u16,
+    room: usize,
     offered: &crate::state::Offered,
 ) -> Vec<Line<'static>> {
     // Attachments first, nearest the box, because they belong to the line still in it: they are
@@ -309,7 +387,7 @@ pub(super) fn lines_beneath_the_box(
     // Then waiting prompts, which describe something already done. Below the line they are no
     // part of, and still above what is offered, since a line the person believes they have sent
     // has to be visible without hunting for it.
-    lines.extend(queued_lines(session, width));
+    lines.extend(queued_lines(session, width, room));
     lines.extend(match offered {
         crate::state::Offered::Nothing => Vec::new(),
         crate::state::Offered::Slash { commands, skills } => {
@@ -332,6 +410,7 @@ pub(super) fn lines_beneath_the_box(
 fn offered_lines(
     session: &Session,
     width: u16,
+    room: usize,
     offered: &crate::state::Offered,
 ) -> Option<std::ops::Range<usize>> {
     let items = match offered {
@@ -341,7 +420,7 @@ fn offered_lines(
     };
     let before = attached_lines(session, width).len()
         + stashed_lines(session, width).len()
-        + queued_lines(session, width).len();
+        + queued_lines(session, width, room).len();
     Some(before..before + items)
 }
 
@@ -359,7 +438,7 @@ pub(super) fn fit_to_room(
     mut lines: Vec<Line<'static>>,
     room: usize,
 ) -> (Vec<Line<'static>>, usize) {
-    let Some(rows) = offered_lines(session, width, offered) else {
+    let Some(rows) = offered_lines(session, width, room, offered) else {
         lines.truncate(room);
         return (lines, 0);
     };
@@ -389,11 +468,12 @@ pub(super) fn fit_to_room(
 pub(super) fn offered_picks(
     session: &Session,
     width: u16,
+    room: usize,
     offered: &crate::state::Offered,
     first: usize,
     pane: ratatui::layout::Rect,
 ) -> Vec<crate::state::Target> {
-    let Some(lines) = offered_lines(session, width, offered) else {
+    let Some(lines) = offered_lines(session, width, room, offered) else {
         return Vec::new();
     };
     let before = lines.start;

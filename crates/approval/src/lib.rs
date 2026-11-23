@@ -420,11 +420,20 @@ pub fn vet_lines(vet: &Vet<'_>) -> Vec<String> {
 ///
 /// `hidden` is how many characters of `preview` drew as nothing before the agent wrote them out,
 /// and the sentence saying so goes above the preview, as it does over a command's output.
+///
+/// `truncated` is whether the file has more lines than `preview` holds, as the agent counted them
+/// when it cut the preview. The sentence saying so is the last row, below the preview and outside
+/// the margin, so it reads as the question's own words and nothing in the file can write it, and
+/// so a person who scrolls to the answer reads it last (PROMPT-13). It is chosen by the flag and
+/// never by the preview's text. Where the preview is empty and the file continues, only that
+/// sentence is drawn, since "nothing of this file can be shown" would say the file holds nothing
+/// past the empty head.
 pub fn vouch_lines(
     path: &str,
     rule: &str,
     check: Check,
     preview: &str,
+    truncated: bool,
     hidden: usize,
 ) -> Vec<String> {
     let mut lines = vec![
@@ -437,11 +446,15 @@ pub fn vouch_lines(
         checked(check),
     ];
     match preview.is_empty() {
-        true => lines.push(t!(vouch_nothing).to_string()),
+        true if !truncated => lines.push(t!(vouch_nothing).to_string()),
+        true => {}
         false => {
             lines.extend(hidden_note(hidden));
             lines.extend(quarantined(preview));
         }
+    }
+    if truncated {
+        lines.push(t!(vouch_continues).to_string());
     }
     lines
 }
@@ -931,12 +944,13 @@ mod tests {
     /// the rule a yes writes, which the file's own name does not.
     #[test]
     fn the_vouch_lines_mark_a_blank_name_and_say_the_rule() {
-        let blank = vouch_lines(" ", "/work/ ", Check::from_word("safe"), "text", 0);
+        let blank = vouch_lines(" ", "/work/ ", Check::from_word("safe"), "text", false, 0);
         let plain = vouch_lines(
             "note.md",
             "/work/note.md",
             Check::from_word("safe"),
             "text",
+            false,
             0,
         );
         assert_ne!(blank[0], " ");
@@ -999,7 +1013,7 @@ mod tests {
     fn the_vouch_lines_say_how_many_characters_draw_as_nothing_above_the_preview() {
         let text = "plain \u{2039}U+E0064 d\u{203A}\u{2039}U+200B\u{203A}";
         let said = t!(hidden_characters, count = 2usize).to_string();
-        let lines = vouch_lines("note.md", "/work", Check::from_word("safe"), text, 2);
+        let lines = vouch_lines("note.md", "/work", Check::from_word("safe"), text, false, 2);
         let saying = lines.iter().position(|line| *line == said);
         let shown = lines
             .iter()
@@ -1008,13 +1022,62 @@ mod tests {
             saying.is_some() && saying < shown,
             "the sentence is not above the preview: {lines:?}"
         );
-        let plain = vouch_lines("note.md", "/work", Check::from_word("safe"), "plain", 0);
+        let plain = vouch_lines(
+            "note.md",
+            "/work",
+            Check::from_word("safe"),
+            "plain",
+            false,
+            0,
+        );
         assert!(
             plain.iter().all(|line| !line.contains("U+XXXX")),
             "a preview with nothing hidden in it said something was: {plain:?}"
         );
-        let empty = vouch_lines("note.md", "/work", Check::from_word("safe"), "", 0);
+        let empty = vouch_lines("note.md", "/work", Check::from_word("safe"), "", false, 0);
         assert_eq!(empty.last(), Some(&t!(vouch_nothing).to_string()));
+    }
+
+    /// PROMPT-13: a preview that is the head of a longer file ends with the catalog's sentence that
+    /// the file continues, outside the margin and below every row of the preview, and a preview
+    /// that is the whole file has no such row. The fault it rejects: `vouch_lines` that ignores
+    /// the flag, so a 20-line head of a long file reads the same as a 5-line file. A second fault
+    /// is a sentence behind the margin, which a line of the file could imitate.
+    #[test]
+    fn the_vouch_lines_say_the_file_continues_below_a_preview_that_is_its_head() {
+        let said = t!(vouch_continues).to_string();
+        let head = (1..=20)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let cut = vouch_lines("big.md", "/work", Check::from_word("safe"), &head, true, 0);
+        assert_eq!(cut.last(), Some(&said), "{cut:?}");
+        assert_eq!(cut.iter().filter(|line| **line == said).count(), 1);
+        assert_eq!(
+            cut.iter()
+                .filter(|line| line.starts_with(QUARANTINE_BAR))
+                .count(),
+            20,
+            "the sentence is a row of the preview: {cut:?}"
+        );
+        let whole = vouch_lines("big.md", "/work", Check::from_word("safe"), &head, false, 0);
+        assert!(whole.iter().all(|line| *line != said), "{whole:?}");
+        assert_eq!(whole.len() + 1, cut.len());
+    }
+
+    /// PROMPT-13: a preview with no text that is the head of a longer file says the file continues
+    /// and does not say nothing of it can be shown. The fault it rejects: the empty-preview branch
+    /// ignoring the flag, which tells the person a file with text further down holds nothing.
+    #[test]
+    fn the_vouch_lines_for_a_blank_head_say_the_file_continues_and_not_that_it_is_blank() {
+        let lines = vouch_lines("big.md", "/work", Check::from_word("safe"), "", true, 0);
+        assert_eq!(
+            lines.last(),
+            Some(&t!(vouch_continues).to_string()),
+            "{lines:?}"
+        );
+        let nothing = t!(vouch_nothing).to_string();
+        assert!(lines.iter().all(|line| *line != nothing), "{lines:?}");
     }
 
     /// PROMPT-1: the credential-read lines name the file so a name that would draw as nothing, or as

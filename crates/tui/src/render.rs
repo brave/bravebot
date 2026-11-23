@@ -45,7 +45,7 @@ pub(crate) use self::transcript::{
 };
 
 use self::beneath::{
-    first_waiting_row, fit_to_room, lines_beneath_the_box, offered_picks, queue_words,
+    first_waiting_row, fit_to_room, lines_beneath_the_box, offered_picks, queue_shown, queue_words,
 };
 use self::hint::draw_hint;
 use self::prompt::{draw_input, draw_status, input_height, status_height};
@@ -105,12 +105,22 @@ fn task_inks(row: &bravebot_core::todo::Row) -> (Style, Style) {
             Style::default().fg(theme::ok()),
             dim().add_modifier(Modifier::CROSSED_OUT),
         )
+    } else if row.status == bravebot_core::todo::Status::Waiting {
+        // Open on purpose: neither the ink and bold of work being done nor the dim of work nobody
+        // is doing. Its own mark keeps it apart from both under `NO_COLOR`.
+        (Style::default(), Style::default())
     } else {
         (
             Style::default().fg(theme::running()),
             Style::default().add_modifier(Modifier::BOLD),
         )
     }
+}
+
+/// Whether `row` is drawn hollow and dim: it is outstanding, no turn is running, and it is not
+/// waiting, which is open on purpose and keeps its own mark whether or not a turn runs (PANEL-10).
+fn drawn_left_open(row: &bravebot_core::todo::Row, left_open: bool) -> bool {
+    left_open && !row.struck() && row.status != bravebot_core::todo::Status::Waiting
 }
 
 /// Draw a task list beneath whatever it belongs to.
@@ -131,7 +141,7 @@ fn todo_lines(todos: &[bravebot_core::todo::Row], left_open: bool) -> Vec<Line<'
             } else {
                 "    ".to_string()
             };
-            let (glyph, marker, text) = if left_open && !row.struck() {
+            let (glyph, marker, text) = if drawn_left_open(row, left_open) {
                 (crate::panel::LEFT_OPEN_MARKER, dim(), dim())
             } else {
                 let (marker, text) = task_inks(row);
@@ -151,6 +161,7 @@ fn status_word(status: bravebot_core::todo::Status) -> &'static str {
     match status {
         Status::Pending => t!(todos_status_pending),
         Status::Active => t!(todos_status_active),
+        Status::Waiting => t!(todos_status_waiting),
         Status::Done => t!(todos_status_done),
         Status::Cancelled => t!(todos_status_cancelled),
     }
@@ -181,6 +192,7 @@ fn status_column() -> usize {
     [
         Status::Pending,
         Status::Active,
+        Status::Waiting,
         Status::Done,
         Status::Cancelled,
     ]
@@ -273,7 +285,7 @@ pub(crate) fn plan_lines(
     let room = width.saturating_sub(margin);
     plan.iter()
         .flat_map(|row| {
-            let (glyph, mark_ink, text_ink) = if left_open && !row.struck() {
+            let (glyph, mark_ink, text_ink) = if drawn_left_open(row, left_open) {
                 (crate::panel::LEFT_OPEN_MARKER, dim(), dim())
             } else {
                 let (mark_ink, text_ink) = task_inks(row);
@@ -997,7 +1009,7 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
         .saturating_sub(status_height)
         .saturating_sub(input_height + 1)
         .saturating_sub(1);
-    let beneath = lines_beneath_the_box(session, width, &offered);
+    let beneath = lines_beneath_the_box(session, width, usize::from(room), &offered);
     let (beneath, offered_first) =
         fit_to_room(session, width, &offered, beneath, usize::from(room));
     let offered_height = (beneath.len() as u16).min(room);
@@ -1045,8 +1057,13 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     laid.targets.extend(draw_input(frame, areas[2], session));
     draw_previews(frame, areas[3], &thumbs);
     frame.render_widget(Paragraph::new(beneath), areas[4]);
-    laid.targets
-        .extend(queued_prompts(session, width, offered_height, areas[4]));
+    laid.targets.extend(queued_prompts(
+        session,
+        width,
+        usize::from(room),
+        offered_height,
+        areas[4],
+    ));
     // Where the frame drew the button that returns to the tail it took a row from the transcript, which
     // is a row more below the view than the session counted before the frame, so the line says the
     // count the button does and the two never differ (VIEW-27, VIEW-45).
@@ -1063,6 +1080,7 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     laid.targets.extend(offered_picks(
         session,
         width,
+        usize::from(room),
         &offered,
         offered_first,
         areas[4],
@@ -1080,11 +1098,12 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
 }
 
 /// The rows a click on a waiting prompt answers on. Each waiting prompt is two rows, and a click on
-/// either takes it back, with the words on the first that remove it (MOUSE-28). Only the rows drawn
-/// are recorded.
+/// either takes it back, with the words on the first that remove it (MOUSE-28). Only the prompts
+/// drawn are recorded, and the row saying how many more wait records none.
 fn queued_prompts(
     session: &Session,
     width: u16,
+    room: usize,
     offered_height: u16,
     area: Rect,
 ) -> Vec<crate::state::Target> {
@@ -1092,7 +1111,7 @@ fn queued_prompts(
         return Vec::new();
     };
     let mut recorded = Vec::new();
-    for place in 0..session.queued.len() {
+    for place in 0..queue_shown(session, width, room).drawn {
         let top = first + 2 * place;
         let Some(rows) = usize::from(offered_height)
             .checked_sub(top)
@@ -6969,6 +6988,209 @@ mod tests {
         );
     }
 
+    /// A session whose turn is running with `count` prompts waiting behind it, named `item 00`
+    /// onwards, and the info panel open.
+    fn working_with_waiting(count: usize, width: u16) -> Session {
+        let mut session = Session::new("none");
+        session.laid.columns = width;
+        session.toggle_panel();
+        session.ctrl_enter_arrives = true;
+        session.type_char('a');
+        session.submit();
+        for at in 0..count {
+            for c in format!("item {at:02}").chars() {
+                session.type_char(c);
+            }
+            assert!(session.queue(), "item {at} was not queued");
+        }
+        session
+    }
+
+    /// The rows of one frame and the rows the transcript was given.
+    fn frame_and_transcript_rows(
+        session: &mut Session,
+        width: u16,
+        height: u16,
+    ) -> (Vec<String>, u16) {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        let mut laid = crate::state::Laid::default();
+        terminal
+            .draw(|frame| laid = draw(frame, session))
+            .expect("draw succeeds");
+        let transcript = laid.window.map_or(0, |window| window.area.height);
+        session.note_layout(laid);
+        let buffer = terminal.backend().buffer();
+        let rows = (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect()
+            })
+            .collect();
+        (rows, transcript)
+    }
+
+    /// INPUT-10: a queue longer than the rows beneath the box hold draws its oldest prompts, and a
+    /// row after them says how many more wait. The regression it rejects is the cut going unsaid,
+    /// or the count not being the prompts left out.
+    #[test]
+    fn a_queue_too_long_for_the_rows_beneath_the_box_says_how_many_more_wait() {
+        let mut session = working_with_waiting(12, 80);
+        let (rows, _) = frame_and_transcript_rows(&mut session, 80, 24);
+
+        let marks = rows.iter().filter(|row| row.contains(" QUEUED ")).count();
+        assert_eq!(marks, 3, "{rows:#?}");
+        for shown in ["item 00", "item 01", "item 02"] {
+            assert!(rows.iter().any(|row| row.contains(shown)), "{rows:#?}");
+        }
+        assert!(!rows.iter().any(|row| row.contains("item 03")), "{rows:#?}");
+        let more: Vec<_> = rows
+            .iter()
+            .filter(|row| row.contains("more waiting"))
+            .collect();
+        assert_eq!(more.len(), 1, "{rows:#?}");
+        assert!(more[0].contains("and 9 more waiting"), "{rows:#?}");
+        assert_eq!(session.queued.len(), 12, "a prompt was lost");
+    }
+
+    /// INPUT-10: the key that sends the queue now is drawn beside the count when the last prompt's
+    /// mark is not drawn, so a long queue can still be hurried. The regression it rejects is the offer
+    /// being drawn only on the last prompt, which a cut queue does not draw.
+    #[test]
+    fn the_offer_to_send_now_moves_to_the_row_counting_the_prompts_left_out() {
+        let mut session = working_with_waiting(12, 120);
+        let (rows, _) = frame_and_transcript_rows(&mut session, 120, 30);
+
+        let offers: Vec<_> = rows
+            .iter()
+            .filter(|row| row.contains("ctrl-enter to stop the turn and send now"))
+            .collect();
+        assert_eq!(offers.len(), 1, "{rows:#?}");
+        assert!(offers[0].contains("more waiting"), "{rows:#?}");
+    }
+
+    /// INPUT-10: the queue takes a bounded number of rows however long it is, and the transcript
+    /// keeps the rest. It rejects a queue that takes every row beneath the box.
+    #[test]
+    fn a_long_queue_leaves_the_transcript_its_rows() {
+        let mut few = working_with_waiting(1, 120);
+        let (_, with_one) = frame_and_transcript_rows(&mut few, 120, 30);
+        let mut many = working_with_waiting(12, 120);
+        let (_, with_twelve) = frame_and_transcript_rows(&mut many, 120, 30);
+
+        assert!(with_twelve > 1, "the queue left {with_twelve} rows");
+        // One prompt takes two rows. Twelve take three prompts and the row counting the rest, seven.
+        assert_eq!(with_one - with_twelve, 7 - 2);
+    }
+
+    /// INPUT-10: the count is true at every size, with a file attached and a line put away above the
+    /// queue, which leave the queue fewer rows. The regression it rejects is a count that is the
+    /// queue's length less a fixed number of prompts, which is right for one size only.
+    #[test]
+    fn the_count_of_prompts_left_out_is_the_prompts_not_drawn_at_every_size() {
+        let directory = crate::testutil::scratch_dir("bravebot-render-queue-count");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("scratch");
+        std::fs::write(directory.join("shot.png"), [0x89u8, 0x50]).expect("write");
+
+        for above in [false, true] {
+            for width in [40u16, 80, 120] {
+                for height in [16u16, 20, 24, 30, 40] {
+                    let mut session = working_with_waiting(12, width).in_workspace(&directory);
+                    if above {
+                        for c in "put away".chars() {
+                            session.type_char(c);
+                        }
+                        session.stash();
+                        session.drop_files(&directory.join("shot.png").to_string_lossy());
+                    }
+                    let (rows, _) = frame_and_transcript_rows(&mut session, width, height);
+                    let drawn = rows.iter().filter(|row| row.contains(" QUEUED ")).count();
+                    let said = format!("and {} more waiting", 12 - drawn);
+                    let at = format!("{width}x{height}, above {above}");
+                    if drawn == 12 {
+                        assert!(
+                            !rows.iter().any(|row| row.contains("more waiting")),
+                            "{at}: {rows:#?}"
+                        );
+                    } else {
+                        assert!(
+                            rows.iter().any(|row| row.contains(&said)),
+                            "{at}: drawn {drawn}: {rows:#?}"
+                        );
+                    }
+                }
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// INPUT-10: the count row and the offer to send now are drawn whole or left out whole, at every
+    /// width. The regression it rejects is a row cut at the edge, which says "and 9 more wa" or
+    /// half of a key.
+    #[test]
+    fn the_count_row_and_the_offer_to_send_now_are_drawn_whole_or_not_at_all() {
+        let (mut counted, mut offered) = (false, false);
+        for width in 8u16..=90 {
+            let mut session = working_with_waiting(12, width);
+            let (rows, _) = frame_and_transcript_rows(&mut session, width, 30);
+            let drawn = rows.iter().filter(|row| row.contains(" QUEUED ")).count();
+            let said = format!("and {} more waiting", 12 - drawn);
+            for row in &rows {
+                if row.contains("more") {
+                    assert!(row.contains(&said), "width {width}: {rows:#?}");
+                    counted = true;
+                }
+                if row.contains("ctrl-enter") {
+                    assert!(
+                        row.contains("ctrl-enter to stop the turn and send now"),
+                        "width {width}: {rows:#?}"
+                    );
+                    offered = true;
+                }
+            }
+        }
+        assert!(
+            counted && offered,
+            "no width drew the row: {counted} {offered}"
+        );
+    }
+
+    /// CMD-6, MOUSE-15: a list of commands offered while a queue too long to draw waits is drawn
+    /// after the queue's bounded rows, and the row a press on an item reaches is the row that names
+    /// it. The regression it rejects is the picks counting the queue's rows as the whole queue would
+    /// draw them, which puts every press a few rows from the item drawn there.
+    #[test]
+    fn a_list_offered_beneath_a_cut_queue_is_picked_on_the_row_that_draws_it() {
+        let mut checked = 0;
+        for height in 14u16..=40 {
+            let mut session = working_with_waiting(12, 120);
+            session.type_char('/');
+            session.type_char('c');
+            let (rows, _) = frame_and_transcript_rows(&mut session, 120, height);
+            let names: Vec<&str> = session
+                .completions()
+                .iter()
+                .map(|command| command.name)
+                .collect();
+            for target in &session.laid.targets {
+                let crate::state::Hit::Item(index) = target.hit else {
+                    continue;
+                };
+                let row = &rows[usize::from(target.area.y)];
+                assert!(
+                    row.contains(names[index]),
+                    "height {height}: item {index} ({}) is not on row {}: {rows:#?}",
+                    names[index],
+                    target.area.y
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 20, "only {checked} picks were checked");
+    }
+
     #[test]
     fn an_empty_session_shows_a_greeting_and_hint() {
         let session = Session::new("kernel-enforced");
@@ -9061,15 +9283,16 @@ mod tests {
         });
 
         let width = 120;
-        let rows: Vec<String> = lines_beneath_the_box(&session, width, &session.offered())
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect()
-            })
-            .collect();
+        let rows: Vec<String> =
+            lines_beneath_the_box(&session, width, usize::MAX, &session.offered())
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect()
+                })
+                .collect();
 
         assert_eq!(rows.len(), 2, "{rows:?}");
         assert!(rows[0].starts_with("  ❯ /release-check"), "{rows:?}");
@@ -9107,15 +9330,16 @@ mod tests {
             }]
         });
 
-        let rows: Vec<String> = lines_beneath_the_box(&session, 120, &session.offered())
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect()
-            })
-            .collect();
+        let rows: Vec<String> =
+            lines_beneath_the_box(&session, 120, usize::MAX, &session.offered())
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect()
+                })
+                .collect();
 
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert!(rows[0].contains("/review-plan"), "{rows:?}");
@@ -9136,15 +9360,16 @@ mod tests {
     #[test]
     fn a_servers_prompt_row_names_its_server_and_what_it_takes() {
         let session = typed_with_prompts("/mcp__w");
-        let rows: Vec<String> = lines_beneath_the_box(&session, 100, &session.offered())
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect()
-            })
-            .collect();
+        let rows: Vec<String> =
+            lines_beneath_the_box(&session, 100, usize::MAX, &session.offered())
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect()
+                })
+                .collect();
         let [row] = rows.as_slice() else {
             panic!("{rows:?}");
         };
@@ -9211,15 +9436,16 @@ mod tests {
                 .to_vec()
         });
 
-        let rows: Vec<String> = lines_beneath_the_box(&session, 120, &session.offered())
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect()
-            })
-            .collect();
+        let rows: Vec<String> =
+            lines_beneath_the_box(&session, 120, usize::MAX, &session.offered())
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect()
+                })
+                .collect();
 
         assert_eq!(rows.len(), 2, "{rows:?}");
         assert!(rows[0].contains("/ship-it"), "{rows:?}");
@@ -11847,6 +12073,77 @@ mod tests {
                 assert_eq!(
                     ended[index], running[index],
                     "row {index} was drawn differently once the turn ended"
+                );
+            }
+        }
+
+        /// A task marked waiting is open on purpose, so neither the transcript's list nor the plan
+        /// `/todos` prints draws it as work being done, and neither dims it as work nobody is doing
+        /// once the turn has ended. Its mark is a glyph of its own, so it differs from the others
+        /// under `NO_COLOR` too, and it is the same whether or not a turn runs.
+        ///
+        /// Rejects: a waiting row drawn with the filled running mark and ink and bold text, one
+        /// that turns hollow and dim when the turn ends, one that shares the mark of a left-open
+        /// row, and either list drawing it unlike the other.
+        #[test]
+        fn a_waiting_task_is_drawn_with_its_own_mark_whether_or_not_a_turn_runs() {
+            let _held = crate::theme::exclusive();
+            let tasks = list(&[
+                ("working on it", Status::Active),
+                ("needs a person", Status::Waiting),
+            ]);
+
+            let running = todo_lines(&tasks, false);
+            let ended = todo_lines(&tasks, true);
+            assert_eq!(
+                ended[1], running[1],
+                "a waiting row was drawn differently once its turn ended"
+            );
+            let waiting = &running[1];
+            let active = &running[0];
+            assert_ne!(waiting.spans[1].content, active.spans[1].content);
+            assert_ne!(
+                waiting.spans[1].content,
+                format!("{} ", crate::panel::LEFT_OPEN_MARKER),
+                "a waiting row carries the mark of a row left open"
+            );
+            assert_ne!(
+                waiting.spans[1].style.fg, active.spans[1].style.fg,
+                "a waiting row has the ink of work being done"
+            );
+            assert!(
+                !waiting.spans[2].style.add_modifier.contains(Modifier::BOLD),
+                "a waiting row is bold, as work being done is"
+            );
+            assert_ne!(
+                ended[1].spans[2].style, ended[0].spans[2].style,
+                "a waiting row is dimmed as a row left open is"
+            );
+            assert!(
+                !waiting.spans[2]
+                    .style
+                    .add_modifier
+                    .contains(Modifier::CROSSED_OUT),
+                "a waiting row is struck through, so it reads as no longer open"
+            );
+
+            // The plan `/todos` prints marks it the same way, and says what it is in words.
+            for left_open in [false, true] {
+                let printed = plan_lines(&tasks, left_open, 60);
+                assert_eq!(
+                    printed[1].spans[1].content.as_ref(),
+                    tasks[1].marker,
+                    "the printed plan marks a waiting row differently from the list under a turn"
+                );
+                assert_eq!(
+                    printed[1].spans[1].content.as_ref(),
+                    waiting.spans[1].content.trim(),
+                );
+                assert_eq!(printed[1].spans[1].style, waiting.spans[1].style);
+                assert!(
+                    printed[1].to_string().contains(t!(todos_status_waiting)),
+                    "the printed plan does not say waiting: {:?}",
+                    printed[1]
                 );
             }
         }

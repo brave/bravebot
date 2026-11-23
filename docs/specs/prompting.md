@@ -382,7 +382,8 @@ than dropped, as it is for any long body.
 
 A long body keeps the question on screen and offers the rest, which can be scrolled to. A small
 edit in a large file shows only the change. An empty output says so, and so does a slot with nothing in it
-and a file with nothing to preview. A diff that cannot be computed says so rather than showing nothing. A plan longer
+and a file with nothing to preview. A preview that is only the head of a longer file says the file
+continues. A diff that cannot be computed says so rather than showing nothing. A plan longer
 than the box is scrolled to rather than cut short, and the question stays on screen while it is.
 The questions a session opens with keep their question and their keys on screen the same way, with
 what lies between scrolled by the keys the write and run prompts use (Up, Down, `k`, `j`, PageUp, PageDown, Home and
@@ -452,6 +453,10 @@ in a window is the same question asked with a mouse, so it owes the same.
 `verified-by: bravebot_tui::confirm::vet::output_that_is_empty_says_so`
 `verified-by: bravebot_tui::confirm::vet::vetted_content_that_is_empty_says_so`
 `verified-by: bravebot_tui::confirm::vet::a_preview_with_nothing_in_it_says_so`
+`verified-by: bravebot_tui::confirm::vet::a_blank_preview_of_a_longer_file_does_not_claim_the_file_is_empty`
+`verified-by: bravebot_approval::lib::the_vouch_lines_say_the_file_continues_below_a_preview_that_is_its_head`
+`verified-by: bravebot_cli::plain::the_plain_vouch_question_says_the_file_continues_only_when_the_preview_is_cut`
+`verified-by: bravebot_ui_bridge::acp::the_editors_vouch_text_says_the_file_continues_only_when_the_preview_is_cut`
 `verified-by: bravebot_tui::confirm::write::an_uncomputable_diff_says_so`
 `verified-by: bravebot_tui::confirm::grants::a_long_plan_keeps_the_question_on_screen_and_offers_the_rest`
 `verified-by: bravebot_tui::confirm::write::a_long_remark_does_not_push_the_diff_off_the_screen`
@@ -970,11 +975,15 @@ text and the same sentence.
 
 The vouch prompt does the same for the preview of a file, the head of it that the person is shown.
 The sentence above the preview counts the characters written out in the preview and no others,
-so a character after the cut is neither written out nor counted. The terminal and the desktop
-window say when the file is cut; a session in lines and the editor bridge do not. The sentence is
-one of the rows the answer waits on, and a preview with none has no such sentence. The terminal, a
-session in lines, the editor bridge and the desktop window draw the same preview and the same
-sentence.
+so a character after the cut is neither written out nor counted. Where the file is longer than the
+preview, the terminal, a session in lines, the editor bridge and the desktop window each say so
+after the preview, and a file that fits in the preview has no such row. A preview that is blank
+because it is only the head of a longer file says the file continues and does not say there is
+nothing to show. In a session in lines and in the editor bridge the row is not behind the margin
+that marks the file's own lines, so a line of the file cannot be taken for it, and it is fixed
+wording that gives no count of the lines left. The sentence over the preview is one of the rows the
+answer waits on, and a preview with none has no such sentence. The terminal, a session in lines, the
+editor bridge and the desktop window draw the same preview and the same sentence.
 
 The write prompt does the same for the lines a write adds or removes, and every row of its change
 is written out, kept lines included. The sentence over them counts the characters in the added and
@@ -1014,8 +1023,8 @@ holding one, such as an emoji with its variation selector, is quoted in a vouch 
 holds the written-out form itself draws like a character that was written out, and the count says
 how many were, except in the question about a call, which writes out the `‹`. A vouch prompt writes
 out and counts the preview only, and a yes covers the whole file, so a character after the cut is
-not written out. The cut marker and the check over the whole file are what tell the person there is
-more.
+not written out. The row saying the file continues and the check over the whole file are what tell
+the person there is more.
 
 `verified-by: bravebot_core::invisible::each_character_that_draws_as_nothing_is_written_out`
 `verified-by: bravebot_core::invisible::a_message_written_in_tag_characters_is_spelled_letter_by_letter`
@@ -1050,6 +1059,11 @@ more.
 `verified-by: bravebot_agent::turn::a_vouch_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes`
 `verified-by: bravebot_tui::confirm::vet::the_vouch_prompt_says_how_many_characters_draw_as_nothing_and_shows_each`
 `verified-by: bravebot_approval::lib::the_vouch_lines_say_how_many_characters_draw_as_nothing_above_the_preview`
+`verified-by: bravebot_approval::lib::the_vouch_lines_say_the_file_continues_below_a_preview_that_is_its_head`
+`verified-by: bravebot_approval::lib::the_vouch_lines_for_a_blank_head_say_the_file_continues_and_not_that_it_is_blank`
+`verified-by: bravebot_cli::plain::the_plain_vouch_question_says_the_file_continues_only_when_the_preview_is_cut`
+`verified-by: bravebot_ui_bridge::acp::the_editors_vouch_text_says_the_file_continues_only_when_the_preview_is_cut`
+`verified-by: bravebot_tui::confirm::vet::a_blank_preview_of_a_longer_file_does_not_claim_the_file_is_empty`
 `verified-by: bravebot_ui_bridge::wire::a_vouch_request_carries_how_many_characters_drew_as_nothing`
 `verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown.test.mjs draws the write, output, vetting and vouch cards from requests carrying the spelled text and the agent's sentence, holds the spelled characters and the sentence to the rows each card marks as deciding, holds a request with no sentence to drawing none and a sentence to being drawn as sent, and make check-ui runs it)`
 

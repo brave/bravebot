@@ -961,15 +961,15 @@ A file written into the session's own directory is not counted as a change not b
 ## `/todos`
 
 Prints the session's plan in the transcript: every task, in the plan's order, with its status in
-words beside its mark (`pending`, `in progress`, `completed` or `cancelled`) and its text wrapped
+words beside its mark (`pending`, `in progress`, `waiting`, `completed` or `cancelled`) and its text wrapped
 to the width and never cut. A heading above it says how many tasks are done, and how many are
 cancelled where any are. The info panel draws only the rows it has room for, each cut to its width,
 and this is the whole plan. A session with no plan says so.
 
 The plan is the one the panel draws, and while a turn runs it is the list that turn has reported so
-far. A task that is neither completed nor cancelled is drawn with the mark and ink the panel gives it
+far. A task that is neither completed, cancelled nor waiting is drawn with the mark and ink the panel gives it
 when you type the command: filled while a turn is running, and hollow and dim while none is, when the
-whole row matches the panel's. What is printed is the
+whole row matches the panel's. A waiting task keeps its own mark whether or not a turn is running. What is printed is the
 plan as it stood then, so a later report from the planner, or the end of the turn, does not change
 it. It is no part of the conversation: no turn starts, nothing is sent, and it is not saved with the
 session or put in an export. The text of a task is the planner's, so a control character in it is

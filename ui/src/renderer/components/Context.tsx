@@ -199,7 +199,7 @@ export const Context = memo(function Context({ live, audit, details, hidden = NO
               return (
                 <li key={index} className={rowClass}>
                   <span className="marker" aria-hidden="true">
-                    {marker === 'done' ? <Icon name="check-circle-filled" /> : marker === 'cancelled' ? <Icon name="close" /> : marker === 'active' ? <ProgressRing mode="indeterminate" /> : <Icon name="radio-unchecked" />}
+                    {marker === 'active' ? <ProgressRing mode="indeterminate" /> : <Icon name={TODO_ICONS[marker]} />}
                   </span>
                   <span className="todo-text">{row.content}</span>
                   <span className="visually-hidden">{hiddenSuffix}</span>
@@ -391,6 +391,19 @@ export const Context = memo(function Context({ live, audit, details, hidden = NO
 })
 
 /**
+ * The icon each plan row's marker draws, one apiece. `active` has none: it draws a progress ring,
+ * which only a turn that is working on the row may show.
+ */
+export const TODO_ICONS: Record<Exclude<TodoMarker, 'active'>, IconName> = {
+  done: 'check-circle-filled',
+  cancelled: 'close',
+  waiting: 'pause-circle',
+  open: 'radio-unchecked',
+}
+
+type TodoMarker = 'done' | 'cancelled' | 'active' | 'waiting' | 'open'
+
+/**
  * How a plan row draws, given whether a turn is running.
  *
  * `done` and `cancelled` are settled and draw the same whether or not a turn is running. `active`
@@ -398,11 +411,16 @@ export const Context = memo(function Context({ live, audit, details, hidden = NO
  * with the row still `active` or `pending`, nothing is working on it, so both draw as left open —
  * the row the planner has not settled, shown with the same hollow mark and dimmed ink as a row
  * that was never started, and no ring that would read as work still going.
+ *
+ * `waiting` is open on purpose: its next step is not the agent's. It draws the same whether or not a
+ * turn is running, with an icon of its own, no ring, and ink that is neither the running row's nor
+ * a settled row's.
  */
 export function todoRowLook(
   row: TodoRow,
   running: boolean,
-): { rowClass: string; marker: 'done' | 'cancelled' | 'active' | 'open'; hiddenSuffix: string } {
+): { rowClass: string; marker: TodoMarker; hiddenSuffix: string } {
+  if (row.status === 'waiting') return { rowClass: 'waiting', marker: 'waiting', hiddenSuffix: ', waiting' }
   if (row.status === 'done') return { rowClass: 'done', marker: 'done', hiddenSuffix: ', done' }
   if (row.status === 'cancelled') return { rowClass: 'cancelled', marker: 'cancelled', hiddenSuffix: ', cancelled' }
   if (row.status === 'active' && running) return { rowClass: 'active', marker: 'active', hiddenSuffix: ', in progress' }
