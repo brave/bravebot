@@ -45804,6 +45804,9 @@ mod tests {
         session.transcript.iter().any(|entry| entry.text == text)
     }
 
+    /// FSWATCH-13: a watch the person typed is armed through the loop's first look and then fires,
+    /// coalesces and ends like a turn's. Without the fire there is nothing a typed watch is for,
+    /// and a separate path for it would be a second implementation of the same watch.
     #[test]
     fn typing_watch_and_a_path_arms_a_watch_that_fires_on_a_write() {
         let (root, mut workspace, mut session, mut answers) =
@@ -45938,6 +45941,9 @@ mod tests {
         );
     }
 
+    /// After `/cd` the same relative path names a different file, so a person's relative watch
+    /// ends on the move as a turn's does (FSWATCH-7). Left armed, it would report changes to a
+    /// file the person never named, here one of another size in the new directory.
     #[test]
     fn a_watch_the_person_armed_under_a_relative_path_ends_on_cd() {
         let (root, mut workspace, mut session, mut answers) =
