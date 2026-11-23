@@ -2500,6 +2500,8 @@ check gives a host under `amazonaws.com`.
 `verified-by: bravebot_cli::running::doctor_names_the_file_of_a_checkouts_endpoints_that_decide_nothing`
 `verified-by: bravebot_config::settings::no_pinnable_name_is_decided_by_a_checkouts_files`
 `verified-by: bravebot_config::settings::the_persons_own_files_decide_every_pinnable_name`
+`verified-by: bravebot_config::settings::the_network_and_google_names_are_person_only`
+`verified-by: bravebot_config::settings::a_checkouts_file_never_wins_a_network_or_google_name`
 
 <a id="BACKEND-34"></a>
 ### BACKEND-34: a settings value is a string, and anything else is not a value

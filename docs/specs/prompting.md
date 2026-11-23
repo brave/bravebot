@@ -390,10 +390,13 @@ End, as [SCROLL-3](scroller.md#SCROLL-3) sets out), a page moving one row fewer
 than the box shows, and none of them takes a yes at a draw that cuts either off.
 A run prompt keeps its question and its keys on screen the same way and pages the same way. While a
 row of its plan, down to the access the line spends, has not been on the screen during this
-question, the row above the keys says how many have not, and `y`, `a` and `r` are not taken: each
-runs the line. Reaching the bottom is not reading what was passed over, and a row read at one width
-is not a row of the plan wrapped to another. What `a` and `r` grant besides is said below the plan,
-and each of them also waits until the rows saying what it grants have been on the screen.
+question, the row above the keys says how many have not, and `y`, `a`, `r`, `s`, `m` and `e` are
+not taken: each runs the line. Reaching the bottom is not reading what was passed over, and a row
+read at one width is not a row of the plan wrapped to another. What `a`, `r`, `s`, `m` and `e` grant
+besides is said below the plan, and each of them also waits until the rows saying what it grants
+have been on the screen. At a vetting or an output prompt that offers `a`, the sentence saying what
+`a` keeps is drawn above the text, so every key that approves waits until every row of that
+sentence has been on the screen.
 In the full-screen interface, the write, output, vetting, vouch, exposure, server, tool list, call
 and plan prompts take no key that approves until every row that decides the question has been drawn
 whole at the box's width, in one draw or over several as the body scrolls. What decides it is what
@@ -455,6 +458,8 @@ in a window is the same question asked with a mouse, so it owes the same.
 `verified-by: bravebot_tui::confirm::run::a_plan_longer_than_the_box_keeps_the_run_keys_and_says_how_many_rows_are_unread`
 `verified-by: bravebot_tui::confirm::run::no_key_runs_a_long_plan_until_every_row_of_it_has_been_on_the_screen`
 `verified-by: bravebot_tui::confirm::run::a_and_r_each_wait_for_the_rows_saying_what_they_grant_besides_running_the_line`
+`verified-by: bravebot_tui::confirm::run::the_scope_key_waits_for_the_scope_rows_in_a_real_draw`
+`verified-by: bravebot_tui::confirm::run::the_keep_keys_wait_for_the_reach_rows_in_a_real_draw`
 `verified-by: bravebot_tui::confirm::run::jumping_to_the_end_of_a_long_plan_leaves_the_rows_passed_over_unread`
 `verified-by: bravebot_tui::confirm::run::a_run_prompt_too_small_for_its_question_takes_no_key_that_runs_the_line`
 `verified-by: bravebot_tui::confirm::run::a_plan_read_at_one_width_is_unread_again_at_another`

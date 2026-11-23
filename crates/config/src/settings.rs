@@ -11732,6 +11732,98 @@ mod tests {
         assert!(!service.base_url.contains("project-from-the-file"));
     }
 
+    /// The six network names and the three Google names, each spelled out so that a name dropped
+    /// from the lists in `env_var` fails its own case where a loop over those lists would pass.
+    const NETWORK_AND_GOOGLE_NAMES: [&str; 9] = [
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "ALL_PROXY",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "NO_PROXY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_CLOUD_PROJECT",
+        "VERTEX_LOCATION",
+    ];
+
+    /// BACKEND-33: a checkout that stated a network or Google name would choose what the process
+    /// trusts, where it sends requests or which Google account receives a conversation, so these
+    /// names are the person's alone to state. `DEPLOY_TARGET` is the control: a name no list holds
+    /// is not person-only, so a predicate that answered `true` for every name fails.
+    #[test]
+    fn the_network_and_google_names_are_person_only() {
+        for name in NETWORK_AND_GOOGLE_NAMES {
+            assert!(
+                crate::env_var::is_person_only(name),
+                "{name} is not in the person-only lists"
+            );
+        }
+        assert!(!crate::env_var::is_person_only("DEPLOY_TARGET"));
+    }
+
+    /// BACKEND-33: a checkout's project and local files decide nothing for the network and Google
+    /// names, so `doctor` must not tell the person that a checkout overrode a name it decides
+    /// nothing for, and the value in use must be the person's. The values differ between the
+    /// person's file and the checkout's, so a checkout that won is visible in the report and in
+    /// `get`. `DEPLOY_TARGET` is the control: a name a checkout may set is reported with the
+    /// checkout's file, so a report that never names anything fails.
+    #[test]
+    fn a_checkouts_file_never_wins_a_network_or_google_name() {
+        let person = |name: &str| format!(r#"{{"env": {{"{name}": "person-value"}}}}"#);
+        let checkout = |name: &str| format!(r#"{{"env": {{"{name}": "checkout-value"}}}}"#);
+
+        for name in NETWORK_AND_GOOGLE_NAMES {
+            let with_project = Layers::new(&format!("person-only-project-{name}"))
+                .global(&person(name))
+                .project(&checkout(name))
+                .read();
+            let with_local = Layers::new(&format!("person-only-local-{name}"))
+                .global(&person(name))
+                .local(&checkout(name))
+                .read();
+            for (file, settings) in [("project", &with_project), ("local", &with_local)] {
+                let reported: Vec<(&str, &Path)> = settings.overridden().collect();
+                assert!(
+                    reported.is_empty(),
+                    "{name}: a {file} file was reported as winning it: {reported:?}"
+                );
+                assert_eq!(
+                    settings.get(name),
+                    Some("person-value"),
+                    "{name}: a {file} file decided it"
+                );
+            }
+        }
+
+        let name = "DEPLOY_TARGET";
+        let by_project = Layers::new("person-only-control-project")
+            .global(&person(name))
+            .project(&checkout(name));
+        let by_local = Layers::new("person-only-control-local")
+            .global(&person(name))
+            .local(&checkout(name));
+        for (file, layers, winner) in [
+            (
+                "project",
+                &by_project,
+                by_project.cwd.join(PROJECT_DIR).join(SETTINGS_FILE),
+            ),
+            (
+                "local",
+                &by_local,
+                by_local.cwd.join(PROJECT_DIR).join(LOCAL_SETTINGS_FILE),
+            ),
+        ] {
+            let settings = layers.read();
+            assert_eq!(
+                settings.overridden().collect::<Vec<_>>(),
+                [(name, winner.as_path())],
+                "a {file} file's {name} was not reported"
+            );
+            assert_eq!(settings.get(name), Some("checkout-value"), "{file}");
+        }
+    }
+
     /// BACKEND-33: which AWS account, region, profile and tier models receive a conversation is the
     /// person's to choose, so a checkout's project and local files decide none of the six Bedrock
     /// names. The region is written into the host the signed request goes to, so a checkout's
