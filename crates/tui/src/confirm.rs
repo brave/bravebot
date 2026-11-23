@@ -1157,9 +1157,9 @@ mod tests {
     }
 
     /// The first and the last few words of a sentence that wraps over several rows, squeezed, which
-    /// are the pieces [`scroll_through`] can ask for: a piece is drawn once a draw shows it whole,
-    /// and a sentence longer than a box is not whole in any one draw.
-    fn sentence_ends(sentence: &str) -> [String; 2] {
+    /// are the pieces [`scroll_through`] and the run prompt's tests can ask for: a piece is drawn
+    /// once a draw shows it whole, and a sentence longer than a box is not whole in any one draw.
+    pub(super) fn sentence_ends(sentence: &str) -> [String; 2] {
         let words: Vec<&str> = sentence.split_whitespace().collect();
         [
             squeezed(&words[..3].join(" ")),
@@ -1240,58 +1240,7 @@ mod tests {
                     deciding,
                 })
             }
-            Kind::ReadOutput => {
-                let reason = numbered('r', 500);
-                let request = OutputRequest {
-                    verdict: Verdict::Unsafe,
-                    reason: Some(reason.join(" ")),
-                    hidden: 3,
-                    ..an_output(&numbered('o', 100).join("\n"))
-                };
-                let drawn = request.clone();
-                let mut deciding = reason;
-                deciding.extend(sentence_ends(&t!(hidden_characters, count = 3usize)));
-                deciding.push("o0000".to_string());
-                Some(Case {
-                    draw: pinned(move |frame, scroll, memory| {
-                        draw_output(frame, &drawn, scroll, &mut memory.seen)
-                    }),
-                    answer: Box::new(move |key, looked| {
-                        approves(output_answer_for(key, &request, looked.pinned()))
-                    }),
-                    approving: vec!['y'],
-                    refusing: 'n',
-                    grants: Vec::new(),
-                    deciding,
-                })
-            }
-            Kind::Vet => {
-                let reason = numbered('r', 500);
-                let request = VetRequest {
-                    hidden: 3,
-                    ..a_vetting(
-                        Verdict::Unsafe,
-                        Some(&reason.join(" ")),
-                        &numbered('c', 50).join("\n"),
-                    )
-                };
-                let drawn = request.clone();
-                let mut deciding = reason;
-                deciding.extend(sentence_ends(&t!(hidden_characters, count = 3usize)));
-                deciding.push("c0000".to_string());
-                Some(Case {
-                    draw: pinned(move |frame, scroll, memory| {
-                        draw_vet(frame, &drawn, scroll, None, &mut memory.seen)
-                    }),
-                    answer: Box::new(move |key, looked| {
-                        approves(vet_answer_for(key, &request, looked.pinned()))
-                    }),
-                    approving: vec!['y'],
-                    refusing: 'n',
-                    grants: Vec::new(),
-                    deciding,
-                })
-            }
+            Kind::ReadOutput | Kind::Vet => oversized_with(kind, Verdict::Unsafe),
             // The host and what it is are pinned, which the fetch prompt's own tests hold at every
             // size, and the address scrolls under them.
             Kind::Fetch => None,
@@ -1537,6 +1486,84 @@ mod tests {
         }
     }
 
+    /// The output and vetting questions with a reason and a text grown past what one screen holds,
+    /// under `verdict`. No other question has them.
+    ///
+    /// Where the check found nothing the prompt offers `a`, which turns the asking off in this
+    /// session and the next. The case requires the first and the last three words of the sentence
+    /// saying so to have been drawn before `a` is taken. The prompt draws that sentence above the
+    /// rows that decide the question, so `y` waits for it too, and the case does not hold `y` to
+    /// it. Under any other verdict only `y` is offered, held to the reason, the hidden-characters
+    /// sentence and the first row of the text.
+    fn oversized_with(kind: Kind, verdict: Verdict) -> Option<Case> {
+        let safe = verdict.is_safe();
+        let reason = numbered('r', 500);
+        let hidden = if safe { 0 } else { 3 };
+        let mut deciding = reason.clone();
+        let (approving, grants) = if safe {
+            (
+                vec!['y', 'a'],
+                vec![('a', sentence_ends(t!(vet_always_covers)).to_vec())],
+            )
+        } else {
+            deciding.extend(sentence_ends(&t!(hidden_characters, count = 3usize)));
+            (vec!['y'], Vec::new())
+        };
+        match kind {
+            Kind::ReadOutput => {
+                let request = OutputRequest {
+                    verdict,
+                    reason: Some(reason.join(" ")),
+                    hidden,
+                    ..an_output(&numbered('o', 100).join("\n"))
+                };
+                let drawn = request.clone();
+                if !safe {
+                    deciding.push("o0000".to_string());
+                }
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_output(frame, &drawn, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(move |key, looked| {
+                        approves(output_answer_for(key, &request, looked.pinned()))
+                    }),
+                    approving,
+                    refusing: 'n',
+                    grants,
+                    deciding,
+                })
+            }
+            Kind::Vet => {
+                let request = VetRequest {
+                    hidden,
+                    ..a_vetting(
+                        verdict,
+                        Some(&reason.join(" ")),
+                        &numbered('c', 50).join("\n"),
+                    )
+                };
+                let drawn = request.clone();
+                if !safe {
+                    deciding.push("c0000".to_string());
+                }
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_vet(frame, &drawn, scroll, None, &mut memory.seen)
+                    }),
+                    answer: Box::new(move |key, looked| {
+                        approves(vet_answer_for(key, &request, looked.pinned()))
+                    }),
+                    approving,
+                    refusing: 'n',
+                    grants,
+                    deciding,
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// Scroll through a case from the top by `step` until it moves no further, checking each draw.
     ///
     /// Text counts as drawn once a draw so far has shown it whole. Each piece is shorter than a
@@ -1556,6 +1583,8 @@ mod tests {
             .map(|(key, texts)| (*key, texts.iter().collect()))
             .collect();
         let mut first = true;
+        let mut waited: Vec<(char, bool)> =
+            case.grants.iter().map(|(key, _)| (*key, false)).collect();
         loop {
             let mut drawn = Looked::default();
             let rows = rows_of(width, height, |frame| {
@@ -1571,6 +1600,11 @@ mod tests {
                 !first || !unseen.is_empty(),
                 "{kind:?} fits one {width}x{height} screen, so it tests nothing there:\n{screen}"
             );
+            assert!(
+                !first || unseen_grants.iter().all(|(_, texts)| !texts.is_empty()),
+                "{kind:?} already shows what a key grants in its first {width}x{height} draw, \
+                 so the wait for it tests nothing:\n{screen}"
+            );
             first = false;
             let refused = (case.answer)(press(KeyCode::Char(case.refusing)), &drawn);
             assert_eq!(
@@ -1582,6 +1616,18 @@ mod tests {
             let next = drawn.moved(scroll, step(&drawn));
             for &key in &case.approving {
                 let taken = (case.answer)(press(KeyCode::Char(key)), &drawn);
+                // The wait for a key's sentence is exercised by a draw that refuses the key while
+                // the sentence is unseen. A prompt that draws the sentence among the rows `y`
+                // waits on refuses `y` there too, which this loop does not require.
+                if taken.is_none() {
+                    let unseen_for_key = unseen_grants
+                        .iter()
+                        .any(|(granting, texts)| *granting == key && !texts.is_empty());
+                    if let Some((_, held)) = waited.iter_mut().find(|(waiting, _)| *waiting == key)
+                    {
+                        *held |= unseen_for_key;
+                    }
+                }
                 let waiting = unseen.first().copied().or_else(|| {
                     unseen_grants
                         .iter()
@@ -1608,6 +1654,13 @@ mod tests {
                     unseen.is_empty() && grants_unseen.is_empty(),
                     "{kind:?} at {width}x{height}: {unseen:?} {grants_unseen:?} never drawn:\n{screen}"
                 );
+                for (key, held) in waited {
+                    assert!(
+                        held,
+                        "{kind:?} at {width}x{height}: no draw refused {key} while what it grants \
+                         was unseen, so the wait for it was never exercised"
+                    );
+                }
                 return;
             }
             scroll = next;
@@ -1620,12 +1673,20 @@ mod tests {
     #[test]
     fn no_question_takes_a_yes_before_every_row_deciding_it_has_been_drawn() {
         for &kind in KINDS {
-            let Some(case) = oversized(kind) else {
-                continue;
-            };
-            for size in [(80, 24), (60, 15)] {
-                scroll_through(kind, &case, size, |_| 1);
-                scroll_through(kind, &case, size, Looked::page);
+            for (label, case) in [
+                (format!("{kind:?}"), oversized(kind)),
+                (
+                    format!("{kind:?} with a safe verdict"),
+                    oversized_with(kind, Verdict::Safe),
+                ),
+            ] {
+                let Some(case) = case else {
+                    continue;
+                };
+                for size in [(80, 24), (60, 15)] {
+                    scroll_through(&label, &case, size, |_| 1);
+                    scroll_through(&label, &case, size, Looked::page);
+                }
             }
         }
     }
@@ -1793,35 +1854,42 @@ mod tests {
     #[test]
     fn a_box_with_no_room_for_the_body_beside_the_keys_takes_no_yes() {
         for &kind in KINDS {
-            let Some(case) = oversized(kind) else {
-                continue;
-            };
-            let mut memory = Memory::default();
-            let mut scroll = 0;
-            loop {
-                let mut drawn = Looked::default();
-                let rows = rows_of(20, 6, |frame| {
-                    drawn = (case.draw)(frame, scroll, &mut memory);
-                });
-                assert!(
-                    !drawn.has_room(),
-                    "{kind:?} found a row for the body, so this size tests nothing:\n{}",
+            for case in [oversized(kind), oversized_with(kind, Verdict::Safe)] {
+                let Some(case) = case else {
+                    continue;
+                };
+                no_yes_in_a_box_without_a_body_row(kind, &case);
+            }
+        }
+    }
+
+    /// Scrolls `case` through a 20x6 box and checks that no approving key is taken at any draw.
+    fn no_yes_in_a_box_without_a_body_row(kind: Kind, case: &Case) {
+        let mut memory = Memory::default();
+        let mut scroll = 0;
+        loop {
+            let mut drawn = Looked::default();
+            let rows = rows_of(20, 6, |frame| {
+                drawn = (case.draw)(frame, scroll, &mut memory);
+            });
+            assert!(
+                !drawn.has_room(),
+                "{kind:?} found a row for the body, so this size tests nothing:\n{}",
+                rows.join("\n")
+            );
+            for &key in &case.approving {
+                assert_eq!(
+                    (case.answer)(press(KeyCode::Char(key)), &drawn),
+                    None,
+                    "{kind:?}, scrolled {scroll}: {key} was taken:\n{}",
                     rows.join("\n")
                 );
-                for &key in &case.approving {
-                    assert_eq!(
-                        (case.answer)(press(KeyCode::Char(key)), &drawn),
-                        None,
-                        "{kind:?}, scrolled {scroll}: {key} was taken:\n{}",
-                        rows.join("\n")
-                    );
-                }
-                let next = drawn.moved(scroll, 1);
-                if next == scroll {
-                    break;
-                }
-                scroll = next;
             }
+            let next = drawn.moved(scroll, 1);
+            if next == scroll {
+                break;
+            }
+            scroll = next;
         }
     }
 

@@ -3982,6 +3982,7 @@ more than the person read.
 `verified-by: bravebot_tui::confirm::run::the_keep_keys_approve_and_remember_the_reach_only`
 `verified-by: bravebot_tui::confirm::run::the_keep_keys_are_unbound_where_the_prompt_does_not_offer_them`
 `verified-by: bravebot_tui::confirm::run::the_keep_keys_wait_for_the_rows_saying_what_they_remember`
+`verified-by: bravebot_tui::confirm::run::the_keep_keys_wait_for_the_reach_rows_in_a_real_draw`
 `verified-by: bravebot_tui::confirm::run::a_prompt_offering_to_keep_a_request_names_what_would_be_kept`
 `verified-by: bravebot_agent::turn::a_kept_credential_scope_asks_about_a_later_vouched_line_and_quarantines_its_output`
 `verified-by: bravebot_agent::turn::a_kept_scope_asks_about_a_remembered_line_in_a_later_session`
