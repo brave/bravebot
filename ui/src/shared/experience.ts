@@ -1,4 +1,5 @@
 import { parseProviderPreferences, type ProviderPreferences } from './model-preferences'
+import type { PastedText } from './pastes'
 
 export interface ConversationPreferences {
   botSlug: string | null
@@ -6,6 +7,8 @@ export interface ConversationPreferences {
   scroll: number | null
   pinned: boolean
   archived: boolean
+  /** The folded pastes the draft still names, so a reopened draft can unfold them (PASTE-1). */
+  folded?: PastedText[]
 }
 
 export interface Experience {
@@ -33,7 +36,19 @@ export function parseConversation(value: unknown): ConversationPreferences {
     scroll: typeof v.scroll === 'number' && Number.isFinite(v.scroll) && v.scroll >= 0 ? v.scroll : null,
     pinned: v.pinned === true,
     archived: v.archived === true,
+    ...(Array.isArray(v.folded) ? { folded: parseFolded(v.folded) } : {}),
   }
+}
+
+/** The saved folded pastes, keeping each entry whose fields have the shapes `PastedText` gives. */
+function parseFolded(value: unknown[]): PastedText[] {
+  const counted = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n > 0
+  return value.slice(0, 1000).flatMap((entry) => {
+    const e = entry && typeof entry === 'object' ? entry as Record<string, unknown> : {}
+    if (typeof e.marker !== 'string' || e.marker.length === 0 || e.marker.length > 200) return []
+    if (typeof e.text !== 'string' || e.text.length > 200000 || !counted(e.number) || !counted(e.lines)) return []
+    return [{ marker: e.marker, text: e.text, number: e.number, lines: e.lines }]
+  })
 }
 
 export function parseExperience(value: unknown): Experience {

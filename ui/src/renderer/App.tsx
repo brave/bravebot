@@ -79,6 +79,7 @@ import { CaffeinateConfirm, KEPT_OFF, keepAwakeAgreed, keepAwakeChosen, type Kee
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
 import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft, settledBy, thinking } from './live'
+import { foldedIn, restaged } from './staging'
 
 export function App(): React.JSX.Element {
   /** Settings take the place of the chat view while open; which page was last open is kept. */
@@ -190,7 +191,11 @@ export function App(): React.JSX.Element {
   const draft = preferences.conversations[draftKey]?.draft ?? ''
   const setDraft = useCallback((text: string) => {
     const current = liveRef.current
-    if (current) setConversation(liveKey(current), { draft: text })
+    if (!current) return
+    // The staging lives only in memory, so the folded pastes the draft names are saved with it
+    // for a reopened draft to unfold.
+    const folded = foldedIn(current.staging, text)
+    setConversation(liveKey(current), { draft: text, folded: folded.length > 0 ? folded : undefined })
   }, [])
   useEffect(() => {
     // Only a pick: a default the backend supplied is not the person's choice, and storing it
@@ -341,6 +346,7 @@ export function App(): React.JSX.Element {
       const picked = bot ? null : pickedModel(summary.directory, summary.id)
       setLive(newLive({
         handle: opened.session,
+        staging: restaged(undefined, conversationPreferences(conversationKey(summary.directory, summary.id)).folded),
         ...reopenedModel(bot?.model, picked, opened.model),
         summary: {
           id: summary.id,
@@ -408,6 +414,7 @@ export function App(): React.JSX.Element {
       setLive(newLive({
         handle: made.session,
         draftId,
+        staging: restaged(undefined, conversationPreferences(conversationKey(chosen, draftId)).folded),
         model: bot?.model ?? made.model,
         summary: {
           id: null,
@@ -1065,10 +1072,12 @@ export function App(): React.JSX.Element {
     if (!handle) return
     await call('session.close', { session: current.handle }).catch(() => undefined)
     openedLives.current.delete(current.handle)
-    setConversation(oldKey, { draft: '', botSlug: null })
+    setConversation(oldKey, { draft: '', botSlug: null, folded: undefined })
+    const folded = foldedIn(current.staging, text)
+    if (folded.length > 0) updateSession(handle, (old) => old ? { ...old, staging: restaged(old.staging, folded) } : old)
     if (text) setDraft(text)
     refreshLives((n) => n + 1)
-  }, [create, setDraft])
+  }, [create, setDraft, updateSession])
 
   const openSettingsPage = useCallback((page?: SettingsPage) => {
     if (page) setSettingsPage(page)

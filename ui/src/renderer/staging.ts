@@ -229,3 +229,23 @@ export function withoutMarker(draft: string, marker: string): string {
 export function sent(staging: Staging | undefined): Staging {
   return { made: staging?.made ?? 0, staged: [] }
 }
+
+/** The folded pastes `draft` still names, as they are saved with it. */
+export function foldedIn(staging: Staging | undefined, draft: string): PastedText[] {
+  return named(staging, draft).flatMap((item) => item.via === 'text' ? [item.pasted] : [])
+}
+
+/**
+ * `staging` with folded pastes saved with a draft staged again, and the counter raised above their
+ * numbers so the next marker does not repeat one. A marker already staged is left as it is.
+ */
+export function restaged(staging: Staging | undefined, folded: PastedText[] | undefined): Staging {
+  const base = staging ?? EMPTY_STAGING
+  const have = new Set(base.staged.map((item) => item.marker))
+  const added = (folded ?? []).filter((pasted) => !have.has(pasted.marker))
+  if (added.length === 0) return base
+  return {
+    made: Math.max(base.made, ...added.map((pasted) => pasted.number)),
+    staged: [...base.staged, ...added.map((pasted) => ({ marker: pasted.marker, via: 'text' as const, pasted }))],
+  }
+}

@@ -180,7 +180,51 @@ test('every exit of a draft holding a folded paste carries the pasted words', ()
   assert.equal(staging.exitOf(command.staging, command.draft).to, 'schedule')
 })
 
-// The marker and the threshold are the terminal's, read from where the terminal keeps them, so the
+// The staging lives only in memory, so App.tsx's `setDraft` saves `foldedIn` with the draft and a
+// reopened conversation's `live` starts from `restaged(undefined, saved.folded)`.
+const experience = load("export * from './src/shared/experience'")
+
+test('a saved draft keeps its folded pastes through the preferences file, and a malformed value is dropped', () => {
+  const shot = staging.stagePaste(staging.EMPTY_STAGING, picture('p'), '', 0)
+  const folded = staging.stageText(shot.staging, 'l1\nl2\nl3\nl4', shot.draft, shot.caret)
+  const gone = staging.stageText(folded.staging, 'x\ny\nz\nw', folded.draft, folded.draft.length)
+  const draft = staging.withoutMarker(gone.draft, '[Pasted text #3 +4 lines]')
+  const saved = staging.foldedIn(gone.staging, draft)
+  assert.deepEqual(saved, [{ marker: '[Pasted text #2 +4 lines]', text: 'l1\nl2\nl3\nl4', number: 2, lines: 4 }],
+    'only the text entries the draft still names are saved')
+  const key = experience.conversationKey('/project', 'draft:a')
+  const read = experience.parseExperience(JSON.parse(JSON.stringify({ conversations: { [key]: { draft, folded: saved } } })))
+  assert.deepEqual(read.conversations[key].folded, saved)
+  assert.equal(read.conversations[key].draft, draft)
+
+  assert.equal('folded' in experience.parseConversation({ draft, folded: 'nope' }), false, 'a value that is not a list is dropped')
+  assert.equal('folded' in experience.parseConversation({ draft }), false, 'nothing saved stays nothing')
+  const good = saved[0]
+  const malformed = [null, 7, { ...good, text: 3 }, { ...good, number: 0 }, { ...good, number: 1.5 }, { ...good, lines: '4' }, { ...good, marker: '' }, { text: 'x' }]
+  assert.deepEqual(experience.parseConversation({ draft, folded: [...malformed, good] }).folded, [good], 'each malformed entry is dropped')
+})
+
+test('folded pastes saved with a draft are staged again, unfold, and the next marker is numbered above them', () => {
+  const saved = [
+    { marker: '[Pasted text #2 +4 lines]', text: 'l1\nl2\nl3\nl4', number: 2, lines: 4 },
+    { marker: '[Pasted text #5 +3 lines]', text: 'a\nb\nc', number: 5, lines: 3 },
+  ]
+  const draft = 'compare [Pasted text #2 +4 lines] with [Pasted text #5 +3 lines]'
+  const opened = staging.restaged(undefined, saved)
+  assert.equal(opened.made, 5)
+  assert.equal(staging.unfolded(opened, draft), 'compare l1\nl2\nl3\nl4 with a\nb\nc')
+  assert.equal(staging.markerAt(opened, draft, draft.indexOf('#5'))?.pasted.text, 'a\nb\nc')
+  assert.equal(staging.exitOf(opened, draft).line, 'compare l1\nl2\nl3\nl4 with a\nb\nc')
+  assert.equal(staging.stageText(opened, 'w\nx\ny\nz', draft, draft.length).staging.made, 6)
+  assert.equal(staging.stagePaste(opened, picture('q'), '', 0).draft, '[Image #6] ', 'pictures share the raised counter')
+
+  const higher = staging.restaged({ made: 9, staged: [{ marker: saved[0].marker, via: 'text', pasted: saved[0] }] }, saved)
+  assert.equal(higher.made, 9, 'the counter is never lowered')
+  assert.deepEqual(higher.staged.map((item) => item.marker), [saved[0].marker, saved[1].marker], 'a marker already staged is not staged twice')
+  assert.equal(staging.restaged(undefined, undefined), staging.EMPTY_STAGING)
+})
+
+// The marker and the threshold are the terminal’s, read from where the terminal keeps them, so the
 // two front ends cannot drift apart.
 test('the folded marker and threshold are the terminal’s', () => {
   const catalog = readFileSync(join('..', 'crates', 'i18n', 'locales', 'en-US.ftl'), 'utf8')
