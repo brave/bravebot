@@ -2033,6 +2033,39 @@ mod tests {
         }
     }
 
+    /// The regression it rejects: starting the stored-login `gh` with `CodeSelectors::Kept`, so a
+    /// generic name that selects code (`NODE_OPTIONS`, `GIT_CONFIG_COUNT`, `DEVELOPER_DIR`,
+    /// `GIT_EXEC_PATH`) reaches it as the person's environment held it, with the account's home. A
+    /// name that is an option, and one that names a place a stage may write, are removed; a name
+    /// that names a directory outside every row is kept, so the start is a check and not a removal
+    /// of every generic name. The loader and token tests above pass for a `Kept` start.
+    #[test]
+    fn a_generic_name_that_selects_code_is_checked_on_the_stored_login_gh() {
+        let (session, planted, genuine) = planted_and_genuine("usability-login-generic");
+        let planted = planted.parent().unwrap().to_path_buf();
+        let genuine = genuine.parent().unwrap().to_path_buf();
+
+        for name in ["DEVELOPER_DIR", "GIT_EXEC_PATH"] {
+            let command = login_with(OsStr::new(name), planted.as_os_str(), &session);
+            assert!(
+                removed(&command, OsStr::new(name)),
+                "{name} naming a directory a stage may write reached the login gh"
+            );
+            let command = login_with(OsStr::new(name), genuine.as_os_str(), &session);
+            assert!(
+                !removed(&command, OsStr::new(name)),
+                "{name} naming a directory outside every row was removed"
+            );
+        }
+        for name in ["NODE_OPTIONS", "GIT_CONFIG_COUNT", "GIT_CONFIG_GLOBAL"] {
+            let command = login_with(OsStr::new(name), genuine.as_os_str(), &session);
+            assert!(
+                removed(&command, OsStr::new(name)),
+                "{name} reached the login gh"
+            );
+        }
+    }
+
     /// The regression it rejects: the token variables reaching the login `gh`, which would answer
     /// from the environment and hide a login the sandbox takes away. The four names are spelled
     /// here and `LOGIN_VARIABLES` must hold exactly them, so a name dropped from the list fails

@@ -6334,6 +6334,113 @@ mod tests {
         );
     }
 
+    /// A legacy rule for a relative name that was recorded with the host's backslashes replays as
+    /// the `/` spelling where a backslash separates, so the untrusted file below the project keeps
+    /// its rule, and as one file name where it does not (TRUST-18). The drive-letter test above
+    /// would pass for a replay that respelled only names rooted at a drive, which leaves
+    /// `src\fetched.json` keyed under a name nothing asks about, and the file is then decided by the
+    /// answer given about the project.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_relative_rule_recorded_with_backslashes_is_replayed_under_the_slash_spelling() {
+        let rules = [StoredRule {
+            path: r"src\fetched.json".to_string(),
+            integrity: UNTRUSTED.to_string(),
+        }];
+        let root = tempfile::tempdir().expect("a directory to stand for the project");
+
+        let spelled_from_slash = restored_rules_with(root.path(), &rules, true);
+        assert_eq!(
+            spelled_from_slash.integrity_of("src/fetched.json"),
+            Some(Integrity::Untrusted),
+            "a relative untrusted rule recorded with a backslash was not replayed under its slash \
+             spelling"
+        );
+
+        let a_file_name = restored_rules_with(root.path(), &rules, false);
+        assert_eq!(
+            a_file_name.integrity_of(r"src\fetched.json"),
+            Some(Integrity::Untrusted),
+            "a name with a backslash in it was not kept as one file name where a backslash does not \
+             separate"
+        );
+        assert_ne!(
+            a_file_name.integrity_of("src/fetched.json"),
+            Some(Integrity::Untrusted),
+            "a rule about one file name was read as one about the file below a directory"
+        );
+    }
+
+    /// The replay a record does for a resumed session (`Record::trust_map`) is the replay of
+    /// `restored_rules_with` under the host's own answer, whichever host runs it. A wrapper that
+    /// passed a literal for the answer reads one host's names as the other's: on a host where a
+    /// backslash does not separate, a literal `true` turns the file name `src\fetched.json` into the
+    /// file below `src`; on Windows, a literal `false` leaves `C:\fetched` keyed inside the project,
+    /// where the answer given about the project decides the files below it (TRUST-18). The Windows
+    /// half is the next test.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_record_replays_its_rules_under_the_answer_of_the_host_it_runs_on() {
+        let record: Record = serde_json::from_value(serde_json::json!({
+            "id": "1-2",
+            "directory": "/tmp/x",
+            "title": "a session",
+            "started": 1,
+            "updated": 1,
+            "conversation": {"messages": [], "context": "trusted"},
+            "trust": [{"path": r"src\fetched.json", "integrity": "untrusted"}],
+        }))
+        .expect("the record loads");
+        let root = tempfile::tempdir().expect("a directory to stand for the project");
+
+        let replayed = record
+            .trust_map(root.path())
+            .expect("a record with a trust map and no bypass replays it");
+
+        let expected = restored_rules_with(
+            root.path(),
+            record.trust.as_deref().expect("the rules"),
+            bravebot_agent::workspace::BACKSLASH_SEPARATES,
+        );
+        for name in [r"src\fetched.json", "src/fetched.json"] {
+            assert_eq!(
+                replayed.integrity_of(name),
+                expected.integrity_of(name),
+                "{name}: the record's replay is not the host's replay"
+            );
+        }
+    }
+
+    /// On Windows a record's rules for a drive-letter name replay under the `/` key, through
+    /// `Record::trust_map` and through the rewind path that reads the same rules
+    /// (`restored_rules`), so a file recorded as untrusted stays untrusted when the session is
+    /// resumed (TRUST-18). Run by the `names-windows` job of the CI workflow, since no other host
+    /// answers `true`.
+    #[cfg(windows)]
+    #[test]
+    fn a_record_on_windows_replays_a_drive_letter_rule_under_the_key_spelled_from_slash() {
+        let record: Record = serde_json::from_value(serde_json::json!({
+            "id": "1-2",
+            "directory": r"C:\work",
+            "title": "a session",
+            "started": 1,
+            "updated": 1,
+            "conversation": {"messages": [], "context": "trusted"},
+            "trust": [{"path": r"C:\fetched", "integrity": "untrusted"}],
+        }))
+        .expect("the record loads");
+
+        let replayed = record
+            .trust_map(Path::new(r"C:\work"))
+            .expect("a record with a trust map and no bypass replays it");
+
+        assert_eq!(
+            replayed.integrity_of("/C:/fetched/x"),
+            Some(Integrity::Untrusted),
+            "the replay left the drive-letter rule keyed inside the project"
+        );
+    }
+
     /// A resumed session asks about writes, whatever the session that wrote the record was doing when
     /// it ended. The trust map and the vouched commands come back because the person resuming is the
     /// person who granted them; a mode is a standing answer somebody gave while watching one piece of

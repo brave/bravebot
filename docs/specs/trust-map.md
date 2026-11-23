@@ -1799,6 +1799,7 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_agent::workspace::a_name_and_its_key_are_spelled_the_way_the_host_separates`
 `verified-by: bravebot_agent::workspace::a_directory_the_trust_map_cannot_key_is_refused`
 `verified-by: bravebot_agent::workspace::each_door_that_opens_a_directory_by_name_refuses_one_the_trust_map_cannot_key`
+`verified-by: bravebot_agent::workspace::the_public_doors_admit_an_ordinary_directory_where_a_backslash_separates`
 `verified-by: bravebot_agent::workspace::a_directory_on_a_drive_letter_is_opened_under_a_key_spelled_from_slash`
 `verified-by: bravebot_agent::workspace::a_rule_keyed_on_a_drive_letter_decides_that_directory_and_nothing_else`
 `verified-by: bravebot_core::spelling::a_name_rooted_at_a_drive_letter_is_keyed_from_slash_where_a_backslash_separates`
@@ -1815,6 +1816,10 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_agent::workspace::a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_rule`
 `verified-by: bravebot_agent::workspace::a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered_by_its_rule`
 `verified-by: bravebot_session::sessions::a_rule_recorded_under_a_drive_letter_is_replayed_under_the_key_spelled_from_slash`
+`verified-by: bravebot_session::sessions::a_relative_rule_recorded_with_backslashes_is_replayed_under_the_slash_spelling`
+`verified-by: bravebot_session::sessions::a_record_replays_its_rules_under_the_answer_of_the_host_it_runs_on`
+`verified-by: bravebot_session::sessions::a_record_on_windows_replays_a_drive_letter_rule_under_the_key_spelled_from_slash`
+`verified-by: bravebot_agent::workspace::the_doors_that_open_a_directory_by_name_admit_an_ordinary_directory_on_windows`
 `verified-by: bravebot_agent::turn::vouching_for_a_project_file_named_absolutely_records_its_relative_rule`
 `verified-by: bravebot_agent::workspace::a_file_vouched_under_a_link_spelling_outside_every_opened_directory_keeps_that_trust_in_a_search`
 `verified-by: bravebot_agent::workspace::files_vouched_under_a_link_spelling_outside_every_opened_directory_keep_that_trust_in_a_walk`
@@ -1825,7 +1830,7 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_core::spelling::a_name_is_below_a_verbatim_root_whichever_way_the_drive_path_is_spelled`
 `verified-by: bravebot_core::spelling::a_drive_spelling_is_not_below_a_root_where_a_slash_is_the_only_separator`
 `verified-by: bravebot_agent::workspace::a_name_typed_with_a_drive_letter_is_below_the_workspace_root_that_resolved_to_a_verbatim_path`
-`verified-by: by-construction (each door that opens or moves to a directory by name passes the host's answer about what separates to its inner function in one expression, BACKSLASH_SEPARATES, which is cfg!(windows): Workspace::resolve_directory to admit_resolved_directory and Workspace::move_root to move_root_to in crates/agent/src/workspace/reach.rs, and restored_rules in crates/session/src/sessions.rs for a saved rule. The tests above give that answer to the inner functions directly, so a wrapper that passed a literal false is not detected on a host where a backslash is not a separator, since a canonical name there is always rooted at a slash. The code that picks a trust key gets no test seam for it, as docs/development/verification.md requires, and no CI job runs these wrappers on a Windows host: the Windows jobs run named tests, and none of them calls these doors or restored_rules. The wrappers are held by their being one expression each and are not demonstrated by a test that fails)`
+`verified-by: by-construction (the host's answer about what separates reaches the two doors through Workspace, which holds BACKSLASH_SEPARATES, which is cfg!(windows), unless a test supplies another with with_door_host, and reaches the replay of a saved rule through restored_rules in crates/session/src/sessions.rs. The wrappers are driven with the Windows answer by the tests above. The other uses of BACKSLASH_SEPARATES in crates/agent/src (a search for the name lists them) have no test of their own that gives them the Windows answer)`
 
 ## What a rewind puts back
 
@@ -1845,6 +1850,7 @@ without blocking restoration of other files.
 `verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project`
 `verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_records_the_scratch_gap_and_no_other`
 `verified-by: bravebot_agent::workspace::a_write_in_a_directory_the_person_opened_is_kept_for_an_undo_and_leaves_no_scratch_gap`
+`verified-by: bravebot_agent::workspace::a_write_beside_the_sessions_directory_in_a_directory_that_holds_it_is_kept_for_an_undo`
 `verified-by: bravebot_agent::workspace::an_untrusted_file_in_the_sessions_own_directory_stays_untrusted_after_an_undo`
 `verified-by: bravebot_agent::workspace::an_explicit_distrust_on_either_side_survives_an_undo_and_the_snapshot_grants_nothing`
 `verified-by: bravebot_agent::workspace::keeping_the_lower_decision_for_a_scratch_file_does_not_stop_the_other_files_being_restored`

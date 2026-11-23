@@ -11107,6 +11107,80 @@ fn a_write_in_a_directory_the_person_opened_is_kept_for_an_undo_and_leaves_no_sc
     );
 }
 
+/// TRUST-19. When the directory the person opened holds the session's own directory, a write
+/// beside the session's directory keeps a backup that restores the file and leaves no scratch gap,
+/// and a write inside the session's directory still leaves the scratch gap and keeps nothing. A
+/// test of containment turned around (`scratch.starts_with(canonical)`) calls the whole opened
+/// directory scratch, which drops the backup of the person's file and reports a gap for it.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_write_beside_the_sessions_directory_in_a_directory_that_holds_it_is_kept_for_an_undo() {
+    use bravebot_agent::rewind::CoverageGap;
+
+    let project = Scratch::new("scratch-gap-holder-project");
+    // The directory that holds the session's own is the test's, so the file written beside it is
+    // removed with it.
+    let holding = Scratch::new("scratch-gap-holder");
+    let holder = holding.path.canonicalize().expect("canonical holder");
+    let given_path = holder.join("session");
+    std::fs::create_dir_all(&given_path).expect("the session's own directory");
+    let given = bravebot_agent::ScratchDirectory::observed(given_path.clone())
+        .expect("the session's own directory is a directory");
+    let beside = holder.join("beside.txt");
+    std::fs::write(&beside, "the person's notes").expect("a file beside the session's directory");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace
+        .add_directory(holder.to_str().expect("utf-8 path"))
+        .expect("the person opens the directory that holds the session's");
+    workspace.open_scratch(Some(given));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let coverage = workspace.rewind_coverage();
+    let written = workspace.write(
+        &mut policy,
+        &trusted_text(&beside.display().to_string()),
+        &trusted_text("what the turn made of them"),
+    );
+    written.expect("a write beside the session's directory");
+    assert!(
+        coverage.is_complete(),
+        "a write beside the session's directory left a gap: {:?}",
+        coverage.gaps()
+    );
+
+    let workings = given_path.join("workings.txt").display().to_string();
+    workspace
+        .write(
+            &mut policy,
+            &trusted_text(&workings),
+            &trusted_text("intermediate"),
+        )
+        .expect("a write in the session's own directory");
+    assert_eq!(coverage.gaps(), [CoverageGap::Scratch].into());
+
+    let backups = workspace.take_backups();
+    let backed_up: Vec<_> = backups.iter().map(|backup| backup.path.clone()).collect();
+    assert_eq!(backed_up, vec![beside.canonicalize().expect("canonical")]);
+    let restored = restore_for_test(&workspace, backups);
+    assert!(
+        restored.is_empty(),
+        "the undo did not restore: {restored:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&beside).expect("the file"),
+        "the person's notes"
+    );
+}
+
 /// What a turn that wrote into the session's own directory and into the project leaves for an
 /// undo: the file decisions before the turn and after it, and the backups the turn kept, which
 /// are the project file's alone because nothing is kept for the session's own directory.
@@ -17601,4 +17675,30 @@ fn a_walk_whose_other_names_could_not_be_found_is_untrusted() {
         (0, 2),
         "a map whose lookup of other names gave up opened the files: {map:?}"
     );
+}
+
+/// TRUST-18. On Windows the two doors that open a directory by name, `/add-dir` and `/cd`, admit an
+/// ordinary directory. The platform canonicalises it as `\\?\C:\...`, which the trust map keys as
+/// `/C:/...` where a backslash separates. A door that passed a literal `false` for the host's
+/// answer would refuse every real directory with "is not spelled from '/'", and no other host
+/// would notice. Run by the `names-windows` job of the CI workflow.
+#[cfg(windows)]
+#[test]
+fn the_doors_that_open_a_directory_by_name_admit_an_ordinary_directory_on_windows() {
+    let project = Scratch::new("windows-doors-project");
+    let elsewhere = Scratch::new("windows-doors-elsewhere");
+    let named = elsewhere.path.to_str().expect("utf-8 path");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    let opened = workspace
+        .add_directory(named)
+        .expect("the door that adds a directory refused an ordinary Windows directory");
+    assert_eq!(opened, elsewhere.path.canonicalize().expect("canonical"));
+    assert_eq!(workspace.added_directories(), vec![opened.clone()]);
+
+    let moved = workspace
+        .change_root(named)
+        .expect("the door that moves the root refused an ordinary Windows directory");
+    assert_eq!(moved.root, opened);
+    assert_eq!(workspace.root(), opened);
 }
