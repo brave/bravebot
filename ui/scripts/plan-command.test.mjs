@@ -38,8 +38,8 @@ test('a longer word, a sentence that mentions the command, or another command is
 // are reached. The faults these reject are a turn sent before plan mode is set, the typed line sent
 // in place of the task, a bare `/plan` starting a turn, a plan line going out while a turn runs, and
 // a turn sent after the mode request failed.
-const { carryOutPlan } = load("export { carryOutPlan } from './src/renderer/plan-line'")
-const { RequestFailed } = load("export { RequestFailed } from './src/renderer/rewind'")
+// One bundle, so the `RequestFailed` thrown here is the class `carryOutPlan` checks for.
+const { carryOutPlan, RequestFailed, failureSummary } = load("export { carryOutPlan } from './src/renderer/plan-line'\nexport { RequestFailed } from './src/renderer/rewind'\nexport { failureSummary } from './src/renderer/failure'")
 
 const harness = (session, { modeFails = false } = {}) => {
   const log = []
@@ -51,7 +51,7 @@ const harness = (session, { modeFails = false } = {}) => {
       call: async (method, params) => {
         log.push({ method, params })
         if (method !== 'session.mode') throw new Error(`unexpected ${method}`)
-        if (modeFails) throw new RequestFailed('bad_request', 'the mode could not be set')
+        if (modeFails) throw new RequestFailed('bad_request', 'the mode could not be set.')
         return { permissionMode: params.mode }
       },
       read: (handle) => sessions.get(handle),
@@ -108,7 +108,11 @@ test('a mode the bridge did not set is shown as an error and starts no turn', as
   assert.equal(h.session().permissionMode, 'ask')
   assert.equal(h.session().entries.length, 1)
   assert.equal(h.session().entries[0].kind, 'error')
-  assert.match(JSON.stringify(h.session().entries[0]), /the mode could not be set/)
+  assert.equal(h.session().entries[0].category, 'plan-mode')
+  assert.equal(h.session().entries[0].text, 'the mode could not be set.')
+  const card = failureSummary('plan-mode')
+  assert.equal(card.title, 'Could not switch to Plan mode')
+  assert.equal(card.description, 'Nothing was sent, so try again or choose Plan from the mode menu.')
 })
 
 // The composer's three ways out, and the queue, each go through the parser before anything else

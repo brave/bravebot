@@ -1,8 +1,10 @@
 // Chat > Plan a Task… through the real menu, Electron IPC and the Rust bridge (MODE-12). Only the
 // model server and the folder picker are substituted. It checks that the item sits under Cycle
-// Permission Mode and is offered mid-turn, that confirming with no task only switches the mode to
-// Plan, that confirming with a task starts a plan-mode turn sent the task alone, and that a plan
-// asked for mid-turn waits in the queue until that turn ends.
+// Permission Mode and is offered mid-turn, that its subtitle says it waits while a turn runs, that a
+// mode the bridge did not set is an error entry and sends nothing, that a /plan line typed mid-turn
+// waits in the Queued tray with the chip on Ask, that confirming with no task only switches the
+// mode to Plan, that confirming with a task starts a plan-mode turn sent the task alone, and that a
+// plan asked for mid-turn waits in the queue until that turn ends.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
@@ -89,29 +91,110 @@ try {
   assert.equal((await menuItem('session.plan')).enabled, true)
   const items = await chatItems()
   assert.equal(items[items.indexOf('mode.cycle') + 1], 'session.plan')
-  for (const name of ['light', 'dark']) {
-    await theme(name)
+  const idle = 'Switches this chat to Plan mode. With a task, starts a turn that plans it without changing anything.'
+  const waits = 'Waits for the running turn, then switches this chat to Plan mode. With a task, starts a turn that plans it without changing anything.'
+  // Opens the dialog, checks its subtitle, shoots it empty (when `empty` names the shot) and with a
+  // task typed, then cancels.
+  const shootDialog = async (subtitle, empty, typed) => {
     await choose('session.plan')
     await dialog.waitFor()
     await dialog.getByText('Task (optional)').first().waitFor()
+    await dialog.getByText(subtitle, { exact: true }).waitFor()
+    await page.waitForTimeout(200)
+    if (empty) await page.screenshot({ path: join(shots, empty) })
     await dialog.locator('textarea').fill('list the TODOs in the parser')
     await page.waitForTimeout(200)
-    await page.screenshot({ path: join(shots, `plan-dialog-${name}.png`) })
+    await page.screenshot({ path: join(shots, typed) })
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
     await dialog.waitFor({ state: 'detached' })
+  }
+  for (const name of ['light', 'dark']) {
+    await theme(name)
+    await shootDialog(idle, `plan-dialog-empty-${name}.png`, `plan-dialog-${name}.png`)
   }
   await theme('light')
   assert.equal(await mode(), 'ask', 'cancelling changes nothing')
   console.log('PASS: Plan a Task… sits under Cycle Permission Mode and its dialog asks for an optional task')
 
-  // 2. No task: only the mode changes, and nothing reaches the model.
+  // 2. A mode the bridge did not set: an error entry in the transcript, and nothing is sent.
+  await app.evaluate(({ ipcMain }) => {
+    const bridge = ipcMain._invokeHandlers.get('bravebot:request')
+    let failed = false
+    ipcMain.removeHandler('bravebot:request')
+    ipcMain.handle('bravebot:request', (event, method, params) => {
+      if (method === 'session.mode' && !failed) { failed = true; return { error: { code: 'internal', message: 'The bridge did not answer.' } } }
+      return bridge(event, method, params)
+    })
+  })
+  await composer.fill('/plan list the TODOs')
+  await composer.press('Enter')
+  const card = page.locator('[data-test="error-card"]').last()
+  await card.getByText('Could not switch to Plan mode', { exact: true }).waitFor()
+  await card.getByText('Nothing was sent, so try again or choose Plan from the mode menu.', { exact: true }).waitFor()
+  assert.equal(await card.locator('[data-test="error-retry"], [data-test="error-model"]').count(), 0, 'no turn or model to recover')
+  await card.locator('[data-test="error-details"]').click()
+  await card.getByText('The bridge did not answer.', { exact: true }).waitFor()
+  await page.mouse.move(5, 5)
+  await page.waitForTimeout(300)
+  assert.equal(await mode(), 'ask', 'the mode is unchanged')
+  assert.equal(asked.length, 0, 'no turn started')
+  for (const name of ['light', 'dark']) {
+    await theme(name)
+    await page.waitForTimeout(200)
+    await page.screenshot({ path: join(shots, `plan-mode-failed-${name}.png`) })
+  }
+  await theme('light')
+  console.log('PASS: a mode the bridge did not set is shown in the transcript and starts no turn')
+
+  // 3. Typed mid-turn in an Ask chat: the dialog says it waits, and /plan x waits in the Queued tray
+  //    with the chip still on Ask, then switches the chip to Plan once the turn ends.
+  {
+    let release
+    steps.push(() => new Promise(resolve => { release = () => resolve(content('Noted.')) }))
+    const before = await ended()
+    await composer.fill('first, a question')
+    await page.getByRole('button', { name: 'Send', exact: true }).click()
+    await until(async () => release !== undefined, 'the turn reaches the model')
+    for (const name of ['light', 'dark']) {
+      await theme(name)
+      await shootDialog(waits, null, `plan-dialog-waiting-${name}.png`)
+    }
+    await theme('light')
+    const sent = asked.length
+    await composer.fill('/plan x')
+    await composer.press('Enter')
+    await page.getByText('/plan x', { exact: true }).first().waitFor()
+    await page.waitForTimeout(300)
+    assert.equal(await mode(), 'ask', 'the chip stays on Ask while the line waits')
+    await page.screenshot({ path: join(shots, 'plan-typed-queued-light.png') })
+    assert.equal(asked.length, sent, 'the typed line waits for the running turn')
+    steps.push(() => content('Planned x.'))
+    release()
+    await until(async () => await ended() > before + 1, 'the queued plan ends')
+    assert.equal(lastUser(asked.at(-1)), 'x')
+    assert.equal(await mode(), 'plan')
+    await page.getByText('Planned x.').first().waitFor()
+    await page.waitForTimeout(300)
+    await page.screenshot({ path: join(shots, 'plan-typed-after-light.png') })
+    console.log('PASS: /plan x typed mid-turn waits with the chip on Ask, then switches to Plan')
+  }
+
+  // Back to Ask through the mode menu, so the next step shows the dialog changing the mode.
+  const trigger = page.locator('[data-test="mode-trigger"]')
+  await trigger.click()
+  await page.locator('[data-test="mode-option-ask"]').click()
+  await until(async () => await mode() === 'ask', 'the mode reads Ask')
+  if ((await trigger.getAttribute('aria-expanded')) === 'true') await trigger.click()
+
+  // 4. No task: only the mode changes, and nothing reaches the model.
+  const asking = asked.length
   await planWith('')
   await until(async () => await mode() === 'plan', 'the mode reads Plan')
   await page.waitForTimeout(500)
-  assert.equal(asked.length, 0, 'no turn started')
+  assert.equal(asked.length, asking, 'no turn started')
   console.log('PASS: confirming with no task only switches the mode to Plan')
 
-  // 3. A task: a plan-mode turn sent the task alone.
+  // 5. A task: a plan-mode turn sent the task alone.
   steps.push(() => content('Here is the plan.'))
   let before = await ended()
   await planWith('list the TODOs')
@@ -123,7 +206,7 @@ try {
   await page.screenshot({ path: join(shots, 'plan-turn-light.png') })
   console.log('PASS: confirming with a task starts a plan-mode turn sent only the task')
 
-  // 4. Mid-turn: offered, and the plan waits in the queue until the turn ends.
+  // 6. Mid-turn: offered, and the plan waits in the queue until the turn ends.
   let release
   steps.push(() => new Promise(resolve => { release = () => resolve(content('Noted.')) }))
   before = await ended()

@@ -33,7 +33,9 @@ export async function carryOutPlan(p: Planning, handle: string, task: string, li
     const { permissionMode } = await p.call<{ permissionMode: PermissionMode }>('session.mode', { session: handle, mode: 'plan' })
     p.update(handle, (old) => ({ ...old, permissionMode }))
   } catch (error) {
-    p.update(handle, (old) => ({ ...old, entries: [...old.entries, t.errored(error instanceof RequestFailed ? error.reason : String(error))] }))
+    // The card's title and sentence come from the 'plan-mode' row in failure.ts, and the bridge's
+    // reason is its technical detail.
+    p.update(handle, (old) => ({ ...old, entries: [...old.entries, t.errored(error instanceof RequestFailed ? error.reason : String(error), 'plan-mode')] }))
     return
   }
   if (task !== '') await p.send(task, handle, queuedAlready ? [] : undefined, staged)

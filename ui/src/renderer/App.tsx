@@ -1428,7 +1428,9 @@ export function App(): React.JSX.Element {
         <NoteDialog running={live.running} onCancel={() => setNoting(null)} onAdd={addNote} />
       )}
       {planning && live?.handle === planning && (
-        <AskDialog title="Plan a task" subtitle="Switches this chat to Plan mode. With a task, starts a turn that plans it without changing anything."
+        <AskDialog title="Plan a task" subtitle={live.running
+          ? 'Waits for the running turn, then switches this chat to Plan mode. With a task, starts a turn that plans it without changing anything.'
+          : 'Switches this chat to Plan mode. With a task, starts a turn that plans it without changing anything.'}
           label="Task (optional)" action="Plan" optional rows={2} test="plan" className="plan-dialog"
           running={false} onCancel={() => setPlanning(null)} onConfirm={planTask} />
       )}
