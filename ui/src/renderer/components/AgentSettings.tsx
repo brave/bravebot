@@ -25,22 +25,25 @@ const spendLimit = ({ limit, path }: NonNullable<Limits['session']>): string =>
 /**
  * The diagnostic log level of the running agent (DIAG-11). The level shown is the one the agent
  * reported, and choosing another only asks for it; what the agent then reports is shown next.
+ * It is the value of the Diagnostics table's Log detail row, with its note under it.
  */
 export function LogDetail({ level, busy, onChoose }: {
   level: LogLevel
   busy: boolean
   onChoose: (level: LogLevel) => void
 }): React.JSX.Element {
-  return <div className="settings-log-level">
-    <Dropdown value={level} disabled={busy} data-test="settings-log-level"
+  return <>
+    <Dropdown value={level} size="small" disabled={busy} data-test="settings-log-level"
       onChange={(detail) => { const value = detail.value; if (isLogLevel(value) && value !== level) onChoose(value) }}>
-      <span slot="label">Log detail</span>
+      {/* Leo drops `aria-*` on the element, so the field is named through its label slot,
+          hidden because the row's label beside it already says it. */}
+      <span slot="label" className="visually-hidden">Log detail</span>
       <leo-option value="error">Errors only</leo-option>
       <leo-option value="info">Errors and steps (info)</leo-option>
       <leo-option value="debug">Everything (debug)</leo-option>
     </Dropdown>
-    <p data-test="settings-log-level-note">Applies until you quit the app. Raise it, reproduce the problem, then choose Report a Bug… from the Help menu.</p>
-  </div>
+    <p className="settings-log-note" data-test="settings-log-level-note">Applies until you quit the app. To report a problem, choose a higher level, reproduce it, then choose Report a Bug… from the Help menu. Higher levels record the hosts the agent contacts.</p>
+  </>
 }
 
 function LimitsInForce({ limits }: { limits: Limits }): React.JSX.Element {
@@ -165,8 +168,8 @@ export function AgentSettings({ session, onChanged, onDirty }: {
               ? <p data-test="settings-log-none">This session keeps nothing, so no log is written.</p>
               : <><p className="settings-path" data-test="settings-log-directory">{report.logs.directory}</p><p className="settings-log-note">{report.logs.level === 'info' || report.logs.level === 'debug'
                 ? 'Logs are written here as the agent works.'
-                : 'Logs are written here when something fails. The folder may be empty until then.'}</p></>}</dd></dl>}
-          {report.logs?.writing && <LogDetail level={isLogLevel(report.logs.level) ? report.logs.level : 'error'} busy={busy} onChoose={(level) => void chooseLevel(level)} />}
+                : 'Logs are written here when something fails. It may be empty until then.'}</p></>}</dd>
+            {report.logs.writing && <><dt>Log detail</dt><dd className="settings-log"><LogDetail level={isLogLevel(report.logs.level) ? report.logs.level : 'error'} busy={busy} onChoose={(level) => void chooseLevel(level)} /></dd></>}</dl>}
           <p>Read the agent’s configuration again, after changing a file or the environment.</p>
           <div className="settings-actions"><Button size="small" kind="outline" onClick={() => void load()} isDisabled={busy}><Icon name="refresh" slot="icon-before" />Refresh diagnostics</Button></div>
         </section>

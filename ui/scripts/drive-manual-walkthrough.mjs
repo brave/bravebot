@@ -168,6 +168,19 @@ try {
   await settings.getByRole('button', { name: 'Refresh diagnostics' }).click()
   // One page of stacked sections rather than tabs.
   for (const name of ['Connection', 'Hooks', 'Run settings']) await settings.getByRole('heading', { name, exact: true, level: 2 }).waitFor()
+  // Log detail against the real agent (DIAG-11): the level it reports is shown, and a level chosen
+  // is set in the running agent, whose settings report then states it.
+  const levelControl = settings.locator('[data-test="settings-log-level"]')
+  const levelShown = () => levelControl.evaluate(el => el.value)
+  await until(async () => await levelShown() === 'error', 'the agent reports error')
+  for (const [option, level, note] of [['Everything (debug)', 'debug', 'Logs are written here as the agent works.'], ['Errors only', 'error', 'Logs are written here when something fails. It may be empty until then.']]) {
+    await levelControl.click()
+    await page.getByRole('option', { name: option, exact: true }).click()
+    await settings.getByText(note, { exact: true }).waitFor()
+    await until(async () => await levelShown() === level, `the agent reports ${level}`)
+    assert.equal((await page.evaluate(() => window.bravebot.request('settings.inspect', {}))).ok.logs.level, level, 'the running agent states the level chosen')
+  }
+  console.log('PASS: Log detail sets the level of the running agent')
   await app.evaluate((_, path) => { globalThis.walkthroughPicker.path = path }, override)
   await settings.getByRole('button', { name: 'Choose settings file…' }).click()
   await settings.getByText('Run override selected. Future turns and model discovery use it.', { exact: true }).waitFor()
