@@ -121,7 +121,7 @@ try {
   assert.equal(await pastedChips.count(), 1, 'deleting the marker takes the picture off')
 
   // ---- text alone lands as text, without what draws as nothing (PASTE-10) ---------------------
-  const hiddenNote = page.locator('[data-test="status-toast"]').filter({ hasText: 'Hidden characters removed' })
+  const hiddenNote = page.locator('[data-test="status-toast"]').filter({ hasText: 'Paste cleaned' })
   await copyText('plain words')
   await composer.press('End')
   await menuPaste()
@@ -137,7 +137,7 @@ try {
   await keyPaste()
   await hiddenNote.waitFor()
   assert.equal(await composer.inputValue(), 'Compare [Image #1] [Image #2] see this', 'only the visible text lands')
-  assert.match(await hiddenNote.innerText(), /removed 17 invisible characters from that paste/)
+  assert.match(await hiddenNote.innerText(), /^Removed 17 invisible characters from that paste$/m)
   assert.equal(await pastedChips.count(), 1)
   // The toast fades in.
   await page.waitForTimeout(400)
@@ -147,6 +147,38 @@ try {
   await page.screenshot({ path: join(output, 'paste-text-hidden-dark.png') })
   await page.emulateMedia({ colorScheme: 'light' })
   await composer.fill('Compare [Image #1] [Image #2] ')
+
+  // ---- text that could not be cleaned is not pasted, and the error toast says so (PASTE-10) ----
+  // The main process's handler is replaced by one giving what `cleanPaste` gives when the bridge
+  // does not answer. It is not put back: every paste after this one is a picture, which is staged.
+  await app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('bravebot:pastes:clean')
+    ipcMain.handle('bravebot:pastes:clean', () => ({ kind: 'unclean' }))
+  })
+  await copyText('words that were not checked')
+  await composer.press('End')
+  await keyPaste()
+  const unclean = page.locator('[data-test="problem-toast"]')
+  await unclean.waitFor()
+  assert.equal(await unclean.getAttribute('role'), 'alert')
+  assert.match(await unclean.innerText(), /The paste could not be checked for hidden characters, so try pasting again\./)
+  assert.equal(await composer.inputValue(), 'Compare [Image #1] [Image #2] ', 'nothing was pasted')
+  // It stays: a confirmation would have gone after four seconds.
+  await page.waitForTimeout(4500)
+  assert.equal(await unclean.count(), 1, 'the error toast stays until dismissed')
+  await page.screenshot({ path: join(output, 'paste-unclean-light.png') })
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: join(output, 'paste-unclean-dark.png') })
+  await page.emulateMedia({ colorScheme: 'light' })
+  await unclean.getByRole('button', { name: 'Dismiss' }).click()
+  await unclean.waitFor({ state: 'hidden' })
+  await composer.press('End')
+  await keyPaste()
+  await unclean.waitFor()
+  assert.equal(await composer.inputValue(), 'Compare [Image #1] [Image #2] ', 'a second failure is said again')
+  await unclean.getByRole('button', { name: 'Dismiss' }).click()
+  await unclean.waitFor({ state: 'hidden' })
 
   // ---- a paste the page made up does nothing ---------------------------------------------------
   await copy(green)

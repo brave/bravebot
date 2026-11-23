@@ -158,6 +158,8 @@ interface Props {
   doing: Doing
   pending: t.Asking | null
   problem: string | null
+  /** Show a problem in the error toast, which stays until it is dismissed. */
+  onProblem: (problem: string) => void
   collapsed: Record<Side, boolean>
   onToggle: (side: Side) => void
   /** Background sessions waiting on the reader, for the folded session list's toggle. */
@@ -351,6 +353,7 @@ export function Transcript({
   doing,
   pending,
   problem,
+  onProblem,
   collapsed,
   onToggle,
   attention,
@@ -551,12 +554,16 @@ export function Transcript({
       return
     }
     if (paste.outcome.kind === 'unclean') {
-      showToast('Nothing was pasted', 'The paste could not be checked for hidden characters.', 'note')
+      // A failure, so the error toast, which stays until dismissed. A second failure shows it again.
+      setDismissed(null)
+      onProblem('The paste could not be checked for hidden characters, so try pasting again.')
       return
     }
     if (paste.outcome.kind === 'text') {
       // The text the bridge cleaned (PASTE-10), written over the selection as the browser's paste would be.
-      if (paste.outcome.note) showToast('Hidden characters removed', paste.outcome.note, 'note')
+      // The catalog note begins in lower case, as the terminal's status line shows it.
+      const note = paste.outcome.note
+      if (note) showToast('Paste cleaned', note.charAt(0).toUpperCase() + note.slice(1), 'note')
       const area = input.current?.shadowRoot?.querySelector('textarea')
       const next = pasteText(draft, area?.selectionStart ?? draft.length, area?.selectionEnd ?? draft.length, paste.outcome.text)
       if (next.draft !== draft) restage(live.handle, { staging: live.staging ?? EMPTY_STAGING, ...next })
