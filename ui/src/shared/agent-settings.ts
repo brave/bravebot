@@ -37,9 +37,10 @@ export interface AgentSettings {
   ignored?: { name: string; path: string }[]
   /** Absent when an older agent built the report. */
   limits?: Limits
-  /** The diagnostic log directory, which may hold no file yet, and whether this process writes a
-   * log there. A null directory is no state directory. Absent when an older agent built the report. */
-  logs?: { directory: string | null; writing: boolean }
+  /** The diagnostic log directory, which may hold no file yet, whether this process writes a log
+   * there, and the level it writes at. A null directory is no state directory. Absent when an
+   * older agent built the report. */
+  logs?: { directory: string | null; writing: boolean; level: 'error' | 'info' | 'debug' }
   managed: { path: string | null; keys: string[] }
   network: { roots: string[]; problem: string | null; trustsNothing: boolean; proxy: string | null; authenticated: boolean; unusableProxy: string | null; noProxy: string | null }
 }

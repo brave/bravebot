@@ -276,6 +276,33 @@ fn a_desktop_agent_started_at_debug_writes_more_than_failures() {
     );
 }
 
+/// Started with `--log-level info`, the settings report and the bug report state the level the log
+/// is written at (DIAG-5, DIAG-9).
+#[test]
+fn the_reports_state_the_level_the_desktop_agent_was_started_with() {
+    let scratch = Scratch::new("bridge-diagnostic-log-level-reported");
+    let endpoint = format!("http://127.0.0.1:{}", a_closed_port());
+    let mut child = front_end_with(&scratch, &endpoint, &["--log-level", "info"]);
+    let said = listen(&mut child);
+    until(&said, |message| message["event"] == "agent.ready");
+
+    send(&mut child, 1, "settings.inspect", json!({}));
+    let inspected = until(&said, |message| message["id"] == 1);
+    send(
+        &mut child,
+        2,
+        "bug-report.compose",
+        json!({"interface": "0.19.0"}),
+    );
+    let composed = until(&said, |message| message["id"] == 2);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert_eq!(inspected["ok"]["logs"]["level"], "info", "{inspected}");
+    let text = composed["ok"]["text"].as_str().unwrap();
+    assert!(text.contains("\"level\": \"info\""), "{text}");
+}
+
 /// A word that is not a level is refused, the process ends with status 2 before it serves, and
 /// no log directory is made (DIAG-3).
 #[test]
