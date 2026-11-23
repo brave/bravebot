@@ -54,22 +54,23 @@ fn main() {
     // than here. Nothing is authorised by an argument.
     // nosemgrep: rust.lang.security.args.args
     let args = std::env::args().skip(1);
-    let (settings, log_level) = match launch("bravebot-rpc", "speak NDJSON on stdin/stdout", args) {
-        Launch::Serve {
-            settings,
-            log_level,
-        } => (settings, log_level),
-        Launch::Version(line) => {
-            println!("{line}");
-            return;
-        }
-        Launch::Refused(lines) => {
-            for line in lines {
-                eprintln!("{line}");
+    let (settings, log_level) =
+        match launch("bravebot-rpc", "speak NDJSON on stdin/stdout", true, args) {
+            Launch::Serve {
+                settings,
+                log_level,
+            } => (settings, log_level),
+            Launch::Version(line) => {
+                println!("{line}");
+                return;
             }
-            std::process::exit(2);
-        }
-    };
+            Launch::Refused(lines) => {
+                for line in lines {
+                    eprintln!("{line}");
+                }
+                std::process::exit(2);
+            }
+        };
 
     // As soon as this process knows it is serving, so a panic in anything that follows is covered.
     // A build with nowhere to send reports, or a person who switched them off, gets nothing from

@@ -11,17 +11,20 @@
 
 use std::process::{Command, Stdio};
 
-/// Each stdio transport, the name it gives itself and what its usage line says it does.
-const TRANSPORTS: [(&str, &str, &str); 2] = [
+/// Each stdio transport, the name it gives itself, what its usage line says it does, and whether
+/// it writes a diagnostic log and so accepts `--log-level`.
+const TRANSPORTS: [(&str, &str, &str, bool); 2] = [
     (
         env!("CARGO_BIN_EXE_bravebot-rpc"),
         "bravebot-rpc",
         "speak NDJSON on stdin/stdout",
+        true,
     ),
     (
         env!("CARGO_BIN_EXE_bravebot-acp"),
         "bravebot-acp",
         "speak ACP on stdin/stdout",
+        false,
     ),
 ];
 
@@ -56,7 +59,7 @@ fn version_line(name: &str) -> String {
 /// ends without serving.
 #[test]
 fn each_transport_prints_its_own_version_line_and_ends() {
-    for (binary, name, _) in TRANSPORTS {
+    for (binary, name, _, _) in TRANSPORTS {
         for flag in ["--version", "-V"] {
             let ran = run(binary, &[flag]);
             assert_eq!(ran.status, Some(0), "{name} {flag}: {}", ran.err);
@@ -67,28 +70,37 @@ fn each_transport_prints_its_own_version_line_and_ends() {
 
 /// A command line a transport cannot serve ends it with status 2 and says why on standard error,
 /// with the usage under the transport's own name. Standard output is the protocol's channel, so
-/// nothing is written there; a caller reading it would take a refusal for a message.
+/// nothing is written there; a caller reading it would take a refusal for a message. A transport
+/// that writes no log refuses `--log-level` whatever word follows, and its usage does not name it.
 #[test]
 fn each_transport_refuses_a_command_line_it_cannot_serve_with_status_2() {
-    for (binary, name, purpose) in TRANSPORTS {
+    for (binary, name, purpose, logs) in TRANSPORTS {
+        let not_accepted = format!("--log-level is not accepted by {name}, which writes no log\n");
+        let (no_word, unknown_word, usage) = if logs {
+            (
+                "--log-level requires error, info or debug\n".to_string(),
+                "unknown log level: verbose\n".to_string(),
+                format!("usage: {name} [--settings <path>] [--log-level <error|info|debug>]"),
+            )
+        } else {
+            (
+                not_accepted.clone(),
+                not_accepted,
+                format!("usage: {name} [--settings <path>]"),
+            )
+        };
         let cases: [(&[&str], String); 5] = [
             (&["--settings"], "--settings requires a file path\n".into()),
             (
                 &["--settings", "first.json", "second.json"],
                 "unexpected argument: second.json\n".into(),
             ),
-            (
-                &["--log-level"],
-                "--log-level requires error, info or debug\n".into(),
-            ),
-            (
-                &["--log-level", "verbose"],
-                "unknown log level: verbose\n".into(),
-            ),
+            (&["--log-level"], no_word),
+            (&["--log-level", "verbose"], unknown_word),
             (
                 &["--sessions-root"],
                 format!(
-                    "unknown option: --sessions-root\nusage: {name} [--settings <path>] [--log-level <error|info|debug>]\n           {purpose}\n       {name} --version\n"
+                    "unknown option: --sessions-root\n{usage}\n           {purpose}\n       {name} --version\n"
                 ),
             ),
         ];

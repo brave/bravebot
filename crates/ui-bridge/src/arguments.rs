@@ -3,9 +3,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this file,
 // You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! The command line `bravebot-rpc` and `bravebot-acp` take: `--settings <path>` and
-//! `--log-level <error|info|debug>`, each optional and at most once and in either order, or
-//! `--version` (`-V`) alone.
+//! The command line `bravebot-rpc` and `bravebot-acp` take: `--settings <path>`, and for a program
+//! that writes a diagnostic log `--log-level <error|info|debug>`, each optional and at most once
+//! and in either order, or `--version` (`-V`) alone. `bravebot-acp` writes no log, so it refuses
+//! `--log-level` and its usage line does not name the flag.
 //!
 //! What to print is returned rather than printed, because only the transport binaries may write
 //! to the standard streams or end the process (docs/specs/layering.md).
@@ -28,8 +29,14 @@ pub enum Launch {
 }
 
 /// Read the arguments after the program's own name. `purpose` is what the usage line says the
-/// program does.
-pub fn launch(program: &str, purpose: &str, mut args: impl Iterator<Item = String>) -> Launch {
+/// program does. `logs` says whether the program writes a diagnostic log: one that does not
+/// refuses `--log-level`, so [`Launch::Serve`] then never carries a level.
+pub fn launch(
+    program: &str,
+    purpose: &str,
+    logs: bool,
+    mut args: impl Iterator<Item = String>,
+) -> Launch {
     let mut settings = None;
     let mut log_level = None;
     let mut first = true;
@@ -40,6 +47,13 @@ pub fn launch(program: &str, purpose: &str, mut args: impl Iterator<Item = Strin
                     return Launch::Refused(vec!["--settings requires a file path".into()]);
                 };
                 settings = Some(PathBuf::from(path));
+            }
+            // A level would change nothing in a program that writes no log. It is refused rather
+            // than ignored, so a configuration that names one learns that no log is written.
+            "--log-level" if !logs => {
+                return Launch::Refused(vec![format!(
+                    "--log-level is not accepted by {program}, which writes no log"
+                )]);
             }
             // A missing or unknown word is refused rather than read as the default, as the
             // terminal's flag is: a typo would leave a person without the log they asked for, and
@@ -63,11 +77,14 @@ pub fn launch(program: &str, purpose: &str, mut args: impl Iterator<Item = Strin
                 return Launch::Refused(vec![format!("unexpected argument: {other}")]);
             }
             other => {
+                let level = if logs {
+                    " [--log-level <error|info|debug>]"
+                } else {
+                    ""
+                };
                 return Launch::Refused(vec![
                     format!("unknown option: {other}"),
-                    format!(
-                        "usage: {program} [--settings <path>] [--log-level <error|info|debug>]"
-                    ),
+                    format!("usage: {program} [--settings <path>]{level}"),
                     format!("           {purpose}"),
                     format!("       {program} --version"),
                 ]);
@@ -98,8 +115,48 @@ mod tests {
         launch(
             "bravebot-test",
             "speak a test protocol",
+            true,
             args.iter().map(|arg| arg.to_string()),
         )
+    }
+
+    fn read_without_a_log(args: &[&str]) -> Launch {
+        launch(
+            "bravebot-test",
+            "speak a test protocol",
+            false,
+            args.iter().map(|arg| arg.to_string()),
+        )
+    }
+
+    /// A program that writes no log refuses the flag at once, before its word is read, and its
+    /// usage line does not name it.
+    #[test]
+    fn a_program_that_writes_no_log_refuses_a_log_level() {
+        let refusal =
+            refused(&["--log-level is not accepted by bravebot-test, which writes no log"]);
+        assert_eq!(read_without_a_log(&["--log-level", "debug"]), refusal);
+        assert_eq!(read_without_a_log(&["--log-level"]), refusal);
+        assert_eq!(
+            read_without_a_log(&["--settings", "settings.json", "--log-level", "info"]),
+            refusal
+        );
+        assert_eq!(
+            read_without_a_log(&["--settings", "settings.json"]),
+            Launch::Serve {
+                settings: Some(PathBuf::from("settings.json")),
+                log_level: None
+            }
+        );
+        assert_eq!(
+            read_without_a_log(&["--sessions-root"]),
+            refused(&[
+                "unknown option: --sessions-root",
+                "usage: bravebot-test [--settings <path>]",
+                "           speak a test protocol",
+                "       bravebot-test --version",
+            ])
+        );
     }
 
     fn refused(lines: &[&str]) -> Launch {

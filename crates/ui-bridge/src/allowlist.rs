@@ -602,4 +602,22 @@ mod tests {
             assert_eq!(failure.code, ErrorCode::NotAllowed, "{method}");
         }
     }
+
+    /// DIAG-11: the host's diagnostic log is for the person at the host, so a client of the host
+    /// may not change its level. The faults this rejects are the method moved to the offered list,
+    /// which would let a client raise the log to debug, and the method dropped from both lists.
+    #[test]
+    fn diagnostic_log_set_is_denied_to_a_client_of_the_host() {
+        assert!(DENIED.contains(&"diagnostic_log.set"));
+        assert!(
+            OFFERED
+                .iter()
+                .all(|operation| operation.method != "diagnostic_log.set"),
+            "diagnostic_log.set is offered"
+        );
+        let failure = check(&request("diagnostic_log.set", json!({"level": "debug"})))
+            .err()
+            .expect("refused");
+        assert_eq!(failure.code, ErrorCode::NotAllowed);
+    }
 }
