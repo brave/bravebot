@@ -1,3 +1,5 @@
+import type { LogLevel } from './protocol'
+
 /**
  * One hook, as the agent read it. `firesForNothing` is its answer about an entry naming a tool on a
  * moment that has no tool call, and is not worked out again here: what a hook is has one reader.
@@ -39,8 +41,8 @@ export interface AgentSettings {
   limits?: Limits
   /** The diagnostic log directory, which may hold no file yet, whether this process writes a log
    * there, and the level it writes at. A null directory is no state directory. Absent when an
-   * older agent built the report. */
-  logs?: { directory: string | null; writing: boolean; level: 'error' | 'info' | 'debug' }
+   * older agent built the report, and `level` is absent when an agent from before DIAG-11 did. */
+  logs?: { directory: string | null; writing: boolean; level?: LogLevel }
   managed: { path: string | null; keys: string[] }
   network: { roots: string[]; problem: string | null; trustsNothing: boolean; proxy: string | null; authenticated: boolean; unusableProxy: string | null; noProxy: string | null }
 }

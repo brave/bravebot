@@ -33,13 +33,17 @@ export class Bridge {
   private waiting = new Map<number, Waiting>()
   private nextId = 0
   private buffer = ''
-  /**
-   * The diagnostic log level chosen in this app run (DIAG-11). It is passed to an agent that is
-   * started again, and is not kept across launches.
-   */
-  private logLevel: LogLevel = 'error'
 
-  constructor(private readonly onEvent: (event: BridgeEvent) => void, private settingsPath: string | null = null) {}
+  /**
+   * `logLevel` is the diagnostic log level chosen in this app run (DIAG-11). It is passed to an
+   * agent that is started again, and is not kept across launches. The main process hands it to a
+   * bridge it makes for a new window, so that window's agent starts at the same level.
+   */
+  constructor(
+    private readonly onEvent: (event: BridgeEvent) => void,
+    private settingsPath: string | null = null,
+    private logLevel: LogLevel = 'error',
+  ) {}
 
   /**
    * Where the binary is.

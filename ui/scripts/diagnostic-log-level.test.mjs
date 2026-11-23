@@ -107,6 +107,28 @@ test('going back to error passes no argument on the next start', async () => {
   assert.deepEqual(fake.spawned[2].args, [])
 })
 
+test('a bridge made with a level starts its agent at that level and keeps it after a restart', async () => {
+  const fake = agent((method, params) => (method === 'diagnostic_log.set' ? { level: params.level, writing: true } : {}))
+  const bridge = new Bridge(() => {}, null, 'info')
+  await bridge.request('agent.info')
+  assert.deepEqual(fake.spawned[0].args, ['--log-level', 'info'])
+  fake.die()
+  await bridge.request('agent.info')
+  assert.deepEqual(fake.spawned[1].args, ['--log-level', 'info'])
+  await bridge.setLogLevel('error')
+  fake.die()
+  await bridge.request('agent.info')
+  assert.deepEqual(fake.spawned[2].args, [])
+})
+
+test('the main process keeps the level the agent accepted for the bridge of a window made later', () => {
+  const index = readFileSync('src/main/index.ts', 'utf8')
+  assert.match(index, /^let diagnosticLogLevel: LogLevel = 'error'$/m)
+  assert.match(index, /bridge = new Bridge\([\s\S]*?\}, selectedSettings, diagnosticLogLevel\)/)
+  // Assigned after the agent answered, so a refused change leaves the stored level as it was.
+  assert.match(index, /const answer = await bridge\.setLogLevel\(level\)[\s\S]{0,200}?diagnosticLogLevel = level as LogLevel/)
+})
+
 test('a word that is not a level is refused before it reaches the agent', async () => {
   const fake = agent()
   const bridge = new Bridge(() => {})
