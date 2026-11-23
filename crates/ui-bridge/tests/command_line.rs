@@ -71,16 +71,24 @@ fn each_transport_prints_its_own_version_line_and_ends() {
 #[test]
 fn each_transport_refuses_a_command_line_it_cannot_serve_with_status_2() {
     for (binary, name, purpose) in TRANSPORTS {
-        let cases: [(&[&str], String); 3] = [
+        let cases: [(&[&str], String); 5] = [
             (&["--settings"], "--settings requires a file path\n".into()),
             (
                 &["--settings", "first.json", "second.json"],
-                "unexpected arguments after settings file\n".into(),
+                "unexpected argument: second.json\n".into(),
+            ),
+            (
+                &["--log-level"],
+                "--log-level requires error, info or debug\n".into(),
+            ),
+            (
+                &["--log-level", "verbose"],
+                "unknown log level: verbose\n".into(),
             ),
             (
                 &["--sessions-root"],
                 format!(
-                    "unknown option: --sessions-root\nusage: {name}            {purpose}\n       {name} --version\n"
+                    "unknown option: --sessions-root\nusage: {name} [--settings <path>] [--log-level <error|info|debug>]\n           {purpose}\n       {name} --version\n"
                 ),
             ),
         ];

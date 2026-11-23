@@ -46,7 +46,19 @@ fn main() {
     // nosemgrep: rust.lang.security.args.args
     let args = std::env::args().skip(1);
     let settings = match launch("bravebot-acp", "speak ACP on stdin/stdout", args) {
-        Launch::Serve { settings } => settings,
+        Launch::Serve {
+            settings,
+            log_level: None,
+        } => settings,
+        // This program configures no diagnostic log, so a level would change nothing. It is
+        // refused rather than ignored, so an editor's configuration that names one learns that
+        // no log is written.
+        Launch::Serve {
+            log_level: Some(_), ..
+        } => {
+            eprintln!("--log-level is not accepted by bravebot-acp, which writes no log");
+            std::process::exit(2);
+        }
         Launch::Version(line) => {
             println!("{line}");
             return;
