@@ -2190,10 +2190,13 @@ impl Bridge {
         // The files the prompt names with `@` (NAME-9), read out of the prompt here rather than
         // taken from the front end, and each one surveyed by the read the turn will make, so a
         // name that would end the turn refuses the send before anything starts. A prompt nobody
-        // typed names nothing, the same line the terminal draws.
+        // typed names nothing, the same line the terminal draws. `shown` is the line as the box
+        // showed it, each folded paste behind its marker, and the names are read there, since the
+        // pasted words name no file (NAME-12).
         let mut files = files;
         if composed.is_none() {
-            for named in crate::mentions::named(&workspace, &prompt)? {
+            let shown = request.params.get("shown").and_then(Value::as_str);
+            for named in crate::mentions::named_as_shown(&workspace, &prompt, shown)? {
                 if !files.contains(&named) {
                     files.push(named);
                 }

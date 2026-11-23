@@ -138,7 +138,7 @@ test('the answer is plain text, and the row kind is one no turn sends', () => {
   // Only the user's own rows and the lines sent into a turn are prompts; nothing in use-turn.ts
   // sends a narration, and an aside's answer is never passed to `send` or `turn.send`.
   const turn = readFileSync('src/renderer/use-turn.ts', 'utf8')
-  const body = turn.slice(turn.indexOf('const askAside = '), turn.indexOf('const typedAside = '))
+  const body = turn.slice(turn.indexOf('const askAside = '), turn.indexOf('const dequeuing = '))
   assert.doesNotMatch(body, /turn\.send|turn\.interject|\bsend\(|interject\(/)
 })
 
@@ -154,12 +154,17 @@ test('the composer asks for the command from the typed line in each place it sen
       assert.ok(at < 0 || at > asked, `${name} asks the aside before ${later}`)
     }
   }
-  assert.equal([...turn.matchAll(/typedAside\(/g)].length, 3, 'submit, the interject key and the queue key')
+  // The command is read in one place, `exitOf`, from the line with its folded pastes put back.
+  assert.equal([...turn.matchAll(/exitOf\(/g)].length, 3, 'submit, the interject key and the queue key')
+  assert.doesNotMatch(turn, /btwQuestion\(|isRecap\(/)
+  const staging = readFileSync('src/renderer/staging.ts', 'utf8')
+  const exit = staging.slice(staging.indexOf('export function exitOf('))
+  assert.match(exit, /const \{ words: line, staged \} = leaving\(staging, draft\)[\s\S]*btwQuestion\(line\)[\s\S]*isRecap\(line\)/)
 })
 
 test('a /btw goes out at once while a turn runs and lines wait, and a mid-turn /recap waits (CMD-8, CMD-16)', () => {
   const turn = readFileSync('src/renderer/use-turn.ts', 'utf8')
-  const body = turn.slice(turn.indexOf('const askAside = '), turn.indexOf('const typedAside = '))
+  const body = turn.slice(turn.indexOf('const askAside = '), turn.indexOf('const dequeuing = '))
   // Nothing reads the queue or the running flag before asking: the bridge decides.
   assert.doesNotMatch(body.slice(0, body.indexOf("call<AsideStarted>('session.btw'")), /\.queued|\.running/)
   // Only a recap the bridge refused with `turn_in_flight` is queued, marked as one, and never as a prompt.
@@ -167,7 +172,7 @@ test('a /btw goes out at once while a turn runs and lines wait, and a mid-turn /
   assert.match(body, /queued: \[\.\.\.\(old\.queued \?\? \[\]\), \{ prompt: line, attachments: \[\], staged: \[\], aside: 'recap' \}\]/)
   assert.equal([...turn.matchAll(/aside: 'recap'/g)].length, 1, 'nothing else makes a queued recap')
   // The queue asks a waiting recap again rather than sending it as a prompt.
-  assert.match(turn, /message\.aside === 'recap'\s*\?\s*askAside\(handle, 'recap', '', message\.prompt, true\)\s*:\s*message\.schedule !== undefined/)
+  assert.match(turn, /message\.aside === 'recap'\s*\?\s*askAside\(handle, 'recap', '', message\.prompt, \[\], true\)\s*:\s*message\.schedule !== undefined/)
   // The line typed into a running turn reaches askAside before the interject key routes it to the queue.
   const interjecting = turn.slice(turn.indexOf('const interjectDraft = '))
   assert.ok(interjecting.indexOf('askAside(') < interjecting.indexOf("route(live"), 'a /btw is not queued behind the turn')
@@ -175,9 +180,10 @@ test('a /btw goes out at once while a turn runs and lines wait, and a mid-turn /
 
 test('a /btw sends what was staged on its line with the request, and a recap sends none (CMD-5)', () => {
   const turn = readFileSync('src/renderer/use-turn.ts', 'utf8')
-  const body = turn.slice(turn.indexOf('const askAside = '), turn.indexOf('const typedAside = '))
-  // The items the line still names, read for a /btw only.
-  assert.match(body, /const staged = kind === 'btw' \? named\(asking\?\.staging, line\) : \[\]/)
+  const body = turn.slice(turn.indexOf('const askAside = '), turn.indexOf('const dequeuing = '))
+  // The items the line still names, found on the folded draft by `exitOf`, used for a /btw only.
+  assert.match(body, /const staged = kind === 'btw' \? onLine : \[\]/)
+  assert.equal([...turn.matchAll(/askAside\(\w+(?:\.current)?, exit\.kind, exit\.question, exit\.line, exit\.staged\)/g)].length, 3, 'submit, the interject key and the queue key')
   // Pasted pictures and dropped pictures or PDFs go as grant ids, and a text file as its marker and name.
   assert.match(body, /pastes: grantsOf\(staged\)\.pastes/)
   assert.match(body, /drops: staged\.flatMap\(\(item\) => item\.via === 'drop' && item\.file\.kind !== 'text' \? \[item\.file\.id\] : \[\]\)/)

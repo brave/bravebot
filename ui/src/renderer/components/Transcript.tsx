@@ -45,10 +45,11 @@ import { reconnectingWords, type RetryDue } from '../retry'
 import { pointForPrompt, undoRow } from '../rewind'
 import { Answers, Approve } from './Approval'
 import { showToast } from '../toasts'
-import { EMPTY_STAGING, named, stageDrop, stagePaste, stageSummon, withoutMarker, type Staging, type SummonedBot } from '../staging'
+import { EMPTY_STAGING, named, stageDrop, stagePaste, stageSummon, stageText, withoutMarker, type Staging, type SummonedBot } from '../staging'
 import { placeCards, summonedIn, summonMarker, type Placement, type Summon } from '../../shared/summons'
 import type { Drop } from '../../shared/drops'
-import type { Paste } from '../../shared/pastes'
+import type { Paste, PastedText } from '../../shared/pastes'
+import { PastedTextPreview } from './PastedTextPreview'
 
 interface Live {
   model: string | null
@@ -393,6 +394,7 @@ export function Transcript({
   const [watches, setWatches] = useState(false)
   const [permissions, setPermissions] = useState(false)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
+  const [peeking, setPeeking] = useState<PastedText | null>(null)
   useEffect(() => {
     const preview = (event: Event) => setPreviewPath((event as CustomEvent<string>).detail)
     document.addEventListener('bravebot:preview-file', preview)
@@ -551,6 +553,17 @@ export function Transcript({
     restage(live.handle, stagePaste(live.staging ?? EMPTY_STAGING, paste.outcome.picture, draft, caret()))
   })
   useEffect(() => window.bravebot.onPaste(pasted), [pasted])
+  /** Fold a long text paste behind a marker. False for a short one, which the browser inserts. */
+  const pastedText = useEvent((text: string): boolean => {
+    if (!live) return false
+    // A paste over a selection replaces it, as the browser's paste this one stands in for would.
+    const area = input.current?.shadowRoot?.querySelector('textarea')
+    const start = area?.selectionStart ?? draft.length
+    const next = stageText(live.staging ?? EMPTY_STAGING, text, draft, start, area?.selectionEnd ?? start)
+    if (!next) return false
+    restage(live.handle, next)
+    return true
+  })
   /** Stage a bot picked from the `@` list to answer this message (MEMORY-14). */
   const summon = useEvent((picked: SummonedBot, word: string | null) => {
     if (!live) return
@@ -584,6 +597,11 @@ export function Transcript({
   const [dragging, setDragging] = useState(false)
   const carriesFiles = (event: React.DragEvent): boolean => event.dataTransfer.types.includes('Files')
   const preview = useEvent((path: string) => setPreviewPath(path))
+  /** Open a folded paste whole. The viewer holds a copy, so the draft and the staging stay as they are (PASTE-13). */
+  const peek = useEvent((marker: string) => {
+    const item = live?.staging?.staged.find((entry) => entry.via === 'text' && entry.marker === marker)
+    if (item?.via === 'text') setPeeking({ ...item.pasted })
+  })
   const resumeQueued = useEvent(onResumeQueued)
   const removeQueued = useEvent(onRemoveQueued)
   const dismissRefusal = useEvent(onDismissRefusal)
@@ -968,9 +986,11 @@ export function Transcript({
           onRemoveAttachment={removeAttachment}
           staged={named(live.staging, draft)}
           onRemoveStaged={removeStaged}
+          onPasteText={pastedText}
           summonable={summonable}
           onSummon={summon}
           onPreview={preview}
+          onPeek={peek}
           queued={queued}
           queuePaused={queuePaused}
           onResumeQueued={resumeQueued}
@@ -991,6 +1011,7 @@ export function Transcript({
       {watches && <Watches session={live.handle} onClose={() => setWatches(false)} />}
       {permissions && <Permissions session={live.handle} onClose={() => setPermissions(false)} onRemembered={(kept) => onTrustRemembered(live.handle, kept)} />}
       {previewPath && <FilePreview session={live.handle} path={previewPath} onClose={() => setPreviewPath(null)} />}
+      {peeking && <PastedTextPreview pasted={peeking} onClose={() => setPeeking(null)} />}
     </main>
   )
 }

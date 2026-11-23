@@ -270,6 +270,63 @@ fn a_send_naming_a_file_that_cannot_go_is_refused_before_the_turn() {
     );
 }
 
+/// NAME-12: a name inside the words of a folded paste is sent as text. The window sends the line as
+/// its box showed it as `shown`, and the bridge reads the names there, so an `@` the person pasted
+/// refuses nothing. A name `shown` gives that the prompt does not is not read either, so `shown`
+/// cannot name a file the sent words never named.
+///
+/// The faults this rejects: the names read out of the prompt when `shown` is given, which refuses
+/// the pasted name, and a name read out of `shown` alone, which `turn.send` then refuses.
+#[test]
+fn a_send_reads_names_in_the_shown_line_and_never_adds_one() {
+    let (mut bridge, _events) = harness();
+    let project = project(&mut bridge);
+
+    let pasted = call(
+        &mut bridge,
+        "turn.send",
+        message_ids::with_fresh(json!({
+            "session": &project.session,
+            "prompt": "look at this\nlog line @../outside.txt\nmore\nend",
+            "shown": "look at this [Pasted text #1 +3 lines]",
+        })),
+    );
+    assert!(
+        !pasted
+            .as_ref()
+            .is_err_and(|refusal| refusal.contains("@../outside.txt")),
+        "a name inside a folded paste was read: {pasted:?}"
+    );
+
+    let added = call(
+        &mut bridge,
+        "turn.send",
+        message_ids::with_fresh(json!({
+            "session": &project.session,
+            "prompt": "look at this",
+            "shown": "look at this @../outside.txt",
+        })),
+    );
+    assert!(
+        !added
+            .as_ref()
+            .is_err_and(|refusal| refusal.contains("@../outside.txt")),
+        "a name only `shown` gives was read: {added:?}"
+    );
+
+    let typed = call(
+        &mut bridge,
+        "turn.send",
+        message_ids::with_fresh(json!({
+            "session": &project.session,
+            "prompt": "read @../outside.txt and\nthe\npasted\nwords",
+            "shown": "read @../outside.txt and [Pasted text #2 +4 lines]",
+        })),
+    )
+    .expect_err("a name typed beside a folded paste is still read");
+    assert!(typed.contains("@../outside.txt"), "{typed}");
+}
+
 /// REFER-6: the window is offered a reference's alias and the files behind it, and a prompt naming
 /// one of them is accepted. The bridge builds the alias list from the settings itself, so a front
 /// end that passed none would offer the window nothing and refuse the name as not in the project.

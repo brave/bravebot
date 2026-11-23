@@ -3,7 +3,7 @@ import type { FileAttachment } from '../../shared/files'
 import { projectLabel } from '../../shared/recents'
 import { acceptMention, type MentionEntry, type MentionOffer } from '../../shared/mentions'
 import { useContextWindow } from '../context-window'
-import type { Staged, SummonedBot } from '../staging'
+import { markerAt, type Staged, type SummonedBot } from '../staging'
 import type { Enhancement } from '../enhancing'
 import type { Handoff } from '../handoff'
 import { Button, ButtonMenu, Icon, ProgressRing, TextArea } from '../nala'
@@ -82,11 +82,15 @@ export interface ComposerProps {
   staged: Staged[]
   /** Take a staged file or picture off, by taking its marker out of the draft. */
   onRemoveStaged: (marker: string) => void
+  /** A text paste: fold it behind a marker where it is long. False where the browser should insert it. */
+  onPasteText?: (text: string) => boolean
   /** The bots the `@` list offers to answer a message, which never includes this chat's own (MEMORY-14). */
   summonable?: SummonedBot[]
   /** Stage a bot picked from the list, replacing the half-typed `word`. */
   onSummon?: (bot: SummonedBot, word: string | null) => void
   onPreview: (path: string) => void
+  /** Open a folded paste whole, read-only, by its marker. Changes nothing in the draft (PASTE-13). */
+  onPeek: (marker: string) => void
   /** The rewrite of the box that is out or standing in it, and what the person was last told of it (INPUT-50). */
   enhancement?: Enhancement
   /** Ask for the box to be made more specific, which puts the rewrite in the box and sends nothing. */
@@ -149,7 +153,7 @@ export interface ComposerFooterProps {
 export const Composer = memo(function Composer(props: ComposerProps): React.JSX.Element {
   const {
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
-    draft, onDraft, onCancel, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview,
+    draft, onDraft, onCancel, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview, onPeek,
     interjected, queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
     canAttach = true, footer, notice, starting = false, summonable = NO_BOTS,
     enhancement, onEnhance, onStopEnhance, onDismissEnhancement,
@@ -384,6 +388,21 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 // A summoned bot is not a chip: its marker stays in the message and is drawn as
                 // the bot's label once the message is sent.
                 if (item.via === 'summon') return null
+                if (item.via === 'text') {
+                  return (
+                    <span className="attachment-chip dropped" key={item.marker} data-test="pasted-text-chip">
+                      <FileGlyph name="pasted.txt" />
+                      {/* The label names the paste once; the marker it stands for in the draft is in
+                          the controls' accessible names. */}
+                      <button type="button" className="attachment-name words" aria-label={`View ${item.marker}`}
+                        data-tooltip="View pasted text" data-tooltip-shortcut="⌥V" aria-keyshortcuts="Alt+V"
+                        data-test="pasted-text-peek" onClick={() => onPeek(item.marker)}>{`Pasted text #${item.pasted.number}`}</button>
+                      <span className="attachment-meta">{`${item.pasted.lines} ${item.pasted.lines === 1 ? 'line' : 'lines'}`}</span>
+                      <IconButton icon="close" size="tiny" label={`Remove ${item.marker} Pasted text`} tooltip="Remove"
+                        onClick={() => onRemoveStaged(item.marker)} />
+                    </span>
+                  )
+                }
                 const name = item.via === 'drop' ? item.file.name : 'Pasted image'
                 const thumbnail = item.via === 'drop' ? item.file.thumbnail : item.picture.thumbnail
                 return (
@@ -398,7 +417,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                   </span>
                 )
               })}
-              {(attachments.length > 0 || staged.some((item) => item.via !== 'summon')) && (
+              {(attachments.length > 0 || staged.some((item) => item.via === 'drop' || item.via === 'paste')) && (
                 <span className="attachment-trust" tabIndex={0}
                   data-tooltip="Attached files and pasted pictures are sent with your message as trusted context: the model reads them as you wrote them.">
                   <Icon name="warning-triangle-outline" />Sent as trusted context
@@ -410,6 +429,13 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
             placeholder={pending ? 'Draft your next message while you review…' : 'Let’s do something great'}
             // The open bot's face watches the field while a person types in it.
             onInput={({ value }) => { onDraft(value); typing() }}
+            onPaste={({ innerEvent }) => {
+              const event = innerEvent as unknown as ClipboardEvent
+              // The preload's capture listener has already taken a picture paste (PASTE-7).
+              if (event.defaultPrevented) return
+              const text = event.clipboardData?.getData('text/plain') ?? ''
+              if (latest.current.onPasteText?.(text)) event.preventDefault()
+            }}
             onKeyDown={({ innerEvent }) => {
               const event = innerEvent as unknown as KeyboardEvent
               const now = latest.current
@@ -437,6 +463,19 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                   else if (entry) mention.current.choose(entry, value.word)
                 })
                 return
+              }
+              // Alt-V opens a folded paste whole when the caret is on its marker. It is matched on the
+              // physical key because Option-V types a character on macOS, and that character still
+              // types when the caret is anywhere else.
+              if (event.code === 'KeyV' && event.altKey && !event.shiftKey && !event.metaKey && !event.ctrlKey && !composing) {
+                const field = event.target as HTMLTextAreaElement | null
+                const caret = field?.selectionStart ?? now.draft.length
+                const found = markerAt({ made: 0, staged: now.staged }, now.draft, caret)
+                if (found) {
+                  event.preventDefault()
+                  if (!event.repeat) now.onPeek(found.marker)
+                  return
+                }
               }
               // Make the message more specific (INPUT-50). It only rewrites the box, so it is free to
               // use where Enter is not: it never sends anything.

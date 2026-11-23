@@ -379,6 +379,7 @@ const api = {
     session: string
     slug: string
     prompt: string
+    shown?: string
     grounded: boolean
     model?: string | null
     attachments?: string[]
@@ -398,6 +399,7 @@ const api = {
     session: string
     slug: string
     prompt: string
+    shown?: string
     model?: string | null
     attachments?: string[]
     drops?: string[]

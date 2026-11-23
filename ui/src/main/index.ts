@@ -258,9 +258,10 @@ async function sendBotTurn(
     attachments?: unknown
     composed?: 'consolidation'
     staged?: { drops?: unknown; pastes?: unknown }
+    shown?: unknown
   },
 ): Promise<Answer> {
-  const { grounded, nudge = false, recall = true, model, attachments, composed, staged } = options
+  const { grounded, nudge = false, recall = true, model, attachments, composed, staged, shown } = options
   if (!bridge) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
 
   // The folder the agent confirmed this session runs in, never one the window named. A bot only
@@ -291,6 +292,9 @@ async function sendBotTurn(
   // Left off entirely for the ordinary case, for the same reason `recall` is: a person typed it,
   // and the agent's default for an absent tag says exactly that.
   if (composed) params.composed = composed
+  // The line as the window's box showed it, where the bridge reads the `@` names (NAME-12). It can
+  // only narrow them: the bridge keeps no name the prompt does not also give.
+  if (typeof shown === 'string') params.shown = shown
   const selectedModel = held.model ?? model
   if (selectedModel !== undefined) params.model = selectedModel
   if (held.definition !== null) {
@@ -345,7 +349,7 @@ function summonedTurn(
   session: string,
   summoned: Bot,
   prompt: string,
-  options: { model?: string | null; attachments?: unknown; staged?: { drops?: unknown; pastes?: unknown } },
+  options: { model?: string | null; attachments?: unknown; staged?: { drops?: unknown; pastes?: unknown }; shown?: unknown },
 ): Promise<Answer> {
   return sendSummonedTurn(
     {
@@ -378,7 +382,7 @@ function summonedTurn(
     session,
     summoned,
     prompt,
-    { model: options.model, attachments: options.attachments, drops: options.staged?.drops, pastes: options.staged?.pastes },
+    { model: options.model, attachments: options.attachments, drops: options.staged?.drops, pastes: options.staged?.pastes, shown: options.shown },
   )
 }
 
@@ -1121,7 +1125,7 @@ if (primary) app.whenReady().then(() => {
       if (typeof value !== 'object' || value === null) {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
-      const { session, slug, prompt, grounded, model, attachments, drops, pastes } = value as Record<string, unknown>
+      const { session, slug, prompt, shown, grounded, model, attachments, drops, pastes } = value as Record<string, unknown>
       if (!isSessionId(session) || typeof prompt !== 'string') {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
@@ -1149,6 +1153,7 @@ if (primary) app.whenReady().then(() => {
         model: model as string | null | undefined,
         attachments,
         staged: { drops, pastes },
+        shown,
       })
     },
   )
@@ -1164,7 +1169,7 @@ if (primary) app.whenReady().then(() => {
       if (typeof value !== 'object' || value === null) {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
-      const { session, slug, prompt, model, attachments, drops, pastes } = value as Record<string, unknown>
+      const { session, slug, prompt, shown, model, attachments, drops, pastes } = value as Record<string, unknown>
       if (!isSessionId(session) || typeof prompt !== 'string') {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
@@ -1178,6 +1183,7 @@ if (primary) app.whenReady().then(() => {
         model: model as string | null | undefined,
         attachments,
         staged: { drops, pastes },
+        shown,
       })
     },
   )

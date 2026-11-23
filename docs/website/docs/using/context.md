@@ -262,6 +262,25 @@ was. A dropped PNG or JPEG is scaled down instead, as in [Dropping a file](#drop
 **Plan** is off while a picture is attached, and a message you send while a turn is
 running keeps its pictures, as it keeps dropped files.
 
+### Pasting long text into the desktop app
+
+A text paste of more than a couple of lines folds in the desktop app as it does in the terminal: the
+box gets a marker such as `[Pasted text #3 +40 lines]` where the cursor is, numbered with the
+pictures and files in the same message, and a **Pasted text #3** chip above the box that shows the line count. A shorter paste
+lands as text. Delete the marker, or remove the chip, to take the paste off.
+
+The words go in place of the marker wherever the message leaves the box: when you send it, queue it
+behind a running turn, send it into the running turn, or use it in `/btw` or `/schedule`. The model
+and the transcript get the words, never the marker. A draft you leave and come back to keeps its
+folded pastes, so the marker still stands for the words after the app restarts. Handing a draft
+off to a new chat does not unfold it yet, and a draft holding a folded paste cannot be enhanced.
+
+To read a folded paste whole, click its chip, or put the cursor on the marker and press Alt-V
+(Option-V on macOS). A window titled `Pasted text #3` shows every line with its line count, and
+**Wrap** wraps long lines. **Done**, Escape or the close button closes it. Opening it changes nothing in
+the box and sends nothing, and it works while a turn is running. With the cursor anywhere else,
+Alt-V is left to type what it always types, so Option-V still types `√` on macOS.
+
 ## Pictures and files on a slash command
 
 A [slash command](../reference/commands.md) that sends words to a model takes a pasted picture or a
