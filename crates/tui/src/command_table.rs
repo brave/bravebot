@@ -208,10 +208,8 @@ pub(crate) const AFTER_COMMAND: &str = "/after";
 /// argument.
 pub(crate) const GOAL_COMMAND: &str = "/goal";
 
-/// The line that lists the standing watches, and ends one by its number.
-///
-/// It cannot arm one. A watch is asked for in a prompt, and what a person needs a command for is
-/// the half they cannot read off the transcript: which watches are live, and how to end one.
+/// The line that lists the standing watches, ends one by its number, and arms one on a path the
+/// person types.
 pub(crate) const WATCH_COMMAND: &str = "/watch";
 
 /// The line that lists the turn's background jobs, and asks for one to be stopped by its name.
@@ -709,7 +707,7 @@ pub fn commands() -> Vec<Command> {
         },
         Command {
             name: WATCH_COMMAND,
-            argument: "[stop <n>]",
+            argument: "[<path> | stop <n>]",
             description: t!(command_watch),
             mid_turn: MidTurn::Runs,
         },

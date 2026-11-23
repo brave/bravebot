@@ -2927,7 +2927,7 @@ command-forget-trust = Ne plus retenir que ce répertoire est approuvé, pour qu
 command-loop = Renvoyer une consigne encore et encore, dire ce qui se répète, ou l'arrêter
 command-after = Envoyer une consigne une seule fois, après un délai
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
-command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
+command-watch = Surveiller un fichier, lister les veilles, ou en arrêter une par son numéro
 command-jobs = Lister les tâches en arrière-plan de ce tour, et en arrêter une par son nom
 command-panel = Afficher ou masquer le panneau d'informations à côté de la transcription
 command-sidebar = Choisir les sections que le panneau d'informations affiche
@@ -3729,6 +3729,11 @@ watch-refused-under-a-goal =
 watch-refused-unreadable =
     aucune veille n'est posée sur { $path } : cette session n'atteint pas ce chemin
 watch-already = la veille { $number } porte déjà sur { $path }
+watch-refused-directory =
+    aucune veille n'est posée sur { $path } : c'est un dossier, et une veille porte sur un fichier
+watch-wait-for-the-turn =
+    aucune veille n'est posée pendant qu'un tour tourne. Tapez à nouveau /watch et le chemin une
+    fois qu'il est fini
 watch-fired =veille { $number } : { $path } semble avoir été écrit
 watch-fired-removed = veille { $number } : { $path } n'existe plus
 watch-fired-appeared = veille { $number } : { $path } existe maintenant
@@ -3737,12 +3742,12 @@ watch-listed =
 watch-listed-by-you =
     veille { $number } : { $path }, posée par vous, il reste { $left }
 watch-none =
-    rien n'est sous veille. Un tour en pose une quand vous demandez à être averti au sujet d'un
-    fichier, et /watch stop <n> en arrête une
+    rien n'est sous veille. /watch <chemin> en pose une sur un fichier, comme le fait un tour
+    quand vous demandez à être averti à son sujet, et /watch stop <n> en arrête une
 watch-no-such = il n'y a pas de veille { $number }. /watch liste celles qui sont actives
 watch-command-takes =
-    /watch liste ce que cette session surveille, et /watch stop <n> arrête celle qui porte ce
-    numéro
+    /watch liste ce que cette session surveille, /watch <chemin> pose une veille sur ce fichier,
+    et /watch stop <n> arrête celle qui porte ce numéro
 watch-stopped = la veille { $number } est arrêtée
 watch-stopped-with-its-turn =
     la veille { $number } est arrêtée : arrêter le tour qu'elle a lancé est la façon de dire que

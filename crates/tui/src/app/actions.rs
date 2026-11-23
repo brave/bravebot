@@ -386,6 +386,31 @@ impl Held<'_> {
         ));
     }
 
+    /// Arm a standing watch on the path a person typed after `/watch`.
+    ///
+    /// The first look is taken through the same gate as every later look in the event loop, so a
+    /// path is judged at arming as it is at every pass: reached inside the workspace, and outside
+    /// it only under bypass in a trusted project (FSWATCH-7, FSWATCH-12). A typed path is the
+    /// person's own choice of file, so no read is promoted for it.
+    pub(super) fn arm_watch_command(&mut self, path: &str) {
+        // A `~` spelled out, so a later look from a moved working directory reads the same path.
+        let path = self.workspace.expanded(path);
+        if self.workspace.names_something_else(&path) {
+            self.session
+                .note(t!(watch_refused_directory, path = path.as_str()));
+            return;
+        }
+        let looked = bravebot_agent::tools::look_at_a_watch(
+            self.workspace,
+            &self.session.live_permission_mode(),
+            &self.answers.trust,
+            &path,
+            self.workspace.root(),
+        );
+        self.session
+            .arm_watch_by_person(&path, self.workspace.root(), looked);
+    }
+
     pub(super) fn reach(&mut self, argument: &str) {
         let home = bravebot_agent::home::directory();
         let profile = bravebot_agent::home::profile();

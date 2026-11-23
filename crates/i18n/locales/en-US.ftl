@@ -3979,7 +3979,7 @@ command-forget-trust = Stop remembering that this directory is trusted, so later
 command-loop = Send a prompt again and again, say what is repeating, or stop it
 command-after = Send a prompt once, after a delay
 command-goal = Keep working until a condition you set is judged met
-command-watch = List the files this session is watching, and stop one by its number
+command-watch = Watch a file, list the watched files, or stop one by its number
 command-jobs = List this turn's background jobs, and stop one by its name
 command-outputs = Open what the commands this session ran printed, background jobs included
 command-sessions = Open the Sessions screen: every session and what each is doing
@@ -4884,18 +4884,22 @@ watch-refused-under-a-goal =
 watch-refused-unreadable =
     no watch is armed on { $path }: this session cannot reach that path
 watch-already = watch { $number } is already on { $path }
+watch-refused-directory =
+    no watch is armed on { $path }: it is a directory, and a watch is on one file
+watch-wait-for-the-turn =
+    no watch is armed while a turn is running. Type /watch with the path again once it ends
 watch-fired =watch { $number }: { $path } looks written to
 watch-fired-removed = watch { $number }: { $path } no longer exists
 watch-fired-appeared = watch { $number }: { $path } now exists
 watch-listed = watch { $number }: { $path }, armed by turn { $turn }, { $left } left
 watch-listed-by-you = watch { $number }: { $path }, armed by you, { $left } left
 watch-none =
-    nothing is being watched. A turn arms a watch when you ask to be told about a file, and
-    /watch stop <n> ends one
+    nothing is being watched. /watch <path> arms a watch on a file, as a turn does when you ask
+    to be told about one, and /watch stop <n> ends one
 watch-no-such = there is no watch { $number }. /watch lists the live ones
 watch-command-takes =
-    /watch lists what this session is watching, and /watch stop <n> ends the one with that
-    number
+    /watch lists what this session is watching, /watch <path> arms a watch on that file, and
+    /watch stop <n> ends the one with that number
 watch-stopped = watch { $number } is stopped
 watch-stopped-with-its-turn =
     watch { $number } is stopped, since stopping the turn it started is how you say you have

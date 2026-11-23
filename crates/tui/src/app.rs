@@ -829,14 +829,21 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         session.schedule_asked(argument);
         return Action::Redraw;
     }
-    // The command that sends nothing either. A watch is armed by asking for one in a prompt, so
-    // what is here is the reading and the ending: the two halves of a standing watch that a
-    // transcript cannot show.
+    // The command that sends nothing either. Listing and stopping are answered here at any time.
+    // Arming goes to the loop, which owns the workspace, the live mode and the trust map the first
+    // look needs, and waits for an idle session, so the look never runs while a turn holds the
+    // trust map (FSWATCH-7).
     if let Some(argument) = argument_to(line, WATCH_COMMAND) {
         match crate::watch_command::parse(argument) {
             crate::watch_command::Asked::List => session.report_watches(),
             crate::watch_command::Asked::Stop(number) => {
                 session.stop_watch(number);
+            }
+            crate::watch_command::Asked::Arm(path) => {
+                if session.status == Status::Idle {
+                    return Action::ArmWatch(path);
+                }
+                session.note(t!(watch_wait_for_the_turn));
             }
             crate::watch_command::Asked::Unreadable => session.note(t!(watch_command_takes)),
         }
@@ -3371,6 +3378,7 @@ fn event_loop(
             }
             Action::Status => held.status(config),
             Action::ForgetTrust => held.forget_trust_command(),
+            Action::ArmWatch(path) => held.arm_watch_command(&path),
             Action::Sandbox(word) => {
                 crate::sandbox_command::run(held.session, &word, &bravebot_config::Managed::load())
             }
@@ -27270,10 +27278,10 @@ mod tests {
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
     }
 
-    /// The command cannot arm one: a watch is asked for in a prompt, and what a person needs a
-    /// command for is the half they cannot read off the transcript.
+    /// Listing and stopping are answered by the session itself. A path goes to the loop, which
+    /// owns what the first look needs, and nothing is armed before it gets there.
     #[test]
-    fn the_watch_command_lists_and_stops_and_arms_nothing() {
+    fn the_watch_command_lists_and_stops_and_hands_a_path_to_the_loop() {
         let mut session = Session::new("none");
         session.arm_watch(
             "a.md",
@@ -27304,11 +27312,11 @@ mod tests {
         }
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::Redraw
+            Action::ArmWatch("src/main.rs".to_string())
         );
         assert!(
             session.watches().is_empty(),
-            "the command armed a watch of its own"
+            "the key handling armed a watch without the loop's look"
         );
     }
 
@@ -45749,6 +45757,191 @@ mod tests {
                 .watch_fired(later, |path, under| workspace.look(path, under))
                 .is_none(),
             "a fire went out about the file in the directory the session moved to"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// What `/watch <path>` does once the loop holds the workspace: [`Held::arm_watch_command`]
+    /// with everything else a session at rest has.
+    fn arm_typed(
+        session: &mut Session,
+        workspace: &mut Workspace,
+        answers: &mut Answers,
+        path: &str,
+    ) {
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            workspace.root(),
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let mut conversation = Conversation::new();
+        let mut scratch = None;
+        let settings = bravebot_config::Settings::default();
+        let run_settings = RunSettings::from_settings(&settings);
+        Held {
+            session,
+            conversation: &mut conversation,
+            stored: &mut stored,
+            answers,
+            workspace,
+            scratch: &mut scratch,
+            settings: &settings,
+            run_settings: &run_settings,
+        }
+        .arm_watch_command(path);
+    }
+
+    /// A session at rest in a scratch project, with the answers it opens with.
+    fn watch_project(name: &str) -> (std::path::PathBuf, Workspace, Session, Answers) {
+        let root = crate::testutil::scratch_dir(name);
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("scratch");
+        let workspace = Workspace::new(&project).expect("workspace");
+        let mut session = Session::new("none");
+        let trust = TrustStore::new(workspace.root());
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let answers = Answers::opening(trust, TrustedPrograms::new(), rules);
+        (root, workspace, session, answers)
+    }
+
+    fn noted(session: &Session, text: &str) -> bool {
+        session.transcript.iter().any(|entry| entry.text == text)
+    }
+
+    #[test]
+    fn typing_watch_and_a_path_arms_a_watch_that_fires_on_a_write() {
+        let (root, mut workspace, mut session, mut answers) =
+            watch_project("bravebot-typed-watch-test");
+        std::fs::write(workspace.root().join("notes.md"), "first").expect("scratch");
+
+        let Action::ArmWatch(path) = dispatch_command(&mut session, commanded("/watch notes.md"))
+        else {
+            panic!("/watch notes.md did not ask the loop to arm a watch");
+        };
+        arm_typed(&mut session, &mut workspace, &mut answers, &path);
+        assert_eq!(session.watches().len(), 1, "the watch was not armed");
+        assert!(
+            session.watches()[0].armed_by_the_person(),
+            "the watch was not marked as the person's"
+        );
+        assert!(
+            noted(&session, &t!(watch_armed, number = 1, path = "notes.md")),
+            "arming the watch said nothing"
+        );
+
+        std::fs::write(
+            workspace.root().join("notes.md"),
+            "a second, longer version",
+        )
+        .expect("scratch");
+        let later = Instant::now() + Duration::from_secs(6);
+        assert!(
+            session
+                .watch_fired(later, |path, under| workspace.look(path, under))
+                .is_some(),
+            "a write to the watched file did not fire"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// FSWATCH-2: a directory is refused, as a turn's request for one is.
+    #[test]
+    fn typing_watch_on_a_directory_is_refused() {
+        let (root, mut workspace, mut session, mut answers) =
+            watch_project("bravebot-typed-watch-directory-test");
+        std::fs::create_dir_all(workspace.root().join("src")).expect("scratch");
+
+        arm_typed(&mut session, &mut workspace, &mut answers, "src");
+
+        assert!(session.watches().is_empty(), "a directory was watched");
+        assert!(
+            noted(&session, &t!(watch_refused_directory, path = "src")),
+            "the refusal said nothing"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// FSWATCH-7: outside bypass, a path outside the project is not reached, so it is not armed.
+    #[test]
+    fn typing_watch_on_a_path_outside_the_project_is_refused_outside_bypass() {
+        let (root, mut workspace, mut session, mut answers) =
+            watch_project("bravebot-typed-watch-outside-test");
+        let elsewhere = root.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).expect("scratch");
+        std::fs::write(elsewhere.join("notes.md"), "not in the project").expect("scratch");
+        let outside = elsewhere
+            .canonicalize()
+            .expect("canonical")
+            .join("notes.md");
+        let outside = outside.to_str().expect("utf-8 path");
+
+        arm_typed(&mut session, &mut workspace, &mut answers, outside);
+
+        assert!(
+            session.watches().is_empty(),
+            "a path outside the project was watched"
+        );
+        assert!(
+            noted(&session, &t!(watch_refused_unreadable, path = outside)),
+            "the refusal said nothing"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Nothing is armed while a turn runs, so the first look never runs while the turn holds the
+    /// trust map (FSWATCH-7). Listing still answers.
+    #[test]
+    fn typing_watch_with_a_path_while_a_turn_runs_says_to_wait() {
+        let mut session = Session::new("none");
+        session.status = Status::Working;
+
+        assert_eq!(
+            dispatch_command(&mut session, commanded("/watch notes.md")),
+            Action::Redraw
+        );
+        assert!(session.watches().is_empty());
+        assert!(
+            noted(&session, t!(watch_wait_for_the_turn)),
+            "the refusal said nothing"
+        );
+    }
+
+    #[test]
+    fn a_watch_the_person_armed_under_a_relative_path_ends_on_cd() {
+        let (root, mut workspace, mut session, mut answers) =
+            watch_project("bravebot-typed-watch-cd-test");
+        let other = root.join("other");
+        std::fs::create_dir_all(&other).expect("scratch");
+        std::fs::write(workspace.root().join("notes.md"), "the watched one").expect("scratch");
+        std::fs::write(other.join("notes.md"), "a different file, of another size")
+            .expect("scratch");
+
+        arm_typed(&mut session, &mut workspace, &mut answers, "notes.md");
+        assert_eq!(session.watches().len(), 1, "the watch was not armed");
+
+        assert_eq!(
+            change_directory(
+                &mut session,
+                &mut workspace,
+                &mut answers,
+                "a-session",
+                other.to_str().expect("utf-8 path"),
+                never_asked,
+            ),
+            Changed::Moved
+        );
+
+        assert!(
+            session.watches().is_empty(),
+            "the watch outlived the directory it was armed in"
+        );
+        assert!(
+            noted(&session, &t!(watch_out_of_reach, number = 1)),
+            "the watch ended without saying so"
         );
 
         std::fs::remove_dir_all(&root).ok();

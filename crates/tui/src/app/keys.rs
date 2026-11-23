@@ -187,6 +187,10 @@ pub enum Action {
     /// Withdraw the remembered answer about the working directory. Needs the workspace, which the
     /// loop owns, and leaves this session's map as it is.
     ForgetTrust,
+    /// Arm a standing watch on the path a person typed after `/watch`. Needs the workspace, the
+    /// live mode and the trust map, which the loop owns, since the first look is taken through the
+    /// same gate as every later one.
+    ArmWatch(String),
     /// List the checkouts the session keeps. Needs the workspace, which the loop owns.
     ListCheckouts,
     /// List what the session left open (OPEN-5). Needs the workspace, which the loop owns.
