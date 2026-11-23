@@ -408,7 +408,6 @@ final class Sim {
         drawShots(ctx)
         drawHero(ctx)
         drawEffects(ctx)
-        // Vignette.
         let vignette = gradient([(0, CGColor(gray: 0, alpha: 0)), (1, CGColor(gray: 0, alpha: 0.6))])
         ctx.drawRadialGradient(vignette, startCenter: CGPoint(x: width / 2, y: height / 2), startRadius: min(width, height) * 0.45,
             endCenter: CGPoint(x: width / 2, y: height / 2), endRadius: hypot(width, height) / 2, options: .drawsAfterEndLocation)
