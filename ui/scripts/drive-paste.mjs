@@ -288,6 +288,39 @@ try {
   assert.equal(await reopened.inputValue(), folded, 'closing the viewer leaves the draft as it was')
   assert.deepEqual(await selection(), [5, 5], 'and the caret where it was')
   assert.equal(await textChips.count(), 1, 'and the paste still staged')
+
+  // ---- Alt-V opens the paste when the caret is on its marker, and only then -------------------
+  const peekDialogs = page.getByRole('dialog', { name: /^Pasted text #/ })
+  const altV = async (caret) => {
+    await reopened.focus()
+    await reopened.evaluate((field, at) => field.setSelectionRange(at, at), caret)
+    await page.keyboard.press('Alt+KeyV')
+  }
+  const opensNothing = async (caret, why) => {
+    await altV(caret)
+    await page.waitForTimeout(400)
+    assert.equal(await peekDialogs.count(), 0, why)
+  }
+  await opensNothing(5, 'Alt-V on plain text opens nothing')
+  assert.equal(await reopened.inputValue(), folded, 'and leaves the draft as it was')
+  for (const caret of [11, 20, 36]) {
+    await altV(caret)
+    await peekDialog(2).waitFor()
+    assert.equal(await peekDialog(2).locator('pre').innerText(), five, `Alt-V at ${caret} opens the paste the caret is on`)
+    await page.keyboard.press('Escape')
+    await peekDialog(2).waitFor({ state: 'hidden' })
+    assert.equal(await reopened.inputValue(), folded, 'and leaves the draft as it was')
+  }
+  assert.equal(await textChips.count(), 1)
+  // The chip's tooltip names the chord.
+  await page.locator('[data-test="pasted-text-peek"]').hover()
+  await page.getByText('⌥V').first().waitFor()
+  await page.screenshot({ path: join(output, 'paste-text-chord-light.png') })
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: join(output, 'paste-text-chord-dark.png') })
+  await page.emulateMedia({ colorScheme: 'light' })
+  await page.mouse.move(0, 0)
   await reopened.focus()
   await reopened.press('End')
   const foldedBefore = requests.length
@@ -313,9 +346,19 @@ try {
   const foldedRows = await page.locator('.entries').innerText()
   assert.match(foldedRows, /Read this: line one\s+line two\s+line three\s+line four\s+line five/, 'the transcript row shows the words')
   assert.ok(!foldedRows.includes('[Pasted text #'), 'and not the marker')
+  // A picture's marker is not a folded paste, so Alt-V on it opens nothing.
+  await copy(green)
+  await reopened.focus()
+  await menuPaste()
+  await page.locator('[data-test="pasted-chip"]').first().waitFor()
+  const pictured = await reopened.inputValue()
+  assert.match(pictured, /^\[Image #\d+\] $/)
+  await opensNothing(3, 'Alt-V on an [Image #n] marker opens nothing')
+  assert.equal(await reopened.inputValue(), pictured, 'and leaves the draft as it was')
+  await reopened.fill('')
   assert.deepEqual(errors, [])
 
-  console.log(`PASS: a trusted paste stages a marker and a chip numbered with drops, a forged paste does nothing, an oversized one is refused with the bridge's note, the send carries the picture as PNG data, and a long text paste folds to a marker, opens whole from its chip without changing the draft, and sends its words. Screenshots in ${output}/paste-*.png`)
+  console.log(`PASS: a trusted paste stages a marker and a chip numbered with drops, a forged paste does nothing, an oversized one is refused with the bridge's note, the send carries the picture as PNG data, and a long text paste folds to a marker, opens whole from its chip or with Alt-V on its marker without changing the draft, and sends its words. Screenshots in ${output}/paste-*.png`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'paste-failure.png') }).catch(() => undefined)
   throw error

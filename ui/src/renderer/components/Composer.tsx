@@ -3,7 +3,7 @@ import type { FileAttachment } from '../../shared/files'
 import { projectLabel } from '../../shared/recents'
 import { acceptMention, type MentionEntry, type MentionOffer } from '../../shared/mentions'
 import { useContextWindow } from '../context-window'
-import type { Staged, SummonedBot } from '../staging'
+import { markerAt, type Staged, type SummonedBot } from '../staging'
 import type { Enhancement } from '../enhancing'
 import type { Handoff } from '../handoff'
 import { Button, ButtonMenu, Icon, ProgressRing, TextArea } from '../nala'
@@ -393,6 +393,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                     <span className="attachment-chip dropped" key={item.marker} data-test="pasted-text-chip">
                       <FileGlyph name="pasted.txt" />
                       <button type="button" className="attachment-name words" data-tooltip={`View ${item.marker}`}
+                        data-tooltip-shortcut="⌥V" aria-keyshortcuts="Alt+V"
                         data-test="pasted-text-peek" onClick={() => onPeek(item.marker)}>Pasted text</button>
                       <span className="attachment-marker">{item.marker}</span>
                       <IconButton icon="close" size="tiny" label={`Remove ${item.marker} Pasted text`} tooltip="Remove"
@@ -460,6 +461,19 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                   else if (entry) mention.current.choose(entry, value.word)
                 })
                 return
+              }
+              // Alt-V opens a folded paste whole when the caret is on its marker. It is matched on the
+              // physical key because Option-V types a character on macOS, and that character still
+              // types when the caret is anywhere else.
+              if (event.code === 'KeyV' && event.altKey && !event.shiftKey && !event.metaKey && !event.ctrlKey && !composing) {
+                const field = event.target as HTMLTextAreaElement | null
+                const caret = field?.selectionStart ?? now.draft.length
+                const found = markerAt({ made: 0, staged: now.staged }, now.draft, caret)
+                if (found) {
+                  event.preventDefault()
+                  if (!event.repeat) now.onPeek(found.marker)
+                  return
+                }
               }
               // Make the message more specific (INPUT-50). It only rewrites the box, so it is free to
               // use where Enter is not: it never sends anything.
