@@ -508,6 +508,10 @@ contrib/terminal-screenshot.py capture.txt
 otherwise, since a frame laid out for one width replayed at another is wrong in a way that still
 looks like a screen. Colour is dropped, so the output survives being quoted and searched.
 
+The title push (`CSI 22;0t`), written before the interface's first title, and the title pop
+(`CSI 23;0t`), written when it hands the terminal back, change no cell and are accepted. Every
+other window operation is still named, since a resize or a move changes what the screen is.
+
 Anything it does not model is named on stderr rather than dropped, and `--strict` exits non-zero on
 one, which is the flag to use before pasting a screen into an issue. `--selftest` checks the replay
 against captures whose screen is known and renders nothing; `make check-spec` runs it, because the

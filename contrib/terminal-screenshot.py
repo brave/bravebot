@@ -66,6 +66,14 @@ SELECTIVE_ERASES = {"J", "K"}
 # so nothing lands on the screen.
 DEVICE_REPORTS = {"c", "n"}
 
+# CSI `t` is a window operation, and most of them move or resize the window, which
+# this does not model. Pushing the window title onto the terminal's stack (22) and
+# popping it back (23) change no cell. The interface writes the push before the
+# first title it sets and the pop when it hands the terminal back, so a capture of
+# a whole session that has a title holds both.
+WINDOW_OP_FINAL = "t"
+TITLE_STACK_OPS = {22, 23}
+
 
 class Screen:
     """A grid of characters, and a cursor that writes into it."""
@@ -173,6 +181,9 @@ def replay(capture, cols, rows):
             continue
         if final in DEVICE_REPORTS:
             continue
+        if final == WINDOW_OP_FINAL:
+            if numbers(params, 1, default=0)[0] in TITLE_STACK_OPS:
+                continue
 
         if final in ("H", "f"):
             row, col = numbers(params, 2)
@@ -223,6 +234,17 @@ CASES = [
     # A sequence that moves cells this does not model would otherwise give a
     # plausible screen that is wrong, which is worse than no screen at all.
     ("an unmodelled sequence is named", "a\x1b[5Xb", 10, 2, ["ab"], ["\x1b[5X"]),
+    # The interface pushes the title with CSI 22;0t and pops it with CSI 23;0t.
+    ("a title push and pop write no cell", "hi\x1b[22;0t\x1b[23;0t", 10, 2, ["hi"], []),
+    # Other window operations resize or move the window, so they stay reported.
+    (
+        "a window resize is named",
+        "a\x1b[8;24;80tb",
+        10,
+        2,
+        ["ab"],
+        ["\x1b[8;24;80t"],
+    ),
 ]
 
 
