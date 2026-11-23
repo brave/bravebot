@@ -409,6 +409,7 @@ setup was looked at.
 `verified-by: bravebot_cli::running::what_was_found_and_left_is_said_before_the_routes`
 `verified-by: bravebot_cli::running::import_providers_with_only_what_is_left_names_it_before_saying_nothing_is_found`
 `verified-by: bravebot_cli::running::a_start_that_can_ask_says_what_it_found_and_left_before_the_refusal`
+`verified-by: bravebot_cli::running::an_import_answered_yes_says_what_was_left_once_and_before_the_question`
 `verified-by: bravebot_cli::running::a_claude_code_anthropic_key_is_importable_and_the_refusal_names_the_command`
 `verified-by: bravebot_config::import::a_key_exported_beside_a_host_of_its_own_is_left`
 `verified-by: bravebot_cli::import::a_key_exported_beside_a_host_is_said_to_be_left_and_not_asked_about`

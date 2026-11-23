@@ -1840,6 +1840,8 @@ stay behind because they were given for work that the brief describes only in wo
 `verified-by: bravebot_tui::app::the_record_a_handoff_came_from_is_untouched_by_the_new_one_and_still_resumes`
 `verified-by: bravebot_tui::app::a_handoff_through_held_clear_carries_only_the_brief`
 `verified-by: bravebot_tui::app::a_handoff_through_held_clear_leaves_the_source_record_as_it_was`
+`verified-by: bravebot_tui::app::a_handoff_through_held_clear_carries_no_standing_rule`
+`verified-by: bravebot_ui_bridge::permission_mode::a_chat_opened_from_a_handoff_holds_none_of_the_source_chats_vouched_commands_or_trust`
 `verified-by: bravebot_ui_bridge::handing_off::a_chat_started_from_a_handoff_carries_only_the_brief_and_leaves_the_source_record_alone`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/handoff.test.mjs asserts that a handoff is armed with the brief, keeps the draft it replaced, is dropped by Escape or an emptied box and is taken on send, and reads the Composer, Transcript, App and use-handoff sources to assert that Escape in the box reaches the rule that drops the brief and puts the draft back; make check-ui runs it)`
 

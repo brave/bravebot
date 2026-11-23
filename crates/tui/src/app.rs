@@ -44011,6 +44011,84 @@ mod tests {
         );
     }
 
+    /// SESSION-34: the standing permissions of the session a handoff leaves do not cross. A rule
+    /// that allows a command and one that denies another, neither written in any settings layer
+    /// the new session reads (as a rule a person's yes put in force is not), are in force before
+    /// `Held::clear` and decide nothing after it, where the new session holds the rules read again
+    /// for its root. The rules are read from `Held::clear`'s own answers, the entry point
+    /// `/handoff` takes.
+    ///
+    /// Rejects: a `clear` that leaves the `Rules` of the source session in place (the new session
+    /// would run a command the old one was told yes to, with no question), and one that keeps
+    /// only the deny rules or only the allow rules.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_handoff_through_held_clear_carries_no_standing_rule() {
+        use bravebot_core::permissions::{Anchors, Decision, Permissions, Ruling};
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-handoff-rules");
+        std::fs::create_dir_all(&root).expect("create");
+        let (mut workspace, mut session, mut stored, mut conversation, mut answers) =
+            a_session_with_answers_to_hand_off(&root);
+        let (standing, rejected) = Permissions::parse(
+            &["Bash(rm -rf build)".to_string()],
+            &[],
+            &["Bash(make check)".to_string()],
+            &Anchors::none(),
+        );
+        assert!(rejected.is_empty(), "{rejected:?}");
+        answers.rules.permissions = standing;
+        assert_eq!(
+            answers.rules.permissions.for_command(&["make", "check"]),
+            Decision::Ruled(Ruling::Allow),
+            "the fixture's allow rule was not in force"
+        );
+        assert_eq!(
+            answers
+                .rules
+                .permissions
+                .for_command(&["rm", "-rf", "build"]),
+            Decision::Ruled(Ruling::Deny),
+            "the fixture's deny rule was not in force"
+        );
+        bypassing(&mut session);
+        session.status = crate::state::Status::Idle;
+        let mut scratch = None;
+        let settings = bravebot_config::Settings::default();
+        let run_settings = RunSettings::from_settings(&settings);
+        let mut terminal = a_fixed_viewport_terminal();
+
+        let ended = Held {
+            session: &mut session,
+            conversation: &mut conversation,
+            stored: &mut stored,
+            answers: &mut answers,
+            workspace: &mut workspace,
+            scratch: &mut scratch,
+            settings: &settings,
+            run_settings: &run_settings,
+        }
+        .clear(&mut terminal, Some("carry on with the notes".to_string()));
+
+        assert!(ended.is_none(), "the handoff ended the session: {ended:?}");
+        assert_eq!(
+            answers.rules.permissions.for_command(&["make", "check"]),
+            Decision::Unmatched,
+            "an allow rule of the source session crossed"
+        );
+        assert_eq!(
+            answers
+                .rules
+                .permissions
+                .for_command(&["rm", "-rf", "build"]),
+            Decision::Unmatched,
+            "a deny rule of the source session crossed"
+        );
+    }
+
     /// SESSION-34: the record a handoff came from is written as it was, through the entry point
     /// `/handoff` takes. The source is read back after `Held::clear` and compared field for field
     /// with what it held before, and the new record holds the link under an id of its own.

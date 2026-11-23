@@ -6841,9 +6841,10 @@ fn permissions_check_draws_the_control_characters_of_a_checkouts_rules_as_pictur
 /// rather than waiting for as long as the suite is allowed to run.
 ///
 /// Unix, where [`in_a_terminal_command`] chooses the arguments of whichever `script` the system
-/// has. The tests that type answers are Linux only, since the two `script` commands in the world
-/// report a child's status differently once input is typed at them, and the job that runs this
-/// suite is Linux.
+/// has. [`in_a_terminal_answering`] builds on Unix too, and holds the input open on the BSD
+/// `script` until the run ends; the tests that need a status through typed input stay Linux only,
+/// since the two `script` commands in the world report a child's status differently once input is
+/// typed at them, and the job that runs this suite is Linux.
 #[cfg(unix)]
 fn in_a_terminal(home: &Path, environment: &[(&str, &str)], arguments: &[&str]) -> Output {
     in_a_terminal_run(home, None, environment, arguments)
@@ -6880,7 +6881,9 @@ fn in_a_terminal_run(
 ///
 /// Written whole before the run asks anything. The terminal holds typed lines until something reads
 /// them, which is what a person typing ahead gets too, so each question reads the next line.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
 fn in_a_terminal_answering(
     home: &Path,
     environment: &[(&str, &str)],
@@ -6894,15 +6897,71 @@ fn in_a_terminal_answering(
         .stderr(Stdio::piped())
         .spawn()
         .expect("script runs the built binary in a terminal");
-    child
-        .stdin
-        .take()
-        .expect("the terminal's input")
+    let mut input = child.stdin.take().expect("the terminal's input");
+    input
         .write_all(answers.as_bytes())
         .expect("type the answers");
-    child
-        .wait_with_output()
-        .expect("script runs the built binary in a terminal")
+    if cfg!(target_os = "linux") {
+        drop(input);
+    } else {
+        // The BSD `script` sends the end of the input into the terminal as soon as its own stdin
+        // closes, ahead of a line the run has not read yet, so the first question reads the end
+        // of the input and not the answer. The input is held open until the run ends, which it
+        // does on its own after the questions the test answers.
+        std::mem::forget(input);
+    }
+    // The run ends on its own after the questions the test answers. One that asks more than the
+    // answers cover would wait for input that never comes on the BSD `script`, so the wait is
+    // bounded and the child is stopped, which fails the test with what it had written.
+    let mut written = Vec::new();
+    for stream in [
+        child
+            .stdout
+            .take()
+            .map(|s| Box::new(s) as Box<dyn Read + Send>),
+        child
+            .stderr
+            .take()
+            .map(|s| Box::new(s) as Box<dyn Read + Send>),
+    ] {
+        let mut stream = stream.expect("the terminal's output");
+        written.push(std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).ok();
+            bytes
+        }));
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("script can be waited on") {
+            break Some(status);
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill().ok();
+            child.wait().ok();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let mut streams = written
+        .into_iter()
+        .map(|reader| reader.join().unwrap_or_default());
+    let (stdout, stderr) = (
+        streams.next().unwrap_or_default(),
+        streams.next().unwrap_or_default(),
+    );
+    let Some(status) = status else {
+        panic!(
+            "the run asked for more than the answers given and was stopped after 120 seconds:\n{}{}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+    };
+    Output {
+        status,
+        stdout,
+        stderr,
+    }
 }
 
 #[cfg(unix)]
@@ -10367,6 +10426,53 @@ fn a_first_run_with_a_claude_code_key_command_writes_an_entry_naming_the_variabl
     for left in ["nobody-may-see", "apiKey", "sonnet"] {
         assert!(!file.contains(left), "{left} was written: {file}");
     }
+}
+
+/// IMPORT-4: at a start that can ask, what the source holds and the import leaves is said once,
+/// before the question, and an answer of `y` writes the import without saying it again after the
+/// written line: the refusal that follows names the routes and not the lines already drawn.
+/// Rejects a start that reads the sources again after the import was written (the heading and the
+/// `- model:` line are said a second time) and one that says them after the question and not
+/// before it.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn an_import_answered_yes_says_what_was_left_once_and_before_the_question() {
+    let scratch = Scratch::new("cli-running-import-left-answered-yes")
+        .with_file(".claude/settings.json", CLAUDE_CODE_KEY_COMMAND);
+
+    let output = in_a_terminal_answering(&scratch.path, NOTHING_CONFIGURED, &["--plain"], "y\n");
+
+    let (transcript, _) = said(&output);
+    let heading = "Found in Claude Code and not imported:";
+    assert_eq!(
+        transcript.matches(heading).count(),
+        1,
+        "the heading was not said exactly once: {transcript}"
+    );
+    assert_eq!(
+        transcript.matches("- model:").count(),
+        1,
+        "what was left was not said exactly once: {transcript}"
+    );
+    let left = transcript.find("- model:").expect("checked above");
+    let question = transcript
+        .find("Import this from Claude Code?")
+        .unwrap_or_else(|| panic!("no import was offered: {transcript}"));
+    let written = transcript
+        .find("imported what Claude Code configured into")
+        .unwrap_or_else(|| panic!("the import was not said to be written: {transcript}"));
+    assert!(left < question && question < written, "{transcript}");
+    assert!(
+        transcript
+            .match_indices(heading)
+            .chain(transcript.match_indices("- model:"))
+            .all(|(at, _)| at < written),
+        "what was left was said again after the write: {transcript}"
+    );
+    let file = std::fs::read_to_string(scratch.settings()).expect("the import was written");
+    assert!(file.contains("ANTHROPIC_API_KEY"), "{file}");
 }
 
 /// IMPORT-8: a one-shot run has nobody to ask, so it reads no answer and writes nothing, and its
