@@ -93,6 +93,15 @@ test('writing the layout or the view to bravebot-ui.json leaves hidden in the fi
   assert.deepEqual(store.readState().hidden, ['writes', 'confined'])
 })
 
+test('the state inherited on a first launch lists hidden, as it lists every other key', () => {
+  const userData = mkdtempSync(join(tmpdir(), 'bravebot-panels-'))
+  const store = load('src/main/state.ts', { electron: { app: { getPath: () => userData } } })
+  const first = store.inherited()
+  assert.ok(Object.hasOwn(first, 'hidden'), 'inherited() must list hidden: ' + JSON.stringify(first))
+  assert.deepEqual(first.hidden, [])
+  assert.deepEqual(Object.keys(first).sort(), Object.keys(parseState({})).sort())
+})
+
 test('a fresh file has every panel on', () => {
   const userData = mkdtempSync(join(tmpdir(), 'bravebot-panels-'))
   const store = load('src/main/state.ts', { electron: { app: { getPath: () => userData } } })

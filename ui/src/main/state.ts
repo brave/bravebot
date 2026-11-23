@@ -80,8 +80,10 @@ export function allowStateWrites(): void {
  * that follows. The old files are left where they are rather than deleted: they cost a few hundred
  * bytes, nothing reads them once this one exists, and a person who steps back to an older build
  * still finds their columns where they left them.
+ *
+ * Exported for the tests alone, which check that it lists every key `parseState` returns.
  */
-function inherited(): StoredState {
+export function inherited(): StoredState {
   const legacy = (name: string): unknown => {
     try {
       return JSON.parse(readFileSync(join(app.getPath('userData'), name), 'utf8'))
