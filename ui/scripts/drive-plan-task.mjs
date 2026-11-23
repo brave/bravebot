@@ -135,6 +135,9 @@ try {
   await card.locator('[data-test="error-details"]').click()
   await card.getByText('The bridge did not answer.', { exact: true }).waitFor()
   await page.mouse.move(5, 5)
+  // A fixed wait, since TS-005 allows one for an absence: it gives a wrong mode change or send that
+  // followed the error card time to show up in the chip or in `asked`. The card is the last thing
+  // the failed /plan does, and no event marks that no send will come after it.
   await page.waitForTimeout(300)
   assert.equal(await mode(), 'ask', 'the mode is unchanged')
   assert.equal(asked.length, 0, 'no turn started')
@@ -164,6 +167,10 @@ try {
     await composer.fill('/plan x')
     await composer.press('Enter')
     await page.getByText('/plan x', { exact: true }).first().waitFor()
+    // A fixed wait, since TS-005 allows one for an absence: it gives a mode change or a send that
+    // skipped the queue time to reach the chip or `asked`. Nothing marks that the queued line will
+    // not be sent early. The release() below, after which `asked` gains the task, shows the
+    // counter does count a send in this window.
     await page.waitForTimeout(300)
     assert.equal(await mode(), 'ask', 'the chip stays on Ask while the line waits')
     await page.screenshot({ path: join(shots, 'plan-typed-queued-light.png') })
@@ -190,6 +197,9 @@ try {
   const asking = asked.length
   await planWith('')
   await until(async () => await mode() === 'plan', 'the mode reads Plan')
+  // A fixed wait, since TS-005 allows one for an absence: carryOutPlan sets the chip from the
+  // session.mode reply before it would call send, so a wrongly started turn would reach `asked`
+  // after the chip reads Plan, and no event marks that no send is coming.
   await page.waitForTimeout(500)
   assert.equal(asked.length, asking, 'no turn started')
   console.log('PASS: confirming with no task only switches the mode to Plan')
@@ -217,6 +227,10 @@ try {
   const sent = asked.length
   await planWith('check the tests')
   await page.getByText('/plan check the tests').first().waitFor()
+  // A fixed wait, since TS-005 allows one for an absence: it gives a send that skipped the queue
+  // time to reach `asked`, and nothing marks that the queued plan will not be sent early. The
+  // release() below, after which `asked` gains the task, shows the counter does count a send in
+  // this window.
   await page.waitForTimeout(300)
   await page.screenshot({ path: join(shots, 'plan-queued-light.png') })
   assert.equal(asked.length, sent, 'the plan waits for the running turn')
