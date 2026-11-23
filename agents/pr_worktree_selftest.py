@@ -880,19 +880,67 @@ def test_a_pull_request_from_a_remote_this_clone_lacks_names_the_script_that_add
         assert code == 1 and f"`{script} start 9` adds one" in out, out
 
 
-SCRIPT_SKILLS = ("rebase", "pr-fix", "implement-issues", "update-docs")
-# A spelling of either script that a session would resolve against its own directory: after `python3`
-# and its flags, a path that does not start with `<clone>/` or `/`, or any path to either script that
-# is not absolute, such as `./agents/skills/pr-fix/pr-fix.py` or `.claude/skills/rebase/rebase.py`.
+# A path a session resolves to one place whatever its directory is: absolute, in the person's home, or
+# a placeholder a step fills in with an absolute path (`<clone>/`, `<loop>/`, `{repo}/`).
+ANCHORED = r"(?:/|~/|<[\w-]+>/|\{\w+\}/)"
+# A spelling of a script that a session would resolve against its own directory: after `python3` and
+# its flags, a `.py` path that is not anchored, or any `.py` path under `agents/skills/`,
+# `.claude/skills/` or `contrib/` that is not anchored, such as `./agents/skills/pr-fix/pr-fix.py`,
+# `.claude/skills/rebase/rebase.py` or `python3 -I 'agents/skills/x/x.py'`. A path with `*` in it
+# (`agents/skills/*/*.py`) is a description of a directory and not a command.
 RELATIVE_SCRIPT = re.compile(
-    r"python3 (?:-\w+ )*(?![\"']?(?:<clone>/|/))[^\s`]*(?:rebase|pr-fix)\.py"
-    r"|(?<![^\s`'\"(])(?!<clone>/|/)[^\s`'\"()]*[/.](?:rebase|pr-fix)\.py"
+    r"python3 (?:-\w+ )*(?![\"']?" + ANCHORED + r")[\"']?[^\s`'\"]*\.py"
+    r"|(?<![^\s`'\"(])(?!" + ANCHORED + r")[^\s`'\"()*]*(?:agents/skills/|\.claude/skills/|contrib/)[^\s`'\"()*]*\.py"
 )
+# The frontmatter key, with the indented lines YAML continues its value on.
+ALLOWED_TOOLS = re.compile(r"^allowed-tools:(.*(?:\n[ \t]+.*)*)", re.MULTILINE)
+GRANT = re.compile(r"Bash\(([^)]*)\)")
 
 
-def test_a_spelling_of_the_rebase_or_pr_fix_script_that_a_session_resolves_against_its_own_directory_is_found():
+def skill_frontmatter_and_steps(text):
+    """The `allowed-tools` values of a SKILL.md (none when it has no such line) and the rest of the file."""
+    front, body = "", text
+    if text.startswith("---\n"):
+        front, _, body = text[4:].partition("\n---\n")
+    return ALLOWED_TOOLS.findall(front), ALLOWED_TOOLS.sub("", front) + "\n" + body
+
+
+def relative_grants(value):
+    """The `Bash(...)` grants in an `allowed-tools` value that run something found from the session's directory.
+
+    A script by a path that is not anchored, any `make` command (`make *`, `make check-*`, `make -C dir *`,
+    which read the Makefile of the directory they run in or name) and any `cargo` command run the pull
+    request's own code with no prompt.
+    `git`, `gh` and the like are programs on the person's PATH and are not listed here.
+    """
+    found = []
+    for command in GRANT.findall(value):
+        words = command.split()
+        while words and re.fullmatch(r"\w+=\S*", words[0]):
+            words.pop(0)  # BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make *
+        if not words:
+            continue
+        program, args = words[0], words[1:]
+        anchored = lambda path: re.match(r"[\"']?" + ANCHORED, path)
+        if re.fullmatch(r"cargo(?:[:*]\*?)?", program):
+            found.append(command)
+        elif re.fullmatch(r"make(?:[:*]\*?)?", program):
+            found.append(command)
+        elif re.fullmatch(r"python3?(?:\.\d+)?", program):
+            paths = [word for word in args if not word.startswith("-")]
+            if not paths or not anchored(paths[0]):
+                found.append(command)
+        elif "/" in program and not anchored(program):
+            found.append(command)
+        elif RELATIVE_SCRIPT.search(command):
+            found.append(command)
+    return found
+
+
+def test_a_spelling_of_a_skill_script_that_a_session_resolves_against_its_own_directory_is_found():
     for line in (
         "python3 agents/skills/pr-fix/pr-fix.py start 9",
+        "python3 agents/skills/check-spec/check-spec.py --changed",
         "python3 ./agents/skills/pr-fix/pr-fix.py start 9",
         "python3 .claude/skills/pr-fix/pr-fix.py start 9",
         "python3 ../clone/agents/skills/rebase/rebase.py start 9",
@@ -900,35 +948,130 @@ def test_a_spelling_of_the_rebase_or_pr_fix_script_that_a_session_resolves_again
         "python3 rebase.py start 9",
         "Bash(python3 agents/skills/rebase/rebase.py *)",
         "`./agents/skills/pr-fix/pr-fix.py start 9`",
+        "./agents/skills/maintenance/maintenance.py status",
+        "python3 contrib/affected-checks.py --containers",
+        "python3 -I contrib/drive_tui.py --raw",
+        "run `python3 contrib/terminal-screenshot.py --strict`",
+        "python3 -I */scripts/check-pr-body.py --body-file b",
+        # A selftest runs the branch's code as a script does, so it is named by an anchored path too.
+        "python3 agents/skills/pr-fix/selftest.py",
+        "python3 agents/pr_worktree_selftest.py",
     ):
         assert RELATIVE_SCRIPT.search(line), line
     for line in (
         "python3 <clone>/agents/skills/pr-fix/pr-fix.py start 9",
+        "python3 {repo}/contrib/terminal-screenshot.py {capture_file} --strict",
+        "{repo}/contrib/drive_tui.py {session_file} --raw {capture_file}",
+        "python3 -I <loop>/scripts/check-pr-body.py --body-file <file>",
+        "python3 -I '<clone>/agents/skills/rebase/rebase.py' start 9",
+        "python3 ~/clone/agents/skills/rebase/rebase.py start 9",
         "Bash(python3 /path/to/clone/agents/skills/rebase/rebase.py *)",
         "python3 -I /a/clone/agents/skills/rebase/rebase.py start 9",
+        "python3 /a/clone/contrib/affected-checks.py",
         "`pr-fix.py` does everything that needs no judgement",
-        "python3 agents/skills/pr-fix/selftest.py",
+        "`agents/*.py`, `agents/skills/*/*.py`, `contrib/`",
+        "[implement-issues.py](implement-issues.py) stops when an item is assigned",
+        "`contrib/README.md` says how",
+        "Behavioural changes also follow `agents/skills/testing-preflight/SKILL.md`.",
     ):
         assert not RELATIVE_SCRIPT.search(line), line
 
 
-def test_no_skill_pre_approves_or_tells_the_session_to_run_the_rebase_or_pr_fix_script_by_a_relative_path():
+def test_a_grant_that_runs_a_script_make_target_or_cargo_command_from_the_session_directory_is_found():
+    grants = lambda *items: relative_grants("Bash(git status*), " + ", ".join(f"Bash({item})" for item in items) + ", Read")
+    for item in (
+        "python3 agents/skills/x/*",
+        "python3 agents/skills/x/x.py *",
+        "python3 ./agents/skills/x/x.py *",
+        "python3 .claude/skills/x/x.py *",
+        "python3 -I agents/skills/x/x.py *",
+        "python3 contrib/*",
+        "python3 contrib/x.py *",
+        "python3 -I */scripts/check-pr-body.py *",
+        "python3 *",
+        "python3 ../clone/agents/skills/x/x.py *",
+        "./agents/skills/x/x.py *",
+        "make *",
+        "make check-x*",
+        "make check-*",
+        "make -C docs/website *",
+        "make -C docs/website check",
+        "make",
+        "BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make *",
+        "cargo *",
+        "cargo test*",
+        "BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo *",
+    ):
+        assert grants(item) == [item], item
+    for item in (
+        "python3 /path/to/clone/agents/skills/x/x.py *",
+        "python3 -I /a/clone/contrib/x.py *",
+        "python3 ~/clone/agents/skills/x/x.py *",
+        "python3 <clone>/agents/skills/x/x.py *",
+        "python3 {repo}/contrib/x.py *",
+        "/path/to/clone/agents/skills/x/x.py *",
+        "git *",
+        "git status*",
+        "git add docs/peer-features-reviewed",
+        "GIT_SEQUENCE_EDITOR=true git rebase *",
+        "gh auth status",
+        "gh api -X GET search/issues *",
+        "echo *",
+        "grep *",
+    ):
+        assert grants(item) == [], item
+    assert relative_grants("Read, Edit, Write") == [] and relative_grants("") == []
+    # A grant list continued on the next line is read whole.
+    multi = "allowed-tools: Bash(git log:*),\n  Bash(python3 agents/skills/x/*), Read\nname: x"
+    assert relative_grants(ALLOWED_TOOLS.search(multi).group(1)) == ["python3 agents/skills/x/*"]
+
+
+def test_a_skill_with_no_allowed_tools_line_has_no_grants_and_its_steps_are_still_read():
+    bare = "---\nname: x\ndescription: d\n---\n\n1. `python3 <clone>/agents/skills/x/x.py run`\n"
+    assert skill_frontmatter_and_steps(bare)[0] == []
+    assert not RELATIVE_SCRIPT.search(skill_frontmatter_and_steps(bare)[1])
+    relative = bare.replace("<clone>/", "")
+    assert RELATIVE_SCRIPT.search(skill_frontmatter_and_steps(relative)[1])
+    granted = "---\nname: x\nallowed-tools: Bash(git *), Read\n---\n\nbody `python3 agents/skills/x/x.py`\n"
+    values, steps = skill_frontmatter_and_steps(granted)
+    assert values == [" Bash(git *), Read"] and "Bash(git *)" not in steps and RELATIVE_SCRIPT.search(steps)
+    # A line that only starts with the key's name in the body is not a grant.
+    prose = "---\nname: x\n---\n\nallowed-tools: Bash(make *)\n"
+    assert skill_frontmatter_and_steps(prose)[0] == []
+
+
+def every_skill_file():
+    files = sorted((HERE / "skills").glob("*/SKILL.md"))
+    assert {one.parent.name for one in files} >= {"rebase", "pr-fix", "implement-issues", "update-docs"}, files
+    return files
+
+
+def test_no_skill_tells_the_session_to_run_a_script_by_a_relative_path():
     # A relative path runs whichever copy is in the session's directory, which in a pull request's
-    # worktree is the pull request's own script.
-    for text_file in sorted((HERE / "skills").glob("*/SKILL.md")):
-        text = text_file.read_text(encoding="utf-8")
-        found = [one.group(0) for one in RELATIVE_SCRIPT.finditer(text)]
-        assert not found, f"{text_file.parent.name}: a step or grant names a script by a relative path: {found}"
-    for skill in SCRIPT_SKILLS:
-        text = (HERE / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
-        frontmatter = text.split("\n---\n", 1)[0]
-        grants = [line for line in frontmatter.splitlines() if line.startswith("allowed-tools:")]
-        assert len(grants) == 1, f"{skill}: one allowed-tools line"
-        # A grant naming either script, or a wildcard over the skills directory, would also match the
-        # copy inside .worktrees/pr-<n>.
-        assert not re.search(r"rebase\.py|pr-fix\.py|agents/skills/(?:rebase|pr-fix)|python3 \*", grants[0]), (
-            f"{skill}: allowed-tools names a script a worktree also holds: {grants[0]}"
-        )
+    # worktree is the pull request's own script. This reads SKILL.md files only: the REPRODUCE line in
+    # security-audit/findings.py is a command printed into a drafted issue for a person at the root of
+    # their own checkout, and no session step runs it.
+    wrong = []
+    for text_file in every_skill_file():
+        steps = skill_frontmatter_and_steps(text_file.read_text(encoding="utf-8"))[1]
+        found = [one.group(0) for one in RELATIVE_SCRIPT.finditer(steps)]
+        if found:
+            wrong.append(f"{text_file.parent.name}: a step names a script by a relative path: {found}")
+    assert not wrong, "\n" + "\n".join(wrong)
+
+
+def test_no_skill_pre_approves_a_script_make_or_cargo_run_from_the_session_directory():
+    wrong = []
+    for text_file in every_skill_file():
+        values = skill_frontmatter_and_steps(text_file.read_text(encoding="utf-8"))[0]
+        assert len(values) <= 1, f"{text_file.parent.name}: more than one allowed-tools line"
+        found = [grant for value in values for grant in relative_grants(value)]
+        if found:
+            wrong.append(f"{text_file.parent.name}: allowed-tools grants what a worktree also holds: {found}")
+    assert not wrong, "\n" + "\n".join(wrong)
+
+
+def test_the_rebase_and_pr_fix_skills_name_their_script_by_the_main_clones_path_in_step_1():
     for skill, script in (("rebase", "rebase.py"), ("pr-fix", "pr-fix.py")):
         text = (HERE / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
         assert f"python3 <clone>/agents/skills/{skill}/{script} start <pr>" in text, f"{skill}: step 1 is not absolute"

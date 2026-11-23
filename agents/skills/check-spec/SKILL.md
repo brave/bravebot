@@ -11,7 +11,6 @@ description:
   on: check spec, /check-spec, make check-spec, does the code match the spec, spec
   conformance, spec drift, file issues for spec gaps.'
 argument-hint: '[spec-name|spec-id ...] [changed] [strict] [full]'
-allowed-tools: Bash(python3 agents/skills/check-spec/*), Bash(make check-spec*)
 ---
 
 # Check the implementation against the spec
@@ -77,10 +76,21 @@ body. Every one of those is a file path passed between the steps.
 
 ## The job
 
+Run each script by the absolute path of the main clone's copy, written
+`<clone>/agents/skills/check-spec/check-spec.py` below, where `<clone>` is the first path `git worktree list`
+prints. A relative path runs the copy in the session's directory, and in a worktree that is the branch's
+own script, which would run with the person's access.
+
+`check-spec.py` analyses the tree its own file is in, wherever it is run from, and has no option to name
+another. Run from a worktree, it therefore checks the main clone's tree, and `changed` means the branch
+checked out there. To check a worktree's own tree, run `make check-spec` in it, which runs the mechanical
+pass with that tree's script. `draft-issues.py` reads the files its findings cite from the current
+directory, so run it from the tree `check-spec.py` analysed.
+
 ### Step 1: prepare (zero model tokens)
 
 ```bash
-python3 agents/skills/check-spec/check-spec.py [spec ...] [--changed] [--strict] [--full]
+python3 <clone>/agents/skills/check-spec/check-spec.py [spec ...] [--changed] [--strict] [--full]
 ```
 
 Stdout is `{"work_dir": ..., "manifest": ...}`. The mechanical report goes to stderr; print
@@ -129,7 +139,7 @@ reviewer's result is missing or unreadable, the collector says so.
 ### Step 4: collect (zero model tokens)
 
 ```bash
-python3 agents/skills/check-spec/collect-findings.py --work-dir "$WORK_DIR" [--strict]
+python3 <clone>/agents/skills/check-spec/collect-findings.py --work-dir "$WORK_DIR" [--strict]
 ```
 
 Print its output. Exit code 1 means something at severity `error` survived. A finding marked
@@ -138,7 +148,7 @@ Print its output. Exit code 1 means something at severity `error` survived. A fi
 ### Step 5: draft an issue per finding (zero model tokens)
 
 ```bash
-python3 agents/skills/check-spec/draft-issues.py --work-dir "$WORK_DIR" [--errors]
+python3 <clone>/agents/skills/check-spec/draft-issues.py --work-dir "$WORK_DIR" [--errors]
 ```
 
 Print its output. One body per finding is now on disk, shaped like a pull request: what is
@@ -169,8 +179,8 @@ there is no backend to run one against, skip this step and say so: a draft with 
 worth more than a draft with an invented one.
 
 Launch one subagent (subagent_type: `general-purpose`) per draft, all in a single message, with
-`{...}` filled in from the draft's line in the table and `{repo}` the absolute path of this
-checkout:
+`{...}` filled in from the draft's line in the table, `{repo}` the absolute path of the checkout this
+session is working on, and `<clone>` replaced by the path described at the top of this section:
 
 ```
 A spec check found a bug that shows up on a screen. Capture what the interface draws, and change nothing.
@@ -179,8 +189,8 @@ How to reach it: {screen_wanted}
 
 1. `cargo build` in {repo}.
 2. Write a drive_tui script to {session_file}: one step per line, `timeout keys`. `contrib/README.md` says how, and the steps have to answer the trust prompt first.
-3. From a disposable directory: `{repo}/contrib/drive_tui.py {session_file} --raw {capture_file} -- {repo}/target/debug/bravebot`
-4. `python3 {repo}/contrib/terminal-screenshot.py {capture_file} --strict > {screen_file}`
+3. From a disposable directory: `<clone>/contrib/drive_tui.py {session_file} --raw {capture_file} -- {repo}/target/debug/bravebot`
+4. `python3 <clone>/contrib/terminal-screenshot.py {capture_file} --strict > {screen_file}`
 5. Read {screen_file}. If it does not show the behaviour described above, fix the script and go round again. If you cannot reach it in three tries, delete {screen_file} and report that you could not.
 
 Write only those three files, all of them in the work directory. Do not edit the tree, do not fix the bug, and never write a screen you did not capture.
@@ -203,8 +213,8 @@ to judge, and guessing at them here would put a finding nobody has read into som
 Where the table said a title needs shortening, rewrite it before posting rather than posting a
 title GitHub will refuse. Keep the defect and the cost, and say the clause id first.
 
-`gh` is deliberately not in this skill's `allowed-tools`, so every call the poster makes asks
-first. That is the gate, not a nuisance to work around.
+Every `gh` call the poster makes asks the person first. That is the gate, not a nuisance to work
+around.
 
 ### Step 8: record the verdicts (zero model tokens)
 
@@ -215,7 +225,7 @@ code its clause depends on changes, or a `full` run. Skip this step for a run on
 another tree would misdate the next run's diff. Otherwise:
 
 ```bash
-python3 agents/skills/check-spec/record-reviewed.py --work-dir "$WORK_DIR" [--dry-run]
+python3 <clone>/agents/skills/check-spec/record-reviewed.py --work-dir "$WORK_DIR" [--dry-run]
 ```
 
 Print its output. It writes a line to `docs/check-spec-reviewed` for every clause a reviewer

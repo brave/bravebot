@@ -5,15 +5,21 @@ description:
   holding them. Keeps any branch with local-only work. Can also delete ignored build directories from
   the worktrees it keeps. Triggers on: clean branches, delete merged branches, prune branches, branch
   cleanup, clean worktrees, reclaim disk space, delete build output.'
-allowed-tools: Bash(python3 agents/skills/clean-branches-and-worktrees/clean-branches-and-worktrees.py *), Bash(gh auth status)
+allowed-tools: Bash(gh auth status)
 ---
 
 # Clean branches and worktrees
 
-`clean-branches-and-worktrees.py` decides everything. Run it from the checkout to clean, usually the main clone:
+`clean-branches-and-worktrees.py` decides everything. Run it from the checkout to clean, usually the main clone.
+
+Run the script by the absolute path of the main clone's copy, written
+`<clone>/agents/skills/clean-branches-and-worktrees/clean-branches-and-worktrees.py` below, where
+`<clone>` is the first path `git worktree list` prints. A relative path runs the copy in the session's
+directory, and in a worktree that is the branch's own script, which would run with the person's access.
+The script acts on the repository of the current directory, whichever copy of it runs.
 
 1. `gh auth status`. If it fails, stop and tell the person.
-2. `python3 agents/skills/clean-branches-and-worktrees/clean-branches-and-worktrees.py --dry-run`, and show the person what it would delete.
+2. `python3 <clone>/agents/skills/clean-branches-and-worktrees/clean-branches-and-worktrees.py --dry-run`, and show the person what it would delete.
 3. When the person agrees, run it again without `--dry-run`.
 4. Report the deleted branches, the removed worktrees, and each skipped branch with its reason.
 

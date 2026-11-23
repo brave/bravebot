@@ -8,7 +8,7 @@ description:
   /peer-advisories, peer advisories, vulnerabilities in other coding agents, do we have the
   Claude Code CVE, compare advisories against bravebot.'
 argument-hint: '[max N] [dry-run] [GHSA-id ...]'
-allowed-tools: Bash(python3 agents/skills/peer-advisories/*), Bash(git status*), Bash(git switch -c *), Bash(git add docs/peer-advisories-vetted), Bash(git commit *)
+allowed-tools: Bash(git status*), Bash(git switch -c *), Bash(git add docs/peer-advisories-vetted), Bash(git commit *)
 ---
 
 # Vet other coding agents' advisories against bravebot
@@ -59,10 +59,18 @@ and the agents that do read them are told what the text is.
 
 ## The job
 
+Run each script by the absolute path of the main clone's copy, written
+`<clone>/agents/skills/peer-advisories/peer-advisories.py` below, where `<clone>` is the first path `git worktree list`
+prints. A relative path runs the copy in the session's directory, and in a worktree that is the branch's
+own script, which would run with the person's access.
+
+`pending` takes the tree and the ledger from the clone the script is in, whatever the current directory
+is. `--root DIR` names another checkout instead, which has to be at `upstream/main` as step 1 says.
+
 ### Step 1: what is left to vet (zero model tokens)
 
 ```bash
-python3 agents/skills/peer-advisories/peer-advisories.py pending [--max N] [GHSA-id ...]
+python3 <clone>/agents/skills/peer-advisories/peer-advisories.py pending [--max N] [GHSA-id ...]
 ```
 
 Print its stderr: the count of advisories, how many are vetted, and the commit being vetted. It
@@ -90,7 +98,7 @@ leaves its advisory undecided, and step 7 records nothing for it.
 ### Step 3: pair each `affected` verdict with a verifier (zero model tokens)
 
 ```bash
-python3 agents/skills/peer-advisories/peer-advisories.py verify --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/peer-advisories/peer-advisories.py verify --work-dir "$WORK_DIR"
 ```
 
 Print its stderr. Stdout is `{"verify": [{"id": ..., "prompt_file": ...}]}`.
@@ -113,7 +121,7 @@ undecided, as in step 2.
 ### Step 5: draft (zero model tokens)
 
 ```bash
-python3 agents/skills/peer-advisories/peer-advisories.py draft --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/peer-advisories/peer-advisories.py draft --work-dir "$WORK_DIR"
 ```
 
 Print its output: one title and label set per confirmed defect. The labels follow
@@ -138,7 +146,7 @@ user's call, so stop and tell them. Stop at a failure and print it.
 Then record each report, so that step 7 and a second run both see it:
 
 ```bash
-python3 agents/skills/peer-advisories/peer-advisories.py filed --work-dir "$WORK_DIR" --id {id} --issue {number} [--existing]
+python3 <clone>/agents/skills/peer-advisories/peer-advisories.py filed --work-dir "$WORK_DIR" --id {id} --issue {number} [--existing]
 ```
 
 Pass `--existing` where the poster posted nothing because an issue already covered the advisory,
@@ -148,7 +156,7 @@ poster again.
 ### Step 7: record (zero model tokens)
 
 ```bash
-python3 agents/skills/peer-advisories/peer-advisories.py record --work-dir "$WORK_DIR" [--dry-run]
+python3 <clone>/agents/skills/peer-advisories/peer-advisories.py record --work-dir "$WORK_DIR" [--dry-run]
 ```
 
 This writes every decided verdict to the ledger. A confirmed defect is decided only once it has an
@@ -175,7 +183,7 @@ Skip this on a `dry-run` run, or pass `--dry-run` to see the line. Otherwise run
 every run, including one that vetted nothing, filed nothing, or left every advisory undecided:
 
 ```bash
-python3 agents/skills/peer-advisories/peer-advisories.py ran --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/peer-advisories/peer-advisories.py ran --work-dir "$WORK_DIR"
 ```
 
 It adds one comment to #1901 reading `peer-advisories ran <date> against <commit>`, or edits the
