@@ -893,6 +893,21 @@ fn watches_require_trust_are_bounded_and_are_not_inherited_by_new_sessions() {
     )
     .unwrap();
     assert_eq!(armed["watches"][0]["path"], "not-yet");
+    // The same file asked for again, spelled the same or another way the project resolves to it,
+    // is the watch already on it and not a second one.
+    for again in ["not-yet", "./not-yet"] {
+        let rows = call(
+            &mut bridge,
+            "watches.add",
+            json!({"session": session, "path": again}),
+        )
+        .unwrap();
+        assert_eq!(
+            rows["watches"].as_array().unwrap().len(),
+            1,
+            "{again} armed a second watch on one file"
+        );
+    }
     let fresh =
         call(&mut bridge, "session.new", json!({"directory": project})).unwrap()["session"].clone();
     assert_eq!(
