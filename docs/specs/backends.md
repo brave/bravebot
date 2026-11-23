@@ -3930,6 +3930,7 @@ request back in its error body is quoted without the header.
 `verified-by: bravebot_aichat::client::a_vertex_key_is_in_no_event_reply_or_log_line_of_an_answered_request`
 `verified-by: bravebot_aichat::client::a_refused_google_vertex_request_does_not_repeat_the_key`
 `verified-by: bravebot_config::provider::a_google_vertex_key_is_sent_in_its_own_header`
+`verified-by: bravebot_cli::running::a_vertex_key_is_in_no_session_record_after_a_turn`
 
 <a id="BACKEND-52"></a>
 ### BACKEND-52: what a service attached to a tool call is sent back with it, to that service only

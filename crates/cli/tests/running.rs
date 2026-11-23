@@ -10609,6 +10609,116 @@ fn import_providers_with_only_what_is_left_names_it_before_saying_nothing_is_fou
     assert!(!scratch.settings().exists(), "the run wrote settings");
 }
 
+/// IMPORT-4: at a start that can ask (three terminals, nothing configured, not incognito) what a
+/// source holds and the import leaves is said once, by name and never by value, before the
+/// refusal's routes, whether the source holds nothing importable or something that is asked about.
+/// Rejects a start that refuses with an empty `Looked` before the sources are offered (the lines
+/// are lost), and one that reads the sources again after the offer (the lines are said twice).
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_start_that_can_ask_says_what_it_found_and_left_before_the_refusal() {
+    // Only what cannot be imported: nothing is asked, the lines are said, the start refuses.
+    let scratch = Scratch::new("cli-running-import-left-at-start").with_file(
+        ".claude/settings.json",
+        r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-ant-oat01-a-token-nobody-may-see"}}"#,
+    );
+    let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, &["--plain"]);
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    assert!(!transcript.contains("Import this"), "{transcript}");
+    assert_eq!(
+        transcript
+            .matches("Found in Claude Code and not imported:")
+            .count(),
+        1,
+        "the heading was not said exactly once: {transcript}"
+    );
+    assert_eq!(
+        transcript.matches("- ANTHROPIC_AUTH_TOKEN:").count(),
+        1,
+        "the name was not said exactly once: {transcript}"
+    );
+    let left = transcript
+        .find("- ANTHROPIC_AUTH_TOKEN:")
+        .expect("checked above");
+    let route = transcript
+        .find("amazon-bedrock")
+        .unwrap_or_else(|| panic!("the refusal's routes were not said: {transcript}"));
+    assert!(
+        left < route,
+        "what was left came after the routes: {transcript}"
+    );
+    assert!(
+        !transcript.contains("a-token-nobody-may-see"),
+        "the value was drawn: {transcript}"
+    );
+    assert!(!scratch.settings().exists(), "the start wrote settings");
+
+    // Something importable beside something left: the left line comes before the question, and
+    // the unanswered question is declined and refused.
+    let scratch = Scratch::new("cli-running-import-left-with-question")
+        .with_file(".claude/settings.json", CLAUDE_CODE_KEY_COMMAND);
+    let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, &["--plain"]);
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    let left = transcript
+        .find("- model:")
+        .unwrap_or_else(|| panic!("the model left was not said: {transcript}"));
+    let question = transcript
+        .find("Import this")
+        .unwrap_or_else(|| panic!("nothing was asked: {transcript}"));
+    assert!(left < question, "{transcript}");
+    assert_eq!(transcript.matches("- model:").count(), 1, "{transcript}");
+    assert!(
+        !transcript.contains("in-the-command-nobody-may-see"),
+        "the command was drawn: {transcript}"
+    );
+}
+
+/// CLI-15: a session in lines given `--vet` resolves auto-vetting on from the flag and says, after
+/// the line about the skipped permissions, that bypass refuses what a check objects to. Without the
+/// flag it says the first line and nothing about vetting. The notice is printed from the value the
+/// session is handed, so a hand-off that resolves the standing answer to a constant, or that
+/// prints the vetting line whenever the flag is present, is told apart from the required one by the
+/// two runs. Rejects `standing_vetting` returning false whatever the flag said, and a notice that is
+/// said for a run that has auto-vetting off.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_session_in_lines_given_the_vet_flag_says_what_bypass_refuses() {
+    let said_with = |name: &str, extra: &[&str]| {
+        let gateway = a_gateway(r#"["tools"]"#, answered("all done"));
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let mut arguments = vec!["--plain", "--dangerously-skip-permissions"];
+        arguments.extend_from_slice(extra);
+        let output = in_a_terminal(&scratch.path, AT_A_GATEWAY, &arguments);
+        said(&output).0
+    };
+    let flag_line = "--dangerously-skip-permissions: nothing will be asked";
+    let vetting_line = "bypass is on with auto-vetting";
+
+    let vetted = said_with("cli-running-plain-bypass-vet", &["--vet"]);
+    let flag = vetted
+        .find(flag_line)
+        .unwrap_or_else(|| panic!("the flag's line was not said: {vetted}"));
+    let screens = vetted
+        .find(vetting_line)
+        .unwrap_or_else(|| panic!("the vetting line was not said under --vet: {vetted}"));
+    assert!(
+        flag < screens,
+        "the lines came in the wrong order: {vetted}"
+    );
+
+    let plain = said_with("cli-running-plain-bypass-no-vet", &[]);
+    assert!(plain.contains(flag_line), "{plain}");
+    assert!(
+        !plain.contains(vetting_line),
+        "a session without auto-vetting said what auto-vetting refuses: {plain}"
+    );
+}
+
 /// IMPORT-8: `doctor` and a one-shot run never ask, even where stdin, stdout and stderr are all
 /// terminals, which is the case where a start would ask. Each ends on the configuration status,
 /// names the command that asks, and writes nothing. Rejects either path calling the start-up
@@ -18026,6 +18136,8 @@ fn a_record_a_running_session_holds_is_not_resumed() {
 /// copy it, and no process is started and nothing reaches the gateway.
 #[cfg(unix)]
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
 fn a_record_a_terminal_holds_is_not_resumed_or_started_again() {
     let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
     let home = ShortHome::new();
@@ -18044,6 +18156,8 @@ fn a_record_a_terminal_holds_is_not_resumed_or_started_again() {
         .open(record_directory.join(format!("{SESSION_ID}.lock")))
         .expect("the lock file");
     holder.try_lock().expect("nothing holds the record yet");
+    let record_path = record_directory.join(format!("{SESSION_ID}.json"));
+    let record_before = std::fs::read(&record_path).expect("read the record");
 
     for arguments in [&["--resume", SESSION_ID][..], &["--continue"][..]] {
         let output = bravebot_started_in(&home.0, &work, AT_A_GATEWAY, arguments);
@@ -18119,6 +18233,12 @@ fn a_record_a_terminal_holds_is_not_resumed_or_started_again() {
     assert!(
         gateway.asked.try_recv().is_err(),
         "a refused task reached the gateway"
+    );
+
+    assert_eq!(
+        std::fs::read(&record_path).expect("read the record"),
+        record_before,
+        "a refused continuation rewrote the record a terminal holds"
     );
 
     // Once the holder has ended the record is free, and the same words are not said.
@@ -20061,6 +20181,90 @@ fn a_one_shot_run_given_the_vet_flag_lets_a_check_that_finds_nothing_release_the
     );
 }
 
+/// CLI-15: with bypass the flag is what makes a verdict able to refuse. A one-shot run given
+/// `--dangerously-skip-permissions --vet` keeps the bytes back from the planner where the check
+/// says `unsafe` and where it cannot be completed, and ends on the status for a refused release.
+/// The same script without `--vet` answers the release yes unshown, so the bytes reach the planner.
+/// Rejects a one-shot task built with auto-vetting off whatever the command line said (the check
+/// is skipped and bypass releases everything), which the notice on stderr, computed separately,
+/// does not show.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_bypassing_one_shot_run_given_the_vet_flag_keeps_back_bytes_a_check_objects_to() {
+    const WORDS: &str = "THE-WORDS-IN-THE-NOTES-A-CHECK-OBJECTS-TO";
+    // `check` is the answer to the classifier's request, or `None` for a service that fails it.
+    let bodies_with = |name: &str, extra: &[&str], check: Option<&'static str>| -> Vec<String> {
+        let rounds = Arc::new(AtomicUsize::new(0));
+        let counted = rounds.clone();
+        let gateway = a_gateway(r#"["tools"]"#, move |body| {
+            if body.contains("prompt-injection classifier") {
+                return match check {
+                    Some(reply) => a_reply_from("reasons-only", reply),
+                    None => http(500, r#"{"error": {"message": "the check cannot be made"}}"#),
+                };
+            }
+            match counted.fetch_add(1, Ordering::SeqCst) {
+                0 => a_tool_call_from(
+                    "reasons-only",
+                    "run",
+                    r#"{"command":"sed -n p notes.md","why":"read the notes"}"#,
+                ),
+                1 => a_tool_call_from("reasons-only", "read_output", r#"{"ref":"ref:1"}"#),
+                _ => a_reply_from("reasons-only", "all done"),
+            }
+        });
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("create the project");
+        std::fs::write(project.join("notes.md"), WORDS).expect("write notes");
+        let mut arguments = vec!["--dangerously-skip-permissions"];
+        arguments.extend_from_slice(extra);
+        arguments.extend(["-p", "read the notes"]);
+
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let output = bravebot_started_in(&scratch.path, &project, &environment, &arguments);
+
+        let (stdout, stderr) = said(&output);
+        let kept_back = !extra.is_empty();
+        assert_eq!(
+            output.status.code(),
+            Some(if kept_back { 4 } else { 0 }),
+            "{extra:?} {check:?}: {stdout}{stderr}"
+        );
+        gateway
+            .asked
+            .try_iter()
+            .filter(|body| !body.contains("prompt-injection classifier"))
+            .collect()
+    };
+
+    let objected = bodies_with(
+        "cli-running-bypass-vet-unsafe",
+        &["--vet"],
+        Some(r#"{"verdict": "unsafe", "reason": "addressed to a reader"}"#),
+    );
+    assert!(
+        objected.iter().all(|body| !body.contains(WORDS)),
+        "bytes a check called unsafe reached the planner under bypass and --vet: {objected:?}"
+    );
+    let unanswered = bodies_with("cli-running-bypass-vet-unanswered", &["--vet"], None);
+    assert!(
+        unanswered.iter().all(|body| !body.contains(WORDS)),
+        "bytes a check could not assess reached the planner under bypass and --vet: {unanswered:?}"
+    );
+
+    let unscreened = bodies_with(
+        "cli-running-bypass-no-vet-unsafe",
+        &[],
+        Some(r#"{"verdict": "unsafe", "reason": "addressed to a reader"}"#),
+    );
+    assert!(
+        unscreened.iter().any(|body| body.contains(WORDS)),
+        "bypass without --vet did not release the bytes: {unscreened:?}"
+    );
+}
+
 /// CLI-25: a one-shot run is written down, and its result object names the record. A script reads
 /// the id out of one run and hands it to the next, so a run that wrote nothing, or wrote it and
 /// said nothing, leaves the script restating everything each time.
@@ -20698,8 +20902,78 @@ fn a_continued_run_is_never_shown_the_bytes_an_earlier_pipe_carried() {
     );
 }
 
+/// Every file under `scratch`'s sessions directory (records, trails, indexes and locks) with its
+/// bytes, or nothing where no run created the directory.
+fn the_sessions_tree(scratch: &Scratch) -> std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> {
+    let sessions = scratch.path.join(".bravebot").join("sessions");
+    match sessions.exists() {
+        true => the_tree_under(&sessions),
+        false => Default::default(),
+    }
+}
+
+/// BACKEND-51: a Vertex key is in no session record. A one-shot turn against a `google-vertex`
+/// service holding a known key is recorded, and no file under the home's `.bravebot/sessions` (the
+/// record, the trail beside it, the index) holds the key. The record is asserted to exist, so a run
+/// that wrote nothing does not pass. Rejects a record writer that stores the resolved credential
+/// or the request headers.
+#[test]
+fn a_vertex_key_is_in_no_session_record_after_a_turn() {
+    const KEY: &str = "AIza-a-vertex-key-nobody-may-record";
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch = Scratch::new("cli-running-vertex-record").with_settings(&format!(
+        r#"{{
+            "provider": {{
+                "google-vertex": {{
+                    "env": ["GOOGLE_API_KEY"],
+                    "options": {{"baseURL": "http://127.0.0.1:{}/v1", "maxRetries": 0}},
+                    "models": {{"reasons-only": {{}}}}
+                }}
+            }},
+            "model": "google-vertex/reasons-only"
+        }}"#,
+        gateway.port
+    ));
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("GOOGLE_API_KEY", KEY));
+
+    let output = bravebot(
+        &scratch.path,
+        &environment,
+        &["--json", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(
+        session_of(&stdout).is_some(),
+        "the run was not recorded, so there is nothing to search: {stdout}"
+    );
+    assert!(
+        !requests(&gateway).is_empty(),
+        "no request reached the service"
+    );
+    let mut searched = 0;
+    for (path, bytes) in the_sessions_tree(&scratch) {
+        let Some(bytes) = bytes else { continue };
+        searched += 1;
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(KEY),
+            "{} holds the key",
+            path.display()
+        );
+    }
+    assert!(
+        searched > 0,
+        "no file under the sessions directory was searched"
+    );
+}
+
 /// CLI-25 and INCOG-3: an incognito run writes no record, says so by a null session, and leaves
 /// `--continue` with nothing to find.
+///
+/// No file at all is written under the sessions directory, so a run that wrote its record or its
+/// trail somewhere `--continue` does not look is rejected as well.
 #[test]
 fn an_incognito_run_is_not_recorded_and_cannot_be_continued() {
     let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
@@ -20709,6 +20983,15 @@ fn an_incognito_run_is_not_recorded_and_cannot_be_continued() {
 
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(stdout.contains(r#""session":null"#), "{stdout}");
+    let written: Vec<_> = the_sessions_tree(&scratch)
+        .into_iter()
+        .filter(|(_, bytes)| bytes.is_some())
+        .map(|(path, _)| path)
+        .collect();
+    assert!(
+        written.is_empty(),
+        "an incognito run wrote a record, a trail or an index: {written:?}"
+    );
     let _ = requests(&gateway);
 
     let (output, stdout, _) = a_recorded_run(&scratch, &["-p", "follow up", "--continue"]);
@@ -20786,6 +21069,125 @@ fn a_failed_run_writes_no_record_and_a_continuation_carries_on_the_last_complete
     assert!(
         !sent.contains("FAIL-NOW"),
         "the continuation carried the turn that failed: {sent}"
+    );
+}
+
+/// CLI-25: `--incognito` with `--resume <id>` or `--continue` runs the task over the record's
+/// conversation and writes nothing back: the result object carries a null session, and every file
+/// under the sessions directory (the record and the trail beside it) is byte for byte what it was.
+/// Rejects a continuation that saves the turn into the ordinary record, or appends to its trail,
+/// while incognito.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_incognito_run_over_a_record_leaves_the_record_and_its_trail_as_they_were() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch =
+        Scratch::new("cli-running-incognito-continued").with_settings(&settings_for(&gateway));
+    let (_, first, _) = a_recorded_run(&scratch, &["-p", "FIRST-QUESTION"]);
+    let id = session_of(&first).expect("the first run named its session");
+    let before = the_sessions_tree(&scratch);
+    assert!(
+        before.values().any(|bytes| bytes.is_some()),
+        "the first run wrote nothing to compare against"
+    );
+    let _ = requests(&gateway);
+
+    for arguments in [
+        vec![
+            "--incognito",
+            "-p",
+            "INCOGNITO-FOLLOW-UP",
+            "--resume",
+            id.as_str(),
+        ],
+        vec!["--incognito", "-p", "INCOGNITO-FOLLOW-UP", "--continue"],
+        vec![
+            "--incognito",
+            "--resume",
+            id.as_str(),
+            "-p",
+            "INCOGNITO-FOLLOW-UP",
+        ],
+    ] {
+        let (output, stdout, stderr) = a_recorded_run(&scratch, &arguments);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{arguments:?}: {stdout}{stderr}"
+        );
+        assert!(
+            stdout.contains(r#""session":null"#),
+            "{arguments:?}: the run named a session: {stdout}"
+        );
+        let sent = requests(&gateway);
+        let sent = sent.last().expect("the task reached the gateway");
+        assert!(
+            sent.contains("FIRST-QUESTION") && sent.contains("INCOGNITO-FOLLOW-UP"),
+            "{arguments:?}: the task did not run over the record's conversation: {sent}"
+        );
+        assert_the_same_tree(
+            &before,
+            &the_sessions_tree(&scratch),
+            &format!("{arguments:?}"),
+        );
+    }
+}
+
+/// CLI-25: a continuation that is refused, for an id that names no record, a `--resume` with no
+/// id, `--mode manifest`, or a record a manifest run wrote, leaves every file under the sessions
+/// directory as it was and creates none. Rejects a refusal made after the record was opened for
+/// writing, which would leave a lock, a rewritten record or an empty one behind.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_refused_continuation_writes_nothing_under_the_sessions_directory() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch =
+        Scratch::new("cli-running-continued-refused-writes").with_settings(&settings_for(&gateway));
+    let (_, stdout, _) = a_recorded_run(&scratch, &["-p", "first"]);
+    let id = session_of(&stdout).expect("the first run named its session");
+    let _ = requests(&gateway);
+
+    let before = the_sessions_tree(&scratch);
+    for arguments in [
+        vec!["-p", "next", "--resume", "no-such-id"],
+        vec!["-p", "next", "--resume"],
+        vec!["--mode", "manifest", "-p", "next", "--continue"],
+        vec!["--mode", "manifest", "-p", "next", "--resume", id.as_str()],
+    ] {
+        let (output, stdout, _) = a_recorded_run(&scratch, &arguments);
+
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stdout}");
+        assert_the_same_tree(
+            &before,
+            &the_sessions_tree(&scratch),
+            &format!("{arguments:?}"),
+        );
+    }
+
+    // A record a manifest run wrote is refused by id and by `--continue`.
+    let path = the_record_file(&scratch, &id);
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("read the record")).expect("JSON");
+    record["manifest"] = serde_json::json!({});
+    std::fs::write(&path, serde_json::to_vec(&record).expect("encode")).expect("write the record");
+    let before = the_sessions_tree(&scratch);
+    for arguments in [
+        vec!["-p", "next", "--resume", id.as_str()],
+        vec!["-p", "next", "--continue"],
+    ] {
+        let (output, stdout, _) = a_recorded_run(&scratch, &arguments);
+
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stdout}");
+        assert_the_same_tree(
+            &before,
+            &the_sessions_tree(&scratch),
+            &format!("{arguments:?}"),
+        );
+    }
+    assert!(
+        requests(&gateway).is_empty(),
+        "a refused run sent a request"
     );
 }
 
@@ -22646,6 +23048,92 @@ fn a_one_shot_run_says_why_a_server_that_never_answered_its_handshake_was_left_o
     assert!(
         took < Duration::from_secs(40),
         "the run waited on a handshake past the bound its declaration gave: {took:?}\n{stderr}"
+    );
+}
+
+/// SERVERS-15, Known costs: a session in lines in a terminal, with a server that never answers its
+/// handshake, opens once the bound has passed and not before, and it opens: the wait ends at three
+/// times the bound and 5 seconds at the latest. The run is bounded here, so a start that waits on
+/// the server for as long as it lives fails this test and does not hang the suite.
+///
+/// The server reads what it is sent and never answers; its declaration gives `startup_timeout_secs`
+/// of 1. The session opens (its opening line is in the transcript) without the server (the note says
+/// why), it took the bound to open (a start that never waited does not report a server left out),
+/// and it opened under the 8 seconds the bound allows, with 32 seconds for the process to start.
+/// Rejects a start that waits for the handshake with no bound or with the default of 60 seconds, and
+/// a start that opens at once and starts the server's handshake in the background with no note.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_session_in_lines_with_a_server_that_never_answers_opens_within_the_bound_the_start_allows() {
+    if !bravebot_sandbox::confinement_works_here() {
+        return skipped("confinement is unavailable, so the server cannot be started");
+    }
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let settings = settings_for(&gateway).replacen('{', r#"{"mcp": {"request": ["weather"]},"#, 1);
+    let argv = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "while IFS= read -r line; do :; done".to_string(),
+    ];
+    let declared = serde_json::json!({"servers": {"weather": {
+        "transport": "stdio", "argv": argv, "variables": ["PATH"],
+        "startup_timeout_secs": 1}}})
+    .to_string();
+    let declaration = bravebot_config::mcp::Declarations::parse(&declared)
+        .expect("the declarations read")
+        .get("weather")
+        .expect("an entry for weather")
+        .declaration
+        .expect("a declaration");
+    let scratch = Scratch::new("cli-running-lines-slow-handshake")
+        .with_settings(&settings)
+        .with_state("mcp.json", &declared)
+        .with_state("mcp-approved", &format!("{}\n", declaration.digest()));
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("PATH", "/usr/bin:/bin"));
+
+    let mut terminal = in_a_terminal_command(
+        &scratch.path,
+        None,
+        &environment,
+        &["--plain", "--dangerously-skip-permissions"],
+    );
+    let started = std::time::Instant::now();
+    let child = terminal
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("script runs the built binary in a terminal");
+    let (sender, ended) = mpsc::channel();
+    std::thread::spawn(move || {
+        sender.send(child.wait_with_output()).ok();
+    });
+    let output = ended
+        .recv_timeout(Duration::from_secs(90))
+        .expect("the session did not open within 90 seconds of a server that never answered")
+        .expect("the run ends");
+    let took = started.elapsed();
+
+    let (transcript, _) = said(&output);
+    assert!(
+        transcript.contains("in lines"),
+        "the session did not open: {transcript}"
+    );
+    assert!(
+        transcript
+            .lines()
+            .any(|line| line.contains("weather") && line.contains("handshake")),
+        "the start did not say that weather was left out: {transcript}"
+    );
+    assert!(
+        took >= Duration::from_secs(1),
+        "the start did not wait for the handshake's bound: {took:?}"
+    );
+    assert!(
+        took < Duration::from_secs(40),
+        "the session opened after waiting on a handshake past its bound: {took:?}\n{transcript}"
     );
 }
 

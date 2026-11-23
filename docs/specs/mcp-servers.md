@@ -1904,6 +1904,7 @@ content.
 `verified-by: bravebot_ui_bridge::connectors::editing_a_connector_keeps_the_bounds_its_declaration_gave`
 `verified-by: bravebot_ui_bridge::manifest::a_server_that_never_answers_its_handshake_does_not_hold_up_a_plan_run`
 `verified-by: bravebot_cli::running::a_one_shot_run_says_why_a_server_that_never_answered_its_handshake_was_left_out`
+`verified-by: bravebot_cli::running::a_session_in_lines_with_a_server_that_never_answers_opens_within_the_bound_the_start_allows`
 
 <a id="SERVERS-16"></a>
 ### SERVERS-16: past a size the setting names, a vouched tool is offered by name until the planner loads it
