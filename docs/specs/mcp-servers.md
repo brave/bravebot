@@ -873,6 +873,8 @@ the list from `also` on `mcp-call.request`.
 `verified-by: bravebot_agent::mcp::a_session_with_no_state_directory_does_not_offer_or_record_answer_two`
 `verified-by: bravebot_agent::mcp::a_call_after_a_servers_answer_was_vetted_asks_though_a_rule_allows_it`
 `verified-by: bravebot_agent::mcp::the_private_arm_survives_a_resume_and_an_allow_ruled_call_still_asks`
+`verified-by: bravebot_tui::undo_tests::undoing_the_turn_that_let_private_content_out_makes_the_conversation_public_again`
+`verified-by: bravebot_ui_bridge::bridge::undoing_the_turn_that_let_private_content_out_makes_the_desktop_conversation_public_again`
 `verified-by: bravebot_agent::mcp::a_call_written_in_a_context_that_met_untrusted_content_reaches_no_server`
 `verified-by: bravebot_agent::mcp::one_yes_covers_the_later_calls_to_the_same_tool_listed_in_its_question`
 `verified-by: bravebot_agent::mcp::one_no_refuses_the_later_calls_listed_in_its_question`

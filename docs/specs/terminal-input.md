@@ -1571,6 +1571,7 @@ vi gives `m` no key, and a box that waited for one would swallow the instruction
 `verified-by: bravebot_tui::sidebar_prompt::escape_and_ctrl_c_close_the_list_and_keep_what_was_changed`
 `verified-by: bravebot_tui::sidebar_prompt::a_space_with_a_modifier_toggles_nothing`
 `verified-by: bravebot_tui::app::a_style_chosen_in_the_config_panel_is_kept_and_said_in_the_transcript`
+`verified-by: bravebot_tui::app::the_config_panel_opened_at_rest_keeps_the_style_taken_and_escape_changes_nothing`
 `verified-by: bravebot_tui::config_prompt::every_row_says_what_it_means`
 
 <a id="INPUT-24"></a>

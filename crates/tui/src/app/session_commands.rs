@@ -81,8 +81,8 @@ pub(super) fn open_effort_picker(session: &mut Session, scope: crate::model_prom
 }
 
 /// Open the panel of preferences and keep what the person chose.
-pub(super) fn choose_editing(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+pub(super) fn choose_editing<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
     session: &mut Session,
 ) {
     let wheel = session.wheel_rows();

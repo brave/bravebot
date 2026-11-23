@@ -549,6 +549,113 @@ fn undoing_a_turn_takes_its_split_back_with_its_tokens() {
     }
 }
 
+/// SERVERS-7: a conversation the planner was shown private content in (a server's answer a person
+/// vetted) asks every later call, and undoing the turn that let the content out ends that, so the
+/// conversation the rewind leaves is public again. Undoing a later turn leaves it private, since
+/// the turn that let the content out is still in the history. Live and after a resume, where the
+/// points come back from the record.
+///
+/// The turn that lets the content out is made by marking the conversation as the planner being
+/// shown a private answer, which is what a turn that vets does to it. That a call to a tool an
+/// `allow` rule covers is then made unasked is read from the gate, which asks whenever
+/// `Conversation::holds` is private, and is not run here.
+///
+/// Rejects: a rewind that keeps the live conversation's `holds` and truncates its messages, one
+/// that restores a snapshot taken after the turn, and one that clears the private arm whichever
+/// turn is undone.
+#[test]
+fn undoing_the_turn_that_let_private_content_out_makes_the_conversation_public_again() {
+    use bravebot_aichat::protocol::Message;
+    use bravebot_core::label::{Confidentiality, Label};
+    if !in_isolated_profile() {
+        return;
+    }
+    for resumed in [false, true] {
+        let case = format!("resumed: {resumed}");
+        let root = scratch_dir(&format!("undo-private-arm-{resumed}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        let root = workspace.root();
+        let mut trust = bravebot_agent::workspace::trust_store(root);
+        let mut programs = TrustedPrograms::new();
+        let mut conversation = Conversation::new();
+        let mut session = Session::new("test");
+        let mut stored =
+            sessions::Handle::begin(root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        for (index, prompt) in ["earlier", "vet the answer", "after it"]
+            .into_iter()
+            .enumerate()
+        {
+            let start = conversation.recounted().len();
+            session.paste(prompt);
+            session.submit().unwrap();
+            session.rewind.open(
+                rewind_point(&session, &conversation, &trust, &programs, &stored),
+                prompt.to_string(),
+            );
+            conversation.push(Message::user(prompt));
+            if index == 1 {
+                conversation.observed(Label::trusted_private());
+            }
+            conversation.push(Message::assistant("done"));
+            session.complete("done", vec![], 10);
+            session.record_turn(start, &conversation);
+        }
+        assert_eq!(
+            conversation.holds(),
+            Confidentiality::Private,
+            "{case}: setup"
+        );
+        save(&mut stored, &session, &conversation, &trust, &programs);
+        if resumed {
+            let record = sessions::load(root, stored.id()).unwrap();
+            trust = record.trust_map(root).unwrap();
+            programs = record.trusted_programs(root);
+            conversation = Conversation::restored(record.conversation.clone());
+            assert_eq!(
+                conversation.holds(),
+                Confidentiality::Private,
+                "{case}: the record lost the private arm, so this says nothing"
+            );
+            let mut reopened = Session::new("test");
+            reopened.replay(
+                &conversation,
+                &record.title,
+                &sessions::recall(root, &record),
+            );
+            reopened.restore_spend(record.tokens, record.spend.clone());
+            reopened.restore_rewind_points(record.rewind_points(root), &conversation);
+            session = reopened;
+        }
+        let mut undo = |steps: usize| {
+            rewind(
+                &mut session,
+                &mut conversation,
+                &mut trust,
+                &mut programs,
+                &mut stored,
+                &workspace,
+                &mut None,
+                &mut bravebot_agent::confirm::Unattended,
+                steps,
+            );
+            conversation.holds()
+        };
+
+        assert_eq!(
+            undo(1),
+            Confidentiality::Private,
+            "{case}: undoing the turn after the vet ended the private arm"
+        );
+        assert_eq!(
+            undo(1),
+            Confidentiality::Public,
+            "{case}: the conversation is still private after the turn that let the content out was undone"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
 /// `/undo` is confined the way a write is, live and after a resume. A pull between the turn and
 /// the rewind turns a directory the turn wrote into into a link out of the workspace; following
 /// it would put the checkout's bytes over a file outside the tree and delete another. Both paths

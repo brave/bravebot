@@ -557,6 +557,7 @@ change of the file.
 `verified-by: bravebot_agent::turn::a_style_from_a_file_opens_the_prompt_and_yields_to_system_prompt`
 `verified-by: bravebot_agent::turn::a_turn_records_the_output_style_that_opened_it`
 `verified-by: bravebot_tui::app::every_turn_the_terminal_starts_carries_the_style_in_force_ticks_and_goal_rounds_included`
+`verified-by: bravebot_tui::app::the_side_requests_the_terminal_sends_carry_no_style_and_only_a_turns_task_does`
 `verified-by: bravebot_tui::app::a_style_file_in_the_home_directory_is_listed_and_picked_by_name`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_style`
 `verified-by: bravebot_config::settings::a_style_that_is_blank_or_not_a_string_names_nothing`

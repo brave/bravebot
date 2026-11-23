@@ -19293,6 +19293,425 @@ mod tests {
         }
     }
 
+    /// INPUT-23. `/config` typed at rest opens the panel through `choose_editing`, which reads its
+    /// own keys. Enter takes the row under the cursor, keeps that style and says which one; Escape
+    /// changes nothing and says nothing. Whichever style is taken, the box is in INSERT mode with no
+    /// instruction left waiting for a key, and no event is left unread.
+    ///
+    /// The faults it rejects are a resting loop that drops the row the panel returns (the style
+    /// stays), one that applies the row on Escape, one that says the other style than it took, and
+    /// one that leaves the mode or the waiting key as the NORMAL mode held them.
+    #[test]
+    fn the_config_panel_opened_at_rest_keeps_the_style_taken_and_escape_changes_nothing() {
+        use crate::vim::{Editing, Mode};
+        use ratatui::backend::TestBackend;
+        let said_of = |editing: Editing| match editing {
+            Editing::Vi => t!(session_editing_vi).to_string(),
+            Editing::Ordinary => t!(session_editing_ordinary).to_string(),
+        };
+        // (style held, whether NORMAL mode holds a `d` waiting for its key, keys, style after, said)
+        let cases = [
+            (
+                Editing::Ordinary,
+                false,
+                vec![KeyCode::Char('j'), KeyCode::Enter],
+                Editing::Vi,
+                true,
+            ),
+            (
+                Editing::Ordinary,
+                false,
+                vec![KeyCode::Enter],
+                Editing::Ordinary,
+                true,
+            ),
+            (
+                Editing::Ordinary,
+                false,
+                vec![KeyCode::Char('j'), KeyCode::Esc],
+                Editing::Ordinary,
+                false,
+            ),
+            (Editing::Vi, true, vec![KeyCode::Enter], Editing::Vi, true),
+            (
+                Editing::Vi,
+                true,
+                vec![KeyCode::Char('k'), KeyCode::Enter],
+                Editing::Ordinary,
+                true,
+            ),
+            (
+                Editing::Vi,
+                true,
+                vec![KeyCode::Char('k'), KeyCode::Esc],
+                Editing::Vi,
+                false,
+            ),
+        ];
+        for (held, waiting, keys, chosen, said) in cases {
+            let case = format!("{held:?} holding a waiting key: {waiting}, keys {keys:?}");
+            let mut session = Session::new("none");
+            session.choose_editing(held);
+            if waiting {
+                handle_key(&mut session, key(KeyCode::Esc));
+                handle_key(&mut session, key(KeyCode::Char('d')));
+                assert_eq!(session.vi_mode(), Some(Mode::Normal), "{case}: setup");
+                assert_eq!(session.half_typed(), Some("d"), "{case}: setup");
+            }
+            let notes = session.transcript.len();
+            let _held =
+                crate::input::script::hold(keys.iter().map(|code| TermEvent::Key(key(*code))));
+            let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+
+            choose_editing(&mut terminal, &mut session);
+
+            assert_eq!(session.editing(), chosen, "{case}");
+            assert_eq!(
+                crate::input::script::unread(),
+                0,
+                "{case}: the panel ended before its keys were read"
+            );
+            if said {
+                assert_eq!(session.transcript.len(), notes + 1, "{case}");
+                assert_eq!(last_note(&session), said_of(chosen), "{case}");
+                assert_eq!(
+                    session.vi_mode(),
+                    (chosen == Editing::Vi).then_some(Mode::Insert),
+                    "{case}: the mode"
+                );
+                assert_eq!(session.half_typed(), None, "{case}: a key left waiting");
+            } else {
+                assert_eq!(
+                    session.transcript.len(),
+                    notes,
+                    "{case}: Escape said something"
+                );
+                if waiting {
+                    assert_eq!(
+                        session.half_typed(),
+                        Some("d"),
+                        "{case}: Escape took the waiting key away"
+                    );
+                }
+            }
+        }
+    }
+
+    /// INSTR-12. In the terminal a `/loop` tick and a `/goal` round are turns and carry the style
+    /// (the test above), while `/btw`, `/recap` and `/compact` start no turn and carry none. The
+    /// style reaches a request only through `with_session_style` on a turn's task, and the senders
+    /// of the side requests (the summary, the aside and the recap, the enhanced prompt, the hand-off
+    /// brief, the commit message and the goal check, all in `side_requests.rs`) hold no task. This
+    /// scans the source of the three files that send them for a call that would put the style on
+    /// one, and for the one call that puts it on a turn.
+    ///
+    /// The fault it rejects is a side-request sender that takes the session's style, which would
+    /// send the person's style words to a summariser or an aside that is told to ignore them. The
+    /// scan is a reading of the source and does not run a sender.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_side_requests_the_terminal_sends_carry_no_style_and_only_a_turns_task_does() {
+        let main = include_str!("app.rs");
+        let (main, _) = main
+            .split_once("\nmod tests {")
+            .expect("the tests module is not where this expects it");
+        for (file, source) in [
+            ("app.rs", main),
+            ("app/actions.rs", include_str!("app/actions.rs")),
+            ("app/side_requests.rs", include_str!("app/side_requests.rs")),
+        ] {
+            for put_on in ["with_session_style", "with_style(", "session.style()"] {
+                assert!(
+                    !source.contains(put_on),
+                    "{file} reads the style in force (`{put_on}`), so a side request may carry it"
+                );
+            }
+        }
+        let turns = include_str!("app/turns.rs");
+        assert_eq!(
+            turns.matches("task = with_session_style(").count(),
+            1,
+            "the style is put on a task in more or fewer places than a turn's"
+        );
+    }
+
+    /// PATHREQ-4. A yes the person gives to `request_path` inside a turn is the grant `/status`
+    /// lists afterwards, in the words `/reach paths` uses. The turn runs on a clone of the session's
+    /// workspace, as the terminal starts one, with the question crossing to this thread as it does
+    /// to the one that owns the screen. Every other status test grants by hand.
+    ///
+    /// The faults it rejects are a grant a turn makes on a copy of the grant list the session does
+    /// not read, and a yes that is honoured for programs and listed by nothing. That `run_turn_animated`
+    /// hands the worker a clone of the session's workspace is read from its source, since the
+    /// function needs a terminal.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    #[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
+    fn a_path_the_person_lets_a_turn_reach_is_the_one_status_lists_afterwards() {
+        use crate::remote_confirm::{Interjections, RemoteConfirmer, Reply, ToMain};
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        // A turn is asked for reach only where programs are confined, as a request for a path is.
+        if bravebot_sandbox::base::Prelude::current().is_none()
+            || !bravebot_sandbox::confinement_works_here()
+        {
+            return;
+        }
+        let top = crate::testutil::scratch_dir("bravebot-app-status-turn-path");
+        std::fs::remove_dir_all(&top).ok();
+        for place in [".ssh", ".bravebot", ".aws"] {
+            std::fs::create_dir_all(top.join("home").join(place)).expect("home directory");
+        }
+        for place in ["beside", "project"] {
+            std::fs::create_dir_all(top.join(place)).expect("directory");
+        }
+        let home = top.join("home").canonicalize().expect("home");
+        let beside = top.join("beside").canonicalize().expect("beside");
+        let root = top.join("project").canonicalize().expect("project");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let session = Session::new("none");
+        let (config, _requests, server) = undo_tests::endpoint::endpoint(
+            vec![
+                undo_tests::endpoint::tool(
+                    "request_path",
+                    serde_json::json!({
+                        "path": beside.display().to_string(),
+                        "why": "the build writes its output there",
+                    }),
+                ),
+                undo_tests::endpoint::answer(),
+            ],
+            None,
+        );
+        let status_config = config.clone();
+        let listed = |workspace: &Workspace| {
+            status_report(&session, &stored, workspace, None, &status_config, None)
+                .lines
+                .into_iter()
+                .map(|line| (line.label, line.value))
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            !listed(&workspace)
+                .iter()
+                .any(|(label, _)| label == t!(status_requested_paths)),
+            "a heading for paths nobody was asked about"
+        );
+
+        let mode = session.permission_mode();
+        let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+        trust.trust(".");
+        let task = Task::new("reach it")
+            .with_profile(Some(home))
+            .with_permission_mode(mode)
+            .with_confined_runs(true)
+            .asking_about_unconfined(true)
+            .with_sandbox_mode(session.live_sandbox_mode());
+        let (to_main, from_worker) = mpsc::channel::<ToMain>();
+        let (answer_tx, answer_rx) = mpsc::channel::<Reply>();
+        let worker_workspace = workspace.clone();
+        let worker = thread::spawn(move || {
+            let mut asking = RemoteConfirmer::new(to_main, answer_rx, Interjections::new());
+            let mut confirmer = bravebot_agent::Confining::new(&mut asking, mode, false);
+            turn::resume(
+                &config,
+                &Egress::new(),
+                &worker_workspace,
+                &task,
+                &mut Conversation::new(),
+                &mut confirmer,
+                &mut bravebot_agent::IgnoreReports,
+                &mut Trail::new(),
+                trust,
+                TrustedPrograms::new(),
+                None,
+                &Cancel::new(),
+            )
+            .outcome
+            .expect("the turn runs");
+        });
+        let mut asked = Vec::new();
+        for message in from_worker {
+            if let ToMain::Path(request) = message {
+                asked.push(request);
+                answer_tx
+                    .send(Reply::Path(bravebot_agent::confirm::Decision::Approve))
+                    .expect("answered");
+            }
+        }
+        worker.join().expect("the turn finished");
+        server.join().expect("the model finished");
+
+        assert_eq!(asked.len(), 1, "the turn did not ask about the path");
+        let first = t!(
+            path_listed,
+            number = "1",
+            access = t!(reach_access_reads),
+            path = asked[0].path.display().to_string().as_str()
+        );
+        let lines = listed(&workspace);
+        let at = lines
+            .iter()
+            .position(|(label, _)| label == t!(status_requested_paths))
+            .unwrap_or_else(|| panic!("a yes given in a turn is not listed by /status: {lines:?}"));
+        assert_eq!(lines[at].1, t!(count_requested_paths, count = 1));
+        assert_eq!(
+            lines[at + 1].1,
+            first,
+            "the row is not the grant the turn made, worded as /reach paths words it"
+        );
+
+        let turns = include_str!("app/turns.rs");
+        let start = turns
+            .find("fn run_turn_animated(")
+            .expect("`fn run_turn_animated(` is not in the source");
+        let (_, run) = turns.split_at(start);
+        let (run, _) = run
+            .split_once("\n}\n")
+            .expect("`fn run_turn_animated` is not closed");
+        assert!(
+            run.contains("let worker_workspace = workspace.clone();")
+                && run.contains("&worker_workspace,")
+                && !run.contains("Workspace::new("),
+            "a turn is not handed a clone of the workspace `/status` reads"
+        );
+    }
+
+    /// PREM-9. `/status` says the tier the last real turn ran on: before a turn, that a premium key
+    /// is available and nothing is sent yet; after a turn that presented no key, that the key was
+    /// not sent; after one that did, that it was; and with no key, that there is no subscription,
+    /// whatever a turn reported. The turn here is a real one, run to its outcome and folded into
+    /// the session as the terminal folds it, with a key held beside a premium host that is not
+    /// Brave's, so the request carries none and the outcome says so.
+    ///
+    /// The faults it rejects are a report built from the configuration alone (it would say the key
+    /// was sent), a `fold_outcome` that records whether a key is held and not whether the turn
+    /// presented one, and a `status_report` that passes no tier or a constant.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
+    fn status_reports_the_tier_the_last_turn_ran_on_once_the_turn_is_folded_in() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-status-tier");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let (mut config, _requests, server) =
+            undo_tests::endpoint::endpoint(vec![undo_tests::endpoint::answer()], None);
+        config.premium_key = Some(bravebot_config::Secret::new("a-premium-key"));
+        config.premium_endpoint = Some("http://127.0.0.1:9/their-own-host".to_string());
+        let mut free = config.clone();
+        free.premium_key = None;
+        let tier = |session: &Session, config: &Config| {
+            status_report(session, &stored, &workspace, None, config, None)
+                .lines
+                .into_iter()
+                .filter(|line| line.label == t!(status_endpoint))
+                .map(|line| line.note.clone())
+                .collect::<Vec<_>>()
+        };
+        let said = |words: &str| vec![words.to_string()];
+        let asked = || Asked {
+            name: "test-model".to_string(),
+            comparable: true,
+            configured: "test-model".to_string(),
+        };
+
+        let mut session = Session::new("none");
+        assert_eq!(
+            tier(&session, &config),
+            said(t!(status_premium_available)),
+            "before a turn"
+        );
+        assert_eq!(
+            tier(&session, &free),
+            said(t!(status_no_subscription)),
+            "before a turn, with no key"
+        );
+
+        session.paste("look it up");
+        session.submit().unwrap();
+        let mut sink = Trail::new();
+        let completed = turn::resume(
+            &config,
+            &Egress::new(),
+            &workspace,
+            &Task::new("look it up"),
+            &mut Conversation::new(),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink,
+            TrustStore::new(&root),
+            TrustedPrograms::new(),
+            None,
+            &Cancel::new(),
+        );
+        server.join().expect("the model finished");
+        assert!(
+            completed.outcome.as_ref().is_ok_and(|done| !done.premium),
+            "the turn reported presenting a key that its premium host is not Brave's to receive"
+        );
+        fold_outcome(
+            &mut session,
+            completed.outcome,
+            sink,
+            Carried {
+                trust: TrustStore::new(&root),
+                programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
+            },
+            Occupied {
+                budget: 100_000,
+                guessed: false,
+                last_request_tokens: 0,
+            },
+            asked(),
+            Line {
+                text: "look it up",
+                addressed: None,
+                offered_a_later_look: false,
+            },
+            &workspace,
+        );
+        assert_eq!(
+            tier(&session, &config),
+            said(t!(status_premium_not_spent)),
+            "after a turn that presented no key"
+        );
+        assert_eq!(
+            tier(&session, &free),
+            said(t!(status_no_subscription)),
+            "no key held, whatever the turn reported"
+        );
+
+        // What `fold_outcome` hands on for a turn whose requests carried the key.
+        record_what_the_turn_ran_on(&mut session, asked(), "test-model", true, true);
+        assert_eq!(
+            tier(&session, &config),
+            said(t!(status_premium_in_use)),
+            "after a turn that presented the key"
+        );
+        assert_eq!(
+            tier(&session, &free),
+            said(t!(status_no_subscription)),
+            "no key held, though a turn reported presenting one"
+        );
+    }
+
     /// The bare command is still the command: the picker opens and nothing is sent, so there is no
     /// turn for the note to describe.
     #[test]
