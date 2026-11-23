@@ -846,7 +846,7 @@ const MAY_ASK_FOR_ALL_FEATURES: [(&str, &str, usize, &str); 13] = [
     ),
     (
         "contrib/check-lint-increase.py",
-        "\"cargo\", \"clippy\", \"--workspace\", \"--lib\", \"--bins\", \"--all-features\"",
+        "\"cargo\", \"clippy\", \"--workspace\", \"--all-targets\", \"--all-features\"",
         1,
         "a lint run",
     ),
