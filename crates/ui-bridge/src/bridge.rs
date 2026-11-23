@@ -3936,7 +3936,7 @@ impl Bridge {
             if !watches.live().iter().any(|w| w.path() == path) {
                 let workspace = Workspace::new(open.project.clone())
                     .map_err(|_| Failure::bad_request("Project unavailable."))?;
-                watches.arm(path.clone(), workspace.root().to_path_buf(), 0, workspace.look(&path, workspace.root()), std::time::Instant::now())
+                watches.arm(path.clone(), workspace.root().to_path_buf(), bravebot_agent::watch::BY_THE_PERSON, workspace.look(&path, workspace.root()), std::time::Instant::now())
                     .map_err(|_| Failure::bad_request("Cannot watch this file. It must be inside the project, with fewer than eight active watches."))?;
             }
         } else if request.method == "watches.stop" {

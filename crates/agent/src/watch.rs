@@ -160,6 +160,11 @@ const MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// cannot produce a queue of fires nobody can read.
 pub const MAX_LIVE: usize = 8;
 
+/// The `armed_by` of a watch a person armed themselves rather than a turn.
+///
+/// Turns are counted from 1, so 0 never names a turn.
+pub const BY_THE_PERSON: usize = 0;
+
 /// The shortest gap between two fires of the same watch, measured from the end of the turn the
 /// last fire started.
 ///
@@ -248,6 +253,11 @@ impl Watch {
 
     pub fn armed_by(&self) -> usize {
         self.armed_by
+    }
+
+    /// Whether a person armed this watch rather than a turn.
+    pub fn armed_by_the_person(&self) -> bool {
+        self.armed_by == BY_THE_PERSON
     }
 
     /// What the fire due for this watch would say, where a change is waiting to be reported.
@@ -1034,6 +1044,22 @@ mod tests {
         assert_eq!(watch.armed_by(), 7);
         assert_eq!(watch.left(now), MAX_AGE);
         assert_eq!(watch.left(now + MAX_AGE), Duration::ZERO);
+    }
+
+    /// A watch a person armed reads as theirs, and one a turn armed does not.
+    #[test]
+    fn a_watch_armed_by_the_person_says_so() {
+        let mut watches = Watches::new();
+        let now = Instant::now();
+        watches
+            .arm("a.txt".to_string(), here(), BY_THE_PERSON, saw("first"), now)
+            .expect("a watch");
+        watches
+            .arm("b.txt".to_string(), here(), 3, saw("first"), now)
+            .expect("a watch");
+
+        assert!(watches.live()[0].armed_by_the_person());
+        assert!(!watches.live()[1].armed_by_the_person());
     }
 
     /// The injection regression test. A fire's prompt lands in the one role nothing can label, so
