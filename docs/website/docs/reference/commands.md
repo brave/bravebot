@@ -685,7 +685,7 @@ Six things end a loop, and each says so:
 | the session moves on | `/clear`, and leaving, which end every loop; so does setting a goal |
 | age | seven days after it started |
 
-**A loop, a [goal](#goal-condition) and a [watch](#watch-stop-n) are never live together**, because a
+**A loop, a [goal](#goal-condition) and a [watch](#watch-path--stop-n) are never live together**, because a
 session does one of the three at a time. Several loops may be live together, since the rule is about kinds. Whichever of a loop and a goal was asked for second stands,
 and the one it replaced is reported as stopped. Asking for either ends every live watch.
 
