@@ -1506,6 +1506,96 @@ mod tests {
             assert!(asked < work, "the task was drawn below the lines: {screen}");
         }
 
+        /// WATCH-8: the sentence the turn was told closes the delegate's lines, and what it
+        /// reported stands under that sentence. The rows run in one order: the call, then the
+        /// sentence, then the report. The wrong implementations it rejects are the sentence
+        /// drawn above the lines (a view that opens on the verdict), and the report drawn above
+        /// the sentence; a `contains` check passes on both.
+        #[test]
+        #[expect(clippy::panic, reason = "a test fails by panicking")]
+        fn a_delegates_view_draws_its_call_then_the_sentence_the_turn_was_told_then_the_report() {
+            let mut session = Session::new("kernel-enforced");
+            let id = spawn(&mut session, "reader", "pick a file at random");
+            session.start_activity(Activity::running("List", "CALLED-DIRECTORY"));
+            session.delegate_finished(
+                id,
+                "SENTENCE-THE-TURN-WAS-TOLD".to_string(),
+                false,
+                Some(Reported::Said("WHAT-IT-REPORTED".to_string())),
+            );
+            session.watch();
+
+            let rows = rows_at(&session, 90, 30);
+            let at = |needle: &str| {
+                rows.iter()
+                    .position(|row| row.contains(needle))
+                    .unwrap_or_else(|| panic!("{needle} was not drawn: {rows:?}"))
+            };
+            let (call, sentence, report) = (
+                at("CALLED-DIRECTORY"),
+                at("SENTENCE-THE-TURN-WAS-TOLD"),
+                at("WHAT-IT-REPORTED"),
+            );
+            assert!(
+                call < sentence,
+                "the sentence the turn was told is not under the delegate's lines: {rows:?}"
+            );
+            assert!(
+                sentence < report,
+                "the report is not under the sentence the turn was told: {rows:?}"
+            );
+        }
+
+        /// WATCH-8: none of the turn's live output is drawn over a delegate's view. The turn is
+        /// writing a reply, thinking and running a command while a delegate is open, and each is
+        /// drawn at the turn's tail where the turn's own view is on the screen (the control, so
+        /// the fixture does draw them) and in none of those places over the delegate. The wrong
+        /// implementation it rejects drops the `watching_a_delegate` guard from any one of the
+        /// three, which draws the turn's words in the delegate's view as that delegate's.
+        #[test]
+        fn nothing_the_turn_is_writing_is_drawn_over_a_delegates_view() {
+            let mut session = Session::new("kernel-enforced");
+            session.type_char('a');
+            session.submit();
+            session.toggle_thinking();
+            let id = spawn(&mut session, "reader", "find the parser");
+            session.start_activity(Activity::running("Read", "DELEGATES-OWN-FILE"));
+            // The turn's own output arrives, as the driver attributes it to the turn.
+            session.reporting_for(None);
+            session.streaming("TURN-REPLY-IN-PROGRESS");
+            session.thinking("TURN-THINKING-ALOUD");
+            session.begin_command();
+            session.command_printing("TURN-COMMAND-OUTPUT\n");
+            let turns = [
+                "TURN-REPLY-IN-PROGRESS",
+                "TURN-THINKING-ALOUD",
+                "TURN-COMMAND-OUTPUT",
+            ];
+
+            let at_the_turn = rendered(&session);
+            for words in turns {
+                assert!(
+                    at_the_turn.contains(words),
+                    "the turn's own view does not draw {words}: {at_the_turn}"
+                );
+            }
+
+            assert!(session.watch());
+            assert!(session.watching_a_delegate());
+            assert_eq!(session.watched_delegate().map(|d| d.id), Some(id));
+            let over_the_delegate = rendered(&session);
+            assert!(
+                over_the_delegate.contains("DELEGATES-OWN-FILE"),
+                "the delegate's own work was not drawn: {over_the_delegate}"
+            );
+            for words in turns {
+                assert!(
+                    !over_the_delegate.contains(words),
+                    "{words} was drawn over a delegate's view: {over_the_delegate}"
+                );
+            }
+        }
+
         /// WATCH-5: a delegate that has finished still has its lines to open.
         #[test]
         fn a_finished_delegates_lines_are_still_there_to_be_opened() {
@@ -4173,6 +4263,66 @@ mod tests {
                     "content drew a margin of its own: {row:?}"
                 );
             }
+        }
+
+        /// SCROLL-10: `x` on a call whose only extra is a quarantined block does nothing, and the
+        /// block is drawn as it was. The block has more lines than its preview draws, but the key
+        /// has no plain expansion of it, so the call is not one the key acts on. The wrong
+        /// implementation it rejects counts the block's lines against its preview as "more to
+        /// show": the key would then flip the call, and the same call with a result the planner
+        /// read, set up the same way, shows the key does act where there is a plain result.
+        #[test]
+        fn the_expand_key_does_nothing_on_a_call_with_only_a_quarantined_block() {
+            let a_call = |with_a_result: bool| {
+                let mut call = Entry::tool(Activity::running("Read", "notes.md").done("40 lines"));
+                call.landing = Some(bravebot_agent::report::Landing::Quarantined);
+                if with_a_result {
+                    let whole: Vec<String> = (0..30).map(|n| format!("line {n}")).collect();
+                    call.returned = Some(bravebot_agent::report::Returned {
+                        lines: whole[..5].to_vec(),
+                        total: 30,
+                        from_the_end: false,
+                        whole,
+                    });
+                }
+                call.shown = Some(Shown {
+                    as_the_planner_had_it: None,
+                    origin: "notes.md".to_string(),
+                    reach: bravebot_agent::report::Reach::NotThePlanner,
+                    label: "(U,priv)".to_string(),
+                    preview: (0..5).map(|n| format!("block line {n}")).collect(),
+                    lines: 40,
+                });
+                let mut session = Session::new("kernel-enforced");
+                session.transcript.push(Entry::user("read the notes"));
+                session.transcript.push(call);
+                session.open_scroller();
+                session.laid.width = 80;
+                session.laid.height = 40;
+                session.laid = as_last_drawn(&session);
+                session
+            };
+
+            let mut only_the_block = a_call(false);
+            let before = as_text(&only_the_block);
+            assert!(before.contains("block line 4"), "{before}");
+            only_the_block.toggle_expanded(as_last_drawn);
+            assert!(
+                !only_the_block.transcript[1].expanded,
+                "the key flipped a call that has nothing but a quarantined block"
+            );
+            assert_eq!(
+                as_text(&only_the_block),
+                before,
+                "the key changed what a quarantined block draws"
+            );
+
+            let mut with_a_result = a_call(true);
+            with_a_result.toggle_expanded(as_last_drawn);
+            assert!(
+                with_a_result.transcript[1].expanded,
+                "the key did nothing on the same call once it holds a result to expand"
+            );
         }
 
         /// What a needle meets is the glyph the escape was replaced with on its way to the

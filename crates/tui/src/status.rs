@@ -3877,6 +3877,77 @@ mod tests {
         );
     }
 
+    /// SERVERS-13: while the mode that skips prompts is in force, the report names the mode and
+    /// lists each server the session started by alias, in the order they started. The faults it
+    /// rejects are a servers line that becomes a count ("2 servers") or "none" under bypass, a
+    /// line that leaves the servers out, a line that adds "(started unasked)" or any other mark of
+    /// the mode beside the aliases or in the note, and a report that does not name the mode. The
+    /// same two servers are drawn asking and under bypass, and the servers line must not differ
+    /// between them by a character.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn under_bypass_the_report_names_the_mode_and_lists_each_started_server_without_a_mark() {
+        use bravebot_agent::PermissionMode::{Ask, Bypass};
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let held = crate::mcp_command::tests::holding_servers(&["docs", "weather"]);
+        let lines_of = |mode, began_in_bypass| {
+            report(&Facts {
+                servers: &held.servers,
+                permission_mode: mode,
+                began_in_bypass,
+                ..facts(&config, &trust)
+            })
+            .lines
+        };
+        let servers_line = |lines: &[Line]| {
+            let line = lines
+                .iter()
+                .find(|line| line.label.trim() == t!(status_mcp_servers))
+                .expect("the servers line is on the report");
+            (line.value.clone(), line.note.clone())
+        };
+
+        let asking = lines_of(Ask, false);
+        let bypassing = lines_of(Bypass, true);
+
+        let (value, note) = servers_line(&bypassing);
+        assert_eq!(
+            value, "docs, weather",
+            "the servers are not listed by alias"
+        );
+        assert_eq!(
+            (value, note),
+            servers_line(&asking),
+            "the servers line says something about the mode beside the servers"
+        );
+
+        let mode = bypassing
+            .iter()
+            .find(|line| line.label.trim() == t!(status_permissions))
+            .expect("the mode is not named while it is in force");
+        assert_eq!(mode.value, t!(mode_bypass));
+        assert!(
+            asking
+                .iter()
+                .all(|line| line.label.trim() != t!(status_permissions)),
+            "the control, asking, names a mode"
+        );
+
+        for line in &bypassing {
+            if line.label.trim() == t!(status_permissions) {
+                continue;
+            }
+            for text in [&line.value, &line.note] {
+                assert!(
+                    !text.contains("unasked") && !text.contains("bypass"),
+                    "{:?} says something of the mode: {text:?}",
+                    line.label
+                );
+            }
+        }
+    }
+
     /// The policy a started server's backend was handed, drawn for the tests of `/status`.
     fn a_policy_for_the_report() -> EffectivePolicy {
         use bravebot_agent::servers::PolicyRow;

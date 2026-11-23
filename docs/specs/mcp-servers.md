@@ -1736,6 +1736,7 @@ not say beside each one whether it started unasked because of the mode.
 `verified-by: bravebot_agent::servers::a_server_the_managed_layer_refuses_is_started_in_no_mode_and_nothing_is_asked_or_recorded`
 `verified-by: bravebot_agent::servers::plugin_tests::nothing_but_a_yes_to_that_server_approves_it`
 `verified-by: bravebot_agent::servers::a_server_started_in_bypass_gets_the_named_variables_and_the_stored_values_and_no_more`
+`verified-by: bravebot_tui::status::under_bypass_the_report_names_the_mode_and_lists_each_started_server_without_a_mark`
 
 <a id="SERVERS-14"></a>
 ### SERVERS-14: what is reachable is visible without running anything

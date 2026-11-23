@@ -429,6 +429,9 @@ left out. Without a key the rest is reachable only by rerunning the command or o
 `verified-by: bravebot_tui::render::the_expand_key_takes_the_topmost_of_several_calls_on_the_screen`
 `verified-by: bravebot_tui::render::the_expand_key_skips_a_call_scrolled_above_the_view`
 `verified-by: bravebot_tui::render::the_expand_key_expands_a_write_and_a_second_press_collapses_it`
+`verified-by: bravebot_tui::render::the_expand_key_does_nothing_on_a_call_with_only_a_quarantined_block`
+`verified-by: bravebot_tui::state::a_resumed_call_holds_no_result_and_the_expand_key_leaves_it_alone`
+`verified-by: bravebot_agent::conversation::what_a_call_returned_is_not_recounted`
 `verified-by: bravebot_tui::state::expanding_does_nothing_while_a_delegate_is_watched`
 `verified-by: bravebot_tui::state::a_delegates_long_result_is_not_held_for_expansion`
 `verified-by: bravebot_tui::state::a_session_holds_a_bounded_number_of_lines_for_expansion`
