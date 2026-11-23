@@ -19,6 +19,12 @@
 
 #![cfg(unix)]
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![expect(
+    clippy::expect_used,
+    clippy::let_underscore_must_use,
+    clippy::panic,
+    reason = "a test target: a failed setup step or a missing call fails the test with its message, and the scratch directory is removed on a best-effort basis"
+)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
