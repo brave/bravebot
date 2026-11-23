@@ -21184,6 +21184,39 @@ mod tests {
         );
     }
 
+    /// AGENT-5: each delegate of a fan-out is told the shared `task` followed by its own entry, so
+    /// the instruction says what to do before it says what differs. A delegate told its entry
+    /// first reads the part that differs ahead of the part that says what to do with it.
+    ///
+    /// Rejects: `format!("{entry}\n\n{task}")` in `tasks_in`, and a composition that drops either
+    /// half or reuses one entry for every delegate.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn each_delegate_is_told_the_shared_task_followed_by_its_own_entry() {
+        let tasks = tasks_in(&json!({"task": "SHARED", "each": ["FIRST", "SECOND"]}))
+            .expect("two entries are accepted");
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "compose a fan-out");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead]),
+            &mut sink,
+        )
+        .expect("policy");
+        let proof = policy.authorise_display_release("what a delegate was asked to do");
+        let told: Vec<String> = tasks
+            .into_iter()
+            .map(|task| task.declassify(&proof))
+            .collect();
+        assert_eq!(
+            told,
+            ["SHARED\n\nFIRST", "SHARED\n\nSECOND"],
+            "a delegate was not told the shared task and then its own entry"
+        );
+    }
+
     /// AGENT-5: a planner told the most one call starts splits a fan-out into calls of that size,
     /// where one told nothing sends a call that is refused and then sends the shared task again.
     /// The figure in the text of `each` is the one `tasks_in` refuses past, and the text says a
@@ -21991,6 +22024,37 @@ mod tests {
         assert_eq!(
             from_file(r#"{"run": {"maxSeconds": 1800}}"#).wait_ceiling,
             Duration::from_secs(270)
+        );
+    }
+
+    /// BACKEND-27: the refusal under `1h` states the bound in force, 600, and not the 270 of the
+    /// shorter lifetimes, and each refusal states its own figure.
+    ///
+    /// Rejects: a refusal whose figure is written as 270 whatever the lifetime.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_wait_refusal_quotes_the_bound_of_the_lifetime_in_force() {
+        use bravebot_config::CacheTtl;
+
+        for (lifetime, longest, over) in [
+            (None, "between 1 and 270", 271),
+            (Some(CacheTtl::FiveMinutes), "between 1 and 270", 271),
+            (Some(CacheTtl::OneHour), "between 1 and 600", 601),
+        ] {
+            let held = Deadlines::BUILT_IN.waiting_under(lifetime);
+            let refusal = wait_from(&json!({"wait_seconds": over}), held)
+                .expect_err("a wait over the bound is refused");
+            assert!(
+                refusal.contains(longest),
+                "{lifetime:?}: the refusal does not quote the bound in force: {refusal}"
+            );
+        }
+        let held = Deadlines::BUILT_IN.waiting_under(Some(CacheTtl::OneHour));
+        assert!(
+            !wait_from(&json!({"wait_seconds": 601}), held)
+                .expect_err("refused")
+                .contains("270"),
+            "the refusal under 1h still quotes the 270 of the shorter lifetimes"
         );
     }
 

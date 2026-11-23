@@ -4934,6 +4934,57 @@ mod tests {
         }
     }
 
+    /// BACKEND-27: the front end asks the backend crate whether the model in force has had its
+    /// breakpoints given up, and the answer is true only for a model a Bedrock account serves and
+    /// the process recorded as refusing them. The record is by model name.
+    ///
+    /// Rejects: a function that always answers `false` (the recorded model row), one that skips the
+    /// `bedrock_for` check and answers the record for a model no Bedrock account serves (the last
+    /// assertion), and a record read under another name (the neighbour row).
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn breakpoints_given_up_is_true_for_a_recorded_bedrock_model_only() {
+        let (refusing, neighbour) = (
+            "caching-refusing-bedrock-arn",
+            "caching-neighbour-bedrock-arn",
+        );
+        let config = Config::from_lookup(|key| {
+            match key {
+                env_var::USE_BEDROCK => Some("1"),
+                env_var::AWS_REGION => Some("us-west-2"),
+                env_var::BEDROCK_OPUS_MODEL => Some(refusing),
+                env_var::BEDROCK_SONNET_MODEL => Some(neighbour),
+                env_var::AWS_PROFILE => Some("a-profile-no-machine-has"),
+                other => return aichat_only(other),
+            }
+            .map(str::to_string)
+        })
+        .expect("configured");
+
+        assert!(!breakpoints_given_up(&config, refusing), "before");
+        bravebot_bedrock::record_breakpoints_refused_for_test(refusing);
+        assert!(
+            breakpoints_given_up(&config, refusing),
+            "a model recorded as refusing the breakpoints was not reported"
+        );
+        for elsewhere in [neighbour, "a-bedrock-model-never-asked", DEFAULT_MODEL] {
+            assert!(!breakpoints_given_up(&config, elsewhere), "{elsewhere}");
+        }
+
+        // A configuration no Bedrock account serves the name in is told nothing of the record,
+        // whatever it holds.
+        let no_bedrock = Config::from_lookup(aichat_only).expect("configured");
+        assert!(no_bedrock.bedrock_for(refusing).is_none());
+        assert!(
+            bravebot_bedrock::breakpoints_given_up(refusing),
+            "the record the question is read from was lost"
+        );
+        assert!(
+            !breakpoints_given_up(&no_bedrock, refusing),
+            "a model no Bedrock account serves was reported as having its breakpoints given up"
+        );
+    }
+
     const ANTHROPIC_WHOLE: &str = r#"{"model":"claude-test-20260101",
         "content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn",
         "usage":{"input_tokens":3,"output_tokens":1}}"#;

@@ -431,6 +431,9 @@ should cover what it says and no more. Anchoring the pattern, as `Edit(./src/**)
 `verified-by: bravebot_core::permissions::a_relative_pattern_of_several_plain_segments_floats_when_it_restricts_and_not_when_it_grants`
 `verified-by: bravebot_core::permissions::a_bare_name_matches_at_any_depth_in_allow_as_well_as_in_deny_and_ask`
 `verified-by: bravebot_core::permissions::a_dotted_pattern_of_several_segments_stays_at_the_top_in_every_list`
+`verified-by: bravebot_core::permissions::a_relative_pattern_naming_a_file_floats_when_it_restricts_and_not_when_it_grants`
+`verified-by: bravebot_core::permissions::a_pattern_whose_first_segment_holds_a_star_does_not_float_in_any_list`
+`verified-by: bravebot_core::permissions::an_anchored_pattern_matches_only_where_it_is_anchored`
 
 <a id="PERM-5"></a>
 ### PERM-5: a command specifier matches a stage's words, with `*` standing in for any text

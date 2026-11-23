@@ -69007,6 +69007,241 @@ fn one_call_can_fan_a_task_out_over_several_delegates() {
     }
 }
 
+/// AGENT-5: each delegate of a fan-out holds its own copy of the command approvals the person has
+/// given. The first delegate's run is answered "always". The sibling, started in the same call, is
+/// held until the first has finished its run, and then makes the same run, which it must be asked
+/// about.
+///
+/// Rejects: one live approval list shared by the siblings of a call, which leaves the second
+/// delegate's run unasked (one question reaches the person instead of two).
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_command_approved_always_in_one_delegate_stays_out_of_a_sibling() {
+    let scratch = Scratch::new("fan-out-command-approvals");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received, kept) = serve_by_marker_in(
+        vec![
+            (
+                "FAN-OUT-APPROVALS",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"SHARED-APPROVALS","each":["ENTRY-FIRST","ENTRY-SECOND"]}"#,
+                    ),
+                    reply_with("waiting for both"),
+                    reply_with("both answered"),
+                    reply_with("both answered"),
+                ],
+            ),
+            (
+                "ENTRY-FIRST",
+                vec![
+                    tool_request("run", r#"{"command":"touch shared-line.txt"}"#),
+                    reply_with("first is done"),
+                ],
+            ),
+            (
+                "ENTRY-SECOND",
+                vec![
+                    tool_request("run", r#"{"command":"touch shared-line.txt"}"#),
+                    reply_with("second is done"),
+                ],
+            ),
+        ],
+        Order::After {
+            held: "ENTRY-SECOND",
+            after: "ENTRY-FIRST",
+            asked: 2,
+        },
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering_in_turn(vec![
+        bravebot_agent::RunDecision::approve_always(),
+        bravebot_agent::RunDecision::approve(),
+    ]);
+    let seen = confirmer.seen.clone();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("FAN-OUT-APPROVALS"),
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    assert!(
+        kept.load(std::sync::atomic::Ordering::SeqCst),
+        "the second delegate was not held until the first had finished"
+    );
+    let asked: Vec<String> = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request.plan.line.clone())
+        .collect();
+    assert_eq!(
+        asked,
+        ["touch shared-line.txt", "touch shared-line.txt"],
+        "the sibling was not asked about the line its sibling was answered always for"
+    );
+}
+
+/// DELEGATE-16, TRACE-7: a delegate's write or run that the permission mode answers without a
+/// person is recorded in the one trail as the mode's answer with the mode's name, whichever mode
+/// answered. Plan mode refuses the write with the mode named, and a question the mode does not
+/// answer is recorded as left to the confirmer.
+///
+/// Rejects: an answer recorded with no mode name or the wrong one (accept-edits recorded as
+/// bypass, or as the confirmer's), and a refusal in plan mode that does not name plan.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
+fn a_delegates_answers_by_the_mode_are_recorded_with_the_modes_name() {
+    use bravebot_agent::PermissionMode;
+    let write = ("write_file", r#"{"path":"out.txt","contents":"x"}"#);
+    let run = ("run", r#"{"command":"touch made-by-delegate.txt"}"#);
+    let cases = [
+        (
+            PermissionMode::AcceptEdits,
+            write,
+            "answered by accept-edits mode, nobody was asked",
+        ),
+        (
+            PermissionMode::Bypass,
+            write,
+            "answered by bypass mode, nobody was asked",
+        ),
+        (
+            PermissionMode::Bypass,
+            run,
+            "answered by bypass mode, nobody was asked",
+        ),
+        (
+            PermissionMode::Ask,
+            write,
+            "no mode answered, left to the confirmer",
+        ),
+        (
+            PermissionMode::AcceptEdits,
+            run,
+            "no mode answered, left to the confirmer",
+        ),
+    ];
+    for (index, (mode, (tool, arguments), expected)) in cases.into_iter().enumerate() {
+        let scratch = Scratch::new(&format!("delegate-mode-name-{index}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve_by_marker(vec![
+            (
+                "HAVE-A-DELEGATE-ACT",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"ACT-IN-THE-DELEGATE"}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("the delegate acted"),
+                ],
+            ),
+            (
+                "ACT-IN-THE-DELEGATE",
+                vec![tool_request(tool, arguments), reply_with("done")],
+            ),
+        ]);
+        let mut sink = RecordingSink::new();
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_writes();
+        let mut confirmer = bravebot_agent::Confining::new(&mut asked, mode, false);
+        // A write reaches the prompt in a tree nobody vouched for, and a run in one that is.
+        let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+        if tool == "run" {
+            trust.trust(".");
+        }
+        turns::run_with_trust(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("HAVE-A-DELEGATE-ACT").with_permission_mode(mode),
+            &mut confirmer,
+            &mut sink,
+            trust,
+        )
+        .expect("turn runs");
+        assert_eq!(
+            trail_entries(&sink, "approval", "")
+                .into_iter()
+                .filter(
+                    |line| line.starts_with("answered by") || line.starts_with("no mode answered")
+                )
+                .collect::<Vec<_>>(),
+            [expected],
+            "{mode:?} {tool}"
+        );
+    }
+
+    let scratch = Scratch::new("delegate-mode-name-plan");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "HAVE-A-DELEGATE-ACT",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"ACT-IN-THE-DELEGATE"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the delegate acted"),
+            ],
+        ),
+        (
+            "ACT-IN-THE-DELEGATE",
+            vec![tool_request(write.0, write.1), reply_with("done")],
+        ),
+    ]);
+    let mut sink = RecordingSink::new();
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_writes();
+    let mut confirmer = bravebot_agent::Confining::new(&mut asked, PermissionMode::Plan, false);
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("HAVE-A-DELEGATE-ACT").with_permission_mode(PermissionMode::Plan),
+        &mut confirmer,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+    let refusals: Vec<String> = sink
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GateBlocked {
+                gate: "permission_mode",
+                reason,
+                ..
+            } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        refusals,
+        ["write_file: plan mode refuses a write, so nothing was written"],
+        "a delegate's write in plan mode was not refused in the mode's name"
+    );
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "plan mode let a delegate write"
+    );
+}
+
 /// The planner could always start this many one call at a time, so the ceiling is not about
 /// authority. It is about a field that turns one sentence into an unbounded number of runs.
 #[test]

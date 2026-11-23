@@ -53,7 +53,7 @@ guards:
       - crates/agent/src/mcp.rs: 4
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 30
+      - crates/agent/src/tools.rs: 31
       - crates/agent/src/tools/recall.rs: 1
       - crates/agent/src/tools/tests/arguments.rs: 1
       - crates/agent/src/tools/tests/editing.rs: 5
@@ -98,7 +98,7 @@ guards:
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
       - crates/agent/tests/workspace.rs: 312
-      - crates/core/src/policy.rs: 31
+      - crates/core/src/policy.rs: 32
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
   - symbol: Labelled::relabel

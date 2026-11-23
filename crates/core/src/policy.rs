@@ -13067,6 +13067,55 @@ five
         );
     }
 
+    /// READ-1: the label of a reserved read is fixed from the trust map when the planner asks, so a
+    /// path nobody vouched for is reserved untrusted and a vouched one trusted, in the reference
+    /// handed back and in the slot. An implementation that gives every reservation
+    /// `Integrity::Trusted` hands the planner a trusted-looking reference to a file it may not see.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_reservation_takes_its_label_from_the_trust_map_when_it_is_made() {
+        let mut sink = RecordingSink::new();
+        let mut store = crate::trust::TrustStore::new("/work");
+        store.trust("src");
+        let mut policy = Policy::begin(
+            routing_with("task", "tidy up"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .unwrap()
+        .with_trust(store);
+
+        let mut slots = SlotStore::new();
+        for (index, (path, trusted)) in [("src/main.rs", true), ("vendor/main.rs", false)]
+            .into_iter()
+            .enumerate()
+        {
+            let slot = SlotId::new(format!("ref:{index}"));
+            let reference = policy
+                .defer(
+                    "read_file",
+                    slot.clone(),
+                    path,
+                    &Labelled::trusted(path.to_string()),
+                    10,
+                    &mut slots,
+                )
+                .expect("a file may be reserved");
+            assert_eq!(
+                reference.label.is_trusted(),
+                trusted,
+                "{path} was reserved at the wrong label: {}",
+                reference.label
+            );
+            assert_eq!(
+                slots.label_of(&slot).map(|label| label.is_trusted()),
+                Some(trusted),
+                "the slot for {path} holds the wrong label"
+            );
+        }
+    }
+
     #[test]
     fn routing_accepts_trusted_public_values() {
         let mut r = Routing::new();

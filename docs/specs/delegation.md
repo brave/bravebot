@@ -896,6 +896,7 @@ something unrelated to it.
 `verified-by: bravebot_agent::shared::what_a_mode_answers_unasked_is_not_held_behind_an_open_question`
 `verified-by: bravebot_agent::shared::a_question_the_mode_does_not_answer_still_waits_for_the_open_one`
 `verified-by: bravebot_agent::shared::the_mode_in_force_when_a_question_is_decided_answers_it`
+`verified-by: bravebot_agent::turn::a_delegates_answers_by_the_mode_are_recorded_with_the_modes_name`
 `verified-by: bravebot_agent::shared::the_mode_view_reaches_only_a_confirmer_lent_with_one_and_passes_to_nested_handles`
 `verified-by: bravebot_agent::shared::two_delegates_reporting_at_once_are_taken_one_call_at_a_time`
 `verified-by: bravebot_agent::shared::two_delegates_recording_at_once_are_taken_one_call_at_a_time`
