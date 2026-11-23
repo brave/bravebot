@@ -1360,6 +1360,10 @@ fn a_reply_that_stops_arriving_is_given_up_on() {
         matches!(error, EgressError::Transport { .. }),
         "expected a transport failure, got {error:?}"
     );
+    assert!(
+        error.is_transient(),
+        "a connection that went quiet is worth another attempt, got {error:?}"
+    );
 }
 
 /// A request stating that its reply may take a long time has not said the connection may go
@@ -1405,6 +1409,10 @@ fn a_reply_that_stops_arriving_is_given_up_on_however_long_its_request_said_it_m
         assert!(
             matches!(error, EgressError::Transport { .. }),
             "expected a transport failure, streamed: {streamed}, got {error:?}"
+        );
+        assert!(
+            error.is_transient(),
+            "a connection that went quiet is worth another attempt, streamed: {streamed}, got {error:?}"
         );
         assert!(
             started.elapsed() < Duration::from_secs(10),

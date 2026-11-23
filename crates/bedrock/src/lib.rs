@@ -402,6 +402,26 @@ impl From<EgressError> for BedrockError {
     }
 }
 
+/// What a read of a reply's body that failed is reported as.
+///
+/// A read that failed before any of the body arrived is not sent again whatever the transport calls
+/// it: a silence that long is a model still thinking as often as a dead connection, and a second
+/// request waits out the same silence and is billed for it
+/// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)). Streamed or whole, the reply was
+/// asked for and the service had the request.
+fn not_sent_again(error: EgressError) -> BedrockError {
+    match error {
+        EgressError::Transport { url, detail, .. } => {
+            BedrockError::Egress(EgressError::Transport {
+                url,
+                detail,
+                transient: false,
+            })
+        }
+        other => other.into(),
+    }
+}
+
 impl From<eventstream::FrameError> for BedrockError {
     fn from(value: eventstream::FrameError) -> Self {
         Self::Frame(value)
@@ -690,15 +710,23 @@ impl<'a> BedrockClient<'a> {
     ) -> Result<Completion, BedrockError> {
         let (http, model) = self.build(request, false)?;
         self.call.spent.sent();
-        let response = self.egress.fetch(policy, http, Label::untrusted_public())?;
+        // The body is read in pieces so that a failure before the status, which sent nothing the
+        // service could have processed, is told from a failure while the body arrives, which is
+        // not sent again ([`not_sent_again`]). Nothing is stopped part way: the body is read to its
+        // end, as the egress layer reads one it hands back whole.
+        let mut stream =
+            self.egress
+                .fetch_streaming(policy, http, Label::untrusted_public(), None)?;
 
         // The envelope is protocol, like the JSON envelope in the other backend: the bytes come out
         // to find the reply inside, and the reply is relabelled with exactly the label it arrived
         // under.
-        let label = response.body.label();
-        let (bytes, label) = policy
-            .decode_transport("converse", label)
-            .decode(response.body);
+        let label = stream.label();
+        let decoding = policy.decode_transport("converse", label);
+        let mut bytes = Vec::new();
+        while let Some(piece) = stream.next_chunk().map_err(not_sent_again)? {
+            bytes.extend(decoding.decode(piece).0);
+        }
 
         // Decode the bill independently of the assistant's content.
         let envelope: serde_json::Value =
@@ -884,7 +912,7 @@ impl<'a> BedrockClient<'a> {
                 Arrived::Piece(piece) => piece,
                 Arrived::Ended => break,
                 Arrived::StoppedPartWay => return Err(self.stopped_part_way(request)),
-                Arrived::Failed(e) => return Err(e.into()),
+                Arrived::Failed(e) => return Err(not_sent_again(e)),
                 Arrived::Cancelled => return Err(BedrockError::Cancelled),
             };
 
@@ -2748,14 +2776,28 @@ mod tests {
         request: &ChatRequest,
         responses: Vec<Vec<u8>>,
     ) -> (Result<Completion, BedrockError>, Vec<serde_json::Value>) {
+        complete_against_with(
+            &Egress::new(),
+            config,
+            request,
+            responses.into_iter().map(|r| (r, false)).collect(),
+        )
+    }
+
+    /// As [`complete_against`], through `egress`, against [`scripted_with_silences`].
+    fn complete_against_with(
+        egress: &Egress,
+        config: &Bedrock,
+        request: &ChatRequest,
+        responses: Vec<(Vec<u8>, bool)>,
+    ) -> (Result<Completion, BedrockError>, Vec<serde_json::Value>) {
         use bravebot_core::{
             capability::{Capability, CapabilitySet},
             event::RecordingSink,
             policy::{ReleasePlan, Routing},
         };
-        let (http, received) = scripted_responses(responses);
-        let egress = Egress::new();
-        let mut client = BedrockClient::new(config, &egress);
+        let (http, received) = scripted_with_silences(responses);
+        let mut client = BedrockClient::new(config, egress);
         client.test_request = Some(http);
         let mut sink = RecordingSink::new();
         let mut routing = Routing::new();
@@ -3058,6 +3100,32 @@ mod tests {
                 ))
             ),
             "a reply that never began was reported as {result:?}"
+        );
+        assert_eq!(sent.len(), 1, "a silence before the reply was sent again");
+    }
+
+    /// A whole reply whose status arrived and whose body then went quiet is the same silence as a
+    /// streamed one, so it is not sent again either: the service has the request, and a second one
+    /// is billed. A request that never reached the service is still sent again.
+    #[test]
+    fn a_whole_reply_that_never_began_is_not_sent_again() {
+        let model = "a-model-whose-whole-reply-never-began";
+        let (result, sent) = complete_against_with(
+            &impatient(),
+            &config_for(model),
+            &writing_a_file(model),
+            vec![silent_from_the_start(), (whole_reply(), false)],
+        );
+
+        assert!(
+            matches!(
+                result,
+                Err(BedrockError::Egress(bravebot_net::EgressError::Transport {
+                    transient: false,
+                    ..
+                }))
+            ),
+            "a whole reply that never began was reported as {result:?}"
         );
         assert_eq!(sent.len(), 1, "a silence before the reply was sent again");
     }

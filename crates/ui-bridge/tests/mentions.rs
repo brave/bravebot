@@ -230,44 +230,108 @@ fn an_entry_holding_a_no_break_space_is_written_so_the_prompt_names_it() {
 
 /// NAME-9: `turn.send` reads the names out of the prompt itself and refuses one that cannot go,
 /// before a turn starts, and a prompt the app composed names nothing.
+///
+/// The composed prompt is accepted and starts a turn, so the test runs in an isolated profile
+/// against a stand-in model endpoint and waits for that turn to end. No other request leaves the
+/// test.
+#[expect(
+    clippy::expect_used,
+    reason = "a test that stops at the call that failed, with the message saying which"
+)]
 #[test]
 fn a_send_naming_a_file_that_cannot_go_is_refused_before_the_turn() {
-    let (mut bridge, events) = harness();
-    let project = project(&mut bridge);
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let (config, requests, server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let mut window = isolated("mentions-refuses-before-the-turn", &config.endpoint);
+    std::fs::write(window.root.with_file_name("outside.txt"), "secret\n").unwrap();
 
     let refusal = call(
-        &mut bridge,
+        &mut window.bridge,
         "turn.send",
         message_ids::with_fresh(
-            json!({ "session": &project.session, "prompt": "read @../outside.txt" }),
+            json!({ "session": &window.session, "prompt": "read @../outside.txt" }),
         ),
     )
     .expect_err("an outside name");
     assert!(refusal.contains("@../outside.txt"), "{refusal}");
     assert!(
-        !events
+        !window
+            .events
             .lock()
             .expect("not poisoned")
             .iter()
             .any(|event| event.name == "turn.started"),
         "a turn started for a refused send"
     );
+    assert_eq!(
+        requests.try_iter().count(),
+        0,
+        "the refused send reached the model"
+    );
 
-    let composed = call(
-        &mut bridge,
+    call(
+        &mut window.bridge,
         "turn.send",
         message_ids::with_fresh(json!({
-            "session": &project.session,
+            "session": &window.session,
             "prompt": "bring your memory up to date, @../outside.txt",
             "composed": "consolidation",
         })),
+    )
+    .expect("a prompt the app composed was read for names");
+    wait_for_turn_end(&window.events);
+    server.join().unwrap();
+    assert_eq!(
+        requests.try_iter().count(),
+        1,
+        "expected the composed send to reach the stand-in endpoint once"
     );
-    assert!(
-        !composed
-            .as_ref()
-            .is_err_and(|refusal| refusal.contains("@../outside.txt")),
-        "a prompt the app composed was read for names: {composed:?}"
-    );
+}
+
+/// The name and data of the first event that ends a turn, once one has arrived. The wait is
+/// bounded, so a turn that never ends fails the test.
+#[expect(
+    clippy::expect_used,
+    reason = "a poisoned lock means another thread of the test already failed"
+)]
+fn wait_for_turn_end(events: &Mutex<Vec<Event>>) -> (&'static str, Value) {
+    let until = std::time::Instant::now() + endpoint::LIMIT;
+    loop {
+        let ended = events
+            .lock()
+            .expect("not poisoned")
+            .iter()
+            .find(|event| matches!(event.name, "turn.done" | "turn.error"))
+            .map(|event| (event.name, event.data.clone()));
+        if let Some(ended) = ended {
+            return ended;
+        }
+        assert!(std::time::Instant::now() < until, "the turn never ended");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Send `params` as `turn.send`, again while the answer is that an earlier turn is still running.
+///
+/// An accepted send starts a turn, and the bridge refuses a send for a running turn before it reads
+/// the names, so a send that follows one is decided by the names only once that turn has ended.
+/// Every attempt carries a fresh message id, since the bridge replays the answer it recorded for an
+/// id it has seen. The wait is bounded, so a turn that never ends fails the test.
+fn send_when_idle(bridge: &mut Bridge, params: &Value) -> Result<Value, String> {
+    let until = std::time::Instant::now() + endpoint::LIMIT;
+    loop {
+        let answer = call(bridge, "turn.send", message_ids::with_fresh(params.clone()));
+        match &answer {
+            Err(refusal)
+                if refusal.starts_with("TurnInFlight") && std::time::Instant::now() < until =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            _ => return answer,
+        }
+    }
 }
 
 /// NAME-12: a name inside the words of a folded paste is sent as text. The window sends the line as
@@ -275,56 +339,77 @@ fn a_send_naming_a_file_that_cannot_go_is_refused_before_the_turn() {
 /// refuses nothing. A name `shown` gives that the prompt does not is not read either, so `shown`
 /// cannot name a file the sent words never named.
 ///
+/// The two sends that are accepted each start a turn against a stand-in endpoint, and the next send
+/// waits for that turn to end, so each send is decided by the names and not by a turn still running.
+/// Both must succeed, and the third must be refused as a bad request that names the file.
+///
 /// The faults this rejects: the names read out of the prompt when `shown` is given, which refuses
 /// the pasted name, and a name read out of `shown` alone, which `turn.send` then refuses.
+#[expect(
+    clippy::expect_used,
+    reason = "a test that stops at the call that failed, with the message saying which"
+)]
 #[test]
 fn a_send_reads_names_in_the_shown_line_and_never_adds_one() {
-    let (mut bridge, _events) = harness();
-    let project = project(&mut bridge);
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let (config, requests, server) =
+        endpoint::endpoint(vec![endpoint::answer(), endpoint::answer()], None);
+    let mut window = isolated("mentions-reads-the-shown-line", &config.endpoint);
+    std::fs::write(window.root.with_file_name("outside.txt"), "secret\n").unwrap();
 
-    let pasted = call(
-        &mut bridge,
-        "turn.send",
-        message_ids::with_fresh(json!({
-            "session": &project.session,
+    send_when_idle(
+        &mut window.bridge,
+        &json!({
+            "session": &window.session,
             "prompt": "look at this\nlog line @../outside.txt\nmore\nend",
             "shown": "look at this [Pasted text #1 +3 lines]",
-        })),
-    );
-    assert!(
-        !pasted
-            .as_ref()
-            .is_err_and(|refusal| refusal.contains("@../outside.txt")),
-        "a name inside a folded paste was read: {pasted:?}"
-    );
+        }),
+    )
+    .expect("a name inside a folded paste was read");
 
-    let added = call(
-        &mut bridge,
-        "turn.send",
-        message_ids::with_fresh(json!({
-            "session": &project.session,
+    send_when_idle(
+        &mut window.bridge,
+        &json!({
+            "session": &window.session,
             "prompt": "look at this",
             "shown": "look at this @../outside.txt",
-        })),
-    );
-    assert!(
-        !added
-            .as_ref()
-            .is_err_and(|refusal| refusal.contains("@../outside.txt")),
-        "a name only `shown` gives was read: {added:?}"
-    );
+        }),
+    )
+    .expect("a name only `shown` gives was read");
 
-    let typed = call(
-        &mut bridge,
-        "turn.send",
-        message_ids::with_fresh(json!({
-            "session": &project.session,
+    let typed = send_when_idle(
+        &mut window.bridge,
+        &json!({
+            "session": &window.session,
             "prompt": "read @../outside.txt and\nthe\npasted\nwords",
             "shown": "read @../outside.txt and [Pasted text #2 +4 lines]",
-        })),
+        }),
     )
     .expect_err("a name typed beside a folded paste is still read");
-    assert!(typed.contains("@../outside.txt"), "{typed}");
+    assert!(
+        typed.starts_with("BadRequest") && typed.contains("@../outside.txt"),
+        "{typed}"
+    );
+
+    server.join().unwrap();
+    assert_eq!(
+        requests.try_iter().count(),
+        2,
+        "expected one request at the stand-in endpoint for each of the two accepted sends"
+    );
+    let started = window
+        .events
+        .lock()
+        .expect("not poisoned")
+        .iter()
+        .filter(|event| event.name == "turn.started")
+        .count();
+    assert_eq!(
+        started, 2,
+        "expected one turn.started for each of the two accepted sends and none for the refused one"
+    );
 }
 
 /// REFER-6: the window is offered a reference's alias and the files behind it, and a prompt naming
