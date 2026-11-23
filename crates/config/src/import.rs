@@ -2715,6 +2715,45 @@ mod tests {
         assert_eq!(left(&found), [("anthropic", Reason::SignIn)]);
     }
 
+    /// IMPORT-4: an opencode `wellknown` sign-in is left with the sign-in reason, as an `oauth` one
+    /// is, and offers no provider. The ids are an Anthropic one, which has a compiled-in endpoint,
+    /// and one with no endpoint anywhere, so the reason is not the one an unknown id would get.
+    /// An id that has a `provider` entry is not listed twice. The regression it rejects: reading
+    /// only `oauth` as a sign-in, which drops a `wellknown` entry without saying so.
+    #[test]
+    fn an_auth_json_wellknown_sign_in_is_left_as_a_sign_in() {
+        let home = Scratch::new("import-wellknown-auth");
+        home.write(
+            ".local/share/opencode/auth.json",
+            r#"{
+                "anthropic": {"type": "wellknown", "key": "TOKEN", "token": "t"},
+                "somewhere-else": {"type": "wellknown", "key": "TOKEN", "token": "t"}
+            }"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        assert!(ids(&found).is_empty(), "{:?}", ids(&found));
+        assert_eq!(
+            left(&found),
+            [
+                ("anthropic", Reason::SignIn),
+                ("somewhere-else", Reason::SignIn)
+            ]
+        );
+
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"anthropic": {"options": {"baseURL": "https://anthropic.invalid/v1"}}}}"#,
+        );
+        let found = one(&home.path, &[], Source::Opencode);
+        assert!(
+            !left(&found).contains(&("anthropic", Reason::SignIn)),
+            "a sign-in beside an entry of its own was listed too: {:?}",
+            left(&found)
+        );
+    }
+
     /// IMPORT-3: opencode's own lists say what the person turned off there.
     #[test]
     fn disabled_providers_are_not_offered() {

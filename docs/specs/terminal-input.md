@@ -2650,6 +2650,7 @@ available, spent in the one place where a second press is the whole of what is b
 `verified-by: bravebot_tui::input::the_queue_is_answered_before_the_terminal_and_in_arrival_order`
 `verified-by: bravebot_tui::input::a_press_and_its_own_release_are_one_keystroke`
 `verified-by: bravebot_tui::input::two_keystrokes_in_one_read_arrived_together`
+`verified-by: bravebot_tui::input_alone::the_shipped_reader_says_whether_an_event_arrived_alone`
 `verified-by: bravebot_tui::input::a_report_of_the_mouse_in_the_read_of_a_key_is_not_another_arrival`
 `verified-by: bravebot_tui::input::keys_with_reports_of_the_mouse_among_them_are_still_a_run`
 `verified-by: bravebot_tui::app::what_the_reader_says_arrived_together_reaches_the_rung_that_leaves`

@@ -416,6 +416,7 @@ setup was looked at.
 `verified-by: bravebot_cli::import::what_was_found_and_left_is_said_with_its_reason_where_a_person_is_asked`
 `verified-by: bravebot_cli::running::a_key_exported_beside_a_host_is_said_to_be_left_before_the_routes`
 `verified-by: bravebot_cli::running::a_claude_code_key_command_is_importable_and_the_refusal_names_the_command`
+`verified-by: bravebot_config::import::an_auth_json_wellknown_sign_in_is_left_as_a_sign_in`
 
 <a id="IMPORT-5"></a>
 ### IMPORT-5: everything that would be written is shown before the question, and only the affirmative writes

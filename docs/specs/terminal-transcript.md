@@ -480,8 +480,10 @@ need searching.
 `verified-by: bravebot_tui::model_prompt::a_search_matching_nothing_says_so`
 `verified-by: bravebot_tui::model_prompt::an_openai_roster_of_mixed_models_is_one_section_with_every_row_reachable`
 `verified-by: bravebot_tui::model_prompt::the_picker_is_drawn_as_a_centred_panel`
+`verified-by: bravebot_tui::model_prompt::the_picker_is_bordered_and_sits_in_the_middle_of_the_frame`
 `verified-by: bravebot_tui::model_prompt::the_panel_stays_inside_a_tiny_terminal`
 `verified-by: bravebot_tui::model_prompt::tab_switches_the_scope_in_both_directions_and_touches_nothing_else`
+`verified-by: bravebot_tui::model_prompt::tab_leaves_the_search_the_folded_sections_and_the_cursor_where_they_were`
 `verified-by: bravebot_tui::model_prompt::a_picker_opens_in_the_every_session_scope_unless_told_otherwise`
 `verified-by: bravebot_tui::model_prompt::a_picker_opened_by_bare_model_draws_the_every_session_scope_in_title_and_footer`
 `verified-by: bravebot_tui::model_prompt::a_picker_opened_by_model_session_draws_the_this_session_scope_in_title_and_footer`

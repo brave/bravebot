@@ -319,6 +319,7 @@ side, keeping a copy, or grepping the lot, is a text editor's job, and the user 
 `verified-by: bravebot_tui::editor::a_transcript_opened_in_the_editor_is_written_outside_the_workspace`
 `verified-by: bravebot_tui::editor::a_transcript_opened_in_the_editor_is_never_read_back`
 `verified-by: bravebot_tui::editor::showing_a_transcript_reads_no_file_back`
+`verified-by: bravebot_tui::editor::showing_a_transcript_succeeds_when_the_file_cannot_be_read_after_the_editor`
 `verified-by: bravebot_tui::editor::the_file_goes_when_the_editor_exits`
 `verified-by: by-construction (editor::show in crates/tui/src/editor.rs returns Result<(), Failure>, so no text the editor wrote can leave it; its one caller, show_transcript in crates/tui/src/app/terminal.rs, uses that result only to say a failure, and the scan above holds the chain from the key to the written file free of a read)`
 

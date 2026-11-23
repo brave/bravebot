@@ -1351,6 +1351,10 @@ fn premium_config(endpoint: &str, premium: &str) -> Config {
 /// PREM-10: with a premium key, the request goes to the premium host and carries the key as its
 /// bearer token. The premium host authorises on the key alone, so the request is not signed: a
 /// signature beside the key, or the key in a cookie, is a request the host does not read.
+///
+/// The request is a `POST` to `/v1/chat/completions` on that host. The regression it rejects: a
+/// premium request sent to another path on the premium host, such as the base host's own route or
+/// a path the premium service does not serve, with the headers right.
 #[test]
 fn a_premium_request_goes_to_the_premium_host_with_the_key_as_its_bearer_token() {
     let (premium_endpoint, received) = serve(REPLY);
@@ -1375,6 +1379,10 @@ fn a_premium_request_goes_to_the_premium_host_with_the_key_as_its_bearer_token()
         .expect("completion succeeds");
 
     let captured = received.recv().expect("request captured");
+    assert_eq!(
+        captured.request_line, "POST /v1/chat/completions HTTP/1.1",
+        "the premium request went to another path on the premium host"
+    );
     assert_eq!(
         captured.header("authorization"),
         Some("Bearer presented-key")
