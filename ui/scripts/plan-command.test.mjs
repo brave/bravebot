@@ -122,12 +122,12 @@ const between = (start, end) => turn.slice(turn.indexOf(start), turn.indexOf(end
 
 test('submit, interject and queue take a plan line before it can become a prompt or an interjection', () => {
   const submit = between('const submit = useCallback', '/** What the composer')
-  assert.match(submit, /planTask\(prompt\)[\s\S]*void plan\(handleRef\.current, task, prompt, staged\)[\s\S]*void send\(prompt\)/)
+  assert.match(submit, /planTask\(exit\.line\)[\s\S]*void plan\(handleRef\.current, task, exit\.line, exit\.staged\)[\s\S]*void send\(exit\.line/)
   const interjectDraft = between('const interjectDraft = ', 'return { ')
-  assert.ok(interjectDraft.indexOf('planTask(text)') < interjectDraft.indexOf('void interject('))
-  assert.match(interjectDraft, /void plan\(handle, task, text, staged\)/)
+  assert.ok(interjectDraft.indexOf('planTask(exit.line)') < interjectDraft.indexOf('void interject('))
+  assert.match(interjectDraft, /void plan\(handle, task, exit\.line, exit\.staged\)/)
   const queueDraft = between('const queueDraft = ', '/** Send whatever')
-  assert.match(queueDraft, /planTask\(draft\)[\s\S]*plan: task \}/)
+  assert.match(queueDraft, /planTask\(exit\.line\)[\s\S]*staged: exit\.staged, plan: task \}/)
   assert.match(turn, /message\.plan !== undefined\s*\? plan\(handle, message\.plan, message\.prompt, message\.staged, true\)/)
   assert.match(turn, /return \{[^}]*\bplan \}/)
 })
