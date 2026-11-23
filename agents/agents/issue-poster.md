@@ -48,6 +48,10 @@ Apply these and no others:
 - `tests-only`, in addition to the labels above, when every file the issue asks to change is test
   code, as "Tests only" in `labelling-issues.md` says. A `spec-coverage` issue takes it, and still
   takes `spec-coverage` alone among the kinds.
+- `skills-only`, in addition to the labels above, when every file the issue asks to change is under
+  `agents/skills`, as "Skills only" in `labelling-issues.md` says.
+- `docs-only`, in addition to the labels above, when every file the issue asks to change is
+  documentation, as "Docs only" in `labelling-issues.md` says.
 - The axes `importance/*`, `urgency/*` and `size/*`, proposed from the scales in
   `labelling-issues.md`, when the task says a person asked for this issue. Never `urgency/p1`.
   Apply no axis to a security issue, or when the task says the issue is a finding nobody has read.
