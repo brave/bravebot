@@ -52,8 +52,9 @@ Never a path a model proposed, never one read out of a file, never one a process
 justification cannot be checked from the bytes, so it lives at the call site. Two call sites mint
 the grant: the terminal's drop handling, which a pasted path reaches and which a Ctrl-V that finds
 files on the clipboard reaches by the same route ([PASTE-12](pasting.md#PASTE-12)), and the
-`dropped` and `attachments` lists a front end sends with `turn.send`, whose caller owes what
-[DROP-10](#DROP-10) states. Nothing else mints it.
+`dropped` and `attachments` lists a front end sends with `turn.send`, and the `attachments` it
+sends with `manifest.run`, checked the same way, whose caller owes what [DROP-10](#DROP-10) states.
+Nothing else mints it.
 
 `verified-by: bravebot_tui::drop::dropping_an_image_puts_a_marker_in_the_line`
 `verified-by: bravebot_tui::app::tests::pasting::a_file_the_clipboard_names_is_staged_as_dropping_it_stages_it`
