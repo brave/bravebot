@@ -497,6 +497,7 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         pasted,
         attached,
         typed_at,
+        names,
     } = match carries(&commanded.line) {
         Carries::Everything => commanded,
         Carries::Bytes => crate::state::without_text_files(commanded),
@@ -718,7 +719,7 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         if task.is_empty() {
             return Action::Redraw;
         }
-        return Action::Submit(session.start_planned(task, pasted, attached));
+        return Action::Submit(session.start_planned(task, pasted, attached, names));
     }
     // A turn the driver writes the prompt of. Nothing the person typed after the word reaches it:
     // the word takes no argument, so a line with one was never this command.
@@ -732,7 +733,7 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     // is a usage note and no turn.
     if let Some(argument) = argument_to(line, REVIEW_COMMAND) {
         return match crate::review_command::parse(argument) {
-            Some(asked) => Action::Submit(session.start_review(&asked)),
+            Some(asked) => Action::Submit(session.start_review(&asked, names)),
             None => {
                 session.note(t!(review_usage));
                 Action::Redraw
@@ -757,7 +758,7 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
             session.note(t!(help_usage));
             return Action::Redraw;
         }
-        return Action::Submit(session.start_help(question));
+        return Action::Submit(session.start_help(question, names));
     }
     // From text this program carries: nothing is read, fetched or sent, and no turn starts.
     if line.trim() == CHANGELOG_COMMAND {
@@ -768,7 +769,7 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     // Carried unparsed, because which names exist is read from the workspace and the trust map,
     // both of which the loop owns.
     if let Some(argument) = argument_to(line, AGENT_COMMAND) {
-        return Action::Address(argument.to_string(), pasted, attached);
+        return Action::Address(argument.to_string(), pasted, attached, names);
     }
     // The command that sends a prompt rather than the line it was typed on. `/loop 5m check the
     // deploy` arms the loop and hands back "check the deploy", which is what every tick sends from
@@ -785,7 +786,7 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
                 Action::Redraw
             }
             crate::loops::Asked::Start(request) => {
-                match session.start_loop(request, pasted, attached) {
+                match session.start_loop(request, pasted, attached, names) {
                     Some(prompt) => Action::Submit(prompt),
                     None => Action::Redraw,
                 }
@@ -800,7 +801,7 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     // clock, as a prompt and never as a command.
     if let Some(argument) = argument_to(line, AFTER_COMMAND) {
         match crate::loops::parse_after(argument) {
-            crate::loops::Delayed::Start(request) => session.start_after(request, typed_at),
+            crate::loops::Delayed::Start(request) => session.start_after(request, typed_at, names),
             crate::loops::Delayed::Unreadable => session.note(t!(after_needs_a_delay)),
         }
         return Action::Redraw;
@@ -990,6 +991,7 @@ fn address(
     argument: &str,
     pasted: Vec<crate::state::AttachedImage>,
     attached: Vec<crate::state::Attached>,
+    names_of_the_line: crate::state::NamesFrom,
 ) -> Action {
     let names = definitions.names().join(", ");
     let (name, task) = argument
@@ -1010,7 +1012,7 @@ fn address(
         session.note(t!(agent_needs_a_task, name = name));
         return Action::Redraw;
     }
-    Action::Submit(session.address(addressed, task, pasted, attached))
+    Action::Submit(session.address(addressed, task, pasted, attached, names_of_the_line))
 }
 
 /// Why a definition a name selects cannot be worked under.
@@ -2756,8 +2758,21 @@ impl StartFacts {
     }
 }
 
-/// The notes said once the trust answer is in: a newer release, the crash report notice and why a
-/// server the checkout asked for is absent.
+/// The keys and managed values the readers of `settings` and of the machine's managed layer dropped
+/// or combined, each said once as a note in the words `doctor` uses (BACKEND-36, RETRIEVE-23). Each
+/// reads to whoever wrote it as a restriction in force, and the file is otherwise applied with
+/// nothing said. The managed layer is the one `bravebot_agent::dropped_keys` reads itself.
+fn say_dropped_keys(session: &mut Session, settings: &bravebot_config::Settings) {
+    for said in bravebot_agent::dropped_keys::at_session_start_of_this_machine(
+        settings,
+        bravebot_agent::dropped_keys::Spelling::Drawn,
+    ) {
+        session.note(said);
+    }
+}
+
+/// The notes said once the trust answer is in: a newer release, the crash report notice, why a
+/// server the checkout asked for is absent, and the keys of the settings that nothing read.
 fn say_startup_notes(
     session: &mut Session,
     config: &Config,
@@ -2790,6 +2805,7 @@ fn say_startup_notes(
     for note in absent {
         session.note(note);
     }
+    say_dropped_keys(session, settings);
 }
 
 /// Put the directories the settings name to the person or open them, by how the trust map was
@@ -3240,7 +3256,7 @@ fn event_loop(
         // now rather than once for the session, because a turn resolves the set afresh too, and a
         // name printed from a stale set would be a name the turn then refuses.
         let action = match action {
-            Action::Address(argument, pasted, attached) => {
+            Action::Address(argument, pasted, attached, names) => {
                 let definitions = bravebot_agent::agents::resolved(
                     &workspace,
                     bravebot_agent::home::directory().as_deref(),
@@ -3255,6 +3271,7 @@ fn event_loop(
                     &argument,
                     pasted,
                     attached,
+                    names,
                 )
             }
             other => other,
@@ -16538,6 +16555,7 @@ mod tests {
             line: line.to_string(),
             pasted: Vec::new(),
             typed_at: std::time::Instant::now(),
+            names: crate::state::NamesFrom::nothing(),
         }
     }
 
@@ -20026,14 +20044,14 @@ mod tests {
     #[test]
     fn a_help_questions_file_names_are_the_persons_while_its_prompt_is_the_drivers() {
         let mut session = Session::new("none");
-        let Action::Submit(prompt) = enter_line(
+        let Action::Submit(_) = enter_line(
             &mut session,
             "/help explain file mentions using @crates/core/src/policy.rs",
         ) else {
             panic!("the question did not start a turn");
         };
         assert_eq!(
-            files_named_in(&prompt, Wrote::ThePerson, std::path::Path::new("."), &[]),
+            named_by_the_person(&session, Wrote::ThePerson, std::path::Path::new("."), &[]).files,
             vec!["crates/core/src/policy.rs".to_string()]
         );
         assert!(!will_look_again(&session, Wrote::ThePerson));
@@ -21776,10 +21794,10 @@ mod tests {
     /// through what starts a tick and what sends a goal round, so the task built for either reads
     /// the same style a typed prompt's does. The second scans the source for what makes those two
     /// turns the typed one's: the tick and the goal round both go out as `Action::Submit`, `submit`
-    /// runs each through `run_turn_animated`, and that function is where the style is put on the
-    /// task. A task built for a tick or a round anywhere else, or without that helper, fails the
-    /// scan. It does not run the worker: that the helper's call is reached is reasoned from the
-    /// source, not observed.
+    /// runs each through `run_turn_animated`, that function builds its task with `the_turn_task`,
+    /// and that builder is where the style is put on the task. A task built for a tick or a round
+    /// anywhere else, or without that helper, fails the scan. It does not run the worker: that the
+    /// helper's call is reached is reasoned from the source, not observed.
     #[test]
     fn every_turn_the_terminal_starts_carries_the_style_in_force_ticks_and_goal_rounds_included() {
         let named = |session: &Session| {
@@ -21797,7 +21815,8 @@ mod tests {
                 .start_loop(
                     crate::loops::request("5m check the build"),
                     Vec::new(),
-                    Vec::new()
+                    Vec::new(),
+                    crate::state::NamesFrom::nothing()
                 )
                 .is_some(),
             "the loop sent no first tick"
@@ -21834,8 +21853,13 @@ mod tests {
 
         let run = function(turns, "run_turn_animated");
         assert!(
-            run.contains("task = with_session_style(task, session);"),
-            "`run_turn_animated` builds a turn's task without the session's style"
+            run.contains("let task = the_turn_task("),
+            "`run_turn_animated` builds a turn's task somewhere other than `the_turn_task`"
+        );
+        let built = function(turns, "the_turn_task");
+        assert!(
+            built.contains("task = with_session_style(task, session);"),
+            "`the_turn_task` builds a turn's task without the session's style"
         );
         let submit = function(actions, "submit");
         assert!(
@@ -23656,6 +23680,84 @@ mod tests {
         );
     }
 
+    /// NAME-12: the first prompt of the session a handoff begins reads its names from the brief as
+    /// the box showed it. The brief holds a folded paste with `@README.md` and `@session:abc123`, at
+    /// the end, in the middle and at the start, ending in a newline or not, and the paste names
+    /// neither; the same names typed beside the paste are read. The path is the real one: Enter on
+    /// the brief, the clear the loop makes, the prompt the new session sends, and the task
+    /// `run_turn_animated` builds for it. Rejects a handoff that sends the brief as the words the
+    /// paste stood for, which reads the paste's names as typed.
+    #[test]
+    fn a_handoff_brief_names_nothing_from_a_paste_in_it() {
+        let paste_without = "one\nsee @README.md and @session:abc123\nthree\nfour";
+        for trailing in ["", "\n"] {
+            let paste = format!("{paste_without}{trailing}");
+            for (before, after) in [("the brief ", ""), ("the ", " brief"), ("", " the brief")] {
+                for typed in ["", " @TYPED-NAME.md @session:abc123"] {
+                    let root = a_workspace_with_a_readme();
+                    let mut session = Session::new("none").in_workspace(root.path());
+                    session.propose_handoff(&format!("{before}{after}{typed}"));
+                    handle_key(&mut session, key(KeyCode::Home));
+                    for _ in 0..before.chars().count() {
+                        handle_key(&mut session, key(KeyCode::Right));
+                    }
+                    handle_paste(&mut session, &paste);
+                    assert!(
+                        session.input().contains("[Pasted text #1"),
+                        "the paste did not fold: {:?}",
+                        session.input()
+                    );
+                    let Action::HandOver(brief) = handle_key(&mut session, key(KeyCode::Enter))
+                    else {
+                        panic!("{before:?} {after:?}: Enter did not hand the brief over");
+                    };
+                    // What `Held::clear` does to the session, which keeps its pastes.
+                    session.clear();
+                    session.hand_over(brief);
+                    let Some(Action::Submit(prompt)) = queued_next(&mut session) else {
+                        panic!("{before:?} {after:?}: the brief was not sent");
+                    };
+                    assert!(
+                        prompt.contains("@README.md"),
+                        "the prompt does not hold the pasted words: {prompt}"
+                    );
+
+                    let task = a_task_built_for(&mut session, root.path(), &prompt);
+                    let named =
+                        named_by_the_person(&session, whose_line(&session), root.path(), &[]);
+                    let expected = match typed {
+                        "" => (Vec::new(), Vec::new()),
+                        _ => (
+                            vec!["TYPED-NAME.md".to_string()],
+                            vec!["abc123".to_string()],
+                        ),
+                    };
+                    let context = format!("{before:?} paste {after:?} {typed:?} {trailing:?}");
+                    assert_eq!((named.files, named.sessions), expected, "{context}");
+                    assert_eq!(task.files, expected.0, "{context}: the task's files");
+                }
+            }
+        }
+    }
+
+    /// NAME-12: the first prompt of a session started from the command line (`-p`, `-i`) names the
+    /// files its words name, as a line typed does, and the session holds no paste to confuse them
+    /// with. Rejects a hand-over that reads nothing for a prompt that was never in the box.
+    #[test]
+    fn a_prompt_from_the_command_line_names_the_files_it_names() {
+        let root = a_workspace_with_a_readme();
+        let mut session = Session::new("none").in_workspace(root.path());
+        session.hand_over_from_the_command_line("summarise @README.md");
+        let Some(Action::Submit(prompt)) = queued_next(&mut session) else {
+            panic!("the prompt was not sent");
+        };
+        assert_eq!(prompt, "summarise @README.md");
+        assert_eq!(
+            named_by_the_person(&session, whose_line(&session), root.path(), &[]).files,
+            vec!["README.md".to_string()]
+        );
+    }
+
     /// CLI-31. A prompt from the command line is drawn as the person's own line, so what a terminal
     /// draws as nothing is taken out of it and counted, as from a paste. Sent as it came, tag
     /// characters spelling an instruction would reach the planner as words nobody saw. A file
@@ -24324,6 +24426,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
 
         assert!(!a_session_is_owed_a_frame(&idle, Duration::from_secs(9)));
@@ -24375,6 +24478,7 @@ mod tests {
             crate::loops::request("5m tail the log"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         session.complete("done", Vec::new(), 0);
         session.loop_turn_ended(None);
@@ -24446,6 +24550,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         session.complete("done", Vec::new(), 0);
         for c in "/loop stop".chars() {
@@ -24472,7 +24577,12 @@ mod tests {
     fn the_loop_command_ends_the_loop_it_names() {
         let mut session = Session::new("none");
         for line in ["5m check the deploy", "1h check the pull request"] {
-            session.start_loop(crate::loops::request(line), Vec::new(), Vec::new());
+            session.start_loop(
+                crate::loops::request(line),
+                Vec::new(),
+                Vec::new(),
+                crate::state::NamesFrom::nothing(),
+            );
             session.complete("done", Vec::new(), 0);
             session.loop_turn_ended(None);
         }
@@ -24509,6 +24619,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         assert!(session.a_turn_is_running(), "the loop sent no first tick");
         for c in "/loop stop".chars() {
@@ -24677,7 +24788,7 @@ mod tests {
     /// endorsement nobody gave.
     ///
     /// Through what picks the next line after a turn, since that is where the sentence is marked
-    /// as the driver's: a test of [`files_named_in`] alone passes with the mark on the wrong side.
+    /// as the driver's: a test of the reader alone passes with the mark on the wrong side.
     #[test]
     fn a_path_named_in_a_sentence_the_driver_wrote_vouches_for_nothing() {
         let mut session = Session::new("none");
@@ -24698,8 +24809,14 @@ mod tests {
             "the reason was not quoted, so nothing here could name a file: {carrying_on}"
         );
         assert!(
-            files_named_in(&carrying_on, wrote, std::path::Path::new("."), &[]).is_empty(),
+            named_by_the_person(&session, wrote, std::path::Path::new("."), &[])
+                .files
+                .is_empty(),
             "a sentence this program wrote opened a file"
+        );
+        assert!(
+            session.names_of_the_turn().is_nothing(),
+            "the turn the driver began kept a line to read names from"
         );
     }
 
@@ -24720,7 +24837,7 @@ mod tests {
         session.complete("done", Vec::new(), 0);
 
         let mut judged = false;
-        let (queued, wrote) = next_after_a_turn(&mut session, |_| {
+        let (_queued, wrote) = next_after_a_turn(&mut session, |_| {
             judged = true;
             Ok(None)
         })
@@ -24729,7 +24846,7 @@ mod tests {
 
         assert!(!judged, "the goal was judged before the person's line went");
         assert_eq!(
-            files_named_in(&queued, wrote, std::path::Path::new("."), &[]),
+            named_by_the_person(&session, wrote, std::path::Path::new("."), &[]).files,
             vec!["crates/core/src/policy.rs".to_string()],
             "a line the person typed stopped naming its files"
         );
@@ -24740,7 +24857,7 @@ mod tests {
     /// would open that file on the say-so of a sentence nobody typed.
     ///
     /// The fire's own session is asked whose line it is, since that choice is made where the
-    /// prompt is submitted and a test of [`files_named_in`] alone passes with the fire marked as
+    /// prompt is submitted and a test of the reader alone passes with the fire marked as
     /// the person's. The `contains` and `referenced` assertions keep the test from passing
     /// because the sentence never held a `@path` to read.
     #[test]
@@ -24773,14 +24890,19 @@ mod tests {
             "a watch's fire was treated as a line the person typed"
         );
         assert!(
-            files_named_in(
-                &prompt,
+            named_by_the_person(
+                &session,
                 whose_line(&session),
                 std::path::Path::new("."),
                 &[]
             )
+            .files
             .is_empty(),
             "a path in a fire's sentence opened a file"
+        );
+        assert!(
+            session.names_of_the_turn().is_nothing(),
+            "the fire kept a line to read names from"
         );
     }
 
@@ -24788,7 +24910,11 @@ mod tests {
     /// a file. A `whose_line` that always answered the driver would pass the test above.
     #[test]
     fn a_line_typed_with_no_fire_in_flight_is_the_persons_and_names_its_files() {
-        let session = Session::new("none");
+        let mut session = Session::new("none");
+        let Action::Submit(_) = enter_line(&mut session, "look at @crates/core/src/policy.rs")
+        else {
+            panic!("the line was not sent");
+        };
 
         assert_eq!(
             whose_line(&session),
@@ -24796,19 +24922,20 @@ mod tests {
             "a line typed with no watch firing was treated as this program's"
         );
         assert_eq!(
-            files_named_in(
-                "look at @crates/core/src/policy.rs",
+            named_by_the_person(
+                &session,
                 whose_line(&session),
                 std::path::Path::new("."),
                 &[]
-            ),
+            )
+            .files,
             vec!["crates/core/src/policy.rs".to_string()],
             "a line the person typed stopped naming its files"
         );
     }
 
     /// REFER-6: `@alias/path` in a line the person typed names the file in the reference's
-    /// directory, and the same text in a line the driver wrote names nothing.
+    /// directory, and a turn the driver wrote names nothing.
     #[test]
     fn a_name_under_a_reference_alias_names_the_file_in_its_directory() {
         let sources = vec![(
@@ -24817,32 +24944,24 @@ mod tests {
         )];
         let line = "see @parser/src/lexer.rs and @crates/x.rs";
         assert_eq!(
-            files_named_in(
-                line,
-                Wrote::ThePerson,
-                std::path::Path::new("/work"),
-                &sources
-            ),
+            crate::state::NamesFrom::the_line_in_a_test(line)
+                .files(std::path::Path::new("/work"), &sources),
             vec![
                 "/refs/parser/src/lexer.rs".to_string(),
                 "crates/x.rs".to_string()
             ]
         );
         assert!(
-            files_named_in(
-                line,
-                Wrote::TheDriver,
-                std::path::Path::new("/work"),
-                &sources
-            )
-            .is_empty()
+            crate::state::NamesFrom::nothing()
+                .files(std::path::Path::new("/work"), &sources)
+                .is_empty()
         );
     }
 
     /// NAME-12: a name inside a folded paste vouches for no file, and a name the person typed in the
-    /// same line still does. The turn reads names from the prompt with each paste folded back to its
-    /// marker. Rejects reading them from the unfolded words, which opens a file the person never
-    /// typed the name of.
+    /// same line still does. The turn reads names from the line as the box showed it, with the
+    /// paste still a marker. Rejects reading them from the unfolded words, which opens a file the
+    /// person never typed the name of.
     #[test]
     fn a_name_inside_a_folded_paste_names_no_file() {
         let mut session = Session::new("none");
@@ -24850,19 +24969,455 @@ mod tests {
             handle_key(&mut session, key(KeyCode::Char(c)));
         }
         handle_paste(&mut session, "one\ncc @secrets.txt\nthree\nfour\n");
-        let prompt = session.unfolded(session.input());
+        let Action::Submit(prompt) = handle_key(&mut session, key(KeyCode::Enter)) else {
+            panic!("the line was not sent");
+        };
         assert!(prompt.contains("@secrets.txt"), "{prompt}");
 
-        assert_eq!(
-            files_named_by_the_person(
-                &session,
-                &prompt,
-                Wrote::ThePerson,
-                std::path::Path::new("."),
-                &[]
-            ),
-            vec!["src/lib.rs".to_string()]
+        let named = named_by_the_person(&session, Wrote::ThePerson, std::path::Path::new("."), &[]);
+        assert_eq!(named.files, vec!["src/lib.rs".to_string()]);
+    }
+
+    /// A line sent from the box, as the turn reads it: the words are what Enter sent, and the names
+    /// are read from the line as the box showed it. Gives the files and the sessions the turn is
+    /// handed, which is what `run_turn_animated` reads through the same function.
+    fn named_when_sent(
+        session: &mut Session,
+        root: &std::path::Path,
+        pastes: &[&str],
+        typed_after: &str,
+    ) -> (String, NamesRead) {
+        for paste in pastes {
+            handle_paste(session, paste);
+        }
+        for c in typed_after.chars() {
+            handle_key(session, key(KeyCode::Char(c)));
+        }
+        let Action::Submit(prompt) = handle_key(session, key(KeyCode::Enter)) else {
+            panic!("the line was not sent");
+        };
+        let named = named_by_the_person(session, whose_line(session), root, &[]);
+        (prompt, named)
+    }
+
+    /// A scratch workspace holding `README.md`.
+    fn a_workspace_with_a_readme() -> tempfile::TempDir {
+        let root = tempfile::tempdir().expect("a scratch directory");
+        std::fs::write(root.path().join("README.md"), "# notes").expect("write");
+        root
+    }
+
+    /// NAME-12: `summarise ` and a paste that folds, holding `@README.md`, hand the turn no file,
+    /// read where `run_turn_animated` reads them. Rejects reading the names from the unfolded
+    /// prompt, which vouches for a file the box showed only as a marker.
+    #[test]
+    fn a_name_inside_a_folded_paste_gives_the_turn_no_file() {
+        let root = a_workspace_with_a_readme();
+        let mut session = Session::new("none").in_workspace(root.path());
+        for c in "summarise ".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_paste(&mut session, "one\nsee @README.md\nthree\n");
+        assert!(
+            session.input().contains("[Pasted text #1"),
+            "the paste did not fold: {:?}",
+            session.input()
         );
+        let Action::Submit(prompt) = handle_key(&mut session, key(KeyCode::Enter)) else {
+            panic!("the line was not sent: {:?}", session.input());
+        };
+        assert!(prompt.contains("@README.md"), "{prompt}");
+
+        let named = named_by_the_person(&session, whose_line(&session), root.path(), &[]);
+        assert!(
+            named.files.is_empty(),
+            "a name inside a folded paste reached the turn: {:?}",
+            named.files
+        );
+    }
+
+    /// NAME-2, NAME-12: the turn built from `summarise ` and a folded paste holding `@README.md`
+    /// leaves no rule for README.md in the trust map, and the same turn with the name typed leaves
+    /// one. The turn is the real one against a stand-in model, given the files the seam read, so
+    /// the rule is what the agent recorded and not a reading of the file list. Rejects a seam that
+    /// hands the turn a name from inside the paste, which the agent then vouches for.
+    #[test]
+    fn a_folded_paste_naming_a_file_leaves_no_rule_for_it_in_the_trust_map() {
+        let rules_after = |paste: Option<&str>, typed: &str| {
+            let root = a_workspace_with_a_readme();
+            let mut session = Session::new("none").in_workspace(root.path());
+            let pastes: Vec<&str> = paste.into_iter().collect();
+            let (prompt, _) = named_when_sent(&mut session, root.path(), &pastes, typed);
+            let workspace = Workspace::new(root.path()).expect("workspace");
+            let (config, requests, server) = super::undo_tests::endpoint::endpoint(
+                vec![super::undo_tests::endpoint::answer()],
+                None,
+            );
+            let trust = bravebot_agent::workspace::trust_store(workspace.root());
+            let authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
+            let task = a_task_built_with(&mut session, root.path(), &prompt, &authority);
+            turn::resume(
+                &config,
+                &Egress::new(),
+                &workspace,
+                &task,
+                &mut Conversation::new(),
+                &mut bravebot_agent::confirm::Unattended,
+                &mut bravebot_agent::IgnoreReports,
+                &mut Trail::new(),
+                trust,
+                TrustedPrograms::new(),
+                None,
+                &Cancel::new(),
+            )
+            .outcome
+            .expect("the turn runs");
+            server.join().expect("the model finished");
+            let request = requests.recv().expect("a request went out");
+            (authority.snapshot().rules().count(), request)
+        };
+
+        let (rules, request) = rules_after(Some("one\nsee @README.md\nthree\n"), "summarise ");
+        assert_eq!(rules, 0, "a name inside a folded paste left a rule");
+        assert!(
+            !request.contains("# notes"),
+            "the file's contents reached the model"
+        );
+
+        let (rules, request) = rules_after(None, "summarise @README.md");
+        assert_eq!(rules, 1, "a typed name left no rule");
+        assert!(request.contains("# notes"), "the typed file was not read");
+    }
+
+    /// NAME-12: the task a turn is begun with is given the files and the session excerpts the line
+    /// names, built by `the_turn_task`, the function `run_turn_animated` builds its task with. A
+    /// folded paste holding `@README.md` and `@session:abc123` adds no file and says nothing of a
+    /// session, and the same names typed do. Rejects a task builder that reads names from the
+    /// prompt, which no test of `named_by_the_person` alone can see.
+    #[test]
+    fn the_task_a_turn_is_built_with_holds_no_file_or_session_a_paste_named() {
+        let built_from = |paste: bool| {
+            let root = a_workspace_with_a_readme();
+            let mut session = Session::new("none").in_workspace(root.path());
+            let (pastes, typed) = match paste {
+                true => (
+                    vec!["one\nsee @README.md and @session:abc123\nthree\n"],
+                    "summarise ",
+                ),
+                false => (Vec::new(), "summarise @README.md and @session:abc123"),
+            };
+            let (prompt, _) = named_when_sent(&mut session, root.path(), &pastes, typed);
+            let task = a_task_built_for(&mut session, root.path(), &prompt);
+            let said_of_the_session = session.transcript.iter().any(|entry| {
+                entry.speaker == crate::state::Speaker::System && entry.text.contains("abc123")
+            });
+            (task.files.clone(), said_of_the_session)
+        };
+
+        assert_eq!(built_from(true), (Vec::new(), false));
+        assert_eq!(built_from(false), (vec!["README.md".to_string()], true));
+    }
+
+    /// The task `run_turn_animated` builds for the turn the session has begun, through
+    /// `the_turn_task`, with the settings, permissions and session record a real turn passes.
+    fn a_task_built_for(session: &mut Session, root: &std::path::Path, prompt: &str) -> Task {
+        let authority = bravebot_core::file_authority::FileAuthority::new(
+            bravebot_agent::workspace::trust_store(root),
+        );
+        a_task_built_with(session, root, prompt, &authority)
+    }
+
+    /// [`a_task_built_for`] with the file authority the turn's decisions are recorded in, for a test
+    /// that reads the rules the turn left.
+    fn a_task_built_with(
+        session: &mut Session,
+        root: &std::path::Path,
+        prompt: &str,
+        authority: &bravebot_core::file_authority::FileAuthority,
+    ) -> Task {
+        let workspace = Workspace::new(root).expect("workspace");
+        let stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let run = RunSettings::from_settings(&bravebot_config::Settings::default());
+        let wrote = whose_line(session);
+        the_turn_task(
+            &run,
+            session,
+            &Permissions::new(),
+            &workspace,
+            &stored,
+            &bravebot_core::credentials::Exposed::default(),
+            authority,
+            prompt,
+            wrote,
+            None,
+            false,
+        )
+        .into_task()
+    }
+
+    /// NAME-12: `/help` and `/review` compose their prompt around the words typed after the command,
+    /// and a paste that ends in a newline is not in those words as it was pasted, since the argument
+    /// is trimmed. The paste holds `@README.md` and `@session:abc123` and names neither. The same
+    /// names typed beside the paste are read. Rejects looking for the paste's text in the composed
+    /// prompt, which does not find it here and reads the pasted words as typed.
+    #[test]
+    fn a_help_or_review_line_names_nothing_from_a_paste_ending_in_a_newline() {
+        let root = a_workspace_with_a_readme();
+        for command in ["/help what is ", "/review the locking "] {
+            for (typed, expected) in [
+                ("", (Vec::new(), Vec::new())),
+                (
+                    " @README.md @session:abc123",
+                    (vec!["README.md".to_string()], vec!["abc123".to_string()]),
+                ),
+            ] {
+                let mut session = Session::new("none").in_workspace(root.path());
+                for c in command.chars() {
+                    handle_key(&mut session, key(KeyCode::Char(c)));
+                }
+                handle_paste(
+                    &mut session,
+                    "one\nsee @README.md and @session:abc123\nthree\n",
+                );
+                for c in typed.chars() {
+                    handle_key(&mut session, key(KeyCode::Char(c)));
+                }
+                let Action::Submit(prompt) = handle_key(&mut session, key(KeyCode::Enter)) else {
+                    panic!("{command}{typed}: no turn began");
+                };
+                assert!(prompt.contains("@README.md"), "{command}: {prompt}");
+                let named = named_by_the_person(&session, whose_line(&session), root.path(), &[]);
+                assert_eq!(
+                    (named.files, named.sessions),
+                    expected,
+                    "{command}{typed}: wrong names"
+                );
+            }
+        }
+    }
+
+    /// NAME-12: the turn `/plan` and `/agent` begin reads names from the line the box showed, a paste
+    /// ending in a newline included. Rejects reading them from the task, which the command trimmed.
+    #[test]
+    fn a_plan_or_agent_line_names_nothing_from_a_paste_ending_in_a_newline() {
+        let root = a_workspace_with_a_readme();
+        for command in ["/plan summarise ", "/agent rule-reviewer summarise "] {
+            for (typed, expected) in [("", Vec::new()), (" @README.md", vec!["README.md"])] {
+                let mut session = Session::new("none").in_workspace(root.path());
+                for c in command.chars() {
+                    handle_key(&mut session, key(KeyCode::Char(c)));
+                }
+                handle_paste(&mut session, "one\nsee @README.md\nthree\n");
+                for c in typed.chars() {
+                    handle_key(&mut session, key(KeyCode::Char(c)));
+                }
+                let begun = handle_key(&mut session, key(KeyCode::Enter));
+                let prompt = match begun {
+                    Action::Submit(prompt) => prompt,
+                    Action::Address(argument, pasted, attached, names) => {
+                        let Action::Submit(prompt) = address(
+                            &mut session,
+                            &a_config_needing_no_sign_in(),
+                            &a_resolved_set(None),
+                            &argument,
+                            pasted,
+                            attached,
+                            names,
+                        ) else {
+                            panic!("{command}{typed}: the line addressed nothing");
+                        };
+                        prompt
+                    }
+                    other => panic!("{command}{typed}: {other:?}"),
+                };
+                assert!(prompt.contains("@README.md"), "{command}: {prompt}");
+                let named = named_by_the_person(&session, whose_line(&session), root.path(), &[]);
+                assert_eq!(named.files, expected, "{command}{typed}: wrong files");
+            }
+        }
+    }
+
+    /// NAME-2, NAME-3, NAME-12: in a workspace that declined its checkout, a send whose folded paste
+    /// names `AGENTS.md` leaves the second request without that file's words and the trust map
+    /// without a rule for it. The same send with `@AGENTS.md` typed puts the file in the system
+    /// prompt of the second request. Both turns are the real one against a stand-in model, the second
+    /// carrying the trust the first ended with. Rejects a seam that vouches for a name inside a
+    /// paste, which trusts the file for every turn after it.
+    #[test]
+    fn a_folded_paste_naming_agents_md_keeps_it_out_of_the_next_turns_system_prompt() {
+        let second_request_after = |paste: Option<&str>, typed: &str| {
+            let root = tempfile::tempdir().expect("a scratch directory");
+            std::fs::write(root.path().join("AGENTS.md"), "ZEBRA-STANDING-RULE\n").expect("write");
+            let mut session = Session::new("none").in_workspace(root.path());
+            let pastes: Vec<&str> = paste.into_iter().collect();
+            let (prompt, _) = named_when_sent(&mut session, root.path(), &pastes, typed);
+            let workspace = Workspace::new(root.path()).expect("workspace");
+            let (config, requests, server) = super::undo_tests::endpoint::endpoint(
+                vec![
+                    super::undo_tests::endpoint::answer(),
+                    super::undo_tests::endpoint::answer(),
+                ],
+                None,
+            );
+            let trust = bravebot_agent::workspace::trust_store(workspace.root());
+            let authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
+            let task = a_task_built_with(&mut session, root.path(), &prompt, &authority);
+            let mut conversation = Conversation::new();
+            let egress = Egress::new();
+            let first = turn::resume(
+                &config,
+                &egress,
+                &workspace,
+                &task,
+                &mut conversation,
+                &mut bravebot_agent::confirm::Unattended,
+                &mut bravebot_agent::IgnoreReports,
+                &mut Trail::new(),
+                trust,
+                TrustedPrograms::new(),
+                None,
+                &Cancel::new(),
+            )
+            .outcome
+            .expect("the first turn runs");
+            requests.recv().expect("the first request went out");
+
+            let next_authority =
+                bravebot_core::file_authority::FileAuthority::new(first.trust.clone());
+            let next = Task::new("hello").with_file_authority(next_authority);
+            turn::resume(
+                &config,
+                &egress,
+                &workspace,
+                &next,
+                &mut conversation,
+                &mut bravebot_agent::confirm::Unattended,
+                &mut bravebot_agent::IgnoreReports,
+                &mut Trail::new(),
+                first.trust.clone(),
+                first.programs.clone(),
+                None,
+                &Cancel::new(),
+            )
+            .outcome
+            .expect("the second turn runs");
+            server.join().expect("the model finished");
+            let request = requests.recv().expect("the second request went out");
+            let body: serde_json::Value = serde_json::from_str(&request).expect("a json body");
+            let system: String = body["messages"]
+                .as_array()
+                .expect("messages")
+                .iter()
+                .filter(|message| message["role"] == "system")
+                .map(|message| message["content"].to_string())
+                .collect();
+            (authority.snapshot().rules().count(), system, request)
+        };
+
+        let (rules, system, request) =
+            second_request_after(Some("one\nsee @AGENTS.md\nthree\n"), "summarise ");
+        assert_eq!(rules, 0, "a name inside a folded paste left a rule");
+        assert!(
+            !system.contains("ZEBRA-STANDING-RULE"),
+            "the file reached the system prompt"
+        );
+        assert!(
+            !request.contains("ZEBRA-STANDING-RULE"),
+            "the file reached the second request"
+        );
+
+        let (rules, system, _) = second_request_after(None, "summarise @AGENTS.md");
+        assert_eq!(rules, 1, "a typed name left no rule");
+        assert!(
+            system.contains("ZEBRA-STANDING-RULE"),
+            "the typed file did not reach the second request's system prompt"
+        );
+    }
+
+    /// NAME-1: the same workspace, with the name typed. Rejects a seam that drops every name, which
+    /// the test above would pass.
+    #[test]
+    fn a_name_typed_in_the_line_gives_the_turn_its_file() {
+        let root = a_workspace_with_a_readme();
+        let mut session = Session::new("none").in_workspace(root.path());
+        let (prompt, named) =
+            named_when_sent(&mut session, root.path(), &[], "summarise @README.md");
+        assert_eq!(prompt, "summarise @README.md");
+        assert_eq!(named.files, vec!["README.md".to_string()]);
+    }
+
+    /// NAME-12: a later paste that holds an earlier paste's text, with a name outside that text,
+    /// names no file. Rejects putting markers back by replacing each earlier paste's text in the
+    /// words, which leaves the later paste's own words standing as typed.
+    #[test]
+    fn a_name_in_a_paste_that_holds_an_earlier_paste_names_no_file() {
+        let root = a_workspace_with_a_readme();
+        let mut session = Session::new("none").in_workspace(root.path());
+        let first = "one\ntwo\nthree\nfour\n";
+        let second = "one\ntwo\nthree\nfour\nsee @README.md\n";
+        handle_paste(&mut session, first);
+        // Rubbed out, so the box holds only the second paste. The first stays held by the session.
+        for _ in 0.."[Pasted text #1 +4 lines]".len() {
+            handle_key(&mut session, key(KeyCode::Backspace));
+        }
+        assert_eq!(session.input(), "", "the first marker was not removed");
+        let (prompt, named) = named_when_sent(&mut session, root.path(), &[second], "");
+        assert_eq!(prompt.trim_end(), second.trim_end());
+        assert!(
+            named.files.is_empty(),
+            "a name in the second paste reached the turn: {:?}",
+            named.files
+        );
+    }
+
+    /// NAME-12: words typed in the box that equal an earlier paste's text are typed words, and a
+    /// name in them is read. Rejects finding pastes by their text in the words, which puts the
+    /// typed words behind a marker and drops the name the box showed.
+    #[test]
+    fn a_name_in_typed_words_equal_to_an_earlier_paste_is_read() {
+        let root = a_workspace_with_a_readme();
+        let mut session = Session::new("none").in_workspace(root.path());
+        let pasted = "see @README.md\ntwo\nthree\nfour\nfive";
+        session.paste_text(pasted);
+        assert_eq!(session.input(), "[Pasted text #1 +5 lines]");
+        // Rubbed out, so the box is empty and the session still holds the paste.
+        handle_key(&mut session, key(KeyCode::Backspace));
+        assert_eq!(session.input(), "", "the marker was not removed");
+        // Written whole into the box, as words that were typed and not pasted.
+        session.paste(pasted);
+        let Action::Submit(prompt) = handle_key(&mut session, key(KeyCode::Enter)) else {
+            panic!("the line was not sent");
+        };
+        assert_eq!(prompt, pasted);
+        let named = named_by_the_person(&session, whose_line(&session), root.path(), &[]);
+        assert_eq!(named.files, vec!["README.md".to_string()]);
+    }
+
+    /// NAME-10 and NAME-12: `@session:<id>` inside a folded paste names no session, and the same
+    /// mention typed in the line still does. Rejects reading session mentions from the unfolded
+    /// prompt, which adds a past session's words to a message the person did not write them in.
+    #[test]
+    fn a_session_mention_inside_a_folded_paste_names_no_session() {
+        let root = a_workspace_with_a_readme();
+        let mut session = Session::new("none").in_workspace(root.path());
+        for c in "carry on ".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_paste(&mut session, "one\nfrom @session:abc123\nthree\n");
+        let Action::Submit(prompt) = handle_key(&mut session, key(KeyCode::Enter)) else {
+            panic!("the line was not sent");
+        };
+        assert!(prompt.contains("@session:abc123"), "{prompt}");
+        let named = named_by_the_person(&session, Wrote::ThePerson, root.path(), &[]);
+        assert!(named.sessions.is_empty(), "{:?}", named.sessions);
+
+        let mut typed = Session::new("none").in_workspace(root.path());
+        let (_, named) = named_when_sent(&mut typed, root.path(), &[], "carry on @session:abc123");
+        assert_eq!(named.sessions, vec!["abc123".to_string()]);
     }
 
     /// Leaving ends a goal, so a person who asked to leave during a turn does not wait on a check
@@ -25164,6 +25719,109 @@ mod tests {
         .expect("config")
     }
 
+    /// BACKEND-36, RETRIEVE-23: the notes said when a terminal session opens name each key the
+    /// settings dropped or combined, once, in the sentences `doctor` uses, with no value. The unread
+    /// key, a key a settings file wrote twice, a key the managed file wrote twice and the managed
+    /// `retrieval` value that pins nothing are four facts, so a start that says three fails.
+    ///
+    /// Rejects a start that leaves these to `doctor`, one that says a key once per layer, one that
+    /// prints what a key was set to, and a sentence that differs from `doctor`'s. The update check
+    /// is switched off by the file itself so the start asks nothing of a network.
+    #[test]
+    fn the_startup_notes_name_each_dropped_key_once_in_doctors_sentences_and_no_value() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        let settings_file = directory.path().join("settings.json");
+        std::fs::write(
+            &settings_file,
+            r#"{"updateCheck": false,
+                "permissions": {"denyy": ["Read(a-rule-nobody-prints)"], "deny": [], "deny": []},
+                "statusLine": "a-command-nobody-prints"}"#,
+        )
+        .expect("write the settings file");
+        let settings = bravebot_config::Settings::layered(None, None, Some(&settings_file));
+        let managed_file = directory.path().join("managed.json");
+        std::fs::write(
+            &managed_file,
+            r#"{"retrieval": "false", "models": {"deny": ["a-model-nobody-prints"]}, "models": {}}"#,
+        )
+        .expect("write the managed file");
+        let _machine = bravebot_config::managed_file_on_this_thread(&managed_file);
+        let mut session = Session::new("none");
+
+        say_startup_notes(
+            &mut session,
+            &a_config_needing_no_sign_in(),
+            &settings,
+            Vec::new(),
+        );
+
+        let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
+        for sentence in bravebot_agent::dropped_keys::at_session_start_of_this_machine(
+            &settings,
+            bravebot_agent::dropped_keys::Spelling::Drawn,
+        ) {
+            assert_eq!(
+                said.iter().filter(|line| **line == sentence).count(),
+                1,
+                "the sentence doctor says is not said once: {sentence}\n{said:?}"
+            );
+        }
+        let named = |needle: &str| said.iter().filter(|line| line.contains(needle)).count();
+        assert_eq!(named("permissions.denyy in "), 1, "{said:?}");
+        assert_eq!(named("statusLine in "), 1, "{said:?}");
+        assert_eq!(
+            named("permissions.deny is written more than once in "),
+            1,
+            "{said:?}"
+        );
+        assert_eq!(named("models is written more than once in "), 1, "{said:?}");
+        assert_eq!(named("retrieval in "), 1, "{said:?}");
+        for value in [
+            "a-rule-nobody-prints",
+            "a-command-nobody-prints",
+            "a-model-nobody-prints",
+        ] {
+            assert!(
+                said.iter().all(|line| !line.contains(value)),
+                "a value is said: {said:?}"
+            );
+        }
+    }
+
+    /// Settings whose keys are all read add no note about dropped keys. Rejects a start that says a
+    /// line for each file.
+    #[test]
+    fn the_startup_notes_say_nothing_about_dropped_keys_where_every_key_was_read() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let settings = bravebot_config::Settings::parse(
+            r#"{"updateCheck": false, "permissions": {"deny": ["Read(.env)"]}}"#,
+        );
+        let mut session = Session::new("none");
+        let _machine = bravebot_config::managed_file_on_this_thread(std::path::Path::new(
+            "no-managed-file-is-here.json",
+        ));
+
+        say_startup_notes(
+            &mut session,
+            &a_config_needing_no_sign_in(),
+            &settings,
+            Vec::new(),
+        );
+
+        let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
+        assert!(
+            said.iter()
+                .all(|line| !line.contains("not read by this build")
+                    && !line.contains("written more than once")),
+            "{said:?}"
+        );
+    }
+
     /// Addresses whatever the session's line addressed, as the loop does once it has read the set.
     fn addressing(session: &mut Session, argument: &str, model: Option<&str>) -> Action {
         address(
@@ -25173,6 +25831,7 @@ mod tests {
             argument,
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         )
     }
 
@@ -25191,7 +25850,8 @@ mod tests {
             Action::Address(
                 "rule-reviewer review the diff".to_string(),
                 Vec::new(),
-                Vec::new()
+                Vec::new(),
+                crate::state::NamesFrom::the_line_in_a_test("/agent rule-reviewer review the diff")
             )
         );
         assert!(
@@ -25223,7 +25883,8 @@ mod tests {
             Some(Action::Address(
                 "rule-reviewer review the diff".to_string(),
                 Vec::new(),
-                Vec::new()
+                Vec::new(),
+                crate::state::NamesFrom::the_line_in_a_test("/agent rule-reviewer review the diff")
             ))
         );
     }
@@ -25310,7 +25971,8 @@ mod tests {
             Action::Address(
                 "rule-reviewer review the diff".to_string(),
                 Vec::new(),
-                Vec::new()
+                Vec::new(),
+                crate::state::NamesFrom::the_line_in_a_test("/agent rule-reviewer review the diff")
             ),
             "the line that came back no longer addressed the definition"
         );
@@ -25502,7 +26164,8 @@ mod tests {
                 &a_resolved_set(Some("haiku")),
                 "rule-reviewer review the diff",
                 Vec::new(),
-                Vec::new()
+                Vec::new(),
+                crate::state::NamesFrom::nothing()
             ),
             Action::Redraw
         );
@@ -25576,7 +26239,8 @@ mod tests {
                 .start_loop(
                     crate::loops::request("5m check the build"),
                     Vec::new(),
-                    Vec::new()
+                    Vec::new(),
+                    crate::state::NamesFrom::nothing()
                 )
                 .is_some(),
             "the loop sent no first tick"
@@ -25618,7 +26282,8 @@ mod tests {
                 &definitions,
                 "diff-checker check the diff",
                 Vec::new(),
-                Vec::new()
+                Vec::new(),
+                crate::state::NamesFrom::nothing()
             ),
             Action::Submit("check the diff".to_string())
         );
@@ -27061,7 +27726,12 @@ mod tests {
     #[test]
     fn interrupting_stops_the_loop_before_it_leaves() {
         let mut session = Session::new("none");
-        session.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
+        session.start_loop(
+            crate::loops::request("5m watch"),
+            Vec::new(),
+            Vec::new(),
+            crate::state::NamesFrom::nothing(),
+        );
         session.complete("done", Vec::new(), 0);
 
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
@@ -27082,7 +27752,12 @@ mod tests {
     fn interrupting_ends_every_loop_when_several_are_live() {
         let mut session = Session::new("none");
         for line in ["5m check the deploy", "1h check the pull request"] {
-            session.start_loop(crate::loops::request(line), Vec::new(), Vec::new());
+            session.start_loop(
+                crate::loops::request(line),
+                Vec::new(),
+                Vec::new(),
+                crate::state::NamesFrom::nothing(),
+            );
             session.complete("done", Vec::new(), 0);
             session.loop_turn_ended(None);
         }
@@ -27097,7 +27772,12 @@ mod tests {
     #[test]
     fn interrupting_clears_the_line_before_it_stops_the_loop() {
         let mut session = Session::new("none");
-        session.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
+        session.start_loop(
+            crate::loops::request("5m watch"),
+            Vec::new(),
+            Vec::new(),
+            crate::state::NamesFrom::nothing(),
+        );
         session.complete("done", Vec::new(), 0);
         for c in "half a thought".chars() {
             handle_key(&mut session, key(KeyCode::Char(c)));
@@ -29254,6 +29934,7 @@ mod tests {
             crate::loops::request("30s check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         assert_eq!(session.status, Status::Working);
         assert!(session.cleared_by_interrupt, "the tick took the offer down");
@@ -29278,6 +29959,7 @@ mod tests {
             crate::loops::request("30s check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         assert_eq!(session.status, Status::Working);
         assert!(session.cleared_by_interrupt, "the tick took the offer down");
@@ -41588,7 +42270,12 @@ mod tests {
             },
         );
         session.start_goal("cargo test exits 0".to_string());
-        session.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
+        session.start_loop(
+            crate::loops::request("watch"),
+            Vec::new(),
+            Vec::new(),
+            crate::state::NamesFrom::nothing(),
+        );
         assert!(!session.rewind.points().is_empty());
         (workspace, session, stored, conversation, answers)
     }
@@ -42734,6 +43421,88 @@ mod tests {
         }
     }
 
+    /// BACKEND-36, RETRIEVE-23: a session the terminal begins says what the managed layer the machine
+    /// holds dropped: the key the managed file wrote twice and the `retrieval` value that pins
+    /// nothing, once each, in the sentences `doctor` uses, and no value.
+    ///
+    /// Rejects a start whose notes leave the machine's managed layer out, which leaves every managed
+    /// key to `doctor`. The note tests above put a layer in front of `say_startup_notes` and pass on
+    /// such a start, so only a test that begins the session reaches this.
+    #[test]
+    fn a_session_begun_says_what_its_managed_layer_dropped() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-begin-managed-notes");
+        std::fs::create_dir_all(&root).expect("create");
+        let managed_file = root.join("managed.json");
+        std::fs::write(
+            &managed_file,
+            r#"{"retrieval": "false", "models": {"deny": ["a-model-nobody-prints"]}, "models": {}}"#,
+        )
+        .expect("write the managed file");
+        let _machine = bravebot_config::managed_file_on_this_thread(&managed_file);
+        let expected = bravebot_agent::dropped_keys::at_session_start_of_this_machine(
+            &bravebot_config::Settings::default(),
+            bravebot_agent::dropped_keys::Spelling::Drawn,
+        );
+        assert_eq!(
+            expected.len(),
+            2,
+            "the fixture drops a repeated key and a retrieval value: {expected:?}"
+        );
+        let workspace = Workspace::new(&root).expect("a workspace");
+        // Never drawn on: a session opened bypassing every permission is not asked about the
+        // directory it opens in.
+        let mut terminal = ratatui::Terminal::with_options(
+            ratatui::backend::CrosstermBackend::new(std::io::stdout()),
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 20, 5)),
+            },
+        )
+        .expect("a terminal");
+        let mut config = a_config_needing_no_sign_in();
+        let mut servers = crate::state::Servers::default();
+
+        let begun = begin_session(
+            &mut terminal,
+            &mut config,
+            &workspace,
+            &mut servers,
+            Startup {
+                confinement: String::new(),
+                sockets_with_a_path_reachable: false,
+                sandbox: crate::sandbox_command::Sandboxed::at_start(),
+                start: Start::Fresh,
+                named: None,
+                links: Links::default(),
+                skip_permissions: true,
+                asked_for_auto: false,
+                prompts: bravebot_agent::turn::SystemPrompts::default(),
+            },
+        )
+        .unwrap_or_else(|ended| panic!("the session did not begin: {ended:?}"));
+
+        let said: Vec<&str> = begun
+            .session
+            .transcript
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect();
+        for sentence in &expected {
+            assert_eq!(
+                said.iter().filter(|line| *line == sentence).count(),
+                1,
+                "the sentence doctor says is not said once: {sentence}\n{said:?}"
+            );
+        }
+        assert!(
+            said.iter()
+                .all(|line| !line.contains("a-model-nobody-prints")),
+            "a value is said: {said:?}"
+        );
+    }
+
     /// `/clear` begins a session nobody has asked anything. A program vouched for, a server
     /// approved, a run prompt drawn and a file agreed to be shown were answers about the session it
     /// ends, and kept they would answer the next one's questions for it.
@@ -43002,12 +43771,23 @@ mod tests {
         let (_, mut session, stored, _, _) = a_session_to_branch(&root);
         let named = format!("carry on from @session:{}", stored.id());
 
+        let ids_after = |session: &mut Session, line: &str, wrote: Wrote| {
+            session.complete("done", Vec::new(), 0);
+            for c in line.chars() {
+                session.type_char(c);
+            }
+            session.submit().expect("the line began a turn");
+            named_by_the_person(session, wrote, &root, &[]).sessions
+        };
+        let by_the_person = ids_after(&mut session, &named, Wrote::ThePerson);
+        let by_the_driver_ids = ids_after(&mut session, &named, Wrote::TheDriver);
+        let unknown_line = "carry on from @session:no-such-id";
+        let unknown_ids = ids_after(&mut session, unknown_line, Wrote::ThePerson);
         let task = with_named_sessions(
             Task::new(named.as_str()),
             &mut session,
             &root,
-            &named,
-            Wrote::ThePerson,
+            &by_the_person,
         );
         assert_eq!(task.session_excerpts.len(), 1);
         assert!(task.session_excerpts[0].1.contains("hello into notes.txt"));
@@ -43018,18 +43798,11 @@ mod tests {
             Task::new(named.as_str()),
             &mut session,
             &root,
-            &named,
-            Wrote::TheDriver,
+            &by_the_driver_ids,
         );
         assert!(by_the_driver.session_excerpts.is_empty());
 
-        let unknown = with_named_sessions(
-            Task::new("x"),
-            &mut session,
-            &root,
-            "carry on from @session:no-such-id",
-            Wrote::ThePerson,
-        );
+        let unknown = with_named_sessions(Task::new("x"), &mut session, &root, &unknown_ids);
         assert!(unknown.session_excerpts.is_empty());
         let said = session.transcript.last().expect("a note").text.clone();
         assert!(said.contains("no session no-such-id"), "{said}");
@@ -43075,8 +43848,7 @@ mod tests {
             Task::new(named.as_str()),
             &mut session,
             &root,
-            &named,
-            Wrote::ThePerson,
+            &crate::state::NamesFrom::the_line_in_a_test(&named).sessions(),
         );
         let text = &uncut.session_excerpts[0].1;
         let added = text.chars().count();
@@ -43098,8 +43870,7 @@ mod tests {
             Task::new(named.as_str()),
             &mut session,
             &root,
-            &named,
-            Wrote::ThePerson,
+            &crate::state::NamesFrom::the_line_in_a_test(&named).sessions(),
         );
         let text = &cut.session_excerpts[0].1;
         let added = text.chars().count();
@@ -43178,8 +43949,7 @@ mod tests {
                 Task::new(named.as_str()),
                 &mut session,
                 &root,
-                &named,
-                Wrote::ThePerson,
+                &crate::state::NamesFrom::the_line_in_a_test(&named).sessions(),
             );
             assert!(
                 task.session_excerpts.is_empty(),
@@ -43205,8 +43975,7 @@ mod tests {
             Task::new(unknown),
             &mut session,
             &root,
-            unknown,
-            Wrote::ThePerson,
+            &crate::state::NamesFrom::the_line_in_a_test(unknown).sessions(),
         );
         assert!(task.session_excerpts.is_empty());
         assert_eq!(session.transcript.len(), notes + 1);
@@ -43222,8 +43991,7 @@ mod tests {
             Task::new(named.as_str()),
             &mut session,
             &root,
-            &named,
-            Wrote::ThePerson,
+            &crate::state::NamesFrom::the_line_in_a_test(&named).sessions(),
         );
         assert_eq!(again.session_excerpts.len(), 1);
     }
@@ -45819,6 +46587,7 @@ mod tests {
             crate::loops::request("5m watch the build"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         let offered = will_look_again(&ticking, Wrote::ThePerson);
         ticking.stop_loops();
@@ -45900,10 +46669,13 @@ mod tests {
             "a /init turn was offered a loop over the prompt this program wrote"
         );
         let mut review = Session::new("none");
-        review.start_review(&crate::review_command::Asked {
-            target: crate::review_command::Target::Uncommitted,
-            focus: None,
-        });
+        review.start_review(
+            &crate::review_command::Asked {
+                target: crate::review_command::Target::Uncommitted,
+                focus: None,
+            },
+            crate::state::NamesFrom::nothing(),
+        );
         assert!(
             !will_look_again(&review, Wrote::ThePerson),
             "a /review turn was offered a loop over the prompt this program wrote"
@@ -45914,6 +46686,7 @@ mod tests {
             crate::loops::request("5m watch the build"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         assert!(
             !will_look_again(&looping, Wrote::ThePerson),
@@ -46031,6 +46804,7 @@ mod tests {
             crate::loops::request("5m watch the build"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         assert_eq!(
             session.status,
@@ -46063,6 +46837,7 @@ mod tests {
             crate::loops::request("5m watch the build"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         session.complete("done", Vec::new(), 0);
         session.loop_turn_ended(None);

@@ -125,7 +125,10 @@ somebody asked to be kept, which [trust-map.md](trust-map.md#TRUST-23) governs: 
 the question here as anywhere, the session says so as it opens, a yes is not kept and the question
 says so, and `/forget-trust` writes nothing and names the file. So is the record of Bedrock models that
 refused the ask to show thinking, which [BACKEND-63](backends.md#BACKEND-63) governs: a refusal already
-in it settles the ask here as anywhere, and one this session finds is not written.
+in it settles the ask here as anywhere, and one this session finds is not written. So is the record of
+directories a confined stage may write, which [sandboxing.md](sandboxing.md#SANDBOX-30) governs: a
+directory already in it is left out of the search for programs as it is anywhere, and a directory this
+session opens or grants is not appended.
 
 **The one read refused is the standing answer about whether a check answers in somebody's place.**
 The word a person's own directory holds about that is not read in this mode, so a session here asks
@@ -159,6 +162,7 @@ to remember.
 `verified-by: bravebot_agent::incognito::a_reach_an_earlier_session_remembered_is_still_honoured`
 `verified-by: bravebot_agent::incognito::no_bedrock_refusal_is_written_down`
 `verified-by: bravebot_agent::incognito::a_bedrock_refusal_an_earlier_session_kept_is_still_honoured`
+`verified-by: bravebot_agent::stage_record_incognito::an_incognito_session_reads_the_record_and_adds_nothing_to_it`
 
 <a id="INCOG-6"></a>
 ### INCOG-6: asking is one way, and composes with every other way of starting

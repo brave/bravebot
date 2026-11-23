@@ -700,25 +700,7 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
         },
     );
 
-    // A key beside the ones this build reads, which the lines above cannot cover: those name a key
-    // that was recognised and not obeyed, and this one was never read at all. The file is
-    // documented as largely another tool's shape, so a pasted block holds `sandbox` or `hooks`, and
-    // nothing else would tell whoever wrote one that the restriction they believe is in force was
-    // never read. A note rather than a failure, on BACKEND-36's reasoning: a key written for a
-    // later release must not stop this binary.
-    each(
-        t!(doctor_settings_unread),
-        settings.unread_keys(),
-        |(path, key)| unread_key_line(path, key),
-    );
-
-    // The same, for a key a file wrote twice in one block. Read so that nothing a first block
-    // refused is erased by a second, and said here because the file otherwise reads as having been
-    // taken whole. A note rather than a failure, on BACKEND-36's reasoning. The key path and the
-    // file, never a value.
-    report_repeated_keys(settings, managed, &managed_file);
-
-    // The same, for a key that only refuses and was spelled as something other than a boolean: it
+    // A key that only refuses and was spelled as something other than a boolean: it
     // is read as absence (PERM-16, PERM-17), so somebody who quoted `"true"` has a session as
     // permissive as one that named nothing, and nothing else would say so. The managed file among
     // them, since an administrator who mistyped a pin is the person least likely to be told by the
@@ -747,15 +729,14 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     );
 }
 
-/// The entries of the managed file's `mcp.allow` and `mcp.deny` that are neither a host nor a
-/// command. They match no server, and the administrator who wrote one believes a server is kept
-/// from starting (SERVERS-12).
-fn report_managed_server_entries(managed: &Managed) {
-    each(
-        t!(doctor_settings_ignored),
-        bravebot_agent::mcp::managed_entries_unusable(managed),
-        |sentence| sentence,
-    );
+/// One line for each entry of the managed file's `mcp.allow` and `mcp.deny` that is neither a host
+/// nor a command. They match no server, and the administrator who wrote one believes a server is
+/// kept from starting (SERVERS-12).
+fn managed_server_entry_lines(managed: &Managed) -> Vec<String> {
+    bravebot_agent::mcp::managed_entries_unusable(managed)
+        .into_iter()
+        .map(|sentence| aligned(t!(doctor_settings_ignored), sentence, FACT))
+        .collect()
 }
 
 /// The line for the file `--settings` named where it grants nothing because it lies in a directory
@@ -767,65 +748,48 @@ fn named_withheld_lines(settings: &bravebot_config::Settings) -> Vec<String> {
         .collect()
 }
 
-/// The line for a key nothing reads, naming the file and not the value.
+/// One line for each entry or key a reader that restricts dropped or combined without refusing the
+/// file: a key nothing reads, a key a file wrote twice, and an entry of the managed file's
+/// `mcp.allow` or `mcp.deny` that matches no server (BACKEND-36, SERVERS-12).
 ///
-/// Claude Code's key for the bypass switch is the one unread key whose writer believes a
-/// restriction is in force, so it is said with the key that does the job (BACKEND-36).
-fn unread_key_line(path: &Path, key: &str) -> String {
-    let bypass = format!(
-        "permissions.{}",
-        bravebot_config::Narrowing::CLAUDE_DISABLE_BYPASS
+/// A key beside the ones this build reads was never read at all, so the lines about a key that was
+/// recognised and not obeyed cannot cover it. The file is documented as largely another tool's
+/// shape, so a pasted block holds `sandbox` or `hooks`, and nothing else would tell whoever wrote
+/// one that the restriction they believe is in force was never read. A repeat is read so that
+/// nothing a first block refused is erased by a second, and said because the file otherwise reads
+/// as having been taken whole. A note rather than a failure, on BACKEND-36's reasoning: a key
+/// written for a later release must not stop this binary. The key path and the file, never a value.
+///
+/// The sentences are the ones a session says when it opens, from
+/// [`bravebot_agent::dropped_keys`], so the two cannot come to word them differently.
+fn dropped_entry_lines(settings: &bravebot_config::Settings, managed: &Managed) -> Vec<String> {
+    let mut lines: Vec<String> = bravebot_agent::dropped_keys::unread_keys(
+        settings,
+        bravebot_agent::dropped_keys::Spelling::Drawn,
+    )
+    .into_iter()
+    .map(|sentence| aligned(t!(doctor_settings_unread), sentence, FACT))
+    .collect();
+    lines.extend(
+        bravebot_agent::dropped_keys::repeated_keys(
+            settings,
+            managed,
+            bravebot_agent::dropped_keys::Spelling::Drawn,
+        )
+        .into_iter()
+        .map(|sentence| aligned(t!(doctor_settings_repeated), sentence, FACT)),
     );
-    match key == bypass {
-        true => t!(
-            doctor_settings_unread_bypass,
-            key = progress::printable(key),
-            path = progress::printable_path(path)
-        ),
-        false => t!(
-            doctor_settings_unread_key,
-            key = progress::printable(key),
-            path = progress::printable_path(path)
-        ),
-    }
+    lines.extend(managed_server_entry_lines(managed));
+    lines
 }
 
-/// Says each line [`repeated_key_lines`] gives, under the heading of the report.
-fn report_repeated_keys(
-    settings: &bravebot_config::Settings,
-    managed: &Managed,
-    managed_file: &str,
-) {
-    for line in repeated_key_lines(settings, managed, managed_file) {
-        fact(t!(doctor_settings_repeated), line);
+/// Says each line [`dropped_entry_lines`] gives. Called whether or not the configuration can be
+/// used: a file whose keys were never read is wrong whatever else the configuration is, and its
+/// author is not told anywhere else.
+fn report_dropped_entries(settings: &bravebot_config::Settings, managed: &Managed) {
+    for line in dropped_entry_lines(settings, managed) {
+        println!("{line}");
     }
-}
-
-/// One line for each key a settings file, or the managed file, wrote twice in one object: the key's
-/// path and the file, never a value (BACKEND-36). The managed file is named by `managed_file`, the
-/// path as the report spells it, so a test can hold the line without a file under `/etc`.
-fn repeated_key_lines(
-    settings: &bravebot_config::Settings,
-    managed: &Managed,
-    managed_file: &str,
-) -> Vec<String> {
-    settings
-        .repeated_keys()
-        .map(|(path, key)| {
-            t!(
-                doctor_settings_repeated_key,
-                key = progress::printable(key),
-                path = progress::printable_path(path)
-            )
-        })
-        .chain(managed.repeated_keys().map(|key| {
-            t!(
-                doctor_settings_repeated_key,
-                key = progress::printable(key),
-                path = managed_file
-            )
-        }))
-        .collect()
 }
 
 /// The network for the programs `run` starts, named only where it is not open, with who decided
@@ -1283,7 +1247,7 @@ pub(crate) fn doctor() -> ExitCode {
             println!("{}", t!(doctor_configuration_ok));
             report_settings_sources(&settings);
             report_ignored_settings(&settings, &managed);
-            report_managed_server_entries(&managed);
+            report_dropped_entries(&settings, &managed);
 
             let network = bravebot_config::settled_run_network()
                 .cloned()
@@ -1325,6 +1289,10 @@ pub(crate) fn doctor() -> ExitCode {
             // Said here too, since a layer that tried to declare a server is wrong whatever else
             // the configuration is, and its author is not told anywhere else.
             report_mcp_declared(&settings, &mut ending);
+            // And the keys no reader read, the keys a file wrote twice and the managed entries that
+            // match no server, for the same reason: they are as wrong with a configuration that
+            // cannot be used as with one that can.
+            report_dropped_entries(&settings, &managed);
             // And the sign-in, which is a fact about the machine rather than about this
             // configuration: a held credential is missing from the report exactly when somebody is
             // debugging a setup that does not load.
@@ -2264,12 +2232,11 @@ pub(crate) fn managed_layer(managed: &Managed) -> Vec<String> {
         },
         FACT,
     )];
-    if managed.retrieval_unreadable() {
-        lines.push(aligned(
-            t!(doctor_settings_ignored),
-            t!(doctor_managed_retrieval_unreadable, path = &path),
-            FACT,
-        ));
+    if let Some(said) = bravebot_agent::dropped_keys::managed_retrieval(
+        managed,
+        bravebot_agent::dropped_keys::Spelling::Drawn,
+    ) {
+        lines.push(aligned(t!(doctor_settings_ignored), said, FACT));
     }
     // The managed file is not one of the layers `permissions.startInAuto` is read from, so it is
     // said here: an administrator who wrote it there believes it binds, and nothing else says it
@@ -3897,9 +3864,13 @@ mod tests {
         .expect("a settings file");
         let settings = bravebot_config::Settings::layered(None, None, Some(&settings_path));
         let managed = Managed::at(&managed_path);
-        let managed_spelled = progress::printable_path(&managed_path);
+        let managed_spelled = managed_path.display().to_string();
 
-        let lines = repeated_key_lines(&settings, &managed, &managed_spelled);
+        let lines = bravebot_agent::dropped_keys::repeated_keys(
+            &settings,
+            &managed,
+            bravebot_agent::dropped_keys::Spelling::Drawn,
+        );
 
         assert_eq!(lines.len(), 2, "one line for each repeat: {lines:?}");
         assert!(
@@ -3910,6 +3881,122 @@ mod tests {
         assert!(
             lines[1].contains("models") && lines[1].contains(&managed_spelled),
             "the managed file's repeat is not named with its key path and file: {lines:?}"
+        );
+        let said = lines.join("\n");
+        assert!(
+            !said.contains("a-model-nobody-prints") && !said.contains("a-rule-nobody-prints"),
+            "a value is printed: {said}"
+        );
+    }
+
+    /// An entry of the managed file's `mcp.deny` or `mcp.allow` that matches no server is named on
+    /// a line of its own with the list and the entry as the file spelled it, and an entry that can
+    /// be matched is not named (SERVERS-12). Each of the four malformed forms is a different way to
+    /// write a deny entry that refuses nothing, so a line built for one form only fails the others.
+    ///
+    /// Rejects leaving the line out of the report (the function that builds it had no test that
+    /// read its output), naming a usable entry, and a line that drops the list it was written in.
+    #[test]
+    fn doctor_names_each_managed_server_entry_that_matches_no_server() {
+        let scratch = Scratch::new("doctor-managed-server-entries");
+        let path = scratch.path.join("managed.json");
+        std::fs::write(
+            &path,
+            r#"{"mcp": {"deny": [{"host": "https://mcp.corp.example"},
+                               {"host": "mcp.corp.example:443"},
+                               {"host": "bücher.example"},
+                               {"command": ["evil-server", "--stdio"]},
+                               {"host": "usable.corp.example"}],
+                       "allow": [{"command": ["another-bare-program"]}]}}"#,
+        )
+        .expect("a managed file");
+
+        let lines = managed_server_entry_lines(&Managed::at(&path));
+
+        assert_eq!(
+            lines.len(),
+            5,
+            "one line for each unusable entry: {lines:?}"
+        );
+        for (list, entry) in [
+            ("mcp.deny", "https://mcp.corp.example"),
+            ("mcp.deny", "mcp.corp.example:443"),
+            ("mcp.deny", "bücher.example"),
+            ("mcp.deny", "evil-server"),
+            ("mcp.allow", "another-bare-program"),
+        ] {
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains(list) && line.contains(entry)),
+                "{list} entry {entry} is not named with its list: {lines:?}"
+            );
+        }
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("usable.corp.example")
+                    && line.contains(&path.display().to_string())),
+            "a usable entry is named, or a line lacks the file: {lines:?}"
+        );
+    }
+
+    /// A managed file whose entries can all be matched, and a machine with no managed file, add no
+    /// line, so the line means an entry and not the presence of a file.
+    #[test]
+    fn doctor_names_no_server_entry_for_a_managed_file_whose_entries_can_be_matched() {
+        let scratch = Scratch::new("doctor-managed-server-entries-none");
+        let path = scratch.path.join("managed.json");
+        std::fs::write(
+            &path,
+            r#"{"mcp": {"deny": [{"host": "mcp.corp.example"}, {"command": ["/usr/bin/server"]}]}}"#,
+        )
+        .expect("a managed file");
+
+        assert!(managed_server_entry_lines(&Managed::at(&path)).is_empty());
+        assert!(managed_server_entry_lines(&Managed::at(&scratch.path.join("absent"))).is_empty());
+    }
+
+    /// The three kinds of entry a reader drops without refusing the file (an unread key, a key
+    /// written twice, a managed server entry that matches no server) are each a line of the report,
+    /// the unread and repeated ones under their own headings and none carrying a value.
+    ///
+    /// Rejects a report that builds one kind and leaves out another, and one that prints the value
+    /// the key was set to.
+    #[test]
+    fn doctor_lines_for_dropped_entries_cover_unread_repeated_and_server_entries() {
+        let scratch = Scratch::new("doctor-dropped-entry-lines");
+        let managed_path = scratch.path.join("managed.json");
+        std::fs::write(
+            &managed_path,
+            r#"{"models": {"deny": ["a-model-nobody-prints"]}, "models": {},
+                "mcp": {"deny": [{"command": ["evil-server"]}]}}"#,
+        )
+        .expect("a managed file");
+        let settings_path = scratch.path.join("settings.json");
+        std::fs::write(
+            &settings_path,
+            r#"{"permissions": {"denyy": ["Read(a-rule-nobody-prints)"]}}"#,
+        )
+        .expect("a settings file");
+        let settings = bravebot_config::Settings::layered(None, None, Some(&settings_path));
+
+        let lines = dropped_entry_lines(&settings, &Managed::at(&managed_path));
+
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(
+            lines[0].contains(&t!(doctor_settings_unread).to_string())
+                && lines[0].contains("permissions.denyy"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[1].contains(&t!(doctor_settings_repeated).to_string())
+                && lines[1].contains("models"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[2].contains("mcp.deny") && lines[2].contains("evil-server"),
+            "{lines:?}"
         );
         let said = lines.join("\n");
         assert!(
@@ -3933,7 +4020,11 @@ mod tests {
         .expect("a settings file");
         let settings = bravebot_config::Settings::layered(None, None, Some(&settings_path));
 
-        let lines = repeated_key_lines(&settings, &Managed::at(&managed_path), "managed");
+        let lines = bravebot_agent::dropped_keys::repeated_keys(
+            &settings,
+            &Managed::at(&managed_path),
+            bravebot_agent::dropped_keys::Spelling::Drawn,
+        );
 
         assert!(lines.is_empty(), "{lines:?}");
     }

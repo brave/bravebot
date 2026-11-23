@@ -6393,6 +6393,7 @@ ui-rules-note-granted-this-chat = They are granted for this chat only.
 ui-rules-note-proposed = These allow rules this project's settings propose were not granted. An allow rule answers a question for you, so only one you grant, or one in your own settings file, is in force. You will still be asked:
 ui-rules-note-directories = A settings file named these directories, and they are not open:
 ui-rules-note-refused = These directories a settings file named cannot be opened:
+ui-rules-note-dropped = These keys were not read as written:
 gcloud-not-installed = The Google Cloud CLI (`gcloud`) was not found. Install it and run `gcloud auth application-default login`, or set GOOGLE_API_KEY to use Google Vertex AI with a key.
 gcloud-refused = The Google Cloud CLI gave no access token ({ $detail }). Run `gcloud auth application-default login`.
 gcloud-no-token = the reply was not a token

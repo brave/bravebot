@@ -404,11 +404,11 @@ export const narrowing = (rules: SettingsRules | null | undefined): string[] => 
 
 /**
  * Whether a settings file wrote something that is not in force, which the person is told: a rule
- * not granted, a directory not open, or one that could not be opened (`refused`, from the bridge's
- * `foldersRefused`).
+ * not granted, a directory not open, one that could not be opened (`refused`, from the bridge's
+ * `foldersRefused`), or a key that was not read as written (`droppedKeys`).
  */
 export const notInForce = (rules: SettingsRules | null | undefined, refused: readonly unknown[] = []): boolean =>
-  !!rules && (rules.unreadable.length > 0 || rules.proposed.length > 0 || rules.directories.length > 0 || refused.length > 0 || refusedPaths(rules).length > 0 || (rules.filesystemIgnored?.length ?? 0) > 0 || !!rules.namedWithheld)
+  !!rules && (rules.unreadable.length > 0 || rules.proposed.length > 0 || rules.directories.length > 0 || refused.length > 0 || refusedPaths(rules).length > 0 || (rules.filesystemIgnored?.length ?? 0) > 0 || !!rules.namedWithheld || (rules.droppedKeys?.length ?? 0) > 0)
 
 /** Whether a yes to the rules question granted checkout rules this conversation holds, which the person is also told. */
 export const grantedRules = (rules: SettingsRules | null | undefined): boolean => (rules?.granted?.length ?? 0) > 0

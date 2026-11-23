@@ -675,19 +675,22 @@ letters: the table grants an answer, so a spelling it does not list keeps the op
 is enough for a file a contributor added to be what an audited name runs, and `PATH_add bin` in a
 project's own `.envrc` puts one there. The directories that are not the system's are the working
 directory, the checkout holding it (a session begun in a subdirectory has the `bin` above it on
-`$PATH`), every directory added by name or left with `/cd`, a directory a stage was granted to write,
-and, for a delegate working in a checkout, the working directory the checkout was made from
+`$PATH`), every directory added by name or left with `/cd`, a directory a stage was granted to write, a
+directory an earlier process let a stage write (the record in
+[sandboxing.md](../sandboxing.md#SANDBOX-30)), and, for a delegate working in a checkout, the working directory the checkout was made from
 (see [checkouts](../checkouts.md)). The checkout is the nearest of the directory and its ancestors
 that holds a `.git`, found as [SANDBOX-30](../sandboxing.md#SANDBOX-30) finds the one it leaves out
 of the search for programs. Only the nearest is taken, because every ancestor with a `.git` would
 also take in an outer repository that merely contains the checkout, such as the repository a
 submodule is part of or a dotfiles repository at the home directory, and every program under it
 would then be outside the proof. A directory with no `.git` above it, or one marked by `.hg` or
-`.jj` only, has no checkout and only the directory itself is in the set. The agent computes the set from the directories the person opened and
-hands it to the policy as it hands the root. The test is made against the path the driver resolved
+`.jj` only, has no checkout and only the directory itself is in the set. The agent computes the set from the directories the person opened and the directories the record
+names, and hands it to the policy as it hands the root. The test is made against the path the driver resolved
 and will execute rather than against the spelling that reached it: those are two values, and only
-the first says where the file is. An assignment decides what a program loads and
-reads before its own arguments are looked at, and a redirection opens a file the argv does not name,
+the first says where the file is. Off Unix the agent starts a program by the file it resolved to, so
+the two are equal and a step is never read as started by another name there. The table alone refuses
+a Windows path, because it matches the file name after the last `/`. An assignment decides what a
+program loads and reads before its own arguments are looked at, and a redirection opens a file the argv does not name,
 so neither is covered by an audit of an option surface. Joining standard error to standard output
 renames a descriptor and opens nothing, so it is not a redirection for this purpose.
 
@@ -788,6 +791,10 @@ interpreters, and `awk`'s `system()` reaches the shell this repository excludes.
 `verified-by: bravebot_core::pure::a_reporting_program_following_links_or_reading_a_list_proves_nothing`
 `verified-by: bravebot_core::pure::cat_answers_with_the_files_it_reads`
 `verified-by: bravebot_core::pure::a_program_spelled_with_a_folded_letter_is_not_in_the_table`
+`verified-by: bravebot_core::pure::a_windows_path_is_not_in_the_table`
+`verified-by: bravebot_core::policy::a_step_resolved_to_a_windows_path_is_not_read_proven`
+`verified-by: bravebot_core::policy::a_step_is_renamed_when_its_file_name_differs_from_the_file_it_resolved_to`
+`verified-by: bravebot_agent::programs::a_program_found_off_unix_is_started_as_the_file_it_resolved_to`
 `verified-by: bravebot_core::policy::a_pipeline_of_sort_uniq_cat_and_ls_over_vouched_paths_does_not_ask`
 `verified-by: bravebot_core::trust::a_subtree_is_trusted_only_when_nothing_beneath_it_is_not`
 `verified-by: bravebot_core::policy::a_line_that_only_reads_vouched_for_paths_comes_back_trusted`
@@ -814,8 +821,10 @@ interpreters, and `awk`'s `system()` reaches the shell this repository excludes.
 `verified-by: bravebot_core::policy::a_program_in_a_directory_the_session_left_is_not_proven`
 `verified-by: bravebot_core::policy::the_set_leaves_the_results_for_the_directory_alone_as_they_were`
 `verified-by: bravebot_agent::workspace::the_directories_a_program_may_not_resolve_into_follow_the_session`
+`verified-by: bravebot_agent::workspace::a_directory_a_stage_was_let_write_is_one_a_program_may_not_resolve_into_and_one_it_was_let_read_is_not`
 `verified-by: bravebot_agent::workspace::a_delegate_in_a_checkout_may_not_resolve_a_program_into_the_working_directory`
 `verified-by: bravebot_agent::tools::tests::arguments::a_directory_a_remembered_grant_lets_a_stage_write_is_in_the_unproven_set`
+`verified-by: bravebot_agent::tools::tests::arguments::a_directory_an_earlier_process_let_a_stage_write_is_in_the_unproven_set`
 `verified-by: bravebot_agent::proof_road_checkout::a_program_reached_through_a_link_into_the_checkout_above_the_directory_is_asked_about`
 `verified-by: bravebot_agent::proof_road_checkout::a_program_in_a_directory_a_remembered_grant_lets_a_stage_write_is_asked_about`
 `verified-by: bravebot_agent::programs::a_relative_path_entry_is_read_under_the_working_directory`

@@ -34,6 +34,12 @@ fn main() {
         );
     }
 
+    // The directories an earlier process let a stage write are left out of the search for the
+    // programs this one starts, and each directory a session here opens is added to that record
+    // for the next. Before a program is looked up. See SANDBOX-30.
+    bravebot_agent::stage_record::load();
+    bravebot_agent::stage_record::follow();
+
     // Not a security decision. The only argument is `--settings <path>`, which names a settings
     // file for a developer driving this by hand, and what that file may grant is decided by the
     // policy layer rather than here. Nothing is authorised by an argument.

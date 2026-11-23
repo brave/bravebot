@@ -32,6 +32,7 @@ pub mod connectors;
 pub mod conversation;
 pub mod delegate;
 pub mod diff;
+pub mod dropped_keys;
 pub mod exec;
 pub mod file_preview;
 pub mod findings;
@@ -105,6 +106,7 @@ pub mod skills;
 #[cfg(test)]
 mod spec_headings;
 pub mod spend_limit;
+pub mod stage_record;
 pub mod styles;
 pub mod subscription;
 #[cfg(test)]

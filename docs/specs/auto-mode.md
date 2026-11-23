@@ -48,7 +48,8 @@ included. It is read from the home settings file and from the file `--settings` 
 other layer. A project or local file that names it has the key removed, and `bravebot doctor` and the
 desktop settings view name the file. A managed file that names it decides nothing, and `doctor` says so.
 Only the boolean `true` opens a session in auto: `false`, a quoted `"true"`, a number and the key
-outside the `permissions` block leave a session asking, and none of them is reported. A mode flag on
+outside the `permissions` block leave a session asking. The key outside the `permissions` block is
+named as a key nothing reads, as any top-level key is, and none of the others is reported. A mode flag on
 the line wins over the setting ([MODE-5](permission-modes.md#MODE-5)).
 
 The bridge behind an editor's ACP server and the one behind the local host open every session asking, a new
@@ -100,6 +101,7 @@ that, and goes straight to asking where a layer wrote `permissions.bypassUnreach
 `verified-by: bravebot_cli::auto_start::a_resumed_session_asks_unless_the_line_or_the_setting_says_auto`
 `verified-by: bravebot_cli::auto_start::only_the_terminal_client_and_the_windows_bridge_read_the_setting`
 `verified-by: bravebot_config::settings::only_a_boolean_true_under_permissions_opens_a_session_in_auto`
+`verified-by: bravebot_agent::dropped_keys::a_start_in_auto_key_outside_permissions_is_named_and_the_one_inside_is_not`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_open_sessions_in_auto`
 `verified-by: bravebot_config::settings::a_managed_file_cannot_open_sessions_in_auto`
 `verified-by: bravebot_cli::doctor::doctor_says_a_managed_file_naming_the_start_in_auto_setting_decides_nothing`

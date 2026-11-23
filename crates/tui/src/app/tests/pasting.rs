@@ -371,6 +371,7 @@ fn what_an_after_line_named_is_held_as_words_and_names_and_not_as_markers() {
                 kind: bravebot_filetype::by_name::Kind::Attachment("image/png"),
             }],
             typed_at: std::time::Instant::now(),
+            names: crate::state::NamesFrom::nothing(),
         },
     );
 

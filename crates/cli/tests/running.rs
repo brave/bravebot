@@ -3762,6 +3762,105 @@ fn doctor_starts_no_aws_from_the_checkout_it_runs_in() {
     );
 }
 
+/// SANDBOX-30 over two processes: a directory a session opened is one a stage of that session
+/// could write, so `doctor` in a later process, run from another directory with that directory
+/// first on `PATH`, asks the `aws` behind it and not the one a stage left there. The first process
+/// is a run that opens the directory with `--add-dir`, which records it in the state directory.
+/// The planted `aws` is written between the runs, as the stage of the first would have written
+/// it. The control is a later process with a state directory that holds no record, which starts
+/// the planted program, so what keeps it from starting is the record. Rejects a record that is
+/// never written, one that is never read, and one that is read into a set the lookup does not
+/// use.
+#[cfg(unix)]
+#[test]
+fn doctor_starts_no_aws_from_a_directory_an_earlier_process_granted() {
+    let (_gateway, scratch, cwd, beside) = a_directory_beside_whose_notes_the_model_reads(
+        "cli-running-doctor-aws-granted-earlier",
+        "notes.md",
+    );
+    let installed = aws_stand_in(&scratch);
+    let marker = scratch.path.join("planted-aws");
+
+    let earlier = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &[
+            "--add-dir",
+            beside.to_str().expect("a path that is text"),
+            "-p",
+            "hello",
+        ],
+    );
+    let (_, stderr) = said(&earlier);
+    assert!(earlier.status.success(), "{stderr}");
+    let record = std::fs::read_to_string(scratch.path.join(".bravebot").join("stage-writes"))
+        .unwrap_or_default();
+    assert!(
+        record.contains(&format!("directory\t{}\n", beside.display())),
+        "the run that opened the directory did not record it: {record:?}"
+    );
+
+    let body = format!("printf x >> '{}' 2>/dev/null; exit 255", marker.display());
+    stand_in(&beside.join("bin"), "aws", &body);
+    let path = std::env::join_paths([beside.join("bin").as_path(), Path::new(&installed)])
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let settings = r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}},
+            "model": "opus"}"#;
+    std::fs::write(
+        scratch.path.join(".bravebot").join("settings.json"),
+        settings,
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("aws-work"), "").unwrap();
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", path.as_str()),
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-east-1"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+
+    // The control: the same directory and `PATH` under a state directory with no record.
+    let without = Scratch::new("cli-running-doctor-aws-granted-earlier-control")
+        .with_settings(settings)
+        .with_file("aws-work", "");
+    let control = bravebot_started_in(
+        &without.path,
+        &checkout_in(&without),
+        &environment,
+        &["doctor"],
+    );
+    let (stdout, stderr) = said(&control);
+    assert!(
+        marker.exists(),
+        "the control did not start the planted aws, so it shows nothing: {stdout}{stderr}"
+    );
+    std::fs::remove_file(&marker).unwrap();
+
+    let later = bravebot_started_in(
+        &scratch.path,
+        &checkout_in(&scratch),
+        &environment,
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&later);
+    assert!(
+        !marker.exists(),
+        "the aws in a directory an earlier process opened was started: {stdout}{stderr}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "session   signed in"),
+        "the installed aws was not the one asked: {stdout}{stderr}"
+    );
+}
+
 /// CRED-14 over the process: this agent's signing key and key id are not in the environment of
 /// `ssh-keygen`, `ssh` or `git`, which run unconfined with the person's access to `~/.ssh`. Each
 /// stand-in reports what it was handed in the part of its answer the report shows.
@@ -5696,6 +5795,56 @@ fn doctor_names_a_restriction_that_names_nothing() {
     );
 }
 
+/// BACKEND-36 and SERVERS-12 on a machine whose configuration cannot be used: `doctor` still names
+/// a key nothing reads and a key a settings file wrote twice, with the file, and prints no value.
+/// The configuration error is an endpoint that names no scheme, the case the test of the status
+/// above uses, and the status stays the configuration one.
+///
+/// Rejects a report that prints the dropped-entry lines only where the configuration loads: its
+/// author is not told anywhere else, and a settings file with a misspelled restriction is as likely
+/// to sit beside a broken endpoint as beside a working one.
+#[test]
+fn doctor_names_a_dropped_key_when_the_configuration_has_an_error() {
+    let scratch = Scratch::new("cli-running-unread-with-error").with_settings(
+        r#"{"statusLine": "a-command-nothing-else-prints",
+            "permissions": {"deny": ["Read(a-rule-nothing-else-prints)"], "deny": []}}"#,
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "ai-chat.example.invalid"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "the report did not end on the configuration status: {stdout}{stderr}"
+    );
+    let file = scratch.path.join(".bravebot").join("settings.json");
+    assert!(
+        stdout.contains(&format!("statusLine in {}", file.display())),
+        "an unread key was left unnamed because the configuration has an error: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "permissions.deny is written more than once in {}",
+            file.display()
+        )),
+        "a repeated key was left unnamed because the configuration has an error: {stdout}"
+    );
+    assert!(
+        !stdout.contains("a-command-nothing-else-prints")
+            && !stdout.contains("a-rule-nothing-else-prints"),
+        "the report printed what a key was set to: {stdout}"
+    );
+}
+
 /// RUN-28 from the process that reads the file: `doctor` says, for each pattern in `run.scrubEnv`,
 /// the pattern and one variable it reached, in the order the entries are written, says nothing for
 /// an exact entry, and prints no value.
@@ -6537,6 +6686,60 @@ fn a_one_shot_run_draws_the_control_characters_of_a_checkouts_rule_as_pictures()
     assert!(
         stderr.contains(THE_DENY_RULE_PICTURED),
         "-p did not draw the rule it ignored as pictures: {stderr}"
+    );
+}
+
+/// BACKEND-36, RETRIEVE-23: a one-shot run names the keys of its settings that were not read or were
+/// written twice on stderr before the task, in the sentences `doctor` uses, once each, and never
+/// what a key was set to. Nobody runs `doctor` for a run nobody watches, so a misspelled key in a
+/// checkout's file reads to its writer as a restriction in force.
+///
+/// Rejects a run that leaves these to `doctor`, one that says a key once for each layer, one that
+/// prints a value, and one that sends the note to stdout, which carries the reply and nothing else.
+/// The run goes to the end, which is what shows the notes were not an error that stopped it.
+#[test]
+fn a_one_shot_run_names_the_keys_its_settings_dropped_on_stderr() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("done"));
+    let scratch =
+        Scratch::new("cli-running-one-shot-dropped-keys").with_settings(&settings_for(&gateway));
+    let cwd = scratch.path.join("checkout");
+    let project = cwd.join(".bravebot");
+    std::fs::create_dir_all(&project).expect("create the project directory");
+    std::fs::write(
+        project.join("settings.json"),
+        r#"{"statusLine": "a-command-nobody-prints",
+            "permissions": {"deny": ["Read(a-rule-nobody-prints)"], "deny": []}}"#,
+    )
+    .expect("write the project layer");
+
+    let output = bravebot_started_in(&scratch.path, &cwd, AT_A_GATEWAY, &["-p", "say hello"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "the run did not finish: {stderr}");
+    let file = project.join("settings.json");
+    let named = |needle: &str| stderr.lines().filter(|line| line.contains(needle)).count();
+    assert_eq!(
+        named(&format!("statusLine in {}", file.display())),
+        1,
+        "{stderr}"
+    );
+    assert_eq!(
+        named(&format!(
+            "permissions.deny is written more than once in {}",
+            file.display()
+        )),
+        1,
+        "{stderr}"
+    );
+    for value in ["a-command-nobody-prints", "a-rule-nobody-prints"] {
+        assert!(
+            !stderr.contains(value) && !stdout.contains(value),
+            "a value is said: {stdout}{stderr}"
+        );
+    }
+    assert!(
+        !stdout.contains("statusLine"),
+        "a note was written to stdout, which carries the reply: {stdout}"
     );
 }
 
@@ -19362,6 +19565,45 @@ fn listing_a_plugins_servers_writes_nothing_into_the_state_directory() {
         assert!(
             !state.join("mcp-approved").exists(),
             "{command} recorded an approval"
+        );
+    }
+}
+
+/// SANDBOX-30: a command that opens no session reads the record of the directories earlier
+/// processes let a stage write and appends nothing to it, and makes none where there was none. A
+/// state directory that holds a record is the same after `doctor` and `mcp list`, byte for byte,
+/// and one that holds none holds none. The two-process test beside the lookups is the control: a
+/// run that opens a session with `--add-dir` does write the record, so this test does not pass for
+/// a record that is never written. Rejects a command that switches the record's writer on before
+/// it knows a session opens, so that `doctor` appends the directory it ran in.
+#[test]
+fn a_command_that_opens_no_session_leaves_the_record_of_stage_writes_as_it_found_it() {
+    let seeded = "directory\t/bravebot-seeded-directory\n";
+    let with =
+        Scratch::new("cli-running-no-session-record-kept").with_state("stage-writes", seeded);
+    let without = Scratch::new("cli-running-no-session-record-none");
+
+    for (command, arguments) in [
+        ("bravebot doctor", vec!["doctor"]),
+        ("bravebot mcp list", vec!["mcp", "list"]),
+    ] {
+        for scratch in [&with, &without] {
+            let output = bravebot(&scratch.path, CONFIGURED, &arguments);
+            let (stdout, stderr) = said(&output);
+            assert!(
+                output.status.code().is_some() && !format!("{stdout}{stderr}").is_empty(),
+                "{command} did not run to its end: {stdout}{stderr}"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(with.path.join(".bravebot").join("stage-writes"))
+                .expect("the record is still there"),
+            seeded,
+            "{command} changed a record it found"
+        );
+        assert!(
+            !without.path.join(".bravebot").join("stage-writes").exists(),
+            "{command} made a record where there was none"
         );
     }
 }

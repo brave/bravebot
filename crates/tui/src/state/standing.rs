@@ -42,11 +42,12 @@ impl Session {
             self.note(t!(loop_full, count = crate::loops::MAX_LIVE));
             return;
         }
-        let number = self.looping.start(crate::loops::Running::armed(
-            prompt.to_string(),
-            wakeup,
-            Instant::now(),
-        ));
+        // The line the turn that asked was begun from, so every tick reads the names the person
+        // typed there and none from words a paste stood for (NAME-12).
+        let number = self.looping.start(
+            crate::loops::Running::armed(prompt.to_string(), wakeup, Instant::now())
+                .names_as(self.turn_names.clone()),
+        );
         self.note(t!(loop_armed_by_the_turn, number = number, after = after));
     }
 
@@ -60,7 +61,12 @@ impl Session {
     ///
     /// The delay counts from `typed`, when the person typed the line. A line typed during a turn is
     /// armed when that turn ends, and a delay that has passed by then is due at once.
-    pub fn start_after(&mut self, request: crate::loops::Request, typed: Instant) {
+    pub fn start_after(
+        &mut self,
+        request: crate::loops::Request,
+        typed: Instant,
+        names: NamesFrom,
+    ) {
         if self.looping.is_full() {
             self.note(t!(loop_full, count = crate::loops::MAX_LIVE));
             return;
@@ -82,7 +88,7 @@ impl Session {
         // Numbered before anything is said about it, so what is said is the number it has.
         let number = self
             .looping
-            .start(crate::loops::Running::after(request, typed));
+            .start(crate::loops::Running::after(request, typed).names_as(names));
         if let crate::loops::Pacing::Once(delay) = pacing {
             // The time left, since a line typed during a turn has already spent part of its delay
             // (LOOP-18). The whole delay stands in only where the line cannot be found, which it
@@ -296,7 +302,13 @@ impl Session {
             }
         }
         let prompt = watch::fired(number, &path, change);
-        Some(self.begin_turn(prompt, (Vec::new(), Vec::new()), Vec::new()))
+        // The driver's sentence quoting the path a watch looks at, so the turn names nothing.
+        Some(self.begin_turn(
+            prompt,
+            (Vec::new(), Vec::new()),
+            Vec::new(),
+            NamesFrom::nothing(),
+        ))
     }
 
     /// Whether the turn running now is a watch's fire.
@@ -582,6 +594,9 @@ impl Session {
     pub(super) fn dispatch_tick_of(&mut self, number: usize) -> Option<String> {
         let running = self.looping.get_mut(number)?;
         let (prompt, pasted, attached) = running.dispatching();
+        // Kept from the loop and not from the box, which this tick may come long after the line was
+        // typed on. A tick reads the names of the line the person typed (NAME-12).
+        let names = running.names().clone();
         let count = running.ticks();
         let quiet = running.quiet();
         // The loop's number is always said, the one `/loop stop` takes, so a tick count is never
@@ -598,6 +613,6 @@ impl Session {
         } else {
             self.note(t!(loop_tick, number = number, count = count));
         }
-        Some(self.begin_turn(prompt, (attached, pasted), Vec::new()))
+        Some(self.begin_turn(prompt, (attached, pasted), Vec::new(), names))
     }
 }

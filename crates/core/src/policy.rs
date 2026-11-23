@@ -6614,10 +6614,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Which number an answer names is a decision taken from untrusted bytes, so it is not taken
     /// here, and not anywhere in the driver. `reader` is a function pointer from a crate that is
     /// not the driver. It captures nothing of the caller's, is handed the text for the width of one
-    /// call and the limit the planner wrote, and gives back one byte. This gate compares neither
-    /// the text nor the byte, and nothing else of the answer is kept. The ninth entry of the Known
-    /// costs in `docs/specs/labels.md` is that reader, and the uses of this gate are pinned there,
-    /// so a second reader of an answer is a moved count.
+    /// call and the limit the planner wrote, and gives back one byte. The type does not stop that
+    /// function from keeping a copy of the text for a later call, so a test in
+    /// `crates/cli/tests/layering.rs` refuses a `static`, a `thread_local!` and interior mutability
+    /// in the crate it comes from. This gate compares neither the text nor the byte, and nothing
+    /// else of the answer is kept. The ninth entry of the Known costs in `docs/specs/labels.md` is
+    /// that reader, and the uses of this gate are pinned there, so a second reader of an answer is a
+    /// moved count.
     ///
     /// **Not a relabel.** The byte is labelled as [`Policy::label_processor_output`] labels a
     /// document: the spec's label met with the label the transport put on the reply, so a number
@@ -14129,6 +14132,46 @@ five
         }
     }
 
+    /// A step is taken as started by another name from its file name alone. The path of another
+    /// directory under the file name the program resolved to is the same program, and a path under
+    /// another file name is not (CMDLINE-8). Where the agent finds a program off Unix `started_as`
+    /// is `resolved`, so no step found there is read as renamed and the table alone refuses it; this
+    /// test states what the guard does with each input on every host. Rejects a guard that compares
+    /// the whole path, which refuses the system's `pwd` reached by another directory, and one that is
+    /// never true, which proves `pwd` started as `cwd`.
+    #[test]
+    fn a_step_is_renamed_when_its_file_name_differs_from_the_file_it_resolved_to() {
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &[]);
+        let started = |started_as: &str| {
+            let mut step = step_named("pwd", &[]);
+            step.started_as = std::path::PathBuf::from(started_as);
+            plan_of(vec![step])
+        };
+
+        for same_name in ["/usr/bin/pwd", "/usr/local/bin/pwd"] {
+            let plan = started(same_name);
+            assert!(
+                !policy.plan_needs_approval(&plan),
+                "pwd started as {same_name} asked: it is not another name"
+            );
+            assert!(
+                label_of(&mut policy, &plan).is_trusted(),
+                "pwd started as {same_name} came back untrusted: it is not another name"
+            );
+        }
+
+        let renamed = started("/usr/local/bin/cwd");
+        assert!(
+            policy.plan_needs_approval(&renamed),
+            "pwd started as cwd ran unasked"
+        );
+        assert!(
+            !label_of(&mut policy, &renamed).is_trusted(),
+            "pwd started as cwd came back as the audited program's output"
+        );
+    }
+
     /// A session begun in a subdirectory of a checkout has the checkout's `bin` on `$PATH` as readily
     /// as one begun at its root (`PATH_add ../bin`), so a file there answering to an audited name
     /// runs unasked and prints as the audited program unless the checkout is refused as well as the
@@ -14295,6 +14338,53 @@ five
             );
             assert!(
                 !label_of(&mut policy, &planted).is_trusted(),
+                "{resolved} came back as the audited program's output"
+            );
+        }
+    }
+
+    /// CMDLINE-4, CMDLINE-8: a step whose resolved path is a Windows path, with a backslash and a
+    /// drive, is not read-proven, on every host. The table matches the file name after the last `/`,
+    /// so the whole spelling is the name and no entry answers for it: the line is asked about and
+    /// its output is untrusted, where the same arguments for `/usr/bin/wc` are proven. A step
+    /// started as the file it resolved to is not taken as renamed (`started_as` is `resolved`
+    /// where the agent finds a program off Unix), so the table is what refuses it. Rejects a
+    /// reading of `\` that makes `C:\Windows\System32\wc` the audited `wc`, which would let a `wc`
+    /// anywhere on a Windows machine answer as the table's.
+    #[test]
+    fn a_step_resolved_to_a_windows_path_is_not_read_proven() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(trusting("/work", &["."], &[]))
+            .with_root(std::path::Path::new("/work"));
+        let started = |resolved: &str| {
+            let mut step = step_named("wc", &["-l"]);
+            step.resolved = std::path::PathBuf::from(resolved);
+            step.started_as = std::path::PathBuf::from(resolved);
+            plan_of(vec![step])
+        };
+
+        let control = started("/usr/bin/wc");
+        assert_eq!(policy.operands_read_by(&control), Some(Vec::new()));
+        assert!(
+            !policy.plan_needs_approval(&control),
+            "the proof road is shut for the control"
+        );
+        assert!(label_of(&mut policy, &control).is_trusted());
+
+        for resolved in [
+            r"C:\Windows\System32\wc.exe",
+            r"C:\Windows\System32\wc",
+            r"\\?\C:\Windows\System32\wc.exe",
+        ] {
+            let windows = started(resolved);
+            assert_eq!(policy.operands_read_by(&windows), None, "{resolved}");
+            assert!(
+                policy.plan_needs_approval(&windows),
+                "{resolved} ran unasked"
+            );
+            assert!(
+                !label_of(&mut policy, &windows).is_trusted(),
                 "{resolved} came back as the audited program's output"
             );
         }

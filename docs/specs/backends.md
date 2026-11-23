@@ -4,6 +4,7 @@ title: Backends
 status: normative
 governs:
   - crates/agent/src/backend.rs
+  - crates/agent/src/dropped_keys.rs
   - crates/agent/src/outcome.rs
   - crates/agent/src/turn.rs
   - crates/agent/src/turn/hooked.rs
@@ -2587,10 +2588,10 @@ discarding one silently would make a typo and a forward-looking entry look ident
 debugging it, which is why `doctor` reports the names rather than only the ones that landed.
 
 A top-level key beside the ones this build reads is kept on the same terms. The rest of the file
-applies, the key configures nothing and restricts nothing, and `doctor` names it with the file that
-set it, weakest first, every file that set one being named. The key is reported and what it was set
-to is not. A variable in `env` is not reported this way, being named already among the names the file
-set.
+applies, the key configures nothing and restricts nothing, and `doctor` and the session as it opens
+name it with the file that set it, every file that set one being named, and `doctor` lists them
+weakest first. The key is reported and what it was set to is not. A variable in `env` is not
+reported this way, being named already among the names the file set.
 
 A key inside `permissions`, `sandbox.filesystem` or `run` that this build does not read is reported
 the same way, spelled with the block that leads to it (`run.scrubenv`,
@@ -2625,12 +2626,28 @@ repeated `models.allow` or `mcp.allow` keeps the entries both lists name, since 
 requested or started and the second list must not widen what the first allowed. Any other repeated
 key, `allow` lists that grant reach and scalars among them, is read as the later value, and a list
 that only refuses or bounds beside a value that is not a list is kept. A repeat is named by `doctor`
-with the file and the key path, as `permissions.deny` or `hooks[0].command` for an element of an
+and by the session as it opens, with the file and the key path, as `permissions.deny` or `hooks[0].command` for an element of an
 array, for the managed file and for every settings file, and what the keys were set to is not
 printed. A key written once in each of two files is the layering and is not a repeat. Every value
 the combining sets aside is held by the parsed document and cleared with it.
 
 The settings are still read whole: a repeat is a note and not a failure, on the reasoning above.
+
+The session names each unread key, each repeated key and each managed `retrieval` value that pins
+nothing ([retrieval.md](retrieval.md)) as it opens, before the first prompt, once each and in the
+sentences `doctor` uses: the key path or the managed value and the file, each control character
+drawn as its picture ([layering.md](layering.md)), and never what the key was set to. The terminal
+interface, the session in lines (a background session included), a one-shot run (on stderr, before
+the task), the desktop window's note about the settings in force and an editor's session over the
+Agent Client Protocol (as messages before the reply to its first prompt) do this. The sentences are
+made in one place that all of those and `doctor` share, so they cannot come to word one differently.
+A front end calls one function of that place, which reads the managed layer the machine holds
+itself and takes no layer from its caller, so a front end cannot pass an empty layer and a key the
+managed file wrote twice and a managed `retrieval` value that pins nothing are named as the person's
+own are. `doctor` loads the layer once for its whole report and names all of them whether or not
+the configuration can be used, since no session opens to name them where it cannot. The managed
+file's `mcp.allow` and `mcp.deny` entries that match no server are named when the
+servers are reached ([mcp-servers.md](mcp-servers.md)).
 
 `verified-by: bravebot_config::lib::a_name_nothing_consults_changes_nothing`
 `verified-by: bravebot_config::settings::a_name_this_crate_does_not_know_is_still_read`
@@ -2661,6 +2678,27 @@ The settings are still read whole: a repeat is a note and not a failure, on the 
 `verified-by: bravebot_cli::running::doctor_names_a_key_written_twice_in_a_settings_file`
 `verified-by: bravebot_cli::doctor::doctor_names_a_key_a_settings_file_and_the_managed_file_wrote_twice`
 `verified-by: bravebot_cli::doctor::doctor_names_no_repeated_key_for_files_that_write_each_key_once`
+`verified-by: bravebot_cli::running::doctor_names_a_dropped_key_when_the_configuration_has_an_error`
+`verified-by: bravebot_agent::dropped_keys::an_unread_key_is_said_with_its_key_path_and_file_and_never_its_value`
+`verified-by: bravebot_agent::dropped_keys::the_bypass_key_claude_code_writes_is_said_with_the_key_that_does_its_job`
+`verified-by: bravebot_agent::dropped_keys::the_key_and_the_file_are_drawn_without_a_control_character`
+`verified-by: bravebot_agent::dropped_keys::the_desktop_spells_a_key_and_a_file_that_hold_a_character_that_draws_as_nothing`
+`verified-by: bravebot_agent::dropped_keys::a_repeated_key_is_said_with_the_file_that_wrote_it_and_no_value`
+`verified-by: bravebot_agent::dropped_keys::a_session_start_says_each_kind_once_in_doctors_sentences`
+`verified-by: bravebot_cli::plain::the_opening_names_each_dropped_key_once_in_doctors_sentences_and_no_value`
+`verified-by: bravebot_cli::plain::the_opening_says_nothing_about_dropped_keys_where_every_key_was_read`
+`verified-by: bravebot_cli::plain::the_opening_draws_a_dropped_key_with_an_escape_in_it_as_pictures`
+`verified-by: bravebot_tui::app::the_startup_notes_name_each_dropped_key_once_in_doctors_sentences_and_no_value`
+`verified-by: bravebot_tui::app::the_startup_notes_say_nothing_about_dropped_keys_where_every_key_was_read`
+`verified-by: bravebot_tui::app::a_session_begun_says_what_its_managed_layer_dropped`
+`verified-by: bravebot_cli::plain::a_hosted_start_says_what_its_managed_layer_dropped`
+`verified-by: bravebot_cli::finish::a_one_shot_run_says_what_its_managed_layer_dropped`
+`verified-by: bravebot_cli::running::a_one_shot_run_names_the_keys_its_settings_dropped_on_stderr`
+`verified-by: bravebot_config::managed::a_test_names_the_managed_file_for_its_own_thread_only`
+`verified-by: bravebot_ui_bridge::rules::a_key_nothing_reads_and_a_key_written_twice_are_reported_to_the_front_end`
+`verified-by: bravebot_ui_bridge::rules::what_a_managed_layer_dropped_is_reported_to_the_front_end`
+`verified-by: bravebot_ui_bridge::acp::a_session_an_editor_opens_is_told_the_keys_its_settings_dropped`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/settings-rules.test.mjs renders the rules banner from a payload carrying droppedKeys, holds a payload with one to being a setting not in force and counted in the banner's summary, holds each sentence to being drawn as text and never as markup, and holds a payload with none, as an older bridge sends, to saying nothing, and make check-ui runs it)`
 
 <a id="BACKEND-37"></a>
 ### BACKEND-37: failures carry safe reasons and measured request counts
@@ -2943,6 +2981,13 @@ Refusing every account but the organisation's takes both halves: the switch pinn
 
 The file is read as the settings files of BACKEND-24 are: one that is missing, larger than 64 KB or
 unparseable pins nothing, and a value that is blank or is not a string pins nothing under that name.
+
+A build with the `test-hosts` feature of `bravebot-config`, debug assertions on and a panic that
+unwinds, also lets the code of a test name another file as the managed layer of the calling thread,
+so that a front end that reads this machine's layer can be tested with a managed file of the test's
+own. No variable, setting or flag names it, a thread that did not ask reads the file above, and a
+build without the feature holds no code that reads one. The refusal of the feature in a release build
+is [CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)'s.
 
 **Why.** Every other source is ultimately the individual's. The environment sits at the top of
 BACKEND-35's order so that a released binary can be pointed at a local backend without rebuilding
@@ -3727,6 +3772,7 @@ models, and the goal judge.
 `verified-by: bravebot_agent::backend::a_pick_the_managed_layer_refuses_is_set_aside_with_the_file_that_refused_it`
 `verified-by: bravebot_cli::import::a_start_on_a_model_the_managed_layer_refuses_is_ended`
 `verified-by: bravebot_cli::plain::a_hosted_start_on_a_model_the_managed_layer_refuses_is_ended`
+`verified-by: bravebot_cli::plain::a_hosted_start_in_a_managed_layer_that_refuses_the_model_ends_before_any_question`
 `verified-by: bravebot_tui::app::the_picker_does_not_offer_a_model_this_machine_may_not_request`
 `verified-by: bravebot_tui::app::a_definition_naming_a_model_this_machine_may_not_request_is_refused`
 `verified-by: bravebot_tui::persist::a_pick_the_managed_layer_refuses_is_set_aside_and_names_the_file`
@@ -5692,15 +5738,17 @@ cancel kills it rather than asking it to stop.
   started unconfined, so [SANDBOX-30](sandboxing.md#SANDBOX-30) searches only the `PATH` entries a
   confined stage cannot write. Somebody whose only `aws` is in an activated virtualenv, or in the
   session's own directory or the temporary directory, gets `NotInstalled` until they install it
-  elsewhere or open the session from a directory that does not hold it. A session opened on a
+  elsewhere or open the session from a directory that does not hold it. A directory an earlier
+  process recorded stays left out, so opening the session elsewhere does not end it for that
+  directory until the file `stage-writes` in the state directory is deleted. A session opened on a
   directory that holds the install, `~/.local/bin` under a session opened on the home directory
   among them, is the same case. The same holds for a
   directory a toolchain was granted writes in once a stage has run with it, so a CLI installed under
   such a cache is found before the first such stage and not after. Where the permission mode
   answers every question and the sandbox mode is workspace-write, a stage is given every path the account
   can write, so an `aws` in a directory the account owns, such as a Homebrew prefix, is found before
-  the first stage runs and not after, and every Bedrock request from then until bravebot exits gets
-  `NotInstalled`. The CLI is also started with a `PATH` of those same entries, so a program it starts
+  the first stage runs and not after, and every Bedrock request from then on gets `NotInstalled`, in
+  later bravebot processes as well unless the session that ran the stage was incognito. The CLI is also started with a `PATH` of those same entries, so a program it starts
   by name, the interpreter of an `aws` that is a script or a bare `credential_process` command, is
   not found by it in a directory left out.
   An editor found outside those directories still starts, with a `PATH` of the searched entries

@@ -947,7 +947,10 @@ fn while_a_turn_works_a_handle_inside_a_folded_paste_is_queued() {
 fn a_prompt_the_driver_composed_is_never_surveyed() {
     let scratch = Scratch::new("driver-line");
     let mut session = surveying(&scratch);
-    let _ = session.start_help("what did @alice mean");
+    let _ = session.start_help(
+        "what did @alice mean",
+        bravebot_tui::state::NamesFrom::nothing(),
+    );
     assert_eq!(session.input(), "");
     assert!(!session.refuse_unsendable_names());
     assert!(!noticed(&session).contains("is not a file"));

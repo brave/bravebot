@@ -7464,6 +7464,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         // The third is between ticks, where the part is at its longest: the countdown is the widest
         // thing this row ever has to fit, so a sweep that only ever saw the bare word would pass
@@ -7474,6 +7475,7 @@ mod tests {
             crate::loops::request("2d check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         counting_down.complete("done", Vec::new(), 0);
         counting_down.loop_turn_ended(None);
@@ -7526,6 +7528,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         let word = t!(loop_hint).to_string();
         let hint = hint_row_at(&session, 120, 24);
@@ -7550,6 +7553,7 @@ mod tests {
         session.start_after(
             crate::loops::request_after("5m check the deploy"),
             std::time::Instant::now(),
+            crate::state::NamesFrom::nothing(),
         );
         let hint = hint_row_at(&session, 120, 24);
         assert!(
@@ -7568,12 +7572,14 @@ mod tests {
             crate::loops::request("1h check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         session.complete("done", Vec::new(), 0);
         session.loop_turn_ended(None);
         session.start_after(
             crate::loops::request_after("5m tail the log"),
             std::time::Instant::now(),
+            crate::state::NamesFrom::nothing(),
         );
         assert_eq!(session.loops().len(), 2);
         let hint = hint_row_at(&session, 120, 24);
@@ -7606,6 +7612,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         let hint = hint_row_at(&session, 120, 24);
         assert!(hint.contains(&t!(loop_hint).to_string()), "{hint}");
@@ -7729,6 +7736,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         session.complete("done", Vec::new(), 0);
         session.loop_turn_ended(None);
@@ -7824,6 +7832,7 @@ mod tests {
         session.start_after(
             crate::loops::request_after("5m check the deploy"),
             std::time::Instant::now(),
+            crate::state::NamesFrom::nothing(),
         );
         let (row, _) = the_still_active_row(&session, 120).expect("a line is held");
         assert!(row.contains("sending in"), "{row}");
@@ -7853,6 +7862,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         session.status = Status::Working;
         session.turns = 1;
@@ -7944,6 +7954,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         job_event(&mut session, started("job:1"));
         let word = t!(loop_hint).to_string();
@@ -8012,6 +8023,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         let word = t!(loop_hint).to_string();
 

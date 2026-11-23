@@ -406,10 +406,57 @@ pub fn managed_file() -> PathBuf {
     Path::new(MANAGED_DIR).join(MANAGED_FILE)
 }
 
+#[cfg(all(feature = "test-hosts", debug_assertions))]
+thread_local! {
+    /// The file a test made the managed layer of the calling thread, where one did.
+    static FILE_ON_THIS_THREAD: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The file [`Managed::load`] reads: the machine's, or in a build with the `test-hosts` feature the
+/// one a test named for this thread.
+fn file_in_force() -> PathBuf {
+    #[cfg(all(feature = "test-hosts", debug_assertions))]
+    if let Some(file) = FILE_ON_THIS_THREAD.with(|held| held.borrow().clone()) {
+        return file;
+    }
+    managed_file()
+}
+
+/// Makes `file` the managed layer [`Managed::load`] reads on the calling thread, until the value it
+/// returns is dropped, so a test can put a managed file in front of a front end that reads the
+/// machine's layer itself. The machine's file is at a fixed path ([`MANAGED_DIR`]) that no test can
+/// write.
+///
+/// It exists in a build with the `test-hosts` feature, which a release build refuses, and is no
+/// variable, setting or flag: nothing outside the code of a test names the file, and a thread that
+/// did not call this reads the machine's file.
+#[cfg(all(feature = "test-hosts", debug_assertions))]
+#[must_use = "the file is the managed layer only until this is dropped"]
+pub fn managed_file_on_this_thread(file: &Path) -> ManagedFileOnThisThread {
+    let previous = FILE_ON_THIS_THREAD.with(|held| held.replace(Some(file.to_path_buf())));
+    ManagedFileOnThisThread { previous }
+}
+
+/// What [`managed_file_on_this_thread`] returns: the thread reads the machine's file again, or the
+/// file it read before, when this is dropped.
+#[cfg(all(feature = "test-hosts", debug_assertions))]
+pub struct ManagedFileOnThisThread {
+    previous: Option<PathBuf>,
+}
+
+#[cfg(all(feature = "test-hosts", debug_assertions))]
+impl Drop for ManagedFileOnThisThread {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        FILE_ON_THIS_THREAD.with(|held| *held.borrow_mut() = previous);
+    }
+}
+
 impl Managed {
     /// Every pin in force on this machine.
     pub fn load() -> Self {
-        Self::at(&managed_file())
+        Self::at(&file_in_force())
     }
 
     /// As [`Managed::load`], for a named file, so a test needs no machine-level one.
@@ -1058,6 +1105,55 @@ mod tests {
             "/etc/bravebot/managed.json"
         };
         assert_eq!(managed_file(), Path::new(expected));
+    }
+
+    /// A test names the managed file for its own thread, so a front end that reads the machine's
+    /// layer can be tested with a file of the test's own: [`Managed::load`] reads that file on the
+    /// thread that named it, reads the machine's file on every other thread, and reads the machine's
+    /// file again once the guard is dropped, the earlier file where the guards nest.
+    ///
+    /// Rejects a seam that is process-wide, so one test's file answers for another test's thread, and
+    /// one that outlives its guard.
+    #[cfg(all(feature = "test-hosts", debug_assertions))]
+    #[test]
+    fn a_test_names_the_managed_file_for_its_own_thread_only() {
+        let directory = std::env::temp_dir().join(format!(
+            "bravebot-managed-thread-seam-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).expect("a scratch directory");
+        let (outer, inner) = (directory.join("outer.json"), directory.join("inner.json"));
+        std::fs::write(&outer, r#"{"retrieval": "false"}"#).expect("a file");
+        std::fs::write(&inner, r#"{"models": {}, "models": {}}"#).expect("a file");
+        let on_the_machine = Managed::load().path().map(Path::to_path_buf);
+
+        let outer_guard = managed_file_on_this_thread(&outer);
+        assert_eq!(Managed::load().path(), Some(outer.as_path()));
+        assert!(Managed::load().retrieval_unreadable());
+        {
+            let _inner_guard = managed_file_on_this_thread(&inner);
+            assert_eq!(Managed::load().path(), Some(inner.as_path()));
+            assert!(!Managed::load().retrieval_unreadable());
+        }
+        assert_eq!(
+            Managed::load().path(),
+            Some(outer.as_path()),
+            "the inner guard did not give the earlier file back"
+        );
+        let elsewhere = std::thread::spawn(|| Managed::load().path().map(Path::to_path_buf))
+            .join()
+            .expect("the thread ran");
+        assert_eq!(
+            elsewhere, on_the_machine,
+            "another thread read the file this thread named"
+        );
+        drop(outer_guard);
+        assert_eq!(
+            Managed::load().path().map(Path::to_path_buf),
+            on_the_machine,
+            "the machine's file is not read again after the guard"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     /// A layer that can pin anything is a layer somebody uses to pin a preference. What an

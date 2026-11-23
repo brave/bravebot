@@ -1095,6 +1095,8 @@ or write files.
 `verified-by: bravebot_agent::agents::one_restriction_nothing_applies_is_named_alone`
 `verified-by: bravebot_agent::agents::a_respelt_restriction_is_found_and_an_unrelated_key_is_not`
 `verified-by: bravebot_agent::agents::the_notice_repeats_a_key_and_never_its_value`
+`verified-by: bravebot_agent::turn::a_turn_tells_the_reporter_once_that_a_definitions_restriction_keys_are_not_applied`
+`verified-by: bravebot_agent::turn::a_delegates_turn_does_not_repeat_the_restriction_notice_of_the_turn_that_started_it`
 `verified-by: bravebot_agent::agents::every_key_this_reads_is_read`
 `verified-by: bravebot_cli::running::doctor_names_the_keys_a_definition_declares_that_nothing_reads`
 `verified-by: bravebot_core::delegate::a_definition_can_only_narrow_what_its_kind_holds`

@@ -32,6 +32,12 @@ fn main() {
         );
     }
 
+    // The directories an earlier process let a stage write are left out of the search for the
+    // programs this one starts, and each directory a session here opens is added to that record
+    // for the next. Before a program is looked up. See SANDBOX-30.
+    bravebot_agent::stage_record::load();
+    bravebot_agent::stage_record::follow();
+
     let Some(start) = Start::from_arguments(std::env::args_os().skip(1)) else {
         std::process::exit(2);
     };

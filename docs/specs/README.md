@@ -86,7 +86,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [diagnostic-log.md](diagnostic-log.md) | `DIAG` | 10 | a file of hosts, statuses, counts and fixed words, never content, for a person to attach to a bug report, and the bug report that names it, from the terminal or the desktop app, and a failure of the desktop window's page |
 | [trace.md](trace.md) | `TRACE` | 12 | what is recorded about every decision the system makes, what that record may contain, and the view of the request a turn built |
 | [localization.md](localization.md) | `LOCALE` | 8 | every word said to a person, and which of them change with the reader's language |
-| [acp.md](acp.md) | `ACP` | 9 | an editor hosting a session over the Agent Client Protocol: what a prompt, an attachment and an answer may carry, and what a failed turn says |
+| [acp.md](acp.md) | `ACP` | 10 | an editor hosting a session over the Agent Client Protocol: what a prompt, an attachment and an answer may carry, what a failed turn says, and the settings keys a new session names |
 | [layering.md](layering.md) | `LAYER` | 6 | which crate is allowed to do what |
 | [releases.md](releases.md) | `RELEASE` | 22 | what names a version, what starts a release, and what an installer trusts about what it fetched |
 | [updates.md](updates.md) | `UPDATE` | 12 | learning that a newer version is out, and the line or link that installs it |

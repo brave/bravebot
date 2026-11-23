@@ -113,8 +113,10 @@ rest of the list still applies. `allow` is never read from here, because a grant
 A key written twice in one object of this file, at any depth, is read so that the second copy erases
 nothing the first one refused. Two blocks under one key are combined, and a `deny` or `ask` list written
 twice keeps the entries of both, as do `models.deny`, `mcp.deny` and the other lists that only refuse. A
-repeated `models.allow` or `mcp.allow` keeps the entries both lists name. `doctor` names each repeated
-key with this file's path, and never what it was set to.
+repeated `models.allow` or `mcp.allow` keeps the entries both lists name. `doctor` and the session as
+it opens name each repeated key with this file's path, and never what it was set to. They also name a
+`retrieval` value in this file that is not a block with a boolean `enabled`, since such a value pins
+nothing.
 
 A layer that can pin a preference is a layer somebody uses to pin one. What two parties have a
 legitimate say in is where a request goes, whose account pays for it, and what a session on the machine

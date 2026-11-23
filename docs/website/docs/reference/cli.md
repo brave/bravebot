@@ -967,8 +967,10 @@ local files belong to whoever made the checkout. It reports:
 - for each AWS account, whether it is signed in, and `bravebot auth login bedrock` where signing in
   is what is missing;
 - which settings files are in force, and which of them won a name more than one set;
-- any top-level key in a settings file that this build does not read, by name and file, never its
-  value: the file still applies and the report still passes;
+- any key in a settings file that this build does not read, at the top level or inside `permissions`,
+  `sandbox.filesystem` or `run`, by name and file, never its value: the file still applies and the
+  report still passes. A key a file wrote twice and a managed `retrieval` value that pins nothing
+  are named the same way. A session names all of these as it opens;
 - any project or local settings file whose `provider` block or `model` key was ignored, since those two
   are read from your own file and the one `--settings` names;
 - whether a gateway key is stored by `bravebot auth login gateway`, without printing it;

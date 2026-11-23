@@ -10058,8 +10058,9 @@ fn remembered_record(tools: &Tools<'_>) -> Option<crate::remembered::Store> {
 
 /// The directories a file that a bare program name resolves to may not lie in (CMDLINE-8): those
 /// the session opened ([`crate::workspace::Workspace::unproven_directories`]), the ones a stage
-/// was let write with `request_path` (in the same set), and the ones a remembered grant lets a
-/// stage write, such as the `bin` of a virtualenv outside the project.
+/// was let write with `request_path` (in the same set), the ones a remembered grant lets a
+/// stage write, such as the `bin` of a virtualenv outside the project, and the ones an earlier
+/// process let a stage write ([`bravebot_sandbox::programs::recorded_earlier`]).
 ///
 /// The toolchain lists ([`bravebot_sandbox::toolchain::Toolchain`]) are not added. An install is
 /// read and never written, and a cache is not a directory a program is looked up in, so neither can
@@ -10081,6 +10082,14 @@ fn unproven_directories(tools: &Tools<'_>) -> Vec<std::path::PathBuf> {
             if !directories.contains(&granted) {
                 directories.push(granted);
             }
+        }
+    }
+    // What the lookups of a program bravebot starts leave out because an earlier process recorded
+    // it, read from the state directory when the process began. This session may never have opened
+    // the directory, so the set the workspace holds does not have it.
+    for earlier in bravebot_sandbox::programs::recorded_earlier() {
+        if !directories.contains(&earlier) {
+            directories.push(earlier);
         }
     }
     directories

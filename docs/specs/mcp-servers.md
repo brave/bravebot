@@ -580,7 +580,8 @@ write, and a file that is a link into such a directory is not taken
 directory the session was opened on, added or moved to, the nearest of it and its ancestors with a
 `.git`, so a session opened below a checkout's root does not search the checkout's `bin`. A server
 started by a command that opens no session has the directory the command ran in and its checkout
-left out as well ([SANDBOX-30](sandboxing.md#SANDBOX-30)). The digest holds the
+left out as well. A lookup for any server also leaves out the directories an earlier process
+recorded as ones a stage may write ([SANDBOX-30](sandboxing.md#SANDBOX-30)). The digest holds the
 name, so an approval of the name must not start a file a confined stage wrote into an activated
 virtualenv's `bin`, a `node_modules/.bin` or the `bin` of the checkout ahead of the installation the
 person was shown. A name found only in such a directory is not found, as for any absent program.
@@ -1550,8 +1551,9 @@ decides nothing, and an empty `deny` denies nothing, which `doctor` does not rep
 in neither form, an alias among them, matches no server: in a deny list it denies nothing and in an
 allow list it allows nothing, so an allow list of nothing else still refuses every server. It is not
 skipped in silence. `doctor` and the session's opening lines name the file, the list and the entry as
-the file spelled it, as [PERM-11](permissions.md#PERM-11) names a permission rule it cannot read,
-and a deny list holding one is named among what the layer pins even where no entry in it was usable.
+the file spelled it, as [PERM-11](permissions.md#PERM-11) names a permission rule it cannot read.
+`doctor` names them whether or not the rest of the configuration can be used. A deny list holding
+one is named among what the layer pins even where no entry in it was usable.
 An IPv6 address written without brackets is read as the bracketed one, since a url spells it no other
 way. A port, a scheme, a path and a name with a character outside ASCII letters, digits, `-` and `_`
 are not part of a host entry, so an entry written with one is such an entry. The layer has no
@@ -1597,6 +1599,10 @@ not to request it.
 `verified-by: bravebot_config::managed::an_ipv6_address_without_brackets_names_the_bracketed_host`
 `verified-by: bravebot_agent::servers::a_managed_entry_that_cannot_be_used_is_named_as_a_session_opens`
 `verified-by: bravebot_cli::doctor::doctor_names_a_deny_list_whose_every_entry_was_unusable_as_pinned`
+`verified-by: bravebot_cli::doctor::doctor_names_each_managed_server_entry_that_matches_no_server`
+`verified-by: bravebot_cli::doctor::doctor_names_no_server_entry_for_a_managed_file_whose_entries_can_be_matched`
+`verified-by: bravebot_cli::doctor::doctor_lines_for_dropped_entries_cover_unread_repeated_and_server_entries`
+`verified-by: bravebot_cli::running::doctor_names_a_dropped_key_when_the_configuration_has_an_error`
 `verified-by: bravebot_config::managed::a_server_declared_or_requested_here_is_read_as_nothing`
 `verified-by: bravebot_config::settings::a_request_or_a_server_list_in_the_mcp_block_is_not_a_declaration`
 `verified-by: bravebot_agent::servers::a_server_the_managed_layer_refuses_is_started_in_no_mode_and_nothing_is_asked_or_recorded`

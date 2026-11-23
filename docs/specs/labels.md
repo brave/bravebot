@@ -1291,7 +1291,9 @@ arrives at all.
   the processor was given. The gate compares nothing, its uses are pinned in `guards` as the other
   gates' are, and a second reader of an answer is a moved count. Everything else the crate does is
   `number_in`, and a second comparison of an answer's text elsewhere in it is found by reading the
-  diff.
+  diff. The `fn` does not capture the caller's state, and what stops it keeping a copy of the text
+  for a later call is `the_reader_of_a_number_keeps_nothing_between_calls`, which fails on a
+  `static`, a `thread_local!`, interior mutability, a lock or an atomic in the crate's source.
 
   The driver carries the byte and decides nothing from it. It is stored as a labelled number under
   a reference of its own kind, drawn to the person as digits beside the call it will fill, and put

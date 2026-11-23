@@ -35,6 +35,9 @@ pub(crate) fn command(args: &[String]) -> Option<()> {
         crate::usage_ping(&config, None);
     }
 
+    // The editor opens sessions through the loop below, each of which records the directories its
+    // stages may write. The record was read before dispatch, as for every command (SANDBOX-30).
+    bravebot_agent::stage_record::follow();
     let finished = bravebot_ui_bridge::acp_loop::serve(
         BufReader::new(std::io::stdin()),
         std::io::stdout(),

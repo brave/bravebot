@@ -247,7 +247,7 @@ fn starting_configuration(hosted: bool) -> Result<Config, ExitCode> {
 
 /// The workspace the session works in, or what ends a start that has none.
 fn opening_workspace(settings: &bravebot_config::Settings) -> Result<Workspace, ExitCode> {
-    match crate::workspace::current_workspace(settings, &bravebot_config::Managed::load()) {
+    match crate::workspace::session_workspace(settings, &bravebot_config::Managed::load()) {
         Ok(workspace) => Ok(workspace),
         Err(err) => Err(crate::workspace::workspace_problem(&err)),
     }
@@ -313,7 +313,9 @@ fn open_streams(hosting: Option<crate::host::Hosting>) -> Streams {
 }
 
 /// What the session says before anything is asked: the opening line naming `model`, the mode of a
-/// background process, a recorded model pick that was set aside, the rules that were ignored.
+/// background process, a recorded model pick that was set aside, the rules that were ignored, and
+/// the keys and managed values the readers of `settings` and of the machine's managed layer dropped
+/// or combined.
 fn say_startup_notes<R: BufRead, W: Write>(
     asking: &mut Prompting<R, W>,
     model: &str,
@@ -352,6 +354,16 @@ fn say_startup_notes<R: BufRead, W: Write>(
             rule = bravebot_agent::confirm::shown_text(&rule.rule),
             path = bravebot_agent::confirm::shown_path(&rule.path)
         ));
+    }
+    // The keys nothing reads, the keys a file wrote twice and a managed `retrieval` value that pins
+    // nothing: each reads to whoever wrote it as a restriction in force, and `doctor` is the only
+    // other place that says so (BACKEND-36, RETRIEVE-23). The sentences are `doctor`'s, from the
+    // key path and the file alone.
+    for said in bravebot_agent::dropped_keys::at_session_start_of_this_machine(
+        settings,
+        bravebot_agent::dropped_keys::Spelling::Drawn,
+    ) {
+        asking.say(&said);
     }
 }
 
@@ -650,14 +662,35 @@ fn run(
     prompts: bravebot_agent::turn::SystemPrompts,
     hosting: Option<crate::host::Hosting>,
 ) -> ExitCode {
-    let hosted_start = HostedStart::of(hosting.as_ref());
-    let mut config = match starting_configuration(hosting.is_some()) {
+    let config = match starting_configuration(hosting.is_some()) {
         Ok(config) => config,
         Err(ended) => return ended,
     };
-
     let settings = bravebot_config::Settings::load();
-    let mut workspace = match opening_workspace(&settings) {
+    begin(
+        config,
+        &settings,
+        skip_permissions,
+        agent.as_deref(),
+        prompts,
+        hosting,
+    )
+}
+
+/// The session from its configuration on: the configuration and the settings `run` read from the
+/// machine, handed over so a test can give it ones of its own. The managed layer is not handed over:
+/// the notes about what it dropped are made from the layer the machine holds, which a test puts in
+/// front of this with `bravebot_config::managed_file_on_this_thread`.
+fn begin(
+    mut config: Config,
+    settings: &bravebot_config::Settings,
+    skip_permissions: bool,
+    agent: Option<&str>,
+    prompts: bravebot_agent::turn::SystemPrompts,
+    hosting: Option<crate::host::Hosting>,
+) -> ExitCode {
+    let hosted_start = HostedStart::of(hosting.as_ref());
+    let mut workspace = match opening_workspace(settings) {
         Ok(workspace) => workspace,
         Err(ended) => return ended,
     };
@@ -676,14 +709,14 @@ fn run(
     let profile = bravebot_agent::home::profile();
     let (permissions, rejected) = permissions_for_a_start(
         hosting.is_some(),
-        &settings,
+        settings,
         profile.as_deref(),
         workspace.root(),
     );
 
     let mode = mode_of(hosting.as_ref(), skip_permissions);
 
-    let (model, set_aside) = model_in_force(&config, &settings);
+    let (model, set_aside) = model_in_force(&config, settings);
     // A hosted session is a background process, which no person started as a launch.
     if hosting.is_none() {
         crate::usage_ping(&config, model.as_deref());
@@ -708,7 +741,7 @@ fn run(
         hosted_start.mode,
         set_aside,
         &rejected,
-        &settings,
+        settings,
         profile.as_deref(),
     );
 
@@ -719,7 +752,7 @@ fn run(
         mode,
         home.as_deref(),
         profile.as_deref(),
-        &settings,
+        settings,
     ) {
         Ok(opened) => opened,
         Err(ended) => return ended,
@@ -732,9 +765,9 @@ fn run(
         home.as_deref(),
         &trust,
         &permissions,
-        agent.as_deref(),
+        agent,
         resumed.as_ref(),
-        &settings,
+        settings,
     ) {
         Ok(agent) => agent,
         Err(ended) => return ended,
@@ -742,7 +775,7 @@ fn run(
 
     // Put on the same two streams every other question here is, after the startup question. Held
     // for the length of the session, since dropping one stops its server.
-    let reached = reach_servers(&mut asking, &settings, workspace.root(), skip_permissions);
+    let reached = reach_servers(&mut asking, settings, workspace.root(), skip_permissions);
 
     // What compaction measures the conversation against, and whether the model in force reads an
     // effort level. A session in lines opens no picker, so the model in force here is the stored
@@ -766,7 +799,7 @@ fn run(
     // BACKEND-43 ranks them. Resolved once, here, beside the other answers this session reads out
     // of a file, because a file edited mid-session describes the next one and this mode has no
     // command that changes the level.
-    let effort = bravebot_session::store::effort(bravebot_session::store::load_effort(), &settings);
+    let effort = bravebot_session::store::effort(bravebot_session::store::load_effort(), settings);
     say_effort_and_sign_in(
         &mut asking,
         &config,
@@ -777,7 +810,7 @@ fn run(
     );
     // Resolved once, here, where the first line about it is said, and handed to the session below.
     let standing_vetting =
-        standing_vetting(hosted, bravebot_session::store::auto_vetting(&settings));
+        standing_vetting(hosted, bravebot_session::store::auto_vetting(settings));
     for line in crate::progress::bypass_notices(skip_permissions, standing_vetting) {
         asking.say(&line);
     }
@@ -796,7 +829,7 @@ fn run(
         prompts,
         output_cap: settings.run_output_cap(),
         download_cap: settings.download_max_bytes(),
-        deadlines: bravebot_agent::exec::Deadlines::from_settings(&settings),
+        deadlines: bravebot_agent::exec::Deadlines::from_settings(settings),
         model,
         in_force: named,
         agent,
@@ -2320,6 +2353,232 @@ mod tests {
         assert!(allowed.output.is_empty());
     }
 
+    /// What a terminal that attaches to a background session is shown, kept as the session writes
+    /// it so a test can read it while the session is still running.
+    #[derive(Clone, Default)]
+    struct Written(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for Written {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Written {
+        fn text(&self) -> String {
+            String::from_utf8_lossy(
+                &self
+                    .0
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )
+            .into_owned()
+        }
+    }
+
+    /// BACKEND-36, RETRIEVE-23: a background session started under a managed layer says what that
+    /// layer dropped before it asks anything: the key the managed file wrote twice and the
+    /// `retrieval` value that pins nothing, once each, in the sentences `doctor` uses, and no value.
+    ///
+    /// This runs the start itself, with a managed file the test names for the thread the start runs
+    /// on, because the machine's file is at a fixed path and the notes are made from the layer the
+    /// machine holds. The regression it rejects is a start whose notes leave the managed layer out,
+    /// which leaves every managed key to `doctor`: the tests of `say_startup_notes` put a layer in
+    /// front of that function and pass on such a start. The settings pause the retention sweep, so the
+    /// start does
+    /// not remove records from the state directory of whoever runs the test. The start goes on to
+    /// the questions a background session puts first and waits for whoever attaches, so it runs on
+    /// a thread that is left waiting, and the test reads what it said until the notes are all there
+    /// or a bound passes.
+    #[test]
+    fn a_hosted_start_says_what_its_managed_layer_dropped() {
+        use crate::host::{Hosting, Shared};
+        use bravebot_session::jobs::{Mode, Roster};
+        use std::time::{Duration, Instant};
+
+        const ID: &str = "22222222-2222-4222-8222-222222222222";
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("plain-hosted-managed-notes-{}", std::process::id()));
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).expect("a scratch directory");
+        let managed_file = root.join("managed.json");
+        std::fs::write(
+            &managed_file,
+            r#"{"retrieval": "false", "models": {"deny": ["a-model-nobody-prints"]}, "models": {}}"#,
+        )
+        .expect("a managed file");
+        std::fs::write(home.join("settings.json"), r#"{"retentionDays": "never"}"#)
+            .expect("a settings file");
+        let settings = bravebot_config::Settings::layered(Some(home), None, None);
+        assert!(
+            matches!(settings.retention(), bravebot_config::Retention::Paused),
+            "the fixture must pause the retention sweep"
+        );
+        let machine = bravebot_config::managed_file_on_this_thread(&managed_file);
+        let expected = bravebot_agent::dropped_keys::at_session_start_of_this_machine(
+            &settings,
+            bravebot_agent::dropped_keys::Spelling::Drawn,
+        );
+        drop(machine);
+        assert_eq!(
+            expected.len(),
+            2,
+            "the fixture drops a repeated key and a retrieval value: {expected:?}"
+        );
+        let config = Config::from_lookup(|name| match name {
+            bravebot_config::env_var::ENDPOINT => Some("https://example.invalid".into()),
+            bravebot_config::env_var::KEY_ID => Some("a-key-id".into()),
+            bravebot_config::env_var::SIGNING_KEY => Some("a-signing-key".into()),
+            _ => None,
+        })
+        .expect("a configured gateway");
+
+        let roster = Roster::at(root.clone());
+        let job = crate::host::entry(&roster, ID, None, Mode::Ask);
+        let shared = Shared::new(Roster::at(root.clone()), job, None);
+        let written = Written::default();
+        assert!(
+            shared.attach(Box::new(written.clone())).is_some(),
+            "a terminal could not attach"
+        );
+        let hosted = std::sync::Arc::clone(&shared);
+        std::thread::spawn(move || {
+            let _machine = bravebot_config::managed_file_on_this_thread(&managed_file);
+            begin(
+                config,
+                &settings,
+                false,
+                None,
+                bravebot_agent::turn::SystemPrompts::default(),
+                Some(Hosting::of(&hosted)),
+            )
+        });
+
+        let bound = Instant::now() + Duration::from_secs(30);
+        let mut said = written.text();
+        while !expected.iter().all(|sentence| said.contains(sentence)) && Instant::now() < bound {
+            std::thread::sleep(Duration::from_millis(20));
+            said = written.text();
+        }
+
+        for sentence in &expected {
+            assert_eq!(
+                said.lines().filter(|line| line == sentence).count(),
+                1,
+                "the sentence doctor says is not said once: {sentence}\n{said}"
+            );
+        }
+        assert!(
+            !said.contains("a-model-nobody-prints"),
+            "a value is said: {said}"
+        );
+    }
+
+    /// BACKEND-48: a background process started again ends where the machine-level layer refuses
+    /// its model, before it asks anything. This runs the start itself, with a managed layer the
+    /// test wrote, for each hosted start that differs in the code: the first start of a session,
+    /// which has a line left for it and no earlier process, and the start `reply`, `attach` and the
+    /// supervisor make again, which has no line and follows a process that ended in the middle of
+    /// a turn.
+    ///
+    /// The layer refuses every model, so the model the start settles on is refused whether it is the
+    /// configured default or a pick recorded on the machine running the test, and the sentence is
+    /// checked for the file that refused and not for a model name.
+    ///
+    /// The regression it rejects is a start that does not check the model it settled on, so that
+    /// the call in `begin` is missing: the start goes on to the questions a background session
+    /// puts first and waits for whoever attaches. That wait has no end here, so the start runs on
+    /// a thread with a bound and a start still running at the bound fails the test. The
+    /// predicate alone is covered by the test above, which cannot tell whether `begin` calls it.
+    #[test]
+    fn a_hosted_start_in_a_managed_layer_that_refuses_the_model_ends_before_any_question() {
+        use crate::host::{Hosting, Shared};
+        use bravebot_session::jobs::{Mode, Roster};
+        use std::sync::{Arc, PoisonError};
+        use std::time::Duration;
+
+        const ID: &str = "11111111-1111-4111-8111-111111111111";
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("plain-hosted-refused-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("a scratch directory");
+        let file = root.join("managed.json");
+        std::fs::write(&file, r#"{"models": {"allow": []}}"#).expect("a managed file");
+
+        for (start, first, interrupted) in [
+            ("a first start", Some("fix the build"), false),
+            ("a start again after an interruption", None, true),
+        ] {
+            let managed = bravebot_config::Managed::at(&file);
+            let mut config = Config::from_lookup(|name| match name {
+                bravebot_config::env_var::ENDPOINT => Some("https://example.invalid".into()),
+                bravebot_config::env_var::KEY_ID => Some("a-key-id".into()),
+                bravebot_config::env_var::SIGNING_KEY => Some("a-signing-key".into()),
+                _ => None,
+            })
+            .expect("a configured gateway");
+            config.models = managed.models().clone();
+
+            let roster = Roster::at(root.clone());
+            let job = crate::host::entry(&roster, ID, first, Mode::Ask);
+            let shared = Shared::new(Roster::at(root.clone()), job, first.map(str::to_string));
+
+            let (ended, ends) = std::sync::mpsc::channel();
+            let hosted = Arc::clone(&shared);
+            std::thread::spawn(move || {
+                let hosting = Hosting::of(&hosted).after_an_interruption(interrupted);
+                let code = begin(
+                    config,
+                    &bravebot_config::Settings::default(),
+                    false,
+                    None,
+                    bravebot_agent::turn::SystemPrompts::default(),
+                    Some(hosting),
+                );
+                let _ = ended.send(code);
+            });
+            let code = ends
+                .recv_timeout(Duration::from_secs(30))
+                .unwrap_or_else(|_| {
+                    panic!("{start} went past the refused model and is waiting for an answer")
+                });
+
+            assert_eq!(code, Ending::Configuration.code(), "{start}");
+            let written = Written::default();
+            assert!(
+                shared.attach(Box::new(written.clone())).is_some(),
+                "{start}: the session's output was not kept"
+            );
+            let said = String::from_utf8(
+                written
+                    .0
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone(),
+            )
+            .expect("what was written is text");
+            assert!(
+                said.contains(&file.display().to_string()),
+                "{start}: the refusal was not said to the session's output: {said}"
+            );
+            assert!(
+                !said.contains(&crate::background::mode_line(Mode::Ask)),
+                "{start}: the session went on to its opening notes: {said}"
+            );
+        }
+    }
+
     /// LABEL-8: a start on a model that searches the web over chat completions is ended with no file
     /// named, whether the model is the configured default or a recorded pick, and a model beside it
     /// that does not search is not ended. The regression it rejects is a refusal that needs a managed
@@ -3118,6 +3377,128 @@ mod tests {
         }
     }
 
+    /// The managed layer of a machine that has no managed file, for the tests of what a session says
+    /// about a settings file alone, so a managed file on the machine running them says nothing in
+    /// them.
+    fn a_machine_with_no_managed_file() -> bravebot_config::ManagedFileOnThisThread {
+        bravebot_config::managed_file_on_this_thread(std::path::Path::new(
+            "no-managed-file-is-here.json",
+        ))
+    }
+
+    /// BACKEND-36, RETRIEVE-23: the opening of a session in lines names each key the settings
+    /// dropped or combined, once, in the sentences `doctor` uses, and says no value. The unread key,
+    /// the key a settings file wrote twice, the key the managed file wrote twice and the managed
+    /// `retrieval` value that pins nothing are four different facts, so a start that says three of
+    /// them fails.
+    ///
+    /// Rejects a start that leaves these to `doctor`, one that says a key once per layer it was read
+    /// from, one that prints what a key was set to, and a sentence that differs from the one
+    /// `doctor` prints.
+    #[test]
+    fn the_opening_names_each_dropped_key_once_in_doctors_sentences_and_no_value() {
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/test-scratch/plain-dropped-keys-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create the scratch directory");
+        let base = base.canonicalize().expect("canonical directory");
+        let settings_file = base.join("settings.json");
+        std::fs::write(
+            &settings_file,
+            r#"{"permissions": {"denyy": ["Read(a-rule-nobody-prints)"], "deny": [], "deny": []},
+                "statusLine": "a-command-nobody-prints"}"#,
+        )
+        .expect("write the settings file");
+        let settings = bravebot_config::Settings::layered(None, None, Some(&settings_file));
+        let managed_file = base.join("managed.json");
+        std::fs::write(
+            &managed_file,
+            r#"{"retrieval": "false", "models": {"deny": ["a-model-nobody-prints"]}, "models": {}}"#,
+        )
+        .expect("write the managed file");
+        let _machine = bravebot_config::managed_file_on_this_thread(&managed_file);
+        let mut asking = Prompting::new(std::io::empty(), Vec::new());
+
+        say_startup_notes(&mut asking, "a-model", None, None, &[], &settings, None);
+
+        let said = String::from_utf8(asking.output).expect("utf-8");
+        let _ = std::fs::remove_dir_all(&base);
+        for sentence in bravebot_agent::dropped_keys::at_session_start_of_this_machine(
+            &settings,
+            bravebot_agent::dropped_keys::Spelling::Drawn,
+        ) {
+            assert_eq!(
+                said.lines().filter(|line| *line == sentence).count(),
+                1,
+                "the sentence doctor says is not said once: {sentence}\n{said}"
+            );
+        }
+        let named = |needle: &str| said.lines().filter(|line| line.contains(needle)).count();
+        assert_eq!(named("permissions.denyy in "), 1, "{said}");
+        assert_eq!(named("statusLine in "), 1, "{said}");
+        assert_eq!(
+            named("permissions.deny is written more than once in "),
+            1,
+            "{said}"
+        );
+        assert_eq!(named("models is written more than once in "), 1, "{said}");
+        assert_eq!(named("retrieval in "), 1, "{said}");
+        for value in [
+            "a-rule-nobody-prints",
+            "a-command-nobody-prints",
+            "a-model-nobody-prints",
+        ] {
+            assert!(!said.contains(value), "a value is said: {said}");
+        }
+    }
+
+    /// A start whose files hold every key once and read every key says nothing about dropped keys,
+    /// so a sentence means a key and not a file. Rejects a start that says a line for each file.
+    #[test]
+    fn the_opening_says_nothing_about_dropped_keys_where_every_key_was_read() {
+        let _machine = a_machine_with_no_managed_file();
+        let settings =
+            bravebot_config::Settings::parse(r#"{"permissions": {"deny": ["Read(.env)"]}}"#);
+        let mut asking = Prompting::new(std::io::empty(), Vec::new());
+
+        say_startup_notes(&mut asking, "a-model", None, None, &[], &settings, None);
+
+        let said = String::from_utf8(asking.output).expect("utf-8");
+        assert_eq!(said.lines().count(), 1, "only the opening line: {said}");
+    }
+
+    /// LAYER-3: a key a checkout wrote holding an escape sequence reaches the terminal as pictures.
+    /// Rejects a sentence that writes the key as the file spelled it.
+    #[test]
+    fn the_opening_draws_a_dropped_key_with_an_escape_in_it_as_pictures() {
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/test-scratch/plain-dropped-key-escape-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create the scratch directory");
+        let settings_file = base.join("settings.json");
+        std::fs::write(&settings_file, "{\"a\\u001b]0;T\\u0007key\": 1}")
+            .expect("write the settings file");
+        let settings = bravebot_config::Settings::layered(None, None, Some(&settings_file));
+        let _ = std::fs::remove_dir_all(&base);
+        assert_eq!(settings.unread_keys().count(), 1);
+        let _machine = a_machine_with_no_managed_file();
+        let mut asking = Prompting::new(std::io::empty(), Vec::new());
+
+        say_startup_notes(&mut asking, "a-model", None, None, &[], &settings, None);
+
+        let said = String::from_utf8(asking.output).expect("utf-8");
+        assert_eq!(
+            said.chars().find(|c| c.is_control() && *c != '\n'),
+            None,
+            "a control character reached the terminal: {said:?}"
+        );
+        assert!(said.contains("a\u{241b}]0;T\u{2407}key"), "{said:?}");
+    }
+
     /// #2599: the opening of a session in lines says why a file `--settings` named grants nothing
     /// where the platform cannot hold it back from a directory a stage may write, naming the file,
     /// and says nothing where it can. Rejects a start that leaves the withholding unsaid, or says
@@ -3132,6 +3513,7 @@ mod tests {
         let file = project.join("override.json");
         std::fs::write(&file, r#"{"sandbox": {"mode": "off"}}"#).expect("write the named file");
         let roots = [project.clone()];
+        let _machine = a_machine_with_no_managed_file();
         let opening = |can_hold_one_file_back: bool| {
             let settings = bravebot_config::Settings::layered_reaching(
                 None,
