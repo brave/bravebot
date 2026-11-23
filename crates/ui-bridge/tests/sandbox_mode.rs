@@ -719,7 +719,7 @@ fn run_once(
     front: &mut FrontEnd,
     rounds: &mpsc::Receiver<String>,
     session: &str,
-    extra: Value,
+    extra: &Value,
 ) -> String {
     let mut params = json!({"session": session, "prompt": "do the work"});
     for (key, value) in extra.as_object().into_iter().flatten() {
@@ -734,7 +734,7 @@ fn run_once(
     }
     assert_eq!(next["event"], "turn.done", "{next}");
     let told: Vec<String> = rounds.try_iter().collect();
-    let results = tool_results(told.last().expect("the model was sent the result"));
+    let results = tool_results(told.last().unwrap());
     results
         .rsplit("Result of run")
         .next()
@@ -758,7 +758,7 @@ fn a_session_stays_in_the_directory_it_opened_on() {
     }
     let scratch = Scratch::new("bridge-scope-directory");
     let elsewhere = scratch.path.join("elsewhere");
-    std::fs::create_dir_all(&elsewhere).expect("another directory");
+    std::fs::create_dir_all(&elsewhere).unwrap();
     let command = format!(
         "/bin/sh -c 'test \"$PWD\" = {}'",
         scratch.project().display()
@@ -773,7 +773,7 @@ fn a_session_stays_in_the_directory_it_opened_on() {
         &mut front,
         &rounds,
         &session,
-        json!({"directory": elsewhere.display().to_string()}),
+        &json!({"directory": elsewhere.display().to_string()}),
     );
     assert!(
         told.contains("It exited 0."),
@@ -796,14 +796,14 @@ fn a_run_time_limit_written_while_a_session_is_open_holds_from_its_next_turn() {
     let mut front = FrontEnd::start(&scratch, &endpoint);
     let (session, _) = front.session(&scratch, true);
 
-    let before = run_once(&mut front, &rounds, &session, json!({}));
+    let before = run_once(&mut front, &rounds, &session, &json!({}));
     assert!(before.contains("It exited 0."), "{before}");
 
     settings(
         &scratch,
         r#"{"run": {"defaultSeconds": 1, "maxSeconds": 1}}"#,
     );
-    let after = run_once(&mut front, &rounds, &session, json!({}));
+    let after = run_once(&mut front, &rounds, &session, &json!({}));
     assert!(
         after.contains("was still running after 1 second and was stopped"),
         "the limit written after the session opened did not apply: {after}"
