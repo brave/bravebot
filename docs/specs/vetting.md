@@ -379,6 +379,7 @@ in is `inconclusive`, which claims nothing.
 `verified-by: bravebot_agent::mcp::screening_asked_for_makes_no_check_of_a_servers_list_under_bypass`
 `verified-by: bravebot_agent::mcp::a_servers_list_is_checked_whole_before_it_is_asked_about`
 `verified-by: bravebot_agent::turn::screening_asked_for_makes_no_check_before_a_vouch_under_bypass`
+`verified-by: bravebot_agent::turn::under_bypass_the_vouch_offer_carries_an_inconclusive_verdict_and_no_check_is_made`
 
 <a id="CHECK-11"></a>
 ### CHECK-11: auto-vetting is off until somebody turns it on, and there are three ways in

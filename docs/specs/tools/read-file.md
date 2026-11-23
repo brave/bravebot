@@ -404,6 +404,7 @@ the rounds after it, to tell the planner what it already had.
 `verified-by: bravebot_agent::turn::a_rewrite_of_the_same_bytes_is_answered_with_the_lines_again`
 `verified-by: bravebot_agent::turn::a_different_window_of_the_same_file_is_not_answered_with_a_notice`
 `verified-by: bravebot_agent::turn::a_repeat_read_spelled_differently_is_the_same_window`
+`verified-by: bravebot_agent::turn::a_repeat_read_through_another_spelling_of_a_symlinked_root_is_the_same_window`
 `verified-by: bravebot_agent::turn::a_window_that_differs_in_only_its_offset_or_only_its_limit_is_sent`
 `verified-by: bravebot_agent::turn::a_repeat_read_of_a_file_the_planner_may_not_see_is_not_a_notice`
 `verified-by: bravebot_agent::turn::a_window_that_was_quarantined_is_sent_once_the_file_is_vouched_for`

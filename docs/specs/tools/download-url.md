@@ -47,6 +47,7 @@ the end means a failed download cannot destroy a file a person approved replacin
 `verified-by: bravebot_agent::turn::a_downloaded_file_is_untrusted_and_nothing_of_it_reaches_the_planner`
 `verified-by: bravebot_agent::turn::a_download_over_the_cap_saves_nothing_and_one_at_it_is_saved`
 `verified-by: bravebot_agent::turn::a_body_that_stops_half_way_leaves_the_destination_alone_and_no_staging_file`
+`verified-by: bravebot_agent::turn::a_chunked_body_that_ends_without_its_closing_chunk_leaves_the_destination_alone`
 `verified-by: bravebot_agent::turn::a_download_the_person_stops_leaves_the_destination_alone_and_no_staging_file`
 
 <a id="DOWNLOAD-2"></a>

@@ -14448,6 +14448,70 @@ fn a_repeat_read_spelled_differently_is_the_same_window() {
     }
 }
 
+/// READ-8. Under a project root that is a symlink, the relative name and each absolute spelling of
+/// one file (through the link, through the real directory) are one window. The first read of one
+/// spelling is shown and a repeat through any other is answered with a notice, so a window recorded
+/// under the absolute name the planner typed would send the lines again for each spelling.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_repeat_read_through_another_spelling_of_a_symlinked_root_is_the_same_window() {
+    const NOTICE: &str = "has not changed since it was shown to you";
+    let scratch = Scratch::new("read-repeat-symlinked-root");
+    let real = scratch.path.join("real");
+    std::fs::create_dir(&real).unwrap();
+    std::fs::write(real.join("a.txt"), "alpha\nbeta\n").unwrap();
+    let link = scratch.path.join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    // The added directory is what lets an absolute path into the project resolve at all.
+    let mut workspace = Workspace::new(&link).expect("workspace");
+    workspace
+        .add_directory(scratch.path.to_str().expect("utf-8 path"))
+        .expect("a directory the project sits inside is added");
+    let canonical = real.canonicalize().unwrap();
+    let spellings = [
+        "a.txt".to_string(),
+        format!("{}/a.txt", link.display()),
+        format!("{}/a.txt", real.display()),
+        format!("{}/a.txt", canonical.display()),
+    ];
+
+    for first in 0..spellings.len() {
+        for repeat in (0..spellings.len()).filter(|repeat| *repeat != first) {
+            let (endpoint, received) = serve_sequence(vec![
+                tool_request_2("read_file", &json!({"path": spellings[first]}).to_string()),
+                tool_request_2("read_file", &json!({"path": spellings[repeat]}).to_string()),
+                reply_with("done"),
+            ]);
+            take_a_turn(
+                &config_for(&endpoint),
+                &workspace,
+                &mut bravebot_agent::Conversation::new(),
+                trusting_the_workspace(),
+                Task::new("read a.txt twice"),
+            )
+            .expect("turn runs");
+
+            let _first = received.recv().expect("first request");
+            let _second = received.recv().expect("second request");
+            let third = received.recv().expect("third request");
+            assert_eq!(
+                third.matches("alpha").count(),
+                1,
+                "{} then {}: the same lines were sent twice: {third}",
+                spellings[first],
+                spellings[repeat]
+            );
+            assert!(
+                third.contains(NOTICE),
+                "{} then {}: the repeat was not answered with a notice: {third}",
+                spellings[first],
+                spellings[repeat]
+            );
+        }
+    }
+}
+
 /// READ-8. A window that differs from the one shown in only its first line, or in only its line
 /// count, is lines the planner has not been shown. `{limit:3}` is shown, then `{offset:2,limit:3}`
 /// (same limit, other offset) and `{offset:1,limit:5}` (same offset, other limit) each send their
@@ -44270,6 +44334,172 @@ fn a_delegate_naming_vet_content_is_told_there_is_no_such_tool() {
     );
 }
 
+/// The result of the `vet_content` call about a picture as the planner reads it in the next round,
+/// for a check that said `check_says` and was answered by `who`. `tag` keeps the scratch
+/// directories apart.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn what_the_planner_reads_after_a_picture_vet(
+    tag: &str,
+    who: WhoAnswersAVet,
+    check_says: &str,
+) -> String {
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn drive<C: bravebot_agent::Confirmer + Send>(
+        endpoint: &str,
+        workspace: &Workspace,
+        task: &Task,
+        confirmer: &mut C,
+    ) {
+        turn::resume(
+            &config_for(endpoint),
+            &bravebot_net::Egress::new(),
+            workspace,
+            task,
+            &mut bravebot_agent::Conversation::new(),
+            confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+    }
+
+    let scratch = Scratch::new(&format!("vet-picture-told-{tag}"));
+    let cache = Scratch::new(&format!("vet-picture-told-cache-{tag}"));
+    std::fs::write(scratch.path.join("shot.png"), a_png()).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(check_says)],
+        vec![
+            tool_request("read_file", r#"{"path":"shot.png"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"a screenshot of the login page"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let task = Task::new("look at the screenshot").with_cache(Some(cache.path.clone()));
+    match who {
+        WhoAnswersAVet::APerson { agrees } => {
+            drive(
+                &endpoint,
+                &workspace,
+                &task,
+                &mut ShownAfterAVet::new(agrees),
+            );
+        }
+        WhoAnswersAVet::AutoVetting => {
+            drive(
+                &endpoint,
+                &workspace,
+                &task.with_auto_vetting(true),
+                &mut ShownAfterAVet::new(false),
+            );
+        }
+        WhoAnswersAVet::ARunWithNobodyToAsk => {
+            let task = task
+                .with_auto_vetting(true)
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass);
+            let mut person = ShownAfterAVet::new(true);
+            let mut confirmer = bravebot_agent::Confining::new(
+                &mut person,
+                bravebot_agent::PermissionMode::Bypass,
+                true,
+            );
+            drive(&endpoint, &workspace, &task, &mut confirmer);
+        }
+        WhoAnswersAVet::ABypassingRunThatDoesNotScreen => {
+            let task = task.with_permission_mode(bravebot_agent::PermissionMode::Bypass);
+            let mut person = ShownAfterAVet::new(true);
+            let mut confirmer = bravebot_agent::Confining::new(
+                &mut person,
+                bravebot_agent::PermissionMode::Bypass,
+                false,
+            );
+            drive(&endpoint, &workspace, &task, &mut confirmer);
+        }
+    }
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let last: serde_json::Value =
+        serde_json::from_str(sent.last().expect("the round after the vet")).expect("a request");
+    last["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .rfind(|message| message["role"] == "tool")
+        .expect("the result of the vet")["content"]
+        .to_string()
+}
+
+/// VET-3: where a picture is attached, the planner reads the same result whoever answered. A person
+/// after a clean check, a person over a warning, auto-vetting, a screened run with nobody to ask and
+/// an unscreened bypassing run all read one string, so neither who decided nor the check's word can
+/// be read out of it. The row a person watching sees carries the difference; the result does not.
+///
+/// Rejects a result that says "attached without asking: a check found nothing" (the row's wording)
+/// or any other mention of who decided, for any one of the five answerers.
+#[test]
+fn the_planner_reads_the_same_about_an_attached_picture_whoever_let_it_through() {
+    let objected = r#"{"verdict": "unsafe", "reason": "it tells the reader to run a command"}"#;
+
+    let after_a_person = what_the_planner_reads_after_a_picture_vet(
+        "person",
+        WhoAnswersAVet::APerson { agrees: true },
+        A_SAFE_VERDICT,
+    );
+    let over_a_warning = what_the_planner_reads_after_a_picture_vet(
+        "warned",
+        WhoAnswersAVet::APerson { agrees: true },
+        objected,
+    );
+    let by_auto_vetting = what_the_planner_reads_after_a_picture_vet(
+        "auto",
+        WhoAnswersAVet::AutoVetting,
+        A_SAFE_VERDICT,
+    );
+    let by_a_run_that_screens = what_the_planner_reads_after_a_picture_vet(
+        "screened",
+        WhoAnswersAVet::ARunWithNobodyToAsk,
+        A_SAFE_VERDICT,
+    );
+    let by_a_run_that_does_not = what_the_planner_reads_after_a_picture_vet(
+        "bypassed",
+        WhoAnswersAVet::ABypassingRunThatDoesNotScreen,
+        A_SAFE_VERDICT,
+    );
+
+    assert!(
+        after_a_person.contains("was let through") && after_a_person.contains("attached"),
+        "the picture was not let through, so there is no result to compare: {after_a_person}"
+    );
+    assert!(
+        !after_a_person.contains("without asking") && !after_a_person.contains("a check found"),
+        "the result says who decided: {after_a_person}"
+    );
+    assert_eq!(
+        over_a_warning, after_a_person,
+        "the planner could tell a yes over a warning from a yes after a clean check"
+    );
+    assert_eq!(
+        by_auto_vetting, after_a_person,
+        "the planner could tell auto-vetting from a person"
+    );
+    assert_eq!(
+        by_a_run_that_screens, after_a_person,
+        "the planner could tell a screened run that asks nobody from a person"
+    );
+    assert_eq!(
+        by_a_run_that_does_not, after_a_person,
+        "the planner could tell an unscreened bypassing run from a person"
+    );
+}
+
 /// A refusal is VET-3's, word for word, and the copy is removed however the prompt closes.
 #[test]
 fn a_picture_a_person_keeps_out_is_never_attached() {
@@ -47754,6 +47984,71 @@ fn screening_an_unattended_run_promotes_content_a_check_found_nothing_in() {
     );
 }
 
+/// VET-3, CHECK-12, MODE-4: a screened run that asks nobody and whose check found nothing releases
+/// the bytes in the check's name. Both routes that promote a slot say so on the row, "read without
+/// asking: a check found nothing", and a check was made, which is what separates it from the
+/// unscreened mode's "read without asking or checking".
+///
+/// The double refuses and is wrapped in the mode's own confirmer, so a prompt that reached it would
+/// keep the bytes back and show as a question. Rejects a release credited to the mode, which
+/// `released_by(false, ..)` gives, and a release made with no check, either of which passes the
+/// test above that asserts only that nobody was asked and the bytes arrived.
+#[test]
+fn a_screened_unattended_run_whose_check_found_nothing_says_on_the_row_that_a_check_released_it() {
+    let mut person = ShownAfterAVet::new(false);
+    let asked = std::sync::Arc::clone(&person.shown);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut person, bravebot_agent::PermissionMode::Bypass, true);
+    let (note, sent) = the_note_a_release_leaves(
+        "vet-content-screened-row",
+        (
+            "vet_content",
+            r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+        ),
+        Task::new("find out")
+            .with_auto_vetting(true)
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut confirmer,
+    );
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "a prompt was put to somebody in the mode that asks nobody"
+    );
+    assert!(
+        sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+        "no check was made, so nothing could have credited one"
+    );
+    assert_eq!(
+        note, "1 line, read without asking: a check found nothing",
+        "the row does not credit the check that released the slot"
+    );
+
+    let mut person = ReadsWhatItRan::new(false);
+    let asked = std::sync::Arc::clone(&person.shown);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut person, bravebot_agent::PermissionMode::Bypass, true);
+    let (note, sent) = the_note_a_release_leaves(
+        "read-output-screened-row",
+        ("read_output", r#"{"ref":"ref:1"}"#),
+        Task::new("find out")
+            .with_auto_vetting(true)
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut confirmer,
+    );
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "a prompt was put to somebody in the mode that asks nobody"
+    );
+    assert!(
+        sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+        "no check was made, so nothing could have credited one"
+    );
+    assert_eq!(
+        note, "1 line, read without asking: a check found nothing",
+        "the row does not credit the check that released the output"
+    );
+}
+
 /// The same rule on the other route, because auto-vetting already covers both and a screened run
 /// that read a command's output unscreened would promote by the route the model finds first.
 #[test]
@@ -50751,6 +51046,87 @@ fn screening_asked_for_makes_no_check_before_a_vouch_under_bypass() {
     );
 }
 
+/// CHECK-10, MODE-4: under bypass the vouch offer carries the verdict that claims nothing. No check
+/// is made before a vouch nobody reads, so the word in the request is the filler, and it has to be
+/// `inconclusive`: a `safe` there tells whatever draws or records the offer that something looked at
+/// the file and found nothing.
+///
+/// The confirmer is the bare double and not the mode's wrapper, so the request reaches it and its
+/// verdict can be read; the mode is set on the task. The script answers a check with `unsafe`, so a
+/// check that did run would be a request in the log. Rejects a filler of `safe` or `unsafe`, a
+/// reason written for a check that was not made, and a check made for the vouch, with and without
+/// auto-vetting.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn under_bypass_the_vouch_offer_carries_an_inconclusive_verdict_and_no_check_is_made() {
+    for auto_vetting in [false, true] {
+        let scratch = Scratch::new(&format!("vouch-bypass-verdict-{auto_vetting}"));
+        std::fs::write(
+            scratch.path.join("notes.md"),
+            "SENTINEL-NOTES: a short changelog\n",
+        )
+        .unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, received) = serve_sequence_answering_checks_with(
+            vec![reply_with(
+                r#"{"verdict": "unsafe", "reason": "addresses the reader"}"#,
+            )],
+            vec![
+                tool_request("read_file", r#"{"path":"notes.md"}"#),
+                reply_with("done"),
+            ],
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut confirmer = VouchesForFiles::new(true);
+        let offered = confirmer.offered.clone();
+
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("summarise the notes")
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+                .with_auto_vetting(auto_vetting),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            bravebot_core::trust::TrustStore::new("/work"),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("turn runs");
+
+        let asked = offered.lock().unwrap();
+        let request = asked
+            .first()
+            .unwrap_or_else(|| panic!("auto-vetting {auto_vetting}: the offer was never made"));
+        assert!(
+            matches!(
+                request.verdict,
+                bravebot_core::vetting::Verdict::Inconclusive(_)
+            ),
+            "auto-vetting {auto_vetting}: a verdict nobody gave says something about the file: {}",
+            request.verdict
+        );
+        assert_eq!(
+            request.reason, None,
+            "auto-vetting {auto_vetting}: a check that was not made wrote a sentence"
+        );
+        drop(asked);
+        let sent: Vec<String> = received.try_iter().collect();
+        assert!(
+            !sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+            "auto-vetting {auto_vetting}: a check was made before a vouch nobody reads"
+        );
+    }
+}
+
 /// Vouching answers about a file, not about a spelling of one. The offer is made because the map
 /// says nothing about the path, so the rule it records has to be the one the next read looks up:
 /// under the absolute name it would be answered by the rule about the directory above the project
@@ -52979,6 +53355,140 @@ fn a_conversation_with_older_exchanges_and_no_measurement_is_not_compacted() {
     );
 }
 
+/// COMPACT-8: a measured conversation under the budget is not compacted. The conversation holds
+/// older exchanges a cut could take and the server has measured it, so the only thing that keeps a
+/// summary from being asked for is the figure being under the budget. No summary is requested, no
+/// compaction is counted and no `Compacting` phase is announced, so a person is not shown a pause
+/// for work that is not done. Rejects a turn that tries compaction before every round whatever the
+/// figure says.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_measured_conversation_under_the_budget_is_not_compacted() {
+    let scratch = Scratch::new("compact-under-budget");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // A second reply, so a turn that asks for a summary first still runs to its end and fails on
+    // the assertions below rather than on a script that ran out.
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("done"),
+        reply_with("a summary nobody should ask for"),
+    ]);
+    let config = config_with_budget(&endpoint, 1_000_000);
+    let mut conversation = a_long_conversation();
+    assert!(
+        conversation.compaction_boundary().is_some(),
+        "the fixture has nothing a cut could take"
+    );
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("finish it"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        !bodies.iter().any(|body| body.contains(A_SUMMARY_ASKING)),
+        "a summary was asked for under the budget: {bodies:#?}"
+    );
+    assert_eq!(bodies.len(), 1, "{bodies:#?}");
+    assert!(
+        bodies[0].contains("port the parser to the new lexer"),
+        "the exchange was left out of the request: {}",
+        bodies[0]
+    );
+    assert_eq!(outcome.timing.activity.compactions, 0);
+    assert!(
+        !reporter
+            .phases
+            .contains(&bravebot_agent::report::Phase::Compacting),
+        "a compaction was announced under the budget: {:?}",
+        reporter.phases
+    );
+}
+
+/// COMPACT-8: over the budget with nothing worth cutting, compaction sends nothing and says nothing.
+/// Every round after the first is over the budget here and the conversation never grows a cut
+/// worth making, so a turn that reported "nothing to compact" or a failed summary on each round
+/// would bury the lines a person can act on. No notice, no narration, no compaction line in the
+/// trail and no summary request.
+///
+/// A `Compacting` phase is announced before the attempt on every over-budget round, and that is
+/// not counted as saying something: it is the pause indicator for work that may be made. Rejects
+/// an `Ok(None)` that reports a notice or narrates, and one that records a compaction.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_over_budget_conversation_with_nothing_worth_cutting_sends_nothing_and_says_nothing() {
+    let scratch = Scratch::new("compact-over-budget-nothing-to-cut");
+    for n in 1..=2 {
+        std::fs::write(scratch.path.join(format!("f{n}.txt")), format!("value {n}")).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) =
+        serve_a_long_turn(2, |_| "a summary nobody should ask for".to_string());
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("read f1.txt and f2.txt, one at a time"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        !bodies.iter().any(|body| body.contains(A_SUMMARY_ASKING)),
+        "a summary was asked for with nothing worth cutting: {bodies:#?}"
+    );
+    assert_eq!(
+        bodies.len(),
+        3,
+        "the turn did not run its two reads and its answer: {bodies:#?}"
+    );
+    assert_eq!(outcome.timing.activity.compactions, 0);
+    assert!(
+        reporter.notices.is_empty(),
+        "a round with nothing to cut said something: {:?}",
+        reporter.notices
+    );
+    // The planner's own replies between calls narrate as empty text here, so only a line with words
+    // in it is something the round said.
+    assert!(
+        reporter.narration.iter().all(|line| line.trim().is_empty()),
+        "a round with nothing to cut narrated: {:?}",
+        reporter.narration
+    );
+    assert!(
+        compact_gate_lines(&sink).is_empty(),
+        "a round with nothing to cut recorded a compaction: {:?}",
+        compact_gate_lines(&sink)
+    );
+}
+
 /// COMPACT-8: a summariser that failed is not asked again for the rest of the turn. The conversation
 /// stays past the budget through every round, so only the failure stops the requests.
 #[test]
@@ -53734,6 +54244,232 @@ fn a_summary_model_the_machine_excludes_refuses_the_compaction_and_leaves_the_co
     .expect("a long conversation has something to summarise");
     let body = received.recv().expect("the summariser's request");
     assert_eq!(model_in(&body), "a-permitted-model", "{body}");
+}
+
+/// A configuration whose gateway serves `gw/a-model` and nothing else, with `summary` as the summary
+/// model, so a name no service answers for is refused while the session's own model is served at
+/// the test endpoint.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_config_serving_only_one_model(endpoint: &str, summary: &str) -> Config {
+    let mut config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some("https://ai-chat.bsg.brave.com".into()),
+        _ => None,
+    })
+    .expect("config");
+    let root = json!({"provider": {"gw": {
+        "options": {"baseURL": endpoint, "apiKey": "SYNTHETIC_TOKEN"},
+        "models": {"a-model": {}}
+    }}});
+    config.providers = bravebot_config::provider::Provider::all(root.as_object().unwrap());
+    config.summary_model = Some(summary.to_string());
+    config
+}
+
+/// COMPACT-15: a `summaryModel` no configured service answers for refuses the compaction through
+/// `turn::compact`. The error names the model and says no service answers for it, it does not say
+/// a sign-in is missing, the conversation is left whole and no request is sent. A named model the
+/// gateway does serve summarises, so the refusal is about the name.
+///
+/// The session's model is served at the test endpoint, so a compaction that fell back to it would
+/// send a request and shorten the conversation. Rejects a `NotServed` refusal worded as a sign-in,
+/// one that is dropped so the request goes out anyway, and a fallback to the session's model.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_summary_model_nothing_serves_refuses_the_compaction_and_leaves_the_conversation_whole() {
+    let (endpoint, received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+    let mut config = a_config_serving_only_one_model(&endpoint, "a-model-nobody-has");
+    let egress = bravebot_net::Egress::new();
+    assert!(
+        matches!(
+            bravebot_agent::backend::serving(&config, &egress, "a-model-nobody-has"),
+            bravebot_agent::backend::Serving::NothingConfigured { .. }
+        ),
+        "this test needs a model that no configured service answers for"
+    );
+    let mut sink = RecordingSink::new();
+    let mut conversation = a_long_conversation();
+    let before = conversation.len();
+
+    let refused = turn::compact(
+        &config,
+        &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
+        &mut conversation,
+        Some("gw/a-model"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+        None,
+    );
+
+    let Err(failure) = refused else {
+        panic!("a summary model nothing serves must refuse the compaction")
+    };
+    let said = failure.to_string();
+    assert!(
+        said.contains("a-model-nobody-has") && said.contains("no configured service answers"),
+        "the refusal did not name the model and say nothing answers for it: {said}"
+    );
+    assert!(
+        !said.contains("sign-in") && !said.contains("managed settings"),
+        "a model nothing serves was reported as another refusal: {said}"
+    );
+    assert_eq!(
+        conversation.len(),
+        before,
+        "a refused compaction shortened the conversation anyway"
+    );
+    let sent: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert!(
+        sent.is_empty(),
+        "a model nothing serves was sent a request: {sent:?}"
+    );
+
+    config.summary_model = Some("gw/a-model".to_string());
+    turn::compact(
+        &config,
+        &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
+        &mut conversation,
+        Some("gw/a-model"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+        None,
+    )
+    .expect("a model the gateway serves summarises")
+    .expect("a long conversation has something to summarise");
+    let body = received.recv().expect("the summariser's request");
+    assert!(body.contains(A_SUMMARY_ASKING), "{body}");
+}
+
+/// GOAL-19: the same name refuses the goal check through `turn::goal`. The error is the summary-model
+/// refusal for that name, it reads as one no service answers for and not as a sign-in, and no
+/// check is sent. The goal's caller ends the goal on that error's sentence. A served name is judged
+/// on, so the refusal is about the name.
+///
+/// Rejects a `NotServed` mapped to the sign-in sentence and a judge that runs on the session's
+/// model, which is served at the test endpoint.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_summary_model_nothing_serves_sends_no_check_and_ends_the_goal_on_that_reason() {
+    let (endpoint, received) =
+        serve_sequence(vec![reply_with("MET\nthe second listing shows a.txt")]);
+    let mut config = a_config_serving_only_one_model(&endpoint, "a-model-nobody-has");
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let conversation = an_exchange_to_ask_beside();
+    let mut judge = |config: &Config| {
+        turn::goal(
+            config,
+            &egress,
+            &bravebot_agent::chatgpt::AccountSession::begin(),
+            bravebot_agent::goal::Check::of(
+                &conversation,
+                "a.txt exists",
+                bravebot_agent::Work::default(),
+            ),
+            Some("gw/a-model"),
+            &mut sink,
+            bravebot_core::trust::TrustStore::new("/work"),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+    };
+
+    let Err(failure) = judge(&config) else {
+        panic!("a summary model nothing serves must send no check")
+    };
+    assert!(
+        matches!(
+            &failure,
+            bravebot_agent::goal::GoalError::SummaryModel(
+                bravebot_agent::compact::SideModelRefusal::NotServed(named)
+            ) if named == "a-model-nobody-has"
+        ),
+        "the goal did not end on the refusal for that name: {failure:?}"
+    );
+    let said = failure.to_string();
+    assert!(
+        said.contains("a-model-nobody-has") && said.contains("no configured service answers"),
+        "the reason did not name the model and say nothing answers for it: {said}"
+    );
+    assert!(
+        !said.contains("sign-in"),
+        "a model nothing serves was reported as one needing a sign-in: {said}"
+    );
+    let sent: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert!(
+        sent.is_empty(),
+        "a model nothing serves was sent a check: {sent:?}"
+    );
+
+    config.summary_model = Some("gw/a-model".to_string());
+    judge(&config).expect("a model the gateway serves is judged on");
+    assert!(
+        received.recv().is_ok(),
+        "the served model was sent no check"
+    );
+}
+
+/// COMPACT-15, LABEL-8: a `summaryModel` that searches the web over chat completions refuses the
+/// compaction through `turn::compact`, naming the model and saying why, as the goal check does. It
+/// is not reported as a sign-in, the conversation is left whole and nothing is sent. Rejects a
+/// compaction that runs on the search model.
+#[test]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_summary_model_that_searches_the_web_refuses_the_compaction_and_leaves_the_conversation_whole()
+{
+    let (endpoint, received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+    let mut config = a_config_listing_a_search_model(&endpoint);
+    config.summary_model = Some("openai/gpt-5-search-api".to_string());
+    let egress = bravebot_net::Egress::new();
+    let mut conversation = a_long_conversation();
+    let before = conversation.len();
+
+    let refused = turn::compact(
+        &config,
+        &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
+        &mut conversation,
+        Some("an-expensive-session-model"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+        None,
+    );
+
+    let said = match refused {
+        Err(failure) => failure.to_string(),
+        Ok(_) => panic!("a summary model that searches the web must refuse the compaction"),
+    };
+    assert!(
+        said.contains("openai/gpt-5-search-api") && said.contains("searches the web"),
+        "the refusal did not name the model and the reason: {said}"
+    );
+    assert!(
+        !said.contains("sign-in"),
+        "a search model was reported as one needing a sign-in: {said}"
+    );
+    assert_eq!(
+        conversation.len(),
+        before,
+        "a refused compaction shortened the conversation anyway"
+    );
+    let sent: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert!(
+        sent.is_empty(),
+        "the search model was sent the conversation: {sent:?}"
+    );
 }
 
 /// GOAL-19: the judge runs on the model the setting names, so one key caps what both side requests
@@ -101933,6 +102669,78 @@ fn a_body_that_stops_half_way_leaves_the_destination_alone_and_no_staging_file()
         second.contains("failed part-way") && second.contains("Nothing was saved"),
         "the planner was not told the download did not finish: {second}"
     );
+}
+
+/// DOWNLOAD-1: a body sent with chunked transfer encoding that ends before its closing chunk is not
+/// a whole file. The head carries no length, so the only mark of the end is the zero chunk, and a
+/// connection that closes without it, between chunks or inside one, leaves what was at the
+/// destination and no staging file. A download that took the end of the connection for the end of
+/// the body would replace the file the person approved replacing with the part that arrived.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_chunked_body_that_ends_without_its_closing_chunk_leaves_the_destination_alone() {
+    let head = b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+    let mut between_chunks = head.to_vec();
+    between_chunks.extend_from_slice(b"9c40\r\n");
+    between_chunks.extend_from_slice(&[7u8; 40_000]);
+    between_chunks.extend_from_slice(b"\r\n");
+    let mut inside_a_chunk = head.to_vec();
+    inside_a_chunk.extend_from_slice(b"186a0\r\n");
+    inside_a_chunk.extend_from_slice(&[7u8; 40_000]);
+
+    for (name, reply) in [
+        ("between-chunks", between_chunks),
+        ("inside-a-chunk", inside_a_chunk),
+    ] {
+        let scratch = Scratch::new(&format!("download-chunked-{name}"));
+        std::fs::write(scratch.path.join("existing.bin"), b"original").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (site, _count) = serve_raw(reply);
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2(
+                "download_url",
+                &format!(r#"{{"url":"{site}/big","path":"existing.bin"}}"#),
+            ),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut confirmer = ApprovesFetchesAndWrites::default();
+
+        turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("fetch the big file"),
+            &mut confirmer,
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+
+        assert_eq!(
+            confirmer.writes.len(),
+            1,
+            "{name}: the person was not asked"
+        );
+        assert_eq!(
+            std::fs::read(scratch.path.join("existing.bin")).unwrap(),
+            b"original",
+            "{name}: a chunked body with no closing chunk replaced the file"
+        );
+        assert_eq!(
+            names_in(&scratch.path),
+            ["existing.bin"],
+            "{name}: a partial file was left behind"
+        );
+        let _first = received.recv().expect("first request");
+        let second = received.recv().expect("second request");
+        assert!(
+            second.contains("failed part-way") && second.contains("Nothing was saved"),
+            "{name}: the planner was not told the download did not finish: {second}"
+        );
+    }
 }
 
 /// DOWNLOAD-1: a person's stop ends a download that is under way and leaves what was at the
