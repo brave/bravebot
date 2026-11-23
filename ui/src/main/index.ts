@@ -65,7 +65,7 @@ import {
 import { KeyEntry } from './key-entry'
 import { closeKeyWindow, handleKeyWindow, showKeyWindow } from './key-window'
 import { SendRefused, forgetDrops, stageDrops, withDrops } from './drops'
-import { clipboardPng, forgetPastes, stagePaste, withPastes } from './pastes'
+import { cleanPaste, clipboardPng, forgetPastes, stagePaste, withPastes } from './pastes'
 import { isSubpath } from '../shared/files'
 import { chooseDirectory, mayOpenSessionIn, offerDirectories } from './opened'
 import { deletedConversations } from './deleted'
@@ -1303,6 +1303,14 @@ if (primary) app.whenReady().then(() => {
     return stagePaste(session, await clipboardPng(), async (bytes) => {
       if (!bridge) throw new Error('the agent is not running')
       return bridge.request('pastes.check', { bytes })
+    })
+  })
+  // Pasted text, with the characters that draw as nothing removed by the bridge (PASTE-10).
+  ipcMain.handle('bravebot:pastes:clean', (event, session: unknown, text: unknown) => {
+    if (!window || event.senderFrame !== window.webContents.mainFrame) return null
+    return cleanPaste(session, text, async (raw) => {
+      if (!bridge) throw new Error('the agent is not running')
+      return bridge.request('pastes.clean', { text: raw })
     })
   })
   ipcMain.handle('bravebot:files:choose-attachments', (_event, session: unknown) => {

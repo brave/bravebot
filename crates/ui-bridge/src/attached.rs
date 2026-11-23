@@ -83,6 +83,22 @@ pub fn paste_check(request: &Request) -> Result<Value, Failure> {
     })
 }
 
+/// A text paste with the characters a terminal draws as nothing taken out (PASTE-10):
+/// `{ "text", "removed" }`, and `note` as well when any were removed. The map is the terminal's,
+/// [`bravebot_core::invisible::without_invisible`], and the note is the terminal's, so a paste one
+/// front end cleans the other cleans the same way and says so in the same words.
+pub fn paste_clean(request: &Request) -> Result<Value, Failure> {
+    let Some(text) = request.param("text").as_str() else {
+        return Err(Failure::bad_request("`text` must be a string"));
+    };
+    let (cleaned, removed) = bravebot_core::invisible::without_invisible(text);
+    let mut answer = json!({ "text": cleaned, "removed": removed });
+    if removed > 0 {
+        answer["note"] = json!(bravebot_i18n::t!(paste_invisible_removed, count = removed));
+    }
+    Ok(answer)
+}
+
 fn too_large(size: usize) -> Failure {
     Failure::bad_request(format!(
         "a pasted picture of {size} bytes is over the {MAX_PASTED_IMAGE_BYTES} a paste may be"

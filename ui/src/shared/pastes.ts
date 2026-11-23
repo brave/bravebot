@@ -16,11 +16,16 @@ export interface PastedPicture {
 
 /**
  * What one paste came to. `too-large` carries the bridge's note, the terminal's, which says the
- * picture's size and the cap, for the window to show as it stands.
+ * picture's size and the cap, for the window to show as it stands. `text` is pasted text with the
+ * characters that draw as nothing removed by the bridge's `pastes.clean` (PASTE-10): how many were
+ * removed, and the terminal's note saying so when there were any. `unclean` is text the bridge did
+ * not clean, which is not pasted.
  */
 export type PasteOutcome =
   | { kind: 'staged'; picture: PastedPicture }
   | { kind: 'too-large'; note: string }
+  | { kind: 'text'; text: string; removed: number; note?: string }
+  | { kind: 'unclean' }
 
 /** One paste into a session's composer, as the preload tells the page. */
 export interface Paste {

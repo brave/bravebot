@@ -1031,7 +1031,7 @@ the person there is more.
 `verified-by: bravebot_core::invisible::text_with_no_hidden_character_is_left_as_it_is`
 `verified-by: bravebot_core::invisible::spelling_keeps_the_lines_the_text_had`
 `verified-by: bravebot_core::invisible::the_list_holds_every_block_that_draws_as_nothing_and_no_ordinary_character`
-`verified-by: bravebot_tui::invisible::every_character_removed_from_a_paste_is_one_that_draws_as_nothing`
+`verified-by: bravebot_core::invisible::every_character_removed_from_a_paste_is_one_that_draws_as_nothing`
 `verified-by: bravebot_agent::turn::an_output_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes`
 `verified-by: bravebot_agent::turn::a_vetting_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes`
 `verified-by: bravebot_agent::turn::a_reference_write_spells_what_draws_as_nothing_and_the_file_keeps_the_bytes`

@@ -100,21 +100,30 @@ window.addEventListener('drop', (event) => {
  * `data-paste-session`. When the clipboard holds a picture, the picture wins over any text beside it
  * as in the terminal (PASTE-7), so the browser's own paste is cancelled and the main process is
  * asked to stage what is on the clipboard. It reads the clipboard itself: nothing here, and nothing
- * the page holds, carries the bytes. A paste of text alone is left to the browser.
+ * the page holds, carries the bytes. A paste of text alone is cancelled too, and its text, read
+ * off the trusted event, is sent to the main process for the bridge's `pastes.clean` to remove the
+ * characters that draw as nothing (PASTE-10). The page is told the cleaned text and inserts it. A
+ * paste with neither a picture nor text, such as files copied in a file manager, is left to the
+ * browser.
  */
 const pasteListeners = new Set<(paste: Paste) => void>()
 const carriesPicture = (event: ClipboardEvent): boolean =>
   [...(event.clipboardData?.items ?? [])].some((item) => item.kind === 'file' && item.type.startsWith('image/'))
 
 window.addEventListener('paste', (event) => {
-  if (!event.isTrusted || !carriesPicture(event)) return
+  if (!event.isTrusted) return
   const session = event.target instanceof Element
     ? event.target.closest<HTMLElement>('[data-paste-session]')?.dataset.pasteSession
     : undefined
   if (!session) return
+  const picture = carriesPicture(event)
+  const text = picture ? '' : event.clipboardData?.getData('text/plain') ?? ''
+  if (!picture && text === '') return
   event.preventDefault()
   void (async () => {
-    const outcome = await ipcRenderer.invoke('bravebot:pastes:stage', session) as PasteOutcome | null
+    const outcome = picture
+      ? await ipcRenderer.invoke('bravebot:pastes:stage', session) as PasteOutcome | null
+      : await ipcRenderer.invoke('bravebot:pastes:clean', session, text) as PasteOutcome | null
     if (outcome) for (const listener of pasteListeners) listener({ session, outcome })
   })()
 }, true)

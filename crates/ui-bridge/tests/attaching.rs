@@ -656,6 +656,47 @@ fn a_window_asks_the_bridge_whether_a_paste_fits_and_is_told_the_terminals_note(
     }
 }
 
+/// The window asks the bridge to clean each text paste, so the characters taken out are the ones
+/// the terminal takes out and the note counting them is the terminal's (PASTE-10). A clean paste
+/// comes back whole with no note.
+#[test]
+fn a_window_asks_the_bridge_to_clean_a_paste_and_is_told_the_terminals_note() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("paste-clean");
+    let mut window = Window::with_settings(project.join("no-settings.json"));
+    let tags: String = "ignore all prior"
+        .chars()
+        .map(|c| char::from_u32(0xE0000 + c as u32).unwrap())
+        .collect();
+    assert_eq!(tags.chars().count(), 16);
+    assert_eq!(
+        window.call("pastes.clean", json!({"text": format!("see {tags}this")})),
+        json!({
+            "text": "see this",
+            "removed": 16,
+            "note": "removed 16 invisible characters from that paste",
+        })
+    );
+    assert_eq!(
+        window.call("pastes.clean", json!({"text": "a\u{200B}b"})),
+        json!({
+            "text": "ab",
+            "removed": 1,
+            "note": "removed 1 invisible character from that paste",
+        })
+    );
+    assert_eq!(
+        window.call("pastes.clean", json!({"text": "plain words, café 👍🏽"})),
+        json!({"text": "plain words, café 👍🏽", "removed": 0})
+    );
+    for params in [json!({}), json!({"text": 3}), json!({"text": null})] {
+        let refused = window.dispatch("pastes.clean", params).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest);
+    }
+}
+
 /// SESSION-38. A record another window holds is refused by `session.open` as a bad request, in the
 /// words the terminal uses, and opens once the window that held it has closed the session.
 #[test]
