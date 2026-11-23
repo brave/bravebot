@@ -20538,6 +20538,72 @@ fn a_command_the_planner_read_is_glimpsed_from_its_end() {
     );
 }
 
+/// SCROLL-10: a command that printed more than five hundred lines is kept for expansion from its
+/// end, where how it went is, and the count is the command's own. The regression it rejects is a
+/// cap that keeps the first five hundred lines of a command's output, which would keep what the
+/// command printed first and drop its exit, and a total taken from the lines kept.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_command_that_printed_six_hundred_lines_is_kept_from_its_end_to_five_hundred() {
+    let scratch = Scratch::new("kept-run");
+    let log: String = (1..=600).map(|n| format!("step {n}\n")).collect();
+    std::fs::write(scratch.path.join("build.log"), log).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sed -n p build.log"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
+            "sed",
+            &["-n", "p", "build.log"],
+            &scratch.path,
+        )]),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let [kept] = reporter.returned.as_slice() else {
+        panic!(
+            "expected one result, for the vouched command: {:?}",
+            reporter.returned
+        );
+    };
+    assert!(kept.from_the_end, "a command was kept from its start");
+    assert_eq!(
+        kept.total, 600,
+        "the total is not the command's own count of lines"
+    );
+    assert_eq!(kept.whole.len(), 500, "the cap is not five hundred lines");
+    assert_eq!(
+        kept.whole.first().map(String::as_str),
+        Some("step 101"),
+        "the lines kept are not the last five hundred"
+    );
+    assert_eq!(
+        kept.whole.last().map(String::as_str),
+        Some("step 600"),
+        "the last line the command printed was not kept"
+    );
+}
+
 /// A processor has always wanted to say something about what it did, and with nowhere to put it
 /// it put it in the file: two sessions ended with a paragraph of reasoning at the top of a Python
 /// script. It has somewhere to put it now, and that somewhere reaches the person and nothing else.

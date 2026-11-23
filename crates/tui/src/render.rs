@@ -5787,6 +5787,27 @@ mod tests {
             assert_eq!(rows.len(), 3, "{rows:#?}");
         }
 
+        /// SCROLL-10: an expanded command that kept the last five hundred of six hundred lines says
+        /// the hundred it left out first, above the lines. The regression it rejects is the count
+        /// drawn after the lines, as it is for a result cut from the other side.
+        #[test]
+        fn an_expanded_command_says_the_earlier_lines_it_cut_before_the_lines_it_kept() {
+            let lines: Vec<String> = (101..=600).map(|n| format!("step {n}")).collect();
+            let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+            let returned = glimpse(&refs, 600, true);
+            assert_eq!(returned.whole.len(), 500);
+
+            let rows = drawn_rows(&returned_lines(&returned, true, 80));
+            assert_eq!(rows.len(), 501, "{:#?}", &rows[..3]);
+            assert!(
+                rows[0].contains("100 earlier lines"),
+                "what came before is not said first: {:#?}",
+                &rows[..3]
+            );
+            assert_eq!(rows[1], "    step 101");
+            assert_eq!(rows[500], "    step 600");
+        }
+
         /// VIEW-24: a glimpse is the size it says it is. A minified file is one line, and wrapped
         /// it would fill the screen the glimpse was meant to leave room on.
         #[test]

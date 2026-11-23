@@ -435,6 +435,8 @@ left out. Without a key the rest is reachable only by rerunning the command or o
 `verified-by: bravebot_tui::state::a_session_holds_twenty_thousand_lines_for_expansion_and_no_more`
 `verified-by: bravebot_agent::turn::a_result_the_planner_read_is_glimpsed_under_its_call`
 `verified-by: bravebot_agent::turn::a_result_of_more_than_five_hundred_lines_is_kept_for_expansion_to_five_hundred`
+`verified-by: bravebot_agent::turn::a_command_that_printed_six_hundred_lines_is_kept_from_its_end_to_five_hundred`
+`verified-by: bravebot_tui::render::an_expanded_command_says_the_earlier_lines_it_cut_before_the_lines_it_kept`
 
 ## Known costs
 
