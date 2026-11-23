@@ -90,6 +90,7 @@ would be a person's word nobody said.
 
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_marks_nothing_trusted_and_is_recorded`
 `verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
+`verified-by: bravebot_agent::turn::a_single_yes_to_a_path_leaves_one_path_reach_record_whoever_gave_it`
 `verified-by: bravebot_tui::status::the_report_lists_the_paths_programs_were_let_reach`
 `verified-by: bravebot_tui::app::the_status_of_a_session_lists_the_paths_programs_were_let_reach`
 

@@ -767,6 +767,7 @@ a model was slow exactly as it draws a slow program.
 `verified-by: bravebot_ui_bridge::reporting::what_a_call_spent_at_a_model_reaches_a_front_end`
 `verified-by: bravebot_agent::turn::what_a_check_cost_reaches_the_row_the_call_drew`
 `verified-by: bravebot_agent::turn::what_a_processor_cost_reaches_the_row_the_call_drew`
+`verified-by: bravebot_agent::turn::the_wait_on_a_processor_row_is_the_time_the_model_took`
 `verified-by: bravebot_agent::turn::what_a_processor_that_chose_cost_reaches_the_row_the_call_drew`
 `verified-by: bravebot_agent::turn::what_a_processor_that_wrote_no_document_cost_reaches_the_row_the_call_drew`
 `verified-by: bravebot_agent::turn::what_a_processor_that_failed_cost_reaches_the_row_the_call_drew`

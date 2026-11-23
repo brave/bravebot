@@ -5953,6 +5953,16 @@ mod tests {
     /// Collect one delegate that came back `came` having done `work`, and return what the planner
     /// was told and the person's note.
     fn collected_with(came: Came, work: crate::outcome::Work) -> (String, String) {
+        let (told, note, _) = collected_and_drawn(came, work);
+        (told, note)
+    }
+
+    /// [`collected_with`], and the report `collect_delegates` handed the reporter for the delegate,
+    /// which is what the person is shown of it.
+    fn collected_and_drawn(
+        came: Came,
+        work: crate::outcome::Work,
+    ) -> (String, String, Option<crate::report::Reported>) {
         type Joined = (
             crate::delegate::Ended,
             crate::outcome::Spent,
@@ -6040,7 +6050,72 @@ mod tests {
             .find(|text| text.contains("delegate d1"))
             .expect("the planner was never told about the delegate");
         let note = reporter.delegates_finished[0].1.clone();
-        (told, note)
+        assert_eq!(
+            reporter.delegates_reported.len(),
+            1,
+            "one delegate was collected and the reporter was told of it other than once"
+        );
+        let drawn = reporter.delegates_reported[0].1.clone();
+        (told, note, drawn)
+    }
+
+    /// WATCH-13 and DELEGATE-8 at the call `collect_delegates` makes, with the delegate's report
+    /// carried through the real presentation step. A report the planner is handed a reference to
+    /// is drawn for the person as `Reported::Kept`, kept from the planner and holding the words as
+    /// a preview, and the planner is told the reference and none of the words. A report it is
+    /// given in words is drawn as `Reported::Said` with the same words.
+    ///
+    /// Rejects a `collect_delegates` that draws a `Said` of the words for a report the planner
+    /// was only handed a reference to (words on screen with no mark, which the clause forbids),
+    /// one that passes `None` for a quarantined report so the person sees nothing of it, one that
+    /// draws a `Kept` for a report the planner read, and one that tells the planner the words of
+    /// a report it may not read.
+    #[test]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn what_collect_delegates_draws_for_the_person_follows_what_the_planner_was_given() {
+        use crate::report::{Reach, Reported};
+
+        let (told, _, drawn) = collected_and_drawn(Came::Untrusted, BUILT);
+        assert!(
+            !told.contains("THE-REPORT-WORDS"),
+            "the planner was given the words of a report it may not read: {told}"
+        );
+        assert!(
+            told.contains("ref:"),
+            "the planner was not given a reference to the report: {told}"
+        );
+        match drawn {
+            Some(Reported::Kept(shown)) => {
+                assert_eq!(
+                    shown.reach,
+                    Reach::NotThePlanner,
+                    "kept from the wrong context"
+                );
+                assert_eq!(shown.origin, "a one-round delegate");
+                assert_eq!(
+                    shown.preview,
+                    vec!["THE-REPORT-WORDS"],
+                    "the person was not given the words as a preview"
+                );
+                assert_eq!(shown.lines, 1);
+                assert_eq!(shown.label, "(U,priv)");
+            }
+            Some(Reported::Said(text)) => {
+                panic!("a report the planner may not read was drawn as said: {text}")
+            }
+            None => panic!("a report the planner was handed a reference to was drawn nowhere"),
+        }
+
+        let (told, _, drawn) = collected_and_drawn(Came::Clean, BUILT);
+        assert!(
+            told.contains("It reported:\n\nTHE-REPORT-WORDS"),
+            "the planner was not given a clean report in words: {told}"
+        );
+        assert_eq!(
+            drawn,
+            Some(Reported::Said("THE-REPORT-WORDS".to_string())),
+            "a report the planner read was not drawn as said, with the same words"
+        );
     }
 
     /// Two commands and one write, as a delegate that edited a file and then built it reports.

@@ -649,6 +649,7 @@ processors where its list holds the tool, and what it writes is private, so the 
 `verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_offered_processors_like_any_other`
 `verified-by: bravebot_agent::turn::what_a_delegate_reported_reaches_the_person_watching`
 `verified-by: bravebot_agent::turn::a_report_the_planner_was_handed_a_reference_to_is_kept_from_it_and_drawn_marked`
+`verified-by: bravebot_agent::turn::what_collect_delegates_draws_for_the_person_follows_what_the_planner_was_given`
 
 <a id="DELEGATE-9"></a>
 ### DELEGATE-9: nothing but the report crosses back
@@ -687,6 +688,8 @@ its parent's context would have moved the log rather than absorbed it.
 `verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_same_sentence_about_the_bound`
 `verified-by: bravebot_agent::turn::a_delegates_report_is_put_beside_how_many_commands_it_ran_and_writes_it_made`
 `verified-by: bravebot_agent::turn::a_request_no_marker_rule_can_answer_is_told_so_and_not_hung_up_on`
+`verified-by: bravebot_agent::turn::a_delegate_that_ran_two_commands_is_reported_with_both_and_its_parent_adds_them_to_its_own`
+`verified-by: bravebot_agent::turn::a_delegate_that_wrote_three_files_is_reported_with_three_writes_and_its_parent_adds_them_to_its_own`
 
 <a id="DELEGATE-10"></a>
 ### DELEGATE-10: a delegate's effects are gated on their own
@@ -705,6 +708,8 @@ Delegation saves context. It never saves an approval.
 
 `verified-by: bravebot_agent::turn::a_delegates_write_is_approved_on_its_own`
 `verified-by: bravebot_agent::turn::a_delegates_run_is_put_to_the_person_and_runs_only_on_a_yes`
+`verified-by: bravebot_agent::turn::a_yes_to_a_run_is_not_carried_between_a_parent_and_its_worker`
+`verified-by: bravebot_agent::turn::a_yes_to_a_write_is_not_carried_between_a_parent_and_its_worker`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_server_asked_every_call_is_refused_unasked`
 `verified-by: bravebot_agent::mcp::a_rule_decides_a_workers_call_to_a_servers_tool_as_the_turns_own`

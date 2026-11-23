@@ -25434,6 +25434,140 @@ fn a_file_a_delegate_in_a_checkout_changed_through_a_run_line_is_not_a_write_of_
     );
 }
 
+/// Runs a turn whose planner makes `own_call` and then starts a worker that makes five calls in
+/// the turn's own workspace: two `write_file` calls, one `edit_file` of a file that is there, and
+/// two `run` calls. Returns every request the model was sent and the work the turn counted.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_turn_whose_worker_made_five_calls(
+    test: &str,
+    own_call: String,
+) -> (Vec<String>, bravebot_agent::Work) {
+    let scratch = Scratch::new(test);
+    std::fs::write(scratch.path.join("edit-me.txt"), "old\n")
+        .expect("a file for the worker to edit");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received, held) = serve_a_turn_and_its_delegate(
+        (
+            "PARENT-STARTS-THE-WORKER",
+            writing_then_delegating(own_call, r#"{"kind":"worker","task":"MAKE-FIVE-CALLS"}"#),
+        ),
+        (
+            "MAKE-FIVE-CALLS",
+            vec![
+                tool_request("write_file", r#"{"path":"a.txt","contents":"first"}"#),
+                tool_request("write_file", r#"{"path":"b.txt","contents":"second"}"#),
+                tool_request(
+                    "edit_file",
+                    r#"{"path":"edit-me.txt","old_text":"old","new_text":"new"}"#,
+                ),
+                tool_request("run", r#"{"command":"printf one"}"#),
+                tool_request("run", r#"{"command":"printf two"}"#),
+                reply_with("made them"),
+            ],
+        ),
+    );
+    let completed = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("PARENT-STARTS-THE-WORKER"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_writes(),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    completed.outcome.as_ref().expect("the turn finishes");
+
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the worker was answered before its parent waited for it, so the rounds this test counts on may not have happened"
+    );
+    assert!(
+        ["a.txt", "b.txt"]
+            .iter()
+            .all(|file| scratch.path.join(file).is_file())
+            && std::fs::read_to_string(scratch.path.join("edit-me.txt")).unwrap() == "new\n",
+        "the worker's calls did not all take effect, so nothing here was counted"
+    );
+    (every_request(&received), completed.work)
+}
+
+/// DELEGATE-9, GROUND-2. The planner is told how many commands a delegate ran over all its calls,
+/// and a parent whose workspace the delegate used adds that number to its own. The worker runs two
+/// commands, in separate calls, after three calls that write; the planner starts the turn by running
+/// one command itself.
+///
+/// Rejects a count kept as a flag per delegate (it says one command), one that keeps the last call's
+/// count (one command), one that counts the delegate's `write_file` and `edit_file` calls as
+/// commands (five), and a parent that takes the delegate's count in place of its own (two where the
+/// turn ran three).
+#[test]
+fn a_delegate_that_ran_two_commands_is_reported_with_both_and_its_parent_adds_them_to_its_own() {
+    let (asked, work) = a_turn_whose_worker_made_five_calls(
+        "delegate-sums-commands",
+        tool_request("run", r#"{"command":"printf parent"}"#),
+    );
+
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("It ran 2 commands and made ")),
+        "the planner was not told the worker ran 2 commands: {:?}",
+        asked
+            .iter()
+            .filter_map(|body| body
+                .find("It ran ")
+                .and_then(|at| body.get(at..(at + 60).min(body.len()))))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        work.commands, 3,
+        "the turn's own count of commands is not its own one plus the worker's two"
+    );
+}
+
+/// DELEGATE-9, GROUND-2. The planner is told how many writes a delegate made, one for each
+/// `write_file` or `edit_file` call, and a parent whose workspace the delegate used adds that number
+/// to its own. The worker writes two new files and edits a third, and runs two commands; the planner
+/// starts the turn by writing a file itself.
+///
+/// Rejects writes counted as a flag (one write), two calls to different files counted as one, an
+/// `edit_file` that is not counted (two), and a parent that takes the delegate's count in place of
+/// its own (three where the turn wrote four files).
+#[test]
+fn a_delegate_that_wrote_three_files_is_reported_with_three_writes_and_its_parent_adds_them_to_its_own()
+ {
+    let (asked, work) = a_turn_whose_worker_made_five_calls(
+        "delegate-sums-writes",
+        tool_request(
+            "write_file",
+            r#"{"path":"notes.txt","contents":"first slice"}"#,
+        ),
+    );
+
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains(" and made 3 writes.")),
+        "the planner was not told the worker made 3 writes: {:?}",
+        asked
+            .iter()
+            .filter_map(|body| body
+                .find("It ran ")
+                .and_then(|at| body.get(at..(at + 60).min(body.len()))))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        work.writes, 4,
+        "the turn's own count of writes is not its own one plus the worker's three"
+    );
+}
+
 /// The question waits for a delegate still working in the turn's workspace, so a turn whose checker
 /// is part way through the build when the question falls due is not told to start one.
 ///
@@ -33574,6 +33708,8 @@ struct AskedAboutRuns {
     answers: std::collections::VecDeque<bravebot_agent::RunDecision>,
     writes: bravebot_agent::WriteDecision,
     seen: std::sync::Arc<std::sync::Mutex<Vec<bravebot_agent::RunRequest>>>,
+    /// The paths of the writes the person was asked about, in order.
+    asked_to_write: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     /// What the person is asked about reach to a path, and what they say. A refusal unless a test
     /// gave a yes.
     path_answer: bravebot_agent::confirm::Decision,
@@ -33599,6 +33735,7 @@ impl AskedAboutRuns {
             answers: std::collections::VecDeque::new(),
             writes: bravebot_agent::WriteDecision::reject(),
             seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            asked_to_write: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             path_answer: bravebot_agent::confirm::Decision::Reject,
             paths: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
@@ -33662,8 +33799,12 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
 
     fn confirm_write(
         &mut self,
-        _request: &bravebot_agent::WriteRequest,
+        request: &bravebot_agent::WriteRequest,
     ) -> bravebot_agent::WriteDecision {
+        self.asked_to_write
+            .lock()
+            .unwrap()
+            .push(request.path.clone());
         self.writes.clone()
     }
 
@@ -48685,16 +48826,37 @@ fn the_rows_of_a_processor_round(
     arguments: &str,
     answer: String,
 ) -> Vec<bravebot_agent::report::Activity> {
+    the_rows_of_a_processor_round_answered_after(test, arguments, answer, std::time::Duration::ZERO)
+}
+
+/// [`the_rows_of_a_processor_round`] where the model holds the processor's reply back for `delay`
+/// before sending it, so the time the call spent at the model is a figure a test can read.
+fn the_rows_of_a_processor_round_answered_after(
+    test: &str,
+    arguments: &str,
+    answer: String,
+    delay: std::time::Duration,
+) -> Vec<bravebot_agent::report::Activity> {
     let scratch = Scratch::new(test);
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     std::fs::write(scratch.path.join("where.txt"), "one\ntwo\nthree\n").unwrap();
 
-    let (endpoint, _received) = serve_sequence(vec![
+    // The third request is the processor's: the run, then the call that hands the output on.
+    let mut replies = vec![
         tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
         tool_request("spawn_processor", arguments),
         answer,
         reply_with("done"),
-    ]);
+    ]
+    .into_iter();
+    let mut asked = 0;
+    let (endpoint, _received) = serve_rounds(Vec::new(), false, move |_| {
+        asked += 1;
+        if asked == 3 {
+            std::thread::sleep(delay);
+        }
+        replies.next().map(Some)
+    });
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -48763,6 +48925,34 @@ fn what_a_processor_cost_reaches_the_row_the_call_drew() {
         processor_reply("X"),
     );
     assert_the_processor_row_carries_the_wait(&rows, false, "document");
+}
+
+/// VIEW-23, magnitude: the figure on a processor's row is the time the call spent at the model.
+/// The model holds the processor's reply back for 300 ms, so the row's wait is at least that.
+///
+/// Rejects a wait taken before the request was made, or a constant `Some(Duration::ZERO)`: both
+/// leave a row that says a model was asked and that it took no time, so a slow processor looks
+/// like a slow program.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_wait_on_a_processor_row_is_the_time_the_model_took() {
+    let delay = std::time::Duration::from_millis(300);
+    let rows = the_rows_of_a_processor_round_answered_after(
+        "processor-round-slow",
+        r#"{"reads":["ref:1"],"instruction":"x"}"#,
+        processor_reply("X"),
+        delay,
+    );
+    assert_the_processor_row_carries_the_wait(&rows, false, "slow document");
+    let waited = rows
+        .iter()
+        .find(|activity| activity.tool == "spawn_processor")
+        .and_then(|activity| activity.waited)
+        .expect("the processor row carries a wait");
+    assert!(
+        waited >= delay,
+        "the row says the call waited {waited:?} at a model that took {delay:?}"
+    );
 }
 
 /// VIEW-23: a processor asked to choose an entry leaves its wait on the row of its call.
@@ -62921,6 +63111,136 @@ fn a_delegates_run_is_put_to_the_person_and_runs_only_on_a_yes() {
         "a delegate's run was not put to the person once, with its line"
     );
     assert!(!made, "the delegate's line ran after the person said no");
+}
+
+/// What the person was asked about when a parent and one worker it starts both make the same
+/// call, in the order `parent_first` says. `tool` is `run` or `write_file`, and the answer to each
+/// question is yes for this once and no more. Returns what the person was asked about, in order:
+/// the lines of the runs, or the paths of the writes.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn what_the_person_was_asked_when_a_parent_and_its_worker_make_the_same_call(
+    tag: &str,
+    tool: &str,
+    arguments: &str,
+    parent_first: bool,
+) -> Vec<String> {
+    let scratch = Scratch::new(&format!("delegate-same-call-{tag}"));
+    std::fs::create_dir_all(scratch.path.join(".husky")).expect("a protected directory");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let spawn = tool_request(
+        "spawn_agent",
+        r#"{"kind":"worker","task":"MAKE-THE-SAME-CALL-AS-YOUR-PARENT"}"#,
+    );
+    let own = tool_request(tool, arguments);
+    let parent = if parent_first {
+        vec![
+            own,
+            spawn,
+            reply_with("waiting"),
+            reply_with("the worker finished"),
+        ]
+    } else {
+        vec![
+            spawn,
+            reply_with("waiting"),
+            own,
+            reply_with("the worker finished"),
+        ]
+    };
+    let (endpoint, _received) = serve_by_marker(vec![
+        ("PARENT-OF-THE-SAME-CALL", parent),
+        (
+            "MAKE-THE-SAME-CALL-AS-YOUR-PARENT",
+            vec![tool_request(tool, arguments), reply_with("made it")],
+        ),
+    ]);
+    let mut confirmer =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_writes();
+    let asked_to_run = confirmer.seen.clone();
+    let asked_to_write = confirmer.asked_to_write.clone();
+    let mut trust = bravebot_core::trust::TrustStore::new(match tool {
+        "run" => workspace.root().to_path_buf(),
+        _ => "/work".into(),
+    });
+    if tool == "run" {
+        trust.trust(".");
+    }
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("PARENT-OF-THE-SAME-CALL"),
+        &mut confirmer,
+        &mut RecordingSink::new(),
+        trust,
+    )
+    .expect("turn runs");
+
+    match tool {
+        "run" => asked_to_run
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|request| request.plan.line.clone())
+            .collect(),
+        _ => asked_to_write.lock().unwrap().clone(),
+    }
+}
+
+/// DELEGATE-10. A yes the person gave a run is for that run: a worker making the same call as its
+/// parent is asked about again, whichever of the two went first, and what it was asked is the line
+/// each proposed. The answer is yes for this once, so nothing is remembered that a parent or a
+/// worker could carry to the other.
+///
+/// Rejects a driver that keeps the answer to a run past the run it was given for, so that the
+/// worker's line runs unasked after the parent's (one question in the first order) and the parent's
+/// after the worker's (one question in the second, through what a delegate hands back).
+#[test]
+fn a_yes_to_a_run_is_not_carried_between_a_parent_and_its_worker() {
+    for (order, parent_first) in [("parent-first", true), ("worker-first", false)] {
+        let asked = what_the_person_was_asked_when_a_parent_and_its_worker_make_the_same_call(
+            &format!("run-{order}"),
+            "run",
+            r#"{"command":"touch shared.txt"}"#,
+            parent_first,
+        );
+        assert_eq!(
+            asked,
+            vec!["touch shared.txt".to_string(); 2],
+            "{order}: the same line was not put to the person once by the parent and once by the worker"
+        );
+    }
+}
+
+/// DELEGATE-10. A yes the person gave a write is for that write: a worker writing the same file as
+/// its parent is asked about it again, whichever of the two went first, and what it was asked about
+/// is that file. The file is one a write is always put to the person for (`.husky/pre-commit` runs
+/// code later), so the question does not depend on what the trust map holds. A write of trusted
+/// bytes to an ordinary path marks the path trusted for the parent and every delegate alike
+/// (DELEGATE-11), which is a decision about the file that they share and not a carried approval.
+///
+/// Rejects a driver that keeps the approval of a write past the write it was given for, so that the
+/// same call goes through unasked in a delegate after its parent (one question in the first order)
+/// and in a parent after its delegate (one question in the second).
+#[test]
+fn a_yes_to_a_write_is_not_carried_between_a_parent_and_its_worker() {
+    for (order, parent_first) in [("parent-first", true), ("worker-first", false)] {
+        let asked = what_the_person_was_asked_when_a_parent_and_its_worker_make_the_same_call(
+            &format!("write-{order}"),
+            "write_file",
+            r#"{"path":".husky/pre-commit","contents":"written"}"#,
+            parent_first,
+        );
+        assert_eq!(
+            asked.len(),
+            2,
+            "{order}: the same file was not put to the person once by the parent and once by the worker: {asked:?}"
+        );
+        assert!(
+            asked.iter().all(|path| path.ends_with("pre-commit")),
+            "{order}: the person was asked about another path: {asked:?}"
+        );
+    }
 }
 
 /// DELEGATE-28. A delegate under a definition with a `writes:` line is refused every file outside
@@ -99864,6 +100184,94 @@ fn under_bypass_a_directory_holding_the_project_says_it_ends_checkouts() {
         "{said}"
     );
     assert_eq!(turn.workspace.added_directories().len(), 1);
+}
+
+/// How many `path_reach` records the trail holds, and what each says.
+fn path_reaches_in(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "path_reach",
+                detail,
+            } => Some(detail.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// PATHREQ-4: one yes to `request_path` leaves one `path_reach` record, whoever gave it: a person's
+/// yes, which says the user let programs reach the path, and bypass, where the mode answers in the
+/// person's place, which says the mode did and that nobody was asked. Bypass also opens the
+/// directory to the file tools, which has a record of its own when a file tool names it, so the
+/// turn makes no file-tool call and the request is the only thing that can record.
+///
+/// Rejects a yes recorded twice (the grant and the approval each writing the record, or the
+/// opening of the directory under bypass writing the mode's record beside the request's), and a
+/// yes that records nothing because the record moved after an early return.
+#[test]
+fn a_single_yes_to_a_path_leaves_one_path_reach_record_whoever_gave_it() {
+    /// The records one yes to `request_path` left, asked of `confirmer` under `permission`.
+    fn records_of_one_yes<C: bravebot_agent::Confirmer + Send>(
+        case: &str,
+        permission: bravebot_agent::PermissionMode,
+        confirmer: &mut C,
+    ) -> (Vec<String>, String) {
+        let places = PathPlaces::new(&format!("one-record-{}", case.replace(' ', "-")));
+        let turn = path_turn(
+            "path-one-record",
+            &places,
+            &[asking_for(&places.beside, true)],
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
+            permission,
+            trusting_the_workspace(),
+            None,
+            confirmer,
+        );
+        (
+            path_reaches_in(&turn.events),
+            places.beside.display().to_string(),
+        )
+    }
+    if cannot_confine_here() {
+        return;
+    }
+
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let (records, named) = records_of_one_yes(
+        "a person's yes",
+        bravebot_agent::PermissionMode::default(),
+        &mut asked,
+    );
+    assert_eq!(
+        records.len(),
+        1,
+        "a person's yes left {} path_reach records: {records:?}",
+        records.len()
+    );
+    assert!(
+        records[0].contains(&named) && !records[0].contains("nobody was asked"),
+        "the record does not name the path as a person's yes: {records:?}"
+    );
+
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let (records, named) = records_of_one_yes(
+        "bypass",
+        bravebot_agent::PermissionMode::Bypass,
+        &mut bypassing(&mut asked),
+    );
+    assert_eq!(
+        records.len(),
+        1,
+        "a yes under bypass left {} path_reach records: {records:?}",
+        records.len()
+    );
+    assert!(
+        records[0].contains(&named) && records[0].contains("nobody was asked"),
+        "the record does not name the path as the mode's yes: {records:?}"
+    );
 }
 
 fn gate_in(events: &[Event], gate: &str) -> String {
