@@ -51,6 +51,11 @@ export interface Queued {
    * its task. It starts a plan run when the turn ends and is never sent as a prompt (MANIFEST-9).
    */
   manifest?: string
+  /**
+   * Set for a typed `/plan` line that waits for the turn: its task, `''` for `/plan` alone. When the
+   * turn ends it sets plan mode and then sends the task alone, never the typed line (MODE-12).
+   */
+  plan?: string
 }
 
 /** A line sent into the running turn, kept as written until the turn says it has read it. */

@@ -28,6 +28,8 @@ export function failureSummary(category: string, cutOff?: CutOff | null, account
     blocked: ['A policy blocked this request', 'Review the conversation permissions and managed settings.'],
     workspace: ['The project could not be accessed', 'Check that the project still exists and that the required files are accessible.'],
     internal: ['The turn could not finish', 'Your conversation is preserved. Review diagnostics before continuing.'],
+    // Set by this window, not the bridge: a `/plan` line whose `session.mode` request failed (MODE-12).
+    'plan-mode': ['Could not switch to Plan mode', 'Nothing was sent, so try again or choose Plan from the mode menu.'],
   }
   const [title, description] = rows[category] ?? ['The turn could not finish', 'Your conversation is preserved. Review the details before continuing.']
   if (category === 'too-long' && cutOff) return { title, description: ceilingStop(cutOff) }

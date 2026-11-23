@@ -15,6 +15,8 @@ import type { ScheduleAnswer } from '../shared/schedule'
 import type { AsideStarted } from '../shared/aside'
 import { manifestTask } from '../shared/manifest'
 import { planRun as startPlanRun } from './plan-run'
+import { planTask } from '../shared/plan'
+import { carryOutPlan } from './plan-line'
 import { exitOf, folded, grantsOf, named, sent, summonOf, type Staged } from './staging'
 import * as t from './transcript'
 
@@ -300,6 +302,17 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     setProblem,
   }, handle, task, line, queuedAlready), [])
 
+  /**
+   * Carry out a typed `/plan [task]` line (MODE-12): queued while a turn runs or another plan line
+   * waits, otherwise plan mode is set and then, with a task, a turn is sent the task alone.
+   */
+  const plan = useCallback((handle: string, task: string, line: string, staged: Staged[], queuedAlready = false) => carryOutPlan({
+    call,
+    read: (target) => openedLives.current.get(target),
+    update: (target, change) => updateSession(target, (old) => (old ? change(old) : old)),
+    send,
+  }, handle, task, line, staged, queuedAlready), [send, updateSession])
+
   // Chats whose queued message is between leaving the queue and `send` returning. `send` awaits the
   // bridge's check of the message's `@` names before it marks the chat running, and without this the
   // queue would take the next message in that gap and send both.
@@ -313,21 +326,24 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       if (!message) continue
       const handle = item.handle
       dequeuing.current.add(handle)
-      // A waiting `/schedule` or `/recap` line is asked again and starts no turn, and a waiting
-      // `/manifest` line starts its run.
+      // A waiting `/schedule` or `/recap` line is asked again and starts no turn, a waiting
+      // `/manifest` line starts its run, and a waiting `/plan` line sets plan mode and then sends
+      // its task alone.
       const settled = message.aside === 'recap'
         ? askAside(handle, 'recap', '', message.prompt, [], true)
         : message.schedule !== undefined
           ? schedule(handle, message.schedule, message.prompt, message.staged, true)
           : message.manifest !== undefined
             ? planRun(handle, message.manifest, message.prompt, true)
-            : send(message.prompt, handle, message.attachments, message.staged)
+            : message.plan !== undefined
+              ? plan(handle, message.plan, message.prompt, message.staged, true)
+              : send(message.prompt, handle, message.attachments, message.staged)
       void settled.finally(() => {
         dequeuing.current.delete(handle)
         refreshLives((revision) => revision + 1)
       })
     }
-  }, [live, livesRevision, send, askAside, planRun, updateSession])
+  }, [live, livesRevision, send, askAside, planRun, plan, updateSession])
 
   /**
    * Send a line into the turn that is running (INPUT-10), or say it was not taken.
@@ -419,10 +435,21 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       void askAside(handleRef.current, exit.kind, exit.question, exit.line, exit.staged)
       return
     }
-    const task = manifestTask(draft)
-    if (task !== null && handleRef.current) {
+    const manifest = manifestTask(draft)
+    if (manifest !== null && handleRef.current) {
       setDraft('')
-      void planRun(handleRef.current, task, draft.trim())
+      void planRun(handleRef.current, manifest, draft.trim())
+      return
+    }
+    // A plan line waits as one: it sets plan mode and sends its task alone when it leaves (MODE-12).
+    const task = exit.to === 'prompt' ? planTask(exit.line) : null
+    if (task !== null) {
+      setLive((old) => old ? {
+        ...old,
+        queued: [...(old.queued ?? []), { prompt: exit.line, attachments: [], staged: exit.staged, plan: task }],
+        staging: sent(old.staging),
+      } : old)
+      setDraft('')
       return
     }
     setLive((old) => old ? {
@@ -444,22 +471,29 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       void schedule(handleRef.current, exit.argument, exit.line, exit.staged)
       return
     }
+    const task = exit.to === 'prompt' ? planTask(exit.line) : null
+    if (task !== null) {
+      setDraft('')
+      setLive((old) => old ? { ...old, staging: sent(old.staging) } : old)
+      void plan(handleRef.current, task, exit.line, exit.staged)
+      return
+    }
     if (exit.to === 'aside') {
       setDraft('')
       void askAside(handleRef.current, exit.kind, exit.question, exit.line, exit.staged)
       return
     }
     // `planRun` reads the folded draft, so a paste or other staged item it names is refused.
-    const task = manifestTask(draft)
-    if (task !== null) {
+    const manifest = manifestTask(draft)
+    if (manifest !== null) {
       setDraft('')
-      void planRun(handleRef.current, task, draft.trim())
+      void planRun(handleRef.current, manifest, draft.trim())
       return
     }
     setDraft('')
     // A refused send puts `exit.line` back in the composer, which is the words.
     void send(exit.line, undefined, undefined, exit.staged)
-  }, [draft, live?.staging, live?.running, live?.askingTrust, live?.rulesQuestion, live?.folderQuestion, send, schedule, askAside, planRun, backendReady])
+  }, [draft, live?.staging, live?.running, live?.askingTrust, live?.rulesQuestion, live?.folderQuestion, send, schedule, askAside, planRun, plan, backendReady])
 
   /** What the composer's interject key does: queue the line behind the turn, or send it into the turn. */
   const interjectDraft = () => {
@@ -473,16 +507,24 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       void schedule(handle, exit.argument, exit.line, exit.staged)
       return
     }
+    // Never interjected: a plan line waits for the running turn (MODE-12).
+    const task = exit.to === 'prompt' ? planTask(exit.line) : null
+    if (task !== null) {
+      setDraft('')
+      setLive((old) => old ? { ...old, staging: sent(old.staging) } : old)
+      void plan(handle, task, exit.line, exit.staged)
+      return
+    }
     if (exit.to === 'aside') {
       setDraft('')
       void askAside(handle, exit.kind, exit.question, exit.line, exit.staged)
       return
     }
     // A `/manifest` line is never sent into a turn: it starts a run, or waits for the turn to end.
-    const task = manifestTask(draft)
-    if (task !== null) {
+    const manifest = manifestTask(draft)
+    if (manifest !== null) {
       setDraft('')
-      void planRun(handle, task, draft.trim())
+      void planRun(handle, manifest, draft.trim())
       return
     }
     if (route(live, exit.staged) === 'queue') { queueDraft(); return }
@@ -492,5 +534,5 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     void interject(handle, line)
   }
 
-  return { answerTrust, answerRules, answerFolder, send, submit, queueDraft, interject, cancel, answer, answerQuestions, interjectDraft }
+  return { answerTrust, answerRules, answerFolder, send, submit, queueDraft, interject, cancel, answer, answerQuestions, interjectDraft, plan }
 }

@@ -354,7 +354,7 @@ export const asideAnswered = (done: AsideDone): Entry => {
   return { kind: 'narration', id: nextId(), text: `${asked}: ${done.message ?? 'the question failed'}`, command, refused: true }
 }
 export const watchFired =(number: number, path: string): Entry => ({ kind: 'watch', id: nextId(), text: `File watch ${number}: ${path}` })
-export const errored = (text: string): Entry => ({ kind: 'error', id: nextId(), text })
+export const errored = (text: string, category?: string): Entry => ({ kind: 'error', id: nextId(), text, ...(category ? { category } : {}) })
 export const quarantined = (shown: Shown): Entry => ({ kind: 'quarantined', id: nextId(), shown })
 export const started = (activity: Activity): Entry => ({
   kind: 'tool',

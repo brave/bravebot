@@ -38,6 +38,7 @@ export type CommandId =
   | 'turn.plan'
   | 'turn.cancel'
   | 'mode.cycle'
+  | 'session.plan'
   | 'turn.rewind'
   | 'session.note'
   | 'session.status'
@@ -205,6 +206,10 @@ export const COMMANDS: readonly Command[] = [
     accelerator: 'CmdOrCtrl+Shift+M',
     requires: 'session',
   },
+  // `/plan [task]` from a dialog (MODE-12): plan mode is set and, with a task, a turn is sent the
+  // task alone. Offered while a turn runs, when the plan waits in the queue for that turn to end.
+  // No command or item chooses bypass (MODE-5). No accelerator, because it asks for the task first.
+  { id: 'session.plan', label: 'Plan a Task…', requires: 'session' },
   // No accelerator: Cmd+Z belongs to the text being edited, and this one asks first anyway.
   { id: 'turn.rewind', label: 'Undo Last Turn…', requires: 'rewindable' },
   // Kept on the record and never sent to the model (SESSION-36). Not while a turn runs: the

@@ -50,6 +50,8 @@ export interface CommandActions {
   changelog: () => void
   /** Ask for a note to keep on the open chat's record. */
   note: () => void
+  /** Ask for an optional task, then set plan mode and, with a task, start a turn planning it (MODE-12). */
+  planTask: () => void
   /** Ask for an optional focus, then shorten the open chat's conversation (CMD-34). */
   compact: () => void
   /** Ask for the next goal, then have a brief for a new chat written toward it (SESSION-34, CMD-34). */
@@ -161,6 +163,8 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.cancel()
         case 'mode.cycle':
           return act.cycleMode()
+        case 'session.plan':
+          return act.planTask()
         case 'turn.rewind':
           return act.undoTurn()
         case 'session.note':
