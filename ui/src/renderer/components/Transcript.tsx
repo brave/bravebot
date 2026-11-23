@@ -45,7 +45,7 @@ import { reconnectingWords, type RetryDue } from '../retry'
 import { pointForPrompt, undoRow } from '../rewind'
 import { Answers, Approve } from './Approval'
 import { showToast } from '../toasts'
-import { EMPTY_STAGING, named, stageDrop, stagePaste, stageSummon, withoutMarker, type Staging, type SummonedBot } from '../staging'
+import { EMPTY_STAGING, named, stageDrop, stagePaste, stageSummon, stageText, withoutMarker, type Staging, type SummonedBot } from '../staging'
 import { placeCards, summonedIn, summonMarker, type Placement, type Summon } from '../../shared/summons'
 import type { Drop } from '../../shared/drops'
 import type { Paste } from '../../shared/pastes'
@@ -551,6 +551,14 @@ export function Transcript({
     restage(live.handle, stagePaste(live.staging ?? EMPTY_STAGING, paste.outcome.picture, draft, caret()))
   })
   useEffect(() => window.bravebot.onPaste(pasted), [pasted])
+  /** Fold a long text paste behind a marker. False for a short one, which the browser inserts. */
+  const pastedText = useEvent((text: string): boolean => {
+    if (!live) return false
+    const next = stageText(live.staging ?? EMPTY_STAGING, text, draft, caret())
+    if (!next) return false
+    restage(live.handle, next)
+    return true
+  })
   /** Stage a bot picked from the `@` list to answer this message (MEMORY-14). */
   const summon = useEvent((picked: SummonedBot, word: string | null) => {
     if (!live) return
@@ -968,6 +976,7 @@ export function Transcript({
           onRemoveAttachment={removeAttachment}
           staged={named(live.staging, draft)}
           onRemoveStaged={removeStaged}
+          onPasteText={pastedText}
           summonable={summonable}
           onSummon={summon}
           onPreview={preview}

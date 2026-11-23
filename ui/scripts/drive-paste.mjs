@@ -1,5 +1,5 @@
 // Pasting a picture into the desktop composer (docs/specs/pasting.md, PASTE-2, PASTE-3, PASTE-6,
-// PASTE-7 and PASTE-9).
+// PASTE-7 and PASTE-9), and folding a long text paste behind a marker (PASTE-1).
 //
 // The real app and the real bridge, against a model service this script serves itself, so nothing
 // is paid for. The picture is put on the operating system's clipboard by the main process
@@ -168,7 +168,7 @@ try {
   await pastedChips.first().waitFor()
   assert.match(await composer.inputValue(), /^\[Image #5\] $/)
   await composer.fill('Queued look at [Image #5] ')
-  await composer.press('Enter')
+  await composer.press('Alt+Enter')
   await page.locator('.queued-messages').waitFor()
   assert.equal(await pastedChips.count(), 0, 'queuing takes the paste with the message')
   await page.waitForFunction(() => document.querySelector('.queued-messages') === null, null, { timeout: 60000 })
@@ -218,6 +218,7 @@ try {
   const reopened = page.getByRole('textbox', { name: COMPOSER_NAME })
   await reopened.fill('What was in them?')
   await page.locator(COMPOSER_SEND).click()
+  await page.locator('.composer .stop').waitFor({ state: 'visible' })
   await page.locator('.composer .stop').waitFor({ state: 'hidden', timeout: 60000 })
   const resumed = requests.slice(resumedBefore).find((body) => body.includes('What was in them?'))
   assert.ok(resumed, 'the follow-up reached the model')
@@ -225,7 +226,53 @@ try {
   await page.screenshot({ path: join(output, 'paste-reopened.png') })
   assert.deepEqual(errors, [])
 
-  console.log(`PASS: a trusted paste stages a marker and a chip numbered with drops, a forged paste does nothing, an oversized one is refused with the bridge's note, and the send carries the picture as PNG data. Screenshots in ${output}/paste-*.png`)
+  // ---- a long text paste folds to a marker and a chip, and sends its words -------------------
+  const copyWords = (text) => app.evaluate(({ clipboard }, text) => clipboard.writeText(text), text)
+  const textChips = page.locator('[data-test="pasted-text-chip"]')
+  await copyWords('first line\nsecond line')
+  await reopened.focus()
+  await menuPaste()
+  await page.waitForTimeout(500)
+  assert.equal(await reopened.inputValue(), 'first line\nsecond line', 'a short text paste is inserted whole')
+  assert.equal(await textChips.count(), 0)
+  await reopened.fill('')
+  const five = 'line one\nline two\nline three\nline four\nline five'
+  await copyWords(five)
+  await reopened.focus()
+  await menuPaste()
+  await textChips.first().waitFor()
+  assert.equal(await reopened.inputValue(), '[Pasted text #1 +5 lines] ', 'a five-line paste folds to its marker')
+  assert.match(await textChips.innerText(), /Pasted text[\s\S]*\[Pasted text #1 \+5 lines\]/)
+  assert.equal(await page.locator('.attachment-trust').count(), 0, 'folded text is not marked as trusted context')
+  await page.screenshot({ path: join(output, 'paste-text-folded-light.png') })
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: join(output, 'paste-text-folded-dark.png') })
+  await page.emulateMedia({ colorScheme: 'light' })
+  await reopened.fill('')
+  assert.equal(await textChips.count(), 0, 'deleting the marker takes the chip off')
+  await reopened.fill('Read this: ')
+  await reopened.press('End')
+  await menuPaste()
+  await textChips.first().waitFor()
+  assert.equal(await reopened.inputValue(), 'Read this: [Pasted text #2 +5 lines] ')
+  const foldedBefore = requests.length
+  await page.locator(COMPOSER_SEND).click()
+  await page.locator('.composer .stop').waitFor({ state: 'visible' })
+  await page.locator('.composer .stop').waitFor({ state: 'hidden', timeout: 60000 })
+  assert.equal(await textChips.count(), 0, 'sending clears the folded paste')
+  const textOf = (message) => typeof message.content === 'string' ? message.content
+    : message.content.map((part) => part.text ?? '').join('')
+  const foldedSent = requests.slice(foldedBefore).map((body) => JSON.parse(body).messages)
+    .find((messages) => messages.some((message) => message.role === 'user' && textOf(message).includes(`Read this: ${five}`)))
+  assert.ok(foldedSent, 'the model received the pasted words')
+  assert.ok(!foldedSent.some((message) => textOf(message).includes('[Pasted text #')), 'and never the marker')
+  const foldedRows = await page.locator('.entries').innerText()
+  assert.match(foldedRows, /Read this: line one\s+line two\s+line three\s+line four\s+line five/, 'the transcript row shows the words')
+  assert.ok(!foldedRows.includes('[Pasted text #'), 'and not the marker')
+  assert.deepEqual(errors, [])
+
+  console.log(`PASS: a trusted paste stages a marker and a chip numbered with drops, a forged paste does nothing, an oversized one is refused with the bridge's note, the send carries the picture as PNG data, and a long text paste folds to a marker and sends its words. Screenshots in ${output}/paste-*.png`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'paste-failure.png') }).catch(() => undefined)
   throw error

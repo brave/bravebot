@@ -82,6 +82,8 @@ export interface ComposerProps {
   staged: Staged[]
   /** Take a staged file or picture off, by taking its marker out of the draft. */
   onRemoveStaged: (marker: string) => void
+  /** A text paste: fold it behind a marker where it is long. False where the browser should insert it. */
+  onPasteText?: (text: string) => boolean
   /** The bots the `@` list offers to answer a message, which never includes this chat's own (MEMORY-14). */
   summonable?: SummonedBot[]
   /** Stage a bot picked from the list, replacing the half-typed `word`. */
@@ -384,8 +386,17 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 // A summoned bot is not a chip: its marker stays in the message and is drawn as
                 // the bot's label once the message is sent.
                 if (item.via === 'summon') return null
-                // Nothing stages folded text yet; its chip comes with the paste that makes it.
-                if (item.via === 'text') return null
+                if (item.via === 'text') {
+                  return (
+                    <span className="attachment-chip dropped" key={item.marker} data-test="pasted-text-chip">
+                      <FileGlyph name="pasted.txt" />
+                      <span className="attachment-label words" data-tooltip="Pasted text">Pasted text</span>
+                      <span className="attachment-marker">{item.marker}</span>
+                      <IconButton icon="close" size="tiny" label={`Remove ${item.marker} Pasted text`} tooltip="Remove"
+                        onClick={() => onRemoveStaged(item.marker)} />
+                    </span>
+                  )
+                }
                 const name = item.via === 'drop' ? item.file.name : 'Pasted image'
                 const thumbnail = item.via === 'drop' ? item.file.thumbnail : item.picture.thumbnail
                 return (
@@ -400,7 +411,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                   </span>
                 )
               })}
-              {(attachments.length > 0 || staged.some((item) => item.via !== 'summon')) && (
+              {(attachments.length > 0 || staged.some((item) => item.via === 'drop' || item.via === 'paste')) && (
                 <span className="attachment-trust" tabIndex={0}
                   data-tooltip="Attached files and pasted pictures are sent with your message as trusted context: the model reads them as you wrote them.">
                   <Icon name="warning-triangle-outline" />Sent as trusted context
@@ -412,6 +423,13 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
             placeholder={pending ? 'Draft your next message while you review…' : 'Let’s do something great'}
             // The open bot's face watches the field while a person types in it.
             onInput={({ value }) => { onDraft(value); typing() }}
+            onPaste={({ innerEvent }) => {
+              const event = innerEvent as unknown as ClipboardEvent
+              // The preload's capture listener has already taken a picture paste (PASTE-7).
+              if (event.defaultPrevented) return
+              const text = event.clipboardData?.getData('text/plain') ?? ''
+              if (latest.current.onPasteText?.(text)) event.preventDefault()
+            }}
             onKeyDown={({ innerEvent }) => {
               const event = innerEvent as unknown as KeyboardEvent
               const now = latest.current
