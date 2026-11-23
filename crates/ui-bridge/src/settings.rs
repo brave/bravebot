@@ -153,6 +153,17 @@ fn managed_named(managed: &Managed, key: &str) -> bool {
     }
 }
 
+/// The diagnostic log directory under `home`, as `doctor` names it (DIAG-5), whether or not a log
+/// exists in it yet, and whether this process writes logs there. The path is sent as null where it
+/// is not UTF-8, so the window is never handed a path that names another directory (PATH-002).
+fn logs(home: Option<&Path>, writing: bool) -> Value {
+    let directory = home.map(|home| home.join(bravebot_diag::DIRECTORY));
+    json!({
+        "directory": directory.as_deref().and_then(Path::to_str),
+        "writing": writing,
+    })
+}
+
 pub fn report(project: Option<&Path>, selected: Option<&Path>) -> Value {
     let settings = layers(project, selected);
     let managed = Managed::load();
@@ -181,6 +192,7 @@ pub fn report(project: Option<&Path>, selected: Option<&Path>) -> Value {
         "overrides": settings.overridden().map(|(name, path)| json!({"name": name, "path": path})).collect::<Vec<_>>(),
         "ignored": ignored(&settings),
         "limits": limits(&settings, &managed),
+        "logs": logs(bravebot_agent::home::directory().as_deref(), bravebot_agent::home::writable().is_some()),
         "managed": { "path": managed.path(), "keys": managed.pinned().collect::<Vec<_>>() },
         "network": { "roots": transport.roots().paths(),
             "problem": (!transport.trust_problems().is_empty()).then(|| transport.trust_problems().iter().map(ToString::to_string).collect::<Vec<_>>().join("\n")),
@@ -193,6 +205,39 @@ pub fn report(project: Option<&Path>, selected: Option<&Path>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DIAG-5: the report names `<state directory>/logs`, as `doctor` does, with no log in it.
+    #[test]
+    fn the_report_names_the_diagnostic_log_directory() {
+        let home = Path::new("/home/someone/.bravebot");
+        let answer = logs(Some(home), true);
+        assert_eq!(
+            answer["directory"],
+            home.join(bravebot_diag::DIRECTORY).to_str().unwrap()
+        );
+        assert_eq!(answer["directory"], "/home/someone/.bravebot/logs");
+        assert_eq!(answer["writing"], true);
+    }
+
+    /// With no state directory there is no log directory to name, and nothing is written.
+    #[test]
+    fn with_no_home_the_report_names_no_log_directory() {
+        let answer = logs(None, false);
+        assert!(answer["directory"].is_null());
+        assert_eq!(answer["writing"], false);
+    }
+
+    /// A log directory that is not UTF-8 is sent as null, not as a lossy copy that names another
+    /// directory (PATH-002).
+    #[cfg(unix)]
+    #[test]
+    fn a_log_directory_that_is_not_text_is_sent_as_null() {
+        use std::os::unix::ffi::OsStrExt;
+        let home = Path::new(std::ffi::OsStr::from_bytes(b"/h/\xff/.bravebot"));
+        let answer = logs(Some(home), true);
+        assert!(answer["directory"].is_null());
+        assert_eq!(answer["writing"], true);
+    }
 
     /// PERM-19: the managed file's deny rule is in the layers a window reads. Without the
     /// `.under(...)` the stack holds only the person's own rules.

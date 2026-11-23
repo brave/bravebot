@@ -129,6 +129,12 @@ export function AgentSettings({ session, onChanged, onDirty }: {
           <p>For a custom certificate authority, set <code>SSL_CERT_FILE</code> or <code>SSL_CERT_DIR</code> before opening the app. These replace bundled roots. Proxy and certificate changes require restarting the app.</p>
         </section>
         <section className="settings-block"><h3>Diagnostics</h3>
+          {/* The window only shows the string the bridge sent; nothing here reads the folder. */}
+          {report.logs && <dl><dt>Diagnostic log</dt><dd className="settings-log">{report.logs.directory === null
+            ? <p data-test="settings-log-none">No state directory is set, so no log is kept.</p>
+            : !report.logs.writing
+              ? <p data-test="settings-log-none">This session keeps nothing, so no log is written.</p>
+              : <><p className="settings-path" data-test="settings-log-directory">{report.logs.directory}</p><p className="settings-log-note">Logs are written here when something fails. The folder may be empty until then.</p></>}</dd></dl>}
           <p>Read the agent’s configuration again, after changing a file or the environment.</p>
           <div className="settings-actions"><Button size="small" kind="outline" onClick={() => void load()} isDisabled={busy}><Icon name="refresh" slot="icon-before" />Refresh diagnostics</Button></div>
         </section>
