@@ -526,9 +526,9 @@ now (INPUT-36) moves to the count row, since the last prompt's mark is not drawn
 whole where the width will not hold its words, and the key is left out whole where it does not fit
 beside them.
 
-**Why.** A queue drawn in full left the transcript one row at 120x30 with twelve prompts waiting,
-and one cut by the screen dropped its last prompts without a word, so a person could not tell that
-the queue was longer than what they saw.
+**Why.** A queue drawn in full takes every row beneath the box and leaves the transcript as little
+as one row, and a queue cut without a count hides how long it is, so a person cannot tell that more
+prompts wait than they see.
 
 **The mark does not say that a wait is running.** While a `job_output` wait runs, a line sent is
 marked like any other behind a turn that will take it, into this turn at its next round, because

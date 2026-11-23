@@ -7031,9 +7031,8 @@ mod tests {
     }
 
     /// INPUT-10: a queue longer than the rows beneath the box hold draws its oldest prompts, and a
-    /// row after them says how many more wait. At 80x24 with the panel open the twelve prompts the
-    /// issue sent used to draw nine of them and say nothing about the other three. The regression it
-    /// rejects is the cut going unsaid, or the count not being the prompts left out.
+    /// row after them says how many more wait. The regression it rejects is the cut going unsaid,
+    /// or the count not being the prompts left out.
     #[test]
     fn a_queue_too_long_for_the_rows_beneath_the_box_says_how_many_more_wait() {
         let mut session = working_with_waiting(12, 80);
@@ -7071,8 +7070,7 @@ mod tests {
     }
 
     /// INPUT-10: the queue takes a bounded number of rows however long it is, and the transcript
-    /// keeps the rest. At 120x30 the twelve prompts took every row beneath the box and left the
-    /// transcript one row.
+    /// keeps the rest. It rejects a queue that takes every row beneath the box.
     #[test]
     fn a_long_queue_leaves_the_transcript_its_rows() {
         let mut few = working_with_waiting(1, 120);
