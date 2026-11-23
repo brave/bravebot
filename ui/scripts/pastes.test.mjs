@@ -194,6 +194,30 @@ test('every exit of a draft holding a folded paste carries the pasted words', ()
   assert.equal(staging.exitOf(command.staging, command.draft).to, 'schedule')
 })
 
+// NAME-12, PASTE-1: the words of a folded paste are sent as text and name no file, so `send` in
+// use-turn.ts reads the `@` names in the line as the box showed it, the terminal's
+// `a_handle_inside_a_folded_paste_is_sent_as_text`. The bridge keeps only names the prompt gives.
+test('a handle inside a folded paste is not read as a name, and one typed beside it is', () => {
+  const pasted = staging.stageText(staging.EMPTY_STAGING, 'log\n@../secret.txt\nmore\nend\n', 'read @notes.md and ', 19)
+  const exit = staging.exitOf(pasted.staging, pasted.draft)
+  assert.ok(exit.line.includes('@../secret.txt'), 'the pasted words are sent')
+  const shown = staging.folded(exit.staged, exit.line)
+  assert.equal(shown, 'read @notes.md and [Pasted text #1 +4 lines]', 'a paste trimmed at the end of the line is folded too')
+  assert.ok(!shown.includes('@../secret.txt'))
+  assert.equal(staging.folded([], 'read @notes.md'), 'read @notes.md', 'a line with no paste is read as sent')
+
+  const twice = staging.exitOf(pasted.staging, `${pasted.draft} ${pasted.draft}`)
+  assert.ok(!staging.folded(twice.staged, twice.line).includes('secret'), 'every copy is folded')
+
+  assert.equal(main.sanitised('turn.send', { session: 's1', prompt: exit.line, shown }).shown, shown, 'the main process forwards it')
+  const turn = readFileSync(join('src', 'renderer', 'use-turn.ts'), 'utf8')
+  const send = turn.slice(turn.indexOf('const send = useCallback'), turn.indexOf('} catch (error) {', turn.indexOf('const send = useCallback')))
+  assert.match(send, /'mentions\.named', \{ session: handle, prompt: line \}/, 'the survey reads the folded line')
+  for (const sender of ['callSummon', 'callBot', "call('turn.send'"]) {
+    assert.match(send.slice(send.indexOf(sender)), /^[^\n]*\.\.\.shown/, `${sender} carries the folded line`)
+  }
+})
+
 // The staging lives only in memory, so App.tsx's `setDraft` saves `foldedIn` with the draft and a
 // reopened conversation's `live` starts from `restaged(undefined, saved.folded)`.
 const experience = load("export * from './src/shared/experience'")

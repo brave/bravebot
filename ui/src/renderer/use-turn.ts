@@ -13,7 +13,7 @@ import { Unconfigurable, METHOD, call, callBot, callSummon } from './rpc'
 import { RequestFailed } from './rewind'
 import type { ScheduleAnswer } from '../shared/schedule'
 import type { AsideStarted } from '../shared/aside'
-import { exitOf, grantsOf, named, sent, summonOf, type Staged } from './staging'
+import { exitOf, folded, grantsOf, named, sent, summonOf, type Staged } from './staging'
 import * as t from './transcript'
 
 /** What `useTurn` takes from the component that owns the sessions and the composer. */
@@ -116,10 +116,14 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     const grants = grantsOf(staged)
     // The bot picked from the `@` list for this message, which answers this turn alone (MEMORY-14).
     const summoned = summonOf(staged)
+    // The line as the box showed it, each folded paste behind its marker. The names are read there
+    // and not in the pasted words, which name no file (NAME-12). Sent only when it differs.
+    const line = folded(staged, prompt)
+    const shown = line === prompt ? {} : { shown: line }
     // The files the prompt names with `@`, asked of the bridge before anything is drawn: a name
     // that cannot go stops the send here, with the message still where it was written. The bridge
-    // reads the prompt again at `turn.send`, and that check is the one that decides what goes.
-    const mentioned = await window.bravebot.request<{ files: string[] }>('mentions.named', { session: handle, prompt })
+    // reads the names again at `turn.send`, and that check is the one that decides what goes.
+    const mentioned = await window.bravebot.request<{ files: string[] }>('mentions.named', { session: handle, prompt: line })
     if (!mentioned.ok) {
       const refused = mentioned.error?.message ?? 'The files this message names could not be checked.'
       updateSession(handle, (old) => old ? {
@@ -166,17 +170,17 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     try {
       if (summoned) {
         // The main process names the summoned bot's definition and sends it for this turn alone.
-        await callSummon({ session: handle, slug: summoned.slug, prompt, model, attachments: attachments.map((file) => file.id), ...grants })
+        await callSummon({ session: handle, slug: summoned.slug, prompt, ...shown, model, attachments: attachments.map((file) => file.id), ...grants })
       } else if (bot) {
         // A bot's turn never goes through `call`. It needs files attached, and the main process
         // strips those from anything a window sends — a window that could name a file to read
         // would be a window that could have the planner read any file on the machine. So this
         // names the bot and says whether the briefing is due, and the paths are composed over
         // there from a definition this side cannot reach.
-        await callBot({ session: handle, slug: bot.slug, prompt, grounded: !bot.grounded, model, attachments: attachments.map((file) => file.id), ...grants })
+        await callBot({ session: handle, slug: bot.slug, prompt, ...shown, grounded: !bot.grounded, model, attachments: attachments.map((file) => file.id), ...grants })
       } else {
         // A new id for each Send, which the agent requires on every send (RPCVIEW-10).
-        await call('turn.send', { session: handle, prompt, model, messageId: crypto.randomUUID(), attachments: attachments.map((file) => file.id), ...grants })
+        await call('turn.send', { session: handle, prompt, ...shown, model, messageId: crypto.randomUUID(), attachments: attachments.map((file) => file.id), ...grants })
       }
     } catch (error) {
       if (error instanceof Unconfigurable) {

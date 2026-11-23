@@ -136,6 +136,24 @@ export function unfolded(staging: Staging | undefined, draft: string): string {
   return words
 }
 
+/**
+ * `words` with each folded paste in `staged` put back behind its marker: the line as the box showed
+ * it, which is where the `@` names are read (NAME-12). The words a person pasted name no file, so
+ * an `@` in them is not surveyed and vouches for nothing. A paste at either end of the line lost its
+ * outer whitespace when the line was trimmed, so its trimmed words are folded too.
+ */
+export function folded(staged: Staged[], words: string): string {
+  let line = words
+  for (const item of staged) {
+    if (item.via !== 'text') continue
+    const text = item.pasted.text
+    for (const spelling of [text, text.trimEnd(), text.trimStart(), text.trim()]) {
+      if (spelling) line = line.split(spelling).join(item.marker)
+    }
+  }
+  return line
+}
+
 /** The folded paste whose marker spans `caret`, from its start to its end, or null. */
 export function markerAt(staging: Staging | undefined, draft: string, caret: number): Extract<Staged, { via: 'text' }> | null {
   for (const item of staging?.staged ?? []) {
