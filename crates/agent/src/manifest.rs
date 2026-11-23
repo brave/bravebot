@@ -2026,12 +2026,13 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
         // An apply's calls are proposed by a processor and approved by the person as one list.
         manifest::APPLY => {
             let alias = locked(policy, index, "server")?;
-            locked(policy, index, "tools")?;
+            let tools = locked(policy, index, "tools")?;
             let began = std::time::Instant::now();
             // A change of mode since the plan was answered can add the list, never take it away.
             let covered = covered && !permission_mode.get().refuses_writes();
             let applied = servers.apply(
-                policy, chat, egress, confirmer, reporter, slots, index, &alias, step, covered,
+                policy, chat, egress, confirmer, reporter, slots, index, &alias, &tools, step,
+                covered,
             );
             accounting.elapsed.inference += began.elapsed();
             let (note, usage) = applied?;
@@ -3520,7 +3521,28 @@ mod tests {
             at: usize,
             capabilities: CapabilitySet,
         ) -> Result<String, String> {
-            let workspace = Workspace::new(root).expect("workspace");
+            run_offering(
+                connectors,
+                &Servers::default(),
+                root,
+                run,
+                decoy,
+                at,
+                capabilities,
+            )
+        }
+
+        /// As [`run_under_the_lock_of`], with the servers a run is offered.
+        fn run_offering(
+            connectors: &mut crate::connectors::Connectors,
+            servers: &Servers,
+            root: &std::path::Path,
+            run: &Manifest,
+            decoy: &Manifest,
+            at: usize,
+            capabilities: CapabilitySet,
+        ) -> Result<String, String> {
+            let workspace = Workspace::new(root).map_err(|e| format!("workspace: {e:?}"))?;
             let config = Config::from_lookup(|key| {
                 match key {
                     bravebot_config::env_var::SIGNING_KEY => Some("test-signing-key"),
@@ -3530,7 +3552,7 @@ mod tests {
                 }
                 .map(str::to_string)
             })
-            .expect("configured");
+            .map_err(|e| format!("configured: {e:?}"))?;
             let egress = Egress::new();
             let mut chat = Chat::new(&config, &egress, &crate::chatgpt::AccountSession::begin());
             let mut sink = bravebot_core::event::RecordingSink::new();
@@ -3540,11 +3562,11 @@ mod tests {
                 capabilities,
                 &mut sink,
             )
-            .expect("policy");
+            .map_err(|e| format!("policy: {e:?}"))?;
             let step = &run.steps()[at];
             run_step(
                 connectors,
-                &Servers::default(),
+                servers,
                 &egress,
                 None,
                 &mut policy,
@@ -3559,7 +3581,8 @@ mod tests {
                 at,
                 false,
                 step,
-                handler_for(REGISTRY, at, step.tool()).expect("a registered tool"),
+                handler_for(REGISTRY, at, step.tool())
+                    .map_err(|e| format!("a registered tool: {e:?}"))?,
                 &mut Accounting::default(),
                 &mut crate::report::IgnoreReports,
             )
@@ -3746,6 +3769,55 @@ mod tests {
             let refusal = outcome.expect_err("not offered");
             assert!(refusal.contains("brave"), "{refusal}");
             assert!(!refusal.contains("other"), "{refusal}");
+        }
+
+        /// MANIFEST-6 and MANIFEST-16: an apply step's tools are the ones the lock holds. The
+        /// server is offered and the step names `move_bookmark`, whose arguments the step gives,
+        /// while the lock holds `close_tab`. The tools of the lock are the ones the arguments are
+        /// read against, so the step stops at the arguments naming a tool the lock does not hold.
+        /// Rejects `step.text("tools")` in place of the lock's value at the `apply` arm, where the
+        /// step would go on to its list and fail there with another sentence.
+        #[test]
+        #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+        fn an_apply_step_reads_the_tools_the_lock_holds_and_not_the_ones_it_names() {
+            let root = crate::testutil::scratch_dir("bravebot-manifest-lock-apply-tools");
+            std::fs::remove_dir_all(&root).ok();
+            std::fs::create_dir_all(&root).unwrap();
+            let applying = |tools: &str| {
+                adopted(Draft::new(vec![
+                    DraftStep::new(manifest::MCP_READ)
+                        .with_text("server", "brave")
+                        .with_text("tool", "list_recent_bookmarks")
+                        .with_text("out_slot", "marks"),
+                    DraftStep::new(manifest::APPLY)
+                        .with_text("server", "brave")
+                        .with_text("tools", tools)
+                        .with_text("arguments", r#"{"move_bookmark":{"url":{"entry":"url"}}}"#)
+                        .with("lists", Arg::List(vec!["marks".to_string()]))
+                        .with_text("instruction", "group these"),
+                ]))
+            };
+            let servers = Servers::offering(crate::mcp::offer_for_test(&[(
+                "brave__move_bookmark",
+                "brave",
+                "move_bookmark",
+            )]));
+
+            let outcome = run_offering(
+                &mut crate::connectors::Connectors::default(),
+                &servers,
+                &root,
+                &applying("move_bookmark"),
+                &applying("close_tab"),
+                1,
+                CapabilitySet::none(),
+            );
+            std::fs::remove_dir_all(&root).ok();
+
+            assert_eq!(
+                outcome.expect_err("the arguments name a tool the lock does not hold"),
+                "the arguments of an APPLY step name each of its tools and no other"
+            );
         }
 
         /// MANIFEST-5: a step whose tool the registry does not hold ends the run before the step

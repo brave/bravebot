@@ -211,6 +211,7 @@ the text following the separator byte for byte, as the search tool does
 `verified-by: bravebot_agent::manifest::a_connector_fetch_and_act_send_what_the_lock_holds_and_not_what_the_step_names`
 `verified-by: bravebot_agent::manifest::a_server_call_and_read_name_the_alias_and_tool_the_lock_holds`
 `verified-by: bravebot_agent::manifest::an_apply_step_names_the_server_the_lock_holds`
+`verified-by: bravebot_agent::manifest::an_apply_step_reads_the_tools_the_lock_holds_and_not_the_ones_it_names`
 `verified-by: bravebot_core::manifest::a_connector_fetch_locks_every_routing_field_and_an_omitted_one_as_no_value`
 `verified-by: bravebot_agent::connectors::a_default_never_replaces_a_value_the_plan_gave_in_another_shape`
 `verified-by: bravebot_core::manifest::a_connector_plan_locks_every_routing_field_and_not_its_target_slot`
