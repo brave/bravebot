@@ -30,6 +30,8 @@ export interface CommandActions {
   create: (directory?: string) => void
   closeSession: () => void
   send: () => void
+  /** Write `/manifest ` into the composer and focus it. It sends nothing (CMD-1). */
+  plan: () => void
   cancel: () => void
   /** Move the open session to the next permission mode. */
   cycleMode: () => void
@@ -153,6 +155,8 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.exportSession('pdf')
         case 'turn.send':
           return act.send()
+        case 'turn.plan':
+          return act.plan()
         case 'turn.cancel':
           return act.cancel()
         case 'mode.cycle':

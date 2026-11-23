@@ -151,3 +151,42 @@ test('every composer path and the queue start a /manifest line as a run, never a
   }
   assert.match(turn, /message\.manifest !== undefined\s*\?\s*planRun\(handle, message\.manifest, message\.prompt, true\)/)
 })
+
+// Chat › Plan and Run…, which only writes the start of the line into the composer.
+const menu = load("export * from './src/shared/commands'; export { canStart, canSend } from './src/renderer/can-send'")
+
+test('Plan and Run… leaves /manifest in an empty composer, keeps a typed draft as the task, and sends nothing', () => {
+  assert.equal(shared.planPrefill(''), '/manifest ')
+  assert.equal(shared.planPrefill('  \n'), '/manifest ')
+  assert.equal(shared.planPrefill('  list the files '), '/manifest list the files')
+  assert.equal(shared.planPrefill('/manifest list the files'), '/manifest list the files')
+  assert.equal(shared.planPrefill('/manifest '), '/manifest ')
+  // The prefilled line is the command with no task yet, so sending it as it stands gets the
+  // terminal's note rather than a run.
+  assert.equal(shared.manifestTask(shared.planPrefill('')), '')
+  // The handler writes the draft and focuses the composer. It calls nothing on the bridge.
+  const app = readFileSync('src/renderer/App.tsx', 'utf8')
+  const handler = app.slice(app.indexOf('    plan: () => {'), app.indexOf('    cancel:', app.indexOf('    plan: () => {')))
+  assert.match(handler, /setDraft\(planPrefill\(draft\)\)/)
+  assert.match(handler, /FOCUS_COMPOSER_EVENT/)
+  assert.doesNotMatch(handler, /call\(|submit|send|planRun/)
+})
+
+test('Plan and Run… is a Chat item with no shortcut, offered with an empty composer and grey when no session can start', () => {
+  const item = menu.command('turn.plan')
+  assert.equal(item.label, 'Plan and Run…')
+  assert.equal(item.accelerator, undefined)
+  const idle = { ...menu.NOTHING_OPEN, hasSession: true, canStart: true }
+  assert.equal(menu.isEnabled(item.requires, idle), true, 'an idle session with an empty composer')
+  assert.equal(menu.isEnabled(item.requires, menu.NOTHING_OPEN), false, 'no session open')
+  assert.equal(menu.isEnabled(item.requires, { ...idle, running: true, canStart: false }), false, 'a turn running')
+  const ready = { running: false, askingTrust: null }
+  assert.equal(menu.canStart(ready, true), true)
+  assert.equal(menu.canSend(ready, true, ''), false, 'Send would be grey here, which is why the item does not use it')
+  assert.equal(menu.canStart({ ...ready, running: true }, true), false)
+  assert.equal(menu.canStart({ ...ready, askingTrust: '/p' }, true), false)
+  assert.equal(menu.canStart(ready, false), false)
+  assert.equal(menu.canStart(null, true), false)
+  assert.equal(menu.parseWindowState({ ...idle, canStart: undefined }), null, 'a state that leaves it out enables nothing')
+  assert.match(readFileSync('src/main/menu.ts', 'utf8'), /item\('turn\.send'\),\s*item\('turn\.plan'\),/)
+})

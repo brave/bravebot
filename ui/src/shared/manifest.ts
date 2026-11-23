@@ -13,3 +13,16 @@ export function manifestTask(line: string): string | null {
   if (!rest.startsWith('/manifest ')) return null
   return rest.slice('/manifest '.length).trim()
 }
+
+/**
+ * What Chat › Plan and Run… leaves in the composer, given what it held.
+ *
+ * An empty composer gets `/manifest `. Text already typed becomes the task, so the item never
+ * throws away a draft, and a draft that is already a `/manifest` line is left as it is. Only
+ * the draft changes. The run starts when the person sends the line (CMD-1).
+ */
+export function planPrefill(draft: string): string {
+  if (manifestTask(draft) !== null) return draft
+  const text = draft.trim()
+  return text ? `/manifest ${text}` : '/manifest '
+}
