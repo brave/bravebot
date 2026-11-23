@@ -64,23 +64,29 @@ export async function planRun(on: PlanRunning, handle: string, task: string, lin
     on.setProblem(refused)
     return
   }
-  const drops = staged.flatMap((item) => item.via === 'drop' && item.file.kind !== 'text' ? [item.file.id] : [])
+  // In the order their markers stand in the task, which is the order the bridge names the files in
+  // when it titles the run's record.
+  const pictures = staged
+    .flatMap((item) => item.via === 'drop' && item.file.kind !== 'text' ? [{ marker: item.marker, file: item.file }] : [])
+    .sort((a, b) => task.indexOf(a.marker) - task.indexOf(b.marker))
+  const drops = pictures.map((item) => item.file.id)
   const files = markersOf(staged.filter((item) => item.via === 'drop' && item.file.kind === 'text')).files
   const row = t.planAsked(task)
   const without = (old: Live) => old.entries.filter((entry) => entry.id !== row.id)
-  on.update(handle, (old) => ({ ...old, entries: [...old.entries, row] }))
+  // Set before the call, since the plan card can arrive before the call's answer does.
+  on.update(handle, (old) => ({ ...old, planDropped: pictures, entries: [...old.entries, row] }))
   try {
     await on.call('manifest.run', { session: handle, task, model: asking?.model ?? null, drops, files })
     // What was sent leaves the composer.
     if (!queuedAlready) on.update(handle, (old) => ({ ...old, staging: sent(old.staging) }))
   } catch (error) {
     if (error instanceof RequestFailed && error.code === 'turn_in_flight' && !queuedAlready) {
-      on.update(handle, (old) => ({ ...old, entries: without(old), queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged, manifest: task }], staging: sent(old.staging) }))
+      on.update(handle, (old) => ({ ...old, planDropped: undefined, entries: without(old), queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged, manifest: task }], staging: sent(old.staging) }))
       return
     }
     // A refused line with drops on it goes back in the composer, where its markers still resolve.
     if (!queuedAlready && staged.length > 0) on.putBack(handle, line)
     const reason = error instanceof RequestFailed ? error.reason : String(error)
-    on.update(handle, (old) => ({ ...old, entries: [...without(old), t.errored(reason)] }))
+    on.update(handle, (old) => ({ ...old, planDropped: undefined, entries: [...without(old), t.errored(reason)] }))
   }
 }
