@@ -19575,8 +19575,7 @@ fn listing_a_plugins_servers_writes_nothing_into_the_state_directory() {
 /// and one that holds none holds none. The two-process test beside the lookups is the control: a
 /// run that opens a session with `--add-dir` does write the record, so this test does not pass for
 /// a record that is never written. Rejects a command that switches the record's writer on before
-/// it knows a session opens, as `main` did for every command, which made `doctor` append the
-/// directory it ran in.
+/// it knows a session opens, so that `doctor` appends the directory it ran in.
 #[test]
 fn a_command_that_opens_no_session_leaves_the_record_of_stage_writes_as_it_found_it() {
     let seeded = "directory\t/bravebot-seeded-directory\n";
