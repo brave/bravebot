@@ -54,6 +54,7 @@ const catalogEnUs = {
     if (category === 'one') return String(count) + ' earlier message kept out of the request, recalled when relevant'
     return String(count) + ' earlier messages kept out of the request, recalled when relevant'
   },
+  uiContextSections: (): string => 'Choose sections',
   uiCrashReportsNotice: (): string => 'If BraveBot crashes, it sends Brave a report the next time it starts. The report holds the version, your operating system and the line of BraveBot\'s source that failed. It never holds your prompts, files or keys. You can turn this off in Settings, under General, or by setting BRAVEBOT_CRASH_REPORTS=0 in the environment.',
   uiCrashReportsNoticeDismiss: (): string => 'Dismiss crash reports notice',
   uiCrashReportsNoticeLess: (): string => 'Less',
@@ -253,6 +254,7 @@ const catalogFr: Messages = {
   uiAppearanceSystem: (): string => 'Système',
   uiContextAllOff: (): string => 'Toutes les sections sont désactivées.',
   uiContextOutOfRequest: catalogEnUs.uiContextOutOfRequest,
+  uiContextSections: (): string => 'Choisir les sections',
   uiCrashReportsNotice: (): string => 'Si BraveBot plante, il envoie à Brave un rapport au démarrage suivant. Le rapport contient la version, votre système d\'exploitation et la ligne du code source de BraveBot qui a échoué. Il ne contient jamais vos invites, vos fichiers ni vos clés. Vous pouvez le désactiver dans les réglages, sous Général, ou en définissant BRAVEBOT_CRASH_REPORTS=0 dans l\'environnement.',
   uiCrashReportsNoticeDismiss: (): string => 'Fermer l\'avis sur les rapports de plantage',
   uiCrashReportsNoticeLess: (): string => 'Moins',

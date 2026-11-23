@@ -4860,6 +4860,7 @@ ui-folders-heading = Dossiers
 ui-folders-about = Dossiers ouverts à côté du projet dans cette conversation. L'agent peut lire et modifier leurs fichiers jusqu'à ce que vous les fermiez.
 ui-folders-empty = Seul le projet est ouvert.
 ui-context-all-off = Toutes les sections sont désactivées.
+ui-context-sections = Choisir les sections
 ui-folders-add = Ajouter un dossier…
 ui-folders-close = Fermer { $name }
 ui-folders-close-explained = Fermer { $name } · L'agent ne peut plus y accéder

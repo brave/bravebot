@@ -27,7 +27,7 @@ function load(path, stubs = {}) {
   return module.exports
 }
 
-const { HIDEABLE, parseHidden } = load('src/shared/panels.ts')
+const { HIDEABLE, parseHidden, toggleHidden } = load('src/shared/panels.ts')
 const { PANEL_NAMES, parseState } = load('src/shared/state.ts')
 
 test('the hideable panels are the Overview panels, in column order', () => {
@@ -141,9 +141,48 @@ test('every panel hidden leaves the column, its head and one line saying so', ()
   const markup = render({ hidden: [...HIDEABLE] })
   for (const name of HIDEABLE) assert.equal(panelClass(markup, name), 'panel off', name)
   assert.ok(markup.includes('id="context-column"'), markup)
-  assert.ok(markup.includes('class="context-head"'), markup)
+  assert.ok(/class="context-head[ "]/.test(markup), markup)
   assert.ok(markup.includes('id="context-all-off"'), markup)
   assert.ok(markup.includes('Every section is turned off.'), markup)
+})
+
+test('ticking or unticking a section toggles that one and keeps column order', () => {
+  assert.deepEqual(toggleHidden([], 'writes'), ['writes'])
+  assert.deepEqual(toggleHidden(['writes'], 'writes'), [])
+  assert.deepEqual(toggleHidden(['notes'], 'plan'), ['plan', 'notes'])
+  assert.deepEqual(toggleHidden(['plan', 'notes'], 'plan'), ['notes'])
+})
+
+// The rows of the Choose sections menu, as `leo-menu-item` elements in the markup.
+const menuRows = (markup) => [...markup.matchAll(/<leo-menu-item([^>]*)>(.*?)<\/leo-menu-item>/g)].map(([, attrs, body]) => ({
+  panel: attrs.match(/data-panel="([^"]*)"/)?.[1],
+  checked: attrs.match(/aria-checked="([^"]*)"/)?.[1],
+  interactive: attrs.includes('data-is-interactive="true"'),
+  text: body.replace(/<[^>]*>/g, ''),
+}))
+
+test('the Choose sections menu lists each Overview panel in column order, by its heading', () => {
+  const markup = render({ hidden: ['writes'], onHidden: () => {} })
+  assert.ok(markup.includes('data-test="context-sections"'), markup)
+  assert.ok(markup.includes('Choose sections'), markup)
+  const rows = menuRows(markup)
+  assert.deepEqual(rows.map((row) => row.panel), [...HIDEABLE])
+  assert.deepEqual(rows.map((row) => row.text), ['Plan', 'Files read', 'Changes', 'Confined content', 'Notes', 'Asides'])
+  assert.deepEqual(rows.map((row) => row.checked), ['true', 'true', 'false', 'true', 'true', 'true'])
+  // A choice leaves the menu open, so each row opts out of Leo's close on select.
+  assert.ok(rows.every((row) => row.interactive), markup)
+})
+
+test('the menu row for the read panel says Calls made when the heading does', () => {
+  const replayedLive = { ...live, entries: [{ kind: 'replayed-tool', id: 'r1', text: 'read src/a.rs' }] }
+  const markup = renderToStaticMarkup(React.createElement(Context, { live: replayedLive, onHidden: () => {} }))
+  assert.equal(menuRows(markup).find((row) => row.panel === 'read')?.text, 'Calls made')
+})
+
+test('every section off still leaves the Choose sections menu in the head', () => {
+  const markup = render({ hidden: [...HIDEABLE], onHidden: () => {} })
+  assert.ok(markup.includes('data-test="context-sections"'), markup)
+  assert.ok(menuRows(markup).every((row) => row.checked === 'false'), markup)
 })
 
 test('a fresh file has every panel on', () => {

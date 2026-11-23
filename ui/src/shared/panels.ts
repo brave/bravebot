@@ -32,3 +32,12 @@ export function parseHidden(value: unknown): PanelName[] {
   const chosen = new Set<unknown>(value)
   return HIDEABLE.filter((name) => chosen.has(name))
 }
+
+/**
+ * The list after a person ticks or unticks `name` in the Choose sections menu: `name` hidden if it
+ * was shown and shown if it was hidden, every other panel as it was, in column order.
+ */
+export function toggleHidden(hidden: readonly PanelName[], name: PanelName): PanelName[] {
+  const wasHidden = hidden.includes(name)
+  return HIDEABLE.filter((other) => other === name ? !wasHidden : hidden.includes(other))
+}

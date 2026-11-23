@@ -6330,6 +6330,8 @@ ui-folders-about = Folders open beside the project in this chat. The agent can r
 ui-folders-empty = Only the project is open.
 # The context column's Overview tab when every section in it is turned off (PANEL-20).
 ui-context-all-off = Every section is turned off.
+# The button at the end of the context column's head that opens the checklist of its sections (PANEL-20).
+ui-context-sections = Choose sections
 ui-folders-add = Add folder…
 ui-folders-close = Close { $name }
 ui-folders-close-explained = Close { $name } · The agent can no longer reach it

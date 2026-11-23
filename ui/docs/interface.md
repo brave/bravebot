@@ -43,7 +43,11 @@ Three columns, each side one resizable and foldable:
   somebody made and a question that never reached them must not look alike.
 - **Context**: an inspector with **Overview** and **Files** tabs, folded from the header's toggle.
   Overview summarises the plan, reads and confined material; Changes distinguishes
-  pending decisions, approved writes and their actual execution outcomes. Files
+  pending decisions, approved writes and their actual execution outcomes. The **Choose sections**
+  button at the end of the tab row opens a checklist of the Overview sections. Ticking or unticking
+  one shows or hides it at once and leaves the menu open, and Escape closes it. The choice is kept
+  in `bravebot-ui.json` under `hidden`, apart from the terminal's `~/.bravebot/sidebar`. With
+  every section off, the tab shows one line saying so and the column stays open. Files
   provides a lazily loaded tree and project-wide filename search, including folders
   not yet expanded. Text files can be previewed. **Open in default app** opens plain text,
   Markdown, JSON, PDF, images, audio and video at once. For any other file,

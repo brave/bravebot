@@ -18,8 +18,18 @@
   padding: 0 var(--leo-spacing-xl);
   border-bottom: 1px solid var(--border-subtle);
 }
+/* The tabs and, at the end of the row, the Choose sections menu. The tabs keep the bottom edge so
+   their underline still sits on the head's border. */
+.context-head-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--leo-spacing-m);
+}
+.context-sections { align-self: center; }
 .inspector-tabs {
   display: block;
+  flex: 1;
+  min-width: 0;
   margin-bottom: -1px;
   --leo-tab-item-font: var(--type-meta-strong);
 }

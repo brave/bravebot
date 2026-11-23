@@ -146,6 +146,11 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     window.bravebot.readHiddenPanels().then(setHiddenPanels, () => setHiddenPanels([]))
   }, [])
+  /** Show a ticked or unticked section at once and save it at once, so closing the window loses nothing. */
+  const changeHiddenPanels = useCallback((hidden: PanelName[]) => {
+    setHiddenPanels(hidden)
+    window.bravebot.writeHiddenPanels(hidden)
+  }, [])
   const dismissedUpdate = preferences.dismissedUpdate
   const download = useCallback(() => { void window.bravebot.openPage('releases') }, [])
   const updateNotice = useMemo(() => {
@@ -1332,7 +1337,7 @@ export function App(): React.JSX.Element {
         onReset={reset}
         onNudge={nudge}
       />
-      <Context live={live} audit={auditPanel} details={details} hidden={hiddenPanels} onAddNote={askNote}
+      <Context live={live} audit={auditPanel} details={details} hidden={hiddenPanels} onHidden={changeHiddenPanels} onAddNote={askNote}
         onAddFolder={addFolderFromPanel} onCloseFolder={closeFolderFromPanel} />
       </div>
       </div>
