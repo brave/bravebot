@@ -276,8 +276,14 @@ if (hasSessions) {
   check(open.flatMap((m) => m.items).find((i) => i.id === 'turn.plan').enabled === true, 'an empty composer leaves Plan and Run… offered')
   const bubblesBefore = await page.locator('.bubble.user').count()
   await click('turn.plan')
-  await page.waitForTimeout(400)
-  check((await page.locator(COMPOSER_INPUT).inputValue()) === '/manifest ', 'Plan and Run… leaves "/manifest " in the composer')
+  // The click runs in the main process, which then messages the renderer, so the draft is polled
+  // for, up to a deadline, rather than read after a guess at how long that takes.
+  let prefilled = false
+  for (let tries = 0; tries < 100 && !prefilled; tries++) {
+    prefilled = (await page.locator(COMPOSER_INPUT).inputValue()) === '/manifest '
+    if (!prefilled) await page.waitForTimeout(50)
+  }
+  check(prefilled, 'Plan and Run… leaves "/manifest " in the composer')
   check(
     // The composer's text field sits inside the leo-textarea's shadow root, so focus is read there.
     await page.locator(COMPOSER_INPUT).evaluate((el) => el.getRootNode().activeElement === el),
