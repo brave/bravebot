@@ -9638,6 +9638,64 @@ mod tests {
             .collect()
     }
 
+    /// MOUSE-28: a click on the last prompt drawn of a queue too long to draw takes it back with every
+    /// prompt after it, the ones not drawn included, and a click on the row saying how many more wait
+    /// takes nothing. The regression it rejects is a click that leaves the undrawn prompts waiting, or
+    /// one that takes the queue back from the row that counts them.
+    #[test]
+    fn a_click_on_the_last_prompt_drawn_takes_the_ones_not_drawn_back_with_it() {
+        let (mut session, _) = two_panes();
+        session.type_char('a');
+        session.submit();
+        for at in 0..12 {
+            for c in format!("item {at:02}").chars() {
+                handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+            }
+            handle_key_while_working(&mut session, key(KeyCode::Enter));
+        }
+        let buffer = drawn_at(&mut session, 120, 30);
+        let (more, column) = find_cell(&buffer, "more waiting");
+        click(&mut session, more, column);
+        assert_eq!(session.queued.len(), 12, "the count row took prompts back");
+        assert_eq!(session.input(), "");
+
+        let (last, column) = find_cell(&buffer, "item 02");
+        click(&mut session, last, column);
+        assert_eq!(waiting(&session), ["item 00", "item 01"]);
+        let expected: Vec<String> = (2..12).map(|at| format!("item {at:02}")).collect();
+        assert_eq!(session.input(), expected.join("\n"));
+    }
+
+    /// MOUSE-28: `remove` on a drawn prompt takes out that one and the next prompt not drawn is drawn
+    /// in its place, and `clear all` removes every line waiting, the ones not drawn included. The
+    /// regression it rejects is a clear that stops at the prompts drawn, or a remove that takes the
+    /// count row's prompts with it.
+    #[test]
+    fn remove_and_clear_all_reach_the_prompts_not_drawn() {
+        let (mut session, _) = two_panes();
+        session.type_char('a');
+        session.submit();
+        for at in 0..12 {
+            for c in format!("item {at:02}").chars() {
+                handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+            }
+            handle_key_while_working(&mut session, key(KeyCode::Enter));
+        }
+        let buffer = drawn_at(&mut session, 120, 30);
+        let (row, column) = find_cell(&buffer, "remove");
+        click(&mut session, row, column);
+        assert_eq!(session.queued.len(), 11);
+        assert_eq!(session.queued[0].prompt, "item 01");
+
+        let buffer = drawn_at(&mut session, 120, 30);
+        let (more, _) = find_cell(&buffer, "more waiting");
+        let (last, _) = find_cell(&buffer, "item 03");
+        assert!(last < more, "the prompt after the removed one is not drawn");
+        let (row, column) = find_cell(&buffer, "clear all");
+        click(&mut session, row, column);
+        assert!(session.queued.is_empty(), "{:?}", waiting(&session));
+    }
+
     /// MOUSE-28: a click on a waiting prompt's words or on its mark takes that prompt and the ones
     /// typed after it back into the box, one to a line in the order they were typed, and leaves the
     /// ones before it waiting. The rows are two to a prompt, one apart from the next prompt's.

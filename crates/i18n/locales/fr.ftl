@@ -3827,6 +3827,10 @@ queued-a-prompt = l'invite précédente
 queued-a-shell-line = la ligne de shell précédente
 queued-remove = retirer
 queued-clear-all = tout retirer
+queued-more = { $count ->
+    [one] et 1 autre en attente
+   *[other] et { $count } autres en attente
+    }
 
 
 ## Coller, déposer et joindre

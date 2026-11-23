@@ -5017,6 +5017,13 @@ queued-a-shell-line = the shell line before it
 # stay short.
 queued-remove = remove
 queued-clear-all = clear all
+# The row after the last waiting line drawn, said where more lines wait than the rows beneath the box
+# hold. $count is how many are not drawn. It may share the row with the key that sends the queue now,
+# so it stays short.
+queued-more = { $count ->
+    [one] and 1 more waiting
+   *[other] and { $count } more waiting
+    }
 
 ## Pasting, dropping and attaching
 
