@@ -139,7 +139,7 @@ the plausible regression it rejects, and whether the failure was demonstrated (t
 the failure seen) or the coverage is reasoned only. A passing test count is not evidence.
 
 Also state, where each applies: the commit the gates ran on and the commit the branch was rebased
-onto afterwards, with the areas that do not reach the diff; each flaky test, with its isolated
+onto afterwards and pushed without them, which CI checks; each flaky test, with its isolated
 run; a failure that also fails on the parent commit, in a `<details>` block that cites the issue
 tracking it; and
 `Docker gates skipped: host-only`.
