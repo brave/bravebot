@@ -21,7 +21,9 @@ governs:
   - ui/src/preload/index.ts
   - ui/src/renderer/staging.ts
   - ui/src/shared/pastes.ts
+  - ui/src/renderer/components/PastedTextPreview.tsx
   - ui/scripts/pastes.test.mjs
+  - ui/scripts/drive-paste.mjs
 guards:
   - symbol: Policy::admit_pasted_image
 documented-by: docs/website/docs/using/context.md
@@ -35,7 +37,8 @@ presentation and holds no labels: it is the user's own words either way, and the
 that the box stays readable. A pasted picture is a claim about provenance, and most of this spec is
 about that claim. A paste leaves a marker in the box, and deleting the marker takes the paste off. A
 folded paste can be opened in the info panel and read whole, without sending it
-([PASTE-13](#PASTE-13)).
+([PASTE-13](#PASTE-13)). The desktop window folds a long paste too, and opens it in a modal
+([PASTE-14](#PASTE-14)).
 
 Three gestures put content into a turn on the user's own footing, and each has its own spec:
 [naming-files.md](naming-files.md) for `@` in a prompt, [pasting.md](pasting.md) for Ctrl-V, and
@@ -516,6 +519,9 @@ holds, and the text is carried to the screen after each character is mapped to w
 `peek` is one of the actions a settings file can move ([INPUT-32](terminal-input.md#INPUT-32)), and
 the list `?` puts up names it.
 
+The desktop window has no info panel. Its form of this clause is a read-only modal, opened from the
+paste's chip or with Alt-V ([PASTE-14](#PASTE-14)).
+
 **Why.** The marker keeps a long paste out of the way of the reply being read
 ([PASTE-1](#PASTE-1)), and a person who pasted it has no other way to check what the marker holds,
 short of sending it. Showing it in the panel, as `/diff` shows the files, uses a place that already
@@ -540,6 +546,61 @@ It sends nothing, so it is safe to use while the turn runs and before deciding w
 `verified-by: bravebot_tui::render::the_shortcut_list_names_the_peek_chord`
 `verified-by: by-construction (the state is a copy of the text held in the session and is drawn from it by the panel's row builder, which takes no handle to the request, the transcript's writer or the session record; the click and key tests assert that the transcript is empty after opening and closing)`
 
+<a id="PASTE-14"></a>
+### PASTE-14: the desktop window folds a long paste and opens it whole in a modal
+
+A text paste into the desktop composer that holds three or more newlines, after `\r\n` and `\r`
+are read as `\n`, folds to `[Pasted text #N +M lines]`, as in [PASTE-1](#PASTE-1). The threshold is
+the terminal's `FOLD_AT_NEWLINES`, the marker is the English form of the terminal's `paste-folded`
+message, and the lines are counted as the terminal counts them, so a trailing newline does not
+start a line. `N` comes from the one counter a draft's drops and pasted pictures use
+([PASTE-11](#PASTE-11)), so a drop, a picture and a folded paste in one draft are `#1`, `#2` and
+`#3`, and a number is not used again after a send. The marker is written at the caret as a pasted
+picture's is, and the words around it stay as they were. A shorter paste is left to the browser
+and lands whole. A paste the preload took as a picture is not read as text. The window has no shell
+mode, so PASTE-1's command line has no case here.
+
+The words are put back wherever the draft leaves the box: a send, a message queued behind a turn, a
+line interjected into a running turn, the question `/btw` asks and the argument `/schedule` takes.
+Every copy of a marker is put back, a marker the person deleted puts back nothing, and a picture's
+marker is left for the grants ([PASTE-11](#PASTE-11)), which are found on the folded draft. The
+request, the transcript row and the queued message hold the words and never the marker. A send the bridge refuses, and an aside that fails, put the words back into the box rather
+than a marker that the cleared staging no longer names.
+
+The draft is saved to disk with the conversation, and the folded pastes it still names are saved
+beside it. When the conversation opens again they are staged again and the counter starts above
+their numbers, so a reopened draft unfolds as it did before it was closed. A saved list that is
+not a list is dropped, and so is an entry whose marker, text, number or line count is not of its
+type.
+
+A folded paste has a chip above the box with a text glyph, the label `Pasted text` and the marker.
+Removing the chip deletes the marker, and deleting the marker takes the chip off. The chip is not
+marked as trusted context, because pasted text holds no labels ([PASTE-7](#PASTE-7)).
+
+The window has no info panel, so its form of [PASTE-13](#PASTE-13) is a read-only modal. A click on
+the chip's label, and Alt-V with the caret at the start, inside or at the end of a folded marker,
+open it on that paste. Alt-V is matched by the physical key, because Option-V types a character on
+macOS. With the caret on plain text or on a picture's marker the key is not cancelled and nothing
+opens. The modal is titled `Pasted text #N`, says how many lines the paste has and that viewing
+sends nothing, and shows the whole text in a `<pre>` with a `Wrap` toggle and a `Done` button.
+Escape and the close control end it as well. It works at rest and while a turn runs. It holds a copy
+of the text, and the draft, the caret and the staging are the same after it closes as before it
+opened. It sends nothing to a model and adds nothing to the transcript.
+
+`verified-by: by-construction (the renderer is not a crate this workspace compiles, so ui/scripts/pastes.test.mjs test "a paste of fewer newlines than the threshold is left to the browser, and one at it folds" pins the threshold and the \r\n and \r forms; make check-ui runs the test)`
+`verified-by: by-construction (ui/scripts/pastes.test.mjs test "lines are counted as a person would count them" pins that a trailing newline starts no line; make check-ui runs the test)`
+`verified-by: by-construction (ui/scripts/pastes.test.mjs test "a folded paste lands at the caret and leaves the words around it as they were" pins where the marker is written; make check-ui runs the test)`
+`verified-by: by-construction (ui/scripts/pastes.test.mjs test "a drop, a picture and a folded paste share one counter, and a number never comes round again" pins the shared counter; make check-ui runs the test)`
+`verified-by: by-construction (ui/scripts/pastes.test.mjs test "unfolding puts back every copy of a marker, drops a deleted one, and leaves pictures alone" pins unfolding and that a folded paste is never a grant; make check-ui runs the test)`
+`verified-by: by-construction (ui/scripts/pastes.test.mjs test "the folded paste under the caret is found at its start, inside it and at its end" pins which marker the chord finds, and none on plain text or a picture's marker; make check-ui runs the test)`
+`verified-by: by-construction (ui/scripts/pastes.test.mjs test "a draft leaving the box carries the words, and what it names is found on the folded draft" pins the words a draft leaves with and the staged items found on the folded draft; make check-ui runs the test)`
+`verified-by: by-construction (ui/scripts/pastes.test.mjs test "every exit of a draft holding a folded paste carries the pasted words" pins the send, the queued message, the /btw question and the /schedule argument; make check-ui runs the test)`
+`verified-by: by-construction (ui/scripts/interjecting.test.mjs test "a line holding a folded paste goes into the turn as the pasted words, and is queued as them if declined" pins the interjected line; make check-ui runs the test)`
+`verified-by: by-construction (ui/scripts/pastes.test.mjs test "a saved draft keeps its folded pastes through the preferences file, and a malformed value is dropped" pins saving and the validation of the saved list; make check-ui runs the test)`
+`verified-by: by-construction (ui/scripts/pastes.test.mjs test "folded pastes saved with a draft are staged again, unfold, and the next marker is numbered above them" pins restaging when a conversation opens; make check-ui runs the test)`
+`verified-by: by-construction (ui/scripts/pastes.test.mjs test "the folded marker and threshold are the terminal’s" reads crates/i18n/locales/en-US.ftl and crates/tui/src/state/attachments.rs and fails if the window's marker wording or threshold differ from the terminal's; make check-ui runs the test)`
+`verified-by: by-construction (ui/scripts/drive-paste.mjs pastes from the real clipboard into the real app and bridge against a stub model under xvfb-run, and asserts that a two-line paste lands whole, a five-line paste folds to its marker and a chip not marked as trusted context, deleting the marker takes the chip off, the chip and Alt-V at the marker's start, middle and end open the modal on all five lines while Alt-V on plain text or an [Image #n] marker opens nothing, Done, Escape and the close control leave the draft, caret and chip as they were, a paste folds and opens while a turn runs, and the model and the transcript row receive the words and never the marker)`
+
 ## Known costs
 
 - **The desktop decodes a pasted picture in its main process.** The clipboard's bytes come from
@@ -547,6 +608,16 @@ It sends nothing, so it is safe to use while the turn runs and before deciding w
   PNG and to draw the chip's drawing. A dropped picture is decoded in the sandboxed renderer
   instead. The decode is the one Electron's clipboard image read always did, and one over the cap
   as it came off the clipboard is refused before it is decoded.
+
+- **Two ways out of the desktop box do not unfold a paste.** Handing a draft off to a new chat
+  sends the draft as it stands, so a folded marker in it is sent as the marker
+  ([PASTE-14](#PASTE-14)). Enhancing a draft is refused while it holds a folded paste, as it is
+  while it holds a picture or a file, rather than enhancing the words behind the marker.
+
+- **The desktop does not remove invisible characters from a folded paste.** The viewer and the
+  request carry whatever the clipboard held, because [PASTE-10](#PASTE-10) runs only in the
+  terminal. The text is drawn in a `<pre>`, so a control character cannot change the page, but a
+  bidirectional control can reorder what is drawn.
 
 - **Whatever put the files on the clipboard chose them.** Ctrl-V reads the list as it finds it, so
   a program that wrote one there has the file read as a drop would be. The marker, or the path of a

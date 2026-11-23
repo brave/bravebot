@@ -33,7 +33,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [auto-mode.md](auto-mode.md) | `AUTO` | 9 | a fifth permission mode in which a classifier that reads only the person's typed lines and the action answers a confined run and the first fetch question, and every other question is asked (the setting that removes the mode from the ladder and from the desktop window's menu, and a model of its own, are not built) |
 | [references.md](references.md) | `REFER` | 6 | directories outside the working one that a person declared in their settings, what declaring one grants, and what the planner is told (repository entries and `@alias` proposed, not built) |
 | [naming-files.md](naming-files.md) | `NAME` | 13 | writing `@path` in a prompt: what it puts into the turn and what it vouches for |
-| [pasting.md](pasting.md) | `PASTE` | 13 | what Ctrl-V puts into a turn, text, a picture or a copied file, and on what footing, and reading a folded paste whole in the info panel |
+| [pasting.md](pasting.md) | `PASTE` | 14 | what Ctrl-V puts into a turn, text, a picture or a copied file, and on what footing, and reading a folded paste whole in the info panel or the desktop's modal |
 | [dropping.md](dropping.md) | `DROP` | 12 | what dragging a file onto a window puts into a turn, and on what footing |
 | [deep-links.md](deep-links.md) | `LINK` | 6 | a `bravebot://open` link: what it may ask for, where it starts, and why its words are put in the box and not sent |
 | [shell-mode.md](shell-mode.md) | `SHELL` | 8 | the `!` prompt: a line the user typed, and why the planner can never reach it |
