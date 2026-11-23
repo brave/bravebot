@@ -411,6 +411,7 @@ Built, and a spawn is refused where a checkout is.
 `verified-by: bravebot_agent::git::each_character_and_device_name_windows_reserves_is_refused_there_alone`
 `verified-by: bravebot_agent::git::the_settings_git_for_windows_applies_are_read_for_either_host_from_any_host`
 `verified-by: bravebot_agent::git::a_text_attribute_is_a_conversion_only_where_git_writes_text_with_crlf`
+`verified-by: bravebot_agent::git::the_hosts_text_conversion_reaches_both_places_attributes_are_read`
 `verified-by: bravebot_agent::git::directories_count_against_the_file_bound`
 `verified-by: bravebot_agent::git::an_attributes_file_past_the_byte_bound_is_not_read`
 `verified-by: bravebot_agent::git::a_tree_past_a_bound_is_refused_for_it_before_an_attributes_file_is_read`

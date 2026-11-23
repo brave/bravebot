@@ -6033,6 +6033,68 @@ mod tests {
         assert_eq!(conversation.reads.token_of("big.log", 1, 2000), None);
     }
 
+    /// Excerpts stored in front of the turn's prompt move every message after them one place, so
+    /// the record of what was read moves with them (RETRIEVE-8, RETRIEVE-30). It rejects an
+    /// `insert_excerpts` that leaves read positions as they were: the entry would then name the
+    /// call before its result, the result would be dropped by masking while the planner is still
+    /// told the lines are in front of it, or kept while they are gone.
+    #[test]
+    fn an_excerpt_stored_in_front_of_a_read_moves_the_read_with_its_message() {
+        for retrieved in [true, false] {
+            let mut conversation = Conversation::new();
+            conversation.push(Message::user("read it"));
+            conversation.prompt_given();
+            let mut call = a_call("read_file", r#"{"path":"big.log"}"#);
+            call.id = "call-1".to_string();
+            conversation.push(Message::assistant_calling("looking", vec![call]));
+            conversation.push(Message::tool_result("call-1", "BULK ".repeat(20_000)));
+            conversation.shown_read(a_window("big.log", "tok"));
+            conversation.push(Message::assistant("read it"));
+            assert_eq!(
+                conversation
+                    .reads
+                    .shown
+                    .iter()
+                    .map(|(at, _)| *at)
+                    .collect::<Vec<_>>(),
+                [2]
+            );
+
+            if retrieved {
+                conversation.insert_retrieved("EXCERPTS".into(), vec![(0, 0)], "m".into());
+            } else {
+                conversation.insert_recalled("EXCERPTS".into(), vec![(0, 0)], "m".into());
+            }
+            assert_eq!(
+                conversation.messages()[0].message.content.text(),
+                "EXCERPTS"
+            );
+            assert_eq!(
+                conversation
+                    .reads
+                    .shown
+                    .iter()
+                    .map(|(at, _)| *at)
+                    .collect::<Vec<_>>(),
+                [3],
+                "the read stayed at the position it had before the excerpts went in"
+            );
+
+            for (prompt, answer) in [("second", "b"), ("third", "c"), ("fourth", "d")] {
+                conversation.push(Message::user(prompt));
+                conversation.push(Message::assistant(answer));
+            }
+            assert!(conversation.reads.token_of("big.log", 1, 2000).is_some());
+
+            assert!(conversation.mask_old_results().is_some());
+            assert_eq!(
+                conversation.reads.token_of("big.log", 1, 2000),
+                None,
+                "the result was dropped and the read is still recorded as shown"
+            );
+        }
+    }
+
     /// A result sent as prose is a result too, and is found by its tag.
     #[test]
     fn a_prose_shaped_result_is_dropped_the_same_way() {

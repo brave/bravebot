@@ -387,8 +387,17 @@ fn offered(
     }
 }
 
-fn registered_tool(tool: &str) -> Option<&'static Advertised> {
-    REGISTRY.iter().find(|entry| entry.tool == tool)
+/// The entry of `registry` that runs the tool of the step at `index`, or the refusal that ends the
+/// run before the step starts where none does (MANIFEST-5).
+fn handler_for(
+    registry: &'static [Advertised],
+    index: usize,
+    tool: &str,
+) -> Result<&'static Advertised, TurnError> {
+    registry
+        .iter()
+        .find(|entry| entry.tool == tool)
+        .ok_or_else(|| TurnError::Precommit(format!("step {}: no handler for '{tool}'", index + 1)))
 }
 
 /// The catalogue the planner is shown: names, one-line summaries, and argument lists.
@@ -1517,13 +1526,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
             return Err(TurnError::Cancelled { attempts: Some(0) });
         }
 
-        let Some(entry) = registered_tool(step.tool()) else {
-            return Err(TurnError::Precommit(format!(
-                "step {}: no handler for '{}'",
-                index + 1,
-                step.tool()
-            )));
-        };
+        let entry = handler_for(REGISTRY, index, step.tool())?;
         // Spelled as the summary, the question and the record spell it. The activity does not say
         // it names a file, so its screen does not spell the line a second time.
         let activity = Activity::running(
@@ -2808,9 +2811,10 @@ mod tests {
     /// The tier a capability is advertised under is the tier its plan will be checked against,
     /// or the catalogue's "these come last" heading is a lie the planner acts on.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn every_capability_is_advertised_at_the_tier_it_is_validated_at() {
         for (tool, tier) in manifest::tools() {
-            let entry = registered_tool(tool).expect("every validated tool is registered");
+            let entry = handler_for(REGISTRY, 0, tool).expect("every validated tool is registered");
             assert_eq!(entry.tier, tier, "{tool} is advertised at the wrong tier");
         }
     }
@@ -3362,6 +3366,7 @@ mod tests {
         use super::*;
 
         /// The note the first step of `run` gives when the driver locked `decoy` instead.
+        #[expect(clippy::expect_used, reason = "a test fails by panicking")]
         fn note_under_the_lock_of(
             root: &std::path::Path,
             run: &Manifest,
@@ -3406,7 +3411,7 @@ mod tests {
                 0,
                 false,
                 step,
-                registered_tool(step.tool()).expect("a registered tool"),
+                handler_for(REGISTRY, 0, step.tool()).expect("a registered tool"),
                 &mut Accounting::default(),
                 &mut crate::report::IgnoreReports,
             )
@@ -3498,6 +3503,281 @@ mod tests {
             );
             let _ = std::fs::remove_dir_all(&root);
             assert_eq!(note, "3 matches");
+        }
+    }
+
+    /// MANIFEST-6 and MANIFEST-5 at the connector and server call sites, and the refusal of a
+    /// step no handler runs. Each test runs one step against a lock built from a different plan.
+    mod a_step_reads_its_connector_and_server_from_the_lock {
+        use super::*;
+
+        /// Run the first step of `run` under the lock of `decoy`, with `connectors` installed.
+        fn run_under_the_lock_of(
+            connectors: &mut crate::connectors::Connectors,
+            root: &std::path::Path,
+            run: &Manifest,
+            decoy: &Manifest,
+            at: usize,
+            capabilities: CapabilitySet,
+        ) -> Result<String, String> {
+            let workspace = Workspace::new(root).expect("workspace");
+            let config = Config::from_lookup(|key| {
+                match key {
+                    bravebot_config::env_var::SIGNING_KEY => Some("test-signing-key"),
+                    bravebot_config::env_var::KEY_ID => Some("test-key-id"),
+                    bravebot_config::env_var::ENDPOINT => Some("https://example.invalid"),
+                    _ => None,
+                }
+                .map(str::to_string)
+            })
+            .expect("configured");
+            let egress = Egress::new();
+            let mut chat = Chat::new(&config, &egress, &crate::chatgpt::AccountSession::begin());
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut policy = Policy::begin(
+                locked_from(decoy),
+                ReleasePlan::new(),
+                capabilities,
+                &mut sink,
+            )
+            .expect("policy");
+            let step = &run.steps()[at];
+            run_step(
+                connectors,
+                &Servers::default(),
+                &egress,
+                None,
+                &mut policy,
+                &workspace,
+                crate::findings::Recording::default(),
+                &mut SlotStore::new(),
+                &mut chat,
+                &mut crate::confirm::Unattended,
+                &crate::LiveMode::new(crate::PermissionMode::Ask),
+                false,
+                false,
+                at,
+                false,
+                step,
+                handler_for(REGISTRY, at, step.tool()).expect("a registered tool"),
+                &mut Accounting::default(),
+                &mut crate::report::IgnoreReports,
+            )
+            .map(|done| done.note)
+        }
+
+        /// A connector whose authority keeps the request it is sent in `request.json` beside it
+        /// and answers `accepted` with a payload.
+        #[cfg(unix)]
+        fn connector_keeping_its_request(dir: &std::path::Path) -> crate::connectors::Connectors {
+            use std::os::unix::fs::PermissionsExt;
+            let script = dir.join("authority.sh");
+            std::fs::write(
+                &script,
+                "#!/bin/sh\ncat > \"$(dirname \"$0\")/request.json\"\n\
+                 printf '%s' '{\"protocol\":1,\"outcome\":\"accepted\",\"payload\":\"BODY\"}'\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let surface =
+                serde_json::from_value::<bravebot_config::connectors::Surface>(serde_json::json!({
+                    "resources": {
+                        "find_issue": { "step": "fetch", "uses": ["place", "select"],
+                            "summary": "first issue", "select": ["state:*"] },
+                        "issue": { "step": "fetch", "uses": ["place", "item"],
+                            "summary": "one issue" },
+                        "comment": { "step": "act", "uses": ["place", "item|on"],
+                            "summary": "comment" },
+                        "lock": { "step": "act", "uses": ["place", "item"],
+                            "summary": "lock", "text": false }
+                    },
+                    "forms": { "place": "owner/name", "item": "positive-integer" }
+                }))
+                .unwrap();
+            let github = bravebot_config::connectors::Connector {
+                name: "github".into(),
+                definition_id: "0".repeat(64),
+                authority: script,
+                item: "svc:github:me".into(),
+                surface,
+            };
+            crate::connectors::Connectors::from(BTreeMap::from([(
+                "github".to_string(),
+                Ok(github),
+            )]))
+        }
+
+        #[cfg(unix)]
+        fn connector_step(tool: &str, connector: &str, resource: &str, place: &str) -> DraftStep {
+            let step = DraftStep::new(tool)
+                .with_text("connector", connector)
+                .with_text("resource", resource)
+                .with_text("place", place);
+            match tool {
+                manifest::CONNECTOR_FETCH => step.with_text("out_slot", "s"),
+                _ => step,
+            }
+        }
+
+        #[cfg(unix)]
+        #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+        fn the_request_the_authority_was_sent(dir: &std::path::Path) -> serde_json::Value {
+            let text = std::fs::read_to_string(dir.join("request.json"))
+                .expect("the authority was sent a request");
+            serde_json::from_str(&text).expect("the request is JSON")
+        }
+
+        /// A connector step's connector, resource and routing come out of the lock. The step names
+        /// a connector nothing installed, another resource and another place and selector, so a
+        /// call site that reads any of them from the step fails to find the connector or sends the
+        /// step's values. Rejects `step.text(field)` in place of the lock at `call_connector`.
+        #[cfg(unix)]
+        #[test]
+        fn a_connector_fetch_and_act_send_what_the_lock_holds_and_not_what_the_step_names() {
+            for tool in [manifest::CONNECTOR_FETCH, manifest::CONNECTOR_ACT] {
+                let root = crate::testutil::scratch_dir("bravebot-manifest-lock-connector");
+                std::fs::remove_dir_all(&root).ok();
+                std::fs::create_dir_all(&root).unwrap();
+                let mut connectors = connector_keeping_its_request(&root);
+                let resource = |locked: bool| match (tool, locked) {
+                    (manifest::CONNECTOR_FETCH, true) => "find_issue",
+                    (manifest::CONNECTOR_FETCH, false) => "issue",
+                    (_, true) => "comment",
+                    (_, false) => "lock",
+                };
+                let the_step = adopted(Draft::new(vec![
+                    connector_step(tool, "mirror", resource(false), "a/a")
+                        .with_text("select", "state:open"),
+                ]));
+                let the_lock = adopted(Draft::new(vec![
+                    connector_step(tool, "github", resource(true), "b/b")
+                        .with_text("select", "state:closed"),
+                ]));
+
+                let outcome = run_under_the_lock_of(
+                    &mut connectors,
+                    &root,
+                    &the_step,
+                    &the_lock,
+                    0,
+                    CapabilitySet::from_iter([Capability::Connector(ConnectorName::new("github"))]),
+                );
+                let request = the_request_the_authority_was_sent(&root);
+                std::fs::remove_dir_all(&root).ok();
+
+                assert!(outcome.is_ok(), "{tool}: {outcome:?}");
+                assert_eq!(request["connector"], "github", "{tool}");
+                assert_eq!(request["resource"], resource(true), "{tool}");
+                assert_eq!(request["routing"]["place"], "b/b", "{tool}");
+                assert_eq!(request["routing"]["select"], "state:closed", "{tool}");
+            }
+        }
+
+        /// A call to a server's tool names the alias and the tool the lock holds. The refusal of a
+        /// server the run was not offered is spelled with both, so it shows which pair the step
+        /// used. Rejects `step.text("server")` or `step.text("tool")` in place of the lock at
+        /// the `mcp_call` and `mcp_read` arms.
+        #[test]
+        #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+        fn a_server_call_and_read_name_the_alias_and_tool_the_lock_holds() {
+            for tool in [manifest::MCP_CALL, manifest::MCP_READ] {
+                let root = crate::testutil::scratch_dir("bravebot-manifest-lock-server");
+                std::fs::remove_dir_all(&root).ok();
+                std::fs::create_dir_all(&root).unwrap();
+                let calling = |server: &str, word: &str| {
+                    let step = DraftStep::new(tool)
+                        .with_text("server", server)
+                        .with_text("tool", word);
+                    adopted(Draft::new(vec![match tool {
+                        manifest::MCP_READ => step.with_text("out_slot", "s"),
+                        _ => step,
+                    }]))
+                };
+
+                let outcome = run_under_the_lock_of(
+                    &mut crate::connectors::Connectors::default(),
+                    &root,
+                    &calling("other", "close_tab"),
+                    &calling("brave", "open_tab"),
+                    0,
+                    CapabilitySet::none(),
+                );
+                std::fs::remove_dir_all(&root).ok();
+
+                let refusal = outcome.expect_err(tool);
+                assert!(refusal.contains("brave:open_tab"), "{tool}: {refusal}");
+                assert!(!refusal.contains("other"), "{tool}: {refusal}");
+                assert!(!refusal.contains("close_tab"), "{tool}: {refusal}");
+            }
+        }
+
+        /// An apply step names the server the lock holds.
+        #[test]
+        #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+        fn an_apply_step_names_the_server_the_lock_holds() {
+            let root = crate::testutil::scratch_dir("bravebot-manifest-lock-apply");
+            std::fs::remove_dir_all(&root).ok();
+            std::fs::create_dir_all(&root).unwrap();
+            let applying = |server: &str| {
+                adopted(Draft::new(vec![
+                    DraftStep::new(manifest::MCP_READ)
+                        .with_text("server", server)
+                        .with_text("tool", "list_recent_bookmarks")
+                        .with_text("out_slot", "marks"),
+                    DraftStep::new(manifest::APPLY)
+                        .with_text("server", server)
+                        .with_text("tools", "move_bookmark")
+                        .with_text("arguments", r#"{"move_bookmark":{"url":{"entry":"url"}}}"#)
+                        .with("lists", Arg::List(vec!["marks".to_string()]))
+                        .with_text("instruction", "group these"),
+                ]))
+            };
+
+            let outcome = run_under_the_lock_of(
+                &mut crate::connectors::Connectors::default(),
+                &root,
+                &applying("other"),
+                &applying("brave"),
+                1,
+                CapabilitySet::none(),
+            );
+            std::fs::remove_dir_all(&root).ok();
+
+            let refusal = outcome.expect_err("not offered");
+            assert!(refusal.contains("brave"), "{refusal}");
+            assert!(!refusal.contains("other"), "{refusal}");
+        }
+
+        /// MANIFEST-5: a step whose tool the registry does not hold ends the run before the step
+        /// starts, naming the step and the tool, and does not fall back to another handler.
+        /// Rejects a lookup that defaults to the first entry of the registry, or to the entry
+        /// before the match.
+        #[test]
+        #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+        #[expect(clippy::panic, reason = "a test fails by panicking")]
+        fn a_step_whose_tool_the_registry_does_not_hold_is_refused_before_it_starts() {
+            const ONLY_A_READ: &[Advertised] = &[Advertised {
+                capability: "FILE_READ",
+                tool: "read_file",
+                tier: Tier::Fetch,
+                gate: None,
+                summary: "",
+                args: "",
+            }];
+
+            let found = handler_for(ONLY_A_READ, 0, "read_file").expect("a held tool");
+            assert_eq!(found.tool, "read_file");
+            for tool in ["write_file", "", "READ_FILE", "read_file "] {
+                let refused = handler_for(ONLY_A_READ, 2, tool)
+                    .err()
+                    .expect("a tool the registry does not hold");
+                match refused {
+                    TurnError::Precommit(said) => {
+                        assert_eq!(said, format!("step 3: no handler for '{tool}'"));
+                    }
+                    other => panic!("{tool:?}: {other:?}"),
+                }
+            }
         }
     }
 }

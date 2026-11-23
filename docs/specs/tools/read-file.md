@@ -414,6 +414,7 @@ the rounds after it, to tell the planner what it already had.
 `verified-by: bravebot_agent::conversation::a_kept_read_follows_its_message_to_its_new_position`
 `verified-by: bravebot_agent::conversation::a_window_shown_again_is_recorded_under_its_latest_token`
 `verified-by: bravebot_agent::conversation::a_read_whose_result_was_dropped_is_forgotten`
+`verified-by: bravebot_agent::conversation::an_excerpt_stored_in_front_of_a_read_moves_the_read_with_its_message`
 `verified-by: bravebot_agent::turn::a_read_repeated_after_its_result_was_dropped_sends_the_lines_again`
 `verified-by: bravebot_agent::turn::a_read_of_a_file_shown_before_a_resume_sends_the_lines_again`
 `verified-by: bravebot_agent::workspace::requests_that_come_to_the_same_lines_are_one_window`

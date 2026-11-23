@@ -2245,6 +2245,7 @@ large as whatever a turn unpacked there, and nothing in the opening session need
 `verified-by: bravebot_agent::scratch::a_session_opening_removes_what_a_killed_one_left`
 `verified-by: bravebot_agent::scratch::the_temporary_directory_is_swept_once_and_then_only_the_accounts_own`
 `verified-by: bravebot_agent::scratch::a_directory_nothing_holds_is_taken_for_a_leftover`
+`verified-by: bravebot_agent::scratch::a_checkouts_directory_nothing_holds_is_taken_for_a_leftover`
 `verified-by: bravebot_agent::scratch::a_live_sessions_directory_is_left_alone`
 `verified-by: bravebot_agent::scratch::a_directory_still_being_made_is_left_alone`
 `verified-by: bravebot_agent::scratch::another_accounts_directory_is_left_alone`
@@ -2253,6 +2254,8 @@ large as whatever a turn unpacked there, and nothing in the opening session need
 `verified-by: bravebot_agent::scratch::a_program_a_session_starts_does_not_hold_its_directory`
 `verified-by: bravebot_agent::scratch::a_claim_held_for_a_moment_is_waited_out`
 `verified-by: bravebot_agent::scratch::a_claim_held_by_something_else_does_not_stall_the_session`
+`verified-by: bravebot_agent::scratch::a_file_system_that_refuses_the_lock_neither_fails_nor_stalls_the_session`
+`verified-by: bravebot_agent::scratch::a_directory_waiting_on_its_lock_is_not_yet_at_the_mode_a_sweep_takes`
 `verified-by: bravebot_agent::scratch::the_removal_of_leftovers_runs_beside_the_opening_session_and_not_ahead_of_it`
 `verified-by: bravebot_agent::git::the_sweep_takes_only_an_unlisted_checkout_nobody_holds`
 `verified-by: bravebot_agent::workspace::a_sweep_leaves_the_checkouts_a_session_made_or_took_back`
