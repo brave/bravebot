@@ -1,0 +1,121 @@
+// A picture dropped onto a typed `/manifest` line goes to the planner with the task (DROP-4,
+// DROP-11), both when the line is sent at once and when it waits behind a running turn.
+//
+// The real app and the real bridge, against a model service this script serves itself, so nothing
+// is paid for. The drop is a trusted drag driven through Chromium's input pipeline, as in
+// drive-drop.mjs.
+//
+// Needs `bravebot-rpc` built (`npm run bridge`) and the app built (`electron-vite build`).
+import assert from 'node:assert/strict'
+import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
+import { COMPOSER_NAME, SHOTS_DIR } from './drive-support.mjs'
+
+// A run asks the planner twice: once for the plan in words, then for its steps. An ordinary turn
+// answers slowly, so a `/manifest` line can be typed while it runs.
+let planning = 0
+const { service, rounds: requests } = await startModelService(async ({ body }) => {
+  if (body.includes('Hold the turn')) {
+    await new Promise((resolve) => setTimeout(resolve, 3000))
+    return { content: 'done' }
+  }
+  planning += 1
+  const target = planning <= 2 ? 'first.md' : 'second.md'
+  return planning % 2 === 1
+    ? { content: `1. Write ${target} with a fixed body.` }
+    : { content: JSON.stringify({ steps: [{ capability: 'FILE_WRITE', args: { path: target, contents: '# Notes from the plan\n' } }] }) }
+})
+
+// The desktop is outside the project, which is where a drop usually comes from (DROP-3).
+const { root, project, profile, env } = makeWorld('bravebot-manifest-drop-', { service, dirs: ['desktop'] })
+const desktop = join(root, 'desktop')
+writeFileSync(join(project, 'README.md'), '# scratch\n')
+
+const output = process.env.BRAVEBOT_DRIVE_OUTPUT ?? SHOTS_DIR
+mkdirSync(output, { recursive: true })
+let app, page, errors
+try {
+  ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1400, height: 1000 } }))
+
+  const pictureBytes = await app.evaluate(({ nativeImage }) => {
+    const size = 48, pixels = Buffer.alloc(size * size * 4)
+    for (let i = 0; i < size * size; i++) pixels.set([0x20, 0x80, 0xd0, 0xff], i * 4)
+    return nativeImage.createFromBitmap(pixels, { width: size, height: size }).toPNG().toString('base64')
+  })
+  const png = join(desktop, 'sketch.png')
+  writeFileSync(png, Buffer.from(pictureBytes, 'base64'))
+
+  await openProject(page, app, project)
+
+  const composer = page.getByRole('textbox', { name: COMPOSER_NAME })
+  const chips = page.locator('[data-test="dropped-chip"]')
+  const stop = page.locator('.composer .stop')
+  const card = page.locator('.confirm.manifest')
+  const cdp = await page.context().newCDPSession(page)
+  const drag = async (files) => {
+    const box = await page.locator('.composer textarea').first().boundingBox()
+    const x = Math.round(box.x + box.width / 2), y = Math.round(box.y + box.height / 2)
+    const data = { items: [], files, dragOperationsMask: 1 }
+    await cdp.send('Input.dispatchDragEvent', { type: 'dragEnter', x, y, data })
+    for (let i = 0; i < 3; i++) {
+      await cdp.send('Input.dispatchDragEvent', { type: 'dragOver', x, y, data })
+      await page.waitForTimeout(100)
+    }
+    await cdp.send('Input.dispatchDragEvent', { type: 'drop', x, y, data })
+  }
+  const planned = (task) => requests.find((body) => body.includes(task) && !body.includes('Hold the turn'))
+  const carriesPicture = (body) => body.includes(`Dropped file: ${png}`) && body.includes('data:image/png;base64,')
+
+  // ---- a /manifest line with a dropped picture, sent at once ------------------------------------
+  await composer.fill('/manifest build the first notes from ')
+  await drag([png])
+  await chips.first().waitFor()
+  assert.equal(await composer.inputValue(), '/manifest build the first notes from [Image #1] ')
+  await page.screenshot({ path: join(output, 'manifest-drop-staged.png') })
+  await composer.press('Enter')
+  await card.first().waitFor({ timeout: 60000 })
+  assert.equal(await chips.count(), 0, 'starting the run clears what was staged')
+  const first = planned('build the first notes from [Image #1]')
+  assert.ok(first, 'the task reached the planner')
+  assert.ok(carriesPicture(first), 'with the dropped picture, named by its path before its bytes (DROP-11)')
+  await page.screenshot({ path: join(output, 'manifest-drop-plan-light.png') })
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: join(output, 'manifest-drop-plan-dark.png') })
+  await page.emulateMedia({ colorScheme: 'light' })
+  await card.first().getByRole('button', { name: 'Run this plan' }).click()
+  await stop.waitFor({ state: 'hidden', timeout: 60000 })
+  await page.waitForFunction(() => document.querySelector('.composer .stop') === null, null, { timeout: 60000 })
+  for (let i = 0; i < 50 && !existsSync(join(project, 'first.md')); i++) await page.waitForTimeout(100)
+  assert.equal(readFileSync(join(project, 'first.md'), 'utf8'), '# Notes from the plan\n', 'the approved plan ran')
+
+  // ---- the same line typed while a turn runs waits, and goes with its picture ---------------------
+  await composer.fill('Hold the turn')
+  await composer.press('Enter')
+  await stop.waitFor({ state: 'visible' })
+  await composer.fill('/manifest build the second notes from ')
+  await drag([png])
+  await chips.first().waitFor()
+  await composer.press('Enter')
+  await page.locator('.queued-messages').waitFor()
+  assert.equal(await chips.count(), 0, 'queuing takes the drop with the line')
+  assert.equal(planned('build the second notes from'), undefined, 'the run waits for the turn')
+  await page.screenshot({ path: join(output, 'manifest-drop-queued.png') })
+  await page.waitForFunction(() => document.querySelector('.queued-messages') === null, null, { timeout: 60000 })
+  await card.nth(1).waitFor({ timeout: 60000 })
+  const second = planned('build the second notes from [Image #')
+  assert.ok(second, 'the queued task reached the planner when the turn ended')
+  assert.ok(carriesPicture(second), 'with the picture it waited with (DROP-4)')
+  assert.ok(!requests.some((body) => body.includes('Hold the turn') && body.includes('/manifest')), 'the line was never sent as a prompt')
+
+  assert.deepEqual(errors, [])
+  console.log(`PASS: a picture dropped onto a /manifest line reaches the planner as "Dropped file:" and its bytes, the plan card is shown and runs, and a line typed during a turn waits and goes with its picture. Screenshots in ${output}/manifest-drop-*.png`)
+} catch (error) {
+  if (page) await page.screenshot({ path: join(output, 'manifest-drop-failure.png') }).catch(() => undefined)
+  throw error
+} finally {
+  await app?.close()
+  await new Promise((resolve) => service.close(resolve))
+  rmSync(root, { recursive: true, force: true })
+}
