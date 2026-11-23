@@ -19830,17 +19830,40 @@ fn a_slot_written_back_to_its_file_after_the_file_was_rewritten_is_asked_about_a
 /// WRITE-4. The same as the test above, with the file rewritten by a `run` line instead of by
 /// `write_file`: by a redirection the line names, and by a program that opens the file itself
 /// (`cp`, `sed -i`), which no part of the line names as a destination. Either way the slot is no
-/// longer a copy of the file, so writing it back is put to the person and restores the bytes.
+/// longer a copy of the file, so the write-back shortcut does not apply, and the restoring write
+/// goes to the ordinary gate instead of being shown unconditionally: WRITE-4 only ever makes a
+/// write unconditional where the destination itself came from a `path_ref`, which this is not.
+///
+/// What TRUST-4's ordinary table (`docs/specs/trust-map.md`) does with the restoring write then
+/// depends on how the line rewrote the file. A redirection is the only form of a line
+/// that names its destination, so it marks the path untrusted, and writing the slot's own
+/// untrusted bytes back into an already untrusted path asks nobody. `cp` and `sed -i` open the
+/// file themselves, which the line does not name as a destination, so the file authority is told
+/// of no write to it: the path is exactly as undecided as it was before the line ran, and a path
+/// nobody has vouched for is asked about either way, as it was before the rewrite.
 ///
 /// Fails if the write is dropped on the strength of where the slot was read from alone after a
-/// program rewrote the file.
+/// program rewrote the file, or if either case is put to the person, or asked of nobody, the
+/// other way around.
 #[test]
-fn a_slot_written_back_to_its_file_after_a_run_line_rewrote_the_file_is_asked_about_and_restores_it()
+fn a_slot_written_back_to_its_file_after_a_run_line_rewrote_the_file_restores_it_and_asks_only_where_the_rewrite_left_the_path_undecided()
  {
-    for (name, command) in [
-        ("redirection", "echo changed > vendor/x.txt"),
-        ("cp", "cp other.txt vendor/x.txt"),
-        ("sed", "sed -i.bak s/vendor/changed/ vendor/x.txt"),
+    for (name, command, expected_asked) in [
+        (
+            "redirection",
+            "echo changed > vendor/x.txt",
+            vec!["copy.txt"],
+        ),
+        (
+            "cp",
+            "cp other.txt vendor/x.txt",
+            vec!["copy.txt", "vendor/x.txt"],
+        ),
+        (
+            "sed",
+            "sed -i.bak s/vendor/changed/ vendor/x.txt",
+            vec!["copy.txt", "vendor/x.txt"],
+        ),
     ] {
         let scratch = Scratch::new(&format!("write-back-after-run-{name}"));
         std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
@@ -19870,12 +19893,24 @@ fn a_slot_written_back_to_its_file_after_a_run_line_rewrote_the_file_is_asked_ab
             RecordingConfirmer::approving().and_approving_runs(),
         );
 
-        // Whether the person was asked is not asserted. A program that rewrites a file leaves it
-        // untrusted, and the trust map asks nothing about untrusted bytes written to an already
-        // untrusted path, so the table decides that and not the shortcut. What the shortcut must
-        // not do is drop the write, which the checks below pin: the file holds the bytes read,
+        // `copy.txt` is always asked about: nobody has vouched for it. Whether the restoring
+        // write to `vendor/x.txt` is asked about too depends on what the rewrite left the trust
+        // map holding: a redirection marks the path untrusted, and TRUST-4 asks nothing about
+        // untrusted bytes written to an already untrusted path; `cp` and `sed -i` leave the path
+        // undecided, which TRUST-4 asks about either way. What the shortcut must not do, either
+        // way, is drop the write, which the checks below also pin: the file holds the bytes read,
         // the planner is told the file was replaced, and the trail has no line saying the path
         // already held what the slot holds.
+        assert_eq!(
+            done.confirmer
+                .seen
+                .iter()
+                .map(|r| r.path.as_str())
+                .collect::<Vec<_>>(),
+            expected_asked,
+            "{name}: who was asked about the restoring write did not match TRUST-4's answer for \
+             how the rewrite left the path"
+        );
         assert!(
             !done
                 .bodies
