@@ -1456,7 +1456,7 @@ fn findable_sockets_that_went_with_a_host_serving_a_turn(
         .collect()
 }
 
-/// A program the host did not start has no way to find it, so it cannot attach to it (U4). After
+/// A program the host did not start has no way to find it, so it cannot attach to it (HOST-13). After
 /// a client has opened a session and run a turn, the host holds no TCP port listening, no UDP port
 /// bound and no Unix socket with a name. On macOS `lsof` lists the host's own sockets, less any
 /// the test process holds too, which the host inherited. On Linux the host is non-dumpable, so a
