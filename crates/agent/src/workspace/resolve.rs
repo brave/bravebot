@@ -615,6 +615,12 @@ impl Workspace {
     /// The remedy is chosen from the path as written as well as from where it lands
     /// ([`Workspace::remedy_for_absolute`]): a path written inside the root or an opened directory
     /// that a link carries out is refused with [`Remedy::Nothing`] whatever the link leads to.
+    ///
+    /// A path that lands in the state directory's stores is worded by [`Workspace::in_the_stores`]
+    /// and [`Workspace::state_directory_remedy`] before [`Workspace::remedy_for_absolute`] is asked,
+    /// the same as [`Workspace::resolve`] words it for a relative path: typed as an absolute path,
+    /// `~/.bravebot/sessions/...` would otherwise read the generic credential-location wording
+    /// `remedy_for_absolute` falls back to, which says nothing of `run` still reaching it.
     fn resolve_added(&self, candidate: &Path, named: &str) -> Result<PathBuf, WorkspaceError> {
         if candidate
             .components()
@@ -631,7 +637,12 @@ impl Workspace {
         };
         let resolved = destination(candidate).ok_or_else(|| escapes(Remedy::Nothing))?;
         if !self.is_opened(&resolved) && !self.bypass_reaches(&resolved, None) {
-            return Err(escapes(self.remedy_for_absolute(candidate, &resolved)));
+            let remedy = if self.in_the_stores(&resolved) {
+                self.state_directory_remedy(&resolved)
+            } else {
+                self.remedy_for_absolute(candidate, &resolved)
+            };
+            return Err(escapes(remedy));
         }
         if let Some(below) = self
             .landed_in(&resolved)

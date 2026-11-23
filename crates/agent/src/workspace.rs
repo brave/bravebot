@@ -7396,6 +7396,32 @@ mod tests {
         );
     }
 
+    /// The same refusal as [`a_workspace_holding_home_cannot_write_the_home_rules_or_reach_the_sessions`],
+    /// for the path spelled absolute rather than relative to the workspace root. An absolute path
+    /// outside every opened directory resolves through [`Workspace::resolve_added`], a different
+    /// function from the one a relative path takes, and it is this one a planner's own expansion of
+    /// `~/.bravebot/sessions/...` reaches. Pins that it words the refusal as the state directory's
+    /// stores do (`Remedy::StateDirectory`, `Remedy::StateDirectorySessions`) and not as the
+    /// generic credential-location fallback does (`Remedy::Credential`), which says nothing of
+    /// `run` still reaching the session records.
+    #[test]
+    fn a_workspace_holding_home_cannot_reach_the_sessions_by_an_absolute_path_either() {
+        let (home, _) = home_and_project("holding-home-rules-absolute");
+        let state = home.join(".bravebot");
+        std::fs::create_dir_all(state.join("sessions/-repo")).expect("sessions");
+        std::fs::write(state.join("AGENTS.md"), "- Use tabs\n").expect("rules");
+        let workspace = Workspace::new(&home).expect("workspace").with_state(&state);
+        let session_file = state.join("sessions/-repo/record.json");
+        std::fs::write(&session_file, "{}").expect("record");
+
+        let remedy = |path: &Path| match workspace.resolve(path.to_str().expect("utf8")) {
+            Err(WorkspaceError::Escapes { remedy, .. }) => remedy,
+            other => panic!("{}: expected Escapes, got {other:?}", path.display()),
+        };
+        assert_eq!(remedy(&state.join("AGENTS.md")), Remedy::StateDirectory);
+        assert_eq!(remedy(&session_file), Remedy::StateDirectorySessions);
+    }
+
     #[test]
     fn a_workspace_holding_home_can_still_write_its_other_files() {
         let (home, _) = home_and_project("holding-home-others");
