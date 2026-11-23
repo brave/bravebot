@@ -293,7 +293,6 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     }
   }, [])
 
-<<<<<<< HEAD
   /** Start a plan run for a typed `/manifest <task>` line (MANIFEST-9). See `plan-run.ts`. */
   const planRun = useCallback((handle: string, task: string, line: string, queuedAlready = false) => startPlanRun({
     call,
