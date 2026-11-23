@@ -119,42 +119,6 @@ fn titled(task: &str, attachments: &[bravebot_agent::turn::Attachment]) -> Strin
     out
 }
 
-#[cfg(test)]
-mod title_tests {
-    use super::titled;
-    use bravebot_agent::turn::Attachment;
-
-    fn dropped(path: &str, media: &str) -> Attachment {
-        Attachment {
-            path: path.to_string(),
-            media: media.to_string(),
-        }
-    }
-
-    #[test]
-    fn each_marker_takes_the_next_files_name() {
-        let attachments = [
-            dropped("/d/a.png", "image/png"),
-            dropped("/d/b.pdf", "application/pdf"),
-        ];
-        assert_eq!(
-            titled("compare [Image #1] with [PDF #3] [x]", &attachments),
-            "compare a.png with b.pdf [x]"
-        );
-    }
-
-    #[test]
-    fn a_marker_with_no_file_and_brackets_that_are_no_marker_stay() {
-        assert_eq!(
-            titled(
-                "[Image #1] and [Image #2] [a #] [#1] [",
-                &[dropped("/d/a.png", "image/png")]
-            ),
-            "a.png and [Image #2] [a #] [#1] ["
-        );
-    }
-}
-
 /// Run one task as a manifest to its end, record it, and say what happened.
 pub(crate) fn walk(walk: Walk) {
     let Walk {
@@ -405,4 +369,40 @@ pub(crate) fn read(request: &Request) -> Result<Value, Failure> {
             "failure": run.failure,
         },
     }))
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::titled;
+    use bravebot_agent::turn::Attachment;
+
+    fn dropped(path: &str, media: &str) -> Attachment {
+        Attachment {
+            path: path.to_string(),
+            media: media.to_string(),
+        }
+    }
+
+    #[test]
+    fn each_marker_takes_the_next_files_name() {
+        let attachments = [
+            dropped("/d/a.png", "image/png"),
+            dropped("/d/b.pdf", "application/pdf"),
+        ];
+        assert_eq!(
+            titled("compare [Image #1] with [PDF #3] [x]", &attachments),
+            "compare a.png with b.pdf [x]"
+        );
+    }
+
+    #[test]
+    fn a_marker_with_no_file_and_brackets_that_are_no_marker_stay() {
+        assert_eq!(
+            titled(
+                "[Image #1] and [Image #2] [a #] [#1] [",
+                &[dropped("/d/a.png", "image/png")]
+            ),
+            "a.png and [Image #2] [a #] [#1] ["
+        );
+    }
 }
