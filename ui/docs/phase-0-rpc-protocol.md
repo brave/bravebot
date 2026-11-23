@@ -1092,8 +1092,33 @@ and `directory`.
 there is asked, and leaves this session's map as it is. It returns the updated lists, and refuses
 `kind: "remembered"` with `bad_request` where nothing is kept. It also refuses `kind: "command"`
 with `bad_request` when `directory` is not a string or names a tree the session holds no such
-entry in, and then removes nothing; it removes only the entry held in that tree. These methods
-refuse with `turn_in_flight` while the session is running. Revocation can reduce existing grants;
+entry in, and then removes nothing; it removes only the entry held in that tree.
+`permissions.check` takes `session`, `family` and `words` and says which rule decides a call, as
+`bravebot permissions check` does ([CLI-30](../../docs/specs/cli.md#CLI-30)). `family` is one of
+`Read`, `Edit`, `Bash`, `WebFetch`, `WebSearch` or `Mcp`, and `words` is an array of strings: one
+path for `Read` and `Edit`, the program and its arguments for `Bash`, one host or URL for
+`WebFetch` (a URL is read as its host), none for `WebSearch`, and one `server:tool` for `Mcp`.
+It matches the call against the rules the session holds, read when it opened (PERM-12), not the
+files as they are now, and reads, writes, grants and revokes nothing. It returns
+`{ decision, rule, shownRule, file, shownFile, granted, reason, notInForce }`:
+- `decision` is `deny`, `ask` or `allow` for the first rule that matches in that order, `none`
+  where no rule matches, or `shortName` where the command reads an 8.3 short name and is refused
+  before any rule is read (PERM-5).
+- `rule` is the deciding rule as its file spelled it, and `file` the file that wrote it. Both are
+  null unless a rule decides, and `file` is also null where no file is known for the rule.
+- `granted` is true where the rule is a checkout's `allow` rule the person granted (PERM-15);
+  `file` is then the checkout's settings file. It is false otherwise.
+- `reason` is the person's reason for the rule, where their own file gave one, already spelled
+  as text, or null.
+- `notInForce` is `{ rule, shownRule, file, shownFile }` for a checkout `allow` rule nobody
+  granted that would have allowed the call, or null. It is always null where the decision is
+  `deny` or `ask`.
+
+`shownRule` and `shownFile` are `rule` and `file` spelled by `bravebot_agent::confirm::shown_text`
+and `shown_path` (PROMPT-1); a client draws those. It refuses with `bad_request` when `family` is
+not one of the six, `words` is not an array of strings, or the words do not fit the family, such
+as an `Mcp` target with no `:` or `WebSearch` with any words. These methods refuse with
+`turn_in_flight` while the session is running. Revocation can reduce existing grants;
 it cannot add trust.
 
 **Known cost.** A command vouched for in a tree with no text spelling is listed with `directory`

@@ -80,6 +80,10 @@ matter:
   bridge, against a model service and a website the script serves itself. A host the person's
   file allows is fetched with no card, a host a rule refuses is neither asked about nor
   fetched, and the banner names what is not in force. No paid inference.
+- `pnpm run drive:rule-check`: the Permissions panel's rule check, through the real app and
+  bridge, against a model service the script serves itself. `Bash git push` is refused by the
+  person's own deny rule, named with its file and reason, and a checkout's ungranted allow rule
+  is named as not in force. Screenshots of both answers, light and dark. No paid inference.
 - `pnpm run drive:permission-mode`: the composer's permission mode, through the real app and
   bridge, against a model service the script serves itself, in a directory nobody trusted.
   Accepting edits writes with no card and still asks about a command, the control works while a
@@ -213,6 +217,7 @@ at, that a control keeps keyboard focus through an animation.
 | `pnpm run drive:exposure` | Answering a read that would expose a credential, and that the value is never drawn |
 | `pnpm run drive:shown` | That no decision card takes an approval before the rows it rests on have been on screen: every kind drawn too tall for a 900x560 window, shut until scrolled through, shut again on a change of width, deaf to a press while shut, and a refusal taken at once; and that rows swept through under the file-drop overlay count for nothing until the drag ends. Screenshots of a card waiting and read, light and dark |
 | `pnpm run drive:rules` | Permission rules from settings files: what is refused, what is not asked, and what is reported as not in force |
+| `pnpm run drive:rule-check` | Which rule decides a call, asked in the Permissions panel: the decision, rule, file, reason and a checkout rule not in force |
 | `pnpm run drive:permission-mode` | The composer's permission mode: accepting edits, plan mode, a change while a turn runs, and the menu shortcut |
 | `pnpm run drive:sandbox-mode` | The composer's sandbox mode: the menu offers workspace-write, read-only and strict and no way to turn the sandbox off, and a program is held to the mode chosen for its turn |
 | `pnpm run drive:spend-limit` | The composer's spend limit: a small limit brings up the limit question, and going on without a limit clears the control |
@@ -344,13 +349,13 @@ These pass `--user-data-dir` with a temporary profile, so the app's own state is
 `drive-bot-summon`, `drive-bot-turn`, `drive-bots`, `drive-close-chat`, `drive-connectors`,
 `drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language`, `drive-language-server`,
 `drive-manual-walkthrough`, `drive-mcp`, `drive-menu`, `drive-models`, `drive-models-live`, `drive-note-changelog-awake`,
-`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,
+`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rule-check`, `drive-rules`, `drive-sandbox-mode`,
 `drive-secure-files`, `drive-session-list`, `drive-spend-limit`, `drive-shown`, `drive-turn-details`,
 `drive-ux-acceptance`, `drive-vetting`, `drive-visual`, `drive-window-lifecycle` and `drive-perf`.
 
 `drive-at-mentions`, `drive-connectors`, `drive-drop`, `drive-exposure`, `drive-fetch`,
 `drive-language-server`, `drive-manual-walkthrough`, `drive-mcp`, `drive-menu`, `drive-note-changelog-awake`, `drive-paste`,
-`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`, `drive-spend-limit` and `drive-vetting`
+`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rule-check`, `drive-rules`, `drive-sandbox-mode`, `drive-spend-limit` and `drive-vetting`
 launch through `scripts/drive-world.mjs`, whose `launchWorld` always passes `--user-data-dir`, with
 the temporary profile its caller made. `drive-manual-walkthrough`, `drive-note-changelog-awake`, `drive-remembered-trust`,
 `drive-rewind` and `drive-vetting` keep their own fixtures and take from it the launch, the

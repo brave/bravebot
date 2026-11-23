@@ -218,6 +218,32 @@ export interface SettingsRules {
 
 export type FilesystemKey = 'allowRead' | 'denyRead' | 'allowWrite' | 'denyWrite'
 
+/** A family `permissions.check` reads a call in, with the words the call takes. */
+export type RuleCheckFamily = 'Read' | 'Edit' | 'Bash' | 'WebFetch' | 'WebSearch' | 'Mcp'
+
+/**
+ * The answer to `permissions.check`: which rule the session's held rules decide a call by (CLI-30).
+ *
+ * `decision` is the first rule that matches in deny, ask, allow order, `none` where no rule
+ * matches, or `shortName` where the call reads an 8.3 short name and is refused (PERM-5). `rule`,
+ * `file`, `reason` and the `granted` flag are null or false unless a rule decides. `file` is null
+ * where no file is known for the rule. `granted` is true for a checkout rule a person granted, whose
+ * `file` is the checkout's settings file. `notInForce` is a checkout `allow` rule that would have
+ * allowed the call and is not granted; it is null where the call is denied or asked about. Draw
+ * the `shown` fields, which spell the text so a character that draws as nothing is visible (PROMPT-1).
+ */
+export interface RuleCheck {
+  decision: 'deny' | 'ask' | 'allow' | 'none' | 'shortName'
+  rule: string | null
+  shownRule: string | null
+  file: string | null
+  shownFile: string | null
+  granted: boolean
+  /** The person's own reason for the rule, already spelled as text. */
+  reason: string | null
+  notInForce: { rule: string; shownRule: string; file: string; shownFile: string } | null
+}
+
 /** A checkout rule a yes to the rules question granted (PERM-15). */
 export interface GrantedRule extends ProposedRule {
   /** Granted in an earlier session, from the grant record, rather than in this one. */

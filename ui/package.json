@@ -37,6 +37,7 @@
     "drive:mcp": "pnpm run bridge && electron-vite build && node scripts/drive-mcp.mjs",
     "drive:connectors": "pnpm run bridge && electron-vite build && node scripts/drive-connectors.mjs",
     "drive:rules": "pnpm run bridge && electron-vite build && node scripts/drive-rules.mjs",
+    "drive:rule-check": "pnpm run bridge && electron-vite build && node scripts/drive-rule-check.mjs",
     "drive:permission-mode": "pnpm run bridge && electron-vite build && node scripts/drive-permission-mode.mjs",
     "drive:sandbox-mode": "pnpm run bridge && electron-vite build && node scripts/drive-sandbox-mode.mjs",
     "drive:spend-limit": "pnpm run bridge && electron-vite build && node scripts/drive-spend-limit.mjs",

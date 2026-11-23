@@ -1018,3 +1018,81 @@ fn a_fork_takes_over_the_directory_question() {
     assert_eq!(holds(&bridge, &parent, &beside), (vec![], false));
     assert!(bridge.open[&parent].ready_for_work().is_err());
 }
+
+/// CLI-30, PERM-15: `permissions.check` reports a checkout's `allow` rule the person has not
+/// granted as not in force, and once they grant it the rule decides the call as a grant.
+#[test]
+fn a_checkouts_allow_rule_is_not_in_force_until_granted() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = proposing("check-not-in-force", &[THE_RULE]);
+    let file = project.join(".bravebot/settings.json");
+    let (mut bridge, _events) = hearing();
+    let (session, settled) = opened_and_trusted(&mut bridge, &project);
+    let check = |bridge: &mut Bridge| {
+        call(
+            bridge,
+            "permissions.check",
+            json!({"session": session, "family": "WebFetch", "words": ["https://example.test/a"]}),
+        )
+        .unwrap()
+    };
+
+    let waiting = check(&mut bridge);
+    assert_eq!(waiting["decision"], "none", "{waiting}");
+    assert_eq!(waiting["granted"], false, "{waiting}");
+    assert_eq!(waiting["notInForce"]["rule"], json!(THE_RULE), "{waiting}");
+    assert_eq!(
+        waiting["notInForce"]["file"],
+        json!(file.display().to_string()),
+        "{waiting}"
+    );
+    assert_eq!(
+        waiting["notInForce"]["shownFile"],
+        json!(bravebot_agent::confirm::shown_path(&file)),
+        "{waiting}"
+    );
+
+    reply(&mut bridge, &session, &settled["rulesQuestion"], true);
+    let granted = check(&mut bridge);
+    assert_eq!(granted["decision"], "allow", "{granted}");
+    assert_eq!(granted["rule"], json!(THE_RULE), "{granted}");
+    assert_eq!(granted["granted"], true, "{granted}");
+    assert_eq!(
+        granted["file"],
+        json!(file.display().to_string()),
+        "{granted}"
+    );
+    assert_eq!(granted["notInForce"], Value::Null, "{granted}");
+}
+
+/// `permissions.check` is refused while a turn runs, since the turn holds the session's rules.
+#[test]
+fn permissions_check_is_refused_during_a_turn_and_for_an_unknown_session() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = proposing("check-during-a-turn", &[]);
+    let (mut bridge, _events) = hearing();
+    let (session, _settled) = opened_and_trusted(&mut bridge, &project);
+    let params = json!({"session": session, "family": "Bash", "words": ["ls"]});
+    assert!(call(&mut bridge, "permissions.check", params.clone()).is_ok());
+    let started = crate::running::Running::start();
+    bridge.open.get_mut(&session).unwrap().running = Some(started.running);
+    let refused = call(&mut bridge, "permissions.check", params).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::TurnInFlight, "{}", refused.message);
+
+    let refused = call(
+        &mut bridge,
+        "permissions.check",
+        json!({"session": "no-such", "family": "Bash", "words": ["ls"]}),
+    )
+    .unwrap_err();
+    assert_eq!(
+        refused.code,
+        ErrorCode::NoSuchSession,
+        "{}",
+        refused.message
+    );
+}

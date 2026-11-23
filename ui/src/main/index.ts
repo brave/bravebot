@@ -705,6 +705,7 @@ const ALLOWED = new Set([
   'rules.reply',
   'folder.reply',
   'permissions.list',
+  'permissions.check',
   'permissions.revoke',
   'doctor',
   'changelog.read',

@@ -89,6 +89,7 @@ pub mod retrieval;
 pub mod rewind;
 pub mod roster;
 mod rule_approval;
+pub mod rule_check;
 pub mod rules;
 pub mod sandbox_reason;
 pub mod scratch;

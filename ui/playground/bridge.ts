@@ -415,6 +415,16 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
         shownRoot: '/Users/example/Library/Application Support/bravebot-ui-b',
       },
     })
+    case 'permissions.check': return ok({
+      decision: 'deny',
+      rule: 'Bash(git push:*)',
+      shownRule: 'Bash(git push:*)',
+      file: '/Users/example/.bravebot/settings.json',
+      shownFile: '/Users/example/.bravebot/settings.json',
+      granted: false,
+      reason: 'Pushes go through review.',
+      notInForce: null,
+    })
     case 'permissions.revoke': return ok({ paths: [], commands: [] })
     case 'watches.list': return ok({ busy: false, watches: [{ number: 1, path: 'src/cache.ts', state: 'watching', remainingSeconds: 86_400, armedBy: null }] })
     case 'watches.add': case 'watches.stop': return ok({ busy: false, watches: [] })
