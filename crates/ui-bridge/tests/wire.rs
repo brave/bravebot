@@ -2408,6 +2408,7 @@ fn a_standing_mcp_answer_takes_an_approval_and_a_literal_true() {
 /// A tool list crosses as the client drew it, a call with each argument as JSON, and a move with
 /// the authority the agent took out of the destination (SERVERS-7, SERVERS-8, SERVERS-11).
 #[test]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
 fn the_mcp_questions_carry_what_a_card_draws() {
     use bravebot_agent::confirm::{
         ListedTool, ListedToolArgument, McpCallRequest, MoveRequest, ToolListRequest,
@@ -2472,6 +2473,29 @@ fn the_mcp_questions_carry_what_a_card_draws() {
     assert_eq!(call["mayStand"], false);
     assert_eq!(call["askedForPrivateArguments"], false);
     assert_eq!(call["also"], json!([]));
+    assert_eq!(
+        call["description"],
+        Value::Null,
+        "a call with no description sends none"
+    );
+
+    let described = wire::mcp_call_request(
+        5,
+        &McpCallRequest {
+            alias: "weather".into(),
+            tool: "get_forecast".into(),
+            arguments: vec![("city".into(), "\"Paris\"".into())],
+            description: Some("the forecast for a city".into()),
+            may_stand: false,
+            asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
+        },
+    );
+    assert_eq!(
+        described["description"], "the forecast for a city",
+        "the card draws the description of the tool from the vouched list"
+    );
 
     let batched = wire::mcp_call_request(
         4,

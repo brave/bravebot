@@ -578,6 +578,24 @@ mod tests {
         assert!(!written.contains("at the model"), "got: {written}");
     }
 
+    /// DOWNLOAD-3: the note a finished download carries, the status, the byte count and the
+    /// cleaned content type, is printed under the call in a one-shot run. A progress printer that
+    /// printed the call and dropped the note would leave a run watched from a terminal with no
+    /// word of what the server answered.
+    #[test]
+    fn a_finished_download_prints_its_status_size_and_content_type() {
+        let written = log(|p| {
+            p.tool_finished(
+                Activity::running("Download", "https://example.com/blob")
+                    .done("203, 3000 bytes, text/x-sentinelsplit"),
+            );
+        });
+        assert!(
+            written.contains("203, 3000 bytes, text/x-sentinelsplit"),
+            "got: {written}"
+        );
+    }
+
     /// TRACE-11, LAYER-3: a call's target, reason and note can name a file a checkout chose, and
     /// the line each is said on is drawn with its control characters pictured.
     #[test]

@@ -372,6 +372,48 @@ fn a_start_hook_that_cannot_run_is_said_when_the_first_turn_fails() {
     window.close(&session);
 }
 
+/// HOOK-7: a hook at a turn's own moment that cannot be started is said in the notices of the event
+/// that ends the turn, whether the turn answered (`turn.done`) or failed (`turn.error`). A failed
+/// turn has no outcome to take its notices from, so `turn.error` is built from the reporter's. An
+/// error event assembled from the session's start notices and the reused answers alone would leave
+/// the person with a turn that failed and no word about the formatter that never ran.
+#[test]
+fn a_turn_hook_that_cannot_run_is_said_whether_the_turn_answered_or_failed() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("window-trouble-turn-moment");
+    let state = bravebot_agent::home::directory().unwrap();
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(
+        bravebot_config::hooks::hooks_file(&state),
+        json!({"hooks": [{"on": "turn-finished", "run": ["/no/such/fmt"]}]}).to_string(),
+    )
+    .unwrap();
+    let (config, _requests, _server) = endpoint::endpoint(
+        vec![endpoint::answer(), "fail".into(), endpoint::answer()],
+        None,
+    );
+    let mut window = Window::on(&config.endpoint, &project);
+    let session = window.session(&project);
+
+    let answered = window.turn(&session, "one");
+    let failed = window.turn(&session, "two");
+
+    let said = |ended: &Value| ended["data"]["notices"].to_string();
+    assert_eq!(answered["event"], "turn.done", "{answered}");
+    assert!(
+        said(&answered).contains("turn-finished hook `/no/such/fmt`"),
+        "{answered}"
+    );
+    assert_eq!(failed["event"], "turn.error", "{failed}");
+    assert!(
+        said(&failed).contains("turn-finished hook `/no/such/fmt`"),
+        "the failed turn's event left out what the turn said: {failed}"
+    );
+    window.close(&session);
+}
+
 /// A start hook holds the first turn while it runs, so the window is told which hook it is, as for a
 /// hook at a turn's own moment: a pair of events, from before the turn's work to its end. A start
 /// that drew nothing would look to the person like a slow model.

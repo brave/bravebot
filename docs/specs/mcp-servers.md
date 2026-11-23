@@ -942,6 +942,7 @@ the list from `also` on `mcp-call.request`.
 `verified-by: bravebot_agent::mcp::a_calls_arguments_reach_the_question_in_the_order_the_agent_holds_them`
 `verified-by: bravebot_tui::confirm::mcp::a_call_prompt_draws_its_arguments_in_the_order_the_request_holds_them`
 `verified-by: bravebot_ui_bridge::wire::a_calls_arguments_cross_the_wire_in_the_order_the_request_holds_them`
+`verified-by: bravebot_ui_bridge::wire::the_mcp_questions_carry_what_a_card_draws`
 
 <a id="SERVERS-8"></a>
 ### SERVERS-8: a server's own words are never an identifier
@@ -2769,14 +2770,20 @@ A server in an OpenShell sandbox receives the stream it is given like any other
 **What the tests pin.** `--plain` and `-p` are pinned by running a server that writes escape
 sequences and reading the transcript. The OpenShell backend is pinned by a fake `openshell` that
 records whether its own stderr is the null device. The full-screen interface (the start in
-`crates/cli/src/main.rs` and `/mcp` in `crates/tui/src/mcp_command.rs`) and the desktop application
-(`crates/ui-bridge/src/bridge.rs`) also pass `Stream::Null`, and no test pins those three call
-sites, since each starts a confined server inside a front end that has no harness for reading what
-the server wrote. A change of one of them to `Stream::Inherited` is found by a reviewer.
+`crates/cli/src/main.rs`) is pinned in a terminal that shows nothing the server wrote, and `/mcp
+reconnect` (`crates/tui/src/mcp_command.rs`) by a child process that re-runs the test. The desktop
+application (`crates/ui-bridge/src/bridge.rs`) is pinned by starting `bravebot-rpc` with its own
+standard error in a file and reading that file, its standard output and every event, for a server
+that writes escape sequences and exits before its handshake. Each of those tests except the
+OpenShell one starts a server under confinement and runs on Unix only. Where confinement is
+unavailable each skips, and fails instead when the `CI` environment variable is set.
 
 `verified-by: bravebot_cli::running::a_session_in_lines_shows_nothing_a_servers_stderr_writes`
 `verified-by: bravebot_cli::running::a_one_shot_run_shows_nothing_a_servers_stderr_writes`
 `verified-by: bravebot_sandbox::openshell::a_discarded_stderr_is_the_null_device_for_the_program_in_the_sandbox`
+`verified-by: bravebot_cli::terminal_modes::the_interface_that_draws_shows_nothing_a_servers_stderr_writes`
+`verified-by: bravebot_tui::mcp_command::reconnect_draws_nothing_a_servers_stderr_writes_and_shows_a_failed_handshake`
+`verified-by: bravebot_ui_bridge::servers::the_desktop_bridge_shows_nothing_a_servers_stderr_writes`
 
 <a id="SERVERS-26"></a>
 ### SERVERS-26: a declaration may name what a row of an `apply` step may fill, and mark a tool plan-covered

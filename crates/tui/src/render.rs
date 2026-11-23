@@ -5545,6 +5545,21 @@ mod tests {
             );
         }
 
+        /// DOWNLOAD-3: the note a finished download carries, which is the status, the byte count
+        /// and the cleaned content type, is drawn under the call in the terminal. A renderer that
+        /// drew the call and left the note out would show the person nothing of what the server
+        /// said, which is the only place the content type is shown.
+        #[test]
+        fn a_finished_download_draws_its_status_size_and_content_type() {
+            let activity = Activity::running("Download", "https://example.com/blob")
+                .done("203, 3000 bytes, text/x-sentinelsplit");
+            let drawn = drawn_for(&activity);
+            assert!(
+                drawn.contains("203, 3000 bytes, text/x-sentinelsplit"),
+                "the note of the download is not drawn: {drawn}"
+            );
+        }
+
         /// The user is shown what the model was not, and it is marked in the margin so the
         /// mark cannot be ended by anything written inside it.
         #[test]

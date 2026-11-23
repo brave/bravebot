@@ -1836,7 +1836,7 @@ stay behind because they were given for work that the brief describes only in wo
 `verified-by: bravebot_agent::turn::a_handoff_brief_past_four_thousand_characters_is_cut_to_four_thousand`
 `verified-by: bravebot_tui::app::the_brief_is_sent_as_a_line_the_person_typed_and_is_recalled_as_one`
 `verified-by: bravebot_tui::app::the_record_a_handoff_came_from_is_untouched_by_the_new_one_and_still_resumes`
-`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/handoff.test.mjs asserts that a handoff is armed with the brief, keeps the draft it replaced, is dropped by Escape or an emptied box and is taken on send; make check-ui runs it)`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/handoff.test.mjs asserts that a handoff is armed with the brief, keeps the draft it replaced, is dropped by Escape or an emptied box and is taken on send, and reads the Composer, Transcript, App and use-handoff sources to assert that Escape in the box reaches the rule that drops the brief and puts the draft back; make check-ui runs it)`
 
 ## Known costs
 
