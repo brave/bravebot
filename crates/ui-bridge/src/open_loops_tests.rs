@@ -226,7 +226,9 @@ fn the_record_keeps_the_sessions_work_and_written_files() {
     assert_eq!(resumed.written, written);
 }
 
-/// Run `git` in `root` with no configuration but its own.
+/// Run `git` in `root` with no configuration but its own. Unix only, like the one test that uses
+/// it, since it points git's global configuration at `/dev/null`.
+#[cfg(unix)]
 fn git(root: &Path, arguments: &[&str]) {
     let status = std::process::Command::new("git")
         .args(["-c", "user.email=t@t", "-c", "user.name=t"])
