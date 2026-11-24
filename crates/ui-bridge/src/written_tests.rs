@@ -34,3 +34,25 @@ fn a_finished_write_is_listed_once_and_a_failed_one_is_not() {
         [PathBuf::from("b.rs"), PathBuf::from("a.rs")]
     );
 }
+
+/// A name that is not UTF-8 and its lossy lookalike are two files, so both are listed (PATH-003).
+/// The regression it rejects is a dedupe that compares names through `to_string_lossy`, which
+/// would drop the second and leave one of the session's writes out of its uncommitted files.
+#[cfg(unix)]
+#[test]
+fn a_name_that_is_not_utf8_is_listed_beside_its_lossy_lookalike() {
+    use std::os::unix::ffi::OsStrExt;
+    let raw = PathBuf::from(std::ffi::OsStr::from_bytes(b"a-\xff"));
+    let lookalike = PathBuf::from("a-\u{FFFD}");
+    let landed_on = |landed: &PathBuf| {
+        Activity::running("Update", "a-").with_written(Some(Written {
+            landed: landed.clone(),
+            ..Written::default()
+        }))
+    };
+    let mut reporter = BridgeReporter::new(Emitter::new(Box::new(|_| {})), "s1");
+    reporter.tool_finished(landed_on(&raw).done("wrote"));
+    reporter.tool_finished(landed_on(&lookalike).done("wrote"));
+
+    assert_eq!(reporter.written(), [raw, lookalike]);
+}
