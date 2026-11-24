@@ -56,3 +56,26 @@ fn a_name_that_is_not_utf8_is_listed_beside_its_lossy_lookalike() {
 
     assert_eq!(reporter.written(), [raw, lookalike]);
 }
+
+/// OPEN-6: the files a turn wrote are its own write calls'. A write a delegate reports lands in the
+/// delegate's checkout, so it is not kept as one the session wrote, and the window still hears that
+/// the call finished.
+#[test]
+fn a_delegates_write_is_not_kept_as_one_the_session_wrote() {
+    let (sender, heard) = std::sync::mpsc::channel();
+    let emitter = Emitter::new(Box::new(move |event| {
+        let _ = sender.send(event.name);
+    }));
+    let mut reporter = BridgeReporter::new(emitter, "s1");
+    reporter.reporting_for(Some(DelegateId::nth(1)));
+    reporter.tool_finished(write_to("/work/delegate.txt").done("wrote"));
+    assert!(reporter.written().is_empty());
+    reporter.reporting_for(None);
+    reporter.tool_finished(write_to("/work/out.txt").done("wrote"));
+    assert_eq!(reporter.written(), [PathBuf::from("/work/out.txt")]);
+    let finished = heard
+        .try_iter()
+        .filter(|name| *name == "tool.finished")
+        .count();
+    assert_eq!(finished, 2);
+}

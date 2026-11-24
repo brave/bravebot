@@ -841,11 +841,11 @@ impl Bridge {
             .and_then(|open| resumed_loops(open, &directory, self.settings.as_deref()));
 
         let mut opened = self.recount(&handle, &directory, &record, auto_vetting);
-        // The line is the person's, in their language (OPEN-3, OPEN-7). Null where nothing is
-        // open, so the window shows nothing (OPEN-6).
+        // The sentence is the person's, in their language (OPEN-7). Null where nothing is open,
+        // so the window shows nothing (OPEN-6).
         opened["openLoops"] = loops
-            .filter(|loops| !loops.is_empty())
-            .map_or(Value::Null, |loops| json!(loops.line()));
+            .and_then(|loops| loops.left_open())
+            .map_or(Value::Null, |said| json!(said));
         opened["settingsRules"] = rules;
         opened["scratch"] = self.scratch_report(&handle);
         if let Some(open) = self.open.get(&handle)
