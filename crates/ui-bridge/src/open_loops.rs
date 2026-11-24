@@ -37,8 +37,7 @@ pub(crate) fn of(state: &State, workspace: &Workspace) -> Loops {
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
-    clippy::disallowed_methods,
-    reason = "a test that unwraps fails at the line that did, and the git test runs git"
+    reason = "a test that unwraps fails at the line that did"
 )]
 mod tests {
     use super::*;
