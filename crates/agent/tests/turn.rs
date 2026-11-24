@@ -486,6 +486,12 @@ fn a_named_file_a_deny_rule_covers_is_left_out_of_the_turn() {
 /// attached the same way and still reaches the planner, which rejects leaving out every absolute
 /// name while a rule is in force. An absolute `@` name inside the project is refused by the read
 /// itself (`Escapes`), so for `@` only the covered file is named.
+///
+/// A volume such as APFS opens both spellings of the directory as one, and one such as ext4 holds
+/// them apart, so the other spelling names a file that exists only on the first. The covered file
+/// is named under both spellings on every volume, since a rule decides on the name and no file has
+/// to exist. The uncovered file is named under a spelling only where it exists, since reading it
+/// is the point and an absent file fails the turn.
 #[test]
 fn a_project_file_a_relative_deny_rule_covers_is_left_out_when_named_absolutely() {
     let scratch = Scratch::new("absolute-denied");
@@ -511,6 +517,7 @@ fn a_project_file_a_relative_deny_rule_covers_is_left_out_when_named_absolutely(
     };
     assert_ne!(root, other, "the two spellings of the root are one");
 
+    let own = root.clone();
     for spelled in [root, other] {
         for gesture in ["dropped", "attached", "at"] {
             let denied = format!("{spelled}/held/src/lib.rs");
@@ -522,18 +529,35 @@ fn a_project_file_a_relative_deny_rule_covers_is_left_out_when_named_absolutely(
                     "main.rs"
                 }
             );
+            // The root's own spelling always holds the file. The other one does where the volume
+            // opens both as one directory.
+            let beside_exists = std::path::Path::new(&beside).exists();
+            assert!(
+                beside_exists || spelled != own,
+                "{gesture} {spelled}: the file beside the covered one is gone"
+            );
             let (permissions, rejected) =
                 bravebot_agent::permissions::from_settings(&settings, None, workspace.root());
             assert!(rejected.is_empty(), "the rule did not parse");
             let task = Task::new("what do they say").with_permissions(permissions);
             let task = match gesture {
                 "at" => task.with_file(denied.clone()),
-                "dropped" => task
-                    .with_dropped_text(denied.clone())
-                    .with_dropped_text(beside),
-                _ => task
-                    .with_attachment(denied.clone(), "image/png")
-                    .with_attachment(beside, "image/png"),
+                "dropped" => {
+                    let task = task.with_dropped_text(denied.clone());
+                    if beside_exists {
+                        task.with_dropped_text(beside)
+                    } else {
+                        task
+                    }
+                }
+                _ => {
+                    let task = task.with_attachment(denied.clone(), "image/png");
+                    if beside_exists {
+                        task.with_attachment(beside, "image/png")
+                    } else {
+                        task
+                    }
+                }
             };
             let (endpoint, received) = serve(&reply_with("it is a stub"));
             let config = config_for(&endpoint);
@@ -563,11 +587,11 @@ fn a_project_file_a_relative_deny_rule_covers_is_left_out_when_named_absolutely(
             let pictures = body.matches("data:image/png;base64,").count();
             assert_eq!(
                 pictures,
-                usize::from(gesture == "attached"),
+                usize::from(gesture == "attached" && beside_exists),
                 "{gesture} {spelled}: the covered attachment was sent, or the uncovered one was not: {body}"
             );
             assert!(
-                gesture != "dropped" || body.contains("fn main()"),
+                gesture != "dropped" || !beside_exists || body.contains("fn main()"),
                 "{gesture} {spelled}: the file no rule covers was left out: {body}"
             );
             assert!(
