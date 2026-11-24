@@ -70,11 +70,22 @@ crates/core/src/policy.rs::precommitted: r => ensures r == spec_precommitted(*se
 crates/core/src/policy.rs::precommitted_into: r => ensures r == spec_precommitted_into(*self, *slot, destination@),
 crates/core/src/policy.rs::deny: r => ensures spec_context(*final(self)) == spec_context(*old(self)),
 crates/core/src/policy.rs::allow: ensures spec_context(*final(self)) == spec_context(*old(self)),
+crates/core/src/policy.rs::refuse_a_denied_host: r => ensures r is Err <==> spec_rules_for_host(*old(self), host@) == crate::permissions::Decision::Ruled( crate::permissions::Ruling::Deny, ),
+crates/core/src/policy.rs::rules_for_host: r => ensures r == spec_rules_for_host(*self, host@),
 crates/core/src/policy.rs::before_fetch: r => ensures r is Ok ==> crate::spec::output_label_is_untrusted(Capability::WebFetch, Some(r->Ok_0)),
+crates/core/src/policy.rs::before_search_rules: r => ensures r is Err <==> spec_rules_for_search(*old(self)) == crate::permissions::Decision::Ruled( crate::permissions::Ruling::Deny, ),
+crates/core/src/policy.rs::rules_for_search: r => ensures r == spec_rules_for_search(*self),
 crates/core/src/policy.rs::before_search: r => ensures r is Ok ==> crate::spec::output_label_is_untrusted(Capability::WebSearch, Some(r->Ok_0)),
 crates/core/src/policy.rs::promote_a_server_move: r => ensures r is Ok <==> spec_granted(*old(self), "mcp_move"@, "alias"@, alias@), r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
+crates/core/src/policy.rs::before_mcp_call_rules: r => ensures r is Err <==> spec_rules_for_mcp(*old(self), alias@, tool@) == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Deny),
+crates/core/src/policy.rs::rules_for_mcp: r => ensures r == spec_rules_for_mcp(*self, alias@, tool@),
 crates/core/src/policy.rs::promote_a_tool_list: r => ensures r is Ok <==> spec_granted(*old(self), "mcp_tools"@, "alias"@, alias@), r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
 crates/core/src/policy.rs::observe: r => ensures r is Ok ==> crate::spec::output_label_is_untrusted(capability, Some(r->Ok_0)), r is Err ==> crate::spec::output_label_is_untrusted(capability, None),
+crates/core/src/policy.rs::refuse_if_denied: r => ensures r is Err <==> decision == crate::permissions::Decision::Ruled( crate::permissions::Ruling::Deny, ),
+crates/core/src/policy.rs::before_read: r => ensures r is Err <==> spec_rules_for_read(*old(self), path@) == crate::permissions::Decision::Ruled( crate::permissions::Ruling::Deny, ),
+crates/core/src/policy.rs::rules_for_read: r => ensures r == spec_rules_for_read(*self, path@),
+crates/core/src/policy.rs::rules_for_edit: r => ensures r == spec_rules_for_edit(*self, path@),
+crates/core/src/policy.rs::refuse_denied_write: r => ensures r is Err <==> spec_rules_for_edit(*old(self), path@) == crate::permissions::Decision::Ruled( crate::permissions::Ruling::Deny, ) || spec_rules_for_read(*old(self), path@) == crate::permissions::Decision::Ruled( crate::permissions::Ruling::Deny, ),
 crates/core/src/policy.rs::context_integrity: r => ensures r == spec_context(*self),
 crates/core/src/policy.rs::absorb: ensures spec_context(*final(self)) == crate::spec::meet(spec_context(*old(self)), observed),
 crates/core/src/policy.rs::record_answers: r => ensures r is Ok <==> crate::value::spec_label_of(series).integrity == Integrity::Trusted, r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::value::spec_label_of( series, ), spec_context(*final(self)) == spec_context(*old(self)),
@@ -160,6 +171,7 @@ crates/core/src/policy.rs::ExDenial: assumes external_type_specification
 crates/core/src/policy.rs::ExDenial: assumes external_body
 crates/core/src/policy.rs::no_observation: assumes external_body
 crates/core/src/policy.rs::no_label: assumes external_body
+crates/core/src/policy.rs::server_call: assumes external_body
 crates/core/src/policy.rs::describe_the_answers: assumes external_body
 crates/core/src/policy.rs::Policy: assumes external_body
 crates/core/src/policy.rs::precommitted: assumes external_body
@@ -167,11 +179,17 @@ crates/core/src/policy.rs::precommitted_into: assumes external_body
 crates/core/src/policy.rs::deny: assumes external_body
 crates/core/src/policy.rs::allow: assumes external_body
 crates/core/src/policy.rs::before_capability: assumes external_body
+crates/core/src/policy.rs::rules_for_host: assumes external_body
 crates/core/src/policy.rs::hold_to_the_host_of: assumes external_body
 crates/core/src/policy.rs::allow_fetched_body: assumes external_body
+crates/core/src/policy.rs::rules_for_search: assumes external_body
 crates/core/src/policy.rs::hold_search_to_the_host_of: assumes external_body
 crates/core/src/policy.rs::allow_search_results: assumes external_body
+crates/core/src/policy.rs::rules_for_mcp: assumes external_body
 crates/core/src/policy.rs::record_observed: assumes external_body
+crates/core/src/policy.rs::refuse_a_deny_rule: assumes external_body
+crates/core/src/policy.rs::rules_for_read: assumes external_body
+crates/core/src/policy.rs::rules_for_edit: assumes external_body
 crates/core/src/policy.rs::context_integrity: assumes external_body
 crates/core/src/policy.rs::absorb: assumes external_body
 crates/core/src/policy.rs::refuse_wrong_kind: assumes external_body

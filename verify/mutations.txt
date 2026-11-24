@@ -617,3 +617,31 @@ replace: self.allow_fetched_body(label); => let label = Label::new(Integrity::Tr
 mutation: Policy::before_search returns a trusted label for search results
 file: crates/core/src/policy.rs
 replace: self.allow_search_results(label); => let label = Label::new(Integrity::Trusted, label.confidentiality);
+
+mutation: refuse_if_denied lets through an action a deny rule covers
+file: crates/core/src/policy.rs
+replace: decision == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Deny); => decision == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Ask);
+
+mutation: before_fetch_rules asks the rules about another host
+file: crates/core/src/policy.rs
+replace: let decision = self.rules_for_host(host); => let decision = self.rules_for_host("example.com");
+
+mutation: before_search_rules lets a denied search through
+file: crates/core/src/policy.rs
+replace: self.refuse_if_denied("search", decision, "a web search") => Ok(())
+
+mutation: before_mcp_call_rules lets a denied call through
+file: crates/core/src/policy.rs
+replace: self.refuse_if_denied("mcp_call", decision, &call) => Ok(())
+
+mutation: before_read lets a denied read through
+file: crates/core/src/policy.rs
+replace: self.refuse_if_denied("read", decision, path) => Ok(())
+
+mutation: refuse_denied_write lets a write to a path nothing may read through
+file: crates/core/src/policy.rs
+replace: self.refuse_if_denied("write", read, path) => Ok(())
+
+mutation: refuse_denied_write lets a write a deny rule on edits covers through
+file: crates/core/src/policy.rs
+replace: self.refuse_if_denied("write", edited, path)?; => let _ = edited;
