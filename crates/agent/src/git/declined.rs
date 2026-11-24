@@ -51,54 +51,64 @@ pub enum Declined {
 }
 
 impl Declined {
-    /// The sentence the planner reads, for a repository it called `named`.
+    /// The sentence the planner reads, for a repository it called `named`, naming `read_git`
+    /// itself.
     ///
     /// What to do instead is not in it. git answers nearly everything this reader declines, `run` is
     /// how git is asked, and a turn is not always offered `run`, so that half is
     /// [`Declined::instead`] and the caller that knows the turn puts the two together.
     pub fn describe(&self, named: &str) -> String {
+        self.describe_as(named, "read_git")
+    }
+
+    /// [`Declined::describe`], naming this reader as `reader` rather than always as `read_git`.
+    ///
+    /// A checkout refusal reaches a turn that made no `read_git` call and may not be offered one
+    /// (TOOL-6), so its caller gives a name that turn can act on, such as "the repository
+    /// reader", where its tool list lacks `read_git`.
+    pub fn describe_as(&self, named: &str, reader: &str) -> String {
         match self {
             Declined::Untrusted => format!(
-                "{named}/.git is not a directory this session trusts in full, so read_git does \
+                "{named}/.git is not a directory this session trusts in full, so {reader} does \
                  not open it: reading history means following what its files say."
             ),
             Declined::Fenced => format!(
-                "{named}/.git holds a file a deny rule covers, and read_git reads every file \
+                "{named}/.git holds a file a deny rule covers, and {reader} reads every file \
                  there or none, so it does not open it."
             ),
             Declined::NoRepository => format!(
-                "{named} has no .git directory holding a repository. read_git reads a repository \
+                "{named} has no .git directory holding a repository. {reader} reads a repository \
                  whose .git is a directory."
             ),
             Declined::LinkedGitDir => format!(
                 "{named}/.git is a file pointing elsewhere, as a linked worktree or a submodule \
-                 has, and read_git does not follow it."
+                 has, and {reader} does not follow it."
             ),
             Declined::Linked => {
-                format!("{named}/.git holds a symbolic link, and read_git does not follow one.")
+                format!("{named}/.git holds a symbolic link, and {reader} does not follow one.")
             }
             Declined::Alternates => format!(
                 "{named}/.git borrows objects from another repository through \
-                 objects/info/alternates, which read_git does not read."
+                 objects/info/alternates, which {reader} does not read."
             ),
             Declined::CommonDir => format!(
                 "{named}/.git shares its refs and objects with another repository through \
-                 commondir, which read_git does not follow."
+                 commondir, which {reader} does not follow."
             ),
             Declined::Replaced => format!(
                 "{named}/.git replaces objects or grafts parents, through refs/replace or \
-                 info/grafts, and read_git does not apply either."
+                 info/grafts, and {reader} does not apply either."
             ),
             Declined::Include => format!(
-                "{named}/.git/config includes configuration from another file, which read_git \
+                "{named}/.git/config includes configuration from another file, which {reader} \
                  does not read."
             ),
             Declined::Worktree => {
-                format!("{named}/.git/config sets core.worktree, which read_git does not follow.")
+                format!("{named}/.git/config sets core.worktree, which {reader} does not follow.")
             }
             Declined::Format => format!(
-                "{named}/.git/config names a repository format or extension read_git does not \
-                 read, or is not configuration read_git can parse."
+                "{named}/.git/config names a repository format or extension {reader} does not \
+                 read, or is not configuration {reader} can parse."
             ),
             Declined::Unreadable => format!(
                 "{named}/.git could not be read as a repository: something it names is missing \
@@ -110,7 +120,7 @@ impl Declined {
             ),
             Declined::NoCommits => format!("{named} has no commits yet."),
             Declined::TooSlow => {
-                format!("Reading {named}/.git took longer than read_git allows.")
+                format!("Reading {named}/.git took longer than {reader} allows.")
             }
             Declined::Unknown(revision) => {
                 format!("{revision} names no commit, tag, branch or object in {named}.")
@@ -119,7 +129,7 @@ impl Declined {
                 "{revision} is the start of more than one object id in {named}; give more of it."
             ),
             Declined::Unsupported(revision, what) => {
-                format!("{revision} uses {what}, which read_git does not support.")
+                format!("{revision} uses {what}, which {reader} does not support.")
             }
             Declined::Kind { revision, wanted } => {
                 format!("{revision} does not name a {wanted} in {named}.")
@@ -132,7 +142,7 @@ impl Declined {
                  repository's root, without . or .. components."
             ),
             Declined::Withheld(path) => format!(
-                "{path} in {named} is a path this session may not read, so read_git does not \
+                "{path} in {named} is a path this session may not read, so {reader} does not \
                  show it."
             ),
             Declined::ShowNeedsPath(revision) => format!(
@@ -168,17 +178,17 @@ impl Declined {
                  base to measure from; use A..B to compare their ends."
             ),
             Declined::UntrustedTree => format!(
-                "{named} is not a working tree this session trusts in full, so read_git does not \
+                "{named} is not a working tree this session trusts in full, so {reader} does not \
                  read its status: status compares every file there with the index."
             ),
             Declined::StatusTakesNoRevision => "status compares the index and the working tree \
                  with HEAD and takes no revision; to compare commits, use diff."
                 .to_owned(),
             Declined::SplitIndex => format!(
-                "{named}/.git/index is split into a shared index, which read_git does not read."
+                "{named}/.git/index is split into a shared index, which {reader} does not read."
             ),
             Declined::SparseIndex => {
-                format!("{named}/.git/index is a sparse index, which read_git does not read.")
+                format!("{named}/.git/index is a sparse index, which {reader} does not read.")
             }
             Declined::Bare => format!(
                 "{named}/.git/config sets core.bare, so the repository has no working tree to \
@@ -186,7 +196,7 @@ impl Declined {
             ),
             Declined::Elsewhere => format!(
                 "{named}/.git/config names an ignore or attributes file outside the repository, \
-                 through core.excludesFile, core.attributesFile or attr.tree, which read_git does \
+                 through core.excludesFile, core.attributesFile or attr.tree, which {reader} does \
                  not read."
             ),
         }

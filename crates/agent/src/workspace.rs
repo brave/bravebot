@@ -4435,7 +4435,20 @@ impl Workspace {
         state: &Path,
         made_for: bravebot_core::delegate::DelegateId,
     ) -> Result<Workspace, (CheckoutRefusal, String)> {
-        self.checkout_in(policy, Some(state), made_for)
+        self.checkout_for_cause_as(policy, state, made_for, "read_git")
+    }
+
+    /// [`Workspace::checkout_for_cause`], naming the reader that would have opened the repository
+    /// as `reader` rather than always as `read_git`, where the turn asking for the checkout is
+    /// not the turn that would have called `read_git` and may not be offered it (TOOL-6).
+    pub fn checkout_for_cause_as<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        state: &Path,
+        made_for: bravebot_core::delegate::DelegateId,
+        reader: &str,
+    ) -> Result<Workspace, (CheckoutRefusal, String)> {
+        self.checkout_in(policy, Some(state), made_for, reader)
     }
 
     /// [`Workspace::checkout_for_cause`] for a session with no state directory to make checkouts
@@ -4446,15 +4459,30 @@ impl Workspace {
         policy: &Policy<'_, S>,
         made_for: bravebot_core::delegate::DelegateId,
     ) -> Result<Workspace, (CheckoutRefusal, String)> {
-        self.checkout_in(policy, None, made_for)
+        self.checkout_in_temporary_directory_cause_as(policy, made_for, "read_git")
+    }
+
+    /// [`Workspace::checkout_in_temporary_directory_cause`], naming the reader that would have
+    /// opened the repository as `reader` rather than always as `read_git` (TOOL-6).
+    pub fn checkout_in_temporary_directory_cause_as<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        made_for: bravebot_core::delegate::DelegateId,
+        reader: &str,
+    ) -> Result<Workspace, (CheckoutRefusal, String)> {
+        self.checkout_in(policy, None, made_for, reader)
     }
 
     /// `state` is where the checkout is made, or `None` for the session's temporary directory.
+    /// `reader` names, in the refusal's sentence, the tool that would have opened the repository:
+    /// `"read_git"` for its own caller, or a stand-in where the asking turn may not be offered it
+    /// (TOOL-6).
     fn checkout_in<S: Sink>(
         &self,
         policy: &Policy<'_, S>,
         state: Option<&Path>,
         made_for: bravebot_core::delegate::DelegateId,
+        reader: &str,
     ) -> Result<Workspace, (CheckoutRefusal, String)> {
         let refused =
             |cause: CheckoutRefusal, why: &str| (cause, format!("No checkout was made: {why}"));
@@ -4519,7 +4547,7 @@ impl Workspace {
                 Err(WorkspaceError::Checkout { refused: why, .. }) => {
                     return Err((
                         CheckoutRefusal::RepositoryRefused,
-                        why.describe("the working directory"),
+                        why.describe_as("the working directory", reader),
                     ));
                 }
                 Err(WorkspaceError::Denied(_)) => {

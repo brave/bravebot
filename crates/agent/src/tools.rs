@@ -1774,6 +1774,18 @@ fn write_it_yourself(beside: Beside) -> &'static str {
     }
 }
 
+/// What a checkout refusal names as the reader that would have opened the repository: `read_git`
+/// itself where this turn's list holds it, and a name this turn can act on otherwise (TOOL-6). The
+/// turn asking `spawn_agent` or `apply_checkout` for a checkout is not the turn that would have
+/// called `read_git`, and may not be offered it.
+fn checkout_reader(beside: Beside) -> &'static str {
+    if beside.holds(Named::ReadGit) {
+        "read_git"
+    } else {
+        "the repository reader"
+    }
+}
+
 /// How a job that has ended finished, read off the exit code and the signal of each of its steps.
 ///
 /// Structure and nothing else: no byte of what the pipeline printed reaches this. Failed rather
@@ -7276,7 +7288,7 @@ fn apply_checkout<S: Sink, C: Confirmer>(
         }
         Some(_) => return Produced::problem("error: 'paths' is a list of paths"),
     };
-    let offered = offered(policy, workspace, &kept, given.as_deref());
+    let offered = offered(policy, workspace, &kept, given.as_deref(), tools.beside);
     let paths: Vec<String> = match given {
         None => offered.paths.iter().cloned().collect(),
         Some(given) => match only_recorded(&id, &offered, given) {
@@ -7303,11 +7315,15 @@ struct Offered {
 /// The paths of the kept checkout that may come back. The status is read afresh on every call,
 /// since a program may have written there since the last one, unless `given` names only paths the
 /// driver recorded itself, which no status could add to or take from.
+///
+/// `beside` is this turn's tool list, read only to say which reader a status that could not be
+/// read names, where reading it fails (TOOL-6).
 fn offered<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     kept: &crate::workspace::SessionCheckout,
     given: Option<&[String]>,
+    beside: Beside,
 ) -> Offered {
     let mut paths = kept.candidates.named.clone();
     let mut listed = std::collections::BTreeSet::new();
@@ -7342,7 +7358,7 @@ fn offered<S: Sink>(
         Err(declined) => Some(format!(
             "The status could not be read, so a file a program wrote other than by a redirection \
              is not found: {}",
-            declined.describe("the checkout")
+            declined.describe_as("the checkout", checkout_reader(beside))
         )),
     };
     Offered {
@@ -7410,7 +7426,7 @@ pub(crate) fn apply_kept_checkout<S: Sink, C: Confirmer>(
         return Err(format!("the session keeps no checkout {id}"));
     };
     let given = (!paths.is_empty()).then_some(paths.as_slice());
-    let offered = offered(policy, tools.workspace, &kept, given);
+    let offered = offered(policy, tools.workspace, &kept, given, tools.beside);
     let paths = match paths.is_empty() {
         true => offered.paths.iter().cloned().collect(),
         false => only_recorded(id, &offered, paths)?,
@@ -14612,12 +14628,19 @@ fn spawn_agent<S: Sink, R: Reporter>(
         let made = match wanted.map(|wanted| wanted.place) {
             None => None,
             Some(place) => match match place {
-                CheckoutPlace::State(state) => {
-                    tools.workspace.checkout_for_cause(policy, state, id)
+                CheckoutPlace::State(state) => tools.workspace.checkout_for_cause_as(
+                    policy,
+                    state,
+                    id,
+                    checkout_reader(tools.beside),
+                ),
+                CheckoutPlace::Temporary => {
+                    tools.workspace.checkout_in_temporary_directory_cause_as(
+                        policy,
+                        id,
+                        checkout_reader(tools.beside),
+                    )
                 }
-                CheckoutPlace::Temporary => tools
-                    .workspace
-                    .checkout_in_temporary_directory_cause(policy, id),
             } {
                 Ok(made) => {
                     if let Some(checkout) = made.checkout() {
@@ -20259,6 +20282,18 @@ mod tests {
                 "{tool}: taking edit_file off changed it"
             );
         }
+    }
+
+    /// TOOL-6. A checkout refusal names `read_git` only where this turn's list holds it, and a
+    /// name this turn can act on otherwise: the turn asking `spawn_agent` or `apply_checkout` for
+    /// a checkout is not always the turn that would have called `read_git`.
+    #[test]
+    fn a_checkout_refusal_names_read_git_only_where_the_list_holds_it() {
+        assert_eq!(checkout_reader(Beside::every()), "read_git");
+        assert_ne!(
+            checkout_reader(Beside::every().without(Named::ReadGit)),
+            "read_git"
+        );
     }
 
     /// The processor's description as the turn it is read in is offered it.
