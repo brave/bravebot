@@ -250,6 +250,61 @@ fn a_desktop_turn_ends_with_the_open_loops_when_they_changed() {
     assert_eq!(open_line(&built), "open: nothing", "{:?}", built.data);
 }
 
+/// OPEN-1 with SESSION-19: undoing a desktop turn that wrote a file takes its write out of the
+/// session's work and written files, saves the record that way, and takes the set it leaves as
+/// shown, so the next turn that writes says the unbuilt change again. The regressions it rejects
+/// are an undo that keeps the undone turn's write in the record, and one that leaves the undone
+/// set as the one shown, so the next write is not said.
+#[test]
+fn undoing_a_turn_that_wrote_takes_its_write_out_of_the_open_loops() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("open-loops-rewound");
+    let (config, _requests, server) = endpoint::endpoint(
+        vec![
+            endpoint::answer(),
+            endpoint::tool("write_file", json!({"path": "notes.md", "contents": "one"})),
+            endpoint::answer(),
+            endpoint::tool("write_file", json!({"path": "other.md", "contents": "two"})),
+            endpoint::answer(),
+        ],
+        None,
+    );
+    let (mut window, session) = Window::on(&project, &config.endpoint);
+
+    let first = window.turn(&session, "nothing to do");
+    assert_eq!(first.name, "turn.done", "{:?}", first.data);
+    let wrote = window.turn(&session, "write the notes");
+    assert_eq!(
+        open_line(&wrote),
+        "open: changes not built (planner)",
+        "{:?}",
+        wrote.data
+    );
+
+    window
+        .once_finished(|window| {
+            window.dispatch("session.rewind", json!({"session": session, "steps": 1}))
+        })
+        .unwrap();
+    let listed = sessions::list(&project);
+    assert_eq!(listed.len(), 1, "the session should be listed");
+    let record = sessions::load(&project, &listed[0].id).expect("the record should load");
+    assert_eq!(record.work, bravebot_agent::Work::default());
+    assert!(record.written.is_empty(), "{:?}", record.written);
+
+    let again = window.turn(&session, "write the other notes");
+    server.join().unwrap();
+    assert_eq!(again.name, "turn.done", "{:?}", again.data);
+    assert_eq!(
+        open_line(&again),
+        "open: changes not built (planner)",
+        "{:?}",
+        again.data
+    );
+}
+
 /// OPEN-3 with GROUND-4: a turn cancelled after it wrote still counts the write, and the line goes
 /// on `turn.error`. The regression it rejects is a line said only on `turn.done`.
 #[test]

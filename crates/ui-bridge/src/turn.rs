@@ -677,7 +677,10 @@ impl Reporter for BridgeReporter {
 
     fn tool_finished(&mut self, activity: Activity) {
         self.say("tool.finished", wire::activity(&activity));
-        if let Some(written) = activity.written.filter(|_| !activity.failed)
+        // The turn's own writes only, as `composing` and `thinking` keep to the turn's own. What a
+        // delegate wrote in a checkout is counted as a kept checkout instead.
+        if self.reporting_for.is_none()
+            && let Some(written) = activity.written.filter(|_| !activity.failed)
             && !self.written.contains(&written.landed)
         {
             self.written.push(written.landed);

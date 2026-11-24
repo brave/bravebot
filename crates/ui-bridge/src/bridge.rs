@@ -3190,12 +3190,35 @@ impl Bridge {
             && refused.is_empty()
             && gaps.is_empty()
             && state.answers.trust == snapshot.trust;
+        // What the session had done and written before the turns undone, so their writes leave the
+        // open loops with them (OPEN-1). A point a record kept without them leaves the session's.
+        if discard {
+            state.work = bravebot_agent::Work::default();
+            state.written.clear();
+        } else {
+            if let Some(work) = snapshot.work {
+                state.work = work;
+            }
+            if let Some(written) = snapshot.written {
+                state.written = written;
+            }
+        }
+        let (work, written) = (state.work, state.written.clone());
         if let Some(stored) = state.handle.as_mut() {
             stored.truncate_audit(snapshot.turns + 1);
+            stored.set_work(work);
+            stored.set_written(&written);
             if discard {
                 stored.discard_unwritten(&snapshot.title);
             }
         }
+        // Taken as shown, as a resume takes it, so the next turn says the set only if it changes
+        // from where the undo left it (OPEN-3).
+        let workspace = match &state.kept {
+            Some(kept) => workspace.with_kept_between_turns(kept),
+            None => workspace,
+        };
+        state.loops_shown = open_loops(state, &workspace);
         if discard {
             // The record is gone, so the next prompt names the session again, and nothing it did
             // is open any longer.
@@ -5524,6 +5547,9 @@ fn open_rewind_point(state: &mut State, workspace: &Workspace, prompt: &str) {
             .handle
             .as_ref()
             .is_some_and(|handle| handle.resumable().is_some()),
+        // So undoing the turn takes its writes and commands out of the open loops (OPEN-1).
+        work: Some(state.work),
+        written: Some(state.written.clone()),
     };
     state.rewind.open(snapshot, prompt.to_string());
     state.rewind.bind_coverage(workspace);

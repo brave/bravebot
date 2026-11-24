@@ -17,6 +17,9 @@ governs:
   - crates/ui-bridge/src/bridge.rs
   - crates/ui-bridge/src/running.rs
   - crates/ui-bridge/src/turn.rs
+  - ui/src/renderer/apply.ts
+  - ui/src/renderer/transcript.ts
+  - ui/src/renderer/components/Transcript.tsx
 documented-by:
   - docs/website/docs/reference/commands.md
 ---

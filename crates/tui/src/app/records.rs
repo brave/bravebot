@@ -30,6 +30,10 @@ pub(super) fn rewind_point(
         transcript_len: began.transcript_len,
         title: stored.title().to_string(),
         was_wrote: stored.resumable().is_some(),
+        // Kept with the point so a desktop that resumes the record and undoes this turn takes its
+        // writes out of the open loops (OPEN-1).
+        work: Some(session.work()),
+        written: Some(session.written()),
     }
 }
 
