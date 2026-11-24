@@ -123,7 +123,8 @@ It is fixed text with counts and the job names bravebot minted ([RUN-15](tools/r
 `verified-by: bravebot_agent::turn::the_next_turn_begins_with_the_open_loops_that_changed`
 `verified-by: bravebot_tui::state::open_loops::loops_the_planner_was_already_told_about_are_not_repeated`
 `verified-by: bravebot_agent::open_loops::the_planners_message_is_fixed_text_and_counts`
-`verified-by: bravebot_ui_bridge::bridge::open_loops_tests::a_desktop_turn_tells_the_planner_of_open_loops_once_per_changed_set`
+`verified-by: bravebot_ui_bridge::open_loops_tests::a_desktop_turn_tells_the_planner_of_open_loops_once_per_changed_set`
+`verified-by: bravebot_agent::turn::telling_open_loops_reaches_the_planner_and_keeps_the_unbuilt_line`
 
 <a id="OPEN-5"></a>
 ### OPEN-5: `/unfinished` shows every open loop in full
@@ -166,7 +167,8 @@ A record with no work record or last-command status reads as nothing open.
 `verified-by: bravebot_session::sessions::the_record_keeps_the_work_record_and_the_last_commands_status`
 `verified-by: bravebot_session::sessions::a_record_from_before_open_loops_reads_as_nothing_open`
 `verified-by: bravebot_tui::state::open_loops::a_resumed_session_shows_what_it_left_open`
-`verified-by: bravebot_ui_bridge::bridge::open_loops_tests::a_resumed_session_tells_the_planner_on_its_first_turn_only`
+`verified-by: bravebot_ui_bridge::open_loops_tests::a_resumed_session_tells_the_planner_on_its_first_turn_only`
+`verified-by: bravebot_ui_bridge::open_loops_tests::the_record_keeps_the_sessions_work_and_written_files`
 
 <a id="OPEN-7"></a>
 ### OPEN-7: open loops never block, and every new sentence is fixed text
