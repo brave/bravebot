@@ -1297,6 +1297,7 @@ fn moving_the_working_directory_restates_it() {
 /// deal with. The prompt says there is one and what it is for, and a sentence in the conversation
 /// names it, since its name changes with every start.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it() {
     let tree = Scratch::new("own-directory");
     let project = tree.directory("project");
@@ -1343,6 +1344,7 @@ fn the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it() {
 /// Rejects an implementation that writes the directory's path back into the prompt: the two texts
 /// differ by it, and the first request of every new process writes the whole prompt again.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn two_sessions_that_differ_only_in_their_own_directory_compose_one_prompt() {
     let tree = Scratch::new("same-prompt");
     let project = tree.directory("project");
@@ -1375,6 +1377,7 @@ fn two_sessions_that_differ_only_in_their_own_directory_compose_one_prompt() {
 
 /// A session with no directory of its own names none.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_session_with_no_directory_of_its_own_has_nothing_to_name() {
     let tree = Scratch::new("no-note");
     let workspace = Workspace::new(tree.directory("project")).expect("workspace");

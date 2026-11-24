@@ -282,14 +282,16 @@ facts about the machine, and the prompt says so.
 
 The path is kept out of the prompt because the prompt is the front of every request and a prompt
 cache is matched from its first byte. The directory's name is made from the process id and the
-clock, so it differs on every start. A path in the prompt made the first request of each new process
-write the whole prompt to the cache again and read none of it, which is every one-shot run and every
-resumed session. Two sessions that differ only in their directory compose the same prompt.
+clock, so it differs on every start. A path in the prompt would make the first request of each new
+process write the whole prompt to the cache again and read none of it, which is every one-shot run
+and every resumed session. Two sessions that differ only in their directory compose the same prompt.
 
 The message is a notice, so it is not drawn as something the person said and no cut falls in front
 of it. It is not part of a snapshot, so a session restored in another process says its new
 directory after the one in its record, and the message says it replaces any path an earlier one
-gave. A delegate is told as well, in its own conversation.
+gave. A delegate is told as well, in its own conversation. A compaction that takes the message out
+of the request puts its words at the end of the summary, as it does a delegate's task
+([COMPACT-19](compaction.md#COMPACT-19)), so the request names the directory after every cut.
 
 One of them carries an imperative, and those are the terms on which one is admitted here: gated on
 what the probe found, and naming the one case rather than stating a preference. The session's own
@@ -395,6 +397,8 @@ it is the planner's.
 `verified-by: bravebot_agent::preamble::two_sessions_that_differ_only_in_their_own_directory_compose_one_prompt`
 `verified-by: bravebot_agent::preamble::a_session_with_no_directory_of_its_own_has_nothing_to_name`
 `verified-by: bravebot_agent::turn::the_sessions_directory_is_named_once_in_the_conversation_and_not_in_the_system_prompt`
+`verified-by: bravebot_agent::conversation::the_scratch_note_survives_compaction_once`
+`verified-by: bravebot_agent::conversation::a_scratch_note_the_cut_leaves_in_place_is_not_sent_again`
 `verified-by: bravebot_agent::preamble::a_session_with_no_directory_of_its_own_is_told_of_none`
 `verified-by: bravebot_agent::preamble::a_missing_dependency_is_stood_in_for_from_the_sessions_own_directory`
 `verified-by: bravebot_agent::preamble::the_stand_in_road_names_no_language_or_variable`

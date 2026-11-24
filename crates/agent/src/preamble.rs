@@ -905,8 +905,8 @@ fn os_release() -> Option<String> {
 ///
 /// Said in the conversation and not in the system prompt. The name is made from the process id and
 /// the clock, so it differs on every start, and the system prompt is the front of every request:
-/// a cache of the prompt is matched from its first byte, so a path in it made every new process
-/// write the whole prompt again and read none of it. Said again in a resumed session, whose
+/// a cache of the prompt is matched from its first byte, so a path in it would make every new
+/// process write the whole prompt again and read none of it. Said again in a resumed session, whose
 /// directory is a new one, and the sentence says it replaces any an earlier message named.
 pub fn scratch_note(workspace: &Workspace) -> Option<String> {
     workspace.scratch().map(|directory| {

@@ -73499,8 +73499,8 @@ fn a_program_a_turn_runs_is_told_where_the_sessions_directory_is() {
 
 /// INSTR-9: the session's own directory is named in the conversation, once per process, and not in
 /// the system prompt. Its name changes with every start, and the system prompt is the front of every
-/// request, so a path there made the first request of each new process write the whole prompt to
-/// the cache again and read none of it.
+/// request, so a path there would make the first request of each new process write the whole prompt
+/// to the cache again and read none of it.
 ///
 /// Pins three things. The first request names the directory exactly once and the system prompt
 /// never does. A second turn of the same session does not say it again, which would grow every
@@ -73510,6 +73510,7 @@ fn a_program_a_turn_runs_is_told_where_the_sessions_directory_is() {
 /// turn, and one that records it as said in the snapshot so a resumed session is left holding a
 /// path to a directory that no longer exists.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn the_sessions_directory_is_named_once_in_the_conversation_and_not_in_the_system_prompt() {
     let scratch = Scratch::new("scratch-named-in-conversation");
     let first_directory = Scratch::new("scratch-named-first");

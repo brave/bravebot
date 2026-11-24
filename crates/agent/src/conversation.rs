@@ -536,6 +536,18 @@ pub struct Conversation {
     /// one: the directory is made again for every process, so a resumed session has a new path
     /// and must say it again after the old one in its record.
     scratch_said: bool,
+    /// Where the message naming the session's directory sits in `messages`, until a compaction
+    /// takes it out of the request.
+    ///
+    /// Not part of a [`Snapshot`], for the reason `scratch_said` is not.
+    scratch_at: Option<usize>,
+    /// The note naming the session's directory, once a compaction took the message holding it
+    /// out of the request.
+    ///
+    /// Carried byte for byte and put back in the summary (COMPACT-19 does the same for a
+    /// delegate's task), because the system prompt says the first message names the directory and
+    /// nothing says it again once `scratch_said` is set.
+    carried_scratch: Option<String>,
     /// Messages before this position are not sent in a turn's request: a retrieval sent excerpts
     /// of them instead ([RETRIEVE-2](../../../docs/specs/retrieval.md#RETRIEVE-2)).
     ///
@@ -654,6 +666,8 @@ impl Conversation {
             skills_overview_said: false,
             long_descriptions_said: false,
             scratch_said: false,
+            scratch_at: None,
+            carried_scratch: None,
             retrieval_cut: 0,
             left_out: 0,
             pinned: Vec::new(),
@@ -1060,6 +1074,12 @@ impl Conversation {
             return false;
         }
         self.messages.drain(mark.0..end);
+        // The note is said after the opening, so what the drain removed was in front of it.
+        if let Some(at) = &mut self.scratch_at
+            && *at >= end
+        {
+            *at -= end - mark.0;
+        }
         self.masked_before = self.masked_before.min(mark.0);
         self.prompt_at = None;
         if self.retrieval_cut > mark.0 {
@@ -1110,8 +1130,13 @@ impl Conversation {
 
     /// Record that the session's directory was named in this process, so a later turn does not
     /// say it again.
+    ///
+    /// Called with the note just pushed, so a compaction that takes it out of the request can send
+    /// it again.
     pub fn scratch_was_said(&mut self) {
         self.scratch_said = true;
+        self.scratch_at = self.messages.len().checked_sub(1);
+        self.carried_scratch = None;
     }
 
     /// See `long_descriptions_said`.
@@ -1566,9 +1591,14 @@ impl Conversation {
                 *position += 1;
             }
         };
-        for position in [&mut self.task_at, &mut self.task_list, &mut self.prompt_at]
-            .into_iter()
-            .flatten()
+        for position in [
+            &mut self.task_at,
+            &mut self.task_list,
+            &mut self.prompt_at,
+            &mut self.scratch_at,
+        ]
+        .into_iter()
+        .flatten()
         {
             after(position);
         }
@@ -1825,6 +1855,20 @@ impl Conversation {
             Some(at) => self.task_list = Some(at - boundary + 1 + carried.len()),
             None => {}
         }
+        // The same for the note naming the session's directory: nothing says it again once it has
+        // been said, and the system prompt points at it.
+        match self.scratch_at {
+            Some(at) if at < boundary => {
+                self.carried_scratch = self.messages[at]
+                    .message
+                    .content
+                    .as_text()
+                    .map(str::to_string);
+                self.scratch_at = None;
+            }
+            Some(at) => self.scratch_at = Some(at - boundary + 1 + carried.len()),
+            None => {}
+        }
         // A position in the messages the drain below moves. What the summary and the carried
         // skills stand in front of is the same message as before, so the line moves with it.
         self.masked_before = match self.masked_before.checked_sub(boundary) {
@@ -1856,6 +1900,10 @@ impl Conversation {
         if let Some(list) = &self.carried_task_list {
             note.push_str("\n\nYour task list, as you last wrote it:\n");
             note.push_str(list);
+        }
+        if let Some(scratch) = &self.carried_scratch {
+            note.push_str("\n\n");
+            note.push_str(scratch);
         }
         self.messages.insert(
             0,
@@ -2242,6 +2290,8 @@ impl Conversation {
             skills_overview_said: false,
             long_descriptions_said: false,
             scratch_said: false,
+            scratch_at: None,
+            carried_scratch: None,
             retrieval_cut,
             left_out: snapshot.left_out,
             pinned,
@@ -4808,6 +4858,53 @@ mod tests {
         assert_eq!(holding(&conversation, "THE-TASK"), 1);
         let note = conversation.messages()[0].message.content.text();
         assert!(!note.contains("THE-TASK"), "{note}");
+    }
+
+    /// A cut that falls after the note naming the session's directory still leaves the path in the
+    /// request, once, through a second cut as well.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_scratch_note_survives_compaction_once() {
+        let note = "The scratch directory of this session is /tmp/scratch-xyz.";
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("first prompt"));
+        conversation.push_composed_from(Message::user(note), Composed::Notice, Provenance::Driver);
+        conversation.scratch_was_said();
+        for round in 0..20 {
+            a_read_round(&mut conversation, round);
+        }
+        for round in 0..2 {
+            let boundary = conversation
+                .compaction_boundary()
+                .expect("something to compact");
+            conversation.compacted(boundary, &format!("summary {round}"));
+            assert_eq!(holding(&conversation, "/tmp/scratch-xyz"), 1, "cut {round}");
+            for more in 0..20 {
+                a_read_round(&mut conversation, 100 * (round + 1) + more);
+            }
+        }
+    }
+
+    /// A note in the part the cut keeps is sent as it was, not twice.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_scratch_note_the_cut_leaves_in_place_is_not_sent_again() {
+        let mut conversation = Conversation::new();
+        for prompt in ["a", "b", "c", "d", "e", "f", "g", "h"] {
+            an_exchange(&mut conversation, prompt);
+        }
+        conversation.push_composed_from(
+            Message::user("scratch is /tmp/scratch-xyz"),
+            Composed::Notice,
+            Provenance::Driver,
+        );
+        conversation.scratch_was_said();
+        conversation.push(Message::assistant("ok"));
+
+        let boundary = conversation.compaction_boundary().expect("a cut");
+        conversation.compacted(boundary, "they started");
+
+        assert_eq!(holding(&conversation, "/tmp/scratch-xyz"), 1);
     }
 
     /// COMPACT-19: a conversation nobody recorded a task in gains none, so a person's own long turn

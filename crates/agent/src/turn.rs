@@ -3518,10 +3518,11 @@ where
     // Where the session's own directory is, said once per process in the conversation and not in
     // the system prompt (INSTR-9). Its name is made from the process id and the clock, so it
     // differs on every start, and the system prompt is the front of every request: a prefix cache
-    // is matched from the first byte, so a path there made a new process write the whole prompt
-    // again and read none of it. Said to a delegate as well, whose conversation is its own and
-    // whose prompt no longer holds the path. Marked only where something was said, and not part of
-    // a snapshot, so a resumed session names its new directory after the old one.
+    // is matched from the first byte, so a path there would make a new process write the whole
+    // prompt again and read none of it. Said to a delegate as well, whose conversation is its own
+    // and whose prompt does not hold the path. Marked only where something was said, and not part
+    // of a snapshot, so a resumed session names its new directory after the old one. A compaction
+    // that takes the note out of the request carries it across (`Conversation::compacted`).
     if !conversation.scratch_said()
         && let Some(note) = crate::preamble::scratch_note(workspace)
     {
