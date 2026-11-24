@@ -1745,7 +1745,7 @@ export function SessionNotices({ forkedFrom, handedOffFrom = null, openLoops = n
   forkedFrom: { title: string; prompt: number } | null
   /** The chat this one was started from with Hand Off to New Chat… (SESSION-34). */
   handedOffFrom?: { id: string; title: string } | null
-  /** What a resumed session left open, as the bridge's translated line says it (OPEN-6). */
+  /** What a resumed session left open, as the bridge's translated sentence says it (OPEN-6). */
   openLoops?: string | null
   kept: KeptTrust | null
   vetting: boolean
@@ -1756,15 +1756,20 @@ export function SessionNotices({ forkedFrom, handedOffFrom = null, openLoops = n
   onManage: () => void
 }): React.JSX.Element | null {
   const unheld = t.notInForce(rules, refused) || t.grantedRules(rules)
-  if (!forkedFrom && !handedOffFrom && !openLoops && !kept && !vetting && !unheld) return null
-  return (
+  // What a resumed session left open stays at the top of the scroll area, since the chat opens
+  // at its end and the note is about where it stood (OPEN-6).
+  const pinned = openLoops && (
+    <div className="session-notices pinned">
+      <p className="session-banner session-notice open-loops" role="note" data-test="open-loops">
+        <Icon name="list-checks" />
+        <span className="notice-text">{openLoops}</span>
+      </p>
+    </div>
+  )
+  if (!forkedFrom && !handedOffFrom && !kept && !vetting && !unheld) return pinned || null
+  return (<>
+    {pinned}
     <div className="session-notices">
-      {openLoops && (
-        <p className="session-banner session-notice" role="note" data-test="open-loops">
-          <Icon name="refresh" />
-          <span className="notice-text">{openLoops}</span>
-        </p>
-      )}
       {handedOffFrom && (
         <p className="session-banner session-notice" role="note" data-test="handed-off-from" data-tooltip={`Record ${handedOffFrom.id}`}>
           <Icon name="message-bubble" />
@@ -1800,7 +1805,7 @@ export function SessionNotices({ forkedFrom, handedOffFrom = null, openLoops = n
       )}
       {unheld && rules && <RulesBanner rules={rules} refused={refused} />}
     </div>
-  )
+  </>)
 }
 
 /**

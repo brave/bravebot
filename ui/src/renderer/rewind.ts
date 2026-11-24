@@ -115,5 +115,8 @@ export function rewoundLive(old: Live, rewound: RewoundSession): Live {
     queuePaused: old.queued?.length ? true : old.queuePaused,
     // The turn that carried the briefing may be one of those undone.
     bot: old.bot ? { ...old.bot, grounded: false } : null,
+    // What the session left open when it was resumed (OPEN-6) described turns the rewind may
+    // have undone.
+    openLoops: null,
   }
 }
