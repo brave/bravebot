@@ -120,6 +120,8 @@ When the set of open loops has changed since the planner was last told, the next
 
 It is fixed text with counts and the job names bravebot minted ([RUN-15](tools/run.md#RUN-15)). It holds no path, no command and no todo text. It asks nothing and requires nothing: the planner may decide a loop no longer matters.
 
+In the desktop app, undoing a turn tells the planner again: the next turn begins with the loops the session now leaves open, whether or not they changed, because the rewound conversation may no longer hold the message it was last told. Undoing the only turn leaves nothing open, so nothing is told.
+
 **Why at the start, not the end.** At the end of a turn the planner has stopped. At the start of the next one it is deciding what to do, and the message survives compaction because it is sent fresh.
 
 **Why the planner's loops only as work.** The person's loops are named so the planner does not try to commit or apply a checkout on its own. Telling it about them as its work would invite exactly that.
@@ -129,6 +131,8 @@ It is fixed text with counts and the job names bravebot minted ([RUN-15](tools/r
 `verified-by: bravebot_agent::open_loops::the_planners_message_is_fixed_text_and_counts`
 `verified-by: bravebot_ui_bridge::open_loops_tests::a_desktop_turn_tells_the_planner_of_open_loops_once_per_changed_set`
 `verified-by: bravebot_agent::turn::telling_open_loops_reaches_the_planner_and_keeps_the_unbuilt_line`
+`verified-by: bravebot_ui_bridge::open_loops_tests::undoing_a_turn_tells_the_planner_of_the_loops_left_open`
+`verified-by: bravebot_ui_bridge::open_loops_tests::undoing_the_only_turn_leaves_nothing_open`
 
 <a id="OPEN-5"></a>
 ### OPEN-5: `/unfinished` shows every open loop in full
