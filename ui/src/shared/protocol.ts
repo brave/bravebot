@@ -467,6 +467,11 @@ export interface OpenedSession extends SessionSettled {
   /** Said when the other front end wrote the transcript above: it drew it, and this one will not draw it the same way. */
   frontNote: string | null
   /**
+   * What the session left open, worked out again from the record and the disk (OPEN-6), as one
+   * translated line: `open: …`. Null when nothing is open. Absent from an older bridge.
+   */
+  openLoops?: string | null
+  /**
    * How many messages compaction has taken out of this conversation, in total.
    *
    * Only ever rises, and rises exactly when the session stopped carrying what was said before the

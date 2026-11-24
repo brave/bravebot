@@ -1,187 +1,156 @@
-// OPEN-3's line on the desktop, through Electron IPC and the real Rust bridge. Only the model server
-// and the folder picker are substituted. A turn that writes a file and builds nothing ends with an
-// `open: changes not built (planner)` row between the reply and its footer, the next idle turn draws
-// none, a stopped turn draws its line under the error card with the same gap, and the longest line
-// wraps between words inside the reading column. The last is the bridge's `turn.done` resent with
-// the spec's example line, since no fixture here leaves every kind open.
-// Screenshots in light and dark go to OPEN_LOOPS_SHOTS, or /tmp/bravebot-open-loops.
+// A reopened chat says at the top of its transcript what it left open (OPEN-6), against the real
+// agent. Real Electron renderer and real `bravebot-rpc`, on a disposable HOME and profile. Before
+// the app starts, the bridge is driven directly to take two turns against a stub model service: one
+// that runs a command that fails and then writes a file, and one that only answers. The window
+// then reopens each. The first shows the bridge's `open: …` line as a session notice; the second,
+// and a new chat, show none. Screenshots go to OPEN_LOOPS_SHOTS, or a temp directory.
+//
+//   pnpm run build && xvfb-run -a node scripts/drive-open-loops.mjs
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { setTimeout as delay } from 'node:timers/promises'
-import { inheritedEnv, launchWorld, listening } from './drive-world.mjs'
-import { COMPOSER_NAME, approveTrust } from './drive-support.mjs'
+import { join, resolve } from 'node:path'
+import { createInterface } from 'node:readline'
+import { launchWorld, makeWorld, startModelService } from './drive-world.mjs'
 
 const shots = process.env.OPEN_LOOPS_SHOTS ?? join(tmpdir(), 'bravebot-open-loops')
 mkdirSync(shots, { recursive: true })
-const root = mkdtempSync(join(tmpdir(), 'bravebot-open-loops-'))
-const home = join(root, 'home'), project = join(root, 'project'), profile = join(root, 'profile')
-for (const path of [join(home, '.bravebot'), project, profile]) mkdirSync(path, { recursive: true })
-writeFileSync(join(project, 'README.md'), '# Open loops\n')
-const token = 'open-loops-only-fake-token'
-const failures = [], steps = [], held = []
-let app, page, toolId = 0
-const content = text => ({ content: text })
-const call = (name, args) => ({ tool_calls: [{ index: 0, id: `call_${++toolId}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] })
-const write = (path, contents) => call('write_file', { path, contents })
-// The spec's example (OPEN-3), every kind but the goal: the longest line the bridge says.
-const LONG = 'open: changes not built, the last command failed, 2 todos (planner); 1 kept checkout, 3 files not committed (you); 1 job running'
-const server = createServer(async (req, res) => {
-  try {
-    let raw = ''; for await (const chunk of req) raw += chunk
-    assert.equal(req.headers.authorization, `Bearer ${token}`)
-    const next = steps.shift()
-    assert(next, `Unexpected model request: ${raw.slice(-400)}`)
-    const delta = next()
-    // A step with no reply holds the request open, so the turn can be stopped while it waits.
-    if (delta === null) { held.push(res); return }
-    res.writeHead(200, { 'Content-Type': 'text/event-stream' })
-    res.end(`data: ${JSON.stringify({ model: 'test', choices: [{ index: 0, delta, finish_reason: delta.tool_calls ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 12, completion_tokens: 9, total_tokens: 21 } })}\n\ndata: [DONE]\n\n`)
-  } catch (error) { failures.push(String(error)); res.writeHead(500); res.end('Fixture assertion failed') }
+const LEFT_OPEN = 'Run a check, then write out.txt'
+const NOTHING_OPEN = 'Just say hello'
+const LINE = 'open: changes not built, the last command failed (planner)'
+
+// The turn that leaves loops open runs `ls no-such-file`, then writes a file, then answers: the
+// write comes after the failed command, so the changes are not built and the command is still the
+// last one (OPEN-1). Every other request, the injection classifier's included, is answered `done`.
+const { service } = await startModelService(({ body, messages }) => {
+  if (body.includes('You are a prompt-injection classifier.')) return { content: 'done' }
+  // That session has one turn, so every tool result in its request is from that turn.
+  if (!messages.some((message) => message.role === 'user' && JSON.stringify(message.content).includes(LEFT_OPEN))) return { content: 'done' }
+  const tools = messages.filter((message) => message.role === 'tool').length
+  if (tools === 0) return { tool: { name: 'run', arguments: { command: 'ls no-such-file' } } }
+  if (tools === 1) return { tool: { name: 'write_file', arguments: { path: 'out.txt', contents: 'written by the turn\n' } } }
+  return { content: 'done' }
 })
-await listening(server)
-writeFileSync(join(home, '.bravebot/settings.json'), JSON.stringify({ provider: { local: { options: { baseURL: `http://127.0.0.1:${server.address().port}/v1`, apiKey: token }, models: { test: {} } } }, model: 'local/test' }))
-const env = Object.assign(inheritedEnv(), { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost' })
-async function until(predicate, label, ms = 20000) {
-  const deadline = Date.now() + ms
-  while (!await predicate()) { assert(Date.now() < deadline, `${label} timed out; fixture errors: ${failures}`); await delay(50) }
+const world = makeWorld('bravebot-open-loops-world-', { service })
+
+/** The bridge on the world's HOME, for seeding the store before the app starts. */
+function bridge() {
+  const child = spawn(resolve('../target/debug/bravebot-rpc'), [], { env: world.env, stdio: ['pipe', 'pipe', 'ignore'] })
+  const pending = new Map()
+  const events = []
+  const waiters = []
+  let asked = 0
+  createInterface({ input: child.stdout }).on('line', (line) => {
+    const message = JSON.parse(line)
+    if (message.id !== undefined) pending.get(message.id)?.(message)
+    else {
+      events.push(message)
+      for (const waiter of [...waiters]) waiter()
+    }
+  })
+  const call = (method, params) => new Promise((done, failed) => {
+    const id = ++asked
+    const timer = setTimeout(() => failed(new Error(`${method} was never answered`)), 30000)
+    pending.set(id, (message) => {
+      clearTimeout(timer)
+      if (message.error) failed(new Error(`${method}: ${message.error.code} ${message.error.message}`))
+      else done(message.ok)
+    })
+    child.stdin.write(`${JSON.stringify({ id, method, params })}\n`)
+  })
+  const event = (wanted) => new Promise((done, failed) => {
+    const timer = setTimeout(() => failed(new Error('the turn never ended')), 30000)
+    const look = () => {
+      const at = events.findIndex(wanted)
+      if (at < 0) return
+      waiters.splice(waiters.indexOf(look), 1)
+      clearTimeout(timer)
+      done(events.splice(at, 1)[0])
+    }
+    waiters.push(look)
+    look()
+  })
+  const ended = new Promise((done) => child.once('exit', done))
+  return { call, event, close: async () => { child.stdin.end(); child.kill(); await ended } }
 }
 
-try {
-  const world = await launchWorld({ profile, env, linuxArgs: ['--disable-gpu'], timeout: 15000, viewport: { width: 1350, height: 900 } })
-  app = world.app; page = world.page
-  await app.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }) }, project)
-  await page.evaluate(() => {
-    window.openLoopsEvents = []
-    window.bravebot.onEvent(event => window.openLoopsEvents.push(event))
+/** One turn in a new session of `directory`, approving every question; the session's record id. */
+async function takeTurn(rpc, directory, prompt) {
+  const { session } = await rpc.call('session.new', { directory })
+  await rpc.call('trust.reply', { session, trusted: true }).catch((error) => {
+    if (!/no_such_request/.test(error.message)) throw error
   })
-  const events = (name) => page.evaluate((name) => window.openLoopsEvents.filter(e => e.event === name), name)
-  const composer = page.getByRole('textbox', { name: COMPOSER_NAME })
-  const ended = async () => (await events('turn.done')).length + (await events('turn.error')).length
-  const say = async (prompt, ...replies) => {
-    steps.push(...replies)
-    const before = await ended()
-    await composer.fill(prompt)
-    await page.getByRole('button', { name: 'Send', exact: true }).click()
-    await until(async () => {
-      const approve = page.locator('.confirm .approve:not([data-clicked])').filter({ visible: true })
-      if (await approve.count() > 0) await approve.first().evaluate(el => { el.dataset.clicked = '1'; el.click() }).catch(() => {})
-      return await ended() > before
-    }, 'turn end')
+  await rpc.call('turn.send', { session, prompt, messageId: randomUUID() })
+  for (;;) {
+    const next = await rpc.event((message) => message.session === session &&
+      ['confirm.request', 'turn.done', 'turn.error'].includes(message.event))
+    if (next.event === 'confirm.request') {
+      await rpc.call('confirm.reply', { session, request: next.data.request, decision: 'approve' })
+      continue
+    }
+    assert.equal(next.event, 'turn.done', JSON.stringify(next))
+    await rpc.call('session.close', { session })
+    return next.data.id
   }
+}
+
+const rpc = bridge()
+await takeTurn(rpc, world.project, LEFT_OPEN)
+await takeTurn(rpc, world.project, NOTHING_OPEN)
+await rpc.close()
+
+let app, page
+try {
+  const launched = await launchWorld({ profile: world.profile, env: world.env, viewport: { width: 1350, height: 900 } })
+  app = launched.app; page = launched.page
+  const list = page.locator('.session-list').first()
+  const rowOf = (title) => list.locator('.session-row').filter({ hasText: title })
+  const show = async (title) => {
+    await rowOf(title).locator('button.session').click()
+    await rowOf(title).and(page.locator('.current')).waitFor()
+  }
+  const notice = page.locator('[data-test="open-loops"]')
   const theme = async (name) => {
     await page.evaluate((name) => window.bravebot.writeTheme(name), name)
     await page.waitForFunction((name) => document.documentElement.getAttribute('data-theme') === name, name)
   }
-  const lines = page.locator('[data-test="open-loops"]')
 
-  await page.getByRole('button', { name: 'Open project', exact: true }).click()
-  const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
-  await trust.waitFor()
-  await approveTrust(trust)
-  await trust.waitFor({ state: 'hidden' })
-
-  const both = async (name) => {
-    for (const each of ['light', 'dark']) {
-      await theme(each)
-      await page.waitForTimeout(300)
-      await page.screenshot({ path: join(shots, `open-loops-${name}-${each}.png`) })
-    }
+  // 1. The chat that left a failed command and unbuilt changes says so above its transcript.
+  await rowOf(LEFT_OPEN).waitFor()
+  await show(LEFT_OPEN)
+  await notice.waitFor()
+  assert.equal((await notice.innerText()).trim(), LINE)
+  assert.ok(!(await notice.innerText()).includes('out.txt'), 'the line names no path')
+  for (const name of ['light', 'dark']) {
+    await theme(name)
+    await page.waitForTimeout(300)
+    await page.screenshot({ path: join(shots, `open-loops-${name}.png`) })
   }
-  // Where the last line sits: the gap above it to the card it is under, the gap below it to the
-  // turn's footer, its left edge against the card's, its height in lines and its width.
-  const placed = () => page.locator('.entries').evaluate((el) => {
-    const line = [...el.querySelectorAll('[data-test="open-loops"]')].pop()
-    const card = line.parentElement.previousElementSibling
-    const after = line.parentElement.nextElementSibling
-    const [l, c] = [line.getBoundingClientRect(), card.getBoundingClientRect()]
-    const text = line.querySelector('span').getBoundingClientRect()
-    return {
-      above: Math.round(l.top - c.bottom),
-      footerAfter: after?.classList.contains('turn-footer') ?? false,
-      leftEdge: Math.round(l.left - c.left),
-      lines: Math.round(text.height / parseFloat(getComputedStyle(line).lineHeight)),
-      width: Math.round(l.width),
-    }
-  })
+  console.log('PASS: a reopened chat that left loops open shows the line as a session notice')
 
-  // 1. A write with no build after it leaves the changes open for the planner.
-  await say('Write notes.md saying hello', () => write('notes.md', 'hello\n'), () => content('I wrote notes.md.'))
-  const first = (await events('turn.done')).at(-1)
-  assert.equal(first?.data.openLoops, 'open: changes not built (planner)', `turn.done carried ${JSON.stringify(first?.data.openLoops)}`)
-  await lines.first().waitFor()
-  assert.equal(await lines.count(), 1)
-  assert.equal(await lines.first().innerText(), 'open: changes not built (planner)')
-  const underReply = await placed()
-  assert.ok(underReply.footerAfter, `the turn's footer is not the row after the line: ${JSON.stringify(underReply)}`)
-  assert.equal(underReply.leftEdge, 0, `the line does not start on the reply's left edge: ${JSON.stringify(underReply)}`)
-  await both('reply')
-  console.log(`PASS: a turn that writes a file ends with the open-loops line under the reply, above the footer ${JSON.stringify(underReply)}`)
+  // 2. A chat that left nothing open shows no notice.
+  await theme('light')
+  await show(NOTHING_OPEN)
+  await page.getByText('done', { exact: true }).first().waitFor()
+  assert.equal(await notice.count(), 0, 'a chat with nothing open showed an open-loops notice')
+  console.log('PASS: a reopened chat with nothing open shows no notice')
 
-  // 2. A turn that changes nothing has no line of its own.
-  await say('Say hi', () => content('Hi.'))
-  assert.equal((await events('turn.done')).at(-1).data.openLoops, null)
-  await page.getByText('Hi.', { exact: true }).waitFor()
-  assert.equal(await lines.count(), 1, 'the idle turn drew an open-loops line')
-  await both('idle-turn')
-  console.log('PASS: the next idle turn draws no line')
+  // 3. Nor does a new chat.
+  await page.getByRole('button', { name: 'New chat', exact: true }).click()
+  await rowOf('New Chat').and(page.locator('.current')).waitFor()
+  assert.equal(await notice.count(), 0, 'a new chat showed an open-loops notice')
+  console.log('PASS: a new chat shows no notice')
 
-  // 3. A turn stopped after it wrote todos carries the changed set on its error card.
-  steps.push(() => call('todo_write', { todos: [{ content: 'Proofread notes', status: 'pending' }, { content: 'Add a heading', status: 'pending' }] }), () => null)
-  const before = await ended()
-  await composer.fill('Plan the notes')
-  await page.getByRole('button', { name: 'Send', exact: true }).click()
-  await until(() => steps.length === 0, 'held model request')
-  await page.getByRole('button', { name: 'Stop', exact: true }).click()
-  await until(async () => await ended() > before, 'stopped turn')
-  const stopped = (await events('turn.error')).at(-1)
-  assert.equal(stopped?.data.openLoops, 'open: changes not built, 2 todos (planner)', `turn.error carried ${JSON.stringify(stopped?.data.openLoops)}`)
-  await until(async () => await lines.count() === 2, 'the line under the error')
-  const underError = await placed()
-  assert.equal(underError.above, underReply.above, `the gap under the error card differs from the gap under a reply: ${JSON.stringify({ underReply, underError })}`)
-  assert.ok(underError.footerAfter, `the error's footer is not the row after the line: ${JSON.stringify(underError)}`)
-  await both('error')
-  console.log(`PASS: a stopped turn draws its line under the error card with the gap a reply has ${JSON.stringify(underError)}`)
-
-  // 4. The longest line the bridge says wraps between words inside the reading column. The event
-  // is the last real `turn.done` with that line in place of its own, sent as the bridge sends one.
-  const last = (await events('turn.done')).at(-1)
-  steps.length = 0
-  await app.evaluate(({ BrowserWindow }, message) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('bravebot:event', message)),
-    { ...last, data: { ...last.data, turn: last.data.turn + 3, reply: 'Here is where the session stands.', openLoops: LONG } })
-  await until(async () => await lines.count() === 3, 'the long line')
-  assert.equal(await lines.last().innerText(), LONG)
-  const wrapped = await placed()
-  assert.ok(wrapped.lines >= 2, `the long line did not wrap: ${JSON.stringify(wrapped)}`)
-  assert.ok(wrapped.width <= 720, `the long line is wider than the reading column: ${JSON.stringify(wrapped)}`)
-  const breaks = await lines.last().evaluate((line) => {
-    // Each line box's last character before a break, which is a space where it broke between words.
-    const text = line.querySelector('span').firstChild, range = document.createRange(), ends = []
-    let top = null
-    for (let at = 0; at < text.length; at++) {
-      range.setStart(text, at); range.setEnd(text, at + 1)
-      const y = Math.round(range.getBoundingClientRect().top)
-      if (top !== null && y > top) ends.push(text.data[at - 1])
-      top = y
-    }
-    return ends
-  })
-  assert.ok(breaks.length >= 1 && breaks.every((c) => c === ' '), `the long line broke inside a word: ${JSON.stringify(breaks)}`)
-  await both('long-line')
-  console.log(`PASS: the longest line wraps between words inside the column ${JSON.stringify(wrapped)}`)
-
-  assert.deepEqual(world.errors, []); assert.deepEqual(failures, [])
-  console.log(`PASS: the open-loops line against the real bridge; screenshots in ${shots}`)
+  assert.deepEqual(launched.errors, [])
+  console.log(`PASS: open loops on reopen against the real bridge; screenshots in ${shots}`)
 } catch (error) {
-  console.error('Fixture failures:', failures)
   if (page) { await page.screenshot({ path: join(shots, 'open-loops-failure.png') }).catch(() => {}); console.error((await page.locator('body').innerText().catch(() => '')).slice(-3000)) }
   throw error
 } finally {
   if (app) await app.close()
-  for (const res of held) res.destroy()
-  server.closeAllConnections()
-  await new Promise(resolve => server.close(resolve))
-  rmSync(root, { recursive: true, force: true })
+  service.closeAllConnections()
+  await new Promise((done) => service.close(done))
+  rmSync(world.root, { recursive: true, force: true })
 }

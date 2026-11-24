@@ -196,6 +196,7 @@ A record with no work record or last-command status reads as nothing open.
 `verified-by: bravebot_ui_bridge::open_loops::a_record_from_before_open_loops_reads_as_nothing_open`
 `verified-by: bravebot_ui_bridge::open_loops::a_written_file_that_differs_from_head_counts_as_uncommitted`
 `verified-by: bravebot_ui_bridge::open_loops::the_first_turn_after_a_reopen_tells_the_planner_what_was_left_open`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/drive-open-loops.mjs takes a turn through the real bridge that runs a failing command and then writes a file, reopens that chat in a real window and holds that the open-loops session notice shows the bridge's line, and holds that a reopened chat with nothing open and a new chat show no such notice)`
 
 <a id="OPEN-7"></a>
 ### OPEN-7: open loops never block, and every new sentence is fixed text

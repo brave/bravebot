@@ -94,6 +94,8 @@ interface Live {
   handoff?: Handoff | null
   /** The chat this one was handed off from (SESSION-34). */
   handedOffFrom?: { id: string; title: string } | null
+  /** What a resumed session left open (OPEN-6). */
+  openLoops?: string | null
 }
 
 /**
@@ -913,6 +915,7 @@ export function Transcript({
         <SessionNotices
           forkedFrom={live.forkedFrom}
           handedOffFrom={live.handedOffFrom ?? null}
+          openLoops={live.openLoops ?? null}
           kept={live.trustRemembered ?? null}
           vetting={live.autoVetting === true}
           rules={live.rules ?? null}
@@ -1738,10 +1741,12 @@ function Questions({
  * of every export: a note this window wrote about a session is not something the session said.
  * The fork link is a button and not a link, because nothing in this window navigates.
  */
-export function SessionNotices({ forkedFrom, handedOffFrom = null, kept, vetting, rules, refused = [], onOpenParent, onManage }: {
+export function SessionNotices({ forkedFrom, handedOffFrom = null, openLoops = null, kept, vetting, rules, refused = [], onOpenParent, onManage }: {
   forkedFrom: { title: string; prompt: number } | null
   /** The chat this one was started from with Hand Off to New Chat… (SESSION-34). */
   handedOffFrom?: { id: string; title: string } | null
+  /** What a resumed session left open, as the bridge's translated line says it (OPEN-6). */
+  openLoops?: string | null
   kept: KeptTrust | null
   vetting: boolean
   rules: SettingsRules | null
@@ -1751,9 +1756,15 @@ export function SessionNotices({ forkedFrom, handedOffFrom = null, kept, vetting
   onManage: () => void
 }): React.JSX.Element | null {
   const unheld = t.notInForce(rules, refused) || t.grantedRules(rules)
-  if (!forkedFrom && !handedOffFrom && !kept && !vetting && !unheld) return null
+  if (!forkedFrom && !handedOffFrom && !openLoops && !kept && !vetting && !unheld) return null
   return (
     <div className="session-notices">
+      {openLoops && (
+        <p className="session-banner session-notice" role="note" data-test="open-loops">
+          <Icon name="refresh" />
+          <span className="notice-text">{openLoops}</span>
+        </p>
+      )}
       {handedOffFrom && (
         <p className="session-banner session-notice" role="note" data-test="handed-off-from" data-tooltip={`Record ${handedOffFrom.id}`}>
           <Icon name="message-bubble" />
