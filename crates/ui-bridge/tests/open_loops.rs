@@ -51,6 +51,10 @@ impl Window {
         .unwrap();
         let (sent, events) = mpsc::channel();
         let bridge = Bridge::new(Box::new(move |event| {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "an event sent after the test stopped reading has nobody to tell"
+            )]
             let _ = sent.send(event);
         }))
         .with_settings(Some(settings));
@@ -179,7 +183,7 @@ fn a_desktop_turn_that_writes_a_file_saves_the_work_and_the_file() {
     assert_eq!(done.name, "turn.done", "{:?}", done.data);
     let listed = sessions::list(&project);
     assert_eq!(listed.len(), 1, "the session should be listed");
-    let record = sessions::load(&project, &listed[0].id).expect("the record should load");
+    let record = sessions::load(&project, &listed[0].id).unwrap();
     assert!(record.work.writes >= 1, "{:?}", record.work);
     assert!(!record.work.ran_after_last_write, "{:?}", record.work);
     let written: Vec<PathBuf> = record
@@ -293,7 +297,7 @@ fn undoing_a_turn_that_wrote_takes_its_write_out_of_the_open_loops() {
         .unwrap();
     let listed = sessions::list(&project);
     assert_eq!(listed.len(), 1, "the session should be listed");
-    let record = sessions::load(&project, &listed[0].id).expect("the record should load");
+    let record = sessions::load(&project, &listed[0].id).unwrap();
     assert_eq!(record.work, bravebot_agent::Work::default());
     assert!(record.written.is_empty(), "{:?}", record.written);
 

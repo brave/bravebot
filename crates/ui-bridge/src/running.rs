@@ -734,8 +734,7 @@ mod tests {
             }))
             .unwrap();
 
-        let state = State::resumed(&project, &record, TrustStore::new(&project))
-            .expect("the record is free");
+        let state = State::resumed(&project, &record, TrustStore::new(&project)).unwrap();
 
         assert_eq!(state.work, record.work);
         assert_eq!(state.work.writes, 2);
@@ -764,8 +763,7 @@ mod tests {
             }))
             .unwrap();
 
-        let mut state = State::resumed(&project, &record, TrustStore::new(&project))
-            .expect("the record is free");
+        let mut state = State::resumed(&project, &record, TrustStore::new(&project)).unwrap();
 
         let changed = state
             .open_loops
