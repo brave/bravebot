@@ -274,6 +274,19 @@ export const RUN_PIPE: RunRequest = {
   vouches: [], summary: 'Collect last week’s fixes',
 }
 
+// A line the planner asked to run with no sandbox (SANDBOX-29). The sentences are the bridge's
+// catalog wording, and no standing answer is offered.
+export const RUN_UNCONFINED: RunRequest = {
+  request: 25, line: 'cargo build', plan: 'cargo build',
+  stages: [{ program: 'cargo', resolved: '/usr/local/bin/cargo', shownBinary: '/usr/local/bin/cargo', args: ['build'], display: 'cargo build' }],
+  directory: DIRECTORY, shownDirectory: DIRECTORY, shownWrites: [], releasesPrivate: false, canBeRemembered: false, ambient: [],
+  confinement: null, notSandboxed: 'this is not sandboxed: it runs with the access your own shell has',
+  unconfined: true,
+  unconfinedNote: 'the planner asked for this one line to run with no sandbox: no profile holds it, and the next line is held to the session\'s mode again',
+  notRememberedNote: 'a line the planner asked to run with no sandbox is asked about every time, so neither the line nor the request is remembered',
+  vouches: [], summary: 'Build with no sandbox',
+}
+
 export const OUTPUT: OutputRequest = {
   request: 7, command: 'npm test -- cache', reference: 'out:1', lines: 6, label: '(U,priv)', labelAxes: axes('untrusted', 'private'),
   output: 'PASS tests/cache.test.ts\n  ✓ reads never block writes (12 ms)\n  ✓ migrates an empty store (4 ms)\n  ✓ keeps snapshots consistent (9 ms)\n\nTests: 3 passed',

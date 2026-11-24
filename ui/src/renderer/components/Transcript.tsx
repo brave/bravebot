@@ -2457,6 +2457,20 @@ function Card({
           {request.confinement === null && !!request.notSandboxed && (
             <p className="permission-scope" data-test="not-sandboxed" data-deciding="all">{request.notSandboxed}</p>
           )}
+          {/* A line the planner asked to run with no sandbox (SANDBOX-29). Both sentences are the
+              bridge's, drawn as sent. No standing answer is offered for such a line, and the
+              Trust button stays gated on `canBeRemembered`, which the bridge sends false for it. */}
+          {request.unconfined && !!request.unconfinedNote && (
+            <div data-deciding="all" data-test="unconfined">
+              <Alert type="warning" className="card-alert warn">
+                <Icon name="shield-alert" slot="icon" />
+                {request.unconfinedNote}
+              </Alert>
+            </div>
+          )}
+          {request.unconfined && !!request.notRememberedNote && (
+            <p className="permission-scope" data-test="not-remembered" data-deciding="all">{request.notRememberedNote}</p>
+          )}
           <AmbientNotice ambient={request.ambient} deciding />
           {!!lent.length && (
             <div data-deciding="all">
