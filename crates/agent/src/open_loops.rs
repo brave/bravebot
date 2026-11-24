@@ -215,6 +215,22 @@ impl Told {
     }
 }
 
+/// The rows of a task list still open: the ones not struck through (OPEN-1). A finished or a
+/// dropped task is struck, so what is left is the work still to come.
+pub fn open_todos(rows: &[bravebot_core::todo::Row]) -> Vec<&bravebot_core::todo::Row> {
+    rows.iter().filter(|row| !row.struck()).collect()
+}
+
+/// The checkouts `workspace` keeps for the session and has neither applied nor removed (OPEN-1).
+/// A removed one is no longer listed, and one whose delegate still runs has no size yet.
+pub fn kept_checkouts(workspace: &crate::Workspace) -> Vec<crate::workspace::SessionCheckout> {
+    workspace
+        .session_checkouts()
+        .into_iter()
+        .filter(|checkout| checkout.size.is_some() && !checkout.applied)
+        .collect()
+}
+
 /// Which of `written`, the files this session wrote, differ from `HEAD` in the repository holding
 /// `root`, read in-process without starting git (OPEN-1).
 ///

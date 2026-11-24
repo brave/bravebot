@@ -2,7 +2,7 @@
 //! ([OPEN](../../../../docs/specs/open-loops.md)).
 
 use super::Session;
-use bravebot_agent::open_loops::{Kind, Loops, Owner};
+use bravebot_agent::open_loops::{self, Kind, Loops, Owner};
 use bravebot_i18n::t;
 
 impl Session {
@@ -35,9 +35,9 @@ impl Session {
     pub fn open_loops(&self, workspace: &bravebot_agent::Workspace) -> Loops {
         let written = self.files_landed().0;
         Loops {
-            open_todos: self.plan().iter().filter(|row| !row.struck()).count(),
+            open_todos: open_loops::open_todos(self.plan()).len(),
             running_jobs: self.running_job_names(),
-            kept_checkouts: kept_checkouts(workspace).len(),
+            kept_checkouts: open_loops::kept_checkouts(workspace).len(),
             uncommitted_files: bravebot_agent::open_loops::uncommitted(workspace.root(), &written)
                 .len(),
             stopped_goal: self.goal_stopped(),
@@ -97,15 +97,13 @@ impl Session {
         }
         if loops.open_todos > 0 {
             said.push(t!(unfinished_todos, count = loops.open_todos));
-            let open: Vec<String> = self
-                .plan()
-                .iter()
-                .filter(|row| !row.struck())
+            let open: Vec<String> = open_loops::open_todos(self.plan())
+                .into_iter()
                 .map(|row| format!("  {}", row.content))
                 .collect();
             said.extend(open);
         }
-        for checkout in kept_checkouts(workspace) {
+        for checkout in open_loops::kept_checkouts(workspace) {
             said.push(t!(
                 unfinished_checkout,
                 id = &checkout.id,
@@ -174,18 +172,6 @@ impl Session {
         }
         (all, since)
     }
-}
-
-/// The checkouts kept and neither applied nor removed (OPEN-1). A removed one is no longer listed,
-/// and one whose delegate still runs has no size yet.
-fn kept_checkouts(
-    workspace: &bravebot_agent::Workspace,
-) -> Vec<bravebot_agent::workspace::SessionCheckout> {
-    workspace
-        .session_checkouts()
-        .into_iter()
-        .filter(|checkout| checkout.size.is_some() && !checkout.applied)
-        .collect()
 }
 
 /// The person's line: each open kind with its count, grouped by whose move it is (OPEN-3).

@@ -21,12 +21,8 @@ pub(crate) fn of(state: &State, workspace: &Workspace) -> Loops {
             .todos
             .values()
             .next_back()
-            .map_or(0, |rows| rows.iter().filter(|row| !row.struck()).count()),
-        kept_checkouts: workspace
-            .session_checkouts()
-            .iter()
-            .filter(|checkout| checkout.size.is_some() && !checkout.applied)
-            .count(),
+            .map_or(0, |rows| bravebot_agent::open_loops::open_todos(rows).len()),
+        kept_checkouts: bravebot_agent::open_loops::kept_checkouts(workspace).len(),
         uncommitted_files: bravebot_agent::open_loops::uncommitted(
             workspace.root(),
             &state.written,
