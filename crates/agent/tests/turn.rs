@@ -69610,22 +69610,33 @@ fn a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not
 fn a_place_a_finished_delegate_returned_is_taken_by_the_next_one_the_turn_starts() {
     let scratch = Scratch::new("delegate-place-returned");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let (endpoint, received) = serve_by_marker(vec![
-        (
-            "REUSE-THE-PLACE",
-            vec![
-                tool_request("spawn_agent", r#"{"kind":"reader","task":"FIRST-TASK"}"#),
-                // Answering with a delegate outstanding makes the turn wait for it, so the next
-                // request is after the first delegate has ended.
-                reply_with("waiting"),
-                tool_request("spawn_agent", r#"{"kind":"reader","task":"SECOND-TASK"}"#),
-                reply_with("waiting"),
-                reply_with("done"),
-            ],
-        ),
-        ("FIRST-TASK", vec![reply_with("first")]),
-        ("SECOND-TASK", vec![reply_with("second")]),
-    ]);
+    // Each delegate's reply is held until the planner's request that follows its `spawn_agent` has
+    // arrived: the first until the second request, the second until the fourth. That request is
+    // made after the turn last looked for finished delegates, so the planner's "waiting" is
+    // answered with the delegate still outstanding however the machine schedules the threads, and
+    // the turn waits for it instead of ending.
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "REUSE-THE-PLACE",
+                vec![
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"FIRST-TASK"}"#),
+                    // Answering with a delegate outstanding makes the turn wait for it, so the next
+                    // request is after the first delegate has ended.
+                    reply_with("waiting"),
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"SECOND-TASK"}"#),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            ("FIRST-TASK", vec![reply_with("first")]),
+            ("SECOND-TASK", vec![reply_with("second")]),
+        ],
+        Order::Staged(&[
+            ("FIRST-TASK", "REUSE-THE-PLACE", 2),
+            ("SECOND-TASK", "REUSE-THE-PLACE", 4),
+        ]),
+    );
     let mut config = config_for(&endpoint);
     config.max_running_delegates = Some(1);
     let egress = bravebot_net::Egress::new();
@@ -69654,6 +69665,10 @@ fn a_place_a_finished_delegate_returned_is_taken_by_the_next_one_the_turn_starts
             reporter.lines()
         );
     }
+    assert!(
+        held.load(Ordering::SeqCst),
+        "a delegate had ended before the planner answered \"waiting\""
+    );
     let bodies: Vec<String> = received.try_iter().collect();
     assert!(
         !bodies.iter().any(|body| body.contains("delegates running")),
@@ -69668,25 +69683,35 @@ fn a_delegate_that_failed_gives_its_place_back() {
     let scratch = Scratch::new("delegate-place-returned-after-failure");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     // Nothing answers the first delegate, so its own first request fails and its run ends with it.
-    let (endpoint, received) = serve_by_marker(vec![
-        (
-            "REUSE-THE-PLACE-AFTER-A-FAILURE",
-            vec![
-                tool_request(
-                    "spawn_agent",
-                    r#"{"kind":"reader","task":"NOBODY-ANSWERS-THIS"}"#,
-                ),
-                reply_with("waiting"),
-                tool_request(
-                    "spawn_agent",
-                    r#"{"kind":"reader","task":"ANSWERED-LATER"}"#,
-                ),
-                reply_with("waiting"),
-                reply_with("done"),
-            ],
-        ),
-        ("ANSWERED-LATER", vec![reply_with("second")]),
-    ]);
+    // The second delegate's reply is held until the planner's fourth request has arrived, which is
+    // made after the turn last looked for finished delegates, so the planner's "waiting" is
+    // answered with that delegate still outstanding and the turn waits for it.
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "REUSE-THE-PLACE-AFTER-A-FAILURE",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"NOBODY-ANSWERS-THIS"}"#,
+                    ),
+                    reply_with("waiting"),
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"ANSWERED-LATER"}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            ("ANSWERED-LATER", vec![reply_with("second")]),
+        ],
+        Order::After {
+            held: "ANSWERED-LATER",
+            after: "REUSE-THE-PLACE-AFTER-A-FAILURE",
+            asked: 4,
+        },
+    );
     let mut config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     config.max_running_delegates = Some(1);
     let egress = bravebot_net::Egress::new();
@@ -69719,6 +69744,10 @@ fn a_delegate_that_failed_gives_its_place_back() {
             .is_some(),
         "a delegate that failed kept its place under a ceiling of one: {:?}",
         reporter.lines()
+    );
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the second delegate had ended before the planner answered \"waiting\""
     );
     let bodies: Vec<String> = received.try_iter().collect();
     assert!(
