@@ -463,6 +463,11 @@ export const askedQuestions = (request: AskRequest): Entry => ({
 })
 export const replied = (text: string, turn?: number): Entry => ({ kind: 'assistant', id: nextId(), text, turn })
 export const openLoops = (text: string, turn: number): Entry => ({ kind: 'open-loops', id: nextId(), text, turn })
+/** The last entry that is not an open-loops line, so a turn that failed reads as failed with its line after the error. */
+export function lastTurnEntry(entries: Entry[]): Entry | undefined {
+  for (let at = entries.length - 1; at >= 0; at--) if (entries[at]!.kind !== 'open-loops') return entries[at]
+  return undefined
+}
 export const turnStarted = (number: number): Entry => ({ kind: 'turn-start', id: nextId(), number })
 
 /**

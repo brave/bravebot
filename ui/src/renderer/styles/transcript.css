@@ -13,15 +13,21 @@
   overflow: hidden;
 }
 
-/* What a turn left open (OPEN-3): one muted line under the reply, in the register of the lines that
-   say what happened on the way to it. Wrapped rather than cut, because each kind it names counts. */
+/* What a turn left open (OPEN-3): a narration row under the reply or error card and above the
+   turn's footer, on the reply's left edge. Wrapped between words rather than cut, because each kind
+   it names counts. */
 .open-loops {
+  display: flex;
+  align-items: baseline;
+  gap: var(--leo-spacing-m);
   min-width: 0;
-  padding-inline: var(--leo-spacing-s);
-  font: var(--type-caption);
-  color: var(--ink-tertiary);
-  overflow-wrap: anywhere;
+  font: var(--type-meta);
+  color: var(--ink-secondary);
+  overflow-wrap: break-word;
+  --leo-icon-size: var(--icon-control);
+  --leo-icon-color: var(--ink-secondary);
 }
+.open-loops leo-icon { flex: none; align-self: center; }
 
 /* ---- a file being dragged over the conversation
 
