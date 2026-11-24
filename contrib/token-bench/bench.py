@@ -6,7 +6,7 @@
     bench.py report RESULTS.jsonl [--plot DIR]
     bench.py --selftest
 
-A contestant is one tool (bravebot, Claude Code, Codex, or the `reference` loop that talks to an
+A contestant is one tool (bravebot, Claude Code, Codex, opencode, or the `reference` loop that talks to an
 OpenAI-compatible endpoint such as OpenRouter) pointed at one model. Two contestants may be the
 same tool on different models or routes, which is how Bedrock is compared with Brave's own
 endpoint or with OpenRouter. See README.md.
@@ -358,6 +358,67 @@ def parse_codex(stdout, previous):
     return TurnResult(usage, reply, calls), thread, now
 
 
+OPENCODE_COUNTERS = ("input", "output", "cache_read", "cache_write", "messages")
+
+
+def opencode_totals(export):
+    """Sum the usage of every model request in an exported opencode session.
+
+    The `--format json` stream leaves out the last request's usage, so the stored session is read
+    instead. Each assistant message carries one request's `tokens`. Reasoning tokens are reported
+    apart from `output` and are billed as output, so they are added back.
+    """
+    total = dict.fromkeys(OPENCODE_COUNTERS, 0)
+    for message in export.get("messages", []):
+        tokens = message.get("tokens")
+        if not tokens:
+            continue
+        cache = tokens.get("cache") or {}
+        total["input"] += tokens.get("input", 0)
+        total["output"] += tokens.get("output", 0) + tokens.get("reasoning", 0)
+        total["cache_read"] += cache.get("read", 0)
+        total["cache_write"] += cache.get("write", 0)
+        total["messages"] += 1
+    return total
+
+
+def parse_opencode(stdout, export, previous):
+    """opencode `run --format json` events, with usage from the exported session.
+
+    The export holds the whole session, so a later turn's cost is the difference from `previous`,
+    the totals after the turn before. `input` is already net of the cache.
+    """
+    session = None
+    reply = ""
+    calls = 0
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        session = event.get("sessionID", session)
+        kind = event.get("type")
+        if kind == "error":
+            raise BenchError("opencode reported an error: "
+                             + str((event.get("error") or {}).get("message"))[:200])
+        if kind == "text":
+            reply = (event.get("part") or {}).get("text", reply)
+        elif kind == "tool_use":
+            calls += 1
+    if session is None:
+        raise BenchError("no session id in opencode's output")
+    now = opencode_totals(export)
+    delta = {k: now[k] - previous.get(k, 0) for k in OPENCODE_COUNTERS}
+    if delta["messages"] <= 0:
+        raise BenchError("the exported session holds no new model request")
+    usage = Usage(delta["input"], delta["cache_read"], delta["cache_write"], delta["output"],
+                  delta["messages"])
+    return TurnResult(usage, reply, calls), session, now
+
+
 # ---------------------------------------------------------------------------------------------
 # The reference loop: a minimal agent straight against an OpenAI-compatible endpoint
 # ---------------------------------------------------------------------------------------------
@@ -435,7 +496,7 @@ def ref_turn(contestant, workdir, prompt, state, extra_system):
     system = REF_SYSTEM + ("\n\n" + extra_system if extra_system else "")
     total, calls, reply = Usage(), 0, ""
     for _ in range(contestant.get("max_requests", 25)):
-        body = {"model": contestant["model"], "tools": REF_TOOLS, "max_tokens": 4096,
+        body = {"model": model_of(contestant), "tools": REF_TOOLS, "max_tokens": 4096,
                 "messages": ref_messages(system, history), "usage": {"include": True}}
         request = urllib.request.Request(
             base + "/chat/completions", json.dumps(body).encode(),
@@ -476,11 +537,24 @@ def ref_turn(contestant, workdir, prompt, state, extra_system):
 
 
 def expand(value):
-    return re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), ""), value)
+    known = dict(os.environ, BENCH_DIR=str(HERE))
+    return re.sub(r"\$\{(\w+)\}", lambda m: known.get(m.group(1), ""), value)
+
+
+def model_of(contestant):
+    """The model to pass, with ${VAR} expanded so a config can name a route without writing an ARN."""
+    model = expand(contestant.get("model") or "")
+    if contestant.get("model") and not model:
+        raise BenchError(f"the model of {contestant['name']} names a variable that is not set")
+    return model or None
 
 
 def execute(cmd, workdir, contestant):
     env = dict(os.environ)
+    # A tool that reads $PWD instead of asking the system for its directory would otherwise work in
+    # the directory bench.py was started from.
+    env["PWD"] = str(pathlib.Path(workdir).resolve())
+    env["BENCH_DIR"] = str(HERE)
     env.update({k: expand(v) for k, v in contestant.get("env", {}).items()})
     try:
         done = subprocess.run(cmd, cwd=workdir, env=env, capture_output=True, text=True,
@@ -496,10 +570,37 @@ def execute(cmd, workdir, contestant):
 
 def run_turn(contestant, workdir, prompt, state, extra_system, single):
     tool = contestant["tool"]
-    model = contestant.get("model")
-    extra = list(contestant.get("args", []))
+    model = model_of(contestant)
+    extra = [expand(a) for a in contestant.get("args", [])]
     if tool == "reference":
         return ref_turn(contestant, workdir, prompt, state, extra_system)
+    if tool == "opencode":
+        bin_ = contestant.get("bin", "opencode")
+        cmd = [bin_, "run", "--standalone", "--format", "json", "--auto"]
+        if model:
+            cmd += ["-m", model]
+        if state.get("session") and not single:
+            cmd += ["-s", state["session"]]
+        if extra_system:
+            # opencode has no flag for it, so the text goes where it reads standing instructions.
+            (workdir / "AGENTS.md").write_text(extra_system)
+        stdout = execute(cmd + extra + [prompt], workdir, contestant)
+        session = None
+        for line in stdout.splitlines():
+            if line.startswith("{") and '"sessionID"' in line:
+                session = json.loads(line)["sessionID"]
+                break
+        if session is None:
+            raise BenchError("no session id in opencode's output")
+        state["session"] = session
+        exported = execute([bin_, "session", "export", session], workdir, contestant)
+        try:
+            export = json.loads(exported)
+        except json.JSONDecodeError as error:
+            raise BenchError("opencode's session export is not JSON") from error
+        result, _, now = parse_opencode(stdout, export, state.get("totals", {}))
+        state["totals"] = now
+        return result
     if tool == "bravebot":
         cmd = [contestant.get("bin", "bravebot"), "-p", prompt, "--json", "--trust-workspace",
                "--dangerously-skip-permissions"]
@@ -590,6 +691,9 @@ def run_scenario(contestant, scenario, rep, sink):
             if "error" in record:
                 break
     finally:
+        if contestant["tool"] == "opencode" and state.get("session"):
+            subprocess.run([contestant.get("bin", "opencode"), "session", "delete", state["session"]],
+                           cwd=workdir, capture_output=True, stdin=subprocess.DEVNULL)
         if contestant["tool"] == "bravebot" and not single:
             subprocess.run([contestant.get("bin", "bravebot"), "sessions", "purge", "-y"],
                            cwd=workdir, capture_output=True, stdin=subprocess.DEVNULL)
@@ -947,6 +1051,63 @@ def selftest():
                 assert sorted(p.name for p in scratch.iterdir()) == ["a.txt", "b.txt", "c.txt"]
         finally:
             shutil.rmtree(scratch)
+
+    # opencode: the stream omits the last request's usage, so usage comes from the exported session.
+    # The sample is a real three-request session. A later turn costs the difference from the totals
+    # before it, and reasoning tokens count as output.
+    export = {"info": {}, "messages": [
+        {"role": None, "tokens": None},
+        {"tokens": {"input": 2, "output": 18, "reasoning": 0, "cache": {"read": 0, "write": 4198}}},
+        {"tokens": {"input": 2, "output": 18, "reasoning": 0, "cache": {"read": 4198, "write": 46}}},
+        {"tokens": {"input": 2, "output": 11, "reasoning": 0, "cache": {"read": 4244, "write": 42}}},
+        {"tokens": None}]}
+    stream = "\n".join(json.dumps(e) for e in [
+        {"type": "step_start", "sessionID": "ses_1"},
+        {"type": "tool_use", "sessionID": "ses_1", "part": {"tool": "read"}},
+        {"type": "tool_use", "sessionID": "ses_1", "part": {"tool": "read"}},
+        {"type": "text", "sessionID": "ses_1", "part": {"text": "There are 3 lines total."}}])
+    first, session, totals = parse_opencode(stream, export, {})
+    assert (first.usage.fresh, first.usage.cache_read, first.usage.cache_write,
+            first.usage.output, first.usage.requests) == (6, 8442, 4286, 47, 3), first
+    assert first.tool_calls == 2 and session == "ses_1" and first.reply.startswith("There are 3")
+    export["messages"].append({"tokens": {"input": 3, "output": 4, "reasoning": 6,
+                                          "cache": {"read": 4286, "write": 20}}})
+    second, _, _ = parse_opencode(stream, export, totals)
+    assert (second.usage.fresh, second.usage.cache_read, second.usage.cache_write,
+            second.usage.output, second.usage.requests) == (3, 4286, 20, 10, 1), second
+    try:
+        parse_opencode(stream, export, {"input": 0, "output": 0, "cache_read": 0,
+                                        "cache_write": 0, "messages": 4})
+        raise AssertionError("a turn with no new request must be an error")
+    except BenchError:
+        pass
+    try:
+        parse_opencode(json.dumps({"type": "error", "sessionID": "s",
+                                   "error": {"message": "Token is expired"}}), export, {})
+        raise AssertionError("an error event must raise")
+    except BenchError as error:
+        assert "expired" in str(error)
+
+    # A model written as ${VAR} comes from the environment, and an unset variable is an error rather
+    # than an empty --model.
+    os.environ["BENCH_SELFTEST_MODEL"] = "m-1"
+    assert model_of({"name": "x", "model": "${BENCH_SELFTEST_MODEL}"}) == "m-1"
+    assert model_of({"name": "x"}) is None
+    del os.environ["BENCH_SELFTEST_MODEL"]
+    try:
+        model_of({"name": "x", "model": "${BENCH_SELFTEST_MODEL}"})
+        raise AssertionError("an unset model variable must raise")
+    except BenchError:
+        pass
+
+    # A started tool sees the scenario directory as $PWD, whatever bench.py inherited.
+    scratch = pathlib.Path(tempfile.mkdtemp())
+    try:
+        seen = execute([sys.executable, "-c", "import os; print(os.environ['PWD'], end='')"],
+                       scratch, {"name": "x"})
+        assert seen == str(scratch.resolve()), seen
+    finally:
+        shutil.rmtree(scratch)
 
     # Cost: one cached token must cost less than one fresh one and a write more, for anthropic.
     w = WEIGHT_PROFILES["anthropic"]
