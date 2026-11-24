@@ -269,10 +269,41 @@ def review(pr):
     return 0
 
 
+def check_key(check):
+    """What names a check across its runs: the workflow and name of a check run, or the context of a
+    commit status. None when the entry has neither, so it is never taken for a run of another."""
+    if check.get("__typename") == "StatusContext":
+        return ("status", check.get("context")) if check.get("context") else None
+    return ("run", check.get("workflowName"), check["name"]) if check.get("name") else None
+
+
+def has_result(check):
+    """Whether the check has a verdict yet: a completed check run, or a commit status not still running."""
+    if check.get("__typename") == "StatusContext":
+        return check.get("state") not in STILL_RUNNING
+    return check.get("status") == "COMPLETED"
+
+
+def latest_runs(rollup):
+    """The checks whose result counts. GitHub keeps every run of a check on the commit, such as one
+    cancelled because a newer run of the workflow started, and shows only the latest. An entry is left
+    out when another entry for the same check started later. An entry that has no result yet, no start
+    time, no name, or the same start time as another run of the check, always counts, since those
+    cases can't be safely deduplicated."""
+    newest = {}
+    for one in rollup:
+        key, started = check_key(one), one.get("startedAt")
+        if key is not None and started:
+            newest[key] = max(newest.get(key, started), started)
+    return [one for one in rollup
+            if not has_result(one) or not one.get("startedAt") or check_key(one) is None
+            or one["startedAt"] == newest[check_key(one)]]
+
+
 def classify(rollup):
     """Split a pull request's checks into (failing, pending, passing), each as (name, link, verdict)."""
     failing, pending, passing = [], [], []
-    for one in rollup:
+    for one in latest_runs(rollup):
         if one.get("__typename") == "StatusContext":
             name, link, verdict = one["context"], one.get("targetUrl") or "", one["state"]
             bucket = passing if verdict == "SUCCESS" else pending if verdict in STILL_RUNNING else failing

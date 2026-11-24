@@ -449,6 +449,55 @@ def test_checks_are_split_into_failing_pending_and_passing():
     assert pr_fix.classify(cancelled)[0], "a cancelled job did not pass"
 
 
+def check_run(conclusion, started, name="Process narration", workflow="Narration"):
+    """One run of a check on the head commit, the kind `cancel-in-progress` cancels and replaces."""
+    return {"__typename": "CheckRun", "workflowName": workflow, "name": name, "status": "COMPLETED",
+            "conclusion": conclusion, "detailsUrl": "u", "startedAt": f"2026-11-01T14:{started}Z"}
+
+
+def check_status(state, started, context="ci/build"):
+    """One commit status on the head commit."""
+    return {"__typename": "StatusContext", "context": context, "state": state, "targetUrl": "u",
+            "startedAt": f"2026-11-01T14:{started}Z"}
+
+
+def test_a_run_a_later_run_of_the_same_check_replaced_does_not_count_as_failing():
+    """A new run of a workflow cancels the one still going, and GitHub keeps both on the commit. The
+    pull request page shows only the later run, so `classify` does too (brave/bravebot#3631)."""
+    passed = check_run("SUCCESS", "04:15")
+    cancelled = check_run("CANCELLED", "04:00")
+    other = check_run("SUCCESS", "04:05", "Specs", "CI")
+    cases = {
+        "cancelled, then passed": [cancelled, passed, other],
+        "passed, listed before the cancelled run it replaced": [passed, cancelled, other],
+        "failed, then passed on a re-run": [check_run("FAILURE", "04:00"), passed, other],
+        "status failed, then passed": [check_status("FAILURE", "04:00"), check_status("SUCCESS", "04:15"), other],
+    }
+    for name, rollup in cases.items():
+        failing, _, _ = pr_fix.classify(rollup)
+        assert failing == [], (name, failing)
+
+
+def test_only_the_latest_run_of_the_same_check_is_looked_past():
+    """A different check, another workflow's check of the same name, or a run that cannot be ordered
+    never stands in for the one that failed, so a genuine failure is still reported."""
+    cases = {
+        "failed, then another check passed": [
+            check_run("FAILURE", "04:00", "Specs", "CI"), check_run("SUCCESS", "04:15", "Locales", "CI")],
+        "failed, then the same name passed in another workflow": [
+            check_run("FAILURE", "04:00", "Affected checks", "CI"),
+            check_run("SUCCESS", "04:15", "Affected checks", "Dependencies")],
+        "failed and passed at the same time": [check_run("FAILURE", "04:00"), check_run("SUCCESS", "04:00")],
+        "cancelled and never replaced": [check_run("CANCELLED", "04:00")],
+        "failed and passed with no start time": [
+            {k: v for k, v in check_run(result, "04:00").items() if k != "startedAt"}
+            for result in ("FAILURE", "SUCCESS")],
+    }
+    for name, rollup in cases.items():
+        failing, _, _ = pr_fix.classify(rollup)
+        assert failing, (name, failing)
+
+
 def test_ci_exits_by_what_is_left_to_do():
     def result(rollup):
         pr = SimpleNamespace(number=9, tree=Path("/nonexistent"), head_sha="abc", rollup=rollup)
