@@ -180,10 +180,33 @@ pub(super) fn unfinished_account(
     (note, body)
 }
 
+/// What a kept checkout's note says about bringing its files back, naming `apply_checkout` only
+/// where the collecting turn's own list holds it (TOOL-6): the tool is never offered to a
+/// delegate (it is in `NEVER_DELEGATED`), so a turn that is itself a delegate collecting another
+/// delegate's kept checkout must not be told to call a tool it does not have. Where the list
+/// lacks it, the clause says only where the files are, so the person still knows, by another way.
+fn apply_checkout_clause(beside: tools::Beside, id: &str, path: &std::path::Path) -> String {
+    match beside.holds(tools::Named::ApplyCheckout) {
+        true => format!(
+            " apply_checkout with checkout \"{id}\" brings the files it names back into the \
+             working directory, asking the person about each."
+        ),
+        false => format!(
+            " The files it holds stay at {} until the person brings them back another way.",
+            path.display()
+        ),
+    }
+}
+
 /// What the planner is told about a delegate's checkout, and the clause the person's note gains.
+///
+/// `beside` is the collecting turn's own tool list: `apply_checkout` is never offered to a
+/// delegate, so a turn that is itself a delegate collecting another delegate's kept checkout is
+/// not told to call it (TOOL-6). Where the list lacks it, the note says only where the files are.
 pub(super) fn checkout_account(
     retired: crate::workspace::Retired,
     checkout: &crate::workspace::CheckoutInfo,
+    beside: tools::Beside,
 ) -> (String, String) {
     use crate::workspace::Retired;
     match retired {
@@ -199,13 +222,12 @@ pub(super) fn checkout_account(
         Retired::Kept => (
             format!(
                 "Its checkout {} of commit {} was kept at {}, since something was done in \
-                 it. {} apply_checkout with checkout \"{}\" brings the files it names \
-                 back into the working directory, asking the person about each.",
+                 it. {}{}",
                 checkout.id(),
                 checkout.commit(),
                 checkout.path().display(),
                 crate::delegate::checkout_candidates(&checkout.candidates()),
-                checkout.id()
+                apply_checkout_clause(beside, checkout.id(), checkout.path()),
             ),
             match checkout.size() {
                 Some(size) => format!(
@@ -432,10 +454,38 @@ pub(super) fn join_delegate<S: Sink, R: Reporter>(
 
 #[cfg(test)]
 mod tests {
-    use super::{stuck_checkout, unfinished_account, work_sentences};
+    use super::{apply_checkout_clause, stuck_checkout, unfinished_account, work_sentences};
+    use crate::tools::{Beside, Named};
     use bravebot_core::delegate::{DelegateId, Finish};
     use std::path::Path;
     use std::time::Duration;
+
+    /// TOOL-6. A kept checkout's note names `apply_checkout` only where the collecting turn's own
+    /// list holds it, since the tool is never offered to a delegate and a sentence may not name a
+    /// tool the turn reading it does not have. Where the list lacks it, the clause says only
+    /// where the files are, which is still true and still useful without naming a tool to fetch
+    /// them with.
+    #[test]
+    fn the_apply_checkout_clause_names_the_tool_only_where_the_list_holds_it() {
+        let path = Path::new("/tmp/checkout-c3");
+        let holding = Beside::every();
+        let named = apply_checkout_clause(holding, "c3", path);
+        assert!(
+            named.contains("apply_checkout with checkout \"c3\" brings the files it names back"),
+            "{named}"
+        );
+
+        let without = holding.without(Named::ApplyCheckout);
+        let unnamed = apply_checkout_clause(without, "c3", path);
+        assert!(
+            !unnamed.contains("apply_checkout"),
+            "named a tool the list does not hold: {unnamed}"
+        );
+        assert!(
+            unnamed.contains("/tmp/checkout-c3") && unnamed.contains("another way"),
+            "{unnamed}"
+        );
+    }
 
     /// TRACE-8. The person's note names the cause of each ending that handed nothing back: the
     /// fixed name of a failure, a stop, and a loss. A stop must not read as a failure, nor a loss as

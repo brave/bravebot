@@ -1774,6 +1774,24 @@ fn write_it_yourself(beside: Beside) -> &'static str {
     }
 }
 
+/// What the notice of a checkout a `spawn_agent` call made says about `lsp`, naming it only where
+/// the collecting turn's own list holds it (TOOL-6): a checkout's delegate is never offered `lsp`
+/// (CHECKOUT-setup strips it unconditionally), but that is a fact about the delegate, and naming
+/// the tool here is a fact read off the collecting turn's own list instead.
+///
+/// `plural` is whether the sentence speaks of more than one checkout: "is not offered" for one,
+/// "or is offered" for several, since the plural sentence is already phrased as a negation
+/// ("None ... or is offered lsp").
+fn lsp_clause(beside: Beside, plural: bool) -> &'static str {
+    if !beside.holds(Named::Lsp) {
+        ""
+    } else if plural {
+        " or is offered lsp"
+    } else {
+        " and is not offered lsp"
+    }
+}
+
 /// How a job that has ended finished, read off the exit code and the signal of each of its steps.
 ///
 /// Structure and nothing else: no byte of what the pipeline printed reaches this. Failed rather
@@ -14737,29 +14755,33 @@ fn spawn_agent<S: Sink, R: Reporter>(
         Some((_, commit, None)) if started.len() == 1 => format!(
             "{body} It works in a checkout of commit {commit}, which has no changes that are not \
              committed and is not your working directory. It keeps no memory between \
-             conversations and is not offered lsp. {}",
+             conversations{}. {}",
+            lsp_clause(tools.beside, false),
             checkouts_share_refs(tools.running)
         ),
         Some((_, commit, None)) => format!(
             "{body} Each works in a checkout of its own of commit {commit}, which has no changes \
              that are not committed and is not your working directory. None keeps memory between \
-             conversations or is offered lsp. {}",
+             conversations{}. {}",
+            lsp_clause(tools.beside, true),
             checkouts_share_refs(tools.running)
         ),
         Some((_, commit, Some(_))) if started.len() == 1 => format!(
             "{body} It works in a checkout of commit {commit}, which is not your working \
              directory. The driver tried to carry your working directory's uncommitted changes \
-             into it as they were when it was made. {} It keeps no memory between conversations \
-             and is not offered lsp. {}",
+             into it as they were when it was made. {} It keeps no memory between conversations\
+             {}. {}",
             carried_summaries(&checkouts),
+            lsp_clause(tools.beside, false),
             checkouts_share_refs(tools.running)
         ),
         Some((_, commit, Some(_))) => format!(
             "{body} Each works in a checkout of its own of commit {commit}, none of which is your \
              working directory. The driver tried to carry your working directory's uncommitted \
              changes into each as they were when it was made. {} None keeps memory between \
-             conversations or is offered lsp. {}",
+             conversations{}. {}",
             carried_summaries(&checkouts),
+            lsp_clause(tools.beside, true),
             checkouts_share_refs(tools.running)
         ),
         None => body,
@@ -20259,6 +20281,21 @@ mod tests {
                 "{tool}: taking edit_file off changed it"
             );
         }
+    }
+
+    /// TOOL-6. A `spawn_agent` call's notice of the checkouts it made names `lsp` only where the
+    /// collecting turn's own list holds it, since a delegate's checkout strips `lsp` from the
+    /// delegate's own list unconditionally (CHECKOUT setup) but that says nothing about whether
+    /// the turn reading this notice, which may itself be a delegate, has `lsp` on its list.
+    #[test]
+    fn the_checkout_notice_names_lsp_only_where_the_list_holds_it() {
+        let holding = Beside::every();
+        let without = holding.without(Named::Lsp);
+
+        assert_eq!(lsp_clause(holding, false), " and is not offered lsp");
+        assert_eq!(lsp_clause(holding, true), " or is offered lsp");
+        assert_eq!(lsp_clause(without, false), "");
+        assert_eq!(lsp_clause(without, true), "");
     }
 
     /// The processor's description as the turn it is read in is offered it.

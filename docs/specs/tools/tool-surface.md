@@ -313,14 +313,23 @@ It was also told in its own prompt what it cannot do, so it holds both answers a
 the tool list is the one that is true.
 
 Not every text is written this way yet. Some results and refusals still name `run`, `read_file`,
-`edit_file`, `read_output`, `job_output`, `lsp`, `search_skills`, `load_skill`, `download_url`,
-`apply_checkout` or `read_git` without reading the list: the decoding note of a page read, the
-result of an approved `request_path`, the unconfined way out that a refused write names, the checkout notes of `spawn_agent`, the descriptions of
+`edit_file`, `read_output`, `job_output`, `search_skills`, `load_skill`, `download_url` or
+`read_git` without reading the list: the decoding note of a page read, the
+result of an approved `request_path`, the unconfined way out that a refused write names, the descriptions of
 `load_skill`, `search_skills`, `download_url` and `ask_user`, the notice about `search_skills`, the
 planning, person-facing and environment prompts, the reminder of a kept skill after compaction, and
 the refusals of a checkout. A text of this kind is to be written from the list when it is found, and
 the test for it is the one the sites above have: a list without the tool, and a list with every
 tool as the control.
+
+The checkout notes of `spawn_agent` name `lsp` only where the collecting turn's own list holds it,
+since a checkout's delegate is never offered `lsp` (its own list has it stripped unconditionally),
+but that is a fact about the delegate and not about the turn being told the note: a turn that is
+itself a delegate collecting another delegate's checkouts must not be told, in its own words, to
+use a tool it does not have. The note a kept checkout gets names `apply_checkout` the same way,
+since `apply_checkout` is never offered to a delegate either (it is in `NEVER_DELEGATED`): where
+the collecting turn's list lacks it, the note says only where the files are, which stays true
+without naming a tool to fetch them with.
 
 `verified-by: bravebot_agent::tools::read_git_names_run_only_where_the_delegate_holds_one`
 `verified-by: bravebot_agent::tools::a_declined_repository_names_run_only_where_the_turn_holds_one`
@@ -396,3 +405,5 @@ tool as the control.
 `verified-by: bravebot_agent::turn::a_processor_given_nothing_names_write_file_only_where_the_turn_was_offered_it`
 `verified-by: bravebot_agent::turn::the_files_beside_a_named_skill_name_read_file_only_where_the_turn_was_offered_it`
 `verified-by: bravebot_agent::turn::a_mode_change_to_off_names_request_path_only_where_the_turn_was_offered_it`
+`verified-by: bravebot_agent::turn::delegate_end::the_apply_checkout_clause_names_the_tool_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::the_checkout_notice_names_lsp_only_where_the_list_holds_it`
