@@ -74,6 +74,7 @@ A write into the session's own directory is not a written file for this rule. Wh
 `verified-by: bravebot_agent::open_loops::a_command_that_exited_non_zero_is_a_failed_command_until_another_runs`
 `verified-by: bravebot_agent::turn::a_turns_record_says_whether_its_last_command_failed`
 `verified-by: bravebot_agent::workspace::a_kept_checkout_is_open_until_applied_or_removed`
+`verified-by: bravebot_agent::workspace::open_loops_keep_only_checkouts_that_ended_and_were_not_applied`
 `verified-by: bravebot_agent::turn::a_typed_checkouts_apply_asks_about_each_recorded_file`
 `verified-by: bravebot_agent::turn::a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status`
 `verified-by: bravebot_agent::open_loops::a_file_written_and_committed_is_not_uncommitted`
@@ -113,6 +114,7 @@ The line replaces the closing line of [TURN-4](turns.md#TURN-4) ("files changed 
 **Why only on change.** A reminder repeated every turn stops being read. A loop you chose to leave open stays in `/unfinished` and does not nag.
 
 `verified-by: bravebot_tui::state::open_loops::a_turn_that_leaves_loops_open_ends_with_one_line_naming_them`
+`verified-by: bravebot_agent::open_loops::the_line_names_each_open_kind_grouped_by_whose_move_it_is`
 `verified-by: bravebot_agent::turn::a_caller_that_shows_open_loops_is_not_also_told_of_unbuilt_changes`
 `verified-by: bravebot_agent::open_loops::the_persons_line_groups_kinds_by_owner_and_names_no_path`
 `verified-by: bravebot_agent::open_loops::the_persons_line_with_nothing_open_is_open_nothing`
