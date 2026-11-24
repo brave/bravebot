@@ -159,7 +159,9 @@ def _setup_find_symbol(workdir):
     package = workdir / "pkg"
     package.mkdir()
     for n in range(40):
-        body = "".join(f"def helper_{n:02d}_{k}(x):\n    return x + {n * 3 + k}\n\n" for k in "abc")
+        body = "".join(
+            f"def helper_{n:02d}_{k}(x):\n    return x + {n * 3 + i}\n\n" for i, k in enumerate("abc")
+        )
         if n == 27:
             body += "def reconcile_ledger_7f3a(entries):\n    return sorted(entries)\n"
         (package / f"mod_{n:02d}.py").write_text(body)
@@ -929,6 +931,22 @@ def selftest():
     assert second.usage.prompt == 34249 - 17112
     third, _, _ = parse_codex(codex_events("t-1", 1, 51404, 48000, 17), totals)
     assert third.usage.prompt == 51404 - 34249 and third.tool_calls == 1
+
+    # Every scenario's setup must run and leave what its prompt refers to. A setup that raises
+    # would stop a whole run partway through.
+    for scenario in scenarios():
+        scratch = pathlib.Path(tempfile.mkdtemp())
+        try:
+            scenario.setup(scratch)
+            if scenario.name == "find_symbol":
+                files = sorted((scratch / "pkg").glob("mod_*.py"))
+                assert len(files) == 40, len(files)
+                holders = [f.name for f in files if "reconcile_ledger_7f3a" in f.read_text()]
+                assert holders == ["mod_27.py"], holders
+            if scenario.name == "read_count":
+                assert sorted(p.name for p in scratch.iterdir()) == ["a.txt", "b.txt", "c.txt"]
+        finally:
+            shutil.rmtree(scratch)
 
     # Cost: one cached token must cost less than one fresh one and a write more, for anthropic.
     w = WEIGHT_PROFILES["anthropic"]
