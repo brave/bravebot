@@ -57,6 +57,7 @@ help:
 	@echo "  make check-spec            Check docs/specs against the implementation"
 	@echo "  make check-security        The security audit's deterministic half"
 	@echo "  make check-maintenance     Dead, repeated, deeply nested, coupled or untested code, as candidates for the maintenance skill"
+	@echo "  make check-profile         Time and size the tests, starts, build, binaries and scripts, as candidates for the profile skill [LANES=\"tests size\"]"
 	@echo "  make check-locales         Hold the catalogs to contrib/untranslated-messages.txt"
 	@echo "  make check-versions        Whether every file stating the version states the same one"
 	@echo "  make check-code-selectors  Whether each start states CodeSelectors and each variable that chooses code has its tests"
@@ -296,6 +297,18 @@ check-security:
 .PHONY: check-maintenance
 check-maintenance: check-maintenance-selftest
 	python3 agents/skills/maintenance/maintenance.py --mechanical-only --no-clippy
+
+# The measurement half of the profile skill. It runs the real programs in a scratch home directory:
+# the tests, a cold start of each built binary, a cold release build with cargo's timings, the size
+# of each release binary, and the scripts the commit hook and CI run. It builds the workspace in
+# release mode, so it takes as long as that does, and nothing runs it in CI. A candidate is a
+# measurement over a stated threshold or well over docs/profile-reviewed, which holds the value of
+# an earlier run; it prints them and exits zero. A lane whose tool is missing says so and has no
+# candidates. Deciding which candidates are worth an issue needs a reading of the code: run the
+# profile skill for that half. LANES limits the run, as in `make check-profile LANES="tests size"`.
+.PHONY: check-profile
+check-profile: check-profile-selftest
+	python3 agents/skills/profile/profiling.py --measure-only $(LANES)
 
 # agents/unverified-clauses.txt, written from the specs. It is the list of clauses nothing pins, and
 # check-spec fails while it and the specs disagree, so this is what to run after giving a clause
@@ -734,12 +747,12 @@ check-affected-containers:
 
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
-	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
+	check-maintenance-selftest check-profile-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
 	check-review-ready-selftest check-clean-branches-selftest check-verus-contracts-selftest \
 	check-verus-contracts-ledger
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
-	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
+	check-maintenance-selftest check-profile-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
 	check-review-ready-selftest check-clean-branches-selftest check-verus-contracts-selftest \
 	check-verus-contracts-ledger
 
@@ -772,6 +785,9 @@ check-pr-worktree-selftest:
 
 check-maintenance-selftest:
 	python3 agents/skills/maintenance/selftest.py
+
+check-profile-selftest:
+	python3 agents/skills/profile/selftest.py
 
 check-session-review-selftest:
 	python3 agents/skills/session-review/selftest.py

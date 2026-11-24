@@ -405,3 +405,9 @@ duplication, files or functions past a length, and the other smells its lanes li
 where a reviewer found a defect, an `area` or `infrastructure` where one is clear, and no axis.
 It assigns every issue to netzenbot. If a required label is missing, the poster refuses and prints
 a creation command for a person. Do not create or use a `maintenance` label for these findings.
+
+The [profile skill](../../agents/skills/profile/SKILL.md), which files what a measurement shows to be
+slow or large (a test, a start, a compile unit, a release binary, a script), applies `enhancement`, or
+`bug` where the measurement shows a defect such as a test that waits out a timeout on every run, an
+`area` or `infrastructure` where one is clear (`infrastructure` for a slow script), and no axis. It
+assigns every issue to netzenbot. Do not create or use a `performance` label for these findings.
