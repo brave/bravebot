@@ -787,6 +787,24 @@ fn shown_to_the_planner(label: Label, picture: bool) -> bool {
     trusted && !picture
 }
 
+/// The refusal for a capability that produces no observation to label.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+fn no_observation(capability: &Capability) -> Denial {
+    Denial {
+        principle: Principle::Capability,
+        message: format!("'{capability}' produces no observation to label"),
+    }
+}
+
+/// The refusal for an observation that has no label, saying `message`.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+fn no_label(message: &'static str) -> Denial {
+    Denial {
+        principle: Principle::Capability,
+        message: message.to_string(),
+    }
+}
+
 /// Which question decided whether a fetch is put to a person.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(verus_keep_ghost, verus_verify)]
@@ -1683,6 +1701,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     /// Check that a capability was granted before it is exercised.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
     pub fn before_capability(&mut self, capability: Capability) -> Gated<()> {
         if !self.capabilities.contains(&capability) {
             // A delegate started without a capability its definition asked for says why, from the
@@ -1903,16 +1922,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     pub fn before_fetch(&mut self, url: &str) -> Gated<Label> {
         self.before_capability(Capability::WebFetch)?;
         self.consume_grant("fetch_url", "url", url)?;
+        self.hold_to_the_host_of(url);
 
-        // What the egress gate checks each hop against, until the call reports back.
+        let Some(label) = Capability::WebFetch.output_label() else {
+            return Err(no_label("a fetched body must have a label"));
+        };
+        self.allow_fetched_body(label);
+        Ok(label)
+    }
+
+    /// What the egress gate checks each hop of a fetch against, until the call reports back.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn hold_to_the_host_of(&mut self, url: &str) {
         self.fetching = Some(crate::url::host_of(url).unwrap_or_default());
         self.fetch_hop = None;
         self.fetching_via = None;
+    }
 
-        let label = Capability::WebFetch.output_label().ok_or_else(|| Denial {
-            principle: Principle::Capability,
-            message: "a fetched body must have a label".to_string(),
-        })?;
+    /// The trail line for the label [`Policy::before_fetch`] gives a body.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn allow_fetched_body(&mut self, label: Label) {
         self.allow(
             "provenance",
             format!(
@@ -1920,7 +1949,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                  approving a host says nothing about what it returns"
             ),
         );
-        Ok(label)
     }
 
     /// Say that the fetch has finished, however it went.
@@ -2026,11 +2054,23 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     pub fn before_search(&mut self, url: &str) -> Gated<Label> {
         self.before_capability(Capability::WebSearch)?;
         self.consume_grant("web_search", "url", url)?;
+        self.hold_search_to_the_host_of(url);
+        let Some(label) = Capability::WebSearch.output_label() else {
+            return Err(no_label("search results must have a label"));
+        };
+        self.allow_search_results(label);
+        Ok(label)
+    }
+
+    /// What the egress gate checks each hop of a search against, while it is in flight.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn hold_search_to_the_host_of(&mut self, url: &str) {
         self.searching = Some(crate::url::host_of(url).unwrap_or_default());
-        let label = Capability::WebSearch.output_label().ok_or_else(|| Denial {
-            principle: Principle::Capability,
-            message: "search results must have a label".to_string(),
-        })?;
+    }
+
+    /// The trail line for the label [`Policy::before_search`] gives results.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn allow_search_results(&mut self, label: Label) {
         self.allow(
             "provenance",
             format!(
@@ -2038,7 +2078,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                  approving a query says nothing about what comes back"
             ),
         );
-        Ok(label)
     }
 
     /// Say that the search has finished, however it went, so a failed request does not leave the
@@ -2463,12 +2502,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Record that a capability produced an observation, returning the label it must
     /// carry. The label comes from the capability, never from the data.
     pub fn observe(&mut self, capability: Capability) -> Gated<Label> {
-        let label = capability.output_label().ok_or_else(|| Denial {
-            principle: Principle::Capability,
-            message: format!("'{capability}' produces no observation to label"),
-        })?;
-        self.sink.emit(Event::Observed { capability, label });
+        let Some(label) = capability.output_label() else {
+            return Err(no_observation(&capability));
+        };
+        self.record_observed(capability, label);
         Ok(label)
+    }
+
+    /// The event for [`Policy::observe`].
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn record_observed(&mut self, capability: Capability, label: Label) {
+        self.sink.emit(Event::Observed { capability, label });
     }
 
     /// Install the user's trust decisions, before the turn runs.

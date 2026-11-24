@@ -9,15 +9,27 @@
 //! [`Capability::WebFetch`] for the one general-purpose fetch primitive, and
 //! [`Capability::Connector`] for the one that reaches an account through an authority.
 
-use crate::label::Label;
+use crate::label::{Confidentiality, Integrity, Label};
 use std::fmt;
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
 
 /// The local name a person gave one declared MCP server.
 ///
 /// A name a person typed, and never one a server reported about itself: what a server calls
 /// itself is display text, so it cannot become an identifier a grant is written against.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(verus_keep_ghost, verus_verify, verifier::external_body)]
 pub struct ServerAlias(String);
+
+// Written out rather than derived, because Verus refuses a derived `Clone` on a type whose fields
+// it does not read.
+impl Clone for ServerAlias {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 impl ServerAlias {
     pub fn new(alias: impl Into<String>) -> Self {
@@ -39,8 +51,18 @@ impl fmt::Display for ServerAlias {
 ///
 /// The file name the person installed it under, and never a name the authority or the service
 /// reported: a grant is written against it, so it has to be something a person chose.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(verus_keep_ghost, verus_verify, verifier::external_body)]
 pub struct ConnectorName(String);
+
+// Written out rather than derived, because Verus refuses a derived `Clone` on a type whose fields
+// it does not read.
+impl Clone for ConnectorName {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 impl ConnectorName {
     pub fn new(name: impl Into<String>) -> Self {
@@ -58,7 +80,8 @@ impl fmt::Display for ConnectorName {
 /// [`CapabilitySet::contains`], which the policy layer's capability gate asks.
 ///
 /// Not `Copy`, because one variant names the server it is about.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub enum Capability {
     /// Read a file from the workspace.
     ///
@@ -119,6 +142,26 @@ pub enum Capability {
     Connector(ConnectorName),
 }
 
+// Written out rather than derived, because Verus gives no specification to a derived `Clone` of an
+// enum one of whose variants holds a type it does not read.
+impl Clone for Capability {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn clone(&self) -> Self {
+        match self {
+            Self::FileRead => Self::FileRead,
+            Self::FileWrite => Self::FileWrite,
+            Self::ShellExec => Self::ShellExec,
+            Self::GitRead => Self::GitRead,
+            Self::GitWrite => Self::GitWrite,
+            Self::WebFetch => Self::WebFetch,
+            Self::WebSearch => Self::WebSearch,
+            Self::McpCall(alias) => Self::McpCall(alias.clone()),
+            Self::LanguageServer => Self::LanguageServer,
+            Self::Connector(name) => Self::Connector(name.clone()),
+        }
+    }
+}
+
 impl Capability {
     /// Every variant, in declaration order.
     ///
@@ -149,24 +192,35 @@ impl Capability {
     ///
     /// `None` for pure effects, which produce no observation to label.
     pub fn output_label(&self) -> Option<Label> {
+        // Built with `Label::new` rather than `Label::untrusted_private()`, which Verus does not
+        // read. Nothing a capability observes is trusted.
+        let observed = Integrity::Untrusted;
         match self {
             // Workspace content is ours (private) and may contain anything (untrusted). A
             // language server's answer was computed from that same content, so it arrives on
             // the same footing.
             Self::FileRead | Self::GitRead | Self::LanguageServer => {
-                Some(Label::untrusted_private())
+                Some(Label::new(observed, Confidentiality::Private))
             }
             // Remote content is attacker-influenceable but not confidential to us.
-            Self::WebFetch | Self::WebSearch => Some(Label::untrusted_public()),
+            Self::WebFetch | Self::WebSearch => Some(Label::new(observed, Confidentiality::Public)),
             // A server may hold the person's own data, a mailbox or a calendar, and this client
             // cannot tell what a given call read from it.
-            Self::McpCall(_) => Some(Label::untrusted_private()),
+            Self::McpCall(_) => Some(Label::new(observed, Confidentiality::Private)),
             // Other people's words, from the person's own account.
-            Self::Connector(_) => Some(Label::untrusted_private()),
+            Self::Connector(_) => Some(Label::new(observed, Confidentiality::Private)),
             // Effects produce no labelled observation.
-            Self::FileWrite | Self::GitWrite => None,
+            Self::FileWrite | Self::GitWrite => {
+                // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+                let effect: Option<Label> = None;
+                effect
+            }
             // Command output can contain anything the workspace contains.
-            Self::ShellExec => Some(Label::untrusted_private()),
+            Self::ShellExec => {
+                // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+                let printed = Confidentiality::Private;
+                Some(Label::new(observed, printed))
+            }
         }
     }
 
