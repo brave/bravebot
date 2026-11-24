@@ -863,3 +863,47 @@ fn a_granted_rule_no_file_wrote_is_in_the_scope() {
     assert_eq!(after.allow, ["WebFetch(domain:example.com) @ granted"]);
     assert_eq!(before.covers(&after), Coverage::Widened(vec![Field::Allow]));
 }
+
+/// A name with a byte that is not text and its lossy lookalike are two paths, so they are two keys
+/// (PATH-003). A key built by lossy conversion would merge them.
+#[cfg(unix)]
+#[test]
+fn a_name_that_is_not_text_and_its_lossy_lookalike_are_two_keys() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let raw = Path::new(OsStr::from_bytes(b"/work/tool-\xff"));
+    let lookalike = Path::new("/work/tool-\u{FFFD}");
+
+    assert_ne!(key(raw), key(lookalike));
+    assert_eq!(key(raw), key(raw));
+}
+
+/// A session opened in the lossy lookalike of a project is not inside a ceiling taken for the
+/// project, so the project field reports it.
+#[cfg(unix)]
+#[test]
+fn a_project_and_its_lossy_lookalike_are_different_projects() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let scope_in = |project: &Path| {
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = open_session(&mut bridge, project);
+        scope_of(
+            &bridge.open[&handle],
+            &no_settings(),
+            &no_managed(),
+            &no_home(),
+        )
+        .unwrap()
+    };
+    let ceiling = scope_in(Path::new(OsStr::from_bytes(b"/work/tool-\xff")));
+    let current = scope_in(Path::new("/work/tool-\u{FFFD}"));
+
+    assert_eq!(
+        ceiling.covers(&current),
+        Coverage::Widened(vec![Field::Project])
+    );
+    assert_eq!(ceiling.covers(&ceiling), Coverage::Covered);
+}
