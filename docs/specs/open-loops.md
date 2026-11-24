@@ -143,6 +143,7 @@ In the desktop app, undoing a turn tells the planner again: the next turn begins
 `verified-by: bravebot_agent::turn::telling_open_loops_reaches_the_planner_and_keeps_the_unbuilt_line`
 `verified-by: bravebot_ui_bridge::open_loops_tests::undoing_a_turn_tells_the_planner_of_the_loops_left_open`
 `verified-by: bravebot_ui_bridge::open_loops_tests::undoing_the_only_turn_leaves_nothing_open`
+`verified-by: bravebot_ui_bridge::open_loops::the_first_turn_after_a_reopen_tells_the_planner_what_was_left_open`
 
 <a id="OPEN-5"></a>
 ### OPEN-5: `/unfinished` shows every open loop in full
@@ -194,6 +195,7 @@ A record with no work record or last-command status reads as nothing open.
 `verified-by: bravebot_ui_bridge::open_loops::a_record_with_failing_work_and_open_todos_reads_as_those_loops`
 `verified-by: bravebot_ui_bridge::open_loops::a_record_from_before_open_loops_reads_as_nothing_open`
 `verified-by: bravebot_ui_bridge::open_loops::a_written_file_that_differs_from_head_counts_as_uncommitted`
+`verified-by: bravebot_ui_bridge::open_loops::the_first_turn_after_a_reopen_tells_the_planner_what_was_left_open`
 
 <a id="OPEN-7"></a>
 ### OPEN-7: open loops never block, and every new sentence is fixed text

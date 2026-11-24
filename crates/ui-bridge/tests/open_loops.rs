@@ -111,6 +111,13 @@ impl Window {
 
 /// Answers each request with the next reply of the first rule whose marker is in its body.
 fn serve(rules: Vec<(&'static str, Vec<String>)>) -> String {
+    serve_recording(rules).0
+}
+
+/// As `serve`, and also keeps the body of every request the planner made, in the order they came.
+fn serve_recording(rules: Vec<(&'static str, Vec<String>)>) -> (String, Arc<Mutex<Vec<String>>>) {
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let kept = Arc::clone(&bodies);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = format!("http://{}", listener.local_addr().unwrap());
     let waiting = Arc::new(Mutex::new(
@@ -122,6 +129,7 @@ fn serve(rules: Vec<(&'static str, Vec<String>)>) -> String {
     std::thread::spawn(move || {
         while let Ok((stream, _)) = listener.accept() {
             let waiting = Arc::clone(&waiting);
+            let kept = Arc::clone(&kept);
             std::thread::spawn(move || {
                 let mut reader = BufReader::new(stream);
                 let mut length = 0;
@@ -142,6 +150,7 @@ fn serve(rules: Vec<(&'static str, Vec<String>)>) -> String {
                 let reply = if body.contains("You are a prompt-injection classifier.") {
                     Some(endpoint::answer())
                 } else {
+                    kept.lock().unwrap().push(body.clone());
                     waiting
                         .lock()
                         .unwrap()
@@ -162,7 +171,7 @@ fn serve(rules: Vec<(&'static str, Vec<String>)>) -> String {
             });
         }
     });
-    address
+    (address, bodies)
 }
 
 fn project(name: &str) -> PathBuf {
@@ -269,4 +278,75 @@ fn a_reopened_session_replies_with_what_it_left_open() {
     );
     assert!(!line.contains("out.txt"), "{line}");
     assert!(!line.contains(&*project.to_string_lossy()), "{line}");
+}
+
+/// OPEN-4, OPEN-6: the first turn after a reopen tells the planner what the session left open, and
+/// the turn after it does not tell it again. The first turn is answered only by a rule that needs
+/// the message, so it ends only if the message was sent. The second turn's request carries the
+/// message once, as the history of the first turn, and is not given it a second time.
+#[test]
+fn the_first_turn_after_a_reopen_tells_the_planner_what_was_left_open() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    const TOLD: &str = "Open from earlier in this session";
+    let project = project("open-loops-desktop-told");
+    let (endpoint, bodies) = serve_recording(vec![
+        (
+            "FAIL-THEN-WRITE",
+            vec![
+                endpoint::tool("run", json!({"command": "ls no-such-file"})),
+                endpoint::tool(
+                    "write_file",
+                    json!({"path": "out.txt", "contents": "written by the turn\n"}),
+                ),
+                endpoint::answer(),
+            ],
+        ),
+        (TOLD, vec![endpoint::answer()]),
+        ("TURN-AFTER-THAT", vec![endpoint::answer()]),
+    ]);
+    let (mut window, session) = Window::on(&project, &endpoint);
+    let done = window.turn(&session, "FAIL-THEN-WRITE");
+    assert_eq!(done.name, "turn.done", "{:?}", done.data);
+    assert!(
+        bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|body| !body.contains(TOLD)),
+        "a fresh session's turn was told of open loops"
+    );
+    let id = done.data["id"]
+        .as_str()
+        .expect("the record's id")
+        .to_string();
+    assert!(
+        window.bridge.shut_down(std::time::Duration::from_secs(10)),
+        "the first window's work did not end"
+    );
+    drop(window);
+    let mut reopened = Window::with_settings(Window::settings_of(&project));
+    let opened = reopened.call("session.open", json!({"directory": project, "id": id}));
+    assert!(opened["openLoops"].is_string(), "{opened}");
+    let session = opened["session"].as_str().unwrap().to_string();
+
+    let before = bodies.lock().unwrap().len();
+    let first = reopened.turn(&session, "FIRST-AFTER-REOPEN");
+    assert_eq!(first.name, "turn.done", "{:?}", first.data);
+    let told: Vec<String> = bodies.lock().unwrap()[before..].to_vec();
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(told[0].matches(TOLD).count(), 1, "{}", told[0]);
+
+    let before = bodies.lock().unwrap().len();
+    let second = reopened.turn(&session, "TURN-AFTER-THAT");
+    assert_eq!(second.name, "turn.done", "{:?}", second.data);
+    let later: Vec<String> = bodies.lock().unwrap()[before..].to_vec();
+    assert_eq!(later.len(), 1, "{later:?}");
+    assert_eq!(
+        later[0].matches(TOLD).count(),
+        1,
+        "the second turn was told again: {}",
+        later[0]
+    );
 }
