@@ -21193,6 +21193,9 @@ mod tests {
     #[test]
     #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn each_delegate_is_told_the_shared_task_followed_by_its_own_entry() {
+        use bravebot_core::capability::{Capability, CapabilitySet};
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
         let tasks = tasks_in(&json!({"task": "SHARED", "each": ["FIRST", "SECOND"]}))
             .expect("two entries are accepted");
         let mut sink = RecordingSink::new();
