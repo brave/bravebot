@@ -722,8 +722,10 @@ that is spelled absolutely, in the workspace's own spelling or in another Unicod
 asked about under its name below the workspace as well, which is the name a project rule is written
 against. A drop is read wherever it lies, so an absolute name is also asked about under the name
 it lands on once its links are followed (`Path::canonicalize`, which is applied to an absolute name
-only, so a relative name is never resolved against the directory the process is in). A covered
-project file that is dropped or attached is left out under either name.
+only, so a relative name is never resolved against the directory the process is in). A landing
+whose name is not UTF-8 has no spelling a rule can be written about, so it is left out while a
+`Read` deny rule is in force. A covered project file that is dropped or attached is left out under
+either name.
 
 The comparison with the workspace directory joins names that differ only in Unicode form: a volume
 that keeps `cafe\u{301}` and `caf\u{e9}` apart holds two directories, and a rule about a file below
@@ -760,6 +762,7 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::a_project_file_a_relative_deny_rule_covers_is_left_out_when_named_absolutely`
 `verified-by: bravebot_agent::workspace::a_relative_name_is_not_resolved_against_the_process_directory_when_asked_about_a_rule`
 `verified-by: bravebot_agent::workspace::a_link_outside_the_root_to_a_covered_file_inside_it_is_covered`
+`verified-by: bravebot_agent::workspace::a_dropped_file_whose_landing_is_not_utf8_is_covered_while_a_deny_rule_is_in_force`
 `verified-by: bravebot_agent::workspace::a_deny_rule_covers_the_same_file_below_a_directory_that_differs_only_in_unicode_form`
 `verified-by: bravebot_agent::lsp::a_location_in_a_denied_file_is_left_out_of_an_answer`
 `verified-by: bravebot_agent::lsp::a_location_spelled_in_another_unicode_form_than_the_root_is_left_out_by_a_deny_rule`

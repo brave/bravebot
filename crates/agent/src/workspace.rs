@@ -868,12 +868,7 @@ impl Workspace {
         if !policy.any_read_is_denied() {
             return false;
         }
-        let asked = |name: &str| {
-            policy.read_is_denied(name)
-                || self
-                    .landing(name)
-                    .is_some_and(|landed| policy.read_is_denied(&landed))
-        };
+        let asked = |name: &str| self.name_or_landing_is_denied(policy, name);
         // The rules about a project file are written against its name below the root, so an
         // absolute name inside the root is asked about under that name too, in whichever Unicode
         // form it spells the root. A drop is read where it lands (`resolve_attachment`), which
@@ -886,8 +881,28 @@ impl Workspace {
                 .is_absolute()
                 .then(|| Path::new(named).canonicalize().ok())
                 .flatten()
-                .and_then(|landed| self.below_root(&landed.to_string_lossy()))
-                .is_some_and(|inside| asked(&inside))
+                .is_some_and(|landed| self.landed_name_is_denied(policy, &landed))
+    }
+
+    /// Whether a `deny` rule covers reading `name`, as written or as the file lands once its links
+    /// are followed.
+    fn name_or_landing_is_denied<S: Sink>(&self, policy: &Policy<'_, S>, name: &str) -> bool {
+        policy.read_is_denied(name)
+            || self
+                .landing(name)
+                .is_some_and(|landed| policy.read_is_denied(&landed))
+    }
+
+    /// Whether a `deny` rule covers reading the file a drop lands on, asked under its name below
+    /// the root, which is the name a project rule is written against. Called only while a rule
+    /// about reading is in force, so a landing that is not UTF-8 is covered: no rule can be written
+    /// about it, and its lossy rendering is the name of a different file (PATH-001).
+    fn landed_name_is_denied<S: Sink>(&self, policy: &Policy<'_, S>, landed: &Path) -> bool {
+        let Some(text) = landed.to_str() else {
+            return true;
+        };
+        self.below_root(text)
+            .is_some_and(|inside| self.name_or_landing_is_denied(policy, &inside))
     }
 
     /// Whether a rule covers reading any of `names`, the other names a file has. Where they could
@@ -6837,6 +6852,42 @@ mod tests {
         )
         .unwrap()
         .with_permissions(permissions)
+    }
+
+    /// A drop is read where it lands, and a landing that is not UTF-8 has no spelling a rule can be
+    /// written against, so it is covered while a `deny` rule about reading is in force (PERM-7,
+    /// PATH-001). Its lossy rendering is the name of a different file, so a rule that does not cover
+    /// that name must not decide for the real one. Rejects asking the rules about the lossy text. A
+    /// landing that is text and that no rule covers is still not covered. The landing is built
+    /// from bytes rather than made on disk, since not every volume can hold such a name.
+    #[cfg(unix)]
+    #[test]
+    fn a_dropped_file_whose_landing_is_not_utf8_is_covered_while_a_deny_rule_is_in_force() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let scratch = crate::testutil::scratch_dir("deny-landing-bytes");
+        std::fs::remove_dir_all(&scratch).ok();
+        std::fs::create_dir_all(&scratch).unwrap();
+        let workspace = Workspace::new(&scratch).unwrap();
+        let mut sink = bravebot_core::RecordingSink::new();
+        let policy = denying_reads(&mut sink, "held/src/lib.rs");
+
+        let invalid = workspace
+            .root()
+            .join(OsStr::from_bytes(b"other-\xff"))
+            .join("main.rs");
+        assert!(invalid.to_str().is_none(), "the landing is text");
+        assert!(
+            workspace.landed_name_is_denied(&policy, &invalid),
+            "a landing that is not UTF-8 was not covered"
+        );
+        let text = workspace.root().join("other").join("main.rs");
+        assert!(
+            !workspace.landed_name_is_denied(&policy, &text),
+            "a landing that is text and that no rule covers was covered"
+        );
+        std::fs::remove_dir_all(&scratch).ok();
     }
 
     /// A relative name is a file below the workspace root and is never looked up against the
