@@ -1452,6 +1452,8 @@ impl Bridge {
             inherited,
             touched,
             by_mode,
+            work,
+            written,
         ) = {
             let state = open
                 .state
@@ -1482,6 +1484,10 @@ impl Bridge {
                     .as_ref()
                     .map(bravebot_agent::workspace::KeptBetweenTurns::touched_record),
                 state.answered_by_mode,
+                // What the parent did and wrote is on disk whatever the cut, so the child carries
+                // it as a resume does (OPEN-6).
+                state.work,
+                state.written.clone(),
             )
         };
 
@@ -1552,6 +1558,8 @@ impl Bridge {
                     );
                     // The map is the parent's, so what the mode answered in it is still the mode's.
                     forked.answered_by_mode = by_mode;
+                    forked.work = work;
+                    forked.written = written;
                     forked.account = self.account_session(&project);
                     forked.spend_limit = self.spend_limit(&project);
                     forked
@@ -5097,6 +5105,18 @@ fn work(work: Work) {
     }
     keep_the_links_of(&mut state, &project, &mut completed);
     state.answers.adopt(completed.decisions);
+    // What the turn did and wrote, however it ended (GROUND-4), added to the session's and written
+    // with the record at the save below so a resume can say what was left open (OPEN-6).
+    state.work.then(completed.work);
+    for landed in reporter.written() {
+        if !state.written.contains(landed) {
+            state.written.push(landed.clone());
+        }
+    }
+    let (work, written) = (state.work, state.written.clone());
+    let handle = state.handle_or_begin(&project);
+    handle.set_work(work);
+    handle.set_written(&written);
     let outcome = completed.outcome;
 
     // The prompt joins the history the terminal also reads, so recall works across both

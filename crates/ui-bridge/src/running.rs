@@ -116,10 +116,12 @@ pub struct State {
     pub model: Option<String>,
     pub todos: BTreeMap<usize, Vec<Row>>,
     /// What every turn of the session did, summed: the writes and commands an open loop is worked
-    /// out from (OPEN-1). Seeded from the record on resume and saved with it (OPEN-6).
+    /// out from (OPEN-1). Seeded from the record on resume, carried into a fork from the parent,
+    /// and saved with the record (OPEN-6).
     pub work: bravebot_agent::Work,
     /// The files the session's successful writes landed on, each once and in the order first
-    /// written. Seeded from the record on resume and saved with it (OPEN-6).
+    /// written. Seeded from the record on resume, carried into a fork from the parent, and saved
+    /// with the record (OPEN-6).
     pub written: Vec<PathBuf>,
     /// The open loops the last turn ended with and the ones the planner was last told of, so a
     /// turn tells the planner only of a set that changed (OPEN-4). Not saved: a resumed session
@@ -706,5 +708,36 @@ mod tests {
         let second = State::fresh(TrustStore::new("/work"));
 
         assert_ne!(first.account.identifier(), second.account.identifier());
+    }
+
+    /// OPEN-6: a session resumed on the desktop carries on the work record and the written files
+    /// its record kept, so the next save writes them back rather than a record that did nothing.
+    /// The regression it rejects is a resume that starts both empty, as `blank` does.
+    #[test]
+    fn a_resumed_session_carries_the_work_and_the_files_its_record_kept() {
+        if !crate::bridge::test_profile::in_isolated_profile() {
+            return;
+        }
+        let project = crate::bridge::test_profile::project("resumed-work");
+        std::fs::create_dir_all(&project).unwrap();
+        let written = project.join("notes.md");
+        let mut conversation = Conversation::new();
+        conversation.push(bravebot_aichat::protocol::Message::user("work"));
+        let record: bravebot_session::sessions::Record =
+            serde_json::from_value(serde_json::json!({
+                "id": "resumed-work", "directory": project, "title": "work",
+                "started": 1, "updated": 1,
+                "conversation": conversation.snapshot(),
+                "work": { "writes": 2, "commands": 0 },
+                "written": [written],
+            }))
+            .unwrap();
+
+        let state = State::resumed(&project, &record, TrustStore::new(&project))
+            .expect("the record is free");
+
+        assert_eq!(state.work, record.work);
+        assert_eq!(state.work.writes, 2);
+        assert_eq!(state.written, vec![written]);
     }
 }
