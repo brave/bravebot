@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Bridge, BridgeError } from './bridge'
-import type { BridgeEvent } from '../shared/protocol'
+import type { BridgeEvent, LogLevel } from '../shared/protocol'
 import { parseLayout } from '../shared/layout'
 import { parseView } from '../shared/view'
 import { parseHidden } from '../shared/panels'
@@ -164,6 +164,8 @@ function tell(channel: string, ...args: unknown[]): void {
 let bridge: Bridge | null = null
 // Model discovery uses its own process so a slow listing never blocks live turn replies.
 let selectedSettings: string | null = null
+// The diagnostic log level chosen in this app run (DIAG-11), for the bridge of each window made.
+let diagnosticLogLevel: LogLevel = 'error'
 let watchClock: ReturnType<typeof setInterval> | null = null
 let pollingWatches = false
 let modelListingGeneration = 0
@@ -579,7 +581,7 @@ function createWindow(): void {
     // One at a time per session: a turn's end waits for its row to be written, and an event of
     // another session is not held behind it.
     deliver(message)
-  }, selectedSettings)
+  }, selectedSettings, diagnosticLogLevel)
   useBotsBridge((method, params) => (bridge ? bridge.request(method, params) : Promise.reject(new Error('The agent is not running, so the bots cannot be reached.'))))
   useOpenerJudge((method, params) => (bridge ? bridge.request(method, params) : Promise.reject(new Error('The agent is not running, so the opener cannot be judged.'))))
 
@@ -1206,6 +1208,18 @@ if (primary) app.whenReady().then(() => {
 
   // The window's language is chosen once, before its first paint, so a new one takes a new start.
   ipcMain.handle('bravebot:app:relaunch', () => relaunchUnlessRunning(runningHandles, app))
+
+  // The diagnostic log level of the running agent (DIAG-11). `diagnostic_log.set` is not in
+  // `ALLOWED`: the bridge keeps the level it sets, so an agent started again gets the same one,
+  // and this process keeps it for the bridge of a window made later in this app run.
+  ipcMain.handle('bravebot:diagnostic-log:set-level', async (_event, level: unknown) => {
+    if (!bridge) throw new BridgeError('no_bridge', 'the agent is not running')
+    const answer = await bridge.setLogLevel(level)
+    // Kept only once the agent answered, as the bridge keeps it: the level the agent reports, so a
+    // word the agent refused is never kept.
+    diagnosticLogLevel = answer.level
+    return answer
+  })
 
   // Choosing a project is a native affair: the renderer cannot see the filesystem and
   // should not be handed a path it invented.

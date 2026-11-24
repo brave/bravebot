@@ -270,6 +270,9 @@ pub const DENIED: &[&str] = &[
     "crash_reports.set",
     "crash_reports.notice_due",
     "crash_reports.mark_notice_shown",
+    // The level of this process's diagnostic log (DIAG-11). The log is written for the person at
+    // the host to read and attach to a bug report, so only that person chooses how much it holds.
+    "diagnostic_log.set",
     // The machine's recorded effort level, which the terminal shares.
     "effort.get",
     "effort.set",
@@ -598,5 +601,25 @@ mod tests {
                 .expect("refused");
             assert_eq!(failure.code, ErrorCode::NotAllowed, "{method}");
         }
+    }
+
+    /// DIAG-11: the host's diagnostic log is for the person at the host, so a client of the host
+    /// may not change its level. The faults this rejects are the method moved to the offered list,
+    /// which would let a client raise the log to debug, and the method dropped from both lists.
+    #[test]
+    fn diagnostic_log_set_is_denied_to_a_client_of_the_host() {
+        assert!(DENIED.contains(&"diagnostic_log.set"));
+        assert!(
+            OFFERED
+                .iter()
+                .all(|operation| operation.method != "diagnostic_log.set"),
+            "diagnostic_log.set is offered"
+        );
+        assert_eq!(
+            check(&request("diagnostic_log.set", json!({"level": "debug"})))
+                .err()
+                .map(|failure| failure.code),
+            Some(ErrorCode::NotAllowed)
+        );
     }
 }

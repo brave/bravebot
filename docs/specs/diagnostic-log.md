@@ -8,6 +8,11 @@ governs:
   - crates/cli/src/bug_report.rs
   - crates/ui-bridge/src/bug_report.rs
   - crates/ui-bridge/src/bin/bravebot-rpc.rs
+  - crates/ui-bridge/src/diagnostic_log.rs
+  - crates/ui-bridge/src/arguments.rs
+  - ui/src/main/bridge.ts
+  - ui/src/main/index.ts
+  - ui/src/renderer/components/AgentSettings.tsx
   - ui/src/main/bug-report.ts
   - ui/src/renderer/components/BugReport.tsx
   - crates/ui-bridge/src/window_fault.rs
@@ -91,7 +96,9 @@ only after the failure they wanted it for.
 ### DIAG-4: an incognito session, or a machine with no home, writes no log
 
 Neither creates the directory or a file in it. The desktop app's agent, `bravebot-rpc`, writes its
-log where the terminal does, at the default level, and to nowhere on the same two conditions.
+log where the terminal does, at the level it was started with, `error` unless `--log-level` named
+another, and to nowhere on the same two conditions. A word that is not a level is refused as it is
+by the terminal, and the agent exits with status 2 and does not serve.
 
 **Why.** An incognito session adds nothing to the state directory, and a log that said where it
 had been would be the trace the mode exists to avoid.
@@ -99,6 +106,12 @@ had been would be the trace the mode exists to avoid.
 `verified-by: bravebot_diag::lib::a_log_with_no_directory_writes_nothing`
 `verified-by: bravebot_cli::running::an_incognito_session_writes_no_log`
 `verified-by: bravebot_ui_bridge::diagnostic_log::a_desktop_turn_that_cannot_reach_its_service_leaves_a_log`
+`verified-by: bravebot_ui_bridge::diagnostic_log::a_desktop_agent_started_at_debug_writes_more_than_failures`
+`verified-by: bravebot_ui_bridge::diagnostic_log::an_unknown_log_level_stops_the_desktop_agent`
+`verified-by: bravebot_ui_bridge::arguments::a_named_log_level_is_served_with`
+`verified-by: bravebot_ui_bridge::arguments::a_log_level_with_no_word_is_refused`
+`verified-by: bravebot_ui_bridge::arguments::an_unknown_log_level_is_refused`
+`verified-by: bravebot_ui_bridge::arguments::a_log_level_given_twice_is_refused`
 `verified-by: bravebot_ui_bridge::no_state_directory::with_no_state_directory_there_is_no_bug_report_and_no_update_record`
 
 <a id="DIAG-5"></a>
@@ -301,3 +314,41 @@ reports in a run, further reports are dropped.
 `verified-by: bravebot_ui_bridge::window_fault::a_request_with_no_kind_is_refused`
 `verified-by: bravebot_ui_bridge::diagnostic_log::a_window_fault_is_logged_as_fixed_words_and_nothing_the_window_sent`
 `verified-by: by-construction (the main process and the renderer are not crates this workspace compiles, so ui/scripts/window-fault.test.mjs pins the window's half: the main process forwards the five fields and drops what else a page adds, cuts a long string, forwards an exit code only where it is a count, and stops at twenty reports; the page names an error by its name and sends the main process that and nothing else; the screen draws the error's message as text so markup in it stays inert; and ui/scripts/drive-window-fault.mjs makes the browser refuse one removeChild in a real window with a real agent and a scratch state directory, and asserts that the screen appears with the components named, that one line holding the kind and the error name and not the message is written, and that Reload brings the app back; make check-ui runs the first, and the governs list above holds the files to existing)`
+
+<a id="DIAG-11"></a>
+### DIAG-11: the desktop window changes the level of the running agent until the app quits
+
+Settings, Diagnostics has a Log detail control with the three levels of [DIAG-3](#DIAG-3). It is
+shown only where the settings report says this process writes a log. Choosing a level asks the
+agent, through `diagnostic_log.set`, to write at that level from then on. The agent changes the
+level of the log it already has and opens no second file, so one process's lines stay in one file
+and retention runs once ([DIAG-2](#DIAG-2)). The answer names the level and whether anything will be
+written, which is false in an incognito process or on a machine with no home ([DIAG-4](#DIAG-4)).
+A word that is not a level is refused, and the level stays as it was. The main process keeps the
+level the agent accepted, passes it as `--log-level` when it starts the agent again, and forgets it
+when the app quits. The settings report states the level in force, so Run Diagnostics and the
+desktop bug report state it too ([DIAG-9](#DIAG-9)). `diagnostic_log.set` is denied to a host
+client.
+
+**Why.** A person asked for a fuller log can raise the level, reproduce the problem and send the
+report without a command line. A second file would split the run's log and remove an older file a
+second time. A debug log names every host contacted, so a level kept past the app run would keep
+writing those files after the report was sent. The log on the host's machine belongs to the person
+at the host, so a client connected to it does not choose what it holds.
+
+**Known costs.** A person who quits before saving the bug report starts the next run at `error`.
+
+`verified-by: bravebot_diag::lib::raising_the_level_keeps_writing_into_the_same_file`
+`verified-by: bravebot_diag::lib::a_line_above_a_lowered_level_is_not_written`
+`verified-by: bravebot_diag::lib::set_level_before_configure_does_nothing`
+`verified-by: bravebot_ui_bridge::diagnostic_log::a_level_word_is_set_and_answered`
+`verified-by: bravebot_ui_bridge::diagnostic_log::a_word_that_is_not_a_level_is_refused`
+`verified-by: bravebot_ui_bridge::diagnostic_log::a_missing_level_is_refused`
+`verified-by: bravebot_ui_bridge::diagnostic_log::raising_the_level_from_the_window_reaches_the_same_log`
+`verified-by: bravebot_ui_bridge::diagnostic_log::the_reports_state_the_level_the_desktop_agent_was_started_with`
+`verified-by: bravebot_ui_bridge::settings::the_report_states_the_level_in_force`
+`verified-by: bravebot_ui_bridge::bug_report::the_report_names_the_log_directory_when_there_is_no_log`
+`verified-by: bravebot_ui_bridge::no_state_directory::with_no_state_directory_there_is_no_bug_report_and_no_update_record`
+`verified-by: bravebot_ui_bridge::host_allowlist::the_allowlist_classifies_every_method_the_bridge_answers`
+`verified-by: bravebot_ui_bridge::allowlist::diagnostic_log_set_is_denied_to_a_client_of_the_host`
+`verified-by: by-construction (the main process and the renderer are not crates this workspace compiles, so ui/scripts/diagnostic-log-level.test.mjs pins the main process's half: the agent is started with no --log-level until a level is chosen, with the chosen level again when it is started a second time, with none after going back to error, and at the level a bridge was made with, the main process hands the level the agent accepted to the bridge of a window made later, a word that is not a level is refused before it reaches the agent, a level the agent refused is not kept, and diagnostic_log.set is not on the window's allow-list; ui/scripts/agent-settings.test.mjs pins that the Log detail control shows the report's level, asks for the level chosen and is hidden where no log is written; ui/scripts/drive-agent-settings.mjs drives the control in a real window whose IPC handlers are replaced by a fixture, and checks that choosing debug asks for it and that the refreshed section shows the level the fixture reports; ui/scripts/drive-manual-walkthrough.mjs chooses debug and then error in a real window with a real agent and a scratch state directory, and checks that the section and the agent's settings report name each; make check-ui runs the first two, and the governs list above holds the files to existing)`

@@ -664,6 +664,24 @@ export interface CrashReportsSaved extends CrashReportsReport {
   saved: boolean
 }
 
+/** A diagnostic log level, as `bravebot-rpc --log-level` and `diagnostic_log.set` take it. */
+export type LogLevel = 'error' | 'info' | 'debug'
+
+export const LOG_LEVELS: readonly LogLevel[] = ['error', 'info', 'debug']
+
+export function isLogLevel(value: unknown): value is LogLevel {
+  return typeof value === 'string' && (LOG_LEVELS as readonly string[]).includes(value)
+}
+
+/**
+ * `diagnostic_log.set`: the level now in force, and whether the log is written at all. `writing` is
+ * false in an incognito run or one with no state directory (DIAG-4).
+ */
+export interface DiagnosticLogSet {
+  level: LogLevel
+  writing: boolean
+}
+
 /**
  * A session begun from part of another one.
  *

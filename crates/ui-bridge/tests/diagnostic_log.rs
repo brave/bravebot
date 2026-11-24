@@ -1,4 +1,4 @@
-//! The desktop agent's diagnostic log (DIAG-4, DIAG-7, DIAG-10).
+//! The desktop agent's diagnostic log (DIAG-3, DIAG-4, DIAG-7, DIAG-10).
 //!
 //! Driven through the binary, because the log is set up by its `main`.
 
@@ -56,8 +56,81 @@ fn a_closed_port() -> u16 {
     listener.local_addr().unwrap().port()
 }
 
+/// A service on a port of its own that answers the first three requests with 503, a status the
+/// client sends again after, and every later one with 404, which is not sent again. A turn starts
+/// more than one request, so three cover the turn's first; a turn against this service writes a
+/// retry step as well as the failure, and ends without waiting out the retry window (BACKEND-55).
+fn an_unavailable_service() -> u16 {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for (served, mut stream) in listener.incoming().map_while(Result::ok).enumerate() {
+            // The whole request is read before answering, so the client is not cut off while it
+            // is still sending its body.
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 8192];
+            let complete = |request: &[u8]| {
+                let text = String::from_utf8_lossy(request);
+                let Some((head, _)) = text.split_once("\r\n\r\n") else {
+                    return false;
+                };
+                let end = head.len();
+                let head = head.to_ascii_lowercase();
+                let length = head
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length:"))
+                    .and_then(|value| value.trim().parse::<usize>().ok());
+                match length {
+                    Some(length) => request.len() >= end + 4 + length,
+                    None if head.contains("transfer-encoding: chunked") => {
+                        text.ends_with("0\r\n\r\n")
+                    }
+                    None => true,
+                }
+            };
+            while !complete(&request) {
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => request.extend_from_slice(&chunk[..read]),
+                }
+            }
+            let status = if served < 3 {
+                "503 Service Unavailable"
+            } else {
+                "404 Not Found"
+            };
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a client that hung up before its answer needs none"
+            )]
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+        }
+    });
+    port
+}
+
 fn front_end(scratch: &Scratch, endpoint: &str) -> Child {
+    front_end_with(scratch, endpoint, &[])
+}
+
+/// Ends the front end and waits for it, so its log is closed before the test reads it.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the front end may have ended already, and the test reads what it left either way"
+)]
+fn stop(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// The front end started with `args` on its command line.
+fn front_end_with(scratch: &Scratch, endpoint: &str, args: &[&str]) -> Child {
     Command::new(env!("CARGO_BIN_EXE_bravebot-rpc"))
+        .args(args)
         .env_clear()
         .current_dir(scratch.path.join("project"))
         .env("HOME", scratch.path.join("home"))
@@ -110,6 +183,36 @@ fn listen(child: &mut Child) -> mpsc::Receiver<Value> {
     said
 }
 
+/// Open a trusted session in the scratch project and run one turn in it to its end.
+fn a_turn(child: &mut Child, said: &mpsc::Receiver<Value>, scratch: &Scratch, prompt: &str) {
+    send(
+        child,
+        1,
+        "session.new",
+        json!({"directory": scratch.path.join("project").display().to_string()}),
+    );
+    let opened = until(said, |message| message["id"] == 1);
+    let session = opened["ok"]["session"].as_str().unwrap().to_string();
+    send(
+        child,
+        2,
+        "trust.reply",
+        json!({"session": session, "trusted": true}),
+    );
+    until(said, |message| message["id"] == 2);
+    send(
+        child,
+        3,
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": prompt})),
+    );
+    until(said, |message| {
+        message["event"] == "turn.done"
+            || message["event"] == "turn.error"
+            || (message["id"] == 3 && message.get("error").is_some())
+    });
+}
+
 /// A turn whose model service cannot be reached leaves a private log under the state directory
 /// naming the host, as a terminal run does, so the desktop app's bug report has a log to name.
 #[test]
@@ -125,34 +228,8 @@ fn a_desktop_turn_that_cannot_reach_its_service_leaves_a_log() {
     );
     assert!(scratch.logs().is_empty(), "a log before anything failed");
 
-    send(
-        &mut child,
-        1,
-        "session.new",
-        json!({"directory": scratch.path.join("project").display().to_string()}),
-    );
-    let opened = until(&said, |message| message["id"] == 1);
-    let session = opened["ok"]["session"].as_str().unwrap().to_string();
-    send(
-        &mut child,
-        2,
-        "trust.reply",
-        json!({"session": session, "trusted": true}),
-    );
-    until(&said, |message| message["id"] == 2);
-    send(
-        &mut child,
-        3,
-        "turn.send",
-        message_ids::with_fresh(json!({"session": session, "prompt": "say done"})),
-    );
-    until(&said, |message| {
-        message["event"] == "turn.done"
-            || message["event"] == "turn.error"
-            || (message["id"] == 3 && message.get("error").is_some())
-    });
-    let _ = child.kill();
-    let _ = child.wait();
+    a_turn(&mut child, &said, &scratch, "say done");
+    stop(&mut child);
 
     let logs = scratch.logs();
     assert_eq!(logs.len(), 1, "expected one log: {logs:?}");
@@ -171,6 +248,196 @@ fn a_desktop_turn_that_cannot_reach_its_service_leaves_a_log() {
         let mode = std::fs::metadata(&logs[0]).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
     }
+}
+
+/// The lines of a log that are tagged above `error`.
+fn lines_above_error(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter(|line| line.contains(" INFO ") || line.contains(" DEBUG "))
+        .collect()
+}
+
+/// Started with `--log-level debug`, a turn against a service that answers 503 writes the retry
+/// steps, which are `info` lines, as well as the failure (DIAG-3, DIAG-4).
+#[test]
+fn a_desktop_agent_started_at_debug_writes_more_than_failures() {
+    let scratch = Scratch::new("bridge-diagnostic-log-debug");
+    let endpoint = format!("http://127.0.0.1:{}", an_unavailable_service());
+    let mut child = front_end_with(&scratch, &endpoint, &["--log-level", "debug"]);
+    let said = listen(&mut child);
+    until(&said, |message| message["event"] == "agent.ready");
+
+    a_turn(&mut child, &said, &scratch, "say done");
+    stop(&mut child);
+
+    let logs = scratch.logs();
+    assert_eq!(logs.len(), 1, "expected one log: {logs:?}");
+    let text = std::fs::read_to_string(&logs[0]).unwrap();
+    assert!(
+        lines_above_error(&text)
+            .iter()
+            .any(|line| line.contains(" INFO aichat.retry ")),
+        "no retry line at debug: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line.contains(" ERROR ")),
+        "the failure is missing: {text}"
+    );
+    assert!(
+        !text.contains("say done"),
+        "the prompt reached the log: {text}"
+    );
+}
+
+/// Started with `--log-level info`, the settings report and the bug report state the level the log
+/// is written at (DIAG-5, DIAG-9).
+#[test]
+fn the_reports_state_the_level_the_desktop_agent_was_started_with() {
+    let scratch = Scratch::new("bridge-diagnostic-log-level-reported");
+    let endpoint = format!("http://127.0.0.1:{}", a_closed_port());
+    let mut child = front_end_with(&scratch, &endpoint, &["--log-level", "info"]);
+    let said = listen(&mut child);
+    until(&said, |message| message["event"] == "agent.ready");
+
+    send(&mut child, 1, "settings.inspect", json!({}));
+    let inspected = until(&said, |message| message["id"] == 1);
+    send(
+        &mut child,
+        2,
+        "bug-report.compose",
+        json!({"interface": "0.19.0"}),
+    );
+    let composed = until(&said, |message| message["id"] == 2);
+    stop(&mut child);
+
+    assert_eq!(inspected["ok"]["logs"]["level"], "info", "{inspected}");
+    let text = composed["ok"]["text"].as_str().unwrap();
+    assert!(text.contains("\"level\": \"info\""), "{text}");
+}
+
+/// Started at the default level, the window raises the level of the running agent and the lines
+/// above `error` go into the file the earlier failure went into, not a second one. A word that is
+/// not a level is refused and changes nothing (DIAG-2, DIAG-11).
+#[test]
+fn raising_the_level_from_the_window_reaches_the_same_log() {
+    let scratch = Scratch::new("bridge-diagnostic-log-raised");
+    let endpoint = format!("http://127.0.0.1:{}", an_unavailable_service());
+    let mut child = front_end(&scratch, &endpoint);
+    let said = listen(&mut child);
+    until(&said, |message| message["event"] == "agent.ready");
+
+    send(
+        &mut child,
+        10,
+        "window.fault",
+        json!({"kind": "renderer_gone", "reason": "crashed", "exit": 11}),
+    );
+    until(&said, |message| message["id"] == 10);
+    let logs = scratch.logs();
+    assert_eq!(
+        logs.len(),
+        1,
+        "expected one log after the failure: {logs:?}"
+    );
+
+    send(
+        &mut child,
+        11,
+        "diagnostic_log.set",
+        json!({"level": "loud"}),
+    );
+    let refused = until(&said, |message| message["id"] == 11);
+    assert_eq!(refused["error"]["code"], "bad_request", "{refused}");
+
+    send(&mut child, 12, "settings.inspect", json!({}));
+    let unchanged = until(&said, |message| message["id"] == 12);
+    assert_eq!(unchanged["ok"]["logs"]["level"], "error", "{unchanged}");
+
+    send(
+        &mut child,
+        13,
+        "diagnostic_log.set",
+        json!({"level": "debug"}),
+    );
+    let raised = until(&said, |message| message["id"] == 13);
+    assert_eq!(raised["ok"]["level"], "debug", "{raised}");
+    assert_eq!(raised["ok"]["writing"], true, "{raised}");
+
+    send(&mut child, 14, "settings.inspect", json!({}));
+    let inspected = until(&said, |message| message["id"] == 14);
+    assert_eq!(inspected["ok"]["logs"]["level"], "debug", "{inspected}");
+
+    a_turn(&mut child, &said, &scratch, "say done");
+    stop(&mut child);
+
+    assert_eq!(scratch.logs(), logs, "the raised level opened another log");
+    let text = std::fs::read_to_string(&logs[0]).unwrap();
+    assert!(
+        text.lines()
+            .next()
+            .is_some_and(|line| line.contains(" ERROR window.fault ")),
+        "the earlier failure is not first: {text}"
+    );
+    assert!(
+        lines_above_error(&text)
+            .iter()
+            .any(|line| line.contains(" INFO aichat.retry ")),
+        "no retry line after raising the level: {text}"
+    );
+    assert!(
+        !text.contains("say done"),
+        "the prompt reached the log: {text}"
+    );
+}
+
+/// A word that is not a level is refused, the process ends with status 2 before it serves, and
+/// no log directory is made (DIAG-3).
+#[test]
+fn an_unknown_log_level_stops_the_desktop_agent() {
+    let scratch = Scratch::new("bridge-diagnostic-log-unknown-level");
+    let output = Command::new(env!("CARGO_BIN_EXE_bravebot-rpc"))
+        .args(["--log-level", "verbose"])
+        .env_clear()
+        .current_dir(scratch.path.join("project"))
+        .env("HOME", scratch.path.join("home"))
+        .env("USERPROFILE", scratch.path.join("home"))
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown log level: verbose"),
+        "no refusal: {stderr}"
+    );
+    assert!(output.stdout.is_empty(), "it served: {output:?}");
+    assert!(
+        !scratch.path.join("home/.bravebot/logs").exists(),
+        "a logs directory was made"
+    );
+}
+
+/// `bravebot-acp` shares the command line and keeps no log, so it refuses a level rather than
+/// ignore it.
+#[test]
+fn the_editor_agent_refuses_a_log_level() {
+    let scratch = Scratch::new("acp-log-level");
+    let output = Command::new(env!("CARGO_BIN_EXE_bravebot-acp"))
+        .args(["--log-level", "debug"])
+        .env_clear()
+        .current_dir(scratch.path.join("project"))
+        .env("HOME", scratch.path.join("home"))
+        .env("USERPROFILE", scratch.path.join("home"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("--log-level is not accepted"),
+        "{output:?}"
+    );
+    assert!(output.stdout.is_empty(), "it served: {output:?}");
 }
 
 /// The window reports a failure of its page, and the log holds the words the agent fixes for it
@@ -217,8 +484,7 @@ fn a_window_fault_is_logged_as_fixed_words_and_nothing_the_window_sent() {
         refused.get("error").is_some(),
         "no kind was accepted: {refused}"
     );
-    let _ = child.kill();
-    let _ = child.wait();
+    stop(&mut child);
 
     let logs = scratch.logs();
     assert_eq!(logs.len(), 1, "expected one log: {logs:?}");
