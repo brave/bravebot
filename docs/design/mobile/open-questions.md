@@ -1,76 +1,6 @@
 # Mobile prototype open questions
 
-Status: proposal. Q2 and Q6 are resolved, and U1 is decided for host-launched clients. This is the single record of unresolved decisions and choices awaiting validation. The [decision record](decisions-and-tradeoffs.md) holds settled choices and their reasons; the linked architecture and contract sections hold implementation requirements.
-
-**Unresolved** means an answer is still needed. **Awaiting validation** means the plan has a proposed answer that needs evidence. Neither status establishes implemented behavior. Each entry names the capability that needs its answer; unrelated work can proceed.
-
-## What can proceed
-
-Each question below names the capability that needs its answer. Work that does not depend on it can proceed. The restricted stage-3d synthetic experiment runs under its [development transport limits](implementation-plan.md#3d-run-a-thin-phone-experiment). See the [README](README.md) for what is built.
-
-## Unresolved security decisions
-
-These are not accepted risks or implementation details that can be skipped. The current limits apply until the required evidence is recorded.
-
-### U1. Local control-channel boundary
-
-- **Status:** decided for host-launched local clients and tested on macOS and Linux, with the gaps under **Not tested** still to close before stage 3b enables real-session control. It covers local clients only. The network listener is a named endpoint and is decided under [U2](#u2-pairing-and-transport-identity).
-- **Decision needed:** how to prevent tool processes from taking control or answering later approvals.
-- **Reason:** an approved unconfined command may run as the same OS user. Socket permissions, peer identity, or a token that command can read do not distinguish it from an authorized client.
-- **Current limit:** synthetic data and controlled model/tool stubs only until the boundary is demonstrated. General same-user malware resistance is not claimed.
-- **Candidates to assess:** OS-enforced separation between tool execution and the control service; or a private connection capability that tools cannot inherit or obtain, such as an inherited descriptor with no public listener. Neither is a proven solution here. Check the cost of platform confinement and how authorized clients reconnect after the original client exits. Process ancestry alone is not a boundary because a child can detach.
-- **Completion evidence:** a short design note and an adversarial test with an approved unconfined child, including a child that detaches before attempting to connect and answer. A passing peer-credential test does not establish this boundary. See [local control boundary](architecture.md#local-control-boundary).
-- **Decision (2026-10-09):** the local channel has no name. The launcher creates an anonymous socket pair and starts a host-chosen program with one end as standard input and output; no other process holds either end ([RPCVIEW-8](../../specs/session-view.md#RPCVIEW-8), `control_link::launch`). A client that exits ends its channel and a replacement is a new launch. The named local listener stays disabled. See the [architecture](architecture.md#local-control-boundary).
-- **Evidence:** `crates/ui-bridge/tests/control_boundary.rs` runs the real `bravebot-rpc` over that channel against a model service of its own. A hook (not confined) and an approved `run` command (confined by the bridge on systems that confine commands, so only the hook case shows an unconfined program) each leave a detached process whose parent has exited. It waits until a write is pending, then writes a forged answer and a marker to every socket it holds and to every descriptor path it can name, connects to each, reads from each, and (on Linux) tries to copy the bridge's descriptors with `pidfd_getfd`. It must find at least three paths that exist, hold no socket, reach no channel and read nothing; the file is written only after the client approves; the client receives only the bridge's lines and the bridge's standard error, a socket as under Node, receives no forged line. The same two attacks run against `bravebot-host`, which holds the near end in its own process and gives the far end to a client it started; that client is the test binary run again, copying the channel to a socket in a private directory of the test's, and the attacker is given the host's and that client's process ids. A second test holds the near end of several channels in the process that starts a hook and a `run` program, as the persistent host will, and checks the programs hold no socket; a third does the same for an MCP server started through `StdioServer::launch` under the platform's confinement. A fourth starts `bravebot-rpc` holding a socket at descriptor 200 that is not close-on-exec, and checks that a hook and an approved `run` command find no descriptor there and that nothing reaches the socket's other end, which the bridge still holds. These faults each fail a test on macOS: the hook's standard input, output or error inherited (`crates/agent/src/hooks.rs`), the `run` tool's standard input or output inherited (`crates/agent/src/exec.rs`), a launcher that keeps the far end, a channel end left inheritable by a host, a launch or a program start that does not take the gate below, an attacker whose descriptor paths name nothing, a sandbox start that hands every socket down to the program (the MCP case), and a bridge that does not mark its inherited descriptors close-on-exec at startup. The check that no forged line reaches the client is reasoned, not shown to catch a leak by itself, because the socket check fails first.
-- **Launcher conditions:** on macOS the standard library creates a socket pair and marks it close-on-exec in two steps (Linux does it atomically), so a process another thread starts in between inherits both ends and the bridge passes them to its tools. That race was reproduced here. `bravebot_sandbox::process` holds the gate: `launch` creates the channel and starts the program under `creating_a_channel`, and each place a crate the bridge links starts a program (hooks, `run`, shell mode, the sandbox start, the usability probes, language servers and the AWS CLI) runs under `starting_a_program`, one at a time, and a test reads the source to keep it that way. The gate is held until the program has started, which is the narrowest point the standard library allows. A host that starts programs some other way takes it too. On Linux a pipe can be reopened through `/proc/<pid>/fd`, so a launcher must use a socket pair, as Node's child processes do (confirmed on macOS, where standard input, output and error are sockets).
-- **Same-user descriptor theft on Linux:** `pidfd_getfd`, `ptrace` and `/proc/<pid>/mem` let a detached process of the same user take the bridge's descriptors when `ptrace_scope` is 0. `bravebot-rpc` and `bravebot-acp` now mark themselves non-dumpable, which the kernel treats as a refusal for anyone without `CAP_SYS_PTRACE`, and also stops the developer who started one from attaching a debugger to it. The mark is cleared by `execve`, so tools are unaffected. A failure to set it is said on standard error. CI runs the attack on Linux twice: at the runner's own `ptrace_scope`, and again at 0, where the test fails unless the attacker a hook started copies with `pidfd_getfd` from a process of the same user that did not refuse it and nothing from the bridge or the host. The attacker an approved command started is confined, and the confinement refuses `pidfd_getfd` against every process, so that run shows the confinement's refusal and not the non-dumpable mark's. The attack's result is read only where it also works against a process of the same user that did not refuse it and is not a descendant of the attacker, which a Yama `ptrace_scope` of 1 would otherwise make look like the bridge's refusal. macOS offers no equivalent that does not also stop a developer's debugger.
-- **Limits of the gate:** it covers channels and the pipes the agent makes for a stage, not other two-step descriptors such as the TCP and TLS sockets to a model endpoint, which a program started in the window could inherit. `bravebot-rpc`, `bravebot-acp`, `bravebot-host` and every `bravebot` command mark every inherited descriptor other than standard input, output and error close-on-exec at startup, so a descriptor they were started with reaches none of their programs. The test process itself does not mark them, so a macOS CI runner that leaves sockets open at descriptors 131 and 140 passes them to what the tests start, and the control-boundary tests count a socket as a leaked control channel only when it is one end of an unnamed pair and the test process was not started holding it. The non-dumpable mark does not survive `execve`, so a tool that holds a leaked descriptor can be inspected. The protection starts at the first statement of `main`.
-- **Required of the persistent host:** the host reads the outcome of the non-dumpable mark (`Refused`, `NotOffered` or `Failed`), exits when it is `Failed`, and reports the outcome in its `agent.info` and `instance.info` as `inspection` ([HOST-1](../../specs/local-host.md#HOST-1), [HOST-5](../../specs/local-host.md#HOST-5)). `bravebot-rpc` does not report it, because nothing consumes it there. The host's Linux supervision also needs a check: a non-dumpable bridge has root-owned `/proc/<pid>` entries, so anything that reads them (metrics collection, crash reporting) must not depend on it. Tools are unaffected, since the mark is cleared at `execve`.
-- **Not adopted:** a named socket authenticated by a one-time code and a key held in client memory. A program that replaces the socket path relays the client's proof and then holds an authenticated connection, and revoking a key does not end connections already open.
-- **Not tested:** Windows (Node uses named pipes there, which a same-user process can open by name, so the clause does not cover it), a descriptor `bravebot-host` or `bravebot-acp` was started with (their startup call is checked by reading the source, and only `bravebot-rpc` and `bravebot acp` are started holding one), and a descriptor that reaches the bridge after it starts, such as one made in two steps outside the gate. The detached-process attack runs against the host process on macOS ([HOST-9](../../specs/local-host.md#HOST-9)). macOS has no `/proc`, so the attacker names the host's and the client's descriptors only on Linux. On Linux it tries `pidfd_getfd`, not `ptrace` or `/proc/<pid>/mem`. `bravebot-host` is the one caller of `control_link::launch` outside the tests; the Electron and TypeScript launchers use Node's child processes. A debugger or other same-user memory access on macOS is outside the claim. Real-session listener control stays blocked until these are tested.
-
-### U2. Pairing and transport identity
-
-- **Status:** unresolved before stage 6 network access, or earlier network exposure during the phone experiment.
-- **Decision needed:** host identity verification, credential creation/storage, revocation, backend access, input limits, and authorization to display private content.
-- **Reason:** reachability and encryption alone do not establish who may control or read a session.
-- **Current limit:** Tailscale is a reachability candidate, not assumed application authentication. A reachable backend must not trust forgeable proxy identity headers.
-- **Completion evidence:** a short protocol decision and tests for unauthorized, revoked, wrong-host, oversized, and stalled requests. See [networking decisions](architecture.md#decisions-before-authenticated-networking).
-
-### U3. Effective session scope
-
-- **Status:** mapping recorded, scope check not built.
-- **Decision needed:** map resolved grants and settings to device access, including changes applied during a session.
-- **Reason:** rules read at session open and settings read per turn have different lifetimes. A single scope API does not yet exist.
-- **Current limit:** scope-expanding answers stay on the host; widened remote access requires authorization before disclosure. Ordinary one-use decisions should not cause needless reauthorization.
-- **Completion evidence:** a short state/transition mapping and tests of initial scope, widening, and revocation. See [permissions and effective scope](architecture.md#permissions-and-effective-scope).
-- **Mapping:** when the desktop bridge (`crates/ui-bridge`) reads each scope source for an open session. Functions are in `src/bridge.rs` unless named otherwise, and tests are in `tests/` unless marked as in `bridge.rs`. `permissions.revoke` is refused while a turn runs, and a turn copies the trust map and the trusted programs when it starts (`work`), so grants change between turns. Untested end to end: a fixed project, and the per-turn settings besides the sandbox mode.
-
-| Source | When read | What changes it | Tests |
-|---|---|---|---|
-| Project directory | At open (`new_session`, `open_session`). | Nothing. The bridge has no `/cd`. | None. |
-| Additional directories | At open from `session.new` `directories`; at resume from the record (`State::resumed` in `running.rs`); at fork from the parent (`State::forked`). `workspace_of` opens them for every turn. | Nothing after open. | `session_new_opens_every_directory_it_is_given` (in `bridge.rs`). |
-| Trust map | At open (`Opening::settled_by`): the resumed or forked map, else a kept answer, else empty until `trust.reply`. | Widened by `trust.reply` (once, before a turn uses it) and `vouch.reply`; narrowed by `permissions.revoke` kind `path`. | `a_repeated_trust_answer_is_refused_and_the_first_stands`, `a_trust_answer_cannot_be_changed_after_a_turn_has_used_it`, `a_resume_takes_its_own_map_before_a_kept_answer`, `permission_review_can_only_remove_existing_grants`. |
-| Remembered trust | At open (`Opening::of`); `permissions.list` reads it again each time. | `trust.reply` keeps a yes; `permissions.revoke` kind `remembered` forgets it for the next session and leaves this session's map. | `a_remembered_yes_settles_the_next_session_started_there`, `forgetting_a_remembered_answer_makes_the_next_session_there_ask`. |
-| Trusted programs | At open: empty, from the record at resume, from the parent at fork. | Widened by `run.reply` with `remember`, or by programs a delegate vouched for; narrowed by `permissions.revoke` kind `command` and by undoing the turn that vouched. | `a_command_vouched_for_holds_for_later_turns_until_it_is_revoked`, `undoing_a_turn_does_not_hand_back_a_revoked_command` (in `bridge.rs`). |
-| Permission rules from settings layers | Once at open (`open_under_rules`, PERM-12); a fork takes its parent's. | A settings edit applies to the next session. Not revocable. | `a_rule_written_after_a_session_opened_governs_the_next_one`, `a_fork_runs_under_the_rules_its_parent_opened_under`. |
-| `readsStayInWorkspace` | Once at open, with the permission rules (`open_under_rules`, PERM-12); a fork takes its parent's. Every turn's workspace is built under the value held. | A settings edit applies to the next session, whether it adds or removes the key. Not revocable. | `removing_reads_stay_in_workspace_does_not_widen_an_open_session`, `adding_reads_stay_in_workspace_confines_the_next_session_and_not_an_open_one`, `a_fork_is_held_to_the_project_where_its_parent_opened_held_to_it`. |
-| Other settings: sandbox mode, references, search caps, effort, run and download caps, MCP requests | Every turn (`start_turn` reads the layers, then `turn_workspace` and `for_a_window_choosing`). | A settings edit applies from the next turn. A window's `session.sandbox` choice replaces the settings mode from the next turn. | `a_mode_the_settings_ask_for_while_a_session_is_open_holds_from_its_next_turn`, `a_window_chooses_the_mode_the_next_turn_runs_under`. |
-| Permission mode | Live (`set_permission_mode`, MODE-8). | `session.mode`, accepted while a turn runs. | `a_mode_chosen_while_a_turn_runs_applies_to_that_turn`. |
-| Auto-vetting | Once at open (`auto_vetting`); a fork takes its parent's. | A settings edit applies to the next session. | `auto_vetting_is_reported_when_a_session_opens_and_held_for_the_rest_of_it`. |
-| Exposure grants | Held for the session after `exposure.reply`. | Undoing a turn keeps them; a fork starts without them. | `an_answer_covers_the_file_for_the_session_and_no_longer`, `undoing_a_turn_stops_the_servers_and_keeps_the_files_agreed_to`, `a_desktop_fork_asks_again_about_what_only_the_parent_was_asked` (in `bridge.rs`). |
-
-- **Not stated by the spec:** [SANDBOX-22](../../specs/sandboxing.md#SANDBOX-22) says the bridge reads the sandbox mode from the settings, but not that it reads them for every turn. The bridge does, so a settings edit from `strict` to `workspace-write` while a session is open widens the next turn. The test above pins the bridge as it is. The scope check has to treat that edit as a widening too.
-- **Remains for stage 6:** a scope check that computes a device's scope from the sources above when a device attaches and after each change listed, suspends remote reads and control before a widened scope becomes visible, and lets narrowing and one-use answers pass without reauthorizing. It needs tests of the initial scope, of widening by each host reply and per-turn setting, and of revocation.
-
-### U4. Attaching a client the host did not launch
-
-- **Status:** decided for the prototype: no client the host did not launch attaches to a running host. A host that outlives its clients and accepts a client it did not start, such as a service the desktop app connects to after the host started, is later work ([end goal](implementation-plan.md#end-goal-beyond-the-prototype)). It needs a new decision and goes through the pairing of [U2](#u2-pairing-and-transport-identity). Stage 5b does not need it, because the desktop app and the host are launched together.
-- **Decision (2026-11-13):** the host has no name to be found by. It listens on no TCP port and binds no UDP port and no Unix socket with a path ([HOST-13](../../specs/local-host.md#HOST-13)). The desktop app either launches the host and owns its lifetime, or the host launches the desktop app. A later client is another launch by the host. This follows from U1, which removed the name, and adds no mechanism a tool could use.
-- **Evidence:** `a_host_serving_a_turn_has_no_socket_another_program_can_find` in `crates/ui-bridge/tests/host_process.rs` starts the real `bravebot-host`, serves a turn through its client, and lists the sockets another program could find. On macOS it reads `lsof` for the host process: a TCP port listening, a UDP port bound, or a Unix socket bound to a path, less any the test process holds too, which the host inherited. On Linux a process of the same user without privilege cannot read a non-dumpable host's descriptors, so the test reads `/proc/net`: TCP ports of the user listening, UDP ports of the user bound, and Unix sockets listening or bound to a name and not connected. It keeps those that appeared after the host started and were gone once the host was killed, and that no other readable process held. Another test's process that it cannot read can open and close a socket in that window, so a socket found is looked for again beside a second host, and the test fails only if that host has one too. On 2026-11-13 a host changed to bind at startup, and keep, a TCP listener, a UDP socket, a Unix listener on a path, or a Unix datagram socket on a path failed the test each time on macOS, and on Linux run as root and as an ordinary user.
-- **Not tested:** a socket the host opens and closes before the turn ends, a listener it opens only on some later request, and Windows.
-
-## Implementation choices and validation
+Status: proposal. This file lists only what is unanswered or waiting for evidence. A decision goes in the [decision record](decisions-and-tradeoffs.md), behavior in the [specs](../../specs/README.md), and planned work in the [implementation plan](implementation-plan.md). **Unresolved** means an answer is still needed. **Awaiting validation** means the plan has a proposed answer that needs evidence. Neither status establishes implemented behavior. Each entry names the capability that needs its answer; unrelated work can proceed.
 
 ### Q1. Does the React Native implementation meet the mobile interaction requirements?
 
@@ -79,27 +9,6 @@ These are not accepted risks or implementation details that can be skipped. The 
 - **Current assumption:** use React Native for both modes, as recorded in the [UI decision](decisions-and-tradeoffs.md#1-react-native-for-both-mobile-modes). No competing WebView or PWA proof is required.
 - **Evidence needed:** device checks of a transcript, composer, and complete approval card, covering responsiveness, keyboard, scrolling, accessibility, labels, and lifecycle. Record gaps and untested platforms.
 - **Before:** expanding the screens beyond the first stage-2b or stage-3d device proof.
-
-### Q2. Where should shared Rust presentation code live?
-
-- **Status:** resolved for the minimal local Rust block; native display validation remains pending.
-- **Decision:** `crates/ui-bridge/src/view.rs` owns session projection under LAYER-1's existing
-  non-presentation boundary. It copies complete labelled wire payloads and branches only on
-  bridge-owned event names and status/identity metadata. `wire::submitted` reuses saved-history
-  tags, and `Running`/`BridgeConfirmer` keep approval semantics.
-- **Evidence:** the stdio caller exercises `session.view.start`, initial state and typed updates
-  through the real process in `crates/ui-bridge/tests/fetch.rs`. The emitter barrier test pins
-  terminal ordering; view tests pin approval replacement payloads. No new dependency is needed.
-- **Presentation choice:** no released-content transform is needed by this transport-only block.
-  Existing CLI/TUI marking helpers inspect text and produce terminal output; importing them into
-  bridge dispatch would violate its boundary. Extract a narrow allowed presentation module or
-  crate when the first rendering caller needs shared transforms, with its layering entry and tests.
-- **First rendering caller:** the mobile app renders released content before any Rust binding exists. It shows content as plain text with its label and escapes control, format, separator and bidirectional characters with a TypeScript function named and documented as a placeholder (`mobile/src/text/displayText.ts`). It is display-only. The app cannot call the Rust implementation until the stage-2b binding exists, so the shared helper, its layering entry and its tests arrive with that caller, in a narrow allowed presentation module chosen then. Until it does the TypeScript function is the only copy outside the Rust renderers, and a change to either is checked against the other. See [the app's rendering rules](app-shell.md#rendering-untrusted-text).
-- **Remaining:** native rendering and marking. See [implemented scope](client-contract.md#implemented-typescript-client).
-  The TypeScript client library carries payloads as received and reads none of them. Its terminal
-  program escapes control, zero-width and bidirectional characters locally in a diagnostic dump and renders
-  nothing, so neither needed a presentation module. This decision completes the placement choice for the stdio client, not
-  device presentation.
 
 ### Q3. How are embedded API keys set up, stored, and revoked after device loss?
 
@@ -125,14 +34,6 @@ These are not accepted risks or implementation details that can be skipped. The 
 - **Evidence needed:** direct/transitive dependency inventory, licences, scripts and native-code review, reproducible builds, and advisory/check coverage for the selected managers under the [dependency plan](decisions-and-tradeoffs.md#9-mobile-dependencies-and-builds).
 - **Before:** landing the additions in stage 1 or the first app work in 2b/3d; reassess the cost at Q1's UI checkpoint.
 
-### Q6. How does a tool finish name the call it ends?
-
-- **Status:** resolved.
-- **Decision:** the engine gives each dispatch an id from a process-wide counter, never from the call or the provider's reply, and carries it as `call` on both `tool.started` and `tool.finished`. The session view, the ACP bridge and the desktop transcript pair a finish with its start by that id alone. A finish whose id names no running call, or that has none, is a row of its own. Calls already overlap without parallel dispatch: a delegate runs on a thread of its own and reports through the same reporter as the turn that started it.
-- **Evidence:** `bravebot_agent::turn::each_call_is_announced_and_summarised_under_an_id_of_its_own` checks that two calls in one reply get different ids and that each finish carries its start's id. `bravebot_ui_bridge::view::a_finished_call_replaces_the_row_of_the_call_it_ends` and `bravebot_ui_bridge::acp::a_finished_call_closes_the_editor_entry_with_its_call_id` finish two calls with the same verb and target in either order. `ui/scripts/tool-pairing.test.mjs` does the same for the desktop transcript, for finishes and for landings. `bravebot_agent::tools::tests::a_held_call_finishes_under_the_id_it_started_with` and `bravebot_agent::manifest::each_step_finishes_under_the_id_it_started_with` check the held-call and manifest paths.
-- **Remaining:** the TUI pairs a finish and a landing with the call still running for the same delegate, which is not a defect because a delegate runs one call at a time, and the CLI only prints. Neither reads the id. The `landed` event carries the same `call`, and the desktop transcript places a landing on the row of that call.
-- **Issue:** [#2769](https://github.com/brave/bravebot/issues/2769), "Give tool calls an id in the session view, so a finish lands on its own call's row when calls overlap".
-
 ### Q7. When does the mobile app close a session it opened?
 
 - **Status:** unresolved.
@@ -142,30 +43,15 @@ These are not accepted risks or implementation details that can be skipped. The 
 - **Before:** the first target used with real data, which is the stage-7 remote adapter.
 - **Issue:** [#2770](https://github.com/brave/bravebot/issues/2770), "Release the sessions the mobile app opens when it switches, changes target or exits".
 
-### Q8. How does the app know a target can list its sessions?
+### Q10. What can the phone pin and sign?
 
-- **Status:** resolved. The app reads `TargetInfo.sessionList` from `describe()` before its first list request, and asks again on the next refresh if that question fails. For a target that reports `false`, the drawer says "This target does not keep a list of sessions." and never requests a list. A failed list request, or a failed `describe()`, shows "Sessions could not be listed." when no list has arrived, and otherwise keeps the last list with a note that it could not be refreshed, until a request newer than the failure succeeds. An empty list still says "No sessions yet." Tests: `mobile/src/__tests__/sessionList.test.tsx`.
-- **Issue:** [#2771](https://github.com/brave/bravebot/issues/2771), "Show the mobile sessions drawer by target capability, and tell a person when listing fails".
-
-### Q9. May the phone answer startup trust?
-
-- **Status:** unresolved.
-- **Question and reason:**
-  - A yes to startup trust vouches for a whole directory tree, and a kept yes answers every later session there ([TRUST-23](../../specs/trust-map.md#TRUST-23)).
-  - From stage 5a the phone does not answer it, and a session the phone opens in a workspace with no kept yes waits until a client on the host that may answer trust, such as the host test client, attaches and the person answers there.
-  - Letting the phone answer would let a person start work from the phone alone in a workspace answered no at startup, or one where a yes cannot be kept.
-- **Current assumption:**
-  - The phone does not answer startup trust.
-  - The host asks about each workspace at startup ([decision 12](decisions-and-tradeoffs.md#12-the-host-asks-about-each-workspaces-trust-at-startup)), so the phone waits only in a workspace with no kept yes.
-  - Kinds are fixed per client on the host's command line ([decision 11](decisions-and-tradeoffs.md#11-clients-are-named-on-the-hosts-command-line-with-the-kinds-each-may-answer)). The host cannot tell the relay from another client, so it does not refuse `--answers trust` for the relay. HOST-3's reason for offering `trust.reply` does not hold for the relay: any local program that has its port and code can answer ([HOST-12](../../specs/local-host.md#HOST-12)), and a yes it sends may be kept for every later session in that workspace. Until step 6 of stage 5a, `dev-relay-demo.ts` and the relay tests give the relay `trust` in a scratch workspace, so a session in a workspace answered no at startup can still be trusted, and the tests answer no at startup to check that path. From step 6, the host test client answers it and they no longer do.
-- **Evidence needed:**
-  - Whether a phone's yes may count as the person's own, and whether a paired phone gets `trust` (stage 6).
-  - Whether the phone's trust question meets TRUST-23's rule that a yes takes no press until the directory, what each answer does and the file it writes have been shown.
-  - Deciding yes changes [decision 5](decisions-and-tradeoffs.md#5-every-attached-device-can-act-with-no-takeover-step), the [shared control rules](architecture.md#shared-control-across-devices), the executive summary, [HOST-3](../../specs/local-host.md#HOST-3) and the relay's `--answers` in `dev-relay-demo.ts`.
-- **Before:** stage 6 pairing.
+- **Status:** awaiting validation.
+- **Question and reason:** can the phone's platform pin a key learned at pairing, present a client certificate, read the TLS exporter value, and keep a P-256 key in the Secure Enclave or StrongBox, from native code or from JavaScript? Decision 20 depends on the answer. These are claims about the platform that this repository does not check.
+- **Evidence needed:** a one-day spike on one phone platform that connects to a Rust host over TLS, pins the host key, and produces a proof from a hardware-held key. Record the platform and the result, and whether a rustls module is needed on the phone.
+- **Before:** the listener and pairing PR of stage 6.
 
 ## Keeping this record current
 
-Update an entry when its assumption, evidence, or required checkpoint changes. When resolved, mark it resolved and replace the open discussion with a link to the decision and its evidence. Update the affected architecture, contract, and stages in the same change. Keep U1–U4 and Q1–Q9 identifiers stable so existing references continue to work.
+Update an entry when its assumption, evidence, or required checkpoint changes. When an entry is answered, record the decision in the decision record, the requirement in the architecture or contract, the work in the plan and the behavior in a spec with the change that makes it true, then delete the entry. Identifiers are not reused, so a gap in the numbering is a deleted entry.
 
 Add a question when it affects a capability, security boundary, or delivery choice. Routine names, numerical limits, and libraries can be chosen during implementation and recorded with their tests. Keep checkpoints and scope cuts in the [implementation plan](implementation-plan.md#checkpoints-and-scope-cuts); review remaining work there as these questions are answered.

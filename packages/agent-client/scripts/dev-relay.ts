@@ -15,7 +15,7 @@
  * starts a new relay with a new port and code.
  *
  * This is a development transport. It is reachable by any program on the computer that can reach
- * 127.0.0.1, which the code alone stands between, and it does not decide U1 or authorize control
+ * 127.0.0.1, which the code alone stands between, and it does not close the untested local-control cases or authorize control
  * of a real session. Run it with synthetic data only.
  */
 

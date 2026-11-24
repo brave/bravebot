@@ -15,7 +15,7 @@ bravebot-host --sessions-root <root> --workspace <dir> \
 
 The name is given twice, to `--client` and to `--host-client-name`, and the two must be the same: the host does not tell a client its name, and the window uses its own copy to say which action in the view is its own.
 
-`pnpm run drive:prototype` in `ui/` starts exactly this, with the host test client as a second client, a model service it serves itself and a scratch home. The host does not start the desktop for the person yet. A desktop that attaches to a host that is already running is [U4](open-questions.md#u4-attaching-a-client-the-host-did-not-launch), which the plan leaves out of 5b because the desktop and the host are launched together.
+`pnpm run drive:prototype` in `ui/` starts exactly this, with the host test client as a second client, a model service it serves itself and a scratch home. The host does not start the desktop for the person yet. A desktop that attaches to a host that is already running is [later work](implementation-plan.md#end-goal-beyond-the-prototype), which the plan leaves out of 5b because the desktop and the host are launched together.
 
 ## The two approaches
 

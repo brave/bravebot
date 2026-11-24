@@ -2887,8 +2887,10 @@ program with no profile and nothing would hold its network shut; the refusal say
 `completion` and the two `import-` commands) run past a refusal, so that the person can read what it
 says and sign in.
 
-The desktop and the bridge have no flag, and read the mode from the settings and the pin. `off` is
-read there as `workspace-write`, because a window has no line that shows its programs are unconfined. A
+The desktop and the bridge have no flag, and read the mode from the settings and the pin at the start
+of every turn, so a settings edit made while a session is open applies from its next turn, unless a
+window has chosen a mode for the session with `session.sandbox`, which replaces the settings mode
+from the next turn. `off` is read there as `workspace-write`, because a window has no line that shows its programs are unconfined. A
 subagent's programs run under the mode of the session that started it, and the mode is not in the
 session record, so a resumed session takes the mode its start-up chose and not the one it was
 saved under. `/sandbox` alone says the mode in force and the flag or file that chose it, in the words `doctor`
@@ -3079,6 +3081,7 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_ui_bridge::wire::a_window_may_name_strict_read_only_or_workspace_write_and_no_other_sandbox_mode`
 `verified-by: bravebot_ui_bridge::wire::a_refused_sandbox_mode_names_the_file_and_the_floor`
 `verified-by: bravebot_ui_bridge::wire::a_refused_sandbox_mode_says_whether_it_reads_or_writes_more_than_the_pin`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_mode_the_settings_ask_for_while_a_session_is_open_holds_from_its_next_turn`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_window_chooses_the_mode_the_next_turn_runs_under`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_read_only_window_refuses_file_writes_before_accepting_edits`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_read_only_window_refuses_a_writing_manifest_before_approval`
