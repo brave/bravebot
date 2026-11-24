@@ -482,6 +482,7 @@ fn a_standing_answer_covers_the_later_messages_to_that_session_and_no_other() {
 /// again, this time with the new label. The control is two calls with no label change between
 /// them, which the standing answer still covers.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_standing_answer_does_not_cover_the_same_target_under_a_label_it_was_not_shown() {
     for (label_rises, expect_asked) in [(true, 2), (false, 1)] {
         let sessions = Sessions::answering(vec![("build", session("build-id", "build"))]);
