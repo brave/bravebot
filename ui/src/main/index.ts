@@ -1215,9 +1215,9 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('bravebot:diagnostic-log:set-level', async (_event, level: unknown) => {
     if (!bridge) throw new BridgeError('no_bridge', 'the agent is not running')
     const answer = await bridge.setLogLevel(level)
-    // Kept only once the agent answered, as the bridge keeps it; `setLogLevel` refused any word
-    // that is not a level.
-    diagnosticLogLevel = level as LogLevel
+    // Kept only once the agent answered, as the bridge keeps it: the level the agent reports, so a
+    // word the agent refused is never kept.
+    diagnosticLogLevel = answer.level
     return answer
   })
 

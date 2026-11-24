@@ -1,6 +1,6 @@
 // DIAG-11 in the main process: the level chosen in the window is passed to `bravebot-rpc` with
-// `--log-level` whenever the agent is started, a word that is not a level never reaches the agent,
-// and the window cannot ask `diagnostic_log.set` itself. `Bridge` is bundled with Electron, the
+// `--log-level` whenever the agent is started, only a level the agent accepted is kept, and the
+// window cannot ask `diagnostic_log.set` itself. `Bridge` is bundled with Electron, the
 // process spawner and the file check replaced by fakes, so no agent is started.
 
 import test from 'node:test'
@@ -126,17 +126,34 @@ test('the main process keeps the level the agent accepted for the bridge of a wi
   assert.match(index, /^let diagnosticLogLevel: LogLevel = 'error'$/m)
   assert.match(index, /bridge = new Bridge\([\s\S]*?\}, selectedSettings, diagnosticLogLevel\)/)
   // Assigned after the agent answered, so a refused change leaves the stored level as it was.
-  assert.match(index, /const answer = await bridge\.setLogLevel\(level\)[\s\S]{0,200}?diagnosticLogLevel = level as LogLevel/)
+  assert.match(index, /const answer = await bridge\.setLogLevel\(level\)[\s\S]{0,200}?diagnosticLogLevel = answer\.level$/m)
 })
 
-test('a word that is not a level is refused before it reaches the agent', async () => {
-  const fake = agent()
-  const bridge = new Bridge(() => {})
-  for (const word of ['verbose', 'DEBUG', '', null, 3, { level: 'debug' }]) {
+test('a word the agent refuses as a level is not kept for the next start', async () => {
+  const fake = agent((method, params) => {
+    if (method !== 'diagnostic_log.set') return {}
+    if (!['error', 'info', 'debug'].includes(params.level)) throw new Error('unknown log level')
+    return { level: params.level, writing: true }
+  })
+  const bridge = new Bridge(() => {}, null, 'info')
+  const words = ['verbose', 'DEBUG', '', null, 3, { level: 'debug' }]
+  for (const word of words) {
     await assert.rejects(bridge.setLogLevel(word), (error) => error.code === 'bad_request')
   }
-  assert.equal(fake.spawned.length, 0, 'no agent was started for a refused word')
-  assert.deepEqual(fake.asked, [])
+  assert.deepEqual(fake.asked.map(({ params }) => params.level), words, 'the agent alone decides what a level is')
+  fake.die()
+  await bridge.request('agent.info')
+  assert.deepEqual(fake.spawned[1].args, ['--log-level', 'info'], 'the level before the refused words is kept')
+})
+
+test('the level kept is the one the agent reports', async () => {
+  const fake = agent((method) => (method === 'diagnostic_log.set' ? { level: 'debug', writing: true } : {}))
+  const bridge = new Bridge(() => {})
+  await bridge.setLogLevel('debug')
+  fake.die()
+  await bridge.request('agent.info')
+  assert.deepEqual(fake.spawned[1].args, ['--log-level', 'debug'])
+  assert.doesNotMatch(readFileSync('src/main/bridge.ts', 'utf8'), /isLogLevel|LOG_LEVELS/, 'the main process keeps no list of levels')
 })
 
 test('a change the agent refuses is not kept for the next start', async () => {

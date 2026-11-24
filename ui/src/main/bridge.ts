@@ -13,7 +13,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { app } from 'electron'
 import { helperPaths } from './helpers'
-import { isLogLevel, type BridgeEvent, type BridgeFailure, type DiagnosticLogSet, type LogLevel } from '../shared/protocol'
+import { type BridgeEvent, type BridgeFailure, type DiagnosticLogSet, type LogLevel } from '../shared/protocol'
 
 /** A request waiting for its answer. */
 interface Waiting {
@@ -179,15 +179,13 @@ export class Bridge {
   /**
    * Change the running agent's diagnostic log level (DIAG-11).
    *
-   * A word that is not a level is refused here and never sent. The level is kept for a restart
-   * only once the agent has answered, so a failed change leaves the window and the agent agreeing.
+   * The word is sent as it comes: the agent alone decides what a level is, and refuses any other
+   * word with `bad_request`. The level the agent reports is kept for a restart only once it has
+   * answered, so a refused or failed change leaves the window and the agent agreeing.
    */
   async setLogLevel(level: unknown): Promise<DiagnosticLogSet> {
-    if (!isLogLevel(level)) {
-      throw new BridgeError('bad_request', `unknown log level: ${String(level)}`)
-    }
     const answer = await this.request<DiagnosticLogSet>('diagnostic_log.set', { level })
-    this.logLevel = level
+    this.logLevel = answer.level
     return answer
   }
 
