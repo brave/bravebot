@@ -476,6 +476,59 @@ fn a_standing_answer_covers_the_later_messages_to_that_session_and_no_other() {
     );
 }
 
+/// MSG-4 (#4128): a standing answer covers the target under the label the person was shown it
+/// under, and no other. A message put to the same target after the sender's own context has
+/// turned private carries a label the standing answer was never shown, so it is asked about
+/// again, this time with the new label. The control is two calls with no label change between
+/// them, which the standing answer still covers.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_standing_answer_does_not_cover_the_same_target_under_a_label_it_was_not_shown() {
+    for (label_rises, expect_asked) in [(true, 2), (false, 1)] {
+        let sessions = Sessions::answering(vec![("build", session("build-id", "build"))]);
+        let mut person = Person::saying(&[MessageDecision::ForTheTurn, MessageDecision::Once]);
+        let mut sink = RecordingSink::new();
+        let mut policy = policy(&mut sink);
+        let mut reporter = crate::report::RecordingReporter::default();
+        let scratch = Scratch::new(&format!("session-messages-label-key-{label_rises}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let ledger: &'static mut Ledger = Box::leak(Box::default());
+        with_tools(&workspace, |tools| {
+            tools.messaging = Some(Messaging {
+                courier: sessions,
+                ledger,
+            });
+            dispatch(
+                &mut policy,
+                tools,
+                &mut person,
+                &mut reporter,
+                &call("build", "one"),
+            );
+            if label_rises {
+                policy.heard_from_delegate(Label::trusted_private());
+            }
+            dispatch(
+                &mut policy,
+                tools,
+                &mut person,
+                &mut reporter,
+                &call("build", "two"),
+            );
+        });
+        assert_eq!(
+            person.asked.len(),
+            expect_asked,
+            "label_rises {label_rises}: {:?}",
+            person.asked
+        );
+        if label_rises {
+            assert_eq!(person.asked[0].label, Label::trusted_public());
+            assert_eq!(person.asked[1].label, Label::trusted_private());
+        }
+    }
+}
+
 /// MSG-10: a turn puts at most ten messages to one session. The eleventh is refused without
 /// asking, the count includes the ones a person declined, and another session is still open
 /// to it. A bound counted per turn would refuse the other session as well, one that counted
