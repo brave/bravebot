@@ -60,6 +60,8 @@ crates/core/src/permissions.rs::pipeline_decision/loop: invariant at <= each.len
 crates/core/src/policy.rs::issue: ensures final(self).pending@ == old(self).pending@.push(grant),
 crates/core/src/policy.rs::spend: spent => ensures spent == granted(old(self).pending@, tool@, field@, value@), spent ==> exists|i: int| 0 <= i < old(self).pending@.len() && grant_is_for( #[trigger] old(self).pending@[i], tool@, field@, value@, ) && final(self).pending@ == old(self).pending@.remove(i), !spent ==> final(self).pending@ == old(self).pending@,
 crates/core/src/policy.rs::spend/loop: invariant at <= self.pending.len(), self.pending@ == old(self).pending@, forall|j: int| 0 <= j < at ==> !grant_is_for( #[trigger] self.pending@[j], tool@, field@, value@, ), decreases self.pending.len() - at,
+crates/core/src/policy.rs::same_slot: r => ensures r == (*a == *b),
+crates/core/src/policy.rs::same_destination: r => ensures r == (a@ == b@),
 crates/core/src/policy.rs::fresh: r => ensures r.integrity == Integrity::Trusted, r.confidentiality == Confidentiality::Public,
 crates/core/src/policy.rs::integrity: r => ensures r == self.integrity,
 crates/core/src/policy.rs::confidentiality: r => ensures r == self.confidentiality,
@@ -203,11 +205,20 @@ crates/core/src/policy.rs::authorise: assumes external_body
 crates/core/src/policy.rs::ExSink: assumes external_trait_specification
 crates/core/src/policy.rs::ExDenial: assumes external_type_specification
 crates/core/src/policy.rs::ExDenial: assumes external_body
+crates/core/src/policy.rs::clone: assumes external
+crates/core/src/policy.rs::joined: assumes external_body
+crates/core/src/policy.rs::same_slot: assumes external_body
+crates/core/src/policy.rs::same_destination: assumes external_body
+crates/core/src/policy.rs::allow: assumes external
+crates/core/src/policy.rs::allow_into: assumes external
+crates/core/src/policy.rs::contains: assumes external_body
+crates/core/src/policy.rs::allows_into: assumes external_body
 crates/core/src/policy.rs::no_observation: assumes external_body
 crates/core/src/policy.rs::no_label: assumes external_body
 crates/core/src/policy.rs::server_call: assumes external_body
 crates/core/src/policy.rs::describe_the_answers: assumes external_body
 crates/core/src/policy.rs::Policy: assumes external_body
+crates/core/src/policy.rs::release_plan: assumes external_body
 crates/core/src/policy.rs::precommitted: assumes external_body
 crates/core/src/policy.rs::precommitted_into: assumes external_body
 crates/core/src/policy.rs::deny: assumes external_body
@@ -228,6 +239,8 @@ crates/core/src/policy.rs::rules_for_read: assumes external_body
 crates/core/src/policy.rs::rules_for_edit: assumes external_body
 crates/core/src/policy.rs::context_integrity: assumes external_body
 crates/core/src/policy.rs::absorb: assumes external_body
+crates/core/src/policy.rs::allow_promoted_reference: assumes external_body
+crates/core/src/policy.rs::path_of_reference: assumes external_body
 crates/core/src/policy.rs::refuse_wrong_kind: assumes external_body
 crates/core/src/policy.rs::allow_a_tool_list: assumes external_body
 crates/core/src/policy.rs::refuse_unplanned_release: assumes external_body
@@ -236,6 +249,8 @@ crates/core/src/policy.rs::record_into_place: assumes external_body
 crates/core/src/policy.rs::allow_written_into_workspace: assumes external_body
 crates/core/src/policy.rs::allow_checkout_into_workspace: assumes external_body
 crates/core/src/policy.rs::record_into_workspace: assumes external_body
+crates/core/src/policy.rs::allow_note: assumes external_body
+crates/core/src/policy.rs::keep_note: assumes external_body
 crates/core/src/policy.rs::consume_grant: assumes external_body
 crates/core/src/programs.rs::TrustedPrograms: assumes external_body
 crates/core/src/programs.rs::clone: assumes external
@@ -245,6 +260,7 @@ crates/core/src/remembered.rs::clone: assumes external
 crates/core/src/slot.rs::SlotId: assumes external_body
 crates/core/src/slot.rs::clone: assumes external
 crates/core/src/slot.rs::as_str: assumes external_body
+crates/core/src/slot.rs::SlotStore: assumes external_body
 crates/core/src/spec.rs::ExPathBuf: assumes external_type_specification
 crates/core/src/spec.rs::ExPathBuf: assumes external_body
 crates/core/src/vetting.rs::Endorsed: assumes external_body

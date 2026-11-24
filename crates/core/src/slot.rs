@@ -424,6 +424,7 @@ impl From<String> for Fill {
 /// Holds `Labelled<String>` because slot content is always opaque text as far as the
 /// kernel is concerned; interpreting it is the job of whatever declassifies it.
 #[derive(Default)]
+#[cfg_attr(verus_keep_ghost, verus_verify, verifier::external_body)]
 pub struct SlotStore {
     slots: HashMap<SlotId, Entry>,
     /// The numbers processors chose, each under a name of its own.
