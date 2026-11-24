@@ -1089,6 +1089,7 @@ fn run_text(data: &Value) -> Option<String> {
             ambient: &ambient_of(data)?,
             releases_private: data["releasesPrivate"].as_bool() == Some(true),
             offers_remember: data["canBeRemembered"].as_bool() == Some(true),
+            unconfined: false,
         })
         .join("\n"),
     )
@@ -1574,6 +1575,7 @@ mod tests {
                 ambient: &ambient,
                 releases_private: run.releases_private(),
                 offers_remember: run.can_be_remembered(),
+                unconfined: false,
             })
             .join("\n")
         };
