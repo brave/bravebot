@@ -164,7 +164,8 @@ that holds it, so a plugin issue is `area/plugins` and not `area/interface`, and
 | `area/background` | background sessions: attach, deny-instead-of-prompting, jobs, per-session checkouts, scheduled runs |
 | `area/delegation` | processors, delegates, skills, hooks, `/loop` and `/goal` |
 | `area/plugins` | plugins and marketplaces: install, update, enable, and what a plugin bundles |
-| `area/backends` | routing, the roster, bedrock, aichat, effort, prompt caching, request signing |
+| `area/backends` | routing, the roster, bedrock, aichat, effort, request signing |
+| `area/caching` | work that involves caching: prompt caching, and any other cache of a response, a result or a file |
 | `area/skus` | premium credentials and the store |
 | `area/interface` | terminal input, vi mode, the scroller, the theme, the transcript, commands |
 | `area/desktop` | the desktop application and the mobile app |
@@ -175,6 +176,11 @@ that holds it, so a plugin issue is `area/plugins` and not `area/interface`, and
 | `area/i18n` | locales, plural rules, the message catalogue |
 
 `area/backends/chatgpt` is a narrower label for the ChatGPT sign-in and goes with `area/backends`.
+
+`area/caching` goes with the area the cache lives in where there is one: an issue about the prompt cache of a
+provider carries `area/caching` and `area/backends`. An issue about the build cache under
+`docs/development/build-cache.md` is `infrastructure`, not `area/caching`, because that cache is part of
+the build and not of the product.
 
 `infrastructure` is the one that is not an `area`, because the build and the tracker
 are not part of the product and an issue about a workflow belongs to whoever owns the pipeline.
