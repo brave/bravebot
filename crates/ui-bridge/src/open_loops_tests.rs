@@ -239,9 +239,11 @@ fn git(root: &Path, arguments: &[&str]) {
         .env_remove("GIT_INDEX_FILE")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .status()
-        .expect("git ran");
-    assert!(status.success(), "git {arguments:?}");
+        .status();
+    assert!(
+        status.as_ref().is_ok_and(std::process::ExitStatus::success),
+        "git {arguments:?}: {status:?}"
+    );
 }
 
 /// OPEN-1, OPEN-4, OPEN-6. A file a desktop turn wrote in a repository and nobody committed is
@@ -419,8 +421,12 @@ fn undoing_a_turn_tells_the_planner_of_the_loops_left_open() {
         .unwrap()
         .open_loops
         .for_the_planner();
-    let said = said.expect("the loops left open were not told again");
-    assert!(said.contains("the last command failed"), "{said}");
+    // Nothing told reads as empty, which the first assertion rejects.
+    let said = said.unwrap_or_default();
+    assert!(
+        said.contains("the last command failed"),
+        "the loops left open were not told again: {said}"
+    );
     assert!(
         !said.contains("todo"),
         "the undone turn's todo is told: {said}"
@@ -487,6 +493,10 @@ fn a_turn_that(
     let (events, received) = mpsc::channel();
     let emitter = Emitter::new(Box::new(move |event| {
         if event.name == "turn.done" || event.name == "turn.error" {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "an end sent after the test stopped listening has nobody to reach"
+            )]
             let _ = events.send(event);
         }
     }));
@@ -554,6 +564,10 @@ fn a_turn_that(
     }
     stop.store(true, Ordering::Release);
     server.join().unwrap();
+    #[expect(
+        clippy::expect_used,
+        reason = "a turn that never reports its end fails the test here"
+    )]
     let event = result.expect("turn must report its end");
     worker.join().unwrap();
     let ends = if fails { "turn.error" } else { "turn.done" };
@@ -581,6 +595,10 @@ fn service(
     let kept = Arc::clone(&bodies);
     let server = std::thread::spawn(move || {
         while !stopping.load(Ordering::Acquire) {
+            #[expect(
+                clippy::panic,
+                reason = "a listener that cannot accept fails the test's service"
+            )]
             let mut stream = match listener.accept() {
                 Ok((stream, _)) => stream,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {

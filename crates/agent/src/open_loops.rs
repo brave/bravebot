@@ -319,7 +319,8 @@ mod tests {
         let mut told = Told::default();
         let failed = Loops::from_work(work(0, 1, true, true));
         told.ended_with(failed.clone());
-        let said = told.for_the_planner().expect("told of the failed command");
+        // Nothing told reads as empty, which the first assertion rejects.
+        let said = told.for_the_planner().unwrap_or_default();
         assert!(
             said.starts_with("Open from earlier in this session"),
             "{said}"
@@ -335,7 +336,7 @@ mod tests {
             ..failed
         };
         told.ended_with(more);
-        let said = told.for_the_planner().expect("told of the changed set");
+        let said = told.for_the_planner().unwrap_or_default();
         assert!(said.contains("2 todos"), "{said}");
         assert_eq!(told.for_the_planner(), None);
     }
