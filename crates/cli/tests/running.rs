@@ -18078,8 +18078,24 @@ fn a_reply_refused_as_stopping_starts_the_session_when_it_is_asked_again_once_st
     std::fs::remove_file(&socket).ok();
     let listener = UnixListener::bind(&socket).expect("a socket the stopping session answers on");
     let (heard, asked) = mpsc::channel();
-    let answering = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("the reply arrives");
+    // The thread polls for the connection against a deadline. When no reply arrives it returns
+    // without sending, which the receive below reports as a failure with a message.
+    std::thread::spawn(move || {
+        listener.set_nonblocking(true).expect("poll for the reply");
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => return,
+            }
+        };
+        stream.set_nonblocking(false).expect("blocking reads");
         stream
             .set_read_timeout(Some(Duration::from_secs(60)))
             .expect("timeout");
@@ -18095,7 +18111,9 @@ fn a_reply_refused_as_stopping_starts_the_session_when_it_is_asked_again_once_st
     });
 
     let refused = bravebot(&home.0, &[], &["reply", "3f2a9c1e", "and the tests"]);
-    answering.join().expect("the answering thread ended");
+    let heard_lines = asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the reply reached the stopping session");
     let (out, err) = said(&refused);
     assert!(!refused.status.success(), "{out}{err}");
     assert!(
@@ -18107,7 +18125,7 @@ fn a_reply_refused_as_stopping_starts_the_session_when_it_is_asked_again_once_st
         "a reply to a stopping session was reported as sent: {out}"
     );
     assert_eq!(
-        asked.recv().expect("what the socket heard"),
+        heard_lines,
         [token, "reply".to_string(), "and the tests".to_string()]
     );
 
