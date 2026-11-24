@@ -559,7 +559,7 @@ pub struct Conversation {
     /// ([RETRIEVE-28](../../../docs/specs/retrieval.md#RETRIEVE-28)).
     left_out: usize,
     /// What the request sends at the cut in place of what the messages before it carried: the
-    /// task, the task list and the skills (RETRIEVE-10).
+    /// task, the task list, the note naming the session's directory and the skills (RETRIEVE-10).
     ///
     /// Taken when the cut moved and kept with it, so every request until the next move reads the
     /// same.
@@ -1768,8 +1768,9 @@ impl Conversation {
         self.recall_fallback_said = said;
     }
 
-    /// What a cut at `cut` sends in front of the messages it keeps: the delegate's task and the
-    /// task list where the cut passes them, then the skills it passes (RETRIEVE-10).
+    /// What a cut at `cut` sends in front of the messages it keeps: the delegate's task, the task
+    /// list and the note naming the session's directory where the cut passes them, then the skills
+    /// it passes (RETRIEVE-10).
     ///
     /// Each from a position or a tag, as compaction finds them, and never from what a message
     /// says. What an earlier summary carried is carried again once the cut passes the summary.
@@ -1783,8 +1784,13 @@ impl Conversation {
             Some(_) => None,
             None => self.carried_task_list.as_deref(),
         };
+        let scratch = match self.scratch_at {
+            Some(at) if at < cut => self.messages[at].message.content.as_text(),
+            Some(_) => None,
+            None => self.carried_scratch.as_deref(),
+        };
         let mut pinned = Vec::new();
-        if task.is_some() || list.is_some() {
+        if task.is_some() || list.is_some() || scratch.is_some() {
             let mut note = PINNED_PREFIX.to_string();
             if let Some(task) = task {
                 note.push_str("\n\nThe task you were given, word for word:\n");
@@ -1793,6 +1799,10 @@ impl Conversation {
             if let Some(list) = list {
                 note.push_str("\n\nYour task list, as you last wrote it:\n");
                 note.push_str(list);
+            }
+            if let Some(scratch) = scratch {
+                note.push_str("\n\n");
+                note.push_str(scratch);
             }
             pinned.push(Stored {
                 message: Arc::new(Message::user(note)),
@@ -6554,6 +6564,79 @@ mod tests {
             wire(&resumed.with_system("SYSTEM")),
             wire(&conversation.with_system("SYSTEM"))
         );
+    }
+
+    /// RETRIEVE-10. A cut that passes the note naming the session's directory sends the path after
+    /// it, once.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_pinned_scratch_note_is_sent_after_the_cut() {
+        let mut conversation = Conversation::new();
+        an_exchange(&mut conversation, "first");
+        conversation.push_composed_from(
+            Message::user("scratch is /tmp/scratch-xyz"),
+            Composed::Notice,
+            Provenance::Driver,
+        );
+        conversation.scratch_was_said();
+        for n in 0..6 {
+            an_exchange(&mut conversation, &format!("prompt {n}"));
+        }
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        assert!(cut > 3, "the note has to be passed");
+        conversation.cut_for_retrieval(cut);
+
+        let sent = request_texts(&conversation);
+        let holding_path = sent
+            .iter()
+            .filter(|text| text.contains("/tmp/scratch-xyz"))
+            .count();
+        assert_eq!(holding_path, 1, "{sent:?}");
+        assert!(sent[0].starts_with(PINNED_PREFIX), "{}", sent[0]);
+        assert!(
+            sent[0].ends_with("scratch is /tmp/scratch-xyz"),
+            "{}",
+            sent[0]
+        );
+    }
+
+    /// RETRIEVE-10. A summary that carries the note, passed by a later cut, has the path sent after
+    /// that cut as well.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_scratch_note_a_summary_carries_is_sent_after_a_later_cut() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("first prompt"));
+        conversation.push_composed_from(
+            Message::user("scratch is /tmp/scratch-xyz"),
+            Composed::Notice,
+            Provenance::Driver,
+        );
+        conversation.scratch_was_said();
+        for round in 0..20 {
+            a_read_round(&mut conversation, round);
+        }
+        let boundary = conversation
+            .compaction_boundary()
+            .expect("something to compact");
+        conversation.compacted(boundary, "summary");
+        for n in 0..6 {
+            an_exchange(&mut conversation, &format!("later {n}"));
+        }
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        assert!(cut > 1, "the summary has to be passed");
+        conversation.cut_for_retrieval(cut);
+
+        let sent = request_texts(&conversation);
+        let holding_path = sent
+            .iter()
+            .filter(|text| text.contains("/tmp/scratch-xyz"))
+            .count();
+        assert_eq!(holding_path, 1, "{sent:?}");
     }
 
     /// RETRIEVE-10. Nothing is pinned where the cut passes nothing to carry, so a plain bot
