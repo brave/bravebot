@@ -2629,8 +2629,10 @@ fn a_denied_read_refuses_a_confined_read_of_a_file_under_another_case_in_a_casef
     let Some(flagged) = casefold_directory(&places.session) else {
         return;
     };
-    std::fs::write(flagged.join("Server.pem"), "held-pem\n").expect("a file");
-    std::fs::write(flagged.join("notes.txt"), "kept-notes\n").expect("a file");
+    for (file, contents) in [("Server.pem", "held-pem\n"), ("notes.txt", "kept-notes\n")] {
+        let written = std::fs::write(flagged.join(file), contents);
+        assert!(written.is_ok(), "{file} was not made: {written:?}");
+    }
     let directory = flagged.display().to_string();
 
     let spellings = ["Server.pem", "SERVER.PEM", "server.pem"];
