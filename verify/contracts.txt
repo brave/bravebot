@@ -6,7 +6,7 @@
 # `python3 contrib/check-verus-contracts.py --write` and say in the pull request why it changed.
 # docs/development/verification.md says how a contract is written and run.
 
-crates/core/src/colour_codes.rs::code_end: r => requires start + 2 <= bytes.len(), ensures r is Some ==> start + 2 <= r->Some_0 < bytes.len() && bytes@[r->Some_0 as int] == b'm', r is Some ==> r->Some_0 <= start + 2 + most,
+crates/core/src/colour_codes.rs::code_end: r => ensures r is Some ==> start + 2 <= r->Some_0 < bytes.len() && bytes@[r->Some_0 as int] == b'm', r is Some ==> r->Some_0 <= start + 2 + most,
 crates/core/src/colour_codes.rs::code_end/loop: invariant parameters == start + 2, room == bytes.len() - parameters, taken <= room, decreases room - taken,
 crates/core/src/command.rs::?: r => ensures r == crate::spec::null_device(*path),
 crates/core/src/command.rs::opens_no_file: r => ensures r == crate::spec::opens_no_file(*self),
@@ -64,7 +64,7 @@ crates/core/src/policy.rs::asks: r => ensures r == crate::spec::write_reason_ask
 crates/core/src/policy.rs::write_reason: r => ensures crate::spec::write_reason_is_sound(facts, r),
 crates/core/src/policy.rs::asks: r => ensures r == crate::spec::reason_asks(self),
 crates/core/src/policy.rs::run_reason: r => ensures crate::spec::run_reason_is_sound(facts, r),
-crates/core/src/policy.rs::output_label: r => requires opaque.integrity == Integrity::Untrusted, ensures crate::spec::output_label_is_sound(facts, opaque, r.0),
+crates/core/src/policy.rs::output_label: r => ensures crate::spec::output_label_is_sound(facts, crate::spec::untrusted(opaque), r.0),
 crates/core/src/policy.rs::precommitted: r => ensures r == spec_precommitted(*self, *slot),
 crates/core/src/policy.rs::precommitted_into: r => ensures r == spec_precommitted_into(*self, *slot, destination@),
 crates/core/src/policy.rs::deny: r => ensures spec_context(*final(self)) == spec_context(*old(self)),
@@ -143,6 +143,7 @@ crates/core/src/command.rs::discards: assumes external_body
 crates/core/src/command.rs::clone: assumes external
 crates/core/src/compare.rs::same_path_buf: assumes external_body
 crates/core/src/compare.rs::is_number: assumes external_body
+crates/core/src/credentials.rs::escape_at: assumes requires
 crates/core/src/policy.rs::Declassification: assumes external_body
 crates/core/src/policy.rs::authorise: assumes external_body
 crates/core/src/policy.rs::ExSink: assumes external_trait_specification

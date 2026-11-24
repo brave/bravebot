@@ -81,6 +81,10 @@ mutation: sextet_of names a value of sixty-four or more for a base64 character
 file: crates/core/src/credentials.rs
 replace: Some(63) => Some(64)
 
+mutation: code_end reads past the end of the bytes for an offset at their end
+file: crates/core/src/colour_codes.rs
+replace: let too_short = start > bytes.len() || bytes.len() - start < 2; => let too_short = false;
+
 mutation: taint takes the first input's confidentiality, so a private second input comes out public
 file: crates/core/src/spec.rs
 replace: confidentiality: join(a.confidentiality, b.confidentiality), => confidentiality: a.confidentiality,
@@ -168,6 +172,10 @@ replace: if facts.vouched { => if true {
 mutation: RunReason::asks treats an ask rule as no prompt
 file: crates/core/src/policy.rs
 replace: let allowed = ruling == crate::permissions::Ruling::Allow; => let allowed = ruling != crate::permissions::Ruling::Deny;
+
+mutation: output_label keeps the integrity of the opaque label it is passed
+file: crates/core/src/policy.rs
+replace: let opaque = Label::new(Integrity::Untrusted, opaque.confidentiality); => let opaque = Label::new(opaque.integrity, opaque.confidentiality);
 
 mutation: output_label gives a trusted proof's label to a line that asked for a scope
 file: crates/core/src/policy.rs

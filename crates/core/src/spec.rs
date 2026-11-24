@@ -247,6 +247,11 @@ pub(crate) open spec fn run_reason_is_sound(facts: RunFacts, reason: RunReason) 
         })
 }
 
+/// `label` with its integrity untrusted and its confidentiality kept.
+pub open spec fn untrusted(label: Label) -> Label {
+    Label { integrity: Integrity::Untrusted, confidentiality: label.confidentiality }
+}
+
 /// What labelling a line's output has to hold.
 ///
 /// Output is trusted only where the audited table proved it so or the person vouched for every
