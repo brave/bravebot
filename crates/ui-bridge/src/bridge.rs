@@ -835,8 +835,17 @@ impl Bridge {
             let settings = crate::settings::layers(Some(&directory), self.settings.as_deref());
             take_back_checkouts(open, &record, &settings);
         }
+        let loops = self
+            .open
+            .get(&handle)
+            .and_then(|open| resumed_loops(open, &directory, self.settings.as_deref()));
 
         let mut opened = self.recount(&handle, &directory, &record, auto_vetting);
+        // The line is the person's, in their language (OPEN-3, OPEN-7). Null where nothing is
+        // open, so the window shows nothing (OPEN-6).
+        opened["openLoops"] = loops
+            .filter(|loops| !loops.is_empty())
+            .map_or(Value::Null, |loops| json!(loops.line()));
         opened["settingsRules"] = rules;
         opened["scratch"] = self.scratch_report(&handle);
         if let Some(open) = self.open.get(&handle)
@@ -4769,6 +4778,22 @@ fn say_open_loops(state: &mut State, workspace: &Workspace) -> Option<String> {
     let loops = crate::open_loops::of(state, workspace);
     let line = loops.to_the_person();
     state.open_loops.ended_with(loops).then_some(line)
+}
+
+/// The open loops the session `open` resumed with, worked out again from its record and from disk,
+/// and kept as the set the person was shown (OPEN-6). `None` where the session's workspace cannot
+/// be made.
+fn resumed_loops(
+    open: &Open,
+    directory: &Path,
+    settings: Option<&Path>,
+) -> Option<bravebot_agent::open_loops::Loops> {
+    let settings = crate::settings::layers(Some(directory), settings);
+    let workspace = with_session_checkouts(open, session_workspace(open, &settings).ok()?);
+    let mut state = open.state.lock().ok()?;
+    let loops = crate::open_loops::resumed(&state, &workspace);
+    state.loops_shown = loops.clone();
+    Some(loops)
 }
 
 /// As a session is forked, place the names the parent's file tools reached as the child's, so the

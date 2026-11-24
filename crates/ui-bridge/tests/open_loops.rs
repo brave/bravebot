@@ -35,14 +35,7 @@ struct Window {
 impl Window {
     /// A bridge whose model is the scripted endpoint, on a project the person trusted.
     fn on(project: &Path, endpoint: &str) -> (Self, String) {
-        // Beside the project and not in it, so the file grants on every host (PERM-14).
-        let settings = project.with_file_name(format!(
-            "{}-test-settings.json",
-            project
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("project")
-        ));
+        let settings = Self::settings_of(project);
         std::fs::write(
             &settings,
             json!({"model": "open-loops-test/test", "provider": {"open-loops-test": {
@@ -51,16 +44,33 @@ impl Window {
             .to_string(),
         )
         .unwrap();
+        let mut window = Self::with_settings(settings);
+        let made = window.call("session.new", json!({"directory": project}));
+        let session = made["session"].as_str().unwrap().to_string();
+        window.call("trust.reply", json!({"session": session, "trusted": true}));
+        (window, session)
+    }
+
+    /// A bridge reading `settings`, with no session open.
+    fn with_settings(settings: PathBuf) -> Self {
         let (sent, events) = mpsc::channel();
         let bridge = Bridge::new(Box::new(move |event| {
             let _ = sent.send(event);
         }))
         .with_settings(Some(settings));
-        let mut window = Self { bridge, events };
-        let made = window.call("session.new", json!({"directory": project}));
-        let session = made["session"].as_str().unwrap().to_string();
-        window.call("trust.reply", json!({"session": session, "trusted": true}));
-        (window, session)
+        Self { bridge, events }
+    }
+
+    /// The settings file `on` writes for `project`. Beside the project and not in it, so the file
+    /// grants on every host (PERM-14).
+    fn settings_of(project: &Path) -> PathBuf {
+        project.with_file_name(format!(
+            "{}-test-settings.json",
+            project
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("project")
+        ))
     }
 
     fn call(&mut self, method: &str, params: Value) -> Value {
@@ -207,4 +217,56 @@ fn a_desktop_turn_saves_its_work_and_the_files_it_wrote() {
         .filter_map(bravebot_session::sessions::StoredPath::to_path)
         .collect();
     assert_eq!(written, [project.join("out.txt")]);
+}
+
+/// OPEN-6: a session the desktop wrote, reopened, replies with the line naming what its last turn
+/// left open: the file written after the failed command is an unbuilt change, and the failed
+/// command is still the last one. The line names no path. The project is not a
+/// repository, so nothing is uncommitted.
+#[test]
+fn a_reopened_session_replies_with_what_it_left_open() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("open-loops-desktop-reopened");
+    let endpoint = serve(vec![(
+        "FAIL-THEN-WRITE",
+        vec![
+            endpoint::tool("run", json!({"command": "ls no-such-file"})),
+            endpoint::tool(
+                "write_file",
+                json!({"path": "out.txt", "contents": "written by the turn\n"}),
+            ),
+            endpoint::answer(),
+        ],
+    )]);
+    let (mut window, session) = Window::on(&project, &endpoint);
+    let done = window.turn(&session, "FAIL-THEN-WRITE");
+    assert_eq!(done.name, "turn.done", "{:?}", done.data);
+    let id = done.data["id"]
+        .as_str()
+        .expect("the record's id")
+        .to_string();
+
+    // The first window closes and waits for what it was still doing, so the record it held is free.
+    assert!(
+        window.bridge.shut_down(std::time::Duration::from_secs(10)),
+        "the first window's work did not end"
+    );
+    drop(window);
+    let mut reopened = Window::with_settings(Window::settings_of(&project));
+    let opened = reopened.call("session.open", json!({"directory": project, "id": id}));
+
+    let line = opened["openLoops"].as_str().expect("an open-loops line");
+    assert_eq!(
+        line,
+        bravebot_agent::open_loops::Loops {
+            unbuilt_changes: true,
+            failed_command: true,
+            ..Default::default()
+        }
+        .line()
+    );
+    assert!(!line.contains("out.txt"), "{line}");
+    assert!(!line.contains(&*project.to_string_lossy()), "{line}");
 }
