@@ -308,6 +308,27 @@ verus! {
 pub uninterp spec fn spec_context<'sink, S: Sink>(policy: Policy<'sink, S>) -> Integrity;
 }
 
+// What the settings file's rules say about each action a gate refuses on a `deny` rule.
+// `Permissions` matches patterns against paths, hosts and words, which Verus does not read, so
+// each is uninterpreted: `Policy::rules_for_*` are assumed to return them, and a contract says
+// what a gate does with the answer.
+#[cfg(verus_keep_ghost)]
+verus! {
+pub uninterp spec fn spec_rules_for_host<'sink, S: Sink>(policy: Policy<'sink, S>, host: Seq<char>)
+    -> crate::permissions::Decision;
+pub uninterp spec fn spec_rules_for_search<'sink, S: Sink>(policy: Policy<'sink, S>)
+    -> crate::permissions::Decision;
+pub uninterp spec fn spec_rules_for_mcp<'sink, S: Sink>(
+    policy: Policy<'sink, S>,
+    alias: Seq<char>,
+    tool: Seq<char>,
+) -> crate::permissions::Decision;
+pub uninterp spec fn spec_rules_for_read<'sink, S: Sink>(policy: Policy<'sink, S>, path: Seq<char>)
+    -> crate::permissions::Decision;
+pub uninterp spec fn spec_rules_for_edit<'sink, S: Sink>(policy: Policy<'sink, S>, path: Seq<char>)
+    -> crate::permissions::Decision;
+}
+
 // A refusal's message is a `String` built by `format!`, which Verus does not read, so a contract
 // says only whether a gate refused. Opaque to Verus, and unchanged in a build.
 #[cfg(verus_keep_ghost)]
@@ -1878,12 +1899,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     /// Refuse a fetch from `host` a `deny` rule covers.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Err <==> spec_rules_for_host(*old(self), host@) == crate::permissions::Decision::Ruled(
+                crate::permissions::Ruling::Deny,
+            ),
+    ))]
     fn refuse_a_denied_host(&mut self, host: &str) -> Gated<()> {
         let decision = self.rules_for_host(host);
         self.refuse_if_denied("fetch", decision, host)
     }
 
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_rules_for_host(*self, host@),
+    ))]
     fn rules_for_host(&self, host: &str) -> crate::permissions::Decision {
         self.permissions.for_host(host)
     }
@@ -2024,12 +2055,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// [`Policy::before_fetch_rules`] refuses a fetch: a rule that refuses is a statement that the
     /// search does not happen, so a prompt would put a question to somebody that their settings file
     /// has already closed.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Err <==> spec_rules_for_search(*old(self)) == crate::permissions::Decision::Ruled(
+                crate::permissions::Ruling::Deny,
+            ),
+    ))]
     pub fn before_search_rules(&mut self) -> Gated<()> {
         let decision = self.rules_for_search();
         self.refuse_if_denied("search", decision, "a web search")
     }
 
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_rules_for_search(*self),
+    ))]
     fn rules_for_search(&self) -> crate::permissions::Decision {
         self.permissions.for_search()
     }
@@ -2214,6 +2255,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// Matched on the alias and the tool and never on the arguments, which are what the planner
     /// wrote (SERVERS-7). In the same position as [`Policy::before_fetch_rules`], for its reason.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Err <==> spec_rules_for_mcp(*old(self), alias@, tool@)
+                == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Deny),
+    ))]
     pub fn before_mcp_call_rules(&mut self, alias: &str, tool: &str) -> Gated<()> {
         let decision = self.rules_for_mcp(alias, tool);
         let call = server_call(alias, tool);
@@ -2221,6 +2267,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_rules_for_mcp(*self, alias@, tool@),
+    ))]
     fn rules_for_mcp(&self, alias: &str, tool: &str) -> crate::permissions::Decision {
         self.permissions.for_mcp(alias, tool)
     }
@@ -3109,6 +3159,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// whether there is anything to prompt about.
     ///
     /// `what` is a routing value: a path, or a stage's argv. Never content.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Err <==> decision == crate::permissions::Decision::Ruled(
+                crate::permissions::Ruling::Deny,
+            ),
+    ))]
     fn refuse_if_denied(
         &mut self,
         gate: &'static str,
@@ -3138,18 +3194,32 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Reads are otherwise ungated, since a read changes nothing and stays inside the workspace.
     /// A deny rule is the one thing that stops one, which is what makes it able to say a file is
     /// off limits rather than merely unvouched for.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Err <==> spec_rules_for_read(*old(self), path@) == crate::permissions::Decision::Ruled(
+                crate::permissions::Ruling::Deny,
+            ),
+    ))]
     pub fn before_read(&mut self, path: &str) -> Gated<()> {
         let decision = self.rules_for_read(path);
         self.refuse_if_denied("read", decision, path)
     }
 
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_rules_for_read(*self, path@),
+    ))]
     fn rules_for_read(&self, path: &str) -> crate::permissions::Decision {
         self.permissions
             .for_path(crate::permissions::Subject::Read, path)
     }
 
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_rules_for_edit(*self, path@),
+    ))]
     fn rules_for_edit(&self, path: &str) -> crate::permissions::Decision {
         self.permissions
             .for_path(crate::permissions::Subject::Edit, path)
@@ -3191,6 +3261,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Both families of rule are consulted: a path nothing may read is a path nothing may replace
     /// either, so a `Read` deny rule stops a write to it. Claude Code does the same, and the reason
     /// is that a file whose contents are off limits is not protected if it can be overwritten.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Err <==> spec_rules_for_edit(*old(self), path@) == crate::permissions::Decision::Ruled(
+                crate::permissions::Ruling::Deny,
+            ) || spec_rules_for_read(*old(self), path@) == crate::permissions::Decision::Ruled(
+                crate::permissions::Ruling::Deny,
+            ),
+    ))]
     pub fn refuse_denied_write(&mut self, path: &str) -> Gated<()> {
         // Both asked before either refusal is recorded, so each answer is the rules as they were.
         let edited = self.rules_for_edit(path);
@@ -15285,6 +15363,25 @@ five
         assert!(
             policy.before_plan_rules(&line).is_err(),
             "a redirection wrote to a path a rule denied"
+        );
+    }
+
+    /// A path nothing may read is a path nothing may replace, so a `Read` deny rule refuses a
+    /// redirection into it as well as a read of it, with no `Edit` rule about it at all.
+    #[test]
+    fn a_rule_denying_reads_of_a_path_denies_a_redirection_to_it() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &["Read(//work/secret.txt)"],
+            &[],
+            &[],
+        ));
+
+        let mut line = plan_of(vec![step_named("echo", &["x"])]);
+        line.writes = vec![std::path::PathBuf::from("/work/secret.txt")];
+        assert!(
+            policy.before_plan_rules(&line).is_err(),
+            "a redirection replaced a path a rule says nothing may read"
         );
     }
 
