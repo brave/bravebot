@@ -167,8 +167,10 @@ Hai assessment without assuming either assessment is authoritative or required.
 
 ## Step 6: is it in a released build?
 
-An award needs the reported code to be in a release. Code that only `<remote>/main` holds has
-reached nobody who runs bravebot, and is fixed before it does. A release is a `v<version>` tag that
+Check whether the reported code has shipped in a published release. Record the affected
+release (or its absence) as one input to bounty eligibility in step 7; unreleased code does
+not, by itself, determine whether an award is recommended. 
+A release is a `v<version>` tag that
 `make github-release` pushes and GitHub lists as a published release
 ([releasing.md](../../../docs/development/releasing.md)). What the report says about the affected
 version is a claim to check, like the rest of it.
@@ -362,7 +364,7 @@ Write the body to a file. Then explain the finding to the user in plain words be
 they can decide without reading the body first:
 
 - what the report claims, and what you checked and reproduced;
-- whether a release holds the code, and so whether it is awarded (step 6);
+- whether a release holds the code, and how that bears on the award recommendation (step 7);
 - who has to do what for it to matter, and what it buys an attacker;
 - why the severity is what you chose, and what else you considered;
 - whether it is a defect to fix or a behaviour that could be documented instead.
