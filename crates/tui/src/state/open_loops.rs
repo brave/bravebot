@@ -48,23 +48,17 @@ impl Session {
     /// Show the person one line where the open loops changed since the last turn ended (OPEN-3).
     pub fn say_open_loops(&mut self, workspace: &bravebot_agent::Workspace) {
         let loops = self.open_loops(workspace);
-        if loops == self.loops_shown {
-            return;
-        }
         let line = open_line(&loops);
-        self.loops_shown = loops;
-        self.note(line);
+        if self.open_loops.ended_with(loops) {
+            self.note(line);
+        }
     }
 
     /// What the planner is told at the start of the next turn, where the open loops changed since
     /// it was last told (OPEN-4). Read from the set the last turn ended with, so the turn does not
     /// ask git again.
     pub fn open_loops_for_the_planner(&mut self) -> Option<String> {
-        if self.loops_shown == self.loops_told {
-            return None;
-        }
-        self.loops_told = self.loops_shown.clone();
-        self.loops_told.to_the_planner()
+        self.open_loops.for_the_planner()
     }
 
     /// Carry out `/unfinished`: every open loop, with what to act on (OPEN-5). Starts no turn and
