@@ -329,6 +329,15 @@ pub uninterp spec fn spec_rules_for_edit<'sink, S: Sink>(policy: Policy<'sink, S
     -> crate::permissions::Decision;
 }
 
+// The capabilities a run holds. `Policy` is opaque to Verus, so this is uninterpreted:
+// `Policy::capabilities_held` is assumed to return it, and `CapabilitySet`'s own functions are
+// proved.
+#[cfg(verus_keep_ghost)]
+verus! {
+pub uninterp spec fn spec_capabilities<'sink, S: Sink>(policy: Policy<'sink, S>)
+    -> crate::capability::CapabilitySet;
+}
+
 // A refusal's message is a `String` built by `format!`, which Verus does not read, so a contract
 // says only whether a gate refused. Opaque to Verus, and unchanged in a build.
 #[cfg(verus_keep_ghost)]
@@ -1728,7 +1737,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     /// Check that a capability was granted before it is exercised.
-    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> spec_capabilities(*old(self)).spec_holds(capability),
+    ))]
     pub fn before_capability(&mut self, capability: Capability) -> Gated<()> {
         let granted = self.capabilities_held().contains(&capability);
         if !granted {
@@ -1740,6 +1752,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     /// The capabilities this run holds, for a contract to read.
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            *r == spec_capabilities(*self),
+    ))]
     fn capabilities_held(&self) -> &crate::capability::CapabilitySet {
         &self.capabilities
     }
