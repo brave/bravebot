@@ -45,8 +45,10 @@ fn main() {
     // policy layer rather than here. Nothing is authorised by an argument.
     // nosemgrep: rust.lang.security.args.args
     let args = std::env::args().skip(1);
-    let settings = match launch("bravebot-acp", "speak ACP on stdin/stdout", args) {
-        Launch::Serve { settings } => settings,
+    // This program configures no diagnostic log, so `launch` refuses `--log-level` and never
+    // answers with a level.
+    let settings = match launch("bravebot-acp", "speak ACP on stdin/stdout", false, args) {
+        Launch::Serve { settings, .. } => settings,
         Launch::Version(line) => {
             println!("{line}");
             return;

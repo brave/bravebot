@@ -163,6 +163,7 @@ plan is asked of does not add one ([BACKEND-15](backends.md#BACKEND-15)).
 `verified-by: bravebot_agent::manifest::the_planning_requests_through_a_gateway_carry_no_tool_list_the_models_options_state`
 `verified-by: bravebot_agent::manifest::the_registry_and_the_kernel_schema_describe_the_same_tools`
 `verified-by: bravebot_agent::manifest::the_registry_offers_exactly_the_capabilities_the_clause_allows`
+`verified-by: bravebot_agent::manifest::a_step_whose_tool_the_registry_does_not_hold_is_refused_before_it_starts`
 `verified-by: bravebot_core::manifest::the_schema_names_exactly_the_tools_the_clause_allows`
 `verified-by: bravebot_core::manifest::no_action_in_the_schema_fills_a_slot`
 `verified-by: bravebot_agent::manifest_server_calls::a_call_the_schema_or_the_list_cannot_hold_runs_nothing`
@@ -207,6 +208,10 @@ the text following the separator byte for byte, as the search tool does
 `verified-by: bravebot_agent::manifest::a_read_step_reads_the_path_the_lock_holds`
 `verified-by: bravebot_agent::manifest::a_listing_step_lists_the_directory_and_pattern_the_lock_holds`
 `verified-by: bravebot_agent::manifest::a_search_step_searches_the_pattern_directory_and_include_the_lock_holds`
+`verified-by: bravebot_agent::manifest::a_connector_fetch_and_act_send_what_the_lock_holds_and_not_what_the_step_names`
+`verified-by: bravebot_agent::manifest::a_server_call_and_read_name_the_alias_and_tool_the_lock_holds`
+`verified-by: bravebot_agent::manifest::an_apply_step_names_the_server_the_lock_holds`
+`verified-by: bravebot_agent::manifest::an_apply_step_reads_the_tools_the_lock_holds_and_not_the_ones_it_names`
 `verified-by: bravebot_core::manifest::a_connector_fetch_locks_every_routing_field_and_an_omitted_one_as_no_value`
 `verified-by: bravebot_agent::connectors::a_default_never_replaces_a_value_the_plan_gave_in_another_shape`
 `verified-by: bravebot_core::manifest::a_connector_plan_locks_every_routing_field_and_not_its_target_slot`

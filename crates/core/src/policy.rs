@@ -1589,6 +1589,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            spec_context(*final(self)) == spec_context(*old(self)),
+    ))]
     fn deny(&mut self, gate: &'static str, principle: Principle, message: String) -> Denial {
         self.refusals.push(format!("{gate}: {message}"));
         self.sink.emit(Event::GateBlocked {
@@ -1601,6 +1605,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        ensures
+            spec_context(*final(self)) == spec_context(*old(self)),
+    ))]
     fn allow(&mut self, gate: &'static str, detail: String) {
         self.sink.emit(Event::GatePassed { gate, detail });
     }
@@ -3793,6 +3801,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::value::spec_label_of(
                 series,
             ),
+            spec_context(*final(self)) == spec_context(*old(self)),
     ))]
     pub fn record_answers(
         &mut self,
@@ -10798,9 +10807,12 @@ fn names_a_path(program: &str) -> bool {
 /// Nothing is resolved, only re-spelled, so a name outside the root keeps just its own and the rule
 /// about the directory holding it decides.
 ///
-/// Where a backslash separates, the root and the operand are compared as keys. The root arrives as
-/// the host resolved it, `\\?\C:\work`, and a line spells the same directory `C:\work`, whose first
-/// component is not the root's, so compared as paths the two never nest (TRUST-18).
+/// The root and the operand are compared by [`crate::spelling::below`], in three steps. As paths
+/// first, which is the only comparison a root that is not text has. Then, where a backslash
+/// separates, as keys: the root arrives as the host resolved it, `\\?\C:\work`, and a line spells
+/// the same directory `C:\work`, whose first component is not the root's, so compared as paths the
+/// two never nest (TRUST-18). Then component by component in canonical Unicode form, so an operand
+/// spelled `cafe\u{301}` is inside a root spelled `caf\u{e9}` and the reverse (TRUST-18).
 ///
 /// [TRUST-9]: ../../../docs/specs/trust-map.md
 /// [TRUST-18]: ../../../docs/specs/trust-map.md
@@ -10809,20 +10821,21 @@ fn keys_for_the_map(
     operand: &str,
     backslash_separates: bool,
 ) -> Vec<String> {
-    let (root, named) = match backslash_separates {
-        true => (
-            std::path::PathBuf::from(&*crate::spelling::to_key(&root.to_string_lossy(), true)),
-            std::path::PathBuf::from(&*crate::spelling::to_key(operand, true)),
-        ),
-        false => (root.to_path_buf(), std::path::PathBuf::from(operand)),
-    };
-    let root = root.as_path();
-    let named = named.as_path();
     let mut keys = vec![operand.to_string()];
-    match named.strip_prefix(root) {
-        Ok(inside) => keys.push(inside.to_string_lossy().into_owned()),
-        Err(_) if root.starts_with(named) => keys.push(String::new()),
-        Err(_) => {}
+    match crate::spelling::below(root, operand, backslash_separates) {
+        Some(inside) => keys.push(inside),
+        None => {
+            // An operand that is an ancestor of a root that is not text holds it as paths, which
+            // is the one comparison such a root has (PATH-003).
+            let holds_the_root = root.starts_with(std::path::Path::new(operand))
+                || root.to_str().is_some_and(|root| {
+                    crate::spelling::below(std::path::Path::new(operand), root, backslash_separates)
+                        .is_some()
+                });
+            if holds_the_root {
+                keys.push(String::new());
+            }
+        }
     }
     keys
 }
@@ -13058,6 +13071,55 @@ five
         );
     }
 
+    /// READ-1: the label of a reserved read is fixed from the trust map when the planner asks, so a
+    /// path nobody vouched for is reserved untrusted and a vouched one trusted, in the reference
+    /// handed back and in the slot. An implementation that gives every reservation
+    /// `Integrity::Trusted` hands the planner a trusted-looking reference to a file it may not see.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_reservation_takes_its_label_from_the_trust_map_when_it_is_made() {
+        let mut sink = RecordingSink::new();
+        let mut store = crate::trust::TrustStore::new("/work");
+        store.trust("src");
+        let mut policy = Policy::begin(
+            routing_with("task", "tidy up"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .unwrap()
+        .with_trust(store);
+
+        let mut slots = SlotStore::new();
+        for (index, (path, trusted)) in [("src/main.rs", true), ("vendor/main.rs", false)]
+            .into_iter()
+            .enumerate()
+        {
+            let slot = SlotId::new(format!("ref:{index}"));
+            let reference = policy
+                .defer(
+                    "read_file",
+                    slot.clone(),
+                    path,
+                    &Labelled::trusted(path.to_string()),
+                    10,
+                    &mut slots,
+                )
+                .expect("a file may be reserved");
+            assert_eq!(
+                reference.label.is_trusted(),
+                trusted,
+                "{path} was reserved at the wrong label: {}",
+                reference.label
+            );
+            assert_eq!(
+                slots.label_of(&slot).map(|label| label.is_trusted()),
+                Some(trusted),
+                "the slot for {path} holds the wrong label"
+            );
+        }
+    }
+
     #[test]
     fn routing_accepts_trusted_public_values() {
         let mut r = Routing::new();
@@ -13313,6 +13375,53 @@ five
             .declassify(&SlotId::new("other"), Label::untrusted_private())
             .expect_err("unlisted slot must be refused");
         assert_eq!(err.principle, Principle::Confinement);
+    }
+
+    /// A release records the label the bytes leave with: public, at the integrity they had. A
+    /// release recorded as private would tell the trail the bytes never left.
+    #[test]
+    fn a_release_is_recorded_public_at_the_integrity_it_had() {
+        let mut sink = RecordingSink::new();
+        let summary = SlotId::new("summary");
+        let issue = SlotId::new("issue");
+        {
+            let mut policy = Policy::begin(
+                routing_with("path", "out.txt"),
+                ReleasePlan::new()
+                    .allow(summary.clone())
+                    .allow_into(issue.clone(), "github brave/bravebot"),
+                all_capabilities(),
+                &mut sink,
+            )
+            .unwrap();
+
+            policy
+                .declassify(&summary, Label::untrusted_private())
+                .unwrap();
+            policy
+                .declassify_into_place(&issue, "github brave/bravebot", Label::trusted_private())
+                .unwrap();
+        }
+
+        let recorded: Vec<(&str, Label, Label)> = sink
+            .events()
+            .iter()
+            .filter_map(|e| match e {
+                Event::Declassified { slot, from, to, .. } => Some((slot.as_str(), *from, *to)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            recorded,
+            [
+                (
+                    "summary",
+                    Label::untrusted_private(),
+                    Label::untrusted_public()
+                ),
+                ("issue", Label::trusted_private(), Label::trusted_public()),
+            ]
+        );
     }
 
     /// A connector act's slot leaves only to the one place its plan named, fixed before anything
@@ -21624,6 +21733,90 @@ five
             [r"D:\work\project\x.txt"],
             "the same path on another drive was named inside the project"
         );
+    }
+
+    /// An operand spelled in another Unicode form of the workspace root is the same directory on a
+    /// volume that opens both, so it is named relative to the project as well, in either direction.
+    /// Rejects comparing the root and the operand byte by byte, which leaves the project's own
+    /// relative rules unasked, and a prefix match, which names `cafe\u{301}x` inside `caf\u{e9}`.
+    #[test]
+    fn an_operand_in_another_unicode_form_of_the_root_is_also_named_relative_to_the_project() {
+        let nfc = "/caf\u{e9}";
+        let nfd = "/cafe\u{301}";
+        for (root, operand_root) in [(nfc, nfd), (nfd, nfc)] {
+            let operand = format!("{operand_root}/held/x.txt");
+            assert_eq!(
+                keys_for_the_map(std::path::Path::new(root), &operand, false),
+                [operand.as_str(), "held/x.txt"],
+                "{operand} was not named relative to {root}"
+            );
+            assert_eq!(
+                keys_for_the_map(std::path::Path::new(root), operand_root, false),
+                [operand_root, ""],
+                "{operand_root} was not named as the project {root}"
+            );
+            let sibling = format!("{operand_root}x/held/x.txt");
+            assert_eq!(
+                keys_for_the_map(std::path::Path::new(root), &sibling, false),
+                [sibling.as_str()],
+                "{sibling} was named inside {root}"
+            );
+        }
+    }
+
+    /// A root whose name is not text is held by an operand that names one of its ancestors, as it
+    /// was when the two were compared as paths, and an operand spelled as the root's lossy rendering
+    /// is a different directory and holds nothing (PATH-003). Rejects a comparison that reads the
+    /// root as text and so has no answer for a root that is not.
+    #[cfg(unix)]
+    #[test]
+    fn an_operand_that_holds_a_root_that_is_not_text_is_named_as_the_project() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = std::path::Path::new(std::ffi::OsStr::from_bytes(b"/home/me-\xff/project"));
+        for held in ["/", "/home", "/home/"] {
+            assert_eq!(
+                keys_for_the_map(root, held, false),
+                [held, ""],
+                "{held} holds the project and was not named as it"
+            );
+        }
+        for other in ["/home/me-\u{FFFD}", "/home/me-\u{FFFD}/project", "/homer"] {
+            assert_eq!(
+                keys_for_the_map(root, other, false),
+                [other],
+                "{other} is another directory than the project"
+            );
+        }
+    }
+
+    /// A relative rule of the project decides a line reading a file spelled in another Unicode form
+    /// of the root, and a line reading a sibling that only starts like the root is not that
+    /// project's. Rejects asking the map the operand's own spelling alone: that name is outside
+    /// the project's rules, so the project's rule marking `vendor` untrusted is never consulted.
+    #[test]
+    fn a_line_reading_a_distrusted_file_spelled_in_another_unicode_form_of_the_root_is_untrusted() {
+        for (root, operand_root) in [
+            ("/caf\u{e9}", "/cafe\u{301}"),
+            ("/cafe\u{301}", "/caf\u{e9}"),
+        ] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink)
+                .with_trust(trusting(root, &["."], &["vendor"]))
+                .with_root(std::path::Path::new(root));
+            let reading = |operand: &str| reading_in(root, operand);
+            assert!(
+                !label_of(
+                    &mut policy,
+                    &reading(&format!("{operand_root}/vendor/lib.js"))
+                )
+                .is_trusted(),
+                "{operand_root}/vendor/lib.js read as trusted under {root}"
+            );
+            assert!(
+                !label_of(&mut policy, &reading(&format!("{root}/vendor/lib.js"))).is_trusted(),
+                "the root's own spelling read as trusted"
+            );
+        }
     }
 
     /// The session's own directory arrives as the host resolved it and a key below it on a drive

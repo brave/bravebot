@@ -489,6 +489,7 @@ impl Bridge {
             }
             "drops.classify" => crate::attached::classified(request),
             "pastes.check" => crate::attached::paste_check(request),
+            "pastes.clean" => crate::attached::paste_clean(request),
             "turn.cancel" => self.cancel_turn(request),
             "turn.interject" => self.interject_turn(request),
             "session.enhance" => self.enhance_draft(request),
@@ -582,6 +583,7 @@ impl Bridge {
             "usage_ping.set" => crate::usage_ping::set(request),
             "crash_reports.get" => Ok(crate::crash_reports::get()),
             "crash_reports.set" => crate::crash_reports::set(request),
+            "diagnostic_log.set" => crate::diagnostic_log::set(request),
             "usage_ping.notice_due" => {
                 Ok(json!({"due": bravebot_session::store::usage_ping_notice_due()}))
             }
@@ -3930,13 +3932,13 @@ impl Bridge {
                 ));
             }
             let path = request.string("path")?;
-            if path.is_empty() || path.chars().any(char::is_control) {
+            if !bravebot_agent::watch::armable(&path) {
                 return Err(Failure::bad_request("Choose a project file."));
             }
-            if !watches.live().iter().any(|w| w.path() == path) {
-                let workspace = Workspace::new(open.project.clone())
-                    .map_err(|_| Failure::bad_request("Project unavailable."))?;
-                watches.arm(path.clone(), workspace.root().to_path_buf(), 0, workspace.look(&path, workspace.root()), std::time::Instant::now())
+            let workspace = Workspace::new(open.project.clone())
+                .map_err(|_| Failure::bad_request("Project unavailable."))?;
+            if watches.watching(&workspace, &path).is_none() {
+                watches.arm(path.clone(), workspace.root().to_path_buf(), bravebot_agent::watch::BY_THE_PERSON, workspace.look(&path, workspace.root()), std::time::Instant::now())
                     .map_err(|_| Failure::bad_request("Cannot watch this file. It must be inside the project, with fewer than eight active watches."))?;
             }
         } else if request.method == "watches.stop" {
@@ -5979,6 +5981,73 @@ mod coverage_tests {
             listed["commands"],
             json!([]),
             "the revoked command came back"
+        );
+    }
+
+    /// SERVERS-7: the desktop rewind ends the private arm as the terminal's undo does. A conversation
+    /// the planner was shown private content in (a server's answer a person vetted) asks every later
+    /// call; undoing the turn that let the content out leaves the conversation public, and undoing
+    /// only a later turn leaves it private. The turn that lets the content out is made by marking
+    /// the conversation private, which is what a turn that vets does to it, and the points are
+    /// opened as a turn opens them. It is in this crate and not in `tests/rewind.rs` because the
+    /// conversation's confidentiality is not on the wire, and a turn that vets needs a server.
+    ///
+    /// Rejects: a rewind that keeps the live conversation (private stays after the vet turn is
+    /// undone), a snapshot taken after the turn, and one that clears the arm whichever turn is undone.
+    #[test]
+    fn undoing_the_turn_that_let_private_content_out_makes_the_desktop_conversation_public_again() {
+        use bravebot_core::label::{Confidentiality, Label};
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("rewind-private-arm");
+        std::fs::create_dir_all(&directory).unwrap();
+        let directory = directory.canonicalize().unwrap();
+        let mut state = State::fresh(TrustStore::new(&directory));
+        let workspace = Workspace::new(&directory).unwrap();
+        for (index, prompt) in ["earlier", "vet the answer", "after it"]
+            .into_iter()
+            .enumerate()
+        {
+            open_rewind_point(&mut state, &workspace, prompt);
+            if index == 1 {
+                state.conversation.observed(Label::trusted_private());
+            }
+        }
+        assert_eq!(
+            state.conversation.holds(),
+            Confidentiality::Private,
+            "setup"
+        );
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = bridge.mint(Open::opened(directory.clone(), state, true, None, false));
+        let rewind = |bridge: &mut Bridge| {
+            let line = json!({"id": 1, "method": "session.rewind", "params": {
+                "session": handle, "steps": 1
+            }})
+            .to_string();
+            bridge.dispatch(&Request::parse(&line).unwrap()).unwrap();
+        };
+        let holds = |bridge: &Bridge| {
+            bridge.open[&handle]
+                .state
+                .lock()
+                .unwrap()
+                .conversation
+                .holds()
+        };
+
+        rewind(&mut bridge);
+        assert_eq!(
+            holds(&bridge),
+            Confidentiality::Private,
+            "undoing the turn after the vet ended the private arm"
+        );
+        rewind(&mut bridge);
+        assert_eq!(
+            holds(&bridge),
+            Confidentiality::Public,
+            "the conversation is still private after the turn that let the content out was undone"
         );
     }
 

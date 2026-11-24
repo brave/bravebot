@@ -20,7 +20,7 @@ documented-by: none (internal: the desktop is started as a host client by a pers
 
 The desktop application started by `bravebot-host` as one of its clients ([HOST-1](local-host.md#HOST-1)), so it and another client attach to the same session ([HOST-7](local-host.md#HOST-7)). In that mode the app is one window drawn from the shared view of [RPCVIEW-1](session-view.md#RPCVIEW-1), and it offers what the host offers a client and nothing else. The ordinary desktop, with its own agent process, its sessions, bots, settings and files, is started without `--bravebot-host-client` and runs none of this mode.
 
-Not here: the desktop attaching to a host that was already running when it started, which needs a decision of its own ([U4](../design/mobile/open-questions.md#u4-attaching-a-client-the-host-did-not-launch)), a session list of the person's saved sessions, attachments, bots, forks, watches, manifests, settings, file browsing, export and any other control the host does not offer ([the capability matrix](../design/mobile/desktop-prototype.md#capability-matrix)).
+Not here: the desktop attaching to a host that was already running when it started, which needs a decision of its own ([the end goal](../design/mobile/implementation-plan.md#end-goal-beyond-the-prototype)), a session list of the person's saved sessions, attachments, bots, forks, watches, manifests, settings, file browsing, export and any other control the host does not offer ([the capability matrix](../design/mobile/desktop-prototype.md#capability-matrix)).
 
 ## Clauses
 
@@ -62,6 +62,6 @@ The window offers no way to close a session. Closing its view of one sends nothi
 <a id="HOSTCLIENT-6"></a>
 ### HOSTCLIENT-6: the window ends with the host's channel, and says so
 
-When the host closes the channel, or the pipe to it fails, the window is told, says that the host ended the connection and why, offers nothing that needs it, and keeps what it last showed. It does not start an agent of its own in the host's place and it does not reconnect, because a program the host did not start cannot attach to a host ([U4](../design/mobile/open-questions.md#u4-attaching-a-client-the-host-did-not-launch)).
+When the host closes the channel, or the pipe to it fails, the window is told, says that the host ended the connection and why, offers nothing that needs it, and keeps what it last showed. It does not start an agent of its own in the host's place and it does not reconnect, because a program the host did not start cannot attach to a host ([HOST-13](local-host.md#HOST-13)).
 
 `verified-by: by-construction (ui/scripts/prototype-client.test.mjs closes the channel and holds that the state says it ended, with the reason, and that later actions are refused)`

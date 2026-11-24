@@ -45,7 +45,7 @@ import { reconnectingWords, type RetryDue } from '../retry'
 import { pointForPrompt, undoRow } from '../rewind'
 import { Answers, Approve } from './Approval'
 import { showToast } from '../toasts'
-import { EMPTY_STAGING, named, stageDrop, stagePaste, stageSummon, stageText, withoutMarker, type Staging, type SummonedBot } from '../staging'
+import { EMPTY_STAGING, named, pasteText, stageDrop, stagePaste, stageSummon, stageText, withoutMarker, type Staging, type SummonedBot } from '../staging'
 import { placeCards, summonedIn, summonMarker, type Placement, type Summon } from '../../shared/summons'
 import type { Drop } from '../../shared/drops'
 import type { Paste, PastedText } from '../../shared/pastes'
@@ -158,6 +158,8 @@ interface Props {
   doing: Doing
   pending: t.Asking | null
   problem: string | null
+  /** Show a problem in the error toast, which stays until it is dismissed. */
+  onProblem: (problem: string) => void
   collapsed: Record<Side, boolean>
   onToggle: (side: Side) => void
   /** Background sessions waiting on the reader, for the folded session list's toggle. */
@@ -351,6 +353,7 @@ export function Transcript({
   doing,
   pending,
   problem,
+  onProblem,
   collapsed,
   onToggle,
   attention,
@@ -548,6 +551,31 @@ export function Transcript({
     if (!live || paste.session !== live.handle) return
     if (paste.outcome.kind === 'too-large') {
       showToast('Too large to paste', paste.outcome.note, 'note')
+      return
+    }
+    if (paste.outcome.kind === 'unclean') {
+      // A failure, so the error toast, which stays until dismissed. A second failure shows it again.
+      setDismissed(null)
+      onProblem('The paste could not be checked for hidden characters, so try pasting again.')
+      return
+    }
+    if (paste.outcome.kind === 'text') {
+      // The text the bridge cleaned (PASTE-10), written over the selection as the browser's paste would be.
+      // The catalog note begins in lower case, as the terminal's status line shows it.
+      const note = paste.outcome.note
+      if (note) showToast('Paste cleaned', note.charAt(0).toUpperCase() + note.slice(1), 'note')
+      // A long paste folds behind a marker, as one the browser was left to insert would have.
+      const area = input.current?.shadowRoot?.querySelector('textarea')
+      const start = area?.selectionStart ?? draft.length
+      const end = area?.selectionEnd ?? start
+      const staging = live.staging ?? EMPTY_STAGING
+      const folds = stageText(staging, paste.outcome.text, draft, start, end)
+      if (folds) {
+        restage(live.handle, folds)
+        return
+      }
+      const next = pasteText(draft, start, end, paste.outcome.text)
+      if (next.draft !== draft) restage(live.handle, { staging, ...next })
       return
     }
     restage(live.handle, stagePaste(live.staging ?? EMPTY_STAGING, paste.outcome.picture, draft, caret()))

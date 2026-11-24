@@ -10316,6 +10316,101 @@ mod tests {
         );
     }
 
+    /// A watch the person typed is the same watch a turn arms: its fire is the driver's sentence
+    /// and begins a turn.
+    #[test]
+    fn a_person_arms_a_watch_and_it_fires_like_any_other() {
+        let mut s = session();
+        s.arm_watch_by_person("notes.md", ARMED_IN, saw("first"));
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_armed, number = 1, path = "notes.md")),
+            "arming said nothing"
+        );
+        assert!(s.watches()[0].armed_by_the_person());
+
+        let later = Instant::now() + Duration::from_secs(6);
+        let prompt = s
+            .watch_fired(later, |_, _| saw("second"))
+            .expect("a change to a watch the person armed did not begin a turn");
+        assert_eq!(prompt, watch::fired(1, "notes.md", watch::Change::Written));
+    }
+
+    /// The loop or goal is the person's own, so their watch gives way rather than ending it in
+    /// silence, and the note names the command that clears it.
+    #[test]
+    fn a_person_cannot_arm_a_watch_under_a_loop_or_a_goal_and_is_told_how_to_clear_it() {
+        let mut under_a_loop = session();
+        under_a_loop.start_loop(
+            crate::loops::request("5m watch"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
+        under_a_loop.arm_watch_by_person("notes.md", ARMED_IN, saw("first"));
+        assert!(under_a_loop.watches().is_empty());
+        assert!(under_a_loop.looping().is_some(), "the person's loop ended");
+        let said = t!(watch_refused_under_a_loop);
+        assert!(said.contains("/loop stop"), "{said}");
+        assert!(
+            under_a_loop
+                .transcript
+                .iter()
+                .any(|entry| entry.text == said),
+            "the person was not told why"
+        );
+
+        let mut under_a_goal = session();
+        under_a_goal.start_goal("cargo test exits 0".to_string());
+        under_a_goal.arm_watch_by_person("notes.md", ARMED_IN, saw("first"));
+        assert!(under_a_goal.watches().is_empty());
+        assert!(under_a_goal.goal.is_some(), "the person's goal ended");
+        let said = t!(watch_refused_under_a_goal);
+        assert!(said.contains("/goal clear"), "{said}");
+        assert!(
+            under_a_goal
+                .transcript
+                .iter()
+                .any(|entry| entry.text == said),
+            "the person was not told why"
+        );
+    }
+
+    /// The cap holds for the person as for a turn.
+    #[test]
+    fn a_person_arming_a_ninth_watch_is_refused() {
+        let mut s = session();
+        for n in 0..watch::MAX_LIVE {
+            s.arm_watch_by_person(&format!("{n}.md"), ARMED_IN, saw("first"));
+        }
+        assert_eq!(s.watches().len(), watch::MAX_LIVE);
+
+        s.arm_watch_by_person("ninth.md", ARMED_IN, saw("first"));
+        assert_eq!(s.watches().len(), watch::MAX_LIVE);
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_not_armed_full, count = watch::MAX_LIVE)),
+            "a refused ninth watch said nothing"
+        );
+    }
+
+    /// A typed path the session cannot reach is not armed, and the sentence is about the path the
+    /// person typed rather than a turn's request.
+    #[test]
+    fn a_path_the_person_cannot_reach_is_refused_and_said_so() {
+        let mut s = session();
+        s.arm_watch_by_person("/elsewhere/gone.md", ARMED_IN, watch::Looked::OutOfReach);
+        assert!(s.watches().is_empty());
+        assert!(
+            s.transcript.iter().any(
+                |entry| entry.text == t!(watch_refused_unreadable, path = "/elsewhere/gone.md")
+            ),
+            "a refused watch said nothing"
+        );
+    }
+
     /// A watch that outlived its session would start sending prompts at somebody who opened a
     /// conversation to read it, about a file that moved while nobody was here.
     ///
@@ -10467,6 +10562,22 @@ mod tests {
                 .iter()
                 .any(|entry| entry.text == t!(watch_none))
         );
+    }
+
+    /// `/watch` lists a watch the person armed as theirs, since no turn armed it and "armed by
+    /// turn 0" names a turn that never ran (FSWATCH-10).
+    #[test]
+    fn a_watch_the_person_armed_is_listed_as_armed_by_them() {
+        let mut s = session();
+        s.arm_watch_by_person("notes.md", ARMED_IN, saw("first"));
+        s.report_watches();
+        let listed = s
+            .transcript
+            .iter()
+            .find(|entry| entry.text.starts_with("watch 1: notes.md"))
+            .expect("the watch is listed");
+        assert!(listed.text.contains("armed by you"), "{:?}", listed.text);
+        assert!(!listed.text.contains("turn"), "{:?}", listed.text);
     }
 
     /// `/init`'s prompt is the driver's, said once for the turn that sends it and not for the next.
@@ -16337,6 +16448,89 @@ mod tests {
             assert_eq!(
                 prompt.text, "what is [Image #1]?",
                 "the redrawn prompt is not the marker the interface wrote"
+            );
+        }
+
+        /// SCROLL-10: a resumed session keeps no results. A call replayed from the record has no
+        /// `returned`, holds no lines for expansion, and `x` leaves it alone, even though the
+        /// record holds a thirty-line tool result for it. The control is a call made live in the
+        /// same session after the replay, which `x` does expand, so a replayed call that expanded
+        /// would be the topmost one and take the key. The wrong implementation it rejects rebuilds
+        /// `Returned` (and its `whole`) from the stored tool result when it replays the record.
+        #[test]
+        #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+        fn a_resumed_call_holds_no_result_and_the_expand_key_leaves_it_alone() {
+            use bravebot_aichat::protocol::{ToolCallRequest, ToolCallRequestFunction};
+
+            let call = ToolCallRequest {
+                id: "call-1".to_string(),
+                kind: "function".to_string(),
+                function: ToolCallRequestFunction {
+                    name: "read_file".to_string(),
+                    arguments: r#"{"path":"src/main.rs"}"#.to_string(),
+                },
+                extra_content: None,
+            };
+            let thirty: String = (0..30).map(|n| format!("stored line {n}\n")).collect();
+            let mut conversation = Conversation::new();
+            conversation.push(Message::user("what is in main.rs?"));
+            conversation.push(Message::assistant_calling("let me look", vec![call]));
+            conversation.push(Message::tool_result("call-1", thirty));
+            conversation.push(Message::assistant("a long file"));
+
+            let mut session = session();
+            session.replay(
+                &conversation,
+                "a title",
+                &bravebot_session::sessions::Recalled {
+                    history: None,
+                    turns: None,
+                    trails: BTreeMap::new(),
+                    todos: BTreeMap::new(),
+                    asides: Vec::new(),
+                    started: None,
+                },
+            );
+            let replayed = session
+                .transcript
+                .iter()
+                .position(|entry| entry.speaker == Speaker::Tool)
+                .expect("the call is in the transcript");
+            assert_eq!(session.transcript[replayed].text, "Read(src/main.rs)");
+            assert!(
+                session.transcript[replayed].returned.is_none(),
+                "a resumed call holds a result the session never kept"
+            );
+            assert_eq!(
+                session.expandable_lines, 0,
+                "a resumed session holds lines for expansion"
+            );
+
+            // A call made in this session, below the replayed one: the key has something to act
+            // on, so a key that does nothing on the replayed call is not a key that does nothing.
+            let thirty_lines: Vec<String> = (0..30).map(|n| format!("live line {n}")).collect();
+            session.finish_activity(Activity::running("Read", "live.rs").done("30 lines"));
+            session.returned(Returned {
+                lines: thirty_lines[..5].to_vec(),
+                total: 30,
+                from_the_end: false,
+                whole: thirty_lines,
+            });
+            let live = session.transcript.len() - 1;
+            assert_eq!(session.expandable_lines, 30);
+
+            session.open_scroller();
+            session.laid.width = 80;
+            session.laid.height = 40;
+            session.laid = crate::render::as_last_drawn(&session);
+            session.toggle_expanded(crate::render::as_last_drawn);
+            assert!(
+                !session.transcript[replayed].expanded,
+                "the key expanded a call replayed from the record"
+            );
+            assert!(
+                session.transcript[live].expanded,
+                "the key did not reach the call made in this session"
             );
         }
 

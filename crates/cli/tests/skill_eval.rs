@@ -123,10 +123,15 @@ fn a_gateway_judging(
                         (true, _) => {
                             let word = verdicts[judged % verdicts.len()];
                             judged += 1;
+                            // A classifier's answer is its word alone, and a judge's is its word
+                            // and a reason.
+                            let content = match word {
+                                "allow" => word.to_string(),
+                                _ => format!("{word}\nbecause the record shows it"),
+                            };
                             serde_json::json!({"model": "reasons-only", "choices": [{
                                 "index": 0,
-                                "delta": {"role": "assistant",
-                                    "content": format!("{word}\nbecause the record shows it")},
+                                "delta": {"role": "assistant", "content": content},
                                 "finish_reason": "stop"}]})
                         }
                         (false, until) if until.is_some_and(|rounds| given >= rounds) => {
@@ -543,6 +548,63 @@ fn a_run_that_would_write_is_refused_and_counted() {
     assert!(
         stdout.contains("with the skill: 1 runs,") && stdout.contains("1 refused calls"),
         "the refusal was not counted: {stdout}"
+    );
+}
+
+/// MODE-1: `skill eval` opens asking where the home settings say `permissions.startInAuto: true`.
+/// The key is in the home settings file (`$HOME/.bravebot/settings.json`, which `bravebot` points
+/// at), the one place it is read, so a session the person starts would open in auto from this
+/// fixture. A case whose model asks to write is refused and counted, and nothing is written.
+/// Rejects an evaluation that takes its mode from `Settings::start_in_auto()`: auto answers the
+/// write, so `written.txt` appears and no refusal is counted. The gateway answers a request that
+/// offers no tools (the classifier's) with `allow`, so a run that opened in auto would be told yes.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_run_that_would_write_is_refused_where_the_home_settings_open_sessions_in_auto() {
+    let gateway = a_gateway_judging(
+        "write_file",
+        |_| r#"{"path":"written.txt","contents":"x"}"#.to_string(),
+        Some(1),
+        &["allow"],
+    );
+    let scratch = Scratch::new("skill-eval-write-start-in-auto");
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&settings_for(&gateway)).expect("settings");
+    settings["permissions"] = serde_json::json!({"startInAuto": true});
+    scratch.write(".bravebot/settings.json", &settings.to_string());
+    scratch.write(".bravebot/skills/demo/SKILL.md", SKILL);
+    scratch.write(
+        ".bravebot/skills/demo/evals/one.json",
+        r#"{"prompt": "write it", "repeats": 1,
+            "graders": [{"check": {"tool_called": "write_file"}}]}"#,
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        &scratch.project(),
+        &["skill", "eval", "demo"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        !scratch.project().join("written.txt").exists(),
+        "an evaluation wrote under a setting that is for sessions"
+    );
+    assert!(
+        stdout.contains("with the skill: 1 runs,") && stdout.contains("1 refused calls"),
+        "the refusal was not counted: {stdout}"
+    );
+    let asked: Vec<String> = gateway.asked.try_iter().collect();
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains(r#""name":"write_file""#)),
+        "the model was never offered the write: {asked:?}"
     );
 }
 

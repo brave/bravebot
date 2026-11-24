@@ -57,6 +57,30 @@ mutation: code_end returns the offset of a byte that is not the m ending the cod
 file: crates/core/src/colour_codes.rs
 replace: if byte == b'm' { => if true {
 
+mutation: escape_at reads the two digits after a percent sign without checking that they are in the text
+file: crates/core/src/credentials.rs
+replace: if bytes[at] != b'%' || bytes.len() - at < 3 { => if bytes[at] != b'%' {
+
+mutation: percent_bytes steps past the end of the text after an escape
+file: crates/core/src/credentials.rs
+replace: at += 3; => at += 4;
+
+mutation: hex_value names a value of sixteen or more for a hexadecimal digit
+file: crates/core/src/credentials.rs
+replace: Some(digit - b'a' + 10) => Some(digit - b'a' + 11)
+
+mutation: base64_bytes takes a byte out when fewer than eight bits are held, so the count of held bits underflows
+file: crates/core/src/credentials.rs
+replace: if held >= 8 { => if held >= 6 {
+
+mutation: base64_bytes keeps the bits it has just taken out, so the next shift can lose a set bit
+file: crates/core/src/credentials.rs
+replace: bits &= (1 << held) - 1; => bits &= 1 << held;
+
+mutation: sextet_of names a value of sixty-four or more for a base64 character
+file: crates/core/src/credentials.rs
+replace: Some(63) => Some(64)
+
 mutation: taint takes the first input's confidentiality, so a private second input comes out public
 file: crates/core/src/spec.rs
 replace: confidentiality: join(a.confidentiality, b.confidentiality), => confidentiality: a.confidentiality,
@@ -452,6 +476,10 @@ replace: let asked_from_trust = label.is_trusted(); => let asked_from_trust = tr
 mutation: record_answers records a private reply as public
 file: crates/core/src/policy.rs
 replace: let replied = Label::new(Integrity::Trusted, label.confidentiality); => let replied = Label::new(Integrity::Trusted, Confidentiality::Public);
+
+mutation: record_answers lowers the context it was asked from
+file: crates/core/src/policy.rs
+replace: self.absorb(Integrity::Trusted); => self.absorb(Integrity::Untrusted);
 
 mutation: label_user_command_output labels what a person's own command printed as public
 file: crates/core/src/policy.rs

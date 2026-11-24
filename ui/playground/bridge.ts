@@ -12,7 +12,7 @@ import { EMPTY_CONVERSATION, parseExperience } from '../src/shared/experience'
 import type { Appearance } from '../src/shared/theme'
 import { parseHidden } from '../src/shared/panels'
 import type { Bot } from '../src/shared/bots'
-import type { EffortLevel } from '../src/shared/protocol'
+import type { EffortLevel, LogLevel } from '../src/shared/protocol'
 import type {
   BridgeEvent, EventMap, EventName, ForkedSession, OpenedSession, RewindPoint, RewoundSession, Said, SessionSummary,
 } from '../src/shared/protocol'
@@ -80,6 +80,8 @@ let rows: SessionSummary[] = SESSIONS()
 let bots: Bot[] = BOTS()
 let experience: Experience = parseExperience(null)
 let effort: EffortLevel | null = null
+// The diagnostic log level the settings report states, changed by Log detail (DIAG-11).
+let logLevel: LogLevel = 'error'
 /** The level every playground session began with, which a model of the ChatGPT account is sent (CHATGPT-10). */
 const sessionBegan: EffortLevel | null = 'medium'
 let appearance: Appearance = (localStorage.getItem('playground:theme') as Appearance | null) ?? 'system'
@@ -433,7 +435,7 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
     case 'settings.inspect': return ok({
       build: '0.19.0 (playground)', configured: playground.configured, problem: playground.configured ? null : 'No model service is configured.', model: 'sample/fast', brave: false, bedrock: false,
       providers: [], selected: null, layers: [], overrides: [], managed: { path: null, keys: [] },
-      logs: { directory: '/Users/example/.bravebot/logs', writing: true },
+      logs: { directory: '/Users/example/.bravebot/logs', writing: true, level: logLevel },
       network: { roots: [], problem: null, trustsNothing: false, proxy: null, authenticated: false, unusableProxy: null, noProxy: null },
     })
     case 'hooks.inspect': return ok({ path: '~/.bravebot/hooks.json', text: null, entire: true, timeoutSeconds: { min: 1, max: 600, defaultFor: {} }, hooks: [] })
@@ -525,6 +527,7 @@ const bridge: BravebotApi = {
   searchFiles: async () => ({ paths: ['src/cache.ts', 'src/migrate.ts'], incomplete: false }),
   openFile: async () => ({ status: 'opened' }),
   selectSettings: async () => null,
+  setLogLevel: async (level) => { logLevel = level; return { level, writing: true } },
   saveHooks: async () => undefined,
   chooseDirectory: async () => DIRECTORY,
   // The playground has no picker, so a folder is never added.

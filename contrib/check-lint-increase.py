@@ -3,10 +3,17 @@
 
 `make check` runs clippy with the lints that hold at zero. The lints here report hundreds of sites
 in the existing code, so enabling them would need every site fixed or marked in one change. This
-holds the number where it is: clippy runs over the libraries and binaries at the merge base and at
-the checkout, and a lint that reports more sites in a crate now than it did then fails the check.
-Sites a change removes are not credited to one it adds in another crate, and nothing is recorded in
-the tree, so there is no list to keep in step with the code.
+holds the number where it is: clippy runs over every target, library, binary, test, example and
+bench alike, at the merge base and at the checkout, and a lint that reports more sites in a crate
+now than it did then fails the check. Sites a change removes are not credited to one it adds in
+another crate, and nothing is recorded in the tree, so there is no list to keep in step with the
+code.
+
+Every target is read, not only what ships, because these lints are allow by default and this is
+the only place any of them is counted: a `#[cfg(test)]` block in a `src/` file, an integration test
+under `crates/*/tests`, an example, a bench or a file under a crate's `test-support` compiles only
+for tests and was invisible to a run that passed `--lib --bins`, so a change could add any number
+of sites there and the check would not see them.
 
 Both runs use the same toolchain on the same host, so a release of clippy that finds more or fewer
 sites, and code that only one platform compiles, change both counts alike. A site that is right is
@@ -57,8 +64,9 @@ LINTS = (
     "allow_attributes",
 )
 
-# Only code under these is counted: what ships, from the crates, and not a build script's output
-# or a dependency's source.
+# Only code under these is counted: from the crates, and not a build script's output or a
+# dependency's source. A test, example or bench is still under `crates/`, so counting every target
+# instead of only the libraries and binaries needs no change here.
 COUNTED = "crates/"
 # A change that touches none of these cannot change what clippy reports.
 RUST_PATHS = ("crates", "Cargo.toml", "Cargo.lock", "clippy.toml")
@@ -85,7 +93,7 @@ def base_commit(root, base, env):
 
 def clippy_command():
     return [
-        "cargo", "clippy", "--workspace", "--lib", "--bins", "--all-features", "--quiet",
+        "cargo", "clippy", "--workspace", "--all-targets", "--all-features", "--quiet",
         "--message-format=json", "--", *(f"-Wclippy::{lint}" for lint in LINTS),
     ]
 
@@ -276,10 +284,11 @@ class Reading(unittest.TestCase):
         self.assertIn("#[expect(<lint>", text)
         self.assertNotIn("#[expect(<lint>", render([("panic", "a", 0, 1, ["crates/a/src/lib.rs:8"])]))
 
-    def test_the_command_reads_the_code_that_ships_with_every_lint_it_counts(self):
+    def test_the_command_reads_every_target_with_every_lint_it_counts(self):
         command = clippy_command()
-        self.assertIn("--lib", command)
-        self.assertNotIn("--all-targets", command)
+        self.assertIn("--all-targets", command)
+        self.assertNotIn("--lib", command)
+        self.assertNotIn("--bins", command)
         for lint in LINTS:
             self.assertIn(f"-Wclippy::{lint}", command)
 

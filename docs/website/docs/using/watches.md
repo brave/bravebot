@@ -117,7 +117,7 @@ filesystem is. Five seconds is short enough that saving a file feels like the ca
 ## Seeing them, and ending one
 
 `/status` lists every live watch: a number that names it, the path, which turn armed it, and how long
-it has left. A session with no live watch says nothing about watches. `/watch` gives the same report.
+it has left, or "armed by you" for one you [armed yourself](#arming-one-yourself). A session with no live watch says nothing about watches. `/watch` gives the same report.
 A firing announces itself, naming the watch it came from.
 
 Numbers are assigned in the order watches were armed, and a number is never reused, so the number
@@ -146,8 +146,36 @@ Stopping a turn that was not a firing ends no watch.
 A watch that ended in silence would be indistinguishable from a watch that is live and has seen
 nothing, and the difference between those two is the whole of what you armed it to learn.
 
-`/watch` on its own lists watches and `/watch stop <n>` ends one. Neither arms one: a watch is armed by
-asking for it in a prompt.
+`/watch` on its own lists watches and `/watch stop <n>` ends one.
+
+## Arming one yourself
+
+`/watch <path>` arms a watch on that file without asking a turn for it:
+
+```
+/watch target/release/bravebot
+```
+
+The path is the rest of the line, so a path with spaces needs no quotes, and a leading `@` from the
+file completer is accepted. A path starting with `~` is watched as the absolute path it stands for.
+A bare number is not taken as a path, since it is almost always a mistyped `/watch stop <n>`.
+
+The same rules apply as to a watch a turn arms:
+
+- A path inside the working directory is watched with no question. A path outside it is watched only
+  in [bypass mode](../security/permission-modes.md#bypassing) in a trusted project, and is otherwise
+  refused.
+- A directory is refused.
+- A path already watched arms nothing new, and the note names the watch that is on it.
+- A ninth watch is refused.
+
+While a loop is running or a goal is set, `/watch <path>` arms nothing and tells you how to end the
+loop (`/loop stop`) or the goal (`/goal clear`) first, so arming a watch never ends your own loop or
+goal. Typed while a turn is running, it waits in the queue and arms the watch once the turn ends,
+so you do not type it again. Listing and stopping work at any time.
+
+`/status` and `/watch` list a watch you armed as **armed by you** instead of naming a turn. It fires,
+ages and ends like any other.
 
 ## Nothing survives the session
 
@@ -172,4 +200,5 @@ read it, with no visible cause and nothing in the transcript to explain it.
   served, and the answer is to leave the session open.
 - **Inside the working directory, nobody is asked at all.** A read there is promoted rather than put to
   you, and a watch asks exactly what a read asks, so a week-long channel about a path can be opened
-  without a prompt. `/status` and the bounds are the whole of what answers for that.
+  without a prompt. `/status` and the bounds are the whole of what answers for that. Arming the watch
+  yourself with `/watch <path>` keeps the path one you named.

@@ -4,7 +4,7 @@ Status: design decisions, not implemented guarantees. Read the [executive summar
 
 ## How to review this plan
 
-This record states deliberate scope choices; [open questions](open-questions.md) tracks unresolved decisions and validation. “Settled for the prototype” means proceed on that basis, subject to implementation evidence. It does not mean the choice is permanent or exempt from review.
+This record states deliberate scope choices; [open questions](open-questions.md) tracks what is still unanswered and what awaits validation. “Settled for the prototype” means proceed on that basis, subject to implementation evidence. It does not mean the choice is permanent or exempt from review.
 
 Challenge a choice when there is a concrete security defect, contradiction, missing requirement, or evidence that its cost outweighs its benefit. Name the affected behavior and stage. An alternative alone does not make the current choice a blocker. Unresolved decisions block only the capabilities named in that record; stages 1–2a can start now.
 
@@ -29,7 +29,7 @@ At the first stage-2b or stage-3d device work, validate a transcript, composer, 
 - **Decision:** keep reusable session behavior, approval semantics, and presentation transforms in Rust. Stdio, embedded, and persistent-host callers use one implementation and expose its view through typed updates. `packages/agent-client/` contains thin adapters, wire types, local UI state, fixtures, and the test program. Follow [UI-006](../../best-practices/ui.md#UI-006) across mobile and desktop.
 - **Reason:** a Rust fix should reach both execution modes without a second TypeScript implementation. Remote clients consume the host's view; embedded clients consume the same view over the native binding. Layout, focus, and other window-only behavior stay in the UI.
 - **Cost:** the local proof now includes an additive bridge view capability and a clearly separated Rust presentation boundary. The exact crate/module placement must obey the layering spec; putting content inspection in `bravebot-core` or `bravebot-agent` is forbidden. Bindings and actual UI rendering still need tests.
-- **Revisit when:** a consumer needs a missing field or operation. Extend the owning Rust API and its tests before adding client-side behavior. Do not introduce a second domain reducer or a new Rust runtime in remote-only clients to solve a transport problem. See the [responsibility table](client-contract.md#shared-screen-state).
+- **Revisit when:** a consumer needs a missing field or operation. Extend the owning Rust API and its tests before adding client-side behavior. Do not introduce a second domain reducer. A new Rust runtime in remote-only clients needs the amendment that [decision 20](#20-the-phone-connects-over-tls-with-pinned-keys-after-a-spike) describes. See the [responsibility table](client-contract.md#shared-screen-state).
 
 ### 3. Early phone feedback and parallel embedded work
 
@@ -47,14 +47,14 @@ At the first stage-2b or stage-3d device work, validate a transcript, composer, 
 
 ### 5. Every attached device can act, with no takeover step
 
-- **Decision:** every device attached to a session sees the whole session live, approval requests included, and can send, answer and cancel at any time. There is no controller role, takeover step or controller epoch. A device paired with a read-only grant views only (stage 6).
+- **Decision:** every device attached to a session sees the session live, approval requests included, with a paired device limited to the allowlist of [decision 19](#19-a-paired-device-is-an-approved-screen-that-receives-an-allowlist-of-events), and can send, answer and cancel at any time. There is no controller role, takeover step or controller epoch. A device paired with a read grant views only ([decision 16](#16-a-grant-names-read-or-control-and-one-workspace)).
   - The host records which device made each send, answer and cancel. The view shows the device that acted last, for example "approved on Phone", and the trace records the device for each action.
   - The first answer to a question counts. A later answer from any device fails on its question number (RPCVIEW-6).
   - A send while a turn runs is refused as busy, and the client keeps it as a draft. There is no shared queue.
-  - Host-only questions, such as workspace trust and command-output admission, are offered only to connections the host lets answer them. This is a property of the connection, not of control. Today every host connection can answer the same kinds ([HOST-10](../../specs/local-host.md#HOST-10)); stage 5a makes them per connection, fixed on the host's command line ([decision 11](#11-clients-are-named-on-the-hosts-command-line-with-the-kinds-each-may-answer)).
-  - A device that leaves or breaks blocks no other device. Its pairing can be revoked on the host (stage 6). A locked or backgrounded phone cannot answer approvals (stage 7, decision 8).
+  - Host-only questions, such as workspace trust and command-output admission, are offered only to connections the host lets answer them. This is a property of the connection, not of control. The host fixes the kinds per connection: for a local client on its command line, and for a paired device by its grant ([decision 16](#16-a-grant-names-read-or-control-and-one-workspace)) ([HOST-10](../../specs/local-host.md#HOST-10), [decision 11](#11-clients-are-named-on-the-hosts-command-line-with-the-kinds-each-may-answer)).
+  - A device that leaves or breaks blocks no other device. Its pairing can be revoked on the host ([decision 16](#16-a-grant-names-read-or-control-and-one-workspace)). A locked or backgrounded phone cannot answer approvals (stage 7, decision 8).
 - **Reason:** an approval is bound to one exact request and answered once, so a device does not need to hold control to answer it. A takeover prompt would confirm the device, not the effect. Moving from desktop to phone needs no handoff, and a lost phone does not leave a session stuck.
-- **Cost:** an approval can be answered on a device the person was not using, such as an unlocked tablet on a desk. Two sends at once start one turn and refuse the other as busy. The host has one controller per session now ([HOST-7](../../specs/local-host.md#HOST-7)); stage 5a replaces it.
+- **Cost:** an approval can be answered on a device the person was not using, such as an unlocked tablet on a desk. Two sends at once start one turn and refuse the other as busy. A session has no controller ([HOST-7](../../specs/local-host.md#HOST-7)).
 - **Deferred:** a "Take control from Desktop?" confirmation before a device acts. Because the view names the device that acted last, the dialog is client-side: a client asks before acting when another device acted last. It needs no host role, epoch or protocol change.
 - **Revisit when:** an approval or cancel is answered on a device the person was not using, or people report acting from the wrong device. Add the dialog then. Add queued follow-ups only if observed use shows they are needed.
 
@@ -74,7 +74,7 @@ At the first stage-2b or stage-3d device work, validate a transcript, composer, 
 
 ### 8. Foreground approvals and host-only output admission
 
-- **Decision:** a phone answers supported approvals only while it is ready and in the foreground. Keep workspace trust, command-output admission, and authority-expanding decisions on the host.
+- **Decision:** a phone answers supported approvals only while it is ready and in the foreground. A `control` device answers workspace trust for one session only ([decision 17](#17-a-control-device-answers-workspace-trust-for-one-session-only)). Keep command-output admission and the other authority-expanding decisions on the host.
 - **Reason:** preserve explicit consent with a small, testable set of phone approval screens.
 - **Cost:** locking the phone may cause refusal when no other attached device can answer. A run-tests-then-read-failures task needs the desktop to answer output admission; it is not a phone-only demo. Startup trust stays unanswered when unavailable.
 - **Revisit when:** a useful task justifies another approval kind or a defined waiting policy. Add complete field display, label handling, permission rules, and tests before enabling it. Push notifications do not themselves grant approval.
@@ -107,7 +107,7 @@ No dependencies or build tooling are added by this proposal. Stage 1 covers the 
   - KINDS is a list drawn from `confirm`, `run`, `fetch`, `ask` and `trust`, or `none`. There is no default.
   - The host starts every client at startup, in command-line order, and serves them at once. `launch NAME` starts one again after it has ended, and is refused while a client of that name is connected. A bare `launch` is accepted only when one client is defined.
   - The name is the client that acted, as the view and the trace show it.
-  - Names and kinds come only from the command line and the `launch` line the person types. Nothing a client sends and no file sets them.
+  - For a local client, names and kinds come only from the command line and the `launch` line the person types. Nothing a client sends and no file sets them. A paired device's name and kinds come from the person's pairing on the host ([decision 14](#14-a-device-pairs-by-a-qr-code-on-the-host-and-a-code-typed-on-the-host), [decision 16](#16-a-grant-names-read-or-control-and-one-workspace)).
 - **Reason:**
   - The host launches every local client over an anonymous socket pair, the development relay included, so it cannot tell a host-local client from the phone's relay unless the person tells it.
   - One program after `--` cannot be two clients with different kinds.
@@ -127,15 +127,85 @@ No dependencies or build tooling are added by this proposal. Stage 1 covers the 
   - The host does not ask about a workspace where a yes cannot be kept, because a yes there would answer nothing. It says on standard error that each session there asks.
   - The host reads the answers from its standard input before it starts reading `launch` and `quit`. Each answer is a line. As in a session in lines ([TRUST-23](../../specs/trust-map.md#TRUST-23)), a line that is not yes declines and keeps nothing, except `quit`, which stops the host and keeps nothing for the workspace being asked about.
   - An end of input at the question answers no, and the host then stops, as the end of its input always does ([HOST-1](../../specs/local-host.md#HOST-1)).
-- **Reason:** the phone does not answer startup trust ([Q9](open-questions.md#q9-may-the-phone-answer-startup-trust)). Without the startup question, a phone that opens a session in a workspace nobody has trusted waits until the person answers on the host. The person has just typed the host's command line naming those workspaces, so the host asks them there once.
+- **Reason:** without the startup question, a phone that opens a session in a workspace nobody has trusted waits until the person answers on the host, or from stage 6 until a `control` phone answers for one session ([decision 17](#17-a-control-device-answers-workspace-trust-for-one-session-only)). The person has just typed the host's command line naming those workspaces, so the host asks them there once.
 - **Cost:**
   - Host startup is interactive for a workspace with no kept yes. A test or script that starts the host with such a workspace has to answer on standard input.
-  - A session the phone opens, which is always in a `--workspace` ([HOST-2](../../specs/local-host.md#HOST-2)), still waits when that workspace has no kept yes, until a client on the host that may answer trust, such as the host test client, attaches and the person answers there. A workspace has none after it was last answered no, after a kept yes is taken back from the terminal or the desktop app, after the directory is replaced by another at the same path, or where a yes cannot be kept: the home directory, a filesystem root, an incognito session, or a filesystem that does not record when a directory was made. The phone's composer then says that the folder is not trusted yet and that the question is answered on the computer the host runs on.
-- **Revisit when:** [Q9](open-questions.md#q9-may-the-phone-answer-startup-trust) is decided.
+  - Until stage 6, a session the phone opens, which is always in a `--workspace` ([HOST-2](../../specs/local-host.md#HOST-2)), waits when that workspace has no kept yes, until a client on the host that may answer trust, such as the host test client, attaches and the person answers there. A workspace has none after it was last answered no, after a kept yes is taken back from the terminal or the desktop app, after the directory is replaced by another at the same path, or where a yes cannot be kept: the home directory, a filesystem root, an incognito session, or a filesystem that does not record when a directory was made. The phone's composer then says that the folder is not trusted yet and that the question is answered on the computer the host runs on.
+- **Revisit when:** people answer the startup question so rarely that a phone's one-session yes ([decision 17](#17-a-control-device-answers-workspace-trust-for-one-session-only)) is the usual answer. Decision 17 relies on this question, so keep it unless that decision changes.
+
+### 13. Device keys and the pairing list live in host memory
+
+- **Decision (2026-11-24):** the host's private key and the list of paired devices are held in the host process and written nowhere. A device pairs again after the host restarts. A device that sleeps, loses its network or changes network reconnects with its device key.
+- **Reason:** [HOST-1](../../specs/local-host.md#HOST-1) says nothing about a client comes from a file a tool could write. A list on disk is such a file: a program the person runs could add its own device, or restore an older list to undo a revocation. Sessions end when the host restarts ([HOST-5](../../specs/local-host.md#HOST-5)), and the person is at the host then.
+- **Cost:** every host restart needs a new pairing. A host that restarts while the person is away stays unreachable until they return.
+- **Revisit when:** signed macOS builds can hold a non-exportable key and a rollback counter in the keychain (*unverified*). Linux and development builds are thought to have no equivalent (*unverified*).
+
+### 14. A device pairs by a QR code on the host and a code typed on the host
+
+- **Decision (2026-11-24):** the person types a pair command on the host. The host opens a one-time window and shows a QR code with its address, its key hash and a secret of at least 128 bits. The phone pins the host key from the code and proves it knows the secret over the connection. The phone then shows a confirmation code, and the person types it on the host. A phone with no camera types a code of at least 80 bits.
+  - The window closes after one pairing or a deadline, and a failed attempt closes it. The secret is never written to the diagnostic log.
+  - The person types the device's name on the host. Strings a device sends are escaped before the host prints them.
+- **Reason:** a six-digit code has about 20 bits, so an attacker on the network who sees anything keyed by it can guess it offline, and it does not tell the phone the host is real. A program reading the host's screen cannot answer a code shown only on the phone.
+- **Cost:** pairing needs the phone's camera or a long typed code. Anyone who can reach the port can close the window, so pairing can be denied and cannot be completed by them. Approval on the host's input assumes host standard input is the person. Input injected with `tmux send-keys` or `TIOCSTI` breaks that assumption.
+- **Revisit when:** a password-authenticated key exchange library is judged mature enough to replace the long typed code.
+
+### 15. The host listens on one chosen address
+
+- **Decision (2026-11-24):** `--listen ADDR:PORT` names one specific address, with no wildcard. The host exits when it cannot bind and does not try another. It accepts connections only while a pairing exists or the pairing window is open. Without `--listen` it has no network address, as now. The listener stays in the host process, and the development relay is retired or limited to development builds.
+  - Limits before authentication are global and not per source address: connections, handshakes in progress, a small first frame, and the threads used before authentication.
+  - Half-open connections are found by an application heartbeat.
+- **Reason:** per-source limits mean little when loopback is one address and each tailnet device has its own. A program that takes the port first can deny service and cannot impersonate the host, because the pinned key identifies it.
+- **Cost:** [HOST-13](../../specs/local-host.md#HOST-13) and its test change to two sides: no `--listen` means no socket, and `--listen` means exactly that one. A TCP port is reachable by every local user. A separate listener process would keep HOST-13 as written and keep TLS bugs away from the host's memory, but device identity would then be decided outside the host and revocation would cross a process boundary.
+- **Revisit when:** a bug class in the network code makes memory isolation worth that cost.
+
+### 16. A grant names read or control, and one workspace
+
+- **Decision (2026-11-24):** the person chooses `read` or `control` when pairing, with no default, and one workspace the device covers. A `read` device adds no kinds to [HOST-10](../../specs/local-host.md#HOST-10)'s set and is refused `session.new`, `session.close`, `turn.send` and `turn.cancel`.
+  - A device has one connection. A new authenticated connection from it ends the old one.
+  - Revoking a device ends its connection and removes its kinds. A request it sent that the host has not yet run does not run.
+  - A pairing does not expire, and a `control` device needs no biometric to use its key.
+- **Reason:** [decision 11](#11-clients-are-named-on-the-hosts-command-line-with-the-kinds-each-may-answer) gives no default kinds. A grant limited to one workspace keeps a device away from the desktop sessions on the same host.
+- **Cost:** a lost phone stays valid until the person revokes it on the host or the host restarts.
+- **Revisit when:** a lost phone stays paired longer than the person expects. Add expiry or a biometric requirement then.
+
+### 17. A control device answers workspace trust for one session only
+
+- **Decision (2026-11-24):** a device with a `control` grant may answer the startup trust question. Its yes applies to that session only and is never written to the kept-trust record. A device cannot keep or remember any grant. A `read` device cannot answer trust.
+  - The phone shows the directory and what each answer does before any button works ([TRUST-23](../../specs/trust-map.md#TRUST-23)). A yes that is not kept names no file.
+- **Reason:** the host already asks about each `--workspace` at startup and keeps the yes ([decision 12](#12-the-host-asks-about-each-workspaces-trust-at-startup)), so the phone seldom meets the question. A one-session yes lets the person start work from the phone in a workspace they declined, and a lost phone cannot trust a folder for good.
+- **Cost:** the phone needs a full trust screen. [Decision 8](#8-foreground-approvals-and-host-only-output-admission) and the shared control rules name this case. A hijacked `control` phone can answer yes for each session it opens in the one workspace its grant names, so the number of sessions is not bounded by the one-session yes. The ceiling of [decision 18](#18-a-devices-scope-is-a-ceiling-set-at-pairing) bounds what that session can reach.
+- **Revisit when:** a phone's one-session yes is used to start sessions the person did not intend.
+
+### 18. A device's scope is a ceiling set at pairing
+
+- **Decision (2026-11-24):** pairing shows the person the limits for the device on the host, and they approve them once. The limits are the workspace, trust no wider than it, a sandbox mode no looser than a named one, the additional directories, exposure grants, the permission mode, the trusted programs, the permission rules, the MCP server set, `readsStayInWorkspace` and auto-vetting. The defaults are the values in force at pairing.
+  - Inside the ceiling the device needs nothing. A change that goes past it suspends the device's reads and control before the first event of the widened turn reaches it, until the person approves a new ceiling on the host. A change that narrows never suspends it.
+  - Fields with a clear order compare against the ceiling. A field with no total order, such as the permission rules and the MCP server set, compares with a per-field `covers`, and a change that `covers` cannot show to narrow counts as widening.
+  - Suspension removes the device's kinds from [HOST-10](../../specs/local-host.md#HOST-10)'s set. Approval sends a [HOST-11](../../specs/local-host.md#HOST-11) snapshot, which shows what happened during the suspension.
+- **Reason:** a snapshot taken at first attach authorizes a scope nobody has seen, and it would suspend the phone on routine changes while the person is away.
+- **Cost:** a change inside the ceiling reaches the device without a prompt. A settings edit that loosens the sandbox mode within the ceiling applies from the next turn ([SANDBOX-22](../../specs/sandboxing.md#SANDBOX-22)). Stage 6 and the [permissions section](architecture.md#permissions-and-effective-scope) read an earlier scope as this ceiling.
+- **Revisit when:** a ceiling is set so wide that it stops meaning anything, or a widening inside it surprises the person.
+
+### 19. A paired device is an approved screen that receives an allowlist of events
+
+- **Decision (2026-11-24):** pairing records the person's yes that the device may show the content they see. The host sends a device only the event names on an allowlist. A quarantined preview becomes a placeholder row that keeps its ID and place in the sequence. A question is never a placeholder: a device that cannot show one in full is refused remote approval, and the person answers on the computer. The choice branches on bridge-owned event names and on labels through the policy layer, never on text the host reads.
+  - The phone saves no transcript to disk, its pending-send store holds only text the person typed, and it hides the app-switcher snapshot, with `FLAG_SECURE` on Android.
+- **Reason:** the view holds quarantined previews whole, and a phone can be lost. Network egress policy covers only requests this process makes, so the stream to a device needs a clause of its own.
+- **Cost:** this changes the rule that every attached client receives the same view. The host writes each event once to every connection today ([HOST-7](../../specs/local-host.md#HOST-7)), so the device path needs its own filter in the send path. The host forwards every event of a session and not only the view's, so the allowlist covers all of them.
+- **Revisit when:** a placeholder hides something the person needs to approve a request.
+
+### 20. The phone connects over TLS with pinned keys, after a spike
+
+- **Decision (2026-11-24):** the host and the phone use TLS 1.3 only, with self-signed X.509 certificates, public-key pinning on both sides, ECDSA P-256 keys and no certificate authority. There is no 0-RTT and no session resumption, or the host checks the registry after every handshake. The existing newline-delimited JSON runs over the stream, with no WebSocket. The phone keeps its key out of JavaScript, in native code with a hardware-held key.
+  - A one-day spike on one phone platform runs first. It shows what the phone's platform can pin and sign, and whether a rustls module on the phone is needed ([Q10](open-questions.md#q10-what-can-the-phone-pin-and-sign)).
+  - If rustls goes on the phone, the line in [the client contract](client-contract.md) that remote-only clients avoid a second native Rust runtime is amended.
+- **Reason:** from JavaScript, React Native's `WebSocket` cannot pin a key learned at pairing, present a client certificate or read the TLS exporter value. A resumed mutual-TLS session skips the client-certificate check, so a revoked device could return. Both claims about the platform and about resumption are unverified here. Tailscale Serve in HTTPS mode would replace the host's certificate and break pinning (*unverified*), so the host binds the tailnet address directly.
+- **Cost:** no browser client, and the phone needs native code. If the spike puts rustls on the phone, the pull request that adds it amends that line of the client contract and decision 2's revisit line.
+- **Revisit when:** the spike shows the platform's TLS stack can pin and sign from JavaScript-visible APIs.
 
 ## Open questions
 
-The [open-question record](open-questions.md) tracks U1–U4, implementation choices, and decisions awaiting validation, with the evidence and checkpoint each needs. Resolve entries there and link their decisions back here. Stages 1–2a can proceed while later security decisions remain open.
+The [open-question record](open-questions.md) tracks implementation choices and decisions awaiting validation, with the evidence and checkpoint each needs. When an entry is answered, record the decision here and delete the entry. Stages 1–2a can proceed while later security decisions are not built.
 
 ## Maintaining this record
 

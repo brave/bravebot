@@ -319,6 +319,7 @@ side, keeping a copy, or grepping the lot, is a text editor's job, and the user 
 `verified-by: bravebot_tui::editor::a_transcript_opened_in_the_editor_is_written_outside_the_workspace`
 `verified-by: bravebot_tui::editor::a_transcript_opened_in_the_editor_is_never_read_back`
 `verified-by: bravebot_tui::editor::showing_a_transcript_reads_no_file_back`
+`verified-by: bravebot_tui::editor::showing_a_transcript_succeeds_when_the_file_cannot_be_read_after_the_editor`
 `verified-by: bravebot_tui::editor::the_file_goes_when_the_editor_exits`
 `verified-by: by-construction (editor::show in crates/tui/src/editor.rs returns Result<(), Failure>, so no text the editor wrote can leave it; its one caller, show_transcript in crates/tui/src/app/terminal.rs, uses that result only to say a failure, and the scan above holds the chain from the key to the written file free of a read)`
 
@@ -429,12 +430,17 @@ left out. Without a key the rest is reachable only by rerunning the command or o
 `verified-by: bravebot_tui::render::the_expand_key_takes_the_topmost_of_several_calls_on_the_screen`
 `verified-by: bravebot_tui::render::the_expand_key_skips_a_call_scrolled_above_the_view`
 `verified-by: bravebot_tui::render::the_expand_key_expands_a_write_and_a_second_press_collapses_it`
+`verified-by: bravebot_tui::render::the_expand_key_does_nothing_on_a_call_with_only_a_quarantined_block`
+`verified-by: bravebot_tui::state::a_resumed_call_holds_no_result_and_the_expand_key_leaves_it_alone`
+`verified-by: bravebot_agent::conversation::what_a_call_returned_is_not_recounted`
 `verified-by: bravebot_tui::state::expanding_does_nothing_while_a_delegate_is_watched`
 `verified-by: bravebot_tui::state::a_delegates_long_result_is_not_held_for_expansion`
 `verified-by: bravebot_tui::state::a_session_holds_a_bounded_number_of_lines_for_expansion`
 `verified-by: bravebot_tui::state::a_session_holds_twenty_thousand_lines_for_expansion_and_no_more`
 `verified-by: bravebot_agent::turn::a_result_the_planner_read_is_glimpsed_under_its_call`
 `verified-by: bravebot_agent::turn::a_result_of_more_than_five_hundred_lines_is_kept_for_expansion_to_five_hundred`
+`verified-by: bravebot_agent::turn::a_command_that_printed_six_hundred_lines_is_kept_from_its_end_to_five_hundred`
+`verified-by: bravebot_tui::render::an_expanded_command_says_the_earlier_lines_it_cut_before_the_lines_it_kept`
 
 ## Known costs
 

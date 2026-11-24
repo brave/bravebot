@@ -164,6 +164,8 @@ field turning one sentence into an unbounded number of runs at once is worth a b
 `verified-by: bravebot_agent::turn::a_fan_out_that_names_no_delegate_is_refused_and_starts_nothing`
 `verified-by: bravebot_agent::tools::the_each_field_says_one_call_starts_at_most_the_fan_out_limit`
 `verified-by: bravebot_agent::tools::an_empty_each_is_refused_with_a_sentence_saying_it_was_empty`
+`verified-by: bravebot_agent::tools::each_delegate_is_told_the_shared_task_followed_by_its_own_entry`
+`verified-by: bravebot_agent::turn::a_command_approved_always_in_one_delegate_stays_out_of_a_sibling`
 `verified-by: bravebot_core::policy::what_a_person_vouched_for_running_inside_a_delegate_is_kept`
 `verified-by: bravebot_core::policy::a_delegate_that_answered_nothing_takes_nothing_away`
 `verified-by: bravebot_agent::turn::a_delegate_that_stopped_after_a_person_vouched_still_brings_the_answer_home`

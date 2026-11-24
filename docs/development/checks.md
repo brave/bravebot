@@ -43,7 +43,7 @@ Windows clippy runs, which each compile different blocks. Place the comment dire
 allocator ([SANDBOX-34](../specs/sandboxing.md#SANDBOX-34), [LAYER-4](../specs/layering.md#LAYER-4)).
 
 Lints the tree has hundreds of sites of are held to the base instead: `make check-lint-increase`
-runs clippy over the libraries and binaries at the merge base and at the branch, and fails when a lint
+runs clippy over every target at the merge base and at the branch, and fails when a lint
 reports more sites in a crate than it did. Mark a site that is right with
 `#[expect(clippy::lint, reason = "...")]`. `make check` runs it after clippy, CI runs it on pull
 requests, and [contrib/README.md](../../contrib/README.md#check-lint-increasepy) lists the lints.

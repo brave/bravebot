@@ -54,6 +54,7 @@ fn a_note_for_the_window_is_in_english_whatever_the_machine_says() {
         json!({"files": [{"path": "/a/scan.pdf", "bytes": 9 * 1024 * 1024}]}),
     );
     let pasted = ask(2, "pastes.check", json!({"bytes": 20 * 1024 * 1024}));
+    let cleaned = ask(3, "pastes.clean", json!({"text": "a\u{200B}\u{202E}b"}));
     drop(stdin);
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&home);
@@ -66,5 +67,9 @@ fn a_note_for_the_window_is_in_english_whatever_the_machine_says() {
     assert_eq!(
         pasted["ok"]["note"], "that picture is 20.0 MB, and a paste carries at most 10.0 MB",
         "{pasted}"
+    );
+    assert_eq!(
+        cleaned["ok"]["note"], "removed 2 invisible characters from that paste",
+        "{cleaned}"
     );
 }

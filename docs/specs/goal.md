@@ -465,6 +465,7 @@ model that answered. The judge is still offered no tools and still gets one roun
 `verified-by: bravebot_agent::turn::a_check_runs_on_the_summary_model_the_settings_name`
 `verified-by: bravebot_agent::turn::a_check_with_no_summary_model_runs_on_the_sessions_own`
 `verified-by: bravebot_agent::turn::a_summary_model_needing_a_sign_in_sends_no_check`
+`verified-by: bravebot_agent::turn::a_summary_model_nothing_serves_sends_no_check_and_ends_the_goal_on_that_reason`
 `verified-by: bravebot_agent::compact::a_summary_model_the_machine_refuses_is_not_the_one_a_side_request_runs_on`
 `verified-by: bravebot_agent::turn::a_summary_model_the_machine_excludes_sends_no_check`
 `verified-by: bravebot_agent::turn::a_summary_model_that_searches_the_web_sends_no_check`

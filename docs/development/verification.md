@@ -42,6 +42,9 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | `Remembered::covers`, `RememberedStep::matches`, `Shape::matches` | A remembered line covers a plan exactly where the lines are joined the same way and each step matches in name, file, start path, assignments, routes and arguments, with a number slot admitting only a number, and the step carries no expansion |
 | `permissions::ruling_of` | A matching `deny` decides over every other rule, an `ask` over an `allow`, and an `allow` only where nothing restricts |
 | `permissions::pipeline_decision` | A `deny` on any stage denies a pipeline, an `ask` on any stage asks, and a pipeline is allowed only where it has stages and every one is allowed |
+| `credentials::hex_value`, `credentials::sextet_of` | Each gives the value of a hexadecimal or base64 character exactly where the byte is one, and nothing for any other byte |
+| `credentials::escape_at`, `credentials::percent_bytes` | Every offset read is inside the text, a whole `%` escape is always decoded, including one that ends the text, and the output is never longer than the input and is shorter where an escape was decoded |
+| `credentials::base64_bytes` | Fewer than eight bits are held between characters and the bits held are below two to the power of how many are held, so no shift is by 32 or more, no mask underflows, and there is at most one byte out for each character in |
 
 `verify/mutations.txt` lists a defect for each, and `make check-verus` requires Verus to refuse
 every one.

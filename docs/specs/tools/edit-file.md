@@ -157,6 +157,7 @@ nothing of the finding ([CRED-19](../credential-protection.md#CRED-19)).
 
 `verified-by: bravebot_agent::turn::an_edit_shows_the_lines_it_changed`
 `verified-by: bravebot_agent::tools::tests::editing::an_edit_result_shows_its_lines_only_for_a_trusted_body`
+`verified-by: bravebot_agent::tools::tests::editing::an_edit_result_is_the_headline_alone_and_untrusted_where_the_choice_was_the_count`
 `verified-by: bravebot_agent::turn::an_edit_does_not_show_the_planner_a_credential_beside_the_change_unless_the_person_agrees`
 `verified-by: bravebot_agent::turn::an_edit_shows_the_lines_around_the_change_once_the_person_agrees_and_asks_once`
 `verified-by: bravebot_agent::turn::an_agreement_to_show_a_file_covers_the_lines_an_edit_shows`

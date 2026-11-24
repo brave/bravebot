@@ -403,7 +403,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model` and `/model session`, `/theme`, `/effort` and `/effort session`, and `/variant` in every form; `/config`; `/language` in every form; `/crash-reports` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/sessions`; `/panel`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/redraw`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model` and `/model session`, `/theme`, `/effort` and `/effort session`, and `/variant` in every form; `/config`; `/language` in every form; `/crash-reports` in every form; `/advisor` and `/style` in every form; `/watch` in every form but the one that arms a watch on a path ([FSWATCH-13](file-watches.md#FSWATCH-13)); `/jobs` in every form; `/outputs`; `/sessions`; `/panel`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/redraw`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
 | everything else | every other command, `/loop <interval> <prompt>`, `/goal <condition>`, every other form of `/schedule` and every other form of `/mcp` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
@@ -845,6 +845,10 @@ carried out or queued as above.
 `verified-by: bravebot_agent::aside::a_fork_shares_the_stored_messages_instead_of_copying_them`
 `verified-by: bravebot_agent::aside::a_question_shares_the_stored_messages_instead_of_copying_them`
 `verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_btw_asked_mid_turn`
+`verified-by: bravebot_tui::app::tests::waiting_commands::ctrl_enter_on_a_waiting_command_stops_the_turn_and_carries_the_command_out`
+`verified-by: bravebot_tui::app::tests::waiting_commands::exit_typed_mid_turn_waits_for_the_turn_and_does_not_stop_it`
+`verified-by: bravebot_tui::app::tests::waiting_commands::a_file_the_open_command_numbers_is_refused_while_a_turn_runs_and_not_queued`
+`verified-by: bravebot_tui::app::tests::waiting_commands::a_btw_typed_behind_a_waiting_btw_waits_behind_it`
 `verified-by: bravebot_tui::app::stopping_the_turn_stops_the_question_beside_it`
 `verified-by: bravebot_tui::app::a_question_still_out_when_the_turn_is_stopped_is_stopped`
 `verified-by: bravebot_tui::app::a_question_still_out_when_the_turn_ends_by_itself_stays_out`
@@ -1238,7 +1242,7 @@ before it is built. This command is the part that needs none of that.
 ### CMD-14: `/resume` leaves for another recorded session, restored as `--resume` restores it
 
 `/resume` with no argument draws the list `--resume` draws ([SESSION-8](sessions.md#SESSION-8)),
-leaving out the session being run, and `/resume <id>` names a record of this directory. Either way
+marking the session being run as the current one, and `/resume <id>` names a record of this directory. Either way
 the running session ends and the next begins from the record chosen through the path a start with
 `--resume` takes, so its transcript, spend, trust map, programs and rules are the record's own and
 nothing the session left granted reaches it: the directories opened and the checkouts kept are
@@ -1266,6 +1270,9 @@ decide, so the command only says which one the person meant.
 `verified-by: bravebot_tui::sessions::resume_by_id_does_not_follow_an_id_out_of_the_sessions_directory`
 `verified-by: bravebot_tui::app::resuming_ends_the_session_and_leaves_its_record_resumable`
 `verified-by: bravebot_tui::app::resume_where_the_directory_holds_no_other_session_stays_and_does_not_echo_the_id`
+`verified-by: bravebot_tui::app::resuming_ends_the_loop_the_goal_the_watches_and_the_checkouts_the_session_kept`
+`verified-by: bravebot_tui::app::typing_resume_with_an_id_leaves_the_loop_with_the_record_chosen`
+`verified-by: bravebot_tui::sessions_screen_tests::a_bare_resume_lists_the_other_sessions_beside_the_current_one_and_keeps_the_session`
 
 <a id="CMD-15"></a>
 ### CMD-15: `/request` opens the last request built, and takes no argument

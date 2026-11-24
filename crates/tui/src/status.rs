@@ -946,11 +946,18 @@ fn running_lines(facts: &Facts<'_>) -> Vec<Line> {
                 &t!(status_watch, number = watch.number()),
                 watch.path().to_string(),
             )
-            .with_note(t!(
-                status_watch_armed_by,
-                turn = watch.armed_by(),
-                left = crate::loops::spell(watch.left(now))
-            )),
+            .with_note(if watch.armed_by_the_person() {
+                t!(
+                    status_watch_armed_by_you,
+                    left = crate::loops::spell(watch.left(now))
+                )
+            } else {
+                t!(
+                    status_watch_armed_by,
+                    turn = watch.armed_by(),
+                    left = crate::loops::spell(watch.left(now))
+                )
+            }),
         );
     }
 
@@ -1656,6 +1663,37 @@ mod tests {
             .expect("the watch is on the report");
         assert_eq!(line.value, "notes/plan.md");
         assert!(line.note.contains('3'), "{:?}", line.note);
+    }
+
+    /// A watch the person armed with `/watch <path>` was armed by no turn, so its line says it
+    /// was theirs and never reads "armed by turn 0" (FSWATCH-10).
+    #[test]
+    fn the_report_says_a_watch_was_armed_by_the_person() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut watches = watch::Watches::new();
+        watches
+            .arm(
+                "notes/plan.md".to_string(),
+                std::path::PathBuf::from("/work"),
+                watch::BY_THE_PERSON,
+                watch::Looked::Saw("first".to_string()),
+                std::time::Instant::now(),
+            )
+            .expect("a watch");
+
+        let mut facts = facts(&config, &trust);
+        facts.watches = watches.live();
+        let report = report(&facts);
+
+        let line = report
+            .lines
+            .iter()
+            .find(|line| line.label.trim() == t!(status_watch, number = 1))
+            .expect("the watch is on the report");
+        assert_eq!(line.value, "notes/plan.md");
+        assert!(line.note.starts_with("armed by you"), "{:?}", line.note);
+        assert!(!line.note.contains("turn"), "{:?}", line.note);
     }
 
     /// The time on the line is what the watch has left of its week, which is when it stops
@@ -3837,6 +3875,77 @@ mod tests {
             note_of(&declined.servers),
             t!(status_mcp_servers_declined, alias = "weather")
         );
+    }
+
+    /// SERVERS-13: while the mode that skips prompts is in force, the report names the mode and
+    /// lists each server the session started by alias, in the order they started. The faults it
+    /// rejects are a servers line that becomes a count ("2 servers") or "none" under bypass, a
+    /// line that leaves the servers out, a line that adds "(started unasked)" or any other mark of
+    /// the mode beside the aliases or in the note, and a report that does not name the mode. The
+    /// same two servers are drawn asking and under bypass, and the servers line must not differ
+    /// between them by a character.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn under_bypass_the_report_names_the_mode_and_lists_each_started_server_without_a_mark() {
+        use bravebot_agent::PermissionMode::{Ask, Bypass};
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let held = crate::mcp_command::tests::holding_servers(&["docs", "weather"]);
+        let lines_of = |mode, began_in_bypass| {
+            report(&Facts {
+                servers: &held.servers,
+                permission_mode: mode,
+                began_in_bypass,
+                ..facts(&config, &trust)
+            })
+            .lines
+        };
+        let servers_line = |lines: &[Line]| {
+            let line = lines
+                .iter()
+                .find(|line| line.label.trim() == t!(status_mcp_servers))
+                .expect("the servers line is on the report");
+            (line.value.clone(), line.note.clone())
+        };
+
+        let asking = lines_of(Ask, false);
+        let bypassing = lines_of(Bypass, true);
+
+        let (value, note) = servers_line(&bypassing);
+        assert_eq!(
+            value, "docs, weather",
+            "the servers are not listed by alias"
+        );
+        assert_eq!(
+            (value, note),
+            servers_line(&asking),
+            "the servers line says something about the mode beside the servers"
+        );
+
+        let mode = bypassing
+            .iter()
+            .find(|line| line.label.trim() == t!(status_permissions))
+            .expect("the mode is not named while it is in force");
+        assert_eq!(mode.value, t!(mode_bypass));
+        assert!(
+            asking
+                .iter()
+                .all(|line| line.label.trim() != t!(status_permissions)),
+            "the control, asking, names a mode"
+        );
+
+        for line in &bypassing {
+            if line.label.trim() == t!(status_permissions) {
+                continue;
+            }
+            for text in [&line.value, &line.note] {
+                assert!(
+                    !text.contains("unasked") && !text.contains("bypass"),
+                    "{:?} says something of the mode: {text:?}",
+                    line.label
+                );
+            }
+        }
     }
 
     /// The policy a started server's backend was handed, drawn for the tests of `/status`.

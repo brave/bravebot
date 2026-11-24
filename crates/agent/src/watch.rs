@@ -20,6 +20,8 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::workspace::Workspace;
+
 /// Whether this turn may arm a standing watch, and why not where it may not.
 ///
 /// Read twice, once by the tool table and once by dispatch, for the reason the scheduling answer
@@ -148,6 +150,15 @@ pub fn names_the_same_file(path: &str, under: &Path, root: &Path) -> bool {
     Path::new(path).is_absolute() || under == root
 }
 
+/// Whether a path a person typed is one a watch may be asked for at all.
+///
+/// An empty path names nothing, and a control character in one is refused rather than written
+/// into a note or a fire's prompt. Every client that lets a person arm a watch asks this, so each
+/// only says the refusal its own way.
+pub fn armable(path: &str) -> bool {
+    !path.is_empty() && !path.chars().any(char::is_control)
+}
+
 /// How long a watch lives before it ends itself.
 ///
 /// The number a loop already uses. A session left open for a week is one nobody is sitting at, and
@@ -159,6 +170,11 @@ const MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// More paths than a conversation names, and few enough that a tree of files all being written
 /// cannot produce a queue of fires nobody can read.
 pub const MAX_LIVE: usize = 8;
+
+/// The `armed_by` of a watch a person armed themselves rather than a turn.
+///
+/// Turns are counted from 1, so 0 never names a turn.
+pub const BY_THE_PERSON: usize = 0;
 
 /// The shortest gap between two fires of the same watch, measured from the end of the turn the
 /// last fire started.
@@ -250,6 +266,11 @@ impl Watch {
         self.armed_by
     }
 
+    /// Whether a person armed this watch rather than a turn.
+    pub fn armed_by_the_person(&self) -> bool {
+        self.armed_by == BY_THE_PERSON
+    }
+
     /// What the fire due for this watch would say, where a change is waiting to be reported.
     pub fn change(&self) -> Option<Change> {
         self.pending
@@ -294,6 +315,28 @@ impl Watches {
 
     pub fn is_empty(&self) -> bool {
         self.live.is_empty()
+    }
+
+    /// The number of the live watch on the file `path` names in `workspace`, if one is on it.
+    ///
+    /// A person arming a path already watched arms nothing new, in every client, so the comparison
+    /// is made here once rather than by each client that arms one. A watch's own path is read only
+    /// while it still names the file it was armed on from the workspace's directory
+    /// ([`names_the_same_file`]). Two spellings are then the same file where they are spelled the
+    /// same, or where the workspace resolves both to one place (`notes.md` and `./notes.md`, or a
+    /// link and what it leads to).
+    pub fn watching(&self, workspace: &Workspace, path: &str) -> Option<usize> {
+        let resolved = workspace.resolve(path).ok();
+        self.live
+            .iter()
+            .filter(|watch| names_the_same_file(&watch.path, &watch.under, workspace.root()))
+            .find(|watch| {
+                watch.path == path
+                    || resolved.as_ref().is_some_and(|resolved| {
+                        workspace.resolve(&watch.path).ok().as_ref() == Some(resolved)
+                    })
+            })
+            .map(|watch| watch.number)
     }
 
     /// Arm a watch on a path, and give back the number it got.
@@ -936,6 +979,51 @@ mod tests {
         assert_eq!(watches.live().len(), MAX_LIVE);
     }
 
+    /// A path already watched is named by the watch on it under any spelling the workspace
+    /// resolves to the same file, and a path nobody watches by none.
+    #[test]
+    fn watching_names_the_live_watch_on_a_path() {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let workspace = Workspace::new(scratch.path()).expect("workspace");
+        let root = workspace.root().to_path_buf();
+        std::fs::write(root.join("b.txt"), "b").expect("scratch");
+        let mut watches = Watches::new();
+        let now = Instant::now();
+        for path in ["a.txt", "b.txt"] {
+            watches
+                .arm(path.to_string(), root.clone(), 1, saw("first"), now)
+                .expect("a watch");
+        }
+
+        assert_eq!(watches.watching(&workspace, "b.txt"), Some(2));
+        assert_eq!(watches.watching(&workspace, "./b.txt"), Some(2));
+        assert_eq!(watches.watching(&workspace, "c.txt"), None);
+        assert!(watches.stop(2));
+        assert_eq!(watches.watching(&workspace, "./b.txt"), None);
+    }
+
+    /// A watch's relative path is read under the directory it was armed in, so once the workspace
+    /// is somewhere else the same spelling is a different file.
+    #[test]
+    fn watching_does_not_match_a_relative_watch_armed_under_another_directory() {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let workspace = Workspace::new(scratch.path()).expect("workspace");
+        let mut watches = Watches::new();
+        armed(&mut watches, "b.txt", Instant::now());
+        assert_eq!(watches.watching(&workspace, "./b.txt"), None);
+        assert_eq!(watches.watching(&workspace, "b.txt"), None);
+    }
+
+    /// An empty path or one holding a control character is refused before anything looks at it.
+    #[test]
+    fn a_path_is_armable_unless_empty_or_holding_a_control_character() {
+        assert!(armable("notes.md"));
+        assert!(armable("a file with spaces.md"));
+        assert!(!armable(""));
+        assert!(!armable("notes\n.md"));
+        assert!(!armable("notes\u{1b}[2J.md"));
+    }
+
     /// A path the session does not reach has no look to record, absent or otherwise.
     #[test]
     fn a_path_out_of_reach_is_refused_rather_than_armed() {
@@ -1034,6 +1122,28 @@ mod tests {
         assert_eq!(watch.armed_by(), 7);
         assert_eq!(watch.left(now), MAX_AGE);
         assert_eq!(watch.left(now + MAX_AGE), Duration::ZERO);
+    }
+
+    /// A watch a person armed reads as theirs, and one a turn armed does not.
+    #[test]
+    fn a_watch_armed_by_the_person_says_so() {
+        let mut watches = Watches::new();
+        let now = Instant::now();
+        watches
+            .arm(
+                "a.txt".to_string(),
+                here(),
+                BY_THE_PERSON,
+                saw("first"),
+                now,
+            )
+            .expect("a watch");
+        watches
+            .arm("b.txt".to_string(), here(), 3, saw("first"), now)
+            .expect("a watch");
+
+        assert!(watches.live()[0].armed_by_the_person());
+        assert!(!watches.live()[1].armed_by_the_person());
     }
 
     /// The injection regression test. A fire's prompt lands in the one role nothing can label, so

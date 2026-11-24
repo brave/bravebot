@@ -327,6 +327,9 @@ enum Attempt {
     BrokenFrames(Vec<String>),
     /// Headers for a chunked stream, then hang up before any of the body.
     BrokenBeforeBody,
+    /// A status of 200 with this content type and a length of body that never comes, the
+    /// connection left open: a reply that is up and quiet.
+    QuietBody(&'static str),
 }
 
 /// Serve one behaviour per connection, in order, recording what each request carried.
@@ -450,6 +453,24 @@ fn serve_attempts(attempts: Vec<Attempt>) -> (String, mpsc::Receiver<Captured>) 
                         b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
                     );
                     let _ = stream.flush();
+                }
+                Attempt::QuietBody(content_type) => {
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "a client that has gone away leaves nothing to be quiet to, and the test fails on the missing second request"
+                    )]
+                    let _ = stream
+                        .write_all(
+                            format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: 1000\r\n\r\n")
+                                .as_bytes(),
+                        )
+                        .and_then(|()| stream.flush());
+                    // Held rather than dropped: a connection that closed would be a socket that
+                    // went away, and this one is open and says nothing.
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_secs(10));
+                        drop(stream);
+                    });
                 }
                 Attempt::Frames(frames) => {
                     let _ = stream.write_all(
@@ -1351,6 +1372,10 @@ fn premium_config(endpoint: &str, premium: &str) -> Config {
 /// PREM-10: with a premium key, the request goes to the premium host and carries the key as its
 /// bearer token. The premium host authorises on the key alone, so the request is not signed: a
 /// signature beside the key, or the key in a cookie, is a request the host does not read.
+///
+/// The request is a `POST` to `/v1/chat/completions` on that host. The regression it rejects: a
+/// premium request sent to another path on the premium host, such as the base host's own route or
+/// a path the premium service does not serve, with the headers right.
 #[test]
 fn a_premium_request_goes_to_the_premium_host_with_the_key_as_its_bearer_token() {
     let (premium_endpoint, received) = serve(REPLY);
@@ -1375,6 +1400,10 @@ fn a_premium_request_goes_to_the_premium_host_with_the_key_as_its_bearer_token()
         .expect("completion succeeds");
 
     let captured = received.recv().expect("request captured");
+    assert_eq!(
+        captured.request_line, "POST /v1/chat/completions HTTP/1.1",
+        "the premium request went to another path on the premium host"
+    );
     assert_eq!(
         captured.header("authorization"),
         Some("Bearer presented-key")
@@ -4680,6 +4709,50 @@ fn a_gateway_stating_a_shorter_idle_gap_gives_up_on_a_quiet_reply_sooner() {
     );
 }
 
+/// A reply whose headers came and whose body then went quiet past the gap is a connection that gave
+/// out, so the request is sent again and the second answer is the one returned. Asked on the whole
+/// path and the streamed one, since each has a retry loop of its own that reads the failure's mark.
+/// Rejects a body that goes quiet being reported as a failure not worth another attempt, which
+/// gives up after the first request.
+#[test]
+fn a_reply_that_went_quiet_before_its_body_arrived_is_sent_again() {
+    let model = "a-model-whose-reply-went-quiet";
+    let egress = Egress::with_timeouts(bravebot_net::Timeouts {
+        idle: Duration::from_millis(300),
+        reply: Duration::from_secs(30),
+        ..bravebot_net::Timeouts::default()
+    });
+
+    for streaming in [false, true] {
+        let content_type = if streaming {
+            "text/event-stream"
+        } else {
+            "application/json"
+        };
+        let (endpoint, received) = serve_attempts(vec![
+            Attempt::QuietBody(content_type),
+            answer_for(streaming),
+        ]);
+        let config = config_for(&endpoint);
+        let gateway = gateway_stating(&endpoint, model, r#""maxRetries": 2"#);
+
+        let (result, attempts) = asked_of(&gateway, &config, &egress, model, streaming);
+
+        assert!(
+            result.is_ok(),
+            "streaming {streaming}: a quiet reply was not sent again: {result:?}"
+        );
+        let completion = result.unwrap();
+        assert_eq!(completion.model, "served-model", "streaming {streaming}");
+        assert_eq!(attempts, 2, "streaming {streaming}");
+        assert_eq!(
+            received.try_iter().count(),
+            2,
+            "streaming {streaming}: the server read one request per attempt"
+        );
+    }
+}
+
 /// A model on this machine is waited on through any silence while a person can stop the turn, and a
 /// stated gap is a bound like the default one, so it does not reach such a model. A stated retry
 /// count does: it decides how often a request is sent again and nothing about how long a reply may
@@ -5891,6 +5964,54 @@ fn an_anthropic_listing_is_asked_for_once_as_a_whole_page_with_the_key_in_its_he
             ("anthropic/claude-opus-5-5", Some(1_000_000), true),
             ("anthropic/claude-haiku-4-5", Some(200_000), false),
         ]
+    );
+}
+
+/// BACKEND-27: a request to an `anthropic` entry whose conversation no later request sends goes out
+/// with the prompt's breakpoint and none on the end of the conversation, and a request that is sent
+/// again keeps both. The reply is read whole.
+///
+/// It rejects a client that keeps the conversation breakpoint whatever the request says, and one that
+/// drops it for every request.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_anthropic_request_giving_up_its_conversation_is_sent_without_the_breakpoint_on_it() {
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Json(MESSAGES_REPLY.into()),
+        Attempt::Json(MESSAGES_REPLY.into()),
+    ]);
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let kept = ChatRequest::new(
+        "anthropic/claude-test",
+        vec![Message::system("be brief"), Message::user("hello")],
+    );
+    let given_up = kept.clone().giving_up_its_conversation();
+
+    for request in [&given_up, &kept] {
+        AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+            .complete(&mut policy, request)
+            .expect("the reply was read");
+    }
+
+    let bodies: Vec<serde_json::Value> = received.try_iter().map(|c| json_of(&c)).collect();
+    assert_eq!(bodies.len(), 2);
+    let ephemeral = serde_json::json!({"type": "ephemeral"});
+    for body in &bodies {
+        assert_eq!(body["system"][0]["cache_control"], ephemeral, "{body}");
+    }
+    assert!(
+        !carries_a_breakpoint(&serde_json::json!(bodies[0]["messages"])),
+        "a conversation nothing sends again was marked: {}",
+        bodies[0]
+    );
+    assert_eq!(
+        bodies[1]["messages"][0]["content"][0]["cache_control"], ephemeral,
+        "a conversation sent again lost its breakpoint: {}",
+        bodies[1]
     );
 }
 

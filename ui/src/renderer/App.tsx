@@ -1332,6 +1332,7 @@ export function App(): React.JSX.Element {
         live={live}
         pending={pending}
         problem={experienceError() || problem}
+        onProblem={setProblem}
         collapsed={collapsed}
         onToggle={toggle}
         attention={attention}

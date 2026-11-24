@@ -3827,6 +3827,73 @@ fn the_shape_call_is_told_an_agent_will_read_the_workspace() {
     );
 }
 
+/// The two planning requests of a manifest run for `task`, as the mock server received them.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn planning_requests_of(task: &Task, name: &str) -> (String, String) {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join("a.md"), "hello").expect("write a.md");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "doc"}},
+            {"capability": "ANSWER", "args": {"from_slot": "doc"}},
+        ])),
+    ]);
+    let mut sink = RecordingSink::new();
+    manifest::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        task,
+        skipping_permissions!(),
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("runs");
+    (
+        received.recv().expect("the shape request"),
+        received.recv().expect("the fit request"),
+    )
+}
+
+/// INSTR-12: the planner of a manifest run is sent no output style. A task carrying `concise` has
+/// the same two planning requests, byte for byte, as one carrying none, and neither holds the
+/// style's words. The manifest planner builds its prompts from constants and takes nothing from
+/// `Task::style`, so this rejects an implementation that opens either planning call's system
+/// prompt with the session's style, as a person's turn does.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_style_in_force_is_not_sent_to_the_planner_of_a_manifest_run() {
+    let concise = bravebot_agent::styles::named("concise")
+        .cloned()
+        .expect("concise ships with the build");
+    assert!(
+        concise.words.contains("Lead with the result"),
+        "the style's words changed, so the assertions below look for nothing"
+    );
+
+    let (plain_shape, plain_fit) = planning_requests_of(&Task::new("show me a.md"), "style-none");
+    let (styled_shape, styled_fit) = planning_requests_of(
+        &Task::new("show me a.md").with_style(Some(concise.clone())),
+        "style-concise",
+    );
+
+    for (call, request) in [("shape", &styled_shape), ("fit", &styled_fit)] {
+        assert!(
+            !request.contains("Lead with the result") && !request.contains(concise.words.as_ref()),
+            "the {call} request carried the session's style: {request}"
+        );
+    }
+    assert_eq!(
+        styled_shape, plain_shape,
+        "a style changed the shape request"
+    );
+    assert_eq!(styled_fit, plain_fit, "a style changed the fit request");
+}
+
 /// A manifest step's change note is built inside the kernel too.
 ///
 /// `FILE_WRITE` reports what it changed off the same comparison a turn's write does, so it is

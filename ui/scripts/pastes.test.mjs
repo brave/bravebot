@@ -52,6 +52,22 @@ test('a paste is numbered from the counter drops use, so a drop then a paste are
   assert.deepEqual(staging.grantsOf(staging.named(again.staging, again.draft)), { drops: ['d', 'e'], pastes: ['p'] })
 })
 
+test('pasted text replaces the selection and puts the caret after it', () => {
+  assert.deepEqual(staging.pasteText('see that now', 4, 8, 'this'), { draft: 'see this now', caret: 8 })
+  assert.deepEqual(staging.pasteText('see that now', 8, 4, 'this'), { draft: 'see this now', caret: 8 }, 'a backward selection is the same selection')
+})
+
+test('pasted text lands at a collapsed caret, and nothing past the end of the draft', () => {
+  assert.deepEqual(staging.pasteText('seethis', 3, 3, ' '), { draft: 'see this', caret: 4 })
+  assert.deepEqual(staging.pasteText('', 0, 0, 'see this'), { draft: 'see this', caret: 8 })
+  assert.deepEqual(staging.pasteText('see', 9, 9, ' this'), { draft: 'see this', caret: 8 })
+})
+
+test('a paste the bridge cleaned to nothing leaves the draft and its selection as they were', () => {
+  assert.deepEqual(staging.pasteText('see that now', 4, 8, ''), { draft: 'see that now', caret: 8 })
+  assert.deepEqual(staging.pasteText('see', 3, 3, ''), { draft: 'see', caret: 3 })
+})
+
 test('a paste lands at the caret, with a space before it when the word there would run into it', () => {
   const pasted = staging.stagePaste(staging.EMPTY_STAGING, picture('p'), 'what isthis', 7)
   assert.equal(pasted.draft, 'what is [Image #1] this')
@@ -362,6 +378,59 @@ test('a bot’s turn keeps its briefing and carries what was pasted', async () =
 test('a manifest run takes no paste', async () => {
   const forwarded = main.sanitised('manifest.run', { session: 's1', task: 't', model: 'm', pastes: [await paste('s1')] })
   assert.deepEqual(forwarded, { session: 's1', task: 't', model: 'm' })
+})
+
+// ---- pasted text (PASTE-10) ---------------------------------------------------------------------
+
+// A stub of the bridge's `pastes.clean` that removes a word, not a character, and says a note the
+// agent does not use, so a character list or wording of this process's own would fail the tests
+// below. The bridge's own answer is pinned in crates/ui-bridge/tests/attaching.rs.
+const cleaned = []
+const clean = async (text) => {
+  cleaned.push(text)
+  const kept = text.replaceAll('HIDDEN', '')
+  const removed = (text.length - kept.length) / 'HIDDEN'.length
+  return removed > 0 ? { text: kept, removed, note: `stub: ${removed} gone` } : { text: kept, removed }
+}
+
+test('pasted text is what the bridge cleaned it to, with its count, and its note only when it says one', async () => {
+  assert.deepEqual(await main.cleanPaste('s1', 'see this', clean), { kind: 'text', text: 'see this', removed: 0 }, 'a clean paste passes through with no note')
+  assert.deepEqual(await main.cleanPaste('s1', 'see HIDDENthisHIDDEN', clean), { kind: 'text', text: 'see this', removed: 2, note: 'stub: 2 gone' })
+  assert.deepEqual(await main.cleanPaste('s1', 'HIDDEN', clean), { kind: 'text', text: '', removed: 1, note: 'stub: 1 gone' }, 'nothing but hidden characters still says so')
+})
+
+test('a bridge that does not answer, or answers something else, gives unclean text, never the raw paste', async () => {
+  assert.deepEqual(await main.cleanPaste('s1', 'raw', async () => { throw new Error('the agent is not running') }), { kind: 'unclean' })
+  for (const answer of [undefined, null, {}, { text: 'raw' }, { removed: 0 }, { text: 3, removed: 0 }, { text: 'raw', removed: '0' }, { text: 'raw', removed: -1 }, { text: 'raw', removed: 1.5 }, { text: 'raw', removed: 1, note: 7 }]) {
+    assert.deepEqual(await main.cleanPaste('s1', 'raw', async () => answer), { kind: 'unclean' }, JSON.stringify(answer))
+  }
+})
+
+test('text pasted into a session this process does not hold, or text that is not a string, is not sent to the bridge', async () => {
+  cleaned.length = 0
+  assert.equal(await main.cleanPaste('nobody', 'text', clean), null)
+  assert.equal(await main.cleanPaste(undefined, 'text', clean), null)
+  assert.equal(await main.cleanPaste('s1', 3, clean), null)
+  assert.equal(await main.cleanPaste('s1', { text: 'x' }, clean), null)
+  assert.deepEqual(cleaned, [], 'the bridge is never asked')
+})
+
+// The preload cancels every trusted text paste to clean it, so the composer's own paste handler
+// never sees one. The cleaned text is folded where the window writes it, or a long paste would land
+// whole in the box (PASTE-1).
+test('cleaned text folds behind a marker before it is written into the draft', () => {
+  const transcript = readFileSync(join('src', 'renderer', 'components', 'Transcript.tsx'), 'utf8')
+  const start = transcript.indexOf("if (paste.outcome.kind === 'text') {")
+  const handler = transcript.slice(start, transcript.indexOf('pasteText(', start))
+  assert.ok(start !== -1 && handler.length > 0, 'the cleaned text is written with pasteText')
+  assert.match(handler, /stageText\([^)]*paste\.outcome\.text/, 'the cleaned text is offered to stageText first')
+
+  const long = 'one\ntwo\nthree\nfour'
+  const folded = staging.stageText(staging.EMPTY_STAGING, long, 'see ', 4, 4)
+  assert.equal(folded.draft, 'see [Pasted text #1 +4 lines] ')
+  assert.equal(staging.unfolded(folded.staging, folded.draft), `see ${long} `)
+  assert.equal(staging.stageText(staging.EMPTY_STAGING, 'short', 'see ', 4, 4), null, 'a short paste is written as it is')
+  assert.deepEqual(staging.pasteText('see ', 4, 4, 'short'), { draft: 'see short', caret: 9 })
 })
 
 /**

@@ -110,6 +110,48 @@ fn a_terminal_that_could_not_be_taken_again_is_returned_as_a_failure() {
     );
 }
 
+/// Each handover takes the terminal again with the mouse choice the session holds, and the one
+/// function that takes it again passes that choice on. A handover that takes it again with
+/// `true` or `false` written in, or with some other value, turns capture on for a person who turned
+/// it off with `tui.mouse`, or leaves the wheel scrolling the window behind the session after an
+/// editor. A scan of the source, since the entry points need a tty to run.
+///
+/// Rejects `take_again_from_a_program` handing `take_over_terminal` a mouse value of its own, and
+/// a handover that reads the choice from anywhere but the session or its caller.
+#[test]
+fn every_handover_takes_the_terminal_again_with_the_mouse_choice_the_session_holds() {
+    let terminal = include_str!("../terminal.rs");
+
+    let taken_again = body_of(terminal, "take_again_from_a_program");
+    assert!(
+        taken_again.contains("take_over_terminal(terminal.backend_mut(), mouse)"),
+        "the terminal is not taken again with the mouse choice it was given: {taken_again}"
+    );
+    assert!(
+        !taken_again.contains("true") && !taken_again.contains("false"),
+        "a mouse choice is written into the function: {taken_again}"
+    );
+
+    for entry in ["edit_prompt", "show_transcript", "open_file_in_editor"] {
+        assert!(
+            body_of(terminal, entry)
+                .contains("take_again_from_a_program(terminal, session.mouse_captured())"),
+            "`{entry}` does not take the terminal again with the session's mouse choice"
+        );
+    }
+    let edit_body = body_of(terminal, "edit_body");
+    assert!(
+        edit_body.contains("take_again_from_a_program(terminal, mouse)"),
+        "`edit_body` does not take the terminal again with the choice its caller read: {edit_body}"
+    );
+    let suspend = body_of(terminal, "suspend_session");
+    assert!(
+        suspend.contains("let mouse = session.mouse_captured();")
+            && suspend.contains("take_over_terminal(terminal.backend_mut(), mouse)"),
+        "`suspend_session` does not take the terminal again with the session's mouse choice: {suspend}"
+    );
+}
+
 /// The text of the function named `name` in `source`, from its signature to the line that closes it.
 fn body_of<'a>(source: &'a str, name: &str) -> &'a str {
     let from = source

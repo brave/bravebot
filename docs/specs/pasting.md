@@ -14,6 +14,7 @@ governs:
   - crates/tui/src/app/side_requests.rs
   - crates/tui/src/app/keys.rs
   - crates/tui/src/invisible.rs
+  - crates/core/src/invisible.rs
   - crates/tui/src/peek_mode.rs
   - crates/tui/src/state/peek.rs
   - crates/ui-bridge/src/attached.rs
@@ -326,7 +327,9 @@ whitespace, and one emoji or text selector stays after an emoji or before a keyc
 England, Scotland and Wales, which are tag characters behind a black flag, stay, and no other tags do. The notice
 `removed 3 invisible characters from that paste` follows the paste and gives the count. A paste
 that held none says nothing. It applies to a paste in shell mode, to one that folds, and to one
-that arrives while a turn runs, since all of them come through the same function.
+that arrives while a turn runs, since all of them come through the same function. A text paste into
+the desktop window's composer goes through that function too, in the bridge, and the window shows
+the same note ([PASTE-11](#PASTE-11)).
 
 **Why.** A paste lands in the person's own message with no label, so the words in it are taken as
 theirs. Text copied from a page can hold an instruction written in characters nothing draws, and
@@ -339,18 +342,18 @@ the person's screen.
 and a run of selectors behind one symbol, are how a message is hidden in text that looks plain.
 Persian, Indic and emoji text needs only the first of each, after a character that is not ASCII.
 
-`verified-by: bravebot_tui::invisible::a_message_written_in_tag_characters_is_removed_and_counted`
-`verified-by: bravebot_tui::invisible::bidirectional_controls_and_zero_width_characters_are_removed`
-`verified-by: bravebot_tui::invisible::a_paste_with_nothing_hidden_is_returned_as_it_came`
-`verified-by: bravebot_tui::invisible::the_joiners_persian_and_indic_scripts_are_written_with_are_kept`
-`verified-by: bravebot_tui::invisible::joiners_between_ascii_letters_are_removed`
-`verified-by: bravebot_tui::invisible::a_run_of_joiners_after_a_letter_keeps_only_the_first`
-`verified-by: bravebot_tui::invisible::emoji_sequences_are_kept_whole`
-`verified-by: bravebot_tui::invisible::the_flags_of_england_scotland_and_wales_are_kept_whole`
-`verified-by: bravebot_tui::invisible::tags_behind_a_black_flag_that_are_not_one_of_the_three_flags_are_removed`
-`verified-by: bravebot_tui::invisible::a_run_of_selectors_after_an_emoji_keeps_only_the_first`
-`verified-by: bravebot_tui::invisible::a_selector_that_follows_nothing_it_modifies_is_removed`
-`verified-by: bravebot_tui::invisible::a_selector_after_a_digit_is_kept_only_for_a_keycap`
+`verified-by: bravebot_core::invisible::a_message_written_in_tag_characters_is_removed_and_counted`
+`verified-by: bravebot_core::invisible::bidirectional_controls_and_zero_width_characters_are_removed`
+`verified-by: bravebot_core::invisible::a_paste_with_nothing_hidden_is_returned_as_it_came`
+`verified-by: bravebot_core::invisible::the_joiners_persian_and_indic_scripts_are_written_with_are_kept`
+`verified-by: bravebot_core::invisible::joiners_between_ascii_letters_are_removed`
+`verified-by: bravebot_core::invisible::a_run_of_joiners_after_a_letter_keeps_only_the_first`
+`verified-by: bravebot_core::invisible::emoji_sequences_are_kept_whole`
+`verified-by: bravebot_core::invisible::the_flags_of_england_scotland_and_wales_are_kept_whole`
+`verified-by: bravebot_core::invisible::tags_behind_a_black_flag_that_are_not_one_of_the_three_flags_are_removed`
+`verified-by: bravebot_core::invisible::a_run_of_selectors_after_an_emoji_keeps_only_the_first`
+`verified-by: bravebot_core::invisible::a_selector_that_follows_nothing_it_modifies_is_removed`
+`verified-by: bravebot_core::invisible::a_selector_after_a_digit_is_kept_only_for_a_keycap`
 `verified-by: bravebot_tui::state::a_paste_loses_the_characters_a_terminal_draws_as_nothing_and_says_how_many`
 `verified-by: bravebot_tui::state::one_removed_character_is_said_in_the_singular`
 `verified-by: bravebot_tui::state::a_paste_with_nothing_hidden_arrives_whole_and_says_nothing`
@@ -360,6 +363,9 @@ Persian, Indic and emoji text needs only the first of each, after a character th
 `verified-by: bravebot_tui::app::a_paste_loses_what_a_terminal_draws_as_nothing`
 `verified-by: bravebot_tui::app::text_read_off_the_clipboard_loses_what_a_terminal_draws_as_nothing`
 `verified-by: bravebot_tui::app::a_pasted_prompt_waits_in_the_box_without_what_a_terminal_draws_as_nothing`
+`verified-by: bravebot_ui_bridge::attaching::a_window_asks_the_bridge_to_clean_a_paste_and_is_told_the_terminals_note`
+`verified-by: bravebot_ui_bridge::english_notes::a_note_for_the_window_is_in_english_whatever_the_machine_says`
+`verified-by: by-construction (the preload and the renderer are not crates this workspace compiles, so ui/scripts/pastes.test.mjs pins pasteText, which writes the cleaned text over the composer's selection and writes nothing for empty text, and cleanPaste, which passes on the text, count and note a stub pastes.clean gives and has nothing pasted when the bridge does not answer or answers something else; make check-ui runs the tests)`
 
 <a id="PASTE-11"></a>
 ### PASTE-11: the desktop window takes a picture only from a trusted paste, off the clipboard itself
@@ -368,7 +374,12 @@ The window keeps [PASTE-2](#PASTE-2) by never letting the page supply the bytes.
 its isolated world, listens for the paste itself and looks only at an event the browser marks
 trusted, inside the composer. When the clipboard holds a picture, the picture wins over any text
 beside it, as in [PASTE-7](#PASTE-7): the browser's own paste is cancelled and the main process is
-asked to stage what is on the clipboard. A paste of text alone is left to the browser. The main
+asked to stage what is on the clipboard. A paste of text alone is cancelled as well, and the text
+on the trusted event goes to the main process, which asks the bridge's `pastes.clean` to remove the
+characters [PASTE-10](#PASTE-10) removes. The composer writes the cleaned text over its selection and
+shows the terminal's note when any were removed. A bridge that does not answer has nothing pasted,
+and the window says the paste could not be checked. A paste with neither a picture nor text is left
+to the browser. The main
 process reads the operating system's clipboard itself, decodes the picture and writes it out again
 as PNG, so the type is always `image/png`, never something the content claims
 ([PASTE-3](#PASTE-3)). The main process asks the bridge's `pastes.check` about the picture's

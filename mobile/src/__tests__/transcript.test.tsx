@@ -232,6 +232,14 @@ describe('activity lines', () => {
     expect(text).toContain('CHANGELOG.md')
     expect(text).toContain('212 lines')
   })
+
+  // DOWNLOAD-3: the note of a finished download is where the person is shown the status, the size and
+  // the cleaned content type. A row that drew the call and dropped the note would show none of it.
+  it('draws the status, size and content type a finished download carries', async () => {
+    const rows = [activity(2, 1, { verb: 'download', target: 'https://example.com/blob', note: '203, 3000 bytes, text/x-sentinelsplit' })]
+    const tree = await render(<Transcript rows={rows} status="running" decisions={new Map()} empty={null} />)
+    expect(textOf(byTestId(tree, 'row-activity-2'))).toContain('203, 3000 bytes, text/x-sentinelsplit')
+  })
 })
 
 describe('following the end of the transcript', () => {

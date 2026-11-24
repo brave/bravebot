@@ -721,10 +721,10 @@ fn started(
             bravebot_sandbox::programs::SearchPath::Reduced,
             // `crontab -l` and `crontab -`, and `launchctl load` and `unload`: no variable of their
             // own is listed. `crontab` names `EDITOR` and `VISUAL` for `crontab -e`, which no start
-            // runs. `launchctl` names `DYLD_INSERT_LIBRARIES`, which the generic table has, and
-            // `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX`. The starts send stdout and stderr to
-            // null. Neither was run. The row for this file in SANDBOX-30 (empty-list starts) says
-            // which names stay out.
+            // runs. `launchctl` names `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH` and
+            // `DYLD_FRAMEWORK_PATH`, which the generic table has, and `DYLD_IMAGE_SUFFIX`, which it
+            // does not. The starts send stdout and stderr to null. Neither was run. The row for
+            // this file in SANDBOX-30 (empty-list starts) says which names stay out.
             bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
             held,
             outside_stage_writable,

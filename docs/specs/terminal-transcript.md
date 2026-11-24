@@ -480,8 +480,10 @@ need searching.
 `verified-by: bravebot_tui::model_prompt::a_search_matching_nothing_says_so`
 `verified-by: bravebot_tui::model_prompt::an_openai_roster_of_mixed_models_is_one_section_with_every_row_reachable`
 `verified-by: bravebot_tui::model_prompt::the_picker_is_drawn_as_a_centred_panel`
+`verified-by: bravebot_tui::model_prompt::the_picker_is_bordered_and_sits_in_the_middle_of_the_frame`
 `verified-by: bravebot_tui::model_prompt::the_panel_stays_inside_a_tiny_terminal`
 `verified-by: bravebot_tui::model_prompt::tab_switches_the_scope_in_both_directions_and_touches_nothing_else`
+`verified-by: bravebot_tui::model_prompt::tab_leaves_the_search_the_folded_sections_and_the_cursor_where_they_were`
 `verified-by: bravebot_tui::model_prompt::a_picker_opens_in_the_every_session_scope_unless_told_otherwise`
 `verified-by: bravebot_tui::model_prompt::a_picker_opened_by_bare_model_draws_the_every_session_scope_in_title_and_footer`
 `verified-by: bravebot_tui::model_prompt::a_picker_opened_by_model_session_draws_the_this_session_scope_in_title_and_footer`
@@ -765,8 +767,10 @@ a model was slow exactly as it draws a slow program.
 `verified-by: bravebot_cli::progress::a_finished_call_prints_what_it_spent_at_a_model`
 `verified-by: bravebot_cli::progress::a_finished_call_that_asked_no_model_prints_nothing_about_one`
 `verified-by: bravebot_ui_bridge::reporting::what_a_call_spent_at_a_model_reaches_a_front_end`
+`verified-by: bravebot_ui_bridge::reporting::a_wait_under_a_second_crosses_as_zero_seconds`
 `verified-by: bravebot_agent::turn::what_a_check_cost_reaches_the_row_the_call_drew`
 `verified-by: bravebot_agent::turn::what_a_processor_cost_reaches_the_row_the_call_drew`
+`verified-by: bravebot_agent::turn::the_wait_on_a_processor_row_is_the_time_the_model_took`
 `verified-by: bravebot_agent::turn::what_a_processor_that_chose_cost_reaches_the_row_the_call_drew`
 `verified-by: bravebot_agent::turn::what_a_processor_that_wrote_no_document_cost_reaches_the_row_the_call_drew`
 `verified-by: bravebot_agent::turn::what_a_processor_that_failed_cost_reaches_the_row_the_call_drew`

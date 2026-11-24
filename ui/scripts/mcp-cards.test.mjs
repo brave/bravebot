@@ -162,6 +162,24 @@ test('the tools card draws each value an argument takes in its own marked block,
   assert.ok(!/<code>[^<]*Checked by bravebot/.test(markup), markup)
 })
 
+test('the tools card draws the checker\'s verdict above the first tool, whatever the verdict is', () => {
+  const words = { safe: 'No instructions detected', unsafe: 'Possible instructions detected', inconclusive: 'Check inconclusive' }
+  for (const [verdict, word] of Object.entries(words)) {
+    const markup = draw(tools({ vetting: { verdict, reason: 'the checker\'s sentence' } }))
+    const verdictAt = markup.indexOf(word)
+    const firstTool = markup.indexOf('mcp-tool-name')
+    assert.ok(verdictAt >= 0, `${verdict}: the verdict is not drawn: ${markup}`)
+    assert.ok(firstTool >= 0, `${verdict}: no tool is drawn: ${markup}`)
+    assert.ok(verdictAt < firstTool, `${verdict}: the verdict is drawn after the first tool: ${markup}`)
+    // The other two words are not drawn, so a card showing one verdict for every list fails.
+    for (const other of Object.values(words).filter((each) => each !== word)) assert.ok(!markup.includes(other), `${verdict}: drew ${other}`)
+    // The checker's sentence is evidence for the verdict and is read before the tools too.
+    const sentenceAt = markup.indexOf('the checker&#x27;s sentence')
+    assert.ok(sentenceAt >= 0, `${verdict}: the checker's sentence is not drawn: ${markup}`)
+    assert.ok(sentenceAt < firstTool, `${verdict}: the checker's sentence is drawn after the first tool: ${markup}`)
+  }
+})
+
 test('a list that holds tools that cannot be offered says so', () => {
   assert.ok(draw(tools({ refused: 2 })).includes('2 more tools are not listed'))
   assert.ok(draw(tools({ refused: 1 })).includes('1 more tool is not listed'))

@@ -155,11 +155,12 @@ no other bound: the wait for a reply to begin and the time the whole of it may t
 request and this clause set them, so a gap longer than those leaves the reply to be ended by them.
 A stream waited on through any silence ([NET-10](#NET-10)) is held to no gap, stated or not.
 
-A reply cut at the end of its time is reported as out of time, apart from one that stopped arriving,
-and is not worth another attempt. It was still being written when it was cut, and asked for again it
-is written as long again and billed again. A reply asked for whole within a time its request stated
-is out of time too when that time runs out before any of it arrives, since it is written before any
-of it is sent. Any other reply that never began is a connection that gave out.
+A reply cut at the end of its time is reported as out of time and is not worth another attempt. It
+was still being written when it was cut, and asked for again it is written as long again and billed
+again. A reply that stopped arriving is not cut at the end of its time: it is worth another attempt
+([NET-6](#NET-6)). A reply asked for whole within a time its request stated is out of time too when
+that time runs out before any of it arrives, since it is written before any of it is sent. Any other
+reply that never began is a connection that gave out.
 
 **Why.** One timeout over the whole call cannot tell a slow answer from a dead connection, and
 choosing a single number makes one of those two cases wrong. The same holds between replies: a
@@ -189,6 +190,13 @@ A connection that gave out is worth another attempt: a timeout, a socket that we
 did not resolve, and a network that is down or unreachable. A refusal is not, and only the statuses
 that mean the server is temporarily unable are treated as retryable.
 
+A reply that stopped arriving, meaning the gap allowed between two pieces of it ran out
+([NET-5](#NET-5)), is a timeout of the connection and is worth another attempt, whether the failure
+was met while the body was read whole or in pieces. The transport reports that timeout inside an I/O
+error whose kind names nothing, so it is read from the transport's error variant and never from its
+text. A reply cut at the end of its time stays out of time and is not worth another attempt. An I/O
+error that names no kind of failure and wraps no transport error is not worth another attempt.
+
 A `Retry-After` header on such an answer is read as whole seconds or an IMF-fixdate HTTP date and
 carried on the failure as a duration of at most one hour. A value that is neither, a date already
 past aside, is absent. It is a number that only sets a timer ([BACKEND-54](backends.md#BACKEND-54)):
@@ -211,6 +219,9 @@ told apart by the failure ([Known costs](#known-costs)).
 
 `verified-by: bravebot_net::lib::a_connection_that_gave_out_is_worth_another_attempt_and_a_refusal_is_not`
 `verified-by: bravebot_net::lib::a_network_that_is_down_is_worth_another_attempt`
+`verified-by: bravebot_net::lib::a_body_that_went_quiet_is_worth_another_attempt`
+`verified-by: bravebot_net::egress::a_reply_that_stops_arriving_is_given_up_on`
+`verified-by: bravebot_net::egress::a_reply_that_stops_arriving_is_given_up_on_however_long_its_request_said_it_may_take`
 `verified-by: bravebot_net::lib::a_request_whose_name_did_not_resolve_is_worth_another_attempt`
 `verified-by: bravebot_net::lib::a_lookup_that_failed_another_way_is_reported_as_it_failed`
 `verified-by: bravebot_net::lib::the_systems_own_failed_lookup_is_reported_as_a_host_not_found`

@@ -621,6 +621,66 @@ fn a_bare_resume_opens_the_sessions_screen_and_a_named_one_does_not() {
     );
 }
 
+/// CMD-14, SCREEN-13. `/resume` with no id draws the Sessions screen over the session, which lists
+/// the session being run marked as the current one beside the others, and leaves the session, its
+/// record and the screen's choice of a record alone. Choosing the current row closes the screen
+/// and ends nothing, so the list offers nothing that would resume the session into itself.
+///
+/// Rejects: a bare `/resume` that picks a record without the screen, one that ends the session or
+/// changes the record it writes to, and a list that marks no row as the session being run, which
+/// offers it as an ordinary record to resume.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_bare_resume_lists_the_other_sessions_beside_the_current_one_and_keeps_the_session() {
+    if !crate::test_profile::in_isolated_profile() {
+        return;
+    }
+    let root = project("sessions-screen-bare-resume-list");
+    let other = left_behind_in(&root, "the other one");
+    let mut here = Loop::in_a_directory(&root);
+    save(&mut here.stored, &root, "this one");
+    let id = here.stored.id().to_string();
+
+    let record = super::session_commands::record_to_resume(&mut here.session, &root, &id, "");
+
+    assert!(record.is_none(), "a bare /resume chose a record");
+    assert_eq!(here.stored.id(), id, "the session moved to another record");
+    let rows: Vec<(String, bool)> = here
+        .session
+        .sessions_screen()
+        .expect("the screen is open")
+        .rows()
+        .iter()
+        .map(|row| (row.task.id.clone(), row.task.current))
+        .collect();
+    assert!(
+        rows.contains(&(other.clone(), false)),
+        "the other session is not offered: {rows:?}"
+    );
+    assert!(
+        rows.contains(&(id.clone(), true)),
+        "the session being run is not marked as the current one: {rows:?}"
+    );
+    assert_eq!(
+        rows.iter().filter(|(_, current)| *current).count(),
+        1,
+        "{rows:?}"
+    );
+
+    let task = here.find("this one");
+    let mut servers = Servers::default();
+    let mut switch = None;
+    let ended = here.held().open_task(&mut servers, &mut switch, &task);
+    assert!(
+        ended.is_none(),
+        "choosing the current row ended the session"
+    );
+    assert!(
+        switch.is_none(),
+        "choosing the current row handed on a record"
+    );
+}
+
 /// SCREEN-8. A new session is begun in this process where the cursor's task ran here or nowhere is
 /// named, and by a process started there where it ran in another directory.
 #[test]

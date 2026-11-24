@@ -46,7 +46,7 @@ and [normative spec](../../specs/session-view.md) give the exact shapes and limi
 It copies labelled payloads whole. Accepted prompts reuse `wire::submitted` and saved-history tag
 rules. Answers reuse `Running` and `BridgeConfirmer`; no second approval reducer exists. There is
 no content-reading display transform or new crate. Rendering helpers and native marking checks
-remain for the first rendering caller, as Q2 records.
+remain for the first rendering caller, as [the app shell](app-shell.md#rendering-untrusted-text) records.
 
 The process tests in `crates/ui-bridge/tests/fetch.rs` exercise accepted/rejected sends, approval,
 denial, cancellation, two interleaved sessions, labels and planner exclusion. The existing process
@@ -187,7 +187,7 @@ Every session, draft, message, and pending action is qualified by target and run
 | List workspaces | Only workspaces authorized for this client. | Host-owned project-ID table; no raw client filesystem paths. |
 | Create session | Fresh session in an approved workspace, not an implicit trust answer. | `session.new`; map workspace ID to a configured path. No automatic retry. |
 | List and open sessions | The target's sessions, newest first, and one of them opened by id. | `AgentClient.listSessions()` and `openSession(id)`, gated by `TargetInfo.sessionList`. `RpcAgentClient` reports `sessionList: false` and rejects both with `UnsupportedError`, sending nothing. A target that has them says what each session shows in a `SessionSummary` and does not make the app read row content. |
-| Attach/view | Current state and subscription for an authorized live session. Once attached, a client may act; other attached clients keep theirs. | New host registry and snapshot operation; never `session.open` on a live record. Several clients per session is stage 5a. |
+| Attach/view | Current state and subscription for an authorized live session. Once attached, a local client or a `control` device may act and a `read` device only watches; other attached clients keep theirs. | New host registry and snapshot operation; never `session.open` on a live record. Several clients per session is stage 5a. |
 | Last actor | Which client made the latest send, answer or cancel. | Host records it per action from its own name for the connection, in the view and the trace. No takeover operation or epoch. |
 | Send | Text plus client message ID; acknowledge acceptance separately from completion. | `turn.send` with a required `messageId`; add narrow send deduplication below. Busy returns no queued turn; record that rejection. |
 | Answer | Typed reply to the exact session/turn/question; the first answer from any client counts. | Existing reply kinds plus new bridge target checks; phone subset below. |
@@ -195,7 +195,7 @@ Every session, draft, message, and pending action is qualified by target and run
 | Close | Enter `closing`; reach `closed` only after writer shutdown. | Existing `session.close` acknowledges before the worker necessarily finishes; add completion evidence. |
 | Detach | End this client's subscription; other attached clients keep the session. | Does not close a persistent host session. Stdio EOF retains its current process-ending semantics. |
 
-Local host trust controls and embedded trust remain explicit typed capabilities. Remote workspace trust is unavailable in the first prototype. The person answers through a capable host-local client before the session can run. Before desktop attachment, the stage-5a local test client provides this typed startup-trust interaction over the U1-protected control channel. The host grants that capability based on authenticated local access; a phone cannot obtain it by advertising another answerable kind. Creating a session from the phone can therefore produce `awaiting host setup` rather than immediately executing. The demo may use a workspace explicitly prepared on the host; project pairing alone never answers trust.
+Local host trust controls and embedded trust remain explicit typed capabilities. Remote workspace trust is unavailable until stage 6, when a device with a `control` grant may answer it for one session only ([decision 17](decisions-and-tradeoffs.md#17-a-control-device-answers-workspace-trust-for-one-session-only)). Until then, and for a `read` device, the person answers through a capable host-local client before the session can run. Before desktop attachment, the stage-5a local test client provides this typed startup-trust interaction over the protected local control channel. The host grants that capability based on authenticated local access; a phone cannot obtain it by advertising another answerable kind. Creating a session from a phone that may not answer trust can therefore produce `awaiting host setup` rather than immediately executing. The demo may use a workspace explicitly prepared on the host; project pairing alone never answers trust.
 
 ## First non-stdio listener allowlist
 
@@ -207,15 +207,16 @@ The initial remote operations are target description, authorized workspace/live-
 
 | Phone input | Allowed fields/behavior |
 |---|---|
-| Create | Host-issued workspace ID; no directory or settings path. |
-| Send | Exact session target, message ID, and text. Use the host-selected model initially. Reject `files`, `dropped`, `attachments`, `composed`, `recall`, and arbitrary model/configuration overrides. |
+| Create | Host-issued workspace ID; no directory or settings path. A `read` grant refuses it. |
+| Send | A `read` grant refuses it. Exact session target, message ID, and text. Use the host-selected model initially. Reject `files`, `dropped`, `attachments`, `composed`, `recall`, and arbitrary model/configuration overrides. |
 | Write decision (`confirm.reply`) | Exact approval target and approve/reject, within the authorized effect scope. |
 | Command decision (`run.reply`) | Exact target and approve-once/reject; host composes `remember: false`. Reject a supplied `remember` field, including `true`. Show the full command and affected scope. |
+| Startup trust (`trust.reply`) | From stage 6, a `control` device only ([decision 17](decisions-and-tradeoffs.md#17-a-control-device-answers-workspace-trust-for-one-session-only)). Yes or no for this session; the host composes `remember: false`, writes nothing to the kept record, and rejects a supplied `remember` field. Show the directory and what each answer does before any button works. |
 | Fetch decision (`fetch.reply`) | Exact target and approve-once/reject. Show the parsed destination host separately. |
 | User question (`ask.reply`) | Exact question target and answers validated against the offered question schema. |
 | Cancel/close | Only their typed identity and expected-state fields. Read-only grants cannot invoke them. |
 
-Require host handling for workspace trust, vouching, command-output admission, vetted-content promotion, credential-exposure approval, language-server startup, and other unlisted reply kinds. Some have session-lived authority even without `remember`; do not classify all replies as one-use. The phone advertises only the kinds it can actually render and answer. Host-only handling requires a capable host-local client under the [shared control rules](architecture.md#shared-control-across-devices); the initial local test client supports startup trust among those host-only kinds. The phone cannot widen this set through capability advertisement. When nobody capable is ready, refusal applies; startup trust remains unanswered. Adding another phone kind is a small later contract/test change.
+Require host handling for vouching, command-output admission, vetted-content promotion, credential-exposure approval, language-server startup, and other unlisted reply kinds. Some have session-lived authority even without `remember`; do not classify all replies as one-use. The phone advertises only the kinds it can actually render and answer. Host-only handling requires a capable host-local client under the [shared control rules](architecture.md#shared-control-across-devices); the initial local test client supports startup trust among those host-only kinds, and from stage 6 a `control` device answers startup trust for one session only ([decision 17](decisions-and-tradeoffs.md#17-a-control-device-answers-workspace-trust-for-one-session-only)). The phone cannot widen this set through capability advertisement. When nobody capable is ready, refusal applies; startup trust remains unanswered. Adding another phone kind is a small later contract/test change.
 
 Reject unknown request fields. Unknown additive event fields may be ignored, but unknown labels/kinds must degrade safely and unsupported approval kinds cannot be answered. Keep content labels and paths needed for informed consent; sanitizing target metadata must not hide an approval's actual destination.
 

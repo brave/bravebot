@@ -1040,6 +1040,21 @@ window shows it as it stands. `bytes` that is not a whole number is `bad_request
 process calls it when it stages a paste, once for the picture as it came off the clipboard and
 again once it is re-encoded, and the renderer cannot.
 
+#### `pastes.clean`
+
+```json
+{ "id": 12, "method": "pastes.clean", "params": { "text": "see​ this" } }
+→ { "text": "see this", "removed": 1, "note": "removed 1 invisible character from that paste" }
+
+{ "id": 13, "method": "pastes.clean", "params": { "text": "see this" } }
+→ { "text": "see this", "removed": 0 }
+```
+
+A text paste with the characters a terminal draws as nothing removed (PASTE-10), by the same
+function the terminal uses (`bravebot_core::invisible::without_invisible`). `removed` is how many
+were taken out. `note` is present only when `removed` is above zero, and is the terminal's note, in
+`en-US` as `pastes.check`'s note is. `text` that is not a string is `bad_request`.
+
 #### `confirm.reply`
 
 ```json
@@ -1686,7 +1701,8 @@ be opened is. The local host and the ACP server put none of these questions.
   import and skills authoring have no dedicated UI. `bravebot mcp` in a terminal does the first.
 - File browsing, previews and attachments are Electron IPC features, not RPC methods. `@`
   completion is `mentions.offer` and `mentions.named`, what a dropped file is comes from
-  `drops.classify`, and whether a paste fits from `pastes.check`.
+  `drops.classify`, whether a paste fits from `pastes.check`, and pasted text with its hidden
+  characters removed from `pastes.clean`.
 - One `bravebot-rpc` process has one client. There is no multi-client transport.
 
 ---

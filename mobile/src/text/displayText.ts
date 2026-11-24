@@ -1,4 +1,4 @@
-// Placeholder for the shared Rust display helper (open-questions.md, Q2). Display only: nothing
+// Placeholder for the shared Rust display helper (docs/design/mobile/app-shell.md). Display only: nothing
 // here decides what an approval or a turn may do. The ranges are checked against Unicode general
 // categories Cf, Zl and Zp in src/__tests__/displayText.test.ts, and avoid \p{...} regexes so they do not
 // depend on the JavaScript engine's Unicode tables.

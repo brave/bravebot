@@ -2355,6 +2355,49 @@ mod tests {
         );
     }
 
+    /// DOWNLOAD-3: an editor is sent the status of a finished call and none of its note. The note of
+    /// a download holds the content type the server sent, which is shown to the person in a
+    /// front end that draws it and goes nowhere else, so the editor's update names the call and
+    /// its status and nothing more. A bridge that forwarded the note would put a server's header
+    /// into an editor that draws it without the cleaning DOWNLOAD-3 describes.
+    #[test]
+    fn a_finished_download_sends_the_editor_its_status_and_none_of_its_note() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&written);
+        let shared = Arc::new(Mutex::new(Shared {
+            write: Box::new(move |message| sink.lock().unwrap().push(message)),
+            wake: Box::new(|| {}),
+            sessions: HashMap::from([("s".to_string(), Session::default())]),
+            unasked: HashMap::new(),
+            asked: HashMap::new(),
+            next: 0,
+            queued: Vec::new(),
+        }));
+        let started = json!({"call": 1, "verb": "Download", "target": "https://example.com/blob",
+            "shownTarget": "https://example.com/blob"});
+        let finished = json!({"call": 1, "verb": "Download", "target": "https://example.com/blob",
+            "shownTarget": "https://example.com/blob", "failed": false,
+            "note": "203, 3000 bytes, text/x-sentinelsplit"});
+        on_event(&shared, Event::new("tool.started", "s", started));
+        on_event(&shared, Event::new("tool.finished", "s", finished));
+
+        let written = written.lock().unwrap();
+        assert_eq!(written.len(), 2);
+        assert_eq!(
+            written[1]["params"]["update"],
+            json!({"sessionUpdate": "tool_call_update",
+                "toolCallId": written[0]["params"]["update"]["toolCallId"],
+                "status": "completed"}),
+            "the update carried more than the call and its status"
+        );
+        assert!(
+            !serde_json::to_string(&written[1])
+                .unwrap()
+                .contains("sentinel"),
+            "the note reached the editor"
+        );
+    }
+
     /// Three calls with the same verb and target, where the middle one finishes first, each
     /// close the editor's entry for their own start, because a finish is matched on the call id
     /// and nothing in the call's content. Pairing with the first or the latest call still

@@ -179,6 +179,54 @@ fn an_edit_result_shows_its_lines_only_for_a_trusted_body() {
     );
 }
 
+/// EDIT-4. The result of an edit is assembled from the choice `what_an_edit_result_shows` made and
+/// from nothing else: `CountAlone` is the headline alone, marked untrusted, whatever lines the
+/// caller holds, and `LinesAndCount` is the lines and the count, not marked untrusted. No turn
+/// reaches `CountAlone`, so the assembly is called directly with an excerpt in hand. The
+/// regressions it rejects are an arm that shows the excerpt whatever the choice was, a count-alone
+/// result that is not marked untrusted, and a lines result that is.
+#[test]
+fn an_edit_result_is_the_headline_alone_and_untrusted_where_the_choice_was_the_count() {
+    let excerpt = || {
+        confirmed(
+            "1: keep\n2: LINES-OF-THE-FILE\n\nedited a.txt: 1 replacement(s)",
+            "",
+        )
+        .text
+    };
+    let headline = || "edited a.txt: 1 replacement(s)".to_string();
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_vouching(&mut sink);
+
+    let alone = edit_result(
+        EditResultShows::CountAlone,
+        headline(),
+        "edited a.txt".to_string(),
+        Some(excerpt()),
+    );
+    let said = super::arguments::told(&mut policy, &alone.text);
+    assert_eq!(said, "edited a.txt: 1 replacement(s)", "the count alone");
+    assert!(
+        !said.contains("LINES-OF-THE-FILE"),
+        "the count-alone result carried the lines: {said}"
+    );
+    assert!(alone.untrusted, "the count-alone result was not marked");
+    assert_eq!(alone.note, "edited a.txt");
+
+    let shown = edit_result(
+        EditResultShows::LinesAndCount,
+        headline(),
+        "edited a.txt".to_string(),
+        Some(excerpt()),
+    );
+    let said = super::arguments::told(&mut policy, &shown.text);
+    assert!(
+        said.contains("LINES-OF-THE-FILE") && said.ends_with("edited a.txt: 1 replacement(s)"),
+        "the control lost its lines: {said}"
+    );
+    assert!(!shown.untrusted, "the lines result was marked untrusted");
+}
+
 /// The property the gate exists for. `old_text` is the planner's words, and a planner
 /// whose context has met untrusted content is writing words an attacker may have
 /// steered. Comparing them against the file decides whether a write happens, so the

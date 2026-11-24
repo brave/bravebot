@@ -175,7 +175,7 @@ impl Refused {
 /// it is the main worktree's, and a linked worktree has its own.
 pub(super) struct Settings {
     /// Whether git writes this checkout as Git for Windows does. It is the host's, so a test
-    /// asks for either through [`Settings::read_for`].
+    /// asks for either through [`Settings::read_for`] or [`make_for`].
     windows: bool,
     autocrlf: bool,
     eol: Option<Vec<u8>>,
@@ -183,10 +183,6 @@ pub(super) struct Settings {
 }
 
 impl Settings {
-    fn read(git_dir: &Path) -> Result<Settings, Refused> {
-        Settings::read_for(git_dir, cfg!(windows))
-    }
-
     /// The settings of the repository at `git_dir` as git reads them on Windows where `windows`
     /// and elsewhere where not, whatever the host is.
     pub(super) fn read_for(git_dir: &Path, windows: bool) -> Result<Settings, Refused> {
@@ -507,8 +503,22 @@ pub fn make(
     trusted: &dyn Fn(&str) -> bool,
     bound: Bound,
 ) -> Result<Made, Refused> {
+    make_for(git_dir, target, id, withheld, trusted, bound, cfg!(windows))
+}
+
+/// [`make`] for a host that writes files as Git for Windows does where `windows` and as git does
+/// elsewhere where not, whatever the host is, so a test reaches both from any host.
+pub(super) fn make_for(
+    git_dir: &Path,
+    target: &Path,
+    id: &str,
+    withheld: &dyn Fn(&str) -> bool,
+    trusted: &dyn Fn(&str) -> bool,
+    bound: Bound,
+    windows: bool,
+) -> Result<Made, Refused> {
     let repo = Repository::open(git_dir)?;
-    let settings = Settings::read(git_dir)?;
+    let settings = Settings::read_for(git_dir, windows)?;
     if let Some(bytes) = read_if_present(&git_dir.join("info").join("attributes"))?
         && let Some(found) = conversion(&bytes, settings.text_converts())
     {

@@ -574,6 +574,11 @@ pub const CODE_SELECTORS: &[(&str, Names)] = &[
     ("NLSPATH", Names::Options),
     ("MUSL_LOCPATH", Names::Directories),
     ("DYLD_INSERT_LIBRARIES", Names::Directories),
+    // dyld's own search paths: a library or framework a stage wrote into a directory either
+    // names loads ahead of the real one in a process this one starts, the same way
+    // `LD_LIBRARY_PATH` does for the Linux loader (SANDBOX-30).
+    ("DYLD_LIBRARY_PATH", Names::Directories),
+    ("DYLD_FRAMEWORK_PATH", Names::Directories),
     // Language runtimes and shells: modules, startup files and tools the program runs.
     selectors::PYTHONPATH,
     selectors::PYTHONUSERBASE,
@@ -2977,6 +2982,22 @@ mod tests {
         assert!(!checked("LD_LIBRARY_PATH", &genuine_dir, &session));
     }
 
+    /// The regression it rejects: `DYLD_LIBRARY_PATH` or `DYLD_FRAMEWORK_PATH` left as the
+    /// person set it, so dyld loads a library or framework a stage wrote into the directory
+    /// either names, outside confinement, in a checked start of the kind the AWS CLI start uses
+    /// (SANDBOX-30). Each name is removed only where it names a file a stage may write, the same
+    /// test `LD_LIBRARY_PATH` is held to above.
+    #[cfg(unix)]
+    #[test]
+    fn dyld_library_path_and_framework_path_are_removed_only_where_a_stage_may_write_them() {
+        let (session, _safe, planted, genuine) = planted_and_genuine("dyld");
+
+        for name in ["DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH"] {
+            assert!(checked(name, &planted, &session), "{name} was kept");
+            assert!(!checked(name, &genuine, &session), "{name} was removed");
+        }
+    }
+
     /// The regression it rejects: a name dropped from the table, which the loop over the table
     /// cannot see. The names are the ones SANDBOX-30 lists, written out here.
     #[cfg(unix)]
@@ -2994,6 +3015,8 @@ mod tests {
             "NLSPATH",
             "MUSL_LOCPATH",
             "DYLD_INSERT_LIBRARIES",
+            "DYLD_LIBRARY_PATH",
+            "DYLD_FRAMEWORK_PATH",
             "PYTHONPATH",
             "PYTHONUSERBASE",
             "PYTHONPYCACHEPREFIX",

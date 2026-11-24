@@ -411,6 +411,7 @@ Built, and a spawn is refused where a checkout is.
 `verified-by: bravebot_agent::git::each_character_and_device_name_windows_reserves_is_refused_there_alone`
 `verified-by: bravebot_agent::git::the_settings_git_for_windows_applies_are_read_for_either_host_from_any_host`
 `verified-by: bravebot_agent::git::a_text_attribute_is_a_conversion_only_where_git_writes_text_with_crlf`
+`verified-by: bravebot_agent::git::the_hosts_text_conversion_reaches_both_places_attributes_are_read`
 `verified-by: bravebot_agent::git::directories_count_against_the_file_bound`
 `verified-by: bravebot_agent::git::an_attributes_file_past_the_byte_bound_is_not_read`
 `verified-by: bravebot_agent::git::a_tree_past_a_bound_is_refused_for_it_before_an_attributes_file_is_read`
@@ -703,6 +704,8 @@ one is given no definition memory. The answer to the spawn says so.
 `verified-by: bravebot_agent::turn::a_deny_rule_with_a_relative_specifier_holds_in_a_delegates_checkout`
 `verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_is_not_told_of_its_definitions_memory`
 `verified-by: bravebot_agent::turn::a_line_in_a_checkout_does_not_write_a_memory_nothing_could_record`
+`verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_reads_nothing_the_checkout_holds_as_a_source`
+`verified-by: bravebot_agent::turn::what_a_person_answered_about_a_credential_is_not_copied_to_a_delegate_in_a_checkout`
 `verified-by: bravebot_core::permissions::a_rule_under_the_working_directory_is_copied_to_the_checkout`
 `verified-by: bravebot_core::permissions::a_rule_outside_the_working_directory_is_not_copied_to_the_checkout`
 `verified-by: bravebot_core::permissions::a_refusal_is_copied_by_the_full_fold_and_a_grant_by_the_simple_fold`
@@ -1180,6 +1183,7 @@ whatever its kind holds, and the answer to the spawn says so.
 `verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory`
 `verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_is_offered_no_lsp`
 `verified-by: bravebot_agent::turn::the_answer_to_a_spawn_in_a_checkout_says_no_delegate_is_offered_lsp`
+`verified-by: bravebot_agent::turn::a_delegate_started_inside_a_checkout_is_offered_no_lsp_either`
 
 <a id="CHECKOUT-21"></a>
 ### CHECKOUT-21: `/status` lists the session's checkouts

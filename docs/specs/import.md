@@ -407,12 +407,16 @@ setup was looked at.
 `verified-by: bravebot_config::import::an_ollama_with_no_model_that_can_call_tools_is_left_and_said`
 `verified-by: bravebot_config::import::an_lm_studio_with_no_model_trained_for_tool_use_is_left_and_said`
 `verified-by: bravebot_cli::running::what_was_found_and_left_is_said_before_the_routes`
+`verified-by: bravebot_cli::running::import_providers_with_only_what_is_left_names_it_before_saying_nothing_is_found`
+`verified-by: bravebot_cli::running::a_start_that_can_ask_says_what_it_found_and_left_before_the_refusal`
+`verified-by: bravebot_cli::running::an_import_answered_yes_says_what_was_left_once_and_before_the_question`
 `verified-by: bravebot_cli::running::a_claude_code_anthropic_key_is_importable_and_the_refusal_names_the_command`
 `verified-by: bravebot_config::import::a_key_exported_beside_a_host_of_its_own_is_left`
 `verified-by: bravebot_cli::import::a_key_exported_beside_a_host_is_said_to_be_left_and_not_asked_about`
 `verified-by: bravebot_cli::import::what_was_found_and_left_is_said_with_its_reason_where_a_person_is_asked`
 `verified-by: bravebot_cli::running::a_key_exported_beside_a_host_is_said_to_be_left_before_the_routes`
 `verified-by: bravebot_cli::running::a_claude_code_key_command_is_importable_and_the_refusal_names_the_command`
+`verified-by: bravebot_config::import::an_auth_json_wellknown_sign_in_is_left_as_a_sign_in`
 
 <a id="IMPORT-5"></a>
 ### IMPORT-5: everything that would be written is shown before the question, and only the affirmative writes
@@ -603,6 +607,9 @@ that answers yes on their behalf.
 `verified-by: bravebot_cli::running::a_settings_file_the_import_cannot_write_is_named_in_place_of_the_command`
 `verified-by: bravebot_cli::running::a_settings_file_the_import_would_take_too_large_is_named_in_place_of_the_command`
 `verified-by: bravebot_cli::running::doctor_with_something_importable_names_the_import_command_and_asks_nothing`
+`verified-by: bravebot_cli::running::doctor_and_a_one_shot_run_in_a_terminal_name_the_import_command_and_do_not_ask`
+`verified-by: bravebot_cli::running::import_providers_with_nothing_to_find_says_so_and_writes_nothing`
+`verified-by: bravebot_cli::running::import_providers_with_every_name_already_set_says_nothing_is_left`
 
 <a id="IMPORT-9"></a>
 ### IMPORT-9: after a write, the start reads its settings again and opens the session if a service now answers

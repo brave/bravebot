@@ -386,6 +386,37 @@ impl Held<'_> {
         ));
     }
 
+    /// Arm a standing watch on the path a person typed after `/watch`.
+    ///
+    /// The first look is taken through the same gate as every later look in the event loop, so a
+    /// path is judged at arming as it is at every pass: reached inside the workspace, and outside
+    /// it only under bypass in a trusted project (FSWATCH-7, FSWATCH-12). A typed path is the
+    /// person's own choice of file, so no read is promoted for it.
+    pub(super) fn arm_watch_command(&mut self, path: &str) {
+        // A `~` spelled out, so a later look from a moved working directory reads the same path.
+        let path = self.workspace.expanded(path);
+        // A path already watched under any spelling arms nothing new, and takes no second look.
+        if let Some(number) = self.session.watch_on(self.workspace, &path) {
+            self.session
+                .note(t!(watch_already, number = number, path = path.as_str()));
+            return;
+        }
+        if self.workspace.names_something_else(&path) {
+            self.session
+                .note(t!(watch_refused_directory, path = path.as_str()));
+            return;
+        }
+        let looked = bravebot_agent::tools::look_at_a_watch(
+            self.workspace,
+            &self.session.live_permission_mode(),
+            &self.answers.trust,
+            &path,
+            self.workspace.root(),
+        );
+        self.session
+            .arm_watch_by_person(&path, self.workspace.root(), looked);
+    }
+
     pub(super) fn reach(&mut self, argument: &str) {
         let home = bravebot_agent::home::directory();
         let profile = bravebot_agent::home::profile();
@@ -669,16 +700,22 @@ impl Held<'_> {
         // Written now rather than at the end of the next turn, for the reason a
         // compaction is: the aside is the change, and a session that asked something
         // and then slept should resume with the answer still there.
-        //
-        // Nothing yet where no turn has been had, as everywhere else that writes
-        // outside a turn: a session opened and abandoned should leave no record, and
-        // a question asked before the first prompt was asked over an empty exchange.
+        self.record_the_aside(&events);
+        Ok(())
+    }
+
+    /// Write the record the aside changed, and the trail of the gates it passed, once the session
+    /// has had a turn.
+    ///
+    /// Nothing yet where no turn has been had, as everywhere else that writes outside a turn: a
+    /// session opened and abandoned should leave no record, and a question asked before the first
+    /// prompt was asked over an empty exchange.
+    pub(super) fn record_the_aside(&mut self, events: &[Stamped]) {
         if self.session.turns > 0 {
             let title = self.stored.title().to_string();
             self.save(&title);
-            self.stored.append_audit(self.session.turns, &events);
+            self.stored.append_audit(self.session.turns, events);
         }
-        Ok(())
     }
 
     pub(super) fn manifest(

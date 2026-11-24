@@ -14,7 +14,9 @@
 //! directory called `C:`.
 
 use std::borrow::Cow;
-use std::path::Path;
+use std::path::{Component, Path};
+
+use crate::trust::canonical_key;
 
 /// `path` with `/` between its segments, for a name below a root.
 ///
@@ -66,6 +68,15 @@ pub fn to_key(path: &str, backslash_separates: bool) -> Cow<'_, str> {
 /// and the empty string for the root itself. The drive letter is compared in upper case, as
 /// [`Path`] compares it on the host that has one.
 ///
+/// Components are compared in the form every canonically equivalent spelling of a name shares
+/// ([`crate::trust::canonical_key`]), so a name spelled `cafe` and a combining accent is below a
+/// root spelled with the precomposed letter, and the reverse. A volume such as APFS opens both
+/// spellings as one directory, so a rule about a file under the root has to be asked about a name
+/// spelled either way. Case is not folded. The result is the part of the name after the root as the
+/// name spelled it, whichever comparison found the root: a doubled separator or a `.` inside it is
+/// kept and a separator at either end is not part of it. A component that only starts like the
+/// root's (`cafe\u{301}x` against `caf\u{e9}`) is not the root's.
+///
 /// A name below a root is `/`-spelled where a backslash separates, which is the spelling a key is
 /// asked about the map under. Nothing is resolved here: a link is not followed and a `..` is kept,
 /// so a caller that has to refuse either does so before asking.
@@ -90,10 +101,24 @@ pub fn below(root: &Path, name: &str, backslash_separates: bool) -> Option<Strin
     };
     let name = drive_in_upper_case(to_key(name, backslash_separates));
     let root = drive_in_upper_case(to_key(root, backslash_separates));
-    Path::new(&name)
-        .strip_prefix(&root)
-        .ok()
-        .map(|inside| inside.to_string_lossy().into_owned())
+    // The remainder is the rest of the name as it was spelled, found by counting components, so no
+    // byte offset in one form is applied to another: decomposing changes a name's length.
+    let mut rest = Path::new(&name).components();
+    for from_root in Path::new(&root).components() {
+        let same = |named: Component<'_>| match (
+            from_root.as_os_str().to_str(),
+            named.as_os_str().to_str(),
+        ) {
+            (Some(root_part), Some(name_part)) => {
+                canonical_key(root_part, false) == canonical_key(name_part, false)
+            }
+            _ => false,
+        };
+        if !rest.next().is_some_and(same) {
+            return None;
+        }
+    }
+    Some(rest.as_path().to_string_lossy().into_owned())
 }
 
 /// `path` from its drive letter on, for a name rooted at one, without the `\\?\` a canonical name
@@ -251,6 +276,117 @@ mod tests {
                 Some("")
             );
             assert_eq!(below(root, "/workshop/a.rs", backslash_separates), None);
+        }
+    }
+
+    /// A volume such as APFS opens a directory under any canonically equivalent spelling of its
+    /// name, so a name below the root is below it whichever form either is spelled in. The part
+    /// after the root is the name's own spelling, and a name that only starts like the root's last
+    /// component is not below it.
+    #[test]
+    fn a_name_is_below_a_root_spelled_in_another_unicode_form() {
+        let decomposed = "/work/cafe\u{301}";
+        let composed = "/work/caf\u{e9}";
+        for (root, named, below_it) in [
+            (
+                decomposed,
+                "/work/caf\u{e9}/held/src/lib.rs",
+                Some("held/src/lib.rs"),
+            ),
+            (
+                composed,
+                "/work/cafe\u{301}/held/src/lib.rs",
+                Some("held/src/lib.rs"),
+            ),
+            (
+                decomposed,
+                "/work/cafe\u{301}/held/src/lib.rs",
+                Some("held/src/lib.rs"),
+            ),
+            (
+                composed,
+                "/work/caf\u{e9}/held/src/lib.rs",
+                Some("held/src/lib.rs"),
+            ),
+            (decomposed, "/work/caf\u{e9}", Some("")),
+            (composed, "/work/cafe\u{301}", Some("")),
+            (composed, "/work/cafe\u{301}x/a.rs", None),
+            (decomposed, "/work/caf\u{e9}x/a.rs", None),
+            (composed, "/work/cafe/a.rs", None),
+            (composed, "/other/caf\u{e9}/a.rs", None),
+            (composed, "/work", None),
+        ] {
+            for backslash_separates in [false, true] {
+                assert_eq!(
+                    below(Path::new(root), named, backslash_separates).as_deref(),
+                    below_it,
+                    "'{named}' under '{root}'"
+                );
+            }
+        }
+        // The remainder is the name as spelled, not its decomposed form.
+        assert_eq!(
+            below(
+                Path::new("/work/cafe\u{301}"),
+                "/work/caf\u{e9}/\u{e9}t\u{e9}.rs",
+                false
+            )
+            .as_deref(),
+            Some("\u{e9}t\u{e9}.rs")
+        );
+    }
+
+    /// The part after the root is the name's own spelling whichever comparison found the root, and
+    /// nothing is resolved: a trailing separator is not part of it, a doubled separator or a `.` in
+    /// the middle is kept, a `..` is kept, and a root with no components holds a relative name. The
+    /// drive-letter rows run on any host, since the host's answer about the separator is given.
+    #[test]
+    fn what_is_below_the_root_is_the_name_as_spelled_whichever_comparison_found_the_root() {
+        let same_form = Path::new("/work/caf\u{e9}");
+        let other_form = Path::new("/work/cafe\u{301}");
+        for (named, below_it) in [
+            ("/work/caf\u{e9}/held/", Some("held")),
+            ("/work/caf\u{e9}/a//b.rs", Some("a//b.rs")),
+            ("/work/caf\u{e9}/a/./b.rs", Some("a/./b.rs")),
+            ("/work/caf\u{e9}/../etc", Some("../etc")),
+            ("/work/caf\u{e9}/", Some("")),
+        ] {
+            let other = named.replace('\u{e9}', "e\u{301}");
+            for root in [same_form, other_form] {
+                for (spelled, expected) in [(named, below_it), (other.as_str(), below_it)] {
+                    assert_eq!(
+                        below(root, spelled, false).as_deref(),
+                        expected,
+                        "'{spelled}' under '{}'",
+                        root.display()
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            below(Path::new(""), "src/a.rs", false).as_deref(),
+            Some("src/a.rs")
+        );
+        assert_eq!(
+            below(Path::new("/work/caf\u{e9}"), "", false),
+            None,
+            "an empty name is below no root"
+        );
+
+        let verbatim = Path::new("\\\\?\\C:\\proj\\caf\u{e9}");
+        for (named, below_it) in [
+            ("c:\\proj\\cafe\u{301}\\x.rs", Some("x.rs")),
+            ("C:/proj/caf\u{e9}/a//b.rs", Some("a//b.rs")),
+            ("C:\\proj\\cafe\u{301}\\", Some("")),
+            ("C:\\proj\\cafe\u{301}x\\a.rs", None),
+            ("D:\\proj\\cafe\u{301}\\a.rs", None),
+        ] {
+            assert_eq!(
+                below(verbatim, named, true).as_deref(),
+                below_it,
+                "'{named}' under '{}'",
+                verbatim.display()
+            );
         }
     }
 }

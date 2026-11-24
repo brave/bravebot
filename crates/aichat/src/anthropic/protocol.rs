@@ -1012,6 +1012,45 @@ mod tests {
         assert!(body["system"][0].get("cache_control").is_some());
     }
 
+    /// A conversation whose last block is a picture or a document is left with the prompt's
+    /// breakpoint alone (BACKEND-27), even where a text block sits just in front of it in the same
+    /// turn. It rejects a builder that marks the last text-bearing block of the last turn when the
+    /// last block itself cannot carry a breakpoint.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_conversation_ending_in_a_picture_or_a_document_is_marked_nowhere_but_the_prompt() {
+        for (url, kind) in [
+            ("data:image/png;base64,QUJD", "image"),
+            ("data:application/pdf;base64,REVG", "document"),
+        ] {
+            let body = body_of(&request(&[
+                Message::system("be brief"),
+                Message::user_parts(vec![
+                    Part::Text {
+                        text: "look".to_string(),
+                    },
+                    Part::ImageUrl {
+                        image_url: crate::protocol::ImageUrl {
+                            url: url.to_string(),
+                        },
+                    },
+                ]),
+            ]));
+            let content = body["messages"][0]["content"].as_array().expect("blocks");
+            assert_eq!(
+                content.last().expect("a block")["type"],
+                kind,
+                "{content:?}"
+            );
+            assert!(
+                !body["messages"].to_string().contains("cache_control"),
+                "a conversation ending in a {kind} carried a breakpoint: {}",
+                body["messages"]
+            );
+            assert!(body["system"][0].get("cache_control").is_some());
+        }
+    }
+
     /// A request whose conversation no later request sends keeps the prompt's breakpoint and loses
     /// the one on the end of it.
     #[test]

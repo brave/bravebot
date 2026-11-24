@@ -1571,6 +1571,7 @@ vi gives `m` no key, and a box that waited for one would swallow the instruction
 `verified-by: bravebot_tui::sidebar_prompt::escape_and_ctrl_c_close_the_list_and_keep_what_was_changed`
 `verified-by: bravebot_tui::sidebar_prompt::a_space_with_a_modifier_toggles_nothing`
 `verified-by: bravebot_tui::app::a_style_chosen_in_the_config_panel_is_kept_and_said_in_the_transcript`
+`verified-by: bravebot_tui::app::the_config_panel_opened_at_rest_keeps_the_style_taken_and_escape_changes_nothing`
 `verified-by: bravebot_tui::config_prompt::every_row_says_what_it_means`
 
 <a id="INPUT-24"></a>
@@ -2585,7 +2586,9 @@ person than whatever error put it there.
 `verified-by: bravebot_tui::app::tests::handover::nothing_runs_after_a_terminal_that_could_not_be_given_back`
 `verified-by: bravebot_tui::app::tests::handover::a_terminal_that_could_not_be_taken_again_is_returned_as_a_failure`
 `verified-by: bravebot_tui::app::tests::handover::every_handover_goes_through_the_one_that_gives_back_and_takes_again`
+`verified-by: bravebot_tui::app::tests::handover::every_handover_takes_the_terminal_again_with_the_mouse_choice_the_session_holds`
 `verified-by: bravebot_cli::terminal_modes::the_editor_a_prompt_is_written_in_is_started_on_a_terminal_that_is_out_of_raw_mode`
+`verified-by: bravebot_cli::terminal_modes::the_interface_that_draws_has_the_terminal_in_raw_mode_so_a_key_is_not_echoed`
 `verified-by: bravebot_cli::terminal_modes::a_session_in_lines_takes_none_of_what_the_interface_that_draws_takes`
 
 <a id="INPUT-34"></a>
@@ -2649,6 +2652,7 @@ available, spent in the one place where a second press is the whole of what is b
 `verified-by: bravebot_tui::input::the_queue_is_answered_before_the_terminal_and_in_arrival_order`
 `verified-by: bravebot_tui::input::a_press_and_its_own_release_are_one_keystroke`
 `verified-by: bravebot_tui::input::two_keystrokes_in_one_read_arrived_together`
+`verified-by: bravebot_tui::input_alone::the_shipped_reader_says_whether_an_event_arrived_alone`
 `verified-by: bravebot_tui::input::a_report_of_the_mouse_in_the_read_of_a_key_is_not_another_arrival`
 `verified-by: bravebot_tui::input::keys_with_reports_of_the_mouse_among_them_are_still_a_run`
 `verified-by: bravebot_tui::app::what_the_reader_says_arrived_together_reaches_the_rung_that_leaves`

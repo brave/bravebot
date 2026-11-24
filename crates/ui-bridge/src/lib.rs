@@ -56,6 +56,7 @@ pub mod crash_notice;
 pub mod control_link;
 pub mod crash_reports;
 pub mod definitions;
+pub mod diagnostic_log;
 pub mod effort;
 pub mod emit;
 pub mod enhance;

@@ -222,6 +222,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font: var(--type-caption);
+  font-variant-numeric: tabular-nums;
   color: var(--ink-secondary);
 }
 .problem-text {

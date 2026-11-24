@@ -541,6 +541,11 @@ fn recalled_fact(fact: &crate::recall::fact::Fact, found: &str) -> String {
 /// A query ranks the live facts of the project and of every project; a key reads that one fact
 /// even where it has been replaced. Every fact returned is trusted text at the confidentiality
 /// its file states, and the answer is held at the join of them.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one read: the confinement check on each argument, then the key path or the query \
+              path, as RECALL-10 covers them"
+)]
 pub(super) fn recall<S: Sink>(
     policy: &mut Policy<'_, S>,
     tools: &Tools,
@@ -554,11 +559,31 @@ pub(super) fn recall<S: Sink>(
     let Some(home) = tools.home else {
         return Produced::problem("recall found nothing: this session has no state directory.");
     };
-    let text_of = |name: &str| arguments.get(name).and_then(Value::as_str);
-    let (query, key) = (text_of("query"), text_of("key"));
-    if query.is_some() == key.is_some() {
+    let query_arg = super::argument(arguments, "query");
+    let key_arg = super::argument(arguments, "key");
+    if query_arg.is_some() == key_arg.is_some() {
         return Produced::problem("error: give exactly one of 'query' and 'key'");
     }
+    let key = match key_arg {
+        Some(proposed) => match policy.promote_confined_read("recall", "key", &proposed) {
+            Ok(promoted) => match promoted.into_trusted() {
+                Ok(value) => Some(value),
+                Err(_) => return Produced::problem("error: the key was not usable"),
+            },
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
+        },
+        None => None,
+    };
+    let query = match query_arg {
+        Some(proposed) => match policy.promote_confined_read("recall", "query", &proposed) {
+            Ok(promoted) => match promoted.into_trusted() {
+                Ok(value) => Some(value),
+                Err(_) => return Produced::problem("error: the query was not usable"),
+            },
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
+        },
+        None => None,
+    };
     let loaded = crate::recall::kept_facts(
         home,
         tools.workspace.root(),
@@ -593,7 +618,7 @@ pub(super) fn recall<S: Sink>(
             body: &fact.body,
         })
         .collect();
-    let ranked = rank(query, &docs);
+    let ranked = rank(&query, &docs);
     let shown: Vec<_> = ranked
         .hits
         .iter()

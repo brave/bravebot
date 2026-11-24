@@ -347,6 +347,14 @@ pub struct Workspace {
     /// Whether a name a run opens is judged as Windows reads it: the host's answer, and one a test
     /// supplies so the run tool's refusal is exercised on any host.
     windows_names: bool,
+    /// Whether a backslash separates on the host the two doors that open a directory by name
+    /// (`/add-dir` and `/cd`) judge a resolved name for: [`BACKSLASH_SEPARATES`], or the answer a
+    /// test supplies so the Windows answer is asked of the public doors on any host (TRUST-18).
+    door_backslash_separates: bool,
+    /// How those two doors turn the name they were given into a directory that exists: the file
+    /// system's answer, or one a test supplies so a name spelled as Windows spells it can reach the
+    /// doors on a host that cannot resolve it.
+    door_resolver: fn(&str) -> Result<PathBuf, WorkspaceError>,
     /// The home directory a leading `~` stands for, read from the environment when the workspace
     /// is built (TRUST-10).
     ///
@@ -551,6 +559,8 @@ impl Workspace {
             #[cfg(unix)]
             identity: directory_identity,
             windows_names: cfg!(windows),
+            door_backslash_separates: BACKSLASH_SEPARATES,
+            door_resolver: reach::existing_directory,
             home: crate::home::profile(),
             state: crate::home::directory(),
             stores: crate::home::directory()
@@ -744,6 +754,22 @@ impl Workspace {
         self
     }
 
+    /// Give the two doors that open a directory by name (`/add-dir` and `/cd`) the answer a host
+    /// where `backslash_separates` is `true` would give them, and `resolve` in place of the file
+    /// system's resolution of the name, so a Windows spelling reaches the public doors on any host
+    /// (TRUST-18).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_door_host(
+        mut self,
+        backslash_separates: bool,
+        resolve: fn(&str) -> Result<PathBuf, WorkspaceError>,
+    ) -> Self {
+        self.door_backslash_separates = backslash_separates;
+        self.door_resolver = resolve;
+        self
+    }
+
     /// Whether the file tools here are held to the primary root by a settings layer (PERM-16).
     ///
     /// For a caller that has to say why a directory was refused before it asks the workspace, and
@@ -839,11 +865,44 @@ impl Workspace {
         // Only a `deny` rule about reading can answer yes, so with none in force the landing,
         // which asks the file system, cannot change the answer. A status asks this of every
         // tracked path.
-        policy.any_read_is_denied()
-            && (policy.read_is_denied(named)
-                || self
-                    .landing(named)
-                    .is_some_and(|landed| policy.read_is_denied(&landed)))
+        if !policy.any_read_is_denied() {
+            return false;
+        }
+        let asked = |name: &str| self.name_or_landing_is_denied(policy, name);
+        // The rules about a project file are written against its name below the root, so an
+        // absolute name inside the root is asked about under that name too, in whichever Unicode
+        // form it spells the root. A drop is read where it lands (`resolve_attachment`), which
+        // canonicalizes an absolute name and no other, so the name an absolute one lands on is asked
+        // about the same way. A relative name is never resolved against the process's directory:
+        // it names a file below the root, and the process may be somewhere else.
+        asked(named)
+            || self.below_root(named).is_some_and(|inside| asked(&inside))
+            || Path::new(named)
+                .is_absolute()
+                .then(|| Path::new(named).canonicalize().ok())
+                .flatten()
+                .is_some_and(|landed| self.landed_name_is_denied(policy, &landed))
+    }
+
+    /// Whether a `deny` rule covers reading `name`, as written or as the file lands once its links
+    /// are followed.
+    fn name_or_landing_is_denied<S: Sink>(&self, policy: &Policy<'_, S>, name: &str) -> bool {
+        policy.read_is_denied(name)
+            || self
+                .landing(name)
+                .is_some_and(|landed| policy.read_is_denied(&landed))
+    }
+
+    /// Whether a `deny` rule covers reading the file a drop lands on, asked under its name below
+    /// the root, which is the name a project rule is written against. Called only while a rule
+    /// about reading is in force, so a landing that is not UTF-8 is covered: no rule can be written
+    /// about it, and its lossy rendering is the name of a different file (PATH-001).
+    fn landed_name_is_denied<S: Sink>(&self, policy: &Policy<'_, S>, landed: &Path) -> bool {
+        let Some(text) = landed.to_str() else {
+            return true;
+        };
+        self.below_root(text)
+            .is_some_and(|inside| self.name_or_landing_is_denied(policy, &inside))
     }
 
     /// Whether a rule covers reading any of `names`, the other names a file has. Where they could
@@ -6519,6 +6578,68 @@ mod tests {
         std::fs::remove_dir_all(base).unwrap();
     }
 
+    /// The public doors, `/add-dir` (`resolve_directory`) and `/cd` (`change_root`), ask the
+    /// refusal of an unkeyable name with the host's answer about what separates, so on a host
+    /// where a backslash separates an ordinary directory, which the platform canonicalises as
+    /// `\\?\C:\...`, is admitted and a share is refused (TRUST-18). The test above gives the
+    /// inner functions the answer; this one gives it to the workspace and calls the doors. A door
+    /// that passed a literal `false` would refuse every real directory on Windows, and nothing run
+    /// on another host would notice.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_public_doors_admit_an_ordinary_directory_where_a_backslash_separates() {
+        fn named_as_it_is(name: &str) -> Result<PathBuf, WorkspaceError> {
+            Ok(PathBuf::from(name))
+        }
+
+        let base = crate::testutil::scratch_dir("bravebot-door-host");
+        std::fs::remove_dir_all(&base).ok();
+        std::fs::create_dir_all(&base).expect("create the project");
+
+        let windows = Workspace::new(&base)
+            .expect("workspace")
+            .with_door_host(true, named_as_it_is);
+        assert_eq!(
+            windows
+                .resolve_directory(r"\\?\C:\other")
+                .expect("the door that adds a directory refused an ordinary Windows directory"),
+            PathBuf::from(r"\\?\C:\other")
+        );
+        let refused = windows
+            .resolve_directory(r"\\server\share\x")
+            .expect_err("the door that adds a directory opened a share");
+        assert!(
+            matches!(&refused, WorkspaceError::Invalid { path, .. } if path == r"\\server\share\x"),
+            "{refused:?}"
+        );
+
+        let mut windows = windows;
+        let root = windows.root().to_path_buf();
+        let moved = windows
+            .change_root(r"\\?\C:\other")
+            .expect("the door that moves the root refused an ordinary Windows directory");
+        assert_eq!(moved.root, PathBuf::from(r"\\?\C:\other"));
+        assert_eq!(moved.closed, vec![root]);
+        let mut windows = Workspace::new(&base)
+            .expect("workspace")
+            .with_door_host(true, named_as_it_is);
+        let root = windows.root().to_path_buf();
+        windows
+            .change_root(r"\\server\share\x")
+            .expect_err("the door that moves the root moved it to a share");
+        assert_eq!(windows.root(), root);
+
+        // The host where a backslash does not separate keeps refusing the same name: `C:\other`
+        // is a file name there, which the key cannot spell from `/`.
+        let elsewhere = Workspace::new(&base)
+            .expect("workspace")
+            .with_door_host(false, named_as_it_is);
+        elsewhere
+            .resolve_directory(r"\\?\C:\other")
+            .expect_err("a drive-letter name was admitted where a backslash does not separate");
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     /// Windows hands back a directory it canonicalised as `\\?\C:\...`, and a planner names one as
     /// `C:\...`, so both have to reach the one key a rule about the directory is held under, and
     /// that key has to read as a root rather than as a name under the project. The same name is a
@@ -6671,6 +6792,224 @@ mod tests {
             "a name holding a backslash was read as a drive where a slash is the only separator"
         );
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A server or a command line may spell the workspace's directory in another Unicode form than
+    /// the one the root was opened under, and a volume such as APFS opens both as one directory. The
+    /// name is below the root in either form, in both directions, and the part after the root is
+    /// as the name spelled it, so a lookup is made under the relative name `Workspace::resolve`
+    /// accepts.
+    #[test]
+    fn a_name_in_another_unicode_form_of_the_root_is_below_the_workspace_root() {
+        for (made_as, tag) in [("cafe\u{301}", "nfd"), ("caf\u{e9}", "nfc")] {
+            let scratch = crate::testutil::scratch_dir(&format!("below-root-unicode-{tag}"));
+            std::fs::remove_dir_all(&scratch).ok();
+            let directory = scratch.join(made_as);
+            std::fs::create_dir_all(directory.join("held/src")).unwrap();
+            let workspace = Workspace::new(&directory).unwrap();
+            let parent = workspace.root.parent().unwrap().to_path_buf();
+            for spelled in ["cafe\u{301}", "caf\u{e9}"] {
+                let typed = parent.join(spelled).join("held/src/lib.rs");
+                let typed = typed.to_string_lossy();
+                for backslash_separates in [false, true] {
+                    assert_eq!(
+                        workspace
+                            .below_root_where(&typed, backslash_separates)
+                            .as_deref(),
+                        Some("held/src/lib.rs"),
+                        "root made as {tag}, name spelled {spelled:?}"
+                    );
+                }
+                let longer = parent.join(format!("{spelled}x")).join("held/src/lib.rs");
+                assert_eq!(
+                    workspace.below_root_where(&longer.to_string_lossy(), false),
+                    None,
+                    "a directory whose name only starts like the root's is not the root"
+                );
+            }
+            std::fs::remove_dir_all(&scratch).ok();
+        }
+    }
+
+    /// A policy whose rules deny reading `rule`, for a question asked of the rules alone.
+    fn denying_reads<'a>(
+        sink: &'a mut bravebot_core::RecordingSink,
+        rule: &str,
+    ) -> Policy<'a, bravebot_core::RecordingSink> {
+        use bravebot_core::permissions::{Anchors, Permissions};
+        use bravebot_core::{CapabilitySet, ReleasePlan, Routing};
+
+        let (permissions, rejected) =
+            Permissions::parse(&[format!("Read({rule})")], &[], &[], &Anchors::none());
+        assert!(rejected.is_empty(), "the rule did not parse");
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "read");
+        Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead]),
+            sink,
+        )
+        .unwrap()
+        .with_permissions(permissions)
+    }
+
+    /// A drop is read where it lands, and a landing that is not UTF-8 has no spelling a rule can be
+    /// written against, so it is covered while a `deny` rule about reading is in force (PERM-7,
+    /// PATH-001). Its lossy rendering is the name of a different file, so a rule that does not cover
+    /// that name must not decide for the real one. Rejects asking the rules about the lossy text. A
+    /// landing that is text and that no rule covers is still not covered. The landing is built
+    /// from bytes rather than made on disk, since not every volume can hold such a name.
+    #[cfg(unix)]
+    #[test]
+    fn a_dropped_file_whose_landing_is_not_utf8_is_covered_while_a_deny_rule_is_in_force() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let scratch = crate::testutil::scratch_dir("deny-landing-bytes");
+        std::fs::remove_dir_all(&scratch).ok();
+        std::fs::create_dir_all(&scratch).unwrap();
+        let workspace = Workspace::new(&scratch).unwrap();
+        let mut sink = bravebot_core::RecordingSink::new();
+        let policy = denying_reads(&mut sink, "held/src/lib.rs");
+
+        let invalid = workspace
+            .root()
+            .join(OsStr::from_bytes(b"other-\xff"))
+            .join("main.rs");
+        assert!(invalid.to_str().is_none(), "the landing is text");
+        assert!(
+            workspace.landed_name_is_denied(&policy, &invalid),
+            "a landing that is not UTF-8 was not covered"
+        );
+        let text = workspace.root().join("other").join("main.rs");
+        assert!(
+            !workspace.landed_name_is_denied(&policy, &text),
+            "a landing that is text and that no rule covers was covered"
+        );
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    /// A relative name is a file below the workspace root and is never looked up against the
+    /// directory the process happens to be in. With the root one level above that directory, the
+    /// relative `Cargo.toml` is no file of the root's, and a rule about the process directory's own
+    /// `Cargo.toml` (written below the root) does not cover it. Rejects canonicalizing a relative
+    /// name, which resolves it against the process directory and finds the covered file. The control
+    /// is the same file named absolutely and the name below the root, which the rule covers.
+    #[test]
+    fn a_relative_name_is_not_resolved_against_the_process_directory_when_asked_about_a_rule() {
+        let here = std::env::current_dir().unwrap();
+        assert!(
+            here.join("Cargo.toml").is_file(),
+            "the fixture file is gone"
+        );
+        let above = here.parent().unwrap();
+        let below = here.file_name().unwrap().to_string_lossy().into_owned();
+        let workspace = Workspace::new(above).unwrap();
+        assert!(
+            !workspace.root().join("Cargo.toml").exists(),
+            "the root holds a Cargo.toml of its own"
+        );
+        let mut sink = bravebot_core::RecordingSink::new();
+        let policy = denying_reads(&mut sink, &format!("{below}/Cargo.toml"));
+
+        let named = workspace.root().join(&below).join("Cargo.toml");
+        assert!(
+            workspace.rule_denies_reading(&policy, &format!("{below}/Cargo.toml")),
+            "the control, the name below the root, was not covered"
+        );
+        assert!(
+            workspace.rule_denies_reading(&policy, &named.to_string_lossy()),
+            "the control, the same file named absolutely, was not covered"
+        );
+        assert!(
+            !workspace.rule_denies_reading(&policy, "Cargo.toml"),
+            "a relative name was resolved against the process directory"
+        );
+    }
+
+    /// A drop is read where it lands, so an absolute name outside the root that is a link to a file
+    /// inside it is covered by a rule written against the file's name below the root. The name asked
+    /// about is spelled outside the root, so neither the name nor its lookup under the root finds
+    /// the file. The control is a link to a file no rule covers.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_outside_the_root_to_a_covered_file_inside_it_is_covered() {
+        let scratch = crate::testutil::scratch_dir("deny-link-from-outside");
+        std::fs::remove_dir_all(&scratch).ok();
+        let project = scratch.join("project");
+        std::fs::create_dir_all(project.join("held/src")).unwrap();
+        std::fs::write(project.join("held/src/lib.rs"), "x").unwrap();
+        std::fs::write(project.join("main.rs"), "x").unwrap();
+        let outside = scratch.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(project.join("held/src/lib.rs"), outside.join("held.rs"))
+            .unwrap();
+        std::os::unix::fs::symlink(project.join("main.rs"), outside.join("main.rs")).unwrap();
+        let workspace = Workspace::new(&project).unwrap();
+        let mut sink = bravebot_core::RecordingSink::new();
+        let policy = denying_reads(&mut sink, "held/src/lib.rs");
+
+        let spelled = |file: &str| {
+            workspace
+                .root()
+                .parent()
+                .unwrap()
+                .join("outside")
+                .join(file)
+        };
+        assert!(
+            workspace.rule_denies_reading(&policy, &spelled("held.rs").to_string_lossy()),
+            "a link from outside the root to a covered file was not covered"
+        );
+        assert!(
+            !workspace.rule_denies_reading(&policy, &spelled("main.rs").to_string_lossy()),
+            "a link from outside the root to an uncovered file was covered"
+        );
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    /// PATH-007: comparing the root with a name in canonical Unicode form joins two directories that
+    /// differ only in the form of their name. A volume such as ext4 holds `cafe\u{301}` and
+    /// `caf\u{e9}` apart as two directories and APFS opens one, and a rule about a file below the
+    /// root covers the file at the same place below the other-form directory on both, which only
+    /// adds a refusal (TRUST-18). Both directories are made, with different text in each. A
+    /// directory that differs in a letter (`cafe`) stays a different directory and is not covered.
+    #[test]
+    fn a_deny_rule_covers_the_same_file_below_a_directory_that_differs_only_in_unicode_form() {
+        let decomposed = "cafe\u{301}";
+        let composed = "caf\u{e9}";
+        for (made_as, other, tag) in [(decomposed, composed, "nfd"), (composed, decomposed, "nfc")]
+        {
+            let scratch = crate::testutil::scratch_dir(&format!("deny-joins-forms-{tag}"));
+            std::fs::remove_dir_all(&scratch).ok();
+            for directory in [made_as, other, "cafe"] {
+                std::fs::create_dir_all(scratch.join(directory).join("held/src")).unwrap();
+                std::fs::write(
+                    scratch.join(directory).join("held/src/lib.rs"),
+                    format!("made as {directory}"),
+                )
+                .unwrap();
+            }
+            // On a volume that folds the two forms the second directory is the first, which is
+            // the same answer for the rule and only changes what the failure message says.
+            let apart = std::fs::read_to_string(scratch.join(made_as).join("held/src/lib.rs"))
+                .is_ok_and(|text| text == format!("made as {made_as}"));
+            let workspace = Workspace::new(scratch.join(made_as)).unwrap();
+            let mut sink = bravebot_core::RecordingSink::new();
+            let policy = denying_reads(&mut sink, "held/src/lib.rs");
+            let parent = workspace.root().parent().unwrap().to_path_buf();
+            for (directory, covered) in [(made_as, true), (other, true), ("cafe", false)] {
+                let named = parent.join(directory).join("held/src/lib.rs");
+                assert_eq!(
+                    workspace.rule_denies_reading(&policy, &named.to_string_lossy()),
+                    covered,
+                    "root made as {tag}, {directory:?} {}",
+                    if apart { "held apart" } else { "folded" }
+                );
+            }
+            std::fs::remove_dir_all(&scratch).ok();
+        }
     }
 
     /// The window a read is recorded under (READ-8) tells two files the volume holds apart from one

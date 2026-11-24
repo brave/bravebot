@@ -174,6 +174,8 @@ a fallback rather than the usual case: see COMPACT-9.
 
 `verified-by: bravebot_agent::turn::a_conversation_past_the_budget_is_summarised_before_the_next_request`
 `verified-by: bravebot_agent::turn::a_conversation_nobody_has_measured_is_not_compacted`
+`verified-by: bravebot_agent::turn::a_measured_conversation_under_the_budget_is_not_compacted`
+`verified-by: bravebot_agent::turn::an_over_budget_conversation_with_nothing_worth_cutting_sends_nothing_and_says_nothing`
 `verified-by: bravebot_agent::conversation::a_long_turn_does_not_summarise_itself_once_per_round`
 `verified-by: bravebot_agent::turn::a_conversation_with_older_exchanges_and_no_measurement_is_not_compacted`
 `verified-by: bravebot_agent::turn::a_summariser_that_failed_is_not_asked_again_for_the_rest_of_the_turn`
@@ -405,6 +407,8 @@ against the window of the planner's model rather than this one
 `verified-by: bravebot_agent::compact::a_summary_model_nothing_serves_is_named_in_the_refusal_it_causes`
 `verified-by: bravebot_agent::compact::a_summary_model_no_configured_service_answers_for_is_refused_rather_than_sent`
 `verified-by: bravebot_agent::turn::a_summary_model_the_machine_excludes_refuses_the_compaction_and_leaves_the_conversation_whole`
+`verified-by: bravebot_agent::turn::a_summary_model_nothing_serves_refuses_the_compaction_and_leaves_the_conversation_whole`
+`verified-by: bravebot_agent::turn::a_summary_model_that_searches_the_web_refuses_the_compaction_and_leaves_the_conversation_whole`
 `verified-by: bravebot_agent::compact::a_summary_model_that_searches_the_web_is_refused_over_chat_completions_only`
 `verified-by: bravebot_cli::running::doctor_names_the_file_of_a_checkouts_summary_model_that_is_not_obeyed`
 
