@@ -448,10 +448,10 @@ text.
 Each import is read through the same `workspace.read` and trust gate as [INSTR-8](#INSTR-8)'s
 pointer, after a `deny` rule is asked ([PERM-7](permissions.md#PERM-7)), so confinement and the
 trust map decide. An import that cannot be expanded stays as written and the person is told which
-file and why: a `deny` rule covers it, it is outside the workspace or not trusted, a file above it
-is already importing it, or the nesting or the count (64 for one instructions file) is past the
-limit. An absolute path, or one reaching above the workspace, is never read and is not reported, because
-it names no file the project holds. The same refusal is reported once, however many times the
+file and why: a `deny` rule covers it, it is outside the workspace, it exists but cannot be read or
+it is not trusted, a file above it is already importing it, or the nesting or the count (64 for one
+instructions file) is past the limit. An absolute path, or one reaching above the workspace, is
+never read and is not reported, because it names no file the project holds. The same refusal is reported once, however many times the
 file is named. An untrusted
 directory's instructions never reach this rule ([INSTR-5](#INSTR-5)).
 
@@ -542,6 +542,7 @@ change of the file.
 `verified-by: bravebot_agent::turn::a_style_takes_the_place_of_the_opening_alone_and_yields_to_system_prompt`
 `verified-by: bravebot_agent::styles::a_style_is_found_by_its_whole_name_only`
 `verified-by: bravebot_agent::styles::no_style_takes_the_quarantine_guidance_with_it`
+`verified-by: bravebot_agent::styles::proactive_says_it_changes_no_mode_and_still_puts_a_write_to_the_person`
 `verified-by: bravebot_agent::styles::a_file_in_the_home_directory_is_a_style_by_its_name`
 `verified-by: bravebot_agent::styles::a_file_cannot_stand_in_for_a_built_in_name`
 `verified-by: bravebot_agent::styles::a_name_that_is_not_a_slug_never_reaches_a_path`
@@ -557,6 +558,7 @@ change of the file.
 `verified-by: bravebot_agent::turn::a_style_from_a_file_opens_the_prompt_and_yields_to_system_prompt`
 `verified-by: bravebot_agent::turn::a_turn_records_the_output_style_that_opened_it`
 `verified-by: bravebot_tui::app::every_turn_the_terminal_starts_carries_the_style_in_force_ticks_and_goal_rounds_included`
+`verified-by: bravebot_tui::app::the_side_requests_the_terminal_sends_carry_no_style_and_only_a_turns_task_does`
 `verified-by: bravebot_tui::app::a_style_file_in_the_home_directory_is_listed_and_picked_by_name`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_style`
 `verified-by: bravebot_config::settings::a_style_that_is_blank_or_not_a_string_names_nothing`
@@ -565,6 +567,16 @@ change of the file.
 `verified-by: bravebot_tui::app::a_prompt_containing_the_style_command_or_a_longer_word_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_style_picked_under_a_replaced_opening_says_it_does_not_show`
 `verified-by: bravebot_tui::app::a_style_named_to_the_command_reaches_the_next_turn_and_only_a_known_name_does`
+`verified-by: bravebot_agent::turn::a_delegate_carries_no_style_the_parent_has`
+`verified-by: bravebot_agent::turn::with_a_style_in_force_a_write_is_still_put_to_the_person`
+`verified-by: bravebot_agent::turn::with_a_style_in_force_plan_mode_still_refuses_a_write`
+`verified-by: bravebot_agent::turn::a_style_in_force_is_not_sent_to_the_classifier_that_vets_a_run`
+`verified-by: bravebot_agent::turn::a_style_in_force_is_not_sent_to_a_processor`
+`verified-by: bravebot_agent::turn::a_style_in_force_is_not_sent_to_the_aside_the_goal_judge_or_the_summariser`
+`verified-by: bravebot_agent::aside::a_question_is_sent_under_its_own_system_prompt_and_no_style`
+`verified-by: bravebot_agent::compact::the_summariser_is_sent_under_its_own_system_prompt_and_no_style`
+`verified-by: bravebot_agent::manifest::a_style_in_force_is_not_sent_to_the_planner_of_a_manifest_run`
+`verified-by: bravebot_tui::app::a_resumed_session_starts_in_the_style_the_settings_name_and_not_the_earlier_pick`
 
 <a id="INSTR-13"></a>
 ### INSTR-13: a project's skill directories are read least specific first, at the root only

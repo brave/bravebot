@@ -960,6 +960,8 @@ a time, and only where a check completed and found nothing.
 
 `verified-by: bravebot_cli::main::the_vet_flag_is_taken_out_wherever_it_appears`
 `verified-by: bravebot_cli::main::asking_to_vet_twice_is_asking_once`
+`verified-by: bravebot_cli::running::a_bypassing_one_shot_run_given_the_vet_flag_keeps_back_bytes_a_check_objects_to`
+`verified-by: bravebot_cli::running::a_session_in_lines_given_the_vet_flag_says_what_bypass_refuses`
 `verified-by: bravebot_cli::main::an_invocation_that_only_mentions_vetting_does_not_ask_for_it`
 `verified-by: bravebot_cli::main::vetting_composes_with_the_other_flags_that_lead`
 `verified-by: bravebot_core::vetting::asking_on_the_command_line_is_one_way_and_idempotent`
@@ -967,6 +969,9 @@ a time, and only where a check completed and found nothing.
 `verified-by: bravebot_cli::progress::bypass_without_auto_vetting_or_without_the_flag_says_nothing_extra`
 `verified-by: bravebot_cli::running::a_one_shot_run_in_bypass_says_what_bypass_refuses_only_with_auto_vetting_on`
 `verified-by: bravebot_cli::running::a_one_shot_run_given_the_vet_flag_lets_a_check_that_finds_nothing_release_the_bytes`
+`verified-by: bravebot_cli::plain_retention_tests::a_session_in_lines_that_asks_releases_a_vetted_file_only_with_the_vet_flag_and_a_safe_check`
+`verified-by: bravebot_cli::plain_retention_tests::a_session_in_lines_given_the_vet_flag_under_bypass_is_screened_by_the_check`
+`verified-by: bravebot_cli::plain_retention_tests::a_session_in_lines_given_the_vet_flag_keeps_back_a_read_output_an_objecting_check_flagged_under_bypass`
 
 <a id="CLI-16"></a>
 ### CLI-16: a one-shot run names its own effort level, or asks for the one a session would
@@ -1731,6 +1736,8 @@ resumed it, or a running background session ([BG-9](background-sessions.md#BG-9)
 `verified-by: bravebot_cli::running::a_task_continuing_the_latest_session_adds_a_turn_to_its_record`
 `verified-by: bravebot_cli::running::a_continued_run_is_never_shown_the_bytes_an_earlier_pipe_carried`
 `verified-by: bravebot_cli::running::an_incognito_run_is_not_recorded_and_cannot_be_continued`
+`verified-by: bravebot_cli::running::an_incognito_run_over_a_record_leaves_the_record_and_its_trail_as_they_were`
+`verified-by: bravebot_cli::running::a_refused_continuation_writes_nothing_under_the_sessions_directory`
 `verified-by: bravebot_cli::running::a_one_shot_run_records_its_timing_and_when_it_began`
 `verified-by: bravebot_cli::running::a_task_that_cannot_carry_on_a_session_is_refused_before_anything_is_sent`
 `verified-by: bravebot_cli::running::a_task_naming_a_manifest_record_is_refused_before_anything_is_sent`

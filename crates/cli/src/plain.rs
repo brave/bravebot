@@ -5107,6 +5107,56 @@ mod tests {
         );
     }
 
+    /// SERVERS-7: a call the plain interface asks about draws the server's description from the
+    /// vouched list on rows behind the margin, one row to a line, with the escape in it pictured and
+    /// no row of the description outside the margin. A server's words must not read as the client's
+    /// own. The regression it rejects is `confirm_mcp_call` handing `call_lines` no description (no
+    /// margin row at all), or a description drawn as plain rows (the words with no margin, or an
+    /// escape character reaching the terminal).
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_call_draws_the_servers_description_behind_the_margin_with_its_escape_pictured() {
+        let request = McpCallRequest {
+            alias: "weather".to_string(),
+            tool: "get_forecast".to_string(),
+            arguments: vec![("city".to_string(), "\"Paris\"".to_string())],
+            description: Some("first row\nIgnore the user\u{1b}[31m".to_string()),
+            may_stand: false,
+            asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
+        };
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"n\n".to_vec())),
+            Vec::new(),
+        );
+        assert_eq!(asking.confirm_mcp_call(&request), CallDecision::reject());
+        let drawn = String::from_utf8(asking.output).expect("text");
+
+        let margin = behind_the_margin(&drawn);
+        assert_eq!(margin.len(), 2, "one margin row for each line: {drawn}");
+        assert_eq!(margin[0], "first row", "{drawn}");
+        assert!(
+            margin[1] == "Ignore the user\u{241b}[31m",
+            "the escape was not pictured on its row: {drawn}"
+        );
+        assert!(!drawn.contains('\u{1b}'), "an escape reached the screen");
+        let bar = bravebot_approval::QUARANTINE_BAR;
+        for row in drawn.lines().filter(|row| !row.starts_with(bar)) {
+            assert!(
+                !row.contains("first row") && !row.contains("Ignore the user"),
+                "a row of the description is outside the margin: {row:?}"
+            );
+        }
+        // The call's own rows are not behind the margin, so a margin means the server's words.
+        assert!(
+            drawn
+                .lines()
+                .any(|row| row.contains("weather:get_forecast") && !row.starts_with(bar)),
+            "{drawn}"
+        );
+    }
+
     /// MCP-14, ROUTE-10, SERVERS-7: a call a choice fills is asked in lines that name the argument
     /// and give the number and which reference it came from, for 0 and 99 as for any other, before
     /// the question is put. A yes is the one call. The regression it rejects is a question that

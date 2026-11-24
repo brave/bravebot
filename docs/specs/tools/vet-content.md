@@ -129,7 +129,9 @@ rather than holding it as text, and [VET-4](#VET-4) says where it goes instead.
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_reaches_the_planner_unasked`
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_content_a_check_objected_to`
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_promotes_content_a_check_found_nothing_in`
+`verified-by: bravebot_agent::turn::a_screened_unattended_run_whose_check_found_nothing_says_on_the_row_that_a_check_released_it`
 `verified-by: bravebot_agent::turn::a_picture_a_person_keeps_out_is_never_attached`
+`verified-by: bravebot_agent::turn::the_planner_reads_the_same_about_an_attached_picture_whoever_let_it_through`
 `verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_yes_whoever_gave_it_and_whatever_the_check_said`
 `verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_refusal_whoever_gave_it_and_whatever_the_check_said`
 `verified-by: bravebot_agent::turn::a_stop_during_the_check_on_content_is_not_a_refusal`

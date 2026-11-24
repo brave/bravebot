@@ -3465,10 +3465,14 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         "schedule_next" if !tools.delegated && tools.scheduling.offered() => {
             schedule_next(policy, tools.scheduling, &arguments)
         }
-        // A surface that keeps no watches is offered no way to arm one, and a call from a turn on
-        // it is answered as an unknown name. Refused here as well as absent from the list, for
-        // the reason the two above are.
-        "watch_file" if !tools.delegated && tools.arming.offered() => watch_file(
+        // A delegate is refused here. A surface that keeps no watches is offered no way to arm
+        // one and is refused by `watch_file` itself: the function takes the arming state as an
+        // argument, and its `Arming::Unavailable` arm answers with the words of the catch-all
+        // below and arms nothing, so a guard on `Arming::offered()` here would give the same
+        // answer and no test could tell the two apart. `schedule_next` above keeps its guard
+        // because that function takes no state that says it was not offered, so the dispatch arm
+        // is the only place that refuses it.
+        "watch_file" if !tools.delegated => watch_file(
             policy,
             tools.workspace,
             tools.slots,
@@ -8152,7 +8156,8 @@ fn edit_file<S: Sink, C: Confirmer>(
             // count-alone arm today. It stays as a second refusal, the way a resumed context's
             // refusal does in `Policy`, and `what_an_edit_result_shows` is the one place that
             // chooses: it reads a `Label` and nothing else.
-            if what_an_edit_result_shows(body_label) == EditResultShows::LinesAndCount {
+            let shows = what_an_edit_result_shows(body_label);
+            let lines = if shows == EditResultShows::LinesAndCount {
                 let region = policy.render_in_place("edit_file", &body, |contents| {
                     crate::replace::changed_region(&current, &contents)
                 });
@@ -8199,22 +8204,19 @@ fn edit_file<S: Sink, C: Confirmer>(
                     policy.allow_exposing_read(&keyed, answered_by);
                 }
 
-                let told = policy.render_in_place("edit_file", &region, |region| match region {
-                    Some(excerpt) => format!("{}\n\n{headline}", excerpt.render()),
-                    None => headline.clone(),
-                });
-                Produced::new(told, "", note)
-                    .with_changes(changes)
-                    .with_written(written)
-                    .marked_untrusted(false)
-                    .having_changed_a_file_at(workspace, &landed)
+                Some(
+                    policy.render_in_place("edit_file", &region, |region| match region {
+                        Some(excerpt) => format!("{}\n\n{headline}", excerpt.render()),
+                        None => headline.clone(),
+                    }),
+                )
             } else {
-                confirmed(headline, note)
-                    .with_changes(changes)
-                    .with_written(written)
-                    .marked_untrusted(true)
-                    .having_changed_a_file_at(workspace, &landed)
-            }
+                None
+            };
+            edit_result(shows, headline, note, lines)
+                .with_changes(changes)
+                .with_written(written)
+                .having_changed_a_file_at(workspace, &landed)
         }
         // As the read above: the name the planner is told is the one it asked with. `Stale` is the
         // arm that reaches here in practice, and it carries the path the write was routed on.
@@ -8246,6 +8248,27 @@ fn what_an_edit_result_shows(body_label: Label) -> EditResultShows {
         EditResultShows::LinesAndCount
     } else {
         EditResultShows::CountAlone
+    }
+}
+
+/// The result of an edit that landed, assembled from what the result shows.
+///
+/// `LinesAndCount` is the lines the edit produced and then the count, under the label they were
+/// shaped with, and is not marked untrusted. `CountAlone` is the headline alone, marked untrusted,
+/// whatever lines are handed in. The choice was made by `what_an_edit_result_shows` and nothing
+/// here looks at the lines to make another. A `LinesAndCount` with no lines, which the caller does
+/// not build, comes out as the count alone, the narrower of the two.
+fn edit_result(
+    shows: EditResultShows,
+    headline: String,
+    note: String,
+    lines: Option<Labelled<String>>,
+) -> Produced {
+    match (shows, lines) {
+        (EditResultShows::LinesAndCount, Some(told)) => {
+            Produced::new(told, "", note).marked_untrusted(false)
+        }
+        _ => confirmed(headline, note).marked_untrusted(true),
     }
 }
 
@@ -21161,6 +21184,42 @@ mod tests {
         );
     }
 
+    /// AGENT-5: each delegate of a fan-out is told the shared `task` followed by its own entry, so
+    /// the instruction says what to do before it says what differs. A delegate told its entry
+    /// first reads the part that differs ahead of the part that says what to do with it.
+    ///
+    /// Rejects: `format!("{entry}\n\n{task}")` in `tasks_in`, and a composition that drops either
+    /// half or reuses one entry for every delegate.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn each_delegate_is_told_the_shared_task_followed_by_its_own_entry() {
+        use bravebot_core::capability::{Capability, CapabilitySet};
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        let tasks = tasks_in(&json!({"task": "SHARED", "each": ["FIRST", "SECOND"]}))
+            .expect("two entries are accepted");
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "compose a fan-out");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead]),
+            &mut sink,
+        )
+        .expect("policy");
+        let proof = policy.authorise_display_release("what a delegate was asked to do");
+        let told: Vec<String> = tasks
+            .into_iter()
+            .map(|task| task.declassify(&proof))
+            .collect();
+        assert_eq!(
+            told,
+            ["SHARED\n\nFIRST", "SHARED\n\nSECOND"],
+            "a delegate was not told the shared task and then its own entry"
+        );
+    }
+
     /// AGENT-5: a planner told the most one call starts splits a fan-out into calls of that size,
     /// where one told nothing sends a call that is refused and then sends the shared task again.
     /// The figure in the text of `each` is the one `tasks_in` refuses past, and the text says a
@@ -21968,6 +22027,37 @@ mod tests {
         assert_eq!(
             from_file(r#"{"run": {"maxSeconds": 1800}}"#).wait_ceiling,
             Duration::from_secs(270)
+        );
+    }
+
+    /// BACKEND-27: the refusal under `1h` states the bound in force, 600, and not the 270 of the
+    /// shorter lifetimes, and each refusal states its own figure.
+    ///
+    /// Rejects: a refusal whose figure is written as 270 whatever the lifetime.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_wait_refusal_quotes_the_bound_of_the_lifetime_in_force() {
+        use bravebot_config::CacheTtl;
+
+        for (lifetime, longest, over) in [
+            (None, "between 1 and 270", 271),
+            (Some(CacheTtl::FiveMinutes), "between 1 and 270", 271),
+            (Some(CacheTtl::OneHour), "between 1 and 600", 601),
+        ] {
+            let held = Deadlines::BUILT_IN.waiting_under(lifetime);
+            let refusal = wait_from(&json!({"wait_seconds": over}), held)
+                .expect_err("a wait over the bound is refused");
+            assert!(
+                refusal.contains(longest),
+                "{lifetime:?}: the refusal does not quote the bound in force: {refusal}"
+            );
+        }
+        let held = Deadlines::BUILT_IN.waiting_under(Some(CacheTtl::OneHour));
+        assert!(
+            !wait_from(&json!({"wait_seconds": 601}), held)
+                .expect_err("refused")
+                .contains("270"),
+            "the refusal under 1h still quotes the 270 of the shorter lifetimes"
         );
     }
 
@@ -23091,8 +23181,9 @@ mod tests {
 
     /// Every tool this program builds for a planner or a delegate: the table under each way a turn
     /// can be scheduled and armed, with the kinds of delegate written into it, a delegate of each
-    /// kind, and the two tools added beside the table, `advisor` and `load_tool`. The tools an MCP
-    /// server offers are not built here.
+    /// kind, and every tool added beside the table: `advisor`, `load_tool`, `propose_plan`,
+    /// `message_session`, `remember`, `propose_rule`, `set_link`, `recall` and `web_search`. The
+    /// tools an MCP server offers are not built here.
     fn every_list_a_turn_can_offer() -> Vec<Tool> {
         use bravebot_core::delegate::{Definitions, Kind};
 
@@ -23130,7 +23221,60 @@ mod tests {
         }
         offer_advisor(&mut offered);
         offer_tool_loader(&mut offered, &["server:tool".to_string()]);
+        offer_propose_plan(&mut offered);
+        offer_message_session(&mut offered);
+        offer_remember(&mut offered);
+        offer_propose_rule(&mut offered);
+        offer_set_link(&mut offered);
+        offer_recall(&mut offered);
+        offer_web_search(&mut offered);
         offered
+    }
+
+    /// ROUTE-7: the list the field scan and the name scan read holds every tool a planner can be
+    /// offered beside the table. A builder left out of it is a tool whose fields nobody reads, so
+    /// a `command` or `script` field added to it would pass `only_run_takes_a_command_line`. The
+    /// regression it rejects is a new `offer_*` builder that is never added to the list, and any
+    /// of the nine named here being dropped from it. A tool added to the table needs no
+    /// line here, because the table is read whole.
+    #[test]
+    fn the_list_every_scan_reads_holds_each_tool_offered_beside_the_table() {
+        let held: Vec<String> = every_list_a_turn_can_offer()
+            .into_iter()
+            .map(|tool| tool.function.name)
+            .collect();
+        for name in [
+            "advisor",
+            "load_tool",
+            "propose_plan",
+            "message_session",
+            "remember",
+            "propose_rule",
+            "set_link",
+            "recall",
+            "web_search",
+        ] {
+            assert!(
+                held.iter().any(|held| held == name),
+                "{name} is offered to a planner and is not in the list the scans read"
+            );
+        }
+    }
+
+    /// ROUTE-7: no tool a planner can be offered is named for a shell, whichever builder makes it.
+    /// `no_shell_is_offered` reads the table and each delegate's list. This reads every list the
+    /// field scan reads, so a tool built beside the table, which a planner reads as its own, is
+    /// held to the same names. The regression it rejects is a `shell_exec` or `exec_script` tool
+    /// added by one of the `offer_*` builders.
+    #[test]
+    fn no_tool_built_beside_the_table_is_named_for_a_shell() {
+        for tool in every_list_a_turn_can_offer() {
+            let name = &tool.function.name;
+            assert!(
+                !name.contains("shell") && !name.contains("exec"),
+                "{name} takes a shell string"
+            );
+        }
     }
 
     /// A planner that asks the user for a path, a filename, or whether something is installed is

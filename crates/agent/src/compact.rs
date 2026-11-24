@@ -253,6 +253,19 @@ impl From<ChatError> for CompactError {
     }
 }
 
+/// The messages a summary is asked for with: the summariser's own system prompt over the part of
+/// the conversation before `boundary`, and the closing instruction. The conversation holds no
+/// output style and this takes none (INSTR-12).
+fn summary_messages(
+    conversation: &Conversation,
+    boundary: usize,
+    focus: Option<&str>,
+) -> Vec<Message> {
+    let mut messages = conversation.to_summarise(boundary, SYSTEM_PROMPT);
+    messages.push(Message::user(instruction(focus)));
+    messages
+}
+
 /// Compact a conversation, where there is anything worth compacting.
 ///
 /// `Ok(None)` means there was not: a conversation that is all recent, or one whose older part is
@@ -281,8 +294,7 @@ pub fn compact<S: Sink>(
         return Ok(None);
     };
 
-    let mut messages = conversation.to_summarise(boundary, SYSTEM_PROMPT);
-    messages.push(Message::user(instruction(focus)));
+    let messages = summary_messages(conversation, boundary, focus);
 
     // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty, and a client
     // never takes the keys that name a tool list from a model's `options` (BACKEND-15), so nothing
@@ -654,6 +666,38 @@ mod tests {
         assert!(
             system.contains("located but not yet edited"),
             "the summariser was not told which case is most easily lost"
+        );
+    }
+
+    /// INSTR-12. The request a summary is asked for under is the summariser's own system prompt and
+    /// closing instruction, whatever the person is working in: the conversation holds no style and
+    /// the builder takes none. Rejects a style's words, or any other, added to the system message.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_summariser_is_sent_under_its_own_system_prompt_and_no_style() {
+        let mut conversation = Conversation::new();
+        for (asked, answered) in [
+            ("add the feature", "reading the source"),
+            ("carry on", "wrote the source"),
+            ("and now", "half way"),
+            ("keep going", "nearly"),
+        ] {
+            conversation.push(Message::user(asked));
+            conversation.push(Message::assistant(answered));
+        }
+        let boundary = conversation
+            .compaction_boundary()
+            .expect("something to compact");
+
+        let messages = summary_messages(&conversation, boundary, None);
+
+        assert_eq!(
+            messages.first().expect("a system message").content.text(),
+            SYSTEM_PROMPT
+        );
+        assert_eq!(
+            messages.last().expect("an instruction").content.text(),
+            INSTRUCTION
         );
     }
 }

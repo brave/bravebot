@@ -249,6 +249,45 @@ fn what_a_call_spent_at_a_model_reaches_a_front_end() {
     );
 }
 
+/// VIEW-23: a wait under a second crosses as 0 whole seconds, which a window draws as nothing. A
+/// bridge that rounds the wait up (`ceil` or `round`) would send 1 for 400 ms, and a window would
+/// draw "1s at the model" for a wait too short to state. The renderer test feeds 0 directly, so only
+/// this one sees the conversion.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_wait_under_a_second_crosses_as_zero_seconds() {
+    use std::time::Duration;
+
+    let (mut reporter, events) = harness();
+
+    for waited in [
+        Duration::from_millis(400),
+        Duration::from_millis(999),
+        Duration::from_millis(1_400),
+        Duration::from_millis(1_999),
+    ] {
+        reporter.tool_finished(
+            Activity::running("read_output", "ref:1")
+                .done("x")
+                .after_waiting(Some(waited)),
+        );
+    }
+
+    let events = events.lock().expect("not poisoned");
+    let crossed: Vec<&serde_json::Value> =
+        events.iter().map(|e| &e.data["waitedSeconds"]).collect();
+    assert_eq!(
+        crossed,
+        [
+            &serde_json::json!(0),
+            &serde_json::json!(0),
+            &serde_json::json!(1),
+            &serde_json::json!(1)
+        ],
+        "a wait was rounded up instead of cut to whole seconds"
+    );
+}
+
 /// PROMPT-1: a call crosses with its file's name as held, which a window matches the call to its
 /// confirmation on, as spelled, which is what it draws on the line, and as spelled without the slot
 /// a reference was drawn under and a leading `./`, which is what it lists the file under. A name

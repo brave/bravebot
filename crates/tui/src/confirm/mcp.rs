@@ -1563,6 +1563,38 @@ mod tests {
         }
     }
 
+    /// SERVERS-7: a call's arguments are drawn one to a row in the order the request holds them.
+    /// The request carries `zeta`, `alpha`, `mid`, which is neither the sorted nor the reverse
+    /// order, so the rows read zeta, alpha, mid at every width.
+    ///
+    /// A wrong implementation draws the arguments through a sorted map or reverses them, which the
+    /// order of the other front ends does not do.
+    #[test]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn a_call_prompt_draws_its_arguments_in_the_order_the_request_holds_them() {
+        let request = McpCallRequest {
+            arguments: vec![
+                ("zeta".into(), "1".into()),
+                ("alpha".into(), "2".into()),
+                ("mid".into(), "3".into()),
+            ],
+            ..call(false, None)
+        };
+        for width in [120, 80, 50] {
+            let (rows, _) = call_screen(&request, (width, 30), 0);
+            let screen = rows.join("\n");
+            let at = |name: &str| {
+                rows.iter()
+                    .position(|row| row.contains(&format!("{name}:")))
+                    .unwrap_or_else(|| panic!("{name} is not drawn at {width}: {screen}"))
+            };
+            assert!(
+                at("zeta") < at("alpha") && at("alpha") < at("mid"),
+                "the rows are not in the request's order at {width}: {screen}"
+            );
+        }
+    }
+
     /// A long description shows its first rows until asked for, and says how to see the rest.
     #[test]
     fn a_call_prompt_cuts_a_long_description_until_it_is_expanded() {

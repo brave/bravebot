@@ -649,6 +649,7 @@ processors where its list holds the tool, and what it writes is private, so the 
 `verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_offered_processors_like_any_other`
 `verified-by: bravebot_agent::turn::what_a_delegate_reported_reaches_the_person_watching`
 `verified-by: bravebot_agent::turn::a_report_the_planner_was_handed_a_reference_to_is_kept_from_it_and_drawn_marked`
+`verified-by: bravebot_agent::turn::what_collect_delegates_draws_for_the_person_follows_what_the_planner_was_given`
 
 <a id="DELEGATE-9"></a>
 ### DELEGATE-9: nothing but the report crosses back
@@ -686,6 +687,9 @@ its parent's context would have moved the log rather than absorbed it.
 `verified-by: bravebot_agent::turn::a_delegate_held_to_its_bound_says_so_to_the_planner_and_the_person`
 `verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_same_sentence_about_the_bound`
 `verified-by: bravebot_agent::turn::a_delegates_report_is_put_beside_how_many_commands_it_ran_and_writes_it_made`
+`verified-by: bravebot_agent::turn::a_request_no_marker_rule_can_answer_is_told_so_and_not_hung_up_on`
+`verified-by: bravebot_agent::turn::a_delegate_that_ran_two_commands_is_reported_with_both_and_its_parent_adds_them_to_its_own`
+`verified-by: bravebot_agent::turn::a_delegate_that_wrote_three_files_is_reported_with_three_writes_and_its_parent_adds_them_to_its_own`
 
 <a id="DELEGATE-10"></a>
 ### DELEGATE-10: a delegate's effects are gated on their own
@@ -704,6 +708,8 @@ Delegation saves context. It never saves an approval.
 
 `verified-by: bravebot_agent::turn::a_delegates_write_is_approved_on_its_own`
 `verified-by: bravebot_agent::turn::a_delegates_run_is_put_to_the_person_and_runs_only_on_a_yes`
+`verified-by: bravebot_agent::turn::a_yes_to_a_run_is_not_carried_between_a_parent_and_its_worker`
+`verified-by: bravebot_agent::turn::a_yes_to_a_write_is_not_carried_between_a_parent_and_its_worker`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_server_asked_every_call_is_refused_unasked`
 `verified-by: bravebot_agent::mcp::a_rule_decides_a_workers_call_to_a_servers_tool_as_the_turns_own`
@@ -890,6 +896,7 @@ something unrelated to it.
 `verified-by: bravebot_agent::shared::what_a_mode_answers_unasked_is_not_held_behind_an_open_question`
 `verified-by: bravebot_agent::shared::a_question_the_mode_does_not_answer_still_waits_for_the_open_one`
 `verified-by: bravebot_agent::shared::the_mode_in_force_when_a_question_is_decided_answers_it`
+`verified-by: bravebot_agent::turn::a_delegates_answers_by_the_mode_are_recorded_with_the_modes_name`
 `verified-by: bravebot_agent::shared::the_mode_view_reaches_only_a_confirmer_lent_with_one_and_passes_to_nested_handles`
 `verified-by: bravebot_agent::shared::two_delegates_reporting_at_once_are_taken_one_call_at_a_time`
 `verified-by: bravebot_agent::shared::two_delegates_recording_at_once_are_taken_one_call_at_a_time`
@@ -969,6 +976,7 @@ front of them for a turn they were told had finished.
 `verified-by: bravebot_tui::state::a_turn_waiting_on_several_delegates_names_each_until_it_reports`
 `verified-by: bravebot_tui::state::a_turn_waiting_on_a_delegate_names_it_until_its_report_is_in`
 `verified-by: bravebot_tui::state::a_new_round_ends_the_wait_the_indicator_names`
+`verified-by: bravebot_agent::turn::a_request_no_marker_rule_can_answer_is_told_so_and_not_hung_up_on`
 
 <a id="DELEGATE-18"></a>
 ### DELEGATE-18: inference wait counts elapsed time once

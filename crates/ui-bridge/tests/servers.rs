@@ -62,6 +62,20 @@ impl Scratch {
         self.path.join("home")
     }
 
+    /// Declare `weather` as a stdio server that runs `script` under `/bin/sh -c`, as `bravebot mcp
+    /// add` writes it.
+    #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn declare_stdio(&self, script: &str) {
+        std::fs::write(
+            self.home().join(".bravebot/mcp.json"),
+            json!({"servers": {"weather": {"transport": "stdio",
+                "argv": ["/bin/sh", "-c", script], "variables": ["PATH"]}}})
+            .to_string(),
+        )
+        .expect("the declarations");
+    }
+
     /// Declare `weather` as the remote server at `url`, as `bravebot mcp add --http` writes it.
     fn declare(&self, url: &str) {
         std::fs::write(
@@ -204,10 +218,19 @@ struct FrontEnd {
     /// and the events of the turn it unblocked race each other, so nothing read is thrown away.
     kept: std::collections::VecDeque<Value>,
     next: u64,
+    /// Every line the front end wrote to its standard output, whether or not it is a message.
+    #[cfg(unix)]
+    written: Arc<Mutex<String>>,
 }
 
 impl FrontEnd {
     fn start(home: &Path) -> Self {
+        Self::start_with_stderr(home, Stdio::null())
+    }
+
+    /// As [`FrontEnd::start`], with the front end's standard error given to `stderr`.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn start_with_stderr(home: &Path, stderr: Stdio) -> Self {
         let endpoint = stub_service();
         let mut child = Command::new(env!("CARGO_BIN_EXE_bravebot-rpc"))
             .env_clear()
@@ -220,15 +243,21 @@ impl FrontEnd {
             .env("BRAVEBOT_DEFAULT_MODEL", "stub-model")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(stderr)
             .spawn()
             .expect("the built binary runs");
-        let said = lines(child.stdout.take().expect("the front end answers"));
+        let written = Arc::new(Mutex::new(String::new()));
+        let said = lines(
+            child.stdout.take().expect("the front end answers"),
+            Arc::clone(&written),
+        );
         Self {
             child,
             said,
             kept: std::collections::VecDeque::new(),
             next: 0,
+            #[cfg(unix)]
+            written,
         }
     }
 
@@ -327,10 +356,16 @@ impl Drop for FrontEnd {
     }
 }
 
-fn lines(stdout: ChildStdout) -> mpsc::Receiver<Value> {
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn lines(stdout: ChildStdout, written: Arc<Mutex<String>>) -> mpsc::Receiver<Value> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            {
+                let mut written = written.lock().expect("not poisoned");
+                written.push_str(&line);
+                written.push('\n');
+            }
             if let Ok(value) = serde_json::from_str::<Value>(&line)
                 && sender.send(value).is_err()
             {
@@ -417,6 +452,9 @@ fn a_server_the_window_approves_is_started_offered_and_called() {
         call["arguments"],
         json!([{"name": "city", "value": "\"Paris\""}])
     );
+    // The card draws the description of the tool from the list the person vouched for. A wire
+    // form that leaves it out, or takes it from another field, draws a call with no description.
+    assert_eq!(call["description"], "the forecast for a city");
 
     let reached = methods(&received);
     assert!(
@@ -535,4 +573,78 @@ fn a_request_nobody_declared_is_said_when_the_first_turn_starts_servers() {
         notes.contains("weather") && notes.contains(".bravebot/settings.json"),
         "{notes}"
     );
+}
+
+/// What the failing server below writes to its standard error before it exits: a window title and
+/// the clipboard (OSC 52). The server's command spells each word in two pieces, so the command the
+/// window is shown for approval never holds the words and a hit in what the window was sent is the
+/// server's own output.
+#[cfg(unix)]
+const WHAT_A_FAILING_SERVER_WRITES: &[&str] = &[
+    "\x1b]0;SERVER-TITLE\x07",
+    "\x1b]52;c;ZXZpbA==\x07",
+    "SERVER-TITLE",
+    "ZXZpbA==",
+];
+
+/// MCP-8, SERVERS-25: the desktop bridge sends a stdio server's standard error nowhere. A server
+/// that writes a window title and the clipboard to it and exits before it answers the handshake is
+/// started by the first turn, and neither the bridge's own standard error and standard output nor
+/// any event the window receives holds what it wrote.
+///
+/// The control is the question put to the window for the server and the note that it did not
+/// complete its handshake: the server was started and failed, so the absence of the bytes is not a
+/// server that never ran. The regression it rejects is `Stream::Inherited` or a piped stream the
+/// bridge draws at the `start_mcp` call, which puts the bytes in the bridge's standard error or in
+/// a note the window shows.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_desktop_bridge_shows_nothing_a_servers_stderr_writes() {
+    if !bravebot_sandbox::confinement_works_here() {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "a CI machine must run this check, and cannot: confinement is unavailable"
+        );
+        eprintln!("skipped: confinement is unavailable, so the server cannot be started");
+        return;
+    }
+    let scratch = Scratch::new("bridge-mcp-stderr");
+    scratch
+        .declare_stdio(r"printf '\033]0;SERVER-%s\007\033]52;c;ZXZp%s\007' TITLE bA== >&2; exit 1");
+    let stderr_file = scratch.path.join("bridge-stderr");
+    let mut front = FrontEnd::start_with_stderr(
+        &scratch.home(),
+        Stdio::from(std::fs::File::create(&stderr_file).expect("a file for stderr")),
+    );
+    let session = front.session(&scratch.project());
+
+    let events = front.turn(&session, &[("mcp-server.request", "approve", false)]);
+
+    assert_eq!(events.last().unwrap()["event"], "turn.done", "{events:?}");
+    assert_eq!(
+        named(&events, "mcp-server.request").len(),
+        1,
+        "the server was never put to the window, so it never ran: {events:?}"
+    );
+    let started = &named(&events, "mcp.started")[0]["data"];
+    assert_eq!(started["servers"], json!([]));
+    assert!(
+        started["notes"]
+            .to_string()
+            .contains("did not complete its handshake"),
+        "the server was not started and failed: {started}"
+    );
+    let seen = [
+        std::fs::read_to_string(&stderr_file).unwrap_or_default(),
+        front.written.lock().expect("not poisoned").clone(),
+        serde_json::to_string(&events).unwrap(),
+    ]
+    .join("\n");
+    for written in WHAT_A_FAILING_SERVER_WRITES {
+        assert!(
+            !seen.contains(written),
+            "a server's standard error reached the bridge's output or an event: {seen:?}"
+        );
+    }
 }

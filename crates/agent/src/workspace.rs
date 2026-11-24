@@ -347,6 +347,14 @@ pub struct Workspace {
     /// Whether a name a run opens is judged as Windows reads it: the host's answer, and one a test
     /// supplies so the run tool's refusal is exercised on any host.
     windows_names: bool,
+    /// Whether a backslash separates on the host the two doors that open a directory by name
+    /// (`/add-dir` and `/cd`) judge a resolved name for: [`BACKSLASH_SEPARATES`], or the answer a
+    /// test supplies so the Windows answer is asked of the public doors on any host (TRUST-18).
+    door_backslash_separates: bool,
+    /// How those two doors turn the name they were given into a directory that exists: the file
+    /// system's answer, or one a test supplies so a name spelled as Windows spells it can reach the
+    /// doors on a host that cannot resolve it.
+    door_resolver: fn(&str) -> Result<PathBuf, WorkspaceError>,
     /// The home directory a leading `~` stands for, read from the environment when the workspace
     /// is built (TRUST-10).
     ///
@@ -551,6 +559,8 @@ impl Workspace {
             #[cfg(unix)]
             identity: directory_identity,
             windows_names: cfg!(windows),
+            door_backslash_separates: BACKSLASH_SEPARATES,
+            door_resolver: reach::existing_directory,
             home: crate::home::profile(),
             state: crate::home::directory(),
             stores: crate::home::directory()
@@ -741,6 +751,22 @@ impl Workspace {
     #[must_use]
     pub(crate) fn with_windows_names(mut self) -> Self {
         self.windows_names = true;
+        self
+    }
+
+    /// Give the two doors that open a directory by name (`/add-dir` and `/cd`) the answer a host
+    /// where `backslash_separates` is `true` would give them, and `resolve` in place of the file
+    /// system's resolution of the name, so a Windows spelling reaches the public doors on any host
+    /// (TRUST-18).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_door_host(
+        mut self,
+        backslash_separates: bool,
+        resolve: fn(&str) -> Result<PathBuf, WorkspaceError>,
+    ) -> Self {
+        self.door_backslash_separates = backslash_separates;
+        self.door_resolver = resolve;
         self
     }
 
@@ -6516,6 +6542,68 @@ mod tests {
             .expect("a move to a directory with a key was refused");
         assert_eq!(moved.root, elsewhere);
         assert_eq!(workspace.root(), elsewhere);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// The public doors, `/add-dir` (`resolve_directory`) and `/cd` (`change_root`), ask the
+    /// refusal of an unkeyable name with the host's answer about what separates, so on a host
+    /// where a backslash separates an ordinary directory, which the platform canonicalises as
+    /// `\\?\C:\...`, is admitted and a share is refused (TRUST-18). The test above gives the
+    /// inner functions the answer; this one gives it to the workspace and calls the doors. A door
+    /// that passed a literal `false` would refuse every real directory on Windows, and nothing run
+    /// on another host would notice.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_public_doors_admit_an_ordinary_directory_where_a_backslash_separates() {
+        fn named_as_it_is(name: &str) -> Result<PathBuf, WorkspaceError> {
+            Ok(PathBuf::from(name))
+        }
+
+        let base = crate::testutil::scratch_dir("bravebot-door-host");
+        std::fs::remove_dir_all(&base).ok();
+        std::fs::create_dir_all(&base).expect("create the project");
+
+        let windows = Workspace::new(&base)
+            .expect("workspace")
+            .with_door_host(true, named_as_it_is);
+        assert_eq!(
+            windows
+                .resolve_directory(r"\\?\C:\other")
+                .expect("the door that adds a directory refused an ordinary Windows directory"),
+            PathBuf::from(r"\\?\C:\other")
+        );
+        let refused = windows
+            .resolve_directory(r"\\server\share\x")
+            .expect_err("the door that adds a directory opened a share");
+        assert!(
+            matches!(&refused, WorkspaceError::Invalid { path, .. } if path == r"\\server\share\x"),
+            "{refused:?}"
+        );
+
+        let mut windows = windows;
+        let root = windows.root().to_path_buf();
+        let moved = windows
+            .change_root(r"\\?\C:\other")
+            .expect("the door that moves the root refused an ordinary Windows directory");
+        assert_eq!(moved.root, PathBuf::from(r"\\?\C:\other"));
+        assert_eq!(moved.closed, vec![root]);
+        let mut windows = Workspace::new(&base)
+            .expect("workspace")
+            .with_door_host(true, named_as_it_is);
+        let root = windows.root().to_path_buf();
+        windows
+            .change_root(r"\\server\share\x")
+            .expect_err("the door that moves the root moved it to a share");
+        assert_eq!(windows.root(), root);
+
+        // The host where a backslash does not separate keeps refusing the same name: `C:\other`
+        // is a file name there, which the key cannot spell from `/`.
+        let elsewhere = Workspace::new(&base)
+            .expect("workspace")
+            .with_door_host(false, named_as_it_is);
+        elsewhere
+            .resolve_directory(r"\\?\C:\other")
+            .expect_err("a drive-letter name was admitted where a backslash does not separate");
         std::fs::remove_dir_all(base).unwrap();
     }
 

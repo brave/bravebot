@@ -1907,6 +1907,10 @@ for one that does not.
 `verified-by: bravebot_bedrock::lib::a_record_of_refused_breakpoints_lapses`
 `verified-by: bravebot_tui::status::the_panel_says_when_the_breakpoints_were_given_up`
 `verified-by: bravebot_tui::panel::the_panel_says_when_the_breakpoints_were_given_up`
+`verified-by: bravebot_bedrock::lib::a_streamed_answer_that_carried_the_breakpoints_clears_the_doubt`
+`verified-by: bravebot_agent::backend::breakpoints_given_up_is_true_for_a_recorded_bedrock_model_only`
+`verified-by: bravebot_agent::tools::the_wait_refusal_quotes_the_bound_of_the_lifetime_in_force`
+`verified-by: bravebot_bedrock::protocol::a_cached_round_is_told_apart_from_one_that_read_the_whole_prompt`
 `verified-by: bravebot_config::settings::only_five_minutes_or_an_hour_names_a_cache_lifetime`
 `verified-by: bravebot_config::lib::the_cache_lifetime_setting_reaches_every_account`
 `verified-by: bravebot_config::lib::a_checkouts_long_cache_lifetime_reaches_no_account`
@@ -1924,14 +1928,20 @@ for one that does not.
 `verified-by: bravebot_bedrock::lib::what_a_model_refused_outlives_the_client_that_found_out`
 `verified-by: bravebot_bedrock::lib::a_request_refused_on_its_contents_is_asked_again_without_the_breakpoints`
 `verified-by: bravebot_bedrock::lib::only_a_refusal_on_the_contents_drops_the_breakpoints`
+`verified-by: bravebot_tui::app::tests::caching_note::the_caching_off_note_is_made_after_a_turn_has_ended`
+`verified-by: bravebot_tui::app::tests::caching_note::the_caching_off_note_is_made_after_a_manifest_run_has_ended`
+`verified-by: bravebot_tui::app::tests::caching_note::the_caching_off_note_follows_the_model_a_pick_puts_in_force`
+`verified-by: bravebot_tui::app::tests::caching_note::the_caching_off_note_is_made_when_the_session_starts`
 `verified-by: bravebot_aichat::anthropic::protocol::the_system_prompt_and_the_end_of_the_conversation_carry_a_breakpoint`
 `verified-by: bravebot_aichat::anthropic::protocol::a_conversation_ending_in_a_tool_result_is_marked_on_the_result`
 `verified-by: bravebot_aichat::anthropic::protocol::a_conversation_ending_in_a_call_is_marked_nowhere_but_the_prompt`
+`verified-by: bravebot_aichat::anthropic::protocol::a_conversation_ending_in_a_picture_or_a_document_is_marked_nowhere_but_the_prompt`
 `verified-by: bravebot_aichat::anthropic::protocol::a_request_giving_up_its_conversation_keeps_the_prompts_breakpoint_alone`
 `verified-by: bravebot_aichat::anthropic::protocol::a_chosen_lifetime_is_stated_on_every_breakpoint_and_none_is_added`
 `verified-by: bravebot_aichat::anthropic::protocol::a_request_without_breakpoints_keeps_everything_that_was_asked_for`
 `verified-by: bravebot_aichat::client::an_anthropic_request_refused_on_its_contents_is_asked_again_without_what_nobody_asked_for`
 `verified-by: bravebot_aichat::client::an_anthropic_entry_that_refused_a_breakpoint_is_not_sent_one_again_per_service`
+`verified-by: bravebot_aichat::client::an_anthropic_request_giving_up_its_conversation_is_sent_without_the_breakpoint_on_it`
 `verified-by: bravebot_aichat::client::an_anthropic_refused_lifetime_is_given_up_before_the_breakpoints`
 `verified-by: bravebot_aichat::client::a_probe_that_failed_as_well_leaves_what_was_known_alone`
 
@@ -3707,8 +3717,8 @@ name a request would carry. It may not add a model to any roster, make one reach
 model is the default.
 
 A model it refuses is not requested by any route: the `model` key, an exported
-`BRAVEBOT_DEFAULT_MODEL`, the baked-in default, a recorded `/model` pick, `--model`, and a
-delegate definition alike. The name is matched after a tier word is resolved
+`BRAVEBOT_DEFAULT_MODEL`, the baked-in default, a recorded `/model` pick, `--model`, a delegate
+definition, and the summary, advisor, plan and processor models and the goal judge's alike. The name is matched after a tier word is resolved
 ([BACKEND-12](#BACKEND-12)), so `opus` is checked as the model that tier names. `/model` does not
 offer a refused model, and neither does the desktop window's roster, the configured model included; a
 turn that window is asked to start on one is refused with the file that refused it. A refused delegate
@@ -3799,6 +3809,12 @@ models, and the goal judge.
 `verified-by: bravebot_agent::compact::a_summary_model_that_searches_the_web_is_refused_over_chat_completions_only`
 `verified-by: bravebot_cli::plain::a_start_on_a_model_that_searches_the_web_is_ended_without_a_file`
 `verified-by: bravebot_config::lib::a_model_that_searches_the_web_is_refused_over_chat_completions_only`
+`verified-by: bravebot_agent::compact::a_summary_model_the_machine_refuses_is_not_the_one_a_side_request_runs_on`
+`verified-by: bravebot_agent::turn::a_summary_model_the_machine_excludes_refuses_the_compaction_and_leaves_the_conversation_whole`
+`verified-by: bravebot_agent::turn::a_summary_model_the_machine_excludes_sends_no_check`
+`verified-by: bravebot_agent::turn::an_advisor_model_the_machine_refuses_is_not_asked`
+`verified-by: bravebot_agent::turn::a_plan_model_the_machine_refuses_falls_back_to_the_sessions_and_says_so`
+`verified-by: bravebot_cli::main::a_processor_model_the_managed_settings_refuse_is_refused_before_the_run`
 
 <a id="BACKEND-49"></a>
 ### BACKEND-49: a `google-vertex` entry is reached at a host built from its project and location
@@ -3935,6 +3951,7 @@ request back in its error body is quoted without the header.
 `verified-by: bravebot_aichat::client::a_vertex_key_is_in_no_event_reply_or_log_line_of_an_answered_request`
 `verified-by: bravebot_aichat::client::a_refused_google_vertex_request_does_not_repeat_the_key`
 `verified-by: bravebot_config::provider::a_google_vertex_key_is_sent_in_its_own_header`
+`verified-by: bravebot_cli::running::a_vertex_key_is_in_no_session_record_after_a_turn`
 
 <a id="BACKEND-52"></a>
 ### BACKEND-52: what a service attached to a tool call is sent back with it, to that service only

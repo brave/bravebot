@@ -259,6 +259,19 @@ pub fn breakpoints_given_up(model: &str) -> bool {
     refusals(model).caching
 }
 
+/// Record `model` as refusing the breakpoints, as two refused requests that did not begin together
+/// do, so a caller above this crate can reach the state [`breakpoints_given_up`] reports without a
+/// service that refuses them. Used by tests of the callers; nothing in the product calls it.
+#[doc(hidden)]
+pub fn record_breakpoints_refused_for_test(model: &str) {
+    let found = Refusals {
+        caching: true,
+        ..refusals(model)
+    };
+    remember(model, found, next_call());
+    remember(model, found, next_call());
+}
+
 /// Record what a model refused, as found by the call numbered `call`.
 fn remember(model: &str, found: Refusals, call: u64) {
     remember_at(model, found, call, Instant::now());
@@ -1470,6 +1483,50 @@ mod tests {
         assert!(
             next.call.refusals.caching && next.call.refusals.effort,
             "it asked all over again"
+        );
+    }
+
+    /// BACKEND-27: a streamed request that carried the breakpoints and was answered clears the
+    /// doubt an earlier refusal left, as a whole reply does. Without that, a refusal after the
+    /// answered stream completes the pair held before it and records a model that reads the
+    /// breakpoints as one that refuses them.
+    ///
+    /// Rejects: `settle_doubt` not called on the streaming path, which leaves the doubt standing
+    /// across an answered stream.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_streamed_answer_that_carried_the_breakpoints_clears_the_doubt() {
+        let model = "a-model-refused-once-and-then-streamed-an-answer";
+        let config = config_for(model);
+        let request = ChatRequest::new(model, vec![Message::user("hello")]);
+
+        let (result, sent) = stream_against(
+            &config,
+            &request,
+            vec![refused_with(REFUSED_CACHING_STATUS), answered()],
+        );
+        result.expect("the streamed request without the breakpoints answers");
+        assert!(marked(&sent[0]) && !marked(&sent[1]), "{sent:?}");
+        assert!(!refusals(model).caching, "one answered probe was recorded");
+
+        let (result, sent) = stream_against(&config, &request, vec![answered()]);
+        result.expect("the next streamed request answers");
+        assert!(
+            marked(&sent[0]),
+            "a later request lost its breakpoints: {}",
+            sent[0]
+        );
+
+        // The answered stream cleared the doubt, so a refusal after it is a first one again.
+        let (result, _) = stream_against(
+            &config,
+            &request,
+            vec![refused_with(REFUSED_CACHING_STATUS), answered()],
+        );
+        result.expect("the streamed request without the breakpoints answers");
+        assert!(
+            !refusals(model).caching,
+            "a refusal after an answered stream completed the pair held before it"
         );
     }
 

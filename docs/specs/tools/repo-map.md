@@ -48,7 +48,7 @@ are left out instead.
 
 A name is credited once for each file that mentions it and does not declare it. A name declared in
 several places shares that credit between them, so `new` and `main` do not outrank what a reader
-came to find. Ties fall to path and then line, so the map is the same every time. The scanner is
+came to find. Ties fall to path and then, within a file, earlier lines first, so the map is the same every time. The scanner is
 hand written and line based: no parser, no dependency, work proportional to the text.
 
 **Why.** The ranking is a decision made from file text, so it reads vouched text only, or a file
@@ -61,6 +61,7 @@ nobody vouched for could raise its own declaration to the top of the map by ment
 `verified-by: bravebot_agent::repo_map::the_same_sources_give_the_same_map`
 `verified-by: bravebot_agent::repo_map::a_name_is_credited_once_for_each_file_that_mentions_it_however_often_it_is_named`
 `verified-by: bravebot_agent::repo_map::declarations_that_rank_alike_are_kept_in_path_order_when_the_budget_cuts_them`
+`verified-by: bravebot_agent::repo_map::within_a_file_declarations_that_rank_alike_are_kept_earliest_line_first`
 
 <a id="MAP-3"></a>
 ### MAP-3: a file holding what looks like a credential contributes nothing

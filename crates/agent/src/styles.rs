@@ -302,6 +302,33 @@ mod tests {
         }
     }
 
+    /// INSTR-12: `proactive` says in its own words that it grants nothing and changes no mode. The
+    /// regression it rejects is a rewording that drops the disclaimer or turns it into an
+    /// invitation, such as "act without asking", which a planner reads as leave to skip the
+    /// person. The sentences are named whole so a reword is deliberate.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn proactive_says_it_changes_no_mode_and_still_puts_a_write_to_the_person() {
+        let words = &named("proactive").expect("shipped").words;
+        for sentence in [
+            "This does not change what you may do",
+            "a write is still put to the person where it would have been",
+            "a mode that refuses still refuses",
+        ] {
+            assert!(
+                words.contains(sentence),
+                "proactive no longer says {sentence:?}: {words}"
+            );
+        }
+        let lowered = words.to_lowercase();
+        for invitation in ["without asking the person", "bypass", "skip approval"] {
+            assert!(
+                !lowered.contains(invitation),
+                "proactive reads as leave to {invitation}: {words}"
+            );
+        }
+    }
+
     #[test]
     fn style_names_are_distinct() {
         let mut names: Vec<_> = BUILT_IN.iter().map(|style| style.name.clone()).collect();

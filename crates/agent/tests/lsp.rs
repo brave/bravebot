@@ -2299,6 +2299,51 @@ fn quarantined_bytes_written_over_a_vouched_path_report_no_diagnostics() {
     );
 }
 
+/// LSP-12 and WRITE-5: quarantined bytes written to a path in a directory the map does not
+/// distrust report no diagnostics either. The path `src/a.rs` is under the project's own rule, so
+/// what withholds the report is the trust of the bytes the write recorded for the file (TRUST-4)
+/// and not a rule about the directory. The planner reads `vendor/x.rs`, which the tree distrusts,
+/// and writes that read's reference to `src/a.rs`. The control is the planner's own words written
+/// to the same path first, which are reported on. A gate that withheld the report only where the
+/// path already had an untrusted rule of its own passes the `vendor/` tests and reports here.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn quarantined_bytes_written_into_a_directory_nobody_distrusts_report_no_diagnostics() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let replies = vec![
+        a_question_about_a_symbol(),
+        tool_request("read_file", r#"{"path":"vendor/x.rs"}"#),
+        tool_request("write_file", A_WRITE_OF_ITS_OWN_WORDS),
+        tool_request(
+            "write_file",
+            r#"{"path":"src/a.rs","contents_ref":"ref:3"}"#,
+        ),
+        reply_with("written"),
+    ];
+    let (requests, _asked, started) = diagnosing_turn(
+        "agent-lsp-write-quarantined-src",
+        "write a.rs",
+        &[],
+        replies,
+    );
+    assert_eq!(started, 1, "the server did not run");
+
+    let results = every_result_of("write_file", requests.last().expect("a request"));
+    assert_eq!(results.len(), 2, "{results:?}");
+    assert!(results[0].contains("replaced src/a.rs"), "{}", results[0]);
+    assert!(
+        results[0].contains("language server: 2 errors at line 2, 4; 1 warning"),
+        "the planner's own words in src/a.rs are not reported on: {}",
+        results[0]
+    );
+    assert!(results[1].contains("replaced src/a.rs"), "{}", results[1]);
+    assert!(
+        !results[1].contains("language server"),
+        "quarantined bytes written under a directory nobody distrusts were reported on: {}",
+        results[1]
+    );
+}
+
 /// The edit the planner makes in the tests below, in its own words.
 const AN_EDIT_OF_ITS_OWN_WORDS: &str = r#"{"path":"src/a.rs","old_text":"Held","new_text":"Kept"}"#;
 

@@ -507,6 +507,16 @@ what that is worth and where it stops.
 `verified-by: bravebot_agent::turn::a_credential_the_destination_already_held_does_not_refuse_the_line_carrying_it`
 `verified-by: bravebot_agent::turn::a_credential_a_line_nobody_vouched_for_left_is_not_scanned`
 `verified-by: bravebot_agent::turn::a_credential_a_vouched_line_left_at_a_destination_the_map_distrusts_is_not_scanned`
+`verified-by: bravebot_agent::turn::a_line_carrying_a_credential_is_refused_before_the_person_is_asked_about_it`
+`verified-by: bravebot_agent::turn::a_destination_past_the_scans_budget_is_passed_over_and_one_within_it_is_scanned`
+`verified-by: bravebot_agent::turn::a_credential_inside_a_connection_string_is_kept_out_of_the_tree_as_the_credential_is`
+`verified-by: bravebot_agent::turn::a_credential_written_in_a_form_that_would_authenticate_in_its_place_is_kept_out_of_the_tree`
+`verified-by: bravebot_core::credentials::a_key_in_either_base64_alphabet_padded_or_not_is_found_as_the_key_is`
+`verified-by: bravebot_core::credentials::a_percent_escape_in_lower_or_upper_case_hex_is_read_as_the_byte_it_names`
+`verified-by: bravebot_core::credentials::a_decoding_that_is_not_text_or_holds_a_control_byte_is_dropped`
+`verified-by: bravebot_core::credentials::a_run_or_an_escape_cut_short_is_read_as_far_as_it_goes_and_never_past_the_text`
+`verified-by: bravebot_agent::turn::a_commit_message_carrying_a_credential_stops_the_line_and_commits_nothing`
+`verified-by: bravebot_agent::shell::a_line_the_person_typed_is_run_though_it_writes_what_looks_like_a_credential`
 `verified-by: bravebot_agent::workspace::a_destination_that_is_not_there_has_no_text_to_scan`
 `verified-by: bravebot_agent::workspace::a_destination_exactly_the_size_of_the_budget_is_read_in_full`
 `verified-by: bravebot_agent::workspace::a_destination_one_byte_past_the_budget_is_not_read`
@@ -1392,6 +1402,14 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   its own config are outside it: the path is the program's business and the driver never learns
   it. What would close this is a scan of the whole tree diff a turn produced, which needs a record
   of what the tree held before it, which is CRED-22's baseline.
+
+- **Only two derived forms of a credential are read.** The scan decodes a line once, as percent
+  escapes and as each run of base64 characters of at least 20 that decodes to text, and reads the
+  result with the provider-shape and connection-string layers. A Basic header over a key and a
+  percent-escaped key are found. An encoding of an encoding, hex, a hash, a key split across lines
+  or one the program builds when it runs is not, and neither is a decoded value only the
+  assignment or whole-file layers would recognise. CRED-11's words "anything derived from one that
+  would authenticate in its place" are met for those two forms and no others.
 
 - **A destination past the scan's budget is passed over.** What a line left is read back for the
   scan, and what it held beforehand is kept so a refused destination can be put back; both are

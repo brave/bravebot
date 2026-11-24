@@ -105,6 +105,154 @@ fn failed_plain_turn_excludes_replacement_from_the_next_request() {
     }
 }
 
+/// CLI-15: a session in lines that asks releases a file nobody vouched for to the planner after a
+/// vet only where `--vet` is given and the check finds nothing. The planner reads `notes.txt`,
+/// asks to vet the reference, and the request after the vet either holds the file's words or does
+/// not. With the flag a check that finds nothing answers the release question and one that objects
+/// leaves the words out. Without the flag the question goes to the confirmer, which here declines,
+/// so the words stay out whatever the check said. The regression it rejects is a task built with
+/// `.with_auto_vetting(false)`: a check that finds nothing would not release the words. The
+/// session under bypass is the next two tests.
+#[test]
+fn a_session_in_lines_that_asks_releases_a_vetted_file_only_with_the_vet_flag_and_a_safe_check() {
+    const WORDS: &str = "NOTES-WORDS-47291";
+    // (auto-vetting, what the check says, whether the planner is shown the file afterwards)
+    let mode = bravebot_agent::PermissionMode::Ask;
+    for (vetting, word, released) in [
+        (true, "safe", true),
+        (false, "safe", false),
+        (true, "unsafe", false),
+    ] {
+        let directory = Scratch::new(&format!("plain-vet-{mode:?}-{vetting}-{word}"));
+        let workspace = Workspace::new(directory.path()).unwrap();
+        std::fs::write(directory.path().join("notes.txt"), WORDS).unwrap();
+        let trust = TrustStore::new(workspace.root());
+        let (config, requests, server) = endpoint::endpoint_answering_checks_with(
+            endpoint::verdict(word),
+            vec![
+                endpoint::tool("read_file", r#"{"path":"notes.txt"}"#),
+                endpoint::tool("vet_content", r#"{"ref":"ref:1","expects":"some notes"}"#),
+                endpoint::answer(),
+            ],
+        );
+        let mut session = running(&config, &workspace, trust);
+        session.mode = mode;
+        session.auto_vetting = vetting;
+        let said = session.take(
+            "look at the notes",
+            &mut bravebot_agent::confirm::Unattended,
+        );
+        assert!(said.failure.is_none(), "{:?}", said.failure);
+        server.join().unwrap();
+
+        let sent: Vec<_> = requests.try_iter().collect();
+        let case = format!("vetting {vetting}, check {word}");
+        assert_eq!(sent.len(), 3, "{case}");
+        assert!(
+            !sent[1].contains(WORDS),
+            "{case}: the planner was shown the file before any vet"
+        );
+        assert_eq!(sent[2].contains(WORDS), released, "{case}: {}", sent[2]);
+    }
+}
+
+/// CLI-15: under bypass the flag is what lets a check refuse. The planner runs `cat notes.txt` and
+/// asks to read the output back. With the flag and a check that objects the output is kept back,
+/// with the flag and a check that finds nothing it is returned, and without the flag the prompt is
+/// answered yes unshown, so the output is returned whatever a check would have said. The
+/// regression it rejects is a task built with auto-vetting off, which makes no check and so
+/// returns the words under a check that objects.
+#[test]
+fn a_session_in_lines_given_the_vet_flag_under_bypass_is_screened_by_the_check() {
+    const WORDS: &str = "OUTPUT-WORDS-83716";
+    // A `run` is refused where the platform has a base and no way to apply it.
+    if bravebot_sandbox::base::Prelude::current().is_some()
+        && !bravebot_sandbox::confinement_works_here()
+    {
+        return;
+    }
+    for (vetting, word, released) in [
+        (true, "unsafe", false),
+        (true, "safe", true),
+        (false, "unsafe", true),
+    ] {
+        let directory = Scratch::new(&format!("plain-vet-bypass-{vetting}-{word}"));
+        let workspace = Workspace::new(directory.path()).unwrap();
+        std::fs::write(directory.path().join("notes.txt"), WORDS).unwrap();
+        let (config, requests, server) = endpoint::endpoint_answering_checks_with(
+            endpoint::verdict(word),
+            vec![
+                endpoint::tool("run", r#"{"command":"cat notes.txt","read":true}"#),
+                endpoint::answer(),
+            ],
+        );
+        let mut session = running(&config, &workspace, TrustStore::new(workspace.root()));
+        session.mode = bravebot_agent::PermissionMode::Bypass;
+        session.auto_vetting = vetting;
+        let said = session.take("show the notes", &mut bravebot_agent::confirm::Unattended);
+        assert!(said.failure.is_none(), "{:?}", said.failure);
+        server.join().unwrap();
+
+        let sent: Vec<_> = requests.try_iter().collect();
+        let case = format!("vetting {vetting}, check {word}");
+        assert_eq!(sent.len(), 2, "{case}");
+        assert_eq!(sent[1].contains(WORDS), released, "{case}: {}", sent[1]);
+    }
+}
+
+/// CLI-15: under bypass the confirmer a session in lines builds screens with the flag too. The
+/// planner runs `cat notes.txt` without `read`, so the output is a reference, and then calls
+/// `read_output` on it. With the flag and a check that objects, the question that call raises is
+/// answered by the confirmer, which refuses it, so the output is kept back. With the flag and a
+/// check that finds nothing the output is returned, and without the flag the question is answered
+/// yes whatever the check said. The task's flag decides that the check is made and the confirmer's
+/// flag decides what the check's word answers, so the regression it rejects is a confirmer built
+/// with screening off (`Confining::new(.., false)`) beside a task built with it on: the check is
+/// made and objects, and the confirmer approves the release anyway.
+#[test]
+fn a_session_in_lines_given_the_vet_flag_keeps_back_a_read_output_an_objecting_check_flagged_under_bypass()
+ {
+    const WORDS: &str = "OUTPUT-WORDS-52917";
+    // A `run` is refused where the platform has a base and no way to apply it.
+    if bravebot_sandbox::base::Prelude::current().is_some()
+        && !bravebot_sandbox::confinement_works_here()
+    {
+        return;
+    }
+    for (vetting, word, released) in [
+        (true, "unsafe", false),
+        (true, "safe", true),
+        (false, "unsafe", true),
+    ] {
+        let directory = Scratch::new(&format!("plain-vet-bypass-read-{vetting}-{word}"));
+        let workspace = Workspace::new(directory.path()).unwrap();
+        std::fs::write(directory.path().join("notes.txt"), WORDS).unwrap();
+        let (config, requests, server) = endpoint::endpoint_answering_checks_with(
+            endpoint::verdict(word),
+            vec![
+                endpoint::tool("run", r#"{"command":"cat notes.txt"}"#),
+                endpoint::tool("read_output", r#"{"ref":"ref:1"}"#),
+                endpoint::answer(),
+            ],
+        );
+        let mut session = running(&config, &workspace, TrustStore::new(workspace.root()));
+        session.mode = bravebot_agent::PermissionMode::Bypass;
+        session.auto_vetting = vetting;
+        let said = session.take("show the notes", &mut bravebot_agent::confirm::Unattended);
+        assert!(said.failure.is_none(), "{:?}", said.failure);
+        server.join().unwrap();
+
+        let sent: Vec<_> = requests.try_iter().collect();
+        let case = format!("vetting {vetting}, check {word}");
+        assert_eq!(sent.len(), 3, "{case}");
+        assert!(
+            !sent[1].contains(WORDS),
+            "{case}: the planner was shown the output before it asked to read it"
+        );
+        assert_eq!(sent[2].contains(WORDS), released, "{case}: {}", sent[2]);
+    }
+}
+
 /// CHATGPT-10: every prompt of a plain session, which is what a background session runs, is built
 /// in the session, so its requests to the ChatGPT account carry one identifier, and another session
 /// carries its own. The regression it rejects is a task built with an identifier for the prompt.

@@ -469,6 +469,51 @@ fn a_handoff_from_a_chat_with_a_turn_running_is_refused_and_the_bridge_goes_on_a
     assert_eq!(window.listed().len(), 1, "a refused handoff wrote a record");
 }
 
+/// SESSION-34, CMD-34: the chat a handoff opens carries only the brief the person sent. The first
+/// request it makes holds the brief and none of the words the source chat exchanged, and the
+/// source's record is the same bytes after the new chat has written its own.
+///
+/// Rejects: a `session.new` that begins the new chat on the source's conversation, and one that
+/// begins its record under the source's id or rewrites the source's record, which the clause says
+/// stays resumable as it was.
+#[test]
+fn a_chat_started_from_a_handoff_carries_only_the_brief_and_leaves_the_source_record_alone() {
+    const SOURCE_WORDS: &str = "PECULIAR-SOURCE-WORDS-ABOUT-FETCH-PAGE";
+    let mut window = Window::open("bridge-handoff-carries-the-brief");
+    window.say(&format!("look at src/net.rs, {SOURCE_WORDS}"));
+    let source_record = window.record_path();
+    let before = std::fs::read(&source_record).unwrap();
+    let before_rows = window.listed();
+    assert_eq!(before_rows.len(), 1, "{before_rows:?}");
+
+    let handle = window.session.clone();
+    let next = window.new_chat(json!({"handedOffFrom": handle}));
+    window.say_in(&next, &format!("{BRIEF}\n\nNext: {GOAL}"));
+
+    let requests = window.requests();
+    let first = requests.last().unwrap().to_string();
+    assert!(first.contains(BRIEF), "the brief was not sent: {first}");
+    assert!(
+        !first.contains(SOURCE_WORDS),
+        "the new chat's request carried what the source chat said: {first}"
+    );
+    assert!(
+        !first.contains("fetch_page makes one attempt."),
+        "the new chat's request carried the source chat's reply: {first}"
+    );
+    assert_eq!(
+        std::fs::read(&source_record).unwrap(),
+        before,
+        "the source's record changed"
+    );
+    let rows = window.listed();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    let source = before_rows[0]["id"].clone();
+    let old = rows.iter().find(|row| row["id"] == source).unwrap();
+    assert_eq!(old["title"], before_rows[0]["title"], "{rows:?}");
+    assert_eq!(old["updated"], before_rows[0]["updated"], "{rows:?}");
+}
+
 /// SESSION-34, CMD-34: `handedOffFrom` naming a handle the bridge does not hold, or a chat with no
 /// record, is refused before a chat is created, so nothing is opened or written.
 #[test]

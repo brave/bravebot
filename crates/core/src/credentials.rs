@@ -31,6 +31,9 @@
 use std::hash::{BuildHasher, Hasher};
 use std::sync::OnceLock;
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// What a layer recognised, which is as much as is ever said about a value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -257,6 +260,13 @@ pub fn scan(path: &str, text: &str, salt: u64) -> Vec<Finding> {
         // Comparing fingerprints would call those two different credentials and report both.
         let mut on_this_line: Vec<(Kind, String)> = shaped(line);
         on_this_line.extend(url_password(line).map(|value| (Kind::UrlPassword, value)));
+        // A credential written in a form that authenticates in its place (CRED-11): the same
+        // two declared layers read what the line decodes to, so a finding is of the credential
+        // and fingerprints as the plain value does.
+        for decoded in decoded_forms(line) {
+            on_this_line.extend(shaped(&decoded));
+            on_this_line.extend(url_password(&decoded).map(|value| (Kind::UrlPassword, value)));
+        }
         if let Some(value) = assigned(line) {
             on_this_line.push((Kind::Assigned, value));
         }
@@ -467,6 +477,243 @@ fn url_password(line: &str) -> Option<String> {
         return None;
     }
     Some(password.to_string())
+}
+
+/// The shortest run of base64 characters read as an encoding of something. Twenty characters
+/// is the shortest key a layer here matches, and its encoding is longer.
+const LEAST_ENCODED: usize = 20;
+
+/// What a line says when its encodings are undone once: the line with its percent escapes
+/// decoded, and each long run of base64 characters decoded to text.
+///
+/// A header carrying `Basic` and the encoding of a key and a URL with a key percent-escaped
+/// authenticate as the key does, and neither holds the key's own characters. One level only: an
+/// encoding of an encoding is not undone, and a value that decodes to bytes that are not text is
+/// not a credential any layer here reads.
+fn decoded_forms(line: &str) -> Vec<String> {
+    let mut forms = Vec::new();
+    if line.contains('%') {
+        forms.extend(percent_decoded(line));
+    }
+    for run in
+        line.split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '-' | '_')))
+    {
+        if run.len() >= LEAST_ENCODED {
+            forms.extend(base64_decoded(run));
+        }
+    }
+    forms
+}
+
+/// The line with each `%` and two hex digits replaced by the byte they name, or nothing where no
+/// escape was there or the result is not text.
+fn percent_decoded(line: &str) -> Option<String> {
+    let (out, changed) = percent_bytes(line.as_bytes());
+    changed.then(|| String::from_utf8(out).ok()).flatten()
+}
+
+/// The value of one hexadecimal digit, or nothing where the byte is not one.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        b'0' <= digit <= b'9' ==> r is Some && r->Some_0 as int == digit as int - 48,
+        b'a' <= digit <= b'f' ==> r is Some && r->Some_0 as int == digit as int - 87,
+        b'A' <= digit <= b'F' ==> r is Some && r->Some_0 as int == digit as int - 55,
+        !(b'0' <= digit <= b'9') && !(b'a' <= digit <= b'f') && !(b'A' <= digit <= b'F')
+            ==> r is None,
+))]
+#[expect(
+    clippy::manual_range_contains,
+    reason = "Verus reads a comparison and not a range, and this function's contract is proved"
+)]
+fn hex_value(digit: u8) -> Option<u8> {
+    if digit >= b'0' && digit <= b'9' {
+        Some(digit - b'0')
+    } else if digit >= b'a' && digit <= b'f' {
+        Some(digit - b'a' + 10)
+    } else if digit >= b'A' && digit <= b'F' {
+        Some(digit - b'A' + 10)
+    } else {
+        None
+    }
+}
+
+/// The byte that the `%` at `at` and the two hex digits after it name, or nothing where the escape
+/// is not whole: the byte is not `%`, fewer than two bytes follow it, or one of them is not a hex
+/// digit. Every offset it reads is inside `bytes`, `Some` means three bytes starting at `at` are
+/// inside it, and a whole escape is always read, including one that ends the text.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    requires
+        at < bytes.len(),
+    ensures
+        r is Some ==> bytes@[at as int] == b'%' && at + 3 <= bytes.len(),
+        bytes@[at as int] == b'%' && at + 3 <= bytes.len()
+            && crate::spec::is_hex_digit(bytes@[at as int + 1])
+            && crate::spec::is_hex_digit(bytes@[at as int + 2]) ==> r is Some,
+))]
+fn escape_at(bytes: &[u8], at: usize) -> Option<u8> {
+    if bytes[at] != b'%' || bytes.len() - at < 3 {
+        return None;
+    }
+    let high = hex_value(bytes[at + 1])?;
+    let low = hex_value(bytes[at + 2])?;
+    Some(high * 16 + low)
+}
+
+/// `bytes` with each `%` and two hex digits replaced by the byte they name, and whether any was.
+///
+/// The output is never longer than the input, where no escape was replaced it is the input, and
+/// where one was it is shorter, since an escape is three bytes in and one out.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r.0@.len() <= bytes@.len(),
+        !r.1 ==> r.0@ == bytes@,
+        r.1 ==> r.0@.len() < bytes@.len(),
+))]
+fn percent_bytes(bytes: &[u8]) -> (Vec<u8>, bool) {
+    let mut out = Vec::new();
+    let mut changed = false;
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= bytes.len(),
+            out@.len() <= at,
+            !changed ==> out@ == bytes@.subrange(0, at as int),
+            changed ==> out@.len() < at,
+        decreases bytes.len() - at,
+    ))]
+    while at < bytes.len() {
+        match escape_at(bytes, at) {
+            Some(byte) => {
+                out.push(byte);
+                changed = true;
+                at += 3;
+            }
+            None => {
+                out.push(bytes[at]);
+                at += 1;
+            }
+        }
+    }
+    #[cfg(verus_keep_ghost)]
+    proof_decl! {
+        assert(bytes@.subrange(0, bytes.len() as int) =~= bytes@);
+    }
+    (out, changed)
+}
+
+/// A run of base64 characters, in either alphabet and with or without its padding, as the text it
+/// encodes, or nothing where it is not valid or the bytes are not printable text.
+fn base64_decoded(run: &str) -> Option<String> {
+    if run.len() % 4 == 1 {
+        return None;
+    }
+    let bytes = base64_bytes(run.as_bytes())?;
+    let text = String::from_utf8(bytes).ok()?;
+    text.chars()
+        .all(|c| !c.is_control() || c.is_whitespace())
+        .then_some(text)
+}
+
+/// The six bits a base64 character stands for, in either alphabet, or nothing where the byte is not
+/// one: `A` to `Z` are 0 to 25, `a` to `z` 26 to 51, `0` to `9` 52 to 61, `+` and `-` are 62, `/`
+/// and `_` are 63.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        b'A' <= c <= b'Z' ==> r is Some && r->Some_0 as int == c as int - 65,
+        b'a' <= c <= b'z' ==> r is Some && r->Some_0 as int == c as int - 71,
+        b'0' <= c <= b'9' ==> r is Some && r->Some_0 as int == c as int + 4,
+        c == b'+' || c == b'-' ==> r is Some && r->Some_0 == 62,
+        c == b'/' || c == b'_' ==> r is Some && r->Some_0 == 63,
+        !(b'A' <= c <= b'Z') && !(b'a' <= c <= b'z') && !(b'0' <= c <= b'9')
+            && c != b'+' && c != b'-' && c != b'/' && c != b'_' ==> r is None,
+))]
+#[expect(
+    clippy::manual_range_contains,
+    reason = "Verus reads a comparison and not a range, and this function's contract is proved"
+)]
+fn sextet_of(c: u8) -> Option<u8> {
+    if c >= b'A' && c <= b'Z' {
+        Some(c - b'A')
+    } else if c >= b'a' && c <= b'z' {
+        Some(c - b'a' + 26)
+    } else if c >= b'0' && c <= b'9' {
+        Some(c - b'0' + 52)
+    } else if c == b'+' || c == b'-' {
+        Some(62)
+    } else if c == b'/' || c == b'_' {
+        Some(63)
+    } else {
+        None
+    }
+}
+
+/// The bytes a run of base64 characters encodes, or nothing where a character is not one.
+///
+/// Fewer than eight bits are held between characters, and the bits held are always fewer than
+/// two to the power of how many are held, so a shift never loses a set bit and no shift is by
+/// thirty-two or more. There is at most one byte out for each character in.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r is Some ==> r->Some_0@.len() <= run@.len(),
+))]
+fn base64_bytes(run: &[u8]) -> Option<Vec<u8>> {
+    let mut bits: u32 = 0;
+    let mut held: u32 = 0;
+    let mut bytes = Vec::new();
+    let mut at = 0;
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        assert(0u32 < (1u32 << 0u32)) by (bit_vector);
+    }
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= run.len(),
+            held < 8,
+            bits < (1u32 << held),
+            bytes@.len() <= at,
+        decreases run.len() - at,
+    ))]
+    while at < run.len() {
+        let sextet = sextet_of(run[at])?;
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            // `bits` is below two to the `held`, so six more bits and the sextet fit in the
+            // `held + 6` bits that are then held.
+            assert(((bits << 6) | (sextet as u32)) < (1u32 << (held + 6))) by (bit_vector)
+                requires
+                    held < 8,
+                    bits < (1u32 << held),
+                    sextet < 64,
+            ;
+        }
+        bits = (bits << 6) | (sextet as u32);
+        held += 6;
+        if held >= 8 {
+            held -= 8;
+            #[cfg(verus_keep_ghost)]
+            proof! {
+                // Taking the top byte leaves the bits below `held`, and `1 << held` is at least 1,
+                // so the mask does not underflow.
+                assert((1u32 << held) >= 1) by (bit_vector)
+                    requires
+                        held < 32,
+                ;
+                assert((bits >> held) < 256u32) by (bit_vector)
+                    requires
+                        held < 6,
+                        bits < (1u32 << (held + 8)),
+                ;
+                assert((bits & (((1u32 << held) - 1) as u32)) < (1u32 << held)) by (bit_vector)
+                    requires
+                        held < 32,
+                ;
+            }
+            bytes.push(((bits >> held) & 0xff) as u8);
+            bits &= (1 << held) - 1;
+        }
+        at += 1;
+    }
+    Some(bytes)
 }
 
 /// The names that say the value beside them is a secret.
@@ -1516,11 +1763,123 @@ mod tests {
         }
     }
 
+    /// `pieces` joined. The encoded fixtures below are written in pieces shorter than a run the
+    /// scan decodes, so this file holds none of them whole.
+    fn glued(pieces: &[&str]) -> String {
+        pieces.concat()
+    }
+
+    /// The tail of every encoding of `x>?` or `x?>` followed by the key, after its first four
+    /// characters, in the pieces `glued` joins. Its characters are the same in both alphabets.
+    const THE_KEY_ENCODED_AFTER_ITS_HEAD: [&str; 4] = ["QUtJQUlP", "U0ZPRE5O", "N0VYQU1Q", "TEU"];
+
+    /// CRED-11: a run of base64 characters is read in either alphabet, padded or not. The heads
+    /// differ in the sextets 62 and 63 (`+` and `/` against `-` and `_`), so a reader that knows
+    /// one alphabet alone misses the key in the other and a reader that insists on the padding
+    /// misses the unpadded forms. Each encoded line fingerprints as the plain key does.
+    #[test]
+    fn a_key_in_either_base64_alphabet_padded_or_not_is_found_as_the_key_is() {
+        let plain = scan("t.txt", "the key is AKIAIOSFODNN7EXAMPLE\n", 7);
+        assert_eq!(plain.len(), 1, "{plain:?}");
+        for head in ["eD4/", "eD4_", "eD8+", "eD8-"] {
+            for padding in ["=", ""] {
+                let tail = glued(&THE_KEY_ENCODED_AFTER_ITS_HEAD);
+                let encoded = format!("{head}{tail}{padding}");
+                let found = scan("t.txt", &format!("Authorization: Basic {encoded}\n"), 7);
+                assert_eq!(found.len(), 1, "{head}{padding}: {found:?}");
+                assert_eq!(
+                    found[0].fingerprint, plain[0].fingerprint,
+                    "{head}{padding}: the finding is of another value than the key"
+                );
+            }
+        }
+    }
+
+    /// CRED-11: a percent escape is read in either case of its hex digits, and a `+` or a sign
+    /// is no digit. `%4b` and `%4B` both name `K`, and the finding is the key the escape spells.
+    #[test]
+    fn a_percent_escape_in_lower_or_upper_case_hex_is_read_as_the_byte_it_names() {
+        let spelled = glued(&["AKIA", "KOSFODNN7", "EXAMPLE"]);
+        let plain = scan("t.txt", &format!("the key is {spelled}\n"), 7);
+        assert_eq!(plain.len(), 1, "{plain:?}");
+        for escape in ["%4b", "%4B"] {
+            let line = glued(&["https://h/?k=AKIA", escape, "OSFODNN7EXAMPLE\n"]);
+            let found = scan("t.txt", &line, 7);
+            assert_eq!(found.len(), 1, "{escape}: {found:?}");
+            assert_eq!(found[0].fingerprint, plain[0].fingerprint, "{escape}");
+        }
+        assert_eq!(percent_decoded("a%4bb%4Bc").as_deref(), Some("aKbKc"));
+        assert_eq!(percent_decoded("a%+4b"), None, "a sign is not a hex digit");
+    }
+
+    /// CRED-11: bytes that are not text are not a credential any layer reads, whichever encoding
+    /// they arrive in. A percent escape of a byte that is not UTF-8 and a base64 run of high bytes
+    /// decode to nothing, and so does a base64 run holding a control character other than
+    /// whitespace; whitespace is kept.
+    #[test]
+    fn a_decoding_that_is_not_text_or_holds_a_control_byte_is_dropped() {
+        assert_eq!(percent_decoded("a%ffb"), None);
+        assert_eq!(percent_decoded("%c3%28"), None);
+        assert_eq!(base64_decoded("//////////////////////////////8"), None);
+        // `abcdefghijklm`, a control character, `nopqrstu`.
+        let control = glued(&["YWJjZGVmZ2hp", "amtsbQFub3Bx", "cnN0dQ"]);
+        assert_eq!(base64_decoded(&control), None);
+        assert!(decoded_forms(&format!("x {control} y")).is_empty());
+        // The same length with a newline in the place of the control character.
+        let spaced = glued(&["YWJjZGVmZ2hp", "agprbG1ub3Bx", "cnN0"]);
+        assert_eq!(
+            base64_decoded(&spaced).as_deref(),
+            Some("abcdefghij\nklmnopqrst")
+        );
+    }
+
+    /// CRED-11: the edges of a run. Under twenty characters nothing is decoded and at twenty it
+    /// is. A run of one to four characters decodes to what it can hold, a run one past a multiple
+    /// of four holds no whole byte and is nothing, and a `%` cut off at the end of the text or
+    /// followed by one digit, a non-digit or a multi-byte character is left as it is, with no read
+    /// past the end of the text.
+    #[test]
+    fn a_run_or_an_escape_cut_short_is_read_as_far_as_it_goes_and_never_past_the_text() {
+        assert!(decoded_forms("").is_empty());
+        assert!(decoded_forms("%").is_empty());
+        assert!(decoded_forms("YWJjZGVmZ2hpamtsbW4").is_empty());
+        assert_eq!(
+            decoded_forms("YWJjZGVmZ2hpamtsbW5v"),
+            ["abcdefghijklmno".to_string()]
+        );
+
+        assert_eq!(base64_decoded("Q"), None);
+        assert_eq!(base64_decoded("QQ").as_deref(), Some("A"));
+        assert_eq!(base64_decoded("QUI").as_deref(), Some("AB"));
+        assert_eq!(base64_decoded("QUJD").as_deref(), Some("ABC"));
+        assert_eq!(base64_decoded("QUJDR"), None);
+        assert_eq!(base64_decoded("QU=I"), None);
+
+        for cut in [
+            "abc%",
+            "abc%4",
+            "abc%g1",
+            "abc%4g",
+            "abc%\u{e9}",
+            "%4\u{e9}",
+        ] {
+            assert_eq!(percent_decoded(cut), None, "{cut:?}");
+        }
+        assert_eq!(percent_decoded("abc%41").as_deref(), Some("abcA"));
+        assert_eq!(percent_decoded("a%41%").as_deref(), Some("aA%"));
+        assert_eq!(percent_decoded("a%41%4").as_deref(), Some("aA%4"));
+        assert_eq!(percent_decoded("%%41").as_deref(), Some("%A"));
+    }
+
     /// CRED-18: the classifier reaches nothing outside the process. Asking a hosted model whether
     /// bytes are a credential, or trying a key against its issuer, needs a socket, a child
     /// process, a file or the environment, and none of those is a name this module can use
     /// without importing it or spelling the path out. The crate has no dependencies, so no
     /// library supplies one behind a name this scan does not contain.
+    ///
+    /// The one import that is not a hasher or a once-cell is Verus's prelude, which the contracts
+    /// on the byte scanners need. It is behind `cfg(verus_keep_ghost)`, which only Verus sets, so
+    /// a build compiles none of it and the scan still reaches nothing outside the process.
     ///
     /// Read off the module's own source, up to its tests, because the property is what the code
     /// can reach and an assertion over one scan's output cannot see a call that was never made.
@@ -1532,10 +1891,16 @@ mod tests {
             .next()
             .expect("a module has a beginning");
 
-        for line in code.lines().map(str::trim) {
+        let lines: Vec<&str> = code.lines().map(str::trim).collect();
+        for (at, line) in lines.iter().enumerate() {
             if let Some(imported) = line.strip_prefix("use ") {
+                let verus_prelude = imported == "vstd::prelude::*;"
+                    && at > 0
+                    && lines[at - 1] == "#[cfg(verus_keep_ghost)]";
                 assert!(
-                    imported.starts_with("std::hash::") || imported.starts_with("std::sync::"),
+                    imported.starts_with("std::hash::")
+                        || imported.starts_with("std::sync::")
+                        || verus_prelude,
                     "the classifier imports {imported}, which is not a hasher or a once-cell"
                 );
             }

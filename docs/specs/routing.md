@@ -170,6 +170,9 @@ Code the planner wrote, shown whole to a person for one page, is the one other c
 
 `verified-by: bravebot_agent::tools::the_tool_set_is_reads_plus_gated_writes`
 `verified-by: bravebot_agent::tools::only_run_takes_a_command_line`
+`verified-by: bravebot_agent::tools::no_shell_is_offered`
+`verified-by: bravebot_agent::tools::the_list_every_scan_reads_holds_each_tool_offered_beside_the_table`
+`verified-by: bravebot_agent::tools::no_tool_built_beside_the_table_is_named_for_a_shell`
 
 <a id="ROUTE-8"></a>
 ### ROUTE-8: an endorsement authorises a destination without relabelling it

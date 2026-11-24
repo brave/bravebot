@@ -10,6 +10,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildSync } from 'esbuild'
 import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
 
 const require = createRequire(import.meta.url)
 const load = (contents) => {
@@ -86,6 +87,39 @@ test('Send on an armed brief takes the text as the person left it and ends the h
   assert.equal(took.held.armed, null)
   assert.equal(h.taken(null, BRIEF), null)
   assert.equal(h.taken({ asking: { goal: 'g' } }, BRIEF), null)
+})
+
+// The wiring between the box and `escaped`. The window is not a crate this workspace compiles, and
+// the real keystroke is driven only by scripts/drive-handoff.mjs, which no check target runs, so
+// this reads the four places the key passes through. It rejects a Composer that never calls
+// `onEscapeHandoff` or calls it only where no brief is armed, a Transcript or App that drops the
+// prop, and a hook that does not write the earlier draft back or does not say it handled the key.
+// It is a text check, so a handler that is moved under another condition still passes it.
+const source = (path) => readFileSync(path, 'utf8')
+
+test('Escape in the box reaches the handoff through the Composer, Transcript, App and the hook', () => {
+  const composer = source('src/renderer/components/Composer.tsx')
+  const asked = composer.indexOf('now.handoff?.armed && now.onEscapeHandoff()')
+  assert.ok(asked >= 0, 'the Composer never asks to drop an armed brief on Escape')
+  const branch = composer.slice(composer.lastIndexOf("event.key === 'Escape'", asked), asked + 120)
+  assert.match(branch, /!composing && !now\.running/, 'the brief is dropped while a turn runs, where Escape stops the turn')
+  assert.match(branch, /now\.onEscapeHandoff\(\)\) \{\s*event\.preventDefault\(\)\s*return/, 'a handled Escape is left to the browser as well')
+  assert.ok(asked < composer.indexOf('now.onCancel()', asked), 'the brief is dropped after Escape was taken to stop the turn')
+
+  const transcript = source('src/renderer/components/Transcript.tsx')
+  assert.match(transcript, /const escapeHandoff = useEvent\(onEscapeHandoff\)/)
+  assert.match(transcript, /onEscapeHandoff=\{escapeHandoff\}/, 'the Transcript does not pass Escape on to the Composer')
+
+  const app = source('src/renderer/App.tsx')
+  assert.match(app, /onEscapeHandoff=\{\(\) => \{ const handle = handleRef\.current; return !!handle && handoffs\.escape\(handle\) \}\}/, 'the App does not hand Escape to the hook for the open session')
+
+  const hook = source('src/renderer/use-handoff.ts')
+  const escape = hook.slice(hook.indexOf('const escape = useCallback'), hook.indexOf('const drop = useCallback'))
+  assert.match(escape, /escaped\(live\.handoff \?\? \{\}\)/, 'the hook does not ask the pure rule what Escape does')
+  assert.match(escape, /setConversation\(liveKey\(live\), \{ draft: back\.write \}\)/, 'the earlier draft is not put back in the box')
+  assert.match(escape, /handoff: back\.held/, 'the handoff is not dropped from the session')
+  assert.match(escape, /return true\s*\}, \[\]\)/, 'the hook does not say it handled the key')
+  assert.match(escape, /if \(!live \|\| !back\) return false/, 'Escape is taken where no brief is armed')
 })
 
 test('the chat a record was handed off from is named by its title, or by its id', () => {

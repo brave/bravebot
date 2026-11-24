@@ -227,6 +227,12 @@ pub fn poll(timeout: Duration) -> io::Result<bool> {
 /// Reads what the terminal has waiting into the queue, as a [`read`] would, so a caller asking
 /// this and then reading sees the events in the order they were written.
 pub fn next_is_a_stream() -> io::Result<bool> {
+    // A test's script is read one event at a time and never from a terminal, which a test process
+    // may not have, so it holds no stream.
+    #[cfg(test)]
+    if script::installed() {
+        return Ok(false);
+    }
     if pending().is_empty() {
         if !event::poll(Duration::ZERO)? {
             return Ok(false);

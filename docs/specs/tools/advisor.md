@@ -143,6 +143,7 @@ for this run and a run that silently lacked it would not say so.
 `verified-by: bravebot_config::lib::the_advisor_setting_resolves_a_tier_word_and_is_absent_when_unset`
 `verified-by: bravebot_ui_bridge::settings::a_project_files_advisor_is_reported_as_ignored`
 `verified-by: bravebot_agent::turn::a_refused_advisor_the_settings_name_is_answered_per_call_and_stops_nothing`
+`verified-by: bravebot_cli::running::an_advisor_nothing_serves_is_refused_before_the_run`
 
 <a id="ADVISOR-9"></a>
 ### ADVISOR-9: `/advisor` names the advisor for the rest of an interactive session

@@ -1011,3 +1011,84 @@ fn a_command_vouched_for_holds_for_later_turns_until_it_is_revoked() {
     front.reply("run.reply", &session, &question, "reject");
     assert_eq!(front.question_or_the_end()["event"], "turn.done");
 }
+
+/// SESSION-34, CMD-34: a chat a handoff opens holds none of what the source chat was given. The
+/// source vouched for a command and had its trust answer withdrawn; the new chat, opened with
+/// `handedOffFrom` naming it, lists no vouched command and no trust rule before its own trust
+/// question is answered, and the command the source vouched for is put to the person again.
+/// The quarantine of the new chat has no surface on the wire, so it is not read here.
+///
+/// Rejects a `session.new` that begins the new chat on the source chat's programs or trust map,
+/// which would run the vouched command unasked in a chat whose person never answered for it.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_chat_opened_from_a_handoff_holds_none_of_the_source_chats_vouched_commands_or_trust() {
+    let scratch = Scratch::new("bridge-handoff-holds-no-grants");
+    let (endpoint, _rounds) = a_planner(|_, this_turn| {
+        (this_turn == 0).then(|| ("run", json!({"command": "/usr/bin/printf vouched%sran -"})))
+    });
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let made = front.call(
+        "session.new",
+        json!({"directory": scratch.project().display().to_string()}),
+    );
+    let source = made["session"].as_str().expect("a handle").to_string();
+    front.call("trust.reply", json!({"session": source, "trusted": true}));
+
+    front.ask(&source);
+    let question = front.question_or_the_end();
+    assert_eq!(question["event"], "run.request", "{question}");
+    front.call(
+        "run.reply",
+        json!({"session": source, "request": question["data"]["request"],
+            "decision": "approve", "remember": true}),
+    );
+    assert_eq!(front.question_or_the_end()["event"], "turn.done");
+    front.call(
+        "permissions.revoke",
+        json!({"session": source, "kind": "path", "path": ""}),
+    );
+    let held = front.call("permissions.list", json!({"session": source}));
+    assert_eq!(
+        held["commands"].as_array().map(Vec::len),
+        Some(1),
+        "the fixture's vouch was not held: {held}"
+    );
+    assert_eq!(
+        held["paths"],
+        json!([{"path": "", "shownPath": "\"\"", "integrity": "untrusted"}]),
+        "the fixture's withdrawn trust was not held: {held}"
+    );
+
+    let opened = front.call(
+        "session.new",
+        json!({"directory": scratch.project().display().to_string(), "handedOffFrom": source}),
+    );
+    let next = opened["session"].as_str().expect("a handle").to_string();
+    let before_the_answer = front.call("permissions.list", json!({"session": next}));
+    assert_eq!(
+        before_the_answer["commands"],
+        json!([]),
+        "a command vouched for in the source chat crossed: {before_the_answer}"
+    );
+    // The yes the person gave is remembered for the directory, so the new chat's map is the one
+    // that yes writes (trusted), and the row the source chat's withdrawal left (untrusted) is the
+    // one that could only have come from the source.
+    assert_eq!(
+        before_the_answer["paths"].as_array().map(|rows| rows
+            .iter()
+            .filter(|row| row["integrity"] == "untrusted")
+            .count()),
+        Some(0),
+        "the trust map of the source chat crossed: {before_the_answer}"
+    );
+
+    front.ask(&next);
+    let asked = front.question_or_the_end();
+    assert_eq!(
+        asked["event"], "run.request",
+        "the command the source chat vouched for ran unasked in the new chat: {asked}"
+    );
+    front.reply("run.reply", &next, &asked, "reject");
+    assert_eq!(front.question_or_the_end()["event"], "turn.done");
+}

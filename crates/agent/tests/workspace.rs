@@ -7855,6 +7855,130 @@ fn an_untrusted_path_is_not_attached_as_a_drop() {
     assert!(matches!(error, WorkspaceError::Denied(_)));
 }
 
+/// DROP-1. A drop's path is routing, so the only label that reaches the unconfined read is
+/// `(T,pub)`. Each of the other three is refused by both reads, whichever axis is wrong: an
+/// untrusted private path (what a read of an unvouched file carries), a trusted private one (a
+/// secret used as an address), and an untrusted public one. The control is the same file under
+/// `(T,pub)`, which is read, so the three refusals are about the label and not the file.
+///
+/// Rejects a gate that tests integrity alone or confidentiality alone, and one that treats a
+/// private label as the person's own.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_path_under_any_label_but_trusted_public_is_not_read_as_a_drop() {
+    let scratch = Scratch::new("dropped-labels");
+    std::fs::write(scratch.path.join("notes.md"), "the note").unwrap();
+    std::fs::write(scratch.path.join("shot.png"), [0x89u8, 0x50]).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    for label in [
+        Label::untrusted_private(),
+        Label::trusted_private(),
+        Label::untrusted_public(),
+    ] {
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy");
+        let text = Labelled::new("notes.md".to_string(), label);
+        let error = workspace
+            .read_dropped_text(&mut policy, &text)
+            .expect_err("a path under this label must be refused as text");
+        assert!(matches!(error, WorkspaceError::Denied(_)), "{label}");
+        let picture = Labelled::new("shot.png".to_string(), label);
+        let error = workspace
+            .read_dropped_attachment(&mut policy, &picture, "image/png")
+            .expect_err("a path under this label must be refused as bytes");
+        assert!(matches!(error, WorkspaceError::Denied(_)), "{label}");
+    }
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    workspace
+        .read_dropped_text(&mut policy, &Labelled::trusted("notes.md".to_string()))
+        .expect("the control path is read");
+    workspace
+        .read_dropped_attachment(
+            &mut policy,
+            &Labelled::trusted("shot.png".to_string()),
+            "image/png",
+        )
+        .expect("the control picture is read");
+}
+
+/// DROP-1 names a path "a processor produced" among the ones that are never a drop. What a
+/// processor writes carries the label taint over its inputs (PROC-3), so a document whose reply
+/// the transport called trusted is untrusted when the processor read an untrusted slot, and the
+/// text of it, handed to either drop read as a path, is refused. The reply here is a path to a
+/// real file, so the refusal is the label's and not a missing file's.
+///
+/// Rejects a processor whose output label is the transport's (so a reply that claims to be
+/// trusted is a drop's path), and a drop read that accepts a `Labelled` path whose label it does
+/// not check.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_path_a_processor_produced_is_not_read_as_a_drop() {
+    use bravebot_core::processor::ProcessorSpec;
+    use bravebot_core::slot::{SlotId, SlotStore};
+
+    let scratch = Scratch::new("dropped-processor-output");
+    std::fs::write(scratch.path.join("notes.md"), "the note").unwrap();
+    std::fs::write(scratch.path.join("shot.png"), [0x89u8, 0x50]).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut store = SlotStore::new();
+    let read = SlotId::new("ref:0");
+    store
+        .writer_for(read.clone(), Label::untrusted_public())
+        .unwrap()
+        .write("a page a model fetched")
+        .unwrap();
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let spec = policy
+        .before_processor(
+            "p",
+            std::slice::from_ref(&read),
+            &Labelled::trusted("name the file".to_string()),
+            None,
+            &store,
+        )
+        .expect("a processor over one written slot");
+    // The transport calls the reply trusted, as a reply that claims to be the person's would.
+    let reply = Labelled::trusted(format!("{}\nnotes.md", ProcessorSpec::NOTE_MARKER));
+    let document = policy
+        .label_processor_output(&spec, reply, &store)
+        .document
+        .expect("a document");
+    assert!(!document.label().is_trusted());
+
+    let error = workspace
+        .read_dropped_text(&mut policy, &document)
+        .expect_err("a processor's output must not be a drop's path");
+    assert!(matches!(error, WorkspaceError::Denied(_)));
+    let error = workspace
+        .read_dropped_attachment(&mut policy, &document, "image/png")
+        .expect_err("a processor's output must not be a drop's path");
+    assert!(matches!(error, WorkspaceError::Denied(_)));
+}
+
 /// Dropping a directory is a plausible slip, and the plausible spelling of it is the absolute
 /// path a drop delivers. Reading one would otherwise fail further down with a message about bytes.
 #[test]
@@ -11103,6 +11227,80 @@ fn a_write_in_a_directory_the_person_opened_is_kept_for_an_undo_and_leaves_no_sc
     assert!(restore_for_test(&workspace, backups).is_empty());
     assert_eq!(
         std::fs::read_to_string(&kept).expect("the opened directory's file"),
+        "the person's notes"
+    );
+}
+
+/// TRUST-19. When the directory the person opened holds the session's own directory, a write
+/// beside the session's directory keeps a backup that restores the file and leaves no scratch gap,
+/// and a write inside the session's directory still leaves the scratch gap and keeps nothing. A
+/// test of containment turned around (`scratch.starts_with(canonical)`) calls the whole opened
+/// directory scratch, which drops the backup of the person's file and reports a gap for it.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_write_beside_the_sessions_directory_in_a_directory_that_holds_it_is_kept_for_an_undo() {
+    use bravebot_agent::rewind::CoverageGap;
+
+    let project = Scratch::new("scratch-gap-holder-project");
+    // The directory that holds the session's own is the test's, so the file written beside it is
+    // removed with it.
+    let holding = Scratch::new("scratch-gap-holder");
+    let holder = holding.path.canonicalize().expect("canonical holder");
+    let given_path = holder.join("session");
+    std::fs::create_dir_all(&given_path).expect("the session's own directory");
+    let given = bravebot_agent::ScratchDirectory::observed(given_path.clone())
+        .expect("the session's own directory is a directory");
+    let beside = holder.join("beside.txt");
+    std::fs::write(&beside, "the person's notes").expect("a file beside the session's directory");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace
+        .add_directory(holder.to_str().expect("utf-8 path"))
+        .expect("the person opens the directory that holds the session's");
+    workspace.open_scratch(Some(given));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let coverage = workspace.rewind_coverage();
+    let written = workspace.write(
+        &mut policy,
+        &trusted_text(&beside.display().to_string()),
+        &trusted_text("what the turn made of them"),
+    );
+    written.expect("a write beside the session's directory");
+    assert!(
+        coverage.is_complete(),
+        "a write beside the session's directory left a gap: {:?}",
+        coverage.gaps()
+    );
+
+    let workings = given_path.join("workings.txt").display().to_string();
+    workspace
+        .write(
+            &mut policy,
+            &trusted_text(&workings),
+            &trusted_text("intermediate"),
+        )
+        .expect("a write in the session's own directory");
+    assert_eq!(coverage.gaps(), [CoverageGap::Scratch].into());
+
+    let backups = workspace.take_backups();
+    let backed_up: Vec<_> = backups.iter().map(|backup| backup.path.clone()).collect();
+    assert_eq!(backed_up, vec![beside.canonicalize().expect("canonical")]);
+    let restored = restore_for_test(&workspace, backups);
+    assert!(
+        restored.is_empty(),
+        "the undo did not restore: {restored:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&beside).expect("the file"),
         "the person's notes"
     );
 }
@@ -17601,4 +17799,30 @@ fn a_walk_whose_other_names_could_not_be_found_is_untrusted() {
         (0, 2),
         "a map whose lookup of other names gave up opened the files: {map:?}"
     );
+}
+
+/// TRUST-18. On Windows the two doors that open a directory by name, `/add-dir` and `/cd`, admit an
+/// ordinary directory. The platform canonicalises it as `\\?\C:\...`, which the trust map keys as
+/// `/C:/...` where a backslash separates. A door that passed a literal `false` for the host's
+/// answer would refuse every real directory with "is not spelled from '/'", and no other host
+/// would notice. Run by the `names-windows` job of the CI workflow.
+#[cfg(windows)]
+#[test]
+fn the_doors_that_open_a_directory_by_name_admit_an_ordinary_directory_on_windows() {
+    let project = Scratch::new("windows-doors-project");
+    let elsewhere = Scratch::new("windows-doors-elsewhere");
+    let named = elsewhere.path.to_str().expect("utf-8 path");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    let opened = workspace
+        .add_directory(named)
+        .expect("the door that adds a directory refused an ordinary Windows directory");
+    assert_eq!(opened, elsewhere.path.canonicalize().expect("canonical"));
+    assert_eq!(workspace.added_directories(), vec![opened.clone()]);
+
+    let moved = workspace
+        .change_root(named)
+        .expect("the door that moves the root refused an ordinary Windows directory");
+    assert_eq!(moved.root, opened);
+    assert_eq!(workspace.root(), opened);
 }

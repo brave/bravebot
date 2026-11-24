@@ -2739,10 +2739,22 @@ fn language_a_run_says_its_failure_in(
     cwd: Option<&Path>,
     environment: &[(&str, &str)],
 ) -> &'static str {
+    language_a_run_with_says_its_failure_in(scratch, cwd, environment, &[])
+}
+
+/// The same with `flags` typed before the prompt, such as `--incognito`.
+fn language_a_run_with_says_its_failure_in(
+    scratch: &Scratch,
+    cwd: Option<&Path>,
+    environment: &[(&str, &str)],
+    flags: &[&str],
+) -> &'static str {
     let mut held = FAILS_OVER_ITS_ENDPOINT.to_vec();
     held.push(("BRAVEBOT_LOCALE", ""));
     held.extend_from_slice(environment);
-    let (_, stderr) = said(&run(&scratch.path, cwd, &held, &["-p", "say something"]));
+    let mut arguments = flags.to_vec();
+    arguments.extend(["-p", "say something"]);
+    let (_, stderr) = said(&run(&scratch.path, cwd, &held, &arguments));
     match (
         stderr.contains("erreur de configuration"),
         stderr.contains("configuration error"),
@@ -2789,6 +2801,34 @@ fn a_language_saved_by_the_command_outranks_the_settings_file() {
     assert_eq!(
         language_a_run_says_its_failure_in(&scratch, None, &[("LANG", "fr_FR.UTF-8")]),
         "en-US"
+    );
+}
+
+/// INCOG-2. An incognito start reads the language the person recorded and opens in it: the choice
+/// outlives nothing, but what was kept before the session is still the person's. The shell says
+/// English and the recorded file says French, so a start that skipped the read under `--incognito`
+/// would answer in English. The same start without the flag is the control that the file is read
+/// at all.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_incognito_start_opens_in_the_language_the_person_recorded() {
+    let scratch = Scratch::new("cli-running-language-incognito").with_state("language", "fr\n");
+    let shell = [("LANG", "en_US.UTF-8")];
+
+    assert_eq!(
+        language_a_run_with_says_its_failure_in(&scratch, None, &shell, &[]),
+        "fr",
+        "the recorded language was not read without the flag"
+    );
+    assert_eq!(
+        language_a_run_with_says_its_failure_in(&scratch, None, &shell, &["--incognito"]),
+        "fr",
+        "an incognito start did not open in the recorded language"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".bravebot/language")).expect("the file"),
+        "fr\n",
+        "an incognito start rewrote the recorded language"
     );
 }
 
@@ -6800,9 +6840,12 @@ fn permissions_check_draws_the_control_characters_of_a_checkouts_rules_as_pictur
 /// of the input is what the run reads at its first question, so a session that opens ends itself
 /// rather than waiting for as long as the suite is allowed to run.
 ///
-/// Linux, because the two `script` commands in the world take different arguments and report the
-/// child's status differently, and the job that runs this suite is Linux.
-#[cfg(target_os = "linux")]
+/// Unix, where [`in_a_terminal_command`] chooses the arguments of whichever `script` the system
+/// has. [`in_a_terminal_answering`] builds on Unix too, and holds the input open on the BSD
+/// `script` until the run ends; the tests that need a status through typed input stay Linux only,
+/// since the two `script` commands in the world report a child's status differently once input is
+/// typed at them, and the job that runs this suite is Linux.
+#[cfg(unix)]
 fn in_a_terminal(home: &Path, environment: &[(&str, &str)], arguments: &[&str]) -> Output {
     in_a_terminal_run(home, None, environment, arguments)
 }
@@ -6820,7 +6863,7 @@ fn in_a_terminal_started_in(
     in_a_terminal_run(home, Some(cwd), environment, arguments)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn in_a_terminal_run(
     home: &Path,
     cwd: Option<&Path>,
@@ -6838,7 +6881,9 @@ fn in_a_terminal_run(
 ///
 /// Written whole before the run asks anything. The terminal holds typed lines until something reads
 /// them, which is what a person typing ahead gets too, so each question reads the next line.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
 fn in_a_terminal_answering(
     home: &Path,
     environment: &[(&str, &str)],
@@ -6852,15 +6897,71 @@ fn in_a_terminal_answering(
         .stderr(Stdio::piped())
         .spawn()
         .expect("script runs the built binary in a terminal");
-    child
-        .stdin
-        .take()
-        .expect("the terminal's input")
+    let mut input = child.stdin.take().expect("the terminal's input");
+    input
         .write_all(answers.as_bytes())
         .expect("type the answers");
-    child
-        .wait_with_output()
-        .expect("script runs the built binary in a terminal")
+    if cfg!(target_os = "linux") {
+        drop(input);
+    } else {
+        // The BSD `script` sends the end of the input into the terminal as soon as its own stdin
+        // closes, ahead of a line the run has not read yet, so the first question reads the end
+        // of the input and not the answer. The input is held open until the run ends, which it
+        // does on its own after the questions the test answers.
+        std::mem::forget(input);
+    }
+    // The run ends on its own after the questions the test answers. One that asks more than the
+    // answers cover would wait for input that never comes on the BSD `script`, so the wait is
+    // bounded and the child is stopped, which fails the test with what it had written.
+    let mut written = Vec::new();
+    for stream in [
+        child
+            .stdout
+            .take()
+            .map(|s| Box::new(s) as Box<dyn Read + Send>),
+        child
+            .stderr
+            .take()
+            .map(|s| Box::new(s) as Box<dyn Read + Send>),
+    ] {
+        let mut stream = stream.expect("the terminal's output");
+        written.push(std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).ok();
+            bytes
+        }));
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("script can be waited on") {
+            break Some(status);
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill().ok();
+            child.wait().ok();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let mut streams = written
+        .into_iter()
+        .map(|reader| reader.join().unwrap_or_default());
+    let (stdout, stderr) = (
+        streams.next().unwrap_or_default(),
+        streams.next().unwrap_or_default(),
+    );
+    let Some(status) = status else {
+        panic!(
+            "the run asked for more than the answers given and was stopped after 120 seconds:\n{}{}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+    };
+    Output {
+        status,
+        stdout,
+        stderr,
+    }
 }
 
 #[cfg(unix)]
@@ -10327,6 +10428,53 @@ fn a_first_run_with_a_claude_code_key_command_writes_an_entry_naming_the_variabl
     }
 }
 
+/// IMPORT-4: at a start that can ask, what the source holds and the import leaves is said once,
+/// before the question, and an answer of `y` writes the import without saying it again after the
+/// written line: the refusal that follows names the routes and not the lines already drawn.
+/// Rejects a start that reads the sources again after the import was written (the heading and the
+/// `- model:` line are said a second time) and one that says them after the question and not
+/// before it.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn an_import_answered_yes_says_what_was_left_once_and_before_the_question() {
+    let scratch = Scratch::new("cli-running-import-left-answered-yes")
+        .with_file(".claude/settings.json", CLAUDE_CODE_KEY_COMMAND);
+
+    let output = in_a_terminal_answering(&scratch.path, NOTHING_CONFIGURED, &["--plain"], "y\n");
+
+    let (transcript, _) = said(&output);
+    let heading = "Found in Claude Code and not imported:";
+    assert_eq!(
+        transcript.matches(heading).count(),
+        1,
+        "the heading was not said exactly once: {transcript}"
+    );
+    assert_eq!(
+        transcript.matches("- model:").count(),
+        1,
+        "what was left was not said exactly once: {transcript}"
+    );
+    let left = transcript.find("- model:").expect("checked above");
+    let question = transcript
+        .find("Import this from Claude Code?")
+        .unwrap_or_else(|| panic!("no import was offered: {transcript}"));
+    let written = transcript
+        .find("imported what Claude Code configured into")
+        .unwrap_or_else(|| panic!("the import was not said to be written: {transcript}"));
+    assert!(left < question && question < written, "{transcript}");
+    assert!(
+        transcript
+            .match_indices(heading)
+            .chain(transcript.match_indices("- model:"))
+            .all(|(at, _)| at < written),
+        "what was left was said again after the write: {transcript}"
+    );
+    let file = std::fs::read_to_string(scratch.settings()).expect("the import was written");
+    assert!(file.contains("ANTHROPIC_API_KEY"), "{file}");
+}
+
 /// IMPORT-8: a one-shot run has nobody to ask, so it reads no answer and writes nothing, and its
 /// refusal names the command that does ask.
 #[test]
@@ -10458,6 +10606,254 @@ fn doctor_with_something_importable_names_the_import_command_and_asks_nothing() 
         std::fs::read_to_string(unwritable.settings()).expect("read"),
         broken
     );
+}
+
+/// IMPORT-8: with no source holding anything and no model server answering, `import-providers` on a
+/// terminal says that nothing was found, as the words for "found nothing" and not those for
+/// "already set", ends successfully and writes no settings. It runs in a terminal because the
+/// command reads the real standard input and error, which no function test reaches. Rejects a
+/// command that prints nothing, ends non-zero, or writes an empty settings file.
+#[cfg(unix)]
+#[test]
+fn import_providers_with_nothing_to_find_says_so_and_writes_nothing() {
+    let scratch = Scratch::new("cli-running-import-providers-nothing-found");
+
+    let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, &["import-providers"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    assert!(
+        transcript.contains(
+            "neither Claude Code nor opencode configures a model service bravebot can use"
+        ),
+        "the command did not say it found nothing: {transcript}"
+    );
+    assert!(
+        !transcript.contains("nothing is left to import"),
+        "a machine with nothing found was told its names are already set: {transcript}"
+    );
+    assert!(
+        !scratch.settings().exists(),
+        "a run that found nothing wrote settings"
+    );
+}
+
+/// IMPORT-8: where everything a source holds is already in the person's settings, the command says
+/// that nothing is left to import, which is a different sentence from finding nothing. The
+/// settings already hold each name Claude Code's Bedrock setup would add. Rejects a command whose
+/// `settled` answer is dropped or inverted, which says "found nothing" to a person who has already
+/// imported everything.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn import_providers_with_every_name_already_set_says_nothing_is_left() {
+    let settings = r#"{
+        "env": {
+            "BRAVEBOT_USE_BEDROCK": "1",
+            "AWS_REGION": "eu-central-1",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        },
+        "model": "sonnet"
+    }"#;
+    let scratch = Scratch::new("cli-running-import-providers-settled")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK)
+        .with_settings(settings);
+
+    let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, &["import-providers"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    assert!(
+        transcript.contains("nothing is left to import"),
+        "the command did not say that nothing is left: {transcript}"
+    );
+    assert!(
+        !transcript.contains("neither Claude Code nor opencode"),
+        "names that were already set were reported as not found: {transcript}"
+    );
+    assert!(
+        !transcript.contains("Import this"),
+        "the command asked about names the file already holds: {transcript}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.settings()).expect("the settings"),
+        settings,
+        "the command changed a file it had nothing to add to"
+    );
+}
+
+/// IMPORT-4, IMPORT-8: a run that has nothing to import still says what it found in a source and
+/// left, by name and never by value, and says it before the sentence that nothing is left. Rejects
+/// a command that returns on finding nothing to ask before the lines about what was left are drawn.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn import_providers_with_only_what_is_left_names_it_before_saying_nothing_is_found() {
+    let scratch = Scratch::new("cli-running-import-providers-left").with_file(
+        ".claude/settings.json",
+        r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-ant-oat01-a-token-nobody-may-see"}}"#,
+    );
+
+    let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, &["import-providers"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    let heading = transcript
+        .find("Found in Claude Code and not imported:")
+        .unwrap_or_else(|| panic!("what was left was not introduced: {transcript}"));
+    let left = transcript
+        .find("ANTHROPIC_AUTH_TOKEN")
+        .unwrap_or_else(|| panic!("what was left was not named: {transcript}"));
+    let nothing = transcript
+        .find("neither Claude Code nor opencode")
+        .unwrap_or_else(|| panic!("the nothing-found sentence is missing: {transcript}"));
+    assert!(heading < left && left < nothing, "{transcript}");
+    assert!(
+        !transcript.contains("a-token-nobody-may-see"),
+        "the value was drawn: {transcript}"
+    );
+    assert!(!scratch.settings().exists(), "the run wrote settings");
+}
+
+/// IMPORT-4: at a start that can ask (three terminals, nothing configured, not incognito) what a
+/// source holds and the import leaves is said once, by name and never by value, before the
+/// refusal's routes, whether the source holds nothing importable or something that is asked about.
+/// Rejects a start that refuses with an empty `Looked` before the sources are offered (the lines
+/// are lost), and one that reads the sources again after the offer (the lines are said twice).
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_start_that_can_ask_says_what_it_found_and_left_before_the_refusal() {
+    // Only what cannot be imported: nothing is asked, the lines are said, the start refuses.
+    let scratch = Scratch::new("cli-running-import-left-at-start").with_file(
+        ".claude/settings.json",
+        r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-ant-oat01-a-token-nobody-may-see"}}"#,
+    );
+    let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, &["--plain"]);
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    assert!(!transcript.contains("Import this"), "{transcript}");
+    assert_eq!(
+        transcript
+            .matches("Found in Claude Code and not imported:")
+            .count(),
+        1,
+        "the heading was not said exactly once: {transcript}"
+    );
+    assert_eq!(
+        transcript.matches("- ANTHROPIC_AUTH_TOKEN:").count(),
+        1,
+        "the name was not said exactly once: {transcript}"
+    );
+    let left = transcript
+        .find("- ANTHROPIC_AUTH_TOKEN:")
+        .expect("checked above");
+    let route = transcript
+        .find("amazon-bedrock")
+        .unwrap_or_else(|| panic!("the refusal's routes were not said: {transcript}"));
+    assert!(
+        left < route,
+        "what was left came after the routes: {transcript}"
+    );
+    assert!(
+        !transcript.contains("a-token-nobody-may-see"),
+        "the value was drawn: {transcript}"
+    );
+    assert!(!scratch.settings().exists(), "the start wrote settings");
+
+    // Something importable beside something left: the left line comes before the question, and
+    // the unanswered question is declined and refused.
+    let scratch = Scratch::new("cli-running-import-left-with-question")
+        .with_file(".claude/settings.json", CLAUDE_CODE_KEY_COMMAND);
+    let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, &["--plain"]);
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    let left = transcript
+        .find("- model:")
+        .unwrap_or_else(|| panic!("the model left was not said: {transcript}"));
+    let question = transcript
+        .find("Import this")
+        .unwrap_or_else(|| panic!("nothing was asked: {transcript}"));
+    assert!(left < question, "{transcript}");
+    assert_eq!(transcript.matches("- model:").count(), 1, "{transcript}");
+    assert!(
+        !transcript.contains("in-the-command-nobody-may-see"),
+        "the command was drawn: {transcript}"
+    );
+}
+
+/// CLI-15: a session in lines given `--vet` resolves auto-vetting on from the flag and says, after
+/// the line about the skipped permissions, that bypass refuses what a check objects to. Without the
+/// flag it says the first line and nothing about vetting. The notice is printed from the value the
+/// session is handed, so a hand-off that resolves the standing answer to a constant, or that
+/// prints the vetting line whenever the flag is present, is told apart from the required one by the
+/// two runs. Rejects `standing_vetting` returning false whatever the flag said, and a notice that is
+/// said for a run that has auto-vetting off.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_session_in_lines_given_the_vet_flag_says_what_bypass_refuses() {
+    let said_with = |name: &str, extra: &[&str]| {
+        let gateway = a_gateway(r#"["tools"]"#, answered("all done"));
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let mut arguments = vec!["--plain", "--dangerously-skip-permissions"];
+        arguments.extend_from_slice(extra);
+        let output = in_a_terminal(&scratch.path, AT_A_GATEWAY, &arguments);
+        said(&output).0
+    };
+    let flag_line = "--dangerously-skip-permissions: nothing will be asked";
+    let vetting_line = "bypass is on with auto-vetting";
+
+    let vetted = said_with("cli-running-plain-bypass-vet", &["--vet"]);
+    let flag = vetted
+        .find(flag_line)
+        .unwrap_or_else(|| panic!("the flag's line was not said: {vetted}"));
+    let screens = vetted
+        .find(vetting_line)
+        .unwrap_or_else(|| panic!("the vetting line was not said under --vet: {vetted}"));
+    assert!(
+        flag < screens,
+        "the lines came in the wrong order: {vetted}"
+    );
+
+    let plain = said_with("cli-running-plain-bypass-no-vet", &[]);
+    assert!(plain.contains(flag_line), "{plain}");
+    assert!(
+        !plain.contains(vetting_line),
+        "a session without auto-vetting said what auto-vetting refuses: {plain}"
+    );
+}
+
+/// IMPORT-8: `doctor` and a one-shot run never ask, even where stdin, stdout and stderr are all
+/// terminals, which is the case where a start would ask. Each ends on the configuration status,
+/// names the command that asks, and writes nothing. Rejects either path calling the start-up
+/// import, which asks wherever all three are terminals, instead of only looking.
+#[cfg(unix)]
+#[test]
+fn doctor_and_a_one_shot_run_in_a_terminal_name_the_import_command_and_do_not_ask() {
+    for (name, arguments) in [
+        ("doctor", &["doctor"][..]),
+        ("one-shot", &["-p", "hi"][..]),
+        ("json", &["-p", "hi", "--json"][..]),
+    ] {
+        let scratch = Scratch::new(&format!("cli-running-import-terminal-{name}"))
+            .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK);
+
+        let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, arguments);
+
+        let (transcript, _) = said(&output);
+        assert_eq!(output.status.code(), Some(3), "{name}: {transcript}");
+        assert!(
+            !transcript.contains("Import this"),
+            "{name} asked in a terminal: {transcript}"
+        );
+        assert!(
+            transcript.contains("bravebot auth login import"),
+            "{name} did not name the command that asks: {transcript}"
+        );
+        assert!(!scratch.settings().exists(), "{name} wrote settings");
+    }
 }
 
 /// IMPORT-8: an import is a write, which an incognito session will not do.
@@ -14160,6 +14556,85 @@ fn a_reference_a_settings_file_declares_is_read_quarantined_beside_a_trusted_add
     );
 }
 
+/// CLI-11, REFER-3. A reference a settings file declares is reachable by absolute path, as a
+/// directory opened with `--add-dir` is, and nothing in it is trusted: the planner's read of a file
+/// in it comes back as a quarantined result, not as the refusal for a path outside the workspace and
+/// not as the file's words. The run names no `--add-dir`, so the reference is the only thing that
+/// opens the directory. The control declares no reference and reads the same path, which is
+/// refused as outside the workspace. Rejects a workspace built without `with_references`, or from
+/// the project layer, where the existing assertion that the words did not reach the planner also
+/// holds because the read was refused.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_reference_a_settings_file_declares_is_reachable_and_read_quarantined() {
+    let words = "THE-WORDS-IN-THE-PROJECT-NOTES";
+    let reads_of = |name: &str, declared: bool| -> Vec<String> {
+        let path = Arc::new(std::sync::OnceLock::<String>::new());
+        let given = Arc::clone(&path);
+        let gateway = a_gateway_whose_model_reads(move || {
+            given
+                .get()
+                .cloned()
+                .expect("the path is set before the run")
+        });
+        let scratch = Scratch::new(name);
+        let cwd = scratch.path.join("project");
+        std::fs::create_dir_all(&cwd).expect("create the project");
+        let referenced = scratch.path.join("referenced");
+        std::fs::create_dir_all(&referenced).expect("create the referenced directory");
+        std::fs::write(referenced.join("notes.md"), words).expect("write the notes");
+        let referenced = referenced.canonicalize().expect("the referenced directory");
+        let mut settings: serde_json::Value =
+            serde_json::from_str(&settings_for(&gateway)).expect("the settings are JSON");
+        if declared {
+            settings["references"] = serde_json::json!({"docs": referenced.display().to_string()});
+        }
+        let scratch = scratch.with_settings(&settings.to_string());
+        path.set(referenced.join("notes.md").display().to_string())
+            .expect("the path is set once");
+
+        let output = bravebot_started_in(
+            &scratch.path,
+            &cwd,
+            AT_A_GATEWAY,
+            &["--trust-workspace", "-p", "read the notes"],
+        );
+
+        let (_, stderr) = said(&output);
+        // The control's read is refused by a gate, which a run reports as status 4.
+        let expected = if declared { 0 } else { 4 };
+        assert_eq!(output.status.code(), Some(expected), "{name}: {stderr}");
+        if !declared {
+            assert!(
+                stderr.contains("resolves outside the workspace"),
+                "the control was not refused as outside the workspace: {stderr}"
+            );
+        }
+        requests(&gateway)
+    };
+    let tool_result_of = |sent: &[String]| -> String {
+        let last = sent.last().expect("the planner was asked again");
+        assert!(last.contains(r#""role":"tool""#), "{last}");
+        last.clone()
+    };
+
+    let with = reads_of("cli-running-reference-reachable", true);
+    let with = tool_result_of(&with);
+    assert!(
+        with.contains("could not be shown to you"),
+        "the read of a reference was not a quarantined result: {with}"
+    );
+    assert!(!with.contains(words), "a reference was trusted: {with}");
+
+    let without = reads_of("cli-running-reference-undeclared", false);
+    let without = tool_result_of(&without);
+    assert!(
+        !without.contains("could not be shown to you"),
+        "a directory nothing declared was reachable: {without}"
+    );
+    assert!(!without.contains(words), "{without}");
+}
+
 /// CLI-11, TRUST-10. The rule recorded for an added directory is about the directory as it was
 /// opened, so a link inside it that leads out of it carries none of its trust: the file the link
 /// reaches is not given to the planner as its own words. Rejects trust decided by the name as the
@@ -17574,6 +18049,107 @@ fn a_reply_from_a_terminal_starts_a_stopped_session_with_it() {
     assert!(!listed.contains("stopped"), "{listed}");
 }
 
+/// BG-13: a reply that a session refused as stopping is not remembered against it. Asked again once
+/// the session is `stopped`, the terminal starts it with the reply as its prompt.
+///
+/// The first reply meets a process that says `stopping` (a socket the test answers on, with the
+/// session's lock held, as a session that has run out its idle time and not yet ended looks). The
+/// refusal is a failure that says to reply again. The lock and the socket are then released, which
+/// is the session having ended, and the same command from a terminal starts it. It rejects a
+/// terminal that keeps the refusal (a mark left by the first attempt, or the refusal read from the
+/// entry again) and goes on refusing the second attempt.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_reply_refused_as_stopping_starts_the_session_when_it_is_asked_again_once_stopped() {
+    use std::os::unix::net::UnixListener;
+
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    a_stopped_session_with_one_turn(&home, &gateway);
+
+    let roster = bravebot_session::jobs::Roster::at(home.0.join(".bravebot/jobs"));
+    let lease = roster
+        .claim(SESSION_ID)
+        .expect("claim the entry")
+        .expect("the host that stopped has let it go");
+    let token = roster.issue_attach_token(SESSION_ID).expect("a secret");
+    let socket = roster.socket_of(SESSION_ID).expect("a socket path");
+    std::fs::remove_file(&socket).ok();
+    let listener = UnixListener::bind(&socket).expect("a socket the stopping session answers on");
+    let (heard, asked) = mpsc::channel();
+    // The thread polls for the connection against a deadline. When no reply arrives it returns
+    // without sending, which the receive below reports as a failure with a message.
+    std::thread::spawn(move || {
+        listener.set_nonblocking(true).expect("poll for the reply");
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => return,
+            }
+        };
+        stream.set_nonblocking(false).expect("blocking reads");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(60)))
+            .expect("timeout");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+        let mut lines = Vec::new();
+        for _ in 0..3 {
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("a line");
+            lines.push(line.trim().to_string());
+        }
+        writeln!(stream, "stopping").expect("the answer");
+        heard.send(lines).ok();
+    });
+
+    let refused = bravebot(&home.0, &[], &["reply", "3f2a9c1e", "and the tests"]);
+    let heard_lines = asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the reply reached the stopping session");
+    let (out, err) = said(&refused);
+    assert!(!refused.status.success(), "{out}{err}");
+    assert!(
+        err.contains("is stopping after an hour idle. Reply again to start it."),
+        "{err}"
+    );
+    assert!(
+        !out.contains("Sent to"),
+        "a reply to a stopping session was reported as sent: {out}"
+    );
+    assert_eq!(
+        heard_lines,
+        [token, "reply".to_string(), "and the tests".to_string()]
+    );
+
+    // The session has ended: nothing holds its lock and nothing listens.
+    drop(lease);
+    std::fs::remove_file(&socket).ok();
+    roster.withdraw_attach_token(SESSION_ID);
+
+    let output = in_a_terminal(
+        &home.0,
+        AT_A_GATEWAY,
+        &["reply", "3f2a9c1e", "and the tests"],
+    );
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{out}{err}");
+    assert!(out.contains("Sent to"), "{out}{err}");
+    let second = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the reply reached the gateway");
+    assert!(second.contains("and the tests"), "{second}");
+    assert!(second.contains("fix the build"), "{second}");
+}
+
 /// BG-10, BG-12: `reply` from a terminal starts an interrupted session, after saying that the turn it
 /// was in is not repeated. The earlier conversation and the reply are in the request, with the
 /// driver's note that the last turn never finished, and that note is not written to the record.
@@ -17767,6 +18343,8 @@ fn a_record_a_running_session_holds_is_not_resumed() {
 /// copy it, and no process is started and nothing reaches the gateway.
 #[cfg(unix)]
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
 fn a_record_a_terminal_holds_is_not_resumed_or_started_again() {
     let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
     let home = ShortHome::new();
@@ -17785,6 +18363,8 @@ fn a_record_a_terminal_holds_is_not_resumed_or_started_again() {
         .open(record_directory.join(format!("{SESSION_ID}.lock")))
         .expect("the lock file");
     holder.try_lock().expect("nothing holds the record yet");
+    let record_path = record_directory.join(format!("{SESSION_ID}.json"));
+    let record_before = std::fs::read(&record_path).expect("read the record");
 
     for arguments in [&["--resume", SESSION_ID][..], &["--continue"][..]] {
         let output = bravebot_started_in(&home.0, &work, AT_A_GATEWAY, arguments);
@@ -17860,6 +18440,12 @@ fn a_record_a_terminal_holds_is_not_resumed_or_started_again() {
     assert!(
         gateway.asked.try_recv().is_err(),
         "a refused task reached the gateway"
+    );
+
+    assert_eq!(
+        std::fs::read(&record_path).expect("read the record"),
+        record_before,
+        "a refused continuation rewrote the record a terminal holds"
     );
 
     // Once the holder has ended the record is free, and the same words are not said.
@@ -18486,6 +19072,70 @@ fn a_background_session_says_its_mode_to_whoever_attaches() {
 
     let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
     let _ = host.wait();
+}
+
+/// MODE-1, BG-8: a background session opens asking even where the person's own settings say
+/// `permissions.startInAuto: true`, which opens the sessions a person starts in auto. The host
+/// reads those settings, so a host that opened its session through the path that reads the key
+/// would say the auto mode to whoever attaches and would answer a write itself, with nobody there.
+/// The attach is replayed the asking line and not the auto one, and the write the model asks for
+/// is held for the attached person, so the file is absent and the roster reports that the session
+/// needs input.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_background_session_opens_asking_where_the_setting_opens_sessions_in_auto() {
+    use std::os::unix::net::UnixStream;
+
+    let gateway = a_gateway(r#"["tools"]"#, |_| writing_out_txt());
+    let home = ShortHome::new();
+    let (mut host, socket) =
+        a_started_host(&home, &gateway, r#"{"permissions": {"startInAuto": true}}"#);
+
+    let mut terminal = UnixStream::connect(&socket).expect("attach");
+    terminal
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .expect("timeout");
+    writeln!(terminal, "{}\nattach", a_token(&socket)).expect("attach");
+    let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
+    let shown = shown_until(&mut seen, "asking before it acts");
+    assert!(
+        !shown.contains("auto mode on"),
+        "the host opened in auto: {shown}"
+    );
+    shown_until(&mut seen, "trust this directory?");
+    writeln!(terminal, "n").expect("answer the question");
+
+    // The write is put to the person attached and waits for them.
+    let held = shown_until(&mut seen, "out.txt");
+    assert!(!held.contains("auto mode on"), "{held}");
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let mut stream = UnixStream::connect(&socket).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .expect("timeout");
+        write!(stream, "{}\nreply\nyes\n", a_token(&socket)).expect("write");
+        let mut answer = String::new();
+        BufReader::new(stream)
+            .read_line(&mut answer)
+            .expect("an answer");
+        if answer.trim() == "needs-input" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "the session never reported needing input: {answer}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        !home.0.join("work/out.txt").exists(),
+        "a background session wrote under a setting that is for sessions the person starts"
+    );
+
+    let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    host.wait().ok();
 }
 
 /// A background session whose settings request a server nobody approved, attached and past the
@@ -19738,6 +20388,90 @@ fn a_one_shot_run_given_the_vet_flag_lets_a_check_that_finds_nothing_release_the
     );
 }
 
+/// CLI-15: with bypass the flag is what makes a verdict able to refuse. A one-shot run given
+/// `--dangerously-skip-permissions --vet` keeps the bytes back from the planner where the check
+/// says `unsafe` and where it cannot be completed, and ends on the status for a refused release.
+/// The same script without `--vet` answers the release yes unshown, so the bytes reach the planner.
+/// Rejects a one-shot task built with auto-vetting off whatever the command line said (the check
+/// is skipped and bypass releases everything), which the notice on stderr, computed separately,
+/// does not show.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_bypassing_one_shot_run_given_the_vet_flag_keeps_back_bytes_a_check_objects_to() {
+    const WORDS: &str = "THE-WORDS-IN-THE-NOTES-A-CHECK-OBJECTS-TO";
+    // `check` is the answer to the classifier's request, or `None` for a service that fails it.
+    let bodies_with = |name: &str, extra: &[&str], check: Option<&'static str>| -> Vec<String> {
+        let rounds = Arc::new(AtomicUsize::new(0));
+        let counted = rounds.clone();
+        let gateway = a_gateway(r#"["tools"]"#, move |body| {
+            if body.contains("prompt-injection classifier") {
+                return match check {
+                    Some(reply) => a_reply_from("reasons-only", reply),
+                    None => http(500, r#"{"error": {"message": "the check cannot be made"}}"#),
+                };
+            }
+            match counted.fetch_add(1, Ordering::SeqCst) {
+                0 => a_tool_call_from(
+                    "reasons-only",
+                    "run",
+                    r#"{"command":"sed -n p notes.md","why":"read the notes"}"#,
+                ),
+                1 => a_tool_call_from("reasons-only", "read_output", r#"{"ref":"ref:1"}"#),
+                _ => a_reply_from("reasons-only", "all done"),
+            }
+        });
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("create the project");
+        std::fs::write(project.join("notes.md"), WORDS).expect("write notes");
+        let mut arguments = vec!["--dangerously-skip-permissions"];
+        arguments.extend_from_slice(extra);
+        arguments.extend(["-p", "read the notes"]);
+
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let output = bravebot_started_in(&scratch.path, &project, &environment, &arguments);
+
+        let (stdout, stderr) = said(&output);
+        let kept_back = !extra.is_empty();
+        assert_eq!(
+            output.status.code(),
+            Some(if kept_back { 4 } else { 0 }),
+            "{extra:?} {check:?}: {stdout}{stderr}"
+        );
+        gateway
+            .asked
+            .try_iter()
+            .filter(|body| !body.contains("prompt-injection classifier"))
+            .collect()
+    };
+
+    let objected = bodies_with(
+        "cli-running-bypass-vet-unsafe",
+        &["--vet"],
+        Some(r#"{"verdict": "unsafe", "reason": "addressed to a reader"}"#),
+    );
+    assert!(
+        objected.iter().all(|body| !body.contains(WORDS)),
+        "bytes a check called unsafe reached the planner under bypass and --vet: {objected:?}"
+    );
+    let unanswered = bodies_with("cli-running-bypass-vet-unanswered", &["--vet"], None);
+    assert!(
+        unanswered.iter().all(|body| !body.contains(WORDS)),
+        "bytes a check could not assess reached the planner under bypass and --vet: {unanswered:?}"
+    );
+
+    let unscreened = bodies_with(
+        "cli-running-bypass-no-vet-unsafe",
+        &[],
+        Some(r#"{"verdict": "unsafe", "reason": "addressed to a reader"}"#),
+    );
+    assert!(
+        unscreened.iter().any(|body| body.contains(WORDS)),
+        "bypass without --vet did not release the bytes: {unscreened:?}"
+    );
+}
+
 /// CLI-25: a one-shot run is written down, and its result object names the record. A script reads
 /// the id out of one run and hands it to the next, so a run that wrote nothing, or wrote it and
 /// said nothing, leaves the script restating everything each time.
@@ -20375,8 +21109,78 @@ fn a_continued_run_is_never_shown_the_bytes_an_earlier_pipe_carried() {
     );
 }
 
+/// Every file under `scratch`'s sessions directory (records, trails, indexes and locks) with its
+/// bytes, or nothing where no run created the directory.
+fn the_sessions_tree(scratch: &Scratch) -> std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> {
+    let sessions = scratch.path.join(".bravebot").join("sessions");
+    match sessions.exists() {
+        true => the_tree_under(&sessions),
+        false => Default::default(),
+    }
+}
+
+/// BACKEND-51: a Vertex key is in no session record. A one-shot turn against a `google-vertex`
+/// service holding a known key is recorded, and no file under the home's `.bravebot/sessions` (the
+/// record, the trail beside it, the index) holds the key. The record is asserted to exist, so a run
+/// that wrote nothing does not pass. Rejects a record writer that stores the resolved credential
+/// or the request headers.
+#[test]
+fn a_vertex_key_is_in_no_session_record_after_a_turn() {
+    const KEY: &str = "AIza-a-vertex-key-nobody-may-record";
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch = Scratch::new("cli-running-vertex-record").with_settings(&format!(
+        r#"{{
+            "provider": {{
+                "google-vertex": {{
+                    "env": ["GOOGLE_API_KEY"],
+                    "options": {{"baseURL": "http://127.0.0.1:{}/v1", "maxRetries": 0}},
+                    "models": {{"reasons-only": {{}}}}
+                }}
+            }},
+            "model": "google-vertex/reasons-only"
+        }}"#,
+        gateway.port
+    ));
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("GOOGLE_API_KEY", KEY));
+
+    let output = bravebot(
+        &scratch.path,
+        &environment,
+        &["--json", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(
+        session_of(&stdout).is_some(),
+        "the run was not recorded, so there is nothing to search: {stdout}"
+    );
+    assert!(
+        !requests(&gateway).is_empty(),
+        "no request reached the service"
+    );
+    let mut searched = 0;
+    for (path, bytes) in the_sessions_tree(&scratch) {
+        let Some(bytes) = bytes else { continue };
+        searched += 1;
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(KEY),
+            "{} holds the key",
+            path.display()
+        );
+    }
+    assert!(
+        searched > 0,
+        "no file under the sessions directory was searched"
+    );
+}
+
 /// CLI-25 and INCOG-3: an incognito run writes no record, says so by a null session, and leaves
 /// `--continue` with nothing to find.
+///
+/// No file at all is written under the sessions directory, so a run that wrote its record or its
+/// trail somewhere `--continue` does not look is rejected as well.
 #[test]
 fn an_incognito_run_is_not_recorded_and_cannot_be_continued() {
     let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
@@ -20386,6 +21190,15 @@ fn an_incognito_run_is_not_recorded_and_cannot_be_continued() {
 
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(stdout.contains(r#""session":null"#), "{stdout}");
+    let written: Vec<_> = the_sessions_tree(&scratch)
+        .into_iter()
+        .filter(|(_, bytes)| bytes.is_some())
+        .map(|(path, _)| path)
+        .collect();
+    assert!(
+        written.is_empty(),
+        "an incognito run wrote a record, a trail or an index: {written:?}"
+    );
     let _ = requests(&gateway);
 
     let (output, stdout, _) = a_recorded_run(&scratch, &["-p", "follow up", "--continue"]);
@@ -20463,6 +21276,125 @@ fn a_failed_run_writes_no_record_and_a_continuation_carries_on_the_last_complete
     assert!(
         !sent.contains("FAIL-NOW"),
         "the continuation carried the turn that failed: {sent}"
+    );
+}
+
+/// CLI-25: `--incognito` with `--resume <id>` or `--continue` runs the task over the record's
+/// conversation and writes nothing back: the result object carries a null session, and every file
+/// under the sessions directory (the record and the trail beside it) is byte for byte what it was.
+/// Rejects a continuation that saves the turn into the ordinary record, or appends to its trail,
+/// while incognito.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_incognito_run_over_a_record_leaves_the_record_and_its_trail_as_they_were() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch =
+        Scratch::new("cli-running-incognito-continued").with_settings(&settings_for(&gateway));
+    let (_, first, _) = a_recorded_run(&scratch, &["-p", "FIRST-QUESTION"]);
+    let id = session_of(&first).expect("the first run named its session");
+    let before = the_sessions_tree(&scratch);
+    assert!(
+        before.values().any(|bytes| bytes.is_some()),
+        "the first run wrote nothing to compare against"
+    );
+    let _ = requests(&gateway);
+
+    for arguments in [
+        vec![
+            "--incognito",
+            "-p",
+            "INCOGNITO-FOLLOW-UP",
+            "--resume",
+            id.as_str(),
+        ],
+        vec!["--incognito", "-p", "INCOGNITO-FOLLOW-UP", "--continue"],
+        vec![
+            "--incognito",
+            "--resume",
+            id.as_str(),
+            "-p",
+            "INCOGNITO-FOLLOW-UP",
+        ],
+    ] {
+        let (output, stdout, stderr) = a_recorded_run(&scratch, &arguments);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{arguments:?}: {stdout}{stderr}"
+        );
+        assert!(
+            stdout.contains(r#""session":null"#),
+            "{arguments:?}: the run named a session: {stdout}"
+        );
+        let sent = requests(&gateway);
+        let sent = sent.last().expect("the task reached the gateway");
+        assert!(
+            sent.contains("FIRST-QUESTION") && sent.contains("INCOGNITO-FOLLOW-UP"),
+            "{arguments:?}: the task did not run over the record's conversation: {sent}"
+        );
+        assert_the_same_tree(
+            &before,
+            &the_sessions_tree(&scratch),
+            &format!("{arguments:?}"),
+        );
+    }
+}
+
+/// CLI-25: a continuation that is refused, for an id that names no record, a `--resume` with no
+/// id, `--mode manifest`, or a record a manifest run wrote, leaves every file under the sessions
+/// directory as it was and creates none. Rejects a refusal made after the record was opened for
+/// writing, which would leave a lock, a rewritten record or an empty one behind.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_refused_continuation_writes_nothing_under_the_sessions_directory() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch =
+        Scratch::new("cli-running-continued-refused-writes").with_settings(&settings_for(&gateway));
+    let (_, stdout, _) = a_recorded_run(&scratch, &["-p", "first"]);
+    let id = session_of(&stdout).expect("the first run named its session");
+    let _ = requests(&gateway);
+
+    let before = the_sessions_tree(&scratch);
+    for arguments in [
+        vec!["-p", "next", "--resume", "no-such-id"],
+        vec!["-p", "next", "--resume"],
+        vec!["--mode", "manifest", "-p", "next", "--continue"],
+        vec!["--mode", "manifest", "-p", "next", "--resume", id.as_str()],
+    ] {
+        let (output, stdout, _) = a_recorded_run(&scratch, &arguments);
+
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stdout}");
+        assert_the_same_tree(
+            &before,
+            &the_sessions_tree(&scratch),
+            &format!("{arguments:?}"),
+        );
+    }
+
+    // A record a manifest run wrote is refused by id and by `--continue`.
+    let path = the_record_file(&scratch, &id);
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("read the record")).expect("JSON");
+    record["manifest"] = serde_json::json!({});
+    std::fs::write(&path, serde_json::to_vec(&record).expect("encode")).expect("write the record");
+    let before = the_sessions_tree(&scratch);
+    for arguments in [
+        vec!["-p", "next", "--resume", id.as_str()],
+        vec!["-p", "next", "--continue"],
+    ] {
+        let (output, stdout, _) = a_recorded_run(&scratch, &arguments);
+
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stdout}");
+        assert_the_same_tree(
+            &before,
+            &the_sessions_tree(&scratch),
+            &format!("{arguments:?}"),
+        );
+    }
+    assert!(
+        requests(&gateway).is_empty(),
+        "a refused run sent a request"
     );
 }
 
@@ -22326,6 +23258,92 @@ fn a_one_shot_run_says_why_a_server_that_never_answered_its_handshake_was_left_o
     );
 }
 
+/// SERVERS-15, Known costs: a session in lines in a terminal, with a server that never answers its
+/// handshake, opens once the bound has passed and not before, and it opens: the wait ends at three
+/// times the bound and 5 seconds at the latest. The run is bounded here, so a start that waits on
+/// the server for as long as it lives fails this test and does not hang the suite.
+///
+/// The server reads what it is sent and never answers; its declaration gives `startup_timeout_secs`
+/// of 1. The session opens (its opening line is in the transcript) without the server (the note says
+/// why), it took the bound to open (a start that never waited does not report a server left out),
+/// and it opened under the 8 seconds the bound allows, with 32 seconds for the process to start.
+/// Rejects a start that waits for the handshake with no bound or with the default of 60 seconds, and
+/// a start that opens at once and starts the server's handshake in the background with no note.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_session_in_lines_with_a_server_that_never_answers_opens_within_the_bound_the_start_allows() {
+    if !bravebot_sandbox::confinement_works_here() {
+        return skipped("confinement is unavailable, so the server cannot be started");
+    }
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let settings = settings_for(&gateway).replacen('{', r#"{"mcp": {"request": ["weather"]},"#, 1);
+    let argv = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "while IFS= read -r line; do :; done".to_string(),
+    ];
+    let declared = serde_json::json!({"servers": {"weather": {
+        "transport": "stdio", "argv": argv, "variables": ["PATH"],
+        "startup_timeout_secs": 1}}})
+    .to_string();
+    let declaration = bravebot_config::mcp::Declarations::parse(&declared)
+        .expect("the declarations read")
+        .get("weather")
+        .expect("an entry for weather")
+        .declaration
+        .expect("a declaration");
+    let scratch = Scratch::new("cli-running-lines-slow-handshake")
+        .with_settings(&settings)
+        .with_state("mcp.json", &declared)
+        .with_state("mcp-approved", &format!("{}\n", declaration.digest()));
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("PATH", "/usr/bin:/bin"));
+
+    let mut terminal = in_a_terminal_command(
+        &scratch.path,
+        None,
+        &environment,
+        &["--plain", "--dangerously-skip-permissions"],
+    );
+    let started = std::time::Instant::now();
+    let child = terminal
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("script runs the built binary in a terminal");
+    let (sender, ended) = mpsc::channel();
+    std::thread::spawn(move || {
+        sender.send(child.wait_with_output()).ok();
+    });
+    let output = ended
+        .recv_timeout(Duration::from_secs(90))
+        .expect("the session did not open within 90 seconds of a server that never answered")
+        .expect("the run ends");
+    let took = started.elapsed();
+
+    let (transcript, _) = said(&output);
+    assert!(
+        transcript.contains("in lines"),
+        "the session did not open: {transcript}"
+    );
+    assert!(
+        transcript
+            .lines()
+            .any(|line| line.contains("weather") && line.contains("handshake")),
+        "the start did not say that weather was left out: {transcript}"
+    );
+    assert!(
+        took >= Duration::from_secs(1),
+        "the start did not wait for the handshake's bound: {took:?}"
+    );
+    assert!(
+        took < Duration::from_secs(40),
+        "the session opened after waiting on a handshake past its bound: {took:?}\n{transcript}"
+    );
+}
+
 /// CLI-26: a list that names nothing, a name that is no tool, and the flags where nothing offers a
 /// tool are each refused as a bad argument before any configuration is read.
 #[test]
@@ -22877,6 +23895,60 @@ fn a_trigger_run_stops_at_the_first_question_and_clear_deletes_it() {
     assert!(said(&again).0.contains("has no question kept"));
     let unknown = bravebot(&scratch.path, &[], &["trigger", "clear", "nothing-here"]);
     assert_eq!(unknown.status.code(), Some(2));
+}
+
+/// MODE-1: a run a delivery starts opens asking even where the person's own settings say
+/// `permissions.startInAuto: true`. The model asks to write `out.txt`; nobody is there to approve
+/// it, so the file is not written and the second request is made with the write refused. The
+/// trigger's run is the one-shot path started again by the listener, so a listener that carried the
+/// setting into it (an `--auto` among the arguments, or a mode read where the entry is fired) would
+/// let a delivery write unasked. The write is observed at the second request, which a run that
+/// wrote would make after the file exists.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_trigger_run_opens_asking_where_the_setting_opens_sessions_in_auto() {
+    let gateway = a_gateway_asking_for_a_write();
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&settings_for(&gateway)).expect("settings");
+    settings["permissions"] = serde_json::json!({"startInAuto": true});
+    let scratch =
+        Scratch::new("cli-running-trigger-start-in-auto").with_settings(&settings.to_string());
+    let secret = a_trigger(&scratch, &[], "deploy", "push", &[]);
+    let at = serving(&scratch, AT_A_GATEWAY);
+    let answer = delivered(
+        &at,
+        "/deploy",
+        Some(&bravebot_signing::webhook::signature(
+            &secret, "push", b"{}",
+        )),
+        b"{}",
+    );
+    assert!(answer.starts_with("HTTP/1.1 202 "), "{answer}");
+
+    let mut sent = Vec::new();
+    for _ in 0..2 {
+        sent.push(
+            gateway
+                .asked
+                .recv_timeout(Duration::from_secs(60))
+                .expect("the run reached the gateway twice"),
+        );
+    }
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "a trigger run wrote under a setting that is for sessions"
+    );
+    assert!(
+        sent[0].contains(r#""name":"write_file""#),
+        "the planner was never offered the write: {}",
+        sent[0]
+    );
+    for body in &sent {
+        assert!(
+            !body.contains("permission classifier"),
+            "a trigger run opened in auto and asked the classifier: {body}"
+        );
+    }
 }
 
 /// CLI-26: where `--no-shell` took `run` away, `read_git`'s description does not send the planner

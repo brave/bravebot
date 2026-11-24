@@ -1235,6 +1235,7 @@ jobs:
             two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_they_are_one_group
             a_listing_has_two_entries_for_two_files_and_each_is_trusted_by_its_own_rule
             a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it
+            the_doors_that_open_a_directory_by_name_admit_an_ordinary_directory_on_windows
           )
           cargo test -p bravebot-agent --locked --test workspace -- --exact "${tests[@]}" \
             | tee "$RUNNER_TEMP/workspace.log"
@@ -1262,6 +1263,18 @@ jobs:
             permissions::tests::a_full_path_rule_inside_the_workspace_covers_its_relative_names_on_windows \
             | tee "$RUNNER_TEMP/full-path-rule.log"
           grep -q 'test result: ok. 1 passed' "$RUNNER_TEMP/full-path-rule.log"
+
+      - name: Test a resumed record's rules on the host where a backslash separates
+        # A record's rules replay under the host's own answer about what separates, which only this
+        # host answers `true` (TRUST-18).
+        run: |
+          mkdir -p "$RUNNER_TEMP/names"
+          export TMP="$(cygpath -w "$RUNNER_TEMP/names")"
+          export TEMP="$TMP"
+          cargo test -p bravebot-session --locked --lib -- --exact \
+            sessions::tests::a_record_on_windows_replays_a_drive_letter_rule_under_the_key_spelled_from_slash \
+            | tee "$RUNNER_TEMP/record-rules.log"
+          grep -q 'test result: ok. 1 passed' "$RUNNER_TEMP/record-rules.log"
 
       - name: Test how a command rule folds the spellings of a program
         run: |

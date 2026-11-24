@@ -47,6 +47,7 @@ the end means a failed download cannot destroy a file a person approved replacin
 `verified-by: bravebot_agent::turn::a_downloaded_file_is_untrusted_and_nothing_of_it_reaches_the_planner`
 `verified-by: bravebot_agent::turn::a_download_over_the_cap_saves_nothing_and_one_at_it_is_saved`
 `verified-by: bravebot_agent::turn::a_body_that_stops_half_way_leaves_the_destination_alone_and_no_staging_file`
+`verified-by: bravebot_agent::turn::a_chunked_body_that_ends_without_its_closing_chunk_leaves_the_destination_alone`
 `verified-by: bravebot_agent::turn::a_download_the_person_stops_leaves_the_destination_alone_and_no_staging_file`
 
 <a id="DOWNLOAD-2"></a>
@@ -89,12 +90,21 @@ status. The content type the server sent is shown to the person in the transcrip
 but printable ASCII removed and cut to 100 characters, and is not part of what the planner is
 told.
 
+Every front end that draws a finished call draws its note, so the person sees the status, the byte
+count and the cleaned content type: the full-screen terminal, a one-shot run's progress, the desktop
+window and the mobile app. The editor adapter (ACP) is the exception. It sends an editor the call's
+status and none of its note, so the content type reaches no editor.
+
 **Why.** A header is the server's own text. Printed raw it can carry terminal escape sequences,
 and given to the planner it is the one channel [FETCH-6](fetch-url.md#FETCH-6) closes for a body.
 
 `verified-by: bravebot_agent::turn::a_downloaded_file_is_untrusted_and_nothing_of_it_reaches_the_planner`
 `verified-by: bravebot_agent::tools::a_content_type_is_shown_without_anything_a_terminal_would_obey`
 `verified-by: bravebot_agent::turn::a_download_tells_the_planner_its_status_and_size_and_the_person_a_cleaned_content_type`
+`verified-by: bravebot_tui::render::a_finished_download_draws_its_status_size_and_content_type`
+`verified-by: bravebot_cli::progress::a_finished_download_prints_its_status_size_and_content_type`
+`verified-by: bravebot_ui_bridge::acp::a_finished_download_sends_the_editor_its_status_and_none_of_its_note`
+`verified-by: by-construction (the desktop renderer and the mobile app are not crates this workspace compiles, so ui/scripts/ux-state.test.mjs renders the real transcript row through react-dom and asserts that a finished download's note is in the markup, and mobile/src/__tests__/transcript.test.tsx asserts the same of the mobile row; make check-ui and make check-mobile run them)`
 
 <a id="DOWNLOAD-4"></a>
 ### DOWNLOAD-4: the size cap is a settings value, and a body over it saves nothing

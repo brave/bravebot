@@ -16451,6 +16451,89 @@ mod tests {
             );
         }
 
+        /// SCROLL-10: a resumed session keeps no results. A call replayed from the record has no
+        /// `returned`, holds no lines for expansion, and `x` leaves it alone, even though the
+        /// record holds a thirty-line tool result for it. The control is a call made live in the
+        /// same session after the replay, which `x` does expand, so a replayed call that expanded
+        /// would be the topmost one and take the key. The wrong implementation it rejects rebuilds
+        /// `Returned` (and its `whole`) from the stored tool result when it replays the record.
+        #[test]
+        #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+        fn a_resumed_call_holds_no_result_and_the_expand_key_leaves_it_alone() {
+            use bravebot_aichat::protocol::{ToolCallRequest, ToolCallRequestFunction};
+
+            let call = ToolCallRequest {
+                id: "call-1".to_string(),
+                kind: "function".to_string(),
+                function: ToolCallRequestFunction {
+                    name: "read_file".to_string(),
+                    arguments: r#"{"path":"src/main.rs"}"#.to_string(),
+                },
+                extra_content: None,
+            };
+            let thirty: String = (0..30).map(|n| format!("stored line {n}\n")).collect();
+            let mut conversation = Conversation::new();
+            conversation.push(Message::user("what is in main.rs?"));
+            conversation.push(Message::assistant_calling("let me look", vec![call]));
+            conversation.push(Message::tool_result("call-1", thirty));
+            conversation.push(Message::assistant("a long file"));
+
+            let mut session = session();
+            session.replay(
+                &conversation,
+                "a title",
+                &bravebot_session::sessions::Recalled {
+                    history: None,
+                    turns: None,
+                    trails: BTreeMap::new(),
+                    todos: BTreeMap::new(),
+                    asides: Vec::new(),
+                    started: None,
+                },
+            );
+            let replayed = session
+                .transcript
+                .iter()
+                .position(|entry| entry.speaker == Speaker::Tool)
+                .expect("the call is in the transcript");
+            assert_eq!(session.transcript[replayed].text, "Read(src/main.rs)");
+            assert!(
+                session.transcript[replayed].returned.is_none(),
+                "a resumed call holds a result the session never kept"
+            );
+            assert_eq!(
+                session.expandable_lines, 0,
+                "a resumed session holds lines for expansion"
+            );
+
+            // A call made in this session, below the replayed one: the key has something to act
+            // on, so a key that does nothing on the replayed call is not a key that does nothing.
+            let thirty_lines: Vec<String> = (0..30).map(|n| format!("live line {n}")).collect();
+            session.finish_activity(Activity::running("Read", "live.rs").done("30 lines"));
+            session.returned(Returned {
+                lines: thirty_lines[..5].to_vec(),
+                total: 30,
+                from_the_end: false,
+                whole: thirty_lines,
+            });
+            let live = session.transcript.len() - 1;
+            assert_eq!(session.expandable_lines, 30);
+
+            session.open_scroller();
+            session.laid.width = 80;
+            session.laid.height = 40;
+            session.laid = crate::render::as_last_drawn(&session);
+            session.toggle_expanded(crate::render::as_last_drawn);
+            assert!(
+                !session.transcript[replayed].expanded,
+                "the key expanded a call replayed from the record"
+            );
+            assert!(
+                session.transcript[live].expanded,
+                "the key did not reach the call made in this session"
+            );
+        }
+
         /// A turn's trail still lands on the last thing the turn said, and a call is a thing the
         /// turn said. Anything else would put the trail above work it covers.
         #[test]

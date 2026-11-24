@@ -1066,6 +1066,7 @@ The auto mode's classifier is kept from a line with a git stage for the same rea
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_the_other_protected_names_beneath_it`
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_change_rename_into_or_remove_an_entry_of_a_git_directory`
+`verified-by: bravebot_sandbox::macos::a_write_row_does_not_change_the_owner_or_the_access_list_of_a_git_directory_or_a_protected_name`
 `verified-by: bravebot_sandbox::macos::a_write_row_inside_a_protected_directory_is_writable_under_itself`
 `verified-by: bravebot_sandbox::macos::every_name_in_the_shared_list_is_in_the_profile`
 `verified-by: bravebot_agent::protected_names::the_sandbox_and_the_file_tools_hold_back_the_same_names`
@@ -2713,6 +2714,7 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::the_program_cargo_runs_for_a_target_is_removed_and_its_target_directory_is_not`
 `verified-by: bravebot_agent::usability::the_loader_variables_are_removed_from_the_stored_login_gh_whatever_they_hold`
 `verified-by: bravebot_agent::usability::the_token_variables_are_removed_from_the_stored_login_gh`
+`verified-by: bravebot_agent::usability::a_generic_name_that_selects_code_is_checked_on_the_stored_login_gh`
 `verified-by: bravebot_agent::usability::the_twelve_host_variables_that_move_a_read_row_or_hand_over_a_socket_are_removed`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_a_template_directory`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_configuration_that_names_a_hooks_directory`

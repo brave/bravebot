@@ -891,6 +891,43 @@ mod tests {
         );
     }
 
+    /// INSTR-12. Every question the driver writes goes out under its own system prompt and no other
+    /// words: a style the session holds is not a parameter of any of them. The aside, the recap, the
+    /// suggestion and the brief share one prompt, and the draft rewrite has its own. Rejects a
+    /// builder that prepends or substitutes a style's words, or anything else, in the system message.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_question_is_sent_under_its_own_system_prompt_and_no_style() {
+        let conversation = an_exchange();
+        for (name, question, system) in [
+            (
+                "/btw",
+                Question::about(&conversation, "why?", Vec::new()),
+                SYSTEM_PROMPT,
+            ),
+            ("/recap", Question::recap(&conversation), SYSTEM_PROMPT),
+            (
+                "a suggestion",
+                Question::suggest(&conversation),
+                SYSTEM_PROMPT,
+            ),
+            (
+                "a brief",
+                Question::handoff(&conversation, "the parser"),
+                SYSTEM_PROMPT,
+            ),
+            (
+                "a draft rewrite",
+                Question::enhance(&conversation, "fix the parser"),
+                ENHANCE_SYSTEM_PROMPT,
+            ),
+        ] {
+            let request = question.into_request();
+            let first = request.first().expect("a request has a system message");
+            assert_eq!(first.content.text(), system, "{name}");
+        }
+    }
+
     /// A model that ignores the length it was asked for still cannot put more than the limit on
     /// the person's screen or into the record.
     #[test]
