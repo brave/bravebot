@@ -1,7 +1,7 @@
 # token-bench
 
 Compares the tokens a coding agent spends on the same tasks, with the same model and cache
-settings. It runs bravebot, Claude Code and Codex headless, plus a minimal `reference` loop that
+settings. It runs bravebot, Claude Code, Codex and opencode headless, plus a minimal `reference` loop that
 calls an OpenAI-compatible endpoint (OpenRouter by default) directly. The reference loop shows what
 a plain agent costs on a route, so the difference between it and a tool is the tool's own overhead.
 
@@ -38,6 +38,10 @@ The tools differ in ways that would skew the numbers if read raw. `bench.py` han
   summed over every request in the invocation.
 - **Codex** `exec --json`: `input_tokens` includes the cached part, and a resumed turn reports the
   whole thread's running total. The turn's cost is the difference from the turn before.
+- **opencode** `run --format json`: the event stream leaves out the last request's usage, so the
+  session is exported afterwards and each assistant message's `tokens` are summed. `input` is net of
+  the cache and reasoning tokens are counted as output. A later turn's cost is the difference from
+  the totals before it. The session is deleted when its scenario ends.
 - **reference**: reads `prompt_tokens_details.cached_tokens` and `cache_write_tokens`, and puts a
   cache mark on the system prompt and the last message.
 
@@ -71,27 +75,55 @@ fails. Add a scenario by adding a `Scenario` to `scenarios()`.
 
 ## Comparing models and routes
 
-A contestant is a tool and a model, so the same tool can appear several times. Bedrock against
-Brave's endpoint, or against OpenRouter, is two or three entries:
+A contestant is a tool and a model, so the same tool can appear several times. Sonnet 5.5 on
+Bedrock against the Anthropic gateway or OpenRouter is a few entries:
 
 ```json
 {"contestants": [
-  {"name": "bravebot-bedrock",    "tool": "bravebot", "model": "sonnet", "args": ["--safe"]},
-  {"name": "bravebot-openrouter", "tool": "bravebot", "model": "openrouter/anthropic/claude-sonnet-4.5", "args": ["--safe"]},
+  {"name": "bravebot-bedrock",    "tool": "bravebot", "model": "${BENCH_BEDROCK_MODEL}",
+   "args": ["--safe", "--settings", "${BENCH_BRAVEBOT_SETTINGS}"]},
+  {"name": "bravebot-anthropic",  "tool": "bravebot", "model": "anthropic/claude-sonnet-5-5", "args": ["--safe"]},
+  {"name": "opencode-bedrock",    "tool": "opencode", "model": "amazon-bedrock/${BENCH_BEDROCK_MODEL}",
+   "env": {"OPENCODE_CONFIG": "${BENCH_OPENCODE_CONFIG}"}},
   {"name": "claude-bedrock",      "tool": "claude",   "args": ["--bare"]},
   {"name": "ref-openrouter",      "tool": "reference", "model": "anthropic/claude-sonnet-4.5"}
 ]}
 ```
 
-Fields: `name`, `tool` (`bravebot`, `claude`, `codex`, `reference`), `model` (passed as `--model`),
-`args` (extra flags), `env` (extra environment, `${VAR}` is expanded), `bin`, `timeout`, `weights`.
-The `reference` tool also takes `base_url` and `key_env`.
+Fields: `name`, `tool` (`bravebot`, `claude`, `codex`, `opencode`, `reference`), `model` (passed as
+`--model`, or `-m` for opencode and codex), `args` (extra flags), `env` (extra environment), `bin`,
+`timeout`, `weights`. `${VAR}` is expanded in `model`, `args` and `env`, and `${BENCH_DIR}` is this
+directory. The `reference` tool also takes `base_url` and `key_env`.
 
-For a fair comparison on a model, give every contestant the same underlying model. `model` for
-bravebot is a tier word from `ANTHROPIC_DEFAULT_*_MODEL` for Bedrock, `openrouter/<model>` for
-OpenRouter, or a Brave roster name. Claude Code takes its route from its own settings, and
-`bench.py` does not change it. Check each result's reply model (bravebot `--json` has a `model`
-field) before comparing the numbers.
+For a fair comparison on a model, give every contestant the same underlying model and route.
+`model` for bravebot is `anthropic/<model>` for the Anthropic gateway, `openrouter/<model>` for
+OpenRouter, a Brave roster name, or a Bedrock inference-profile ARN. A bravebot run with no `model`
+uses whatever `/model` chose, which is not necessarily the route the other contestants use. Claude
+Code takes its route from its own settings, and `bench.py` does not change it. Check each result's
+reply model (bravebot `--json` has a `model` field) before comparing the numbers.
+
+### Bedrock
+
+An inference-profile ARN holds an account id, so it is set in the environment and in two settings
+files that stay outside the repository:
+
+- `BENCH_BEDROCK_MODEL` is the profile ARN of the model to compare. `aws bedrock
+  get-inference-profile` names the model behind a profile, and the profile has to be the same model
+  for every contestant. A profile for a different model measures the model.
+- `BENCH_BRAVEBOT_SETTINGS` is a bravebot settings file that names the profile under
+  `provider.amazon-bedrock.models`, so bravebot offers it, with the region and profile in
+  `options` (see the bravebot Bedrock page).
+- `BENCH_OPENCODE_CONFIG` is an opencode config with the same block, which is the format bravebot's
+  provider block copies:
+
+```json
+{"provider": {"amazon-bedrock": {
+  "options": {"region": "us-west-2", "profile": "<aws profile>"},
+  "models": {"<profile ARN>": {"name": "bench", "limit": {"context": 200000, "output": 8192}}}}}}
+```
+
+opencode signs with the AWS profile, so `aws sso login --profile <aws profile>` has to be current. An
+expired session ends the first turn with a `provider.auth` error that the benchmark records.
 
 ## Fairness
 
@@ -109,14 +141,18 @@ The benchmark controls these, and each can change a result:
 ## Known limits
 
 - Two identical `bravebot -p` calls in a row, with and without `--incognito` and `--safe`, each
-  wrote the whole prefix (about 29,000 tokens with `--safe`) and read nothing from the cache,
-  while rounds inside one invocation did read it. Claude Code and Codex read about 90% of their
-  prompt in the same conditions. The cause is not established. The environment block of the system
-  prompt (`crates/agent/src/preamble.rs`) holds a scratch directory that differs for each session,
-  which would change the prefix. This is the largest gap in the first results.
+  wrote the whole prefix (about 29,000 tokens with `--safe`) and read nothing from the cache, while
+  rounds inside one invocation did read it. This held for Sonnet 5.5 on the `anthropic` gateway and
+  on a Bedrock profile. An OpenAI model on Bedrock read the cache in full (about 19,800 tokens, three
+  invocations in a row). The cause is not established. Claude Code and Codex read about 90% of
+  their prompt in the same conditions.
 - Cache lifetime is about five minutes on Anthropic models, so a run that spends longer between
   turns than that measures a cold cache.
 - Codex does not report cache writes for these models, so its write cost is zero.
+- opencode runs through a private server (`--standalone`) and loads its own tool set and system
+  prompt, so its fixed cost reflects those defaults. It has no flag for extra system text, so the
+  system-prompt scenarios give it an `AGENTS.md` in the working directory, which it reads as
+  standing instructions.
 - Three repeats is the default. Cache behaviour on a shared endpoint is noisy, so raise `--repeats`
   before drawing a conclusion from a small gap.
 - Costs are list-price ratios, not invoices. Claude Code also reports `total_cost_usd`, which is
