@@ -54,7 +54,8 @@ run measured: its value, the date, the commit and, where a reviewer read it, the
 compares with that value and reports a candidate that grew by 25% (10% for a size) and is at least a
 quarter of its threshold, so a regression is found while it is still under the threshold. A candidate a
 reviewer called `keep` or `optimize` is left out until it grows past the margin or `--fresh` is given.
-`record` writes the ledger for a tree that is `main` and no other, and leaves it uncommitted for a person.
+`record` writes the ledger for whatever tree was measured and does not check the branch, so run it on
+`main`: a measurement from another branch becomes the baseline. It leaves the file uncommitted for a person.
 
 **Labels** are `enhancement`, or `bug` where a reviewer found a defect that the measurement shows, and an
 `area/*` or `infrastructure` where one is clear (`infrastructure` for the scripts lane). No axes.

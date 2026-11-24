@@ -28,19 +28,21 @@ TERMINAL_LIMIT = 20.0
 SCRIPT_TARGETS_EXTRA = ("check-spec", "check-security", "check-locales", "check-versions", "check-code-selectors")
 
 
-def run(args, cwd, env, timeout):
+def run(args, cwd, env, timeout, merge_stderr=False):
     """`(exit code, stdout, stderr, seconds)`. The exit code is None where the program could not be
-    started or did not finish in `timeout`, and stderr then says why."""
+    started or did not finish in `timeout`, and stderr then says why. With `merge_stderr` both streams
+    share one pipe, in the order the program wrote them, and come back as stdout with stderr empty."""
     began = time.monotonic()
     try:
         # The program and arguments are written in this file or name a binary this run built.
         done = subprocess.run(  # nosemgrep: gitlab.bandit.B603
-            [str(a) for a in args], cwd=str(cwd), env=env, capture_output=True, text=True,
+            [str(a) for a in args], cwd=str(cwd), env=env, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE, text=True,
             timeout=timeout, check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as problem:
         return None, "", str(problem), time.monotonic() - began
-    return done.returncode, done.stdout, done.stderr, time.monotonic() - began
+    return done.returncode, done.stdout, done.stderr or "", time.monotonic() - began
 
 
 class Context:
@@ -95,17 +97,23 @@ def run_tests(ctx):
     env = ctx.env(CARGO_TARGET_DIR=str(target))
     if shutil.which("cargo-nextest"):
         env["NEXTEST_PROFILE"] = "profile"
-        run(["cargo", "nextest", "run", "--workspace", "--locked", "--no-fail-fast", "--test-threads", "4"],
-            ctx.root, env, TESTS_SECONDS)
         report = target / "nextest" / "profile" / "junit.xml"
+        # The target directory outlasts a run, so a file found afterwards must be this run's.
+        report.unlink(missing_ok=True)
+        code, _, why, _ = run(
+            ["cargo", "nextest", "run", "--workspace", "--locked", "--no-fail-fast", "--test-threads", "4"],
+            ctx.root, env, TESTS_SECONDS)
+        if code is None:
+            return [], f"cargo-nextest did not start or finish, so the tests lane measured nothing: {why}"
         if not report.exists():
             return [], "cargo-nextest wrote no JUnit file, so the tests lane measured nothing"
         return lanes.test_rows(lanes.parse_junit(report.read_text(encoding="utf-8"))), None
     # libtest's `--report-time` is unstable, and `RUSTC_BOOTSTRAP` is what lets a stable toolchain's test binary take it.
     env["RUSTC_BOOTSTRAP"] = "1"
+    # Cargo writes its `Running` and `Doc-tests` lines to stderr, so both streams share one pipe.
     _, out, _, _ = run(
         ["cargo", "test", "--workspace", "--locked", "--no-fail-fast", "--", "-Z", "unstable-options", "--report-time"],
-        ctx.root, env, TESTS_SECONDS,
+        ctx.root, env, TESTS_SECONDS, merge_stderr=True,
     )
     cases = lanes.parse_report_time(out)
     note = "cargo-nextest is not installed, so the times are from cargo test --report-time, one binary after another"

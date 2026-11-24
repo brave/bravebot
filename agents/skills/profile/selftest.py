@@ -267,6 +267,49 @@ class Measuring(unittest.TestCase):
         self.assertIsNone(code)
         self.assertLess(seconds, 10)
 
+    def test_a_merged_run_keeps_stderr_and_stdout_in_the_order_they_were_written(self):
+        """An implementation capturing the streams apart gives cargo's stderr `Running` line no place
+        among the stdout test lines, so every test lands under the empty binary."""
+        script = ("import sys; sys.stderr.write('Running a\\n'); sys.stderr.flush(); "
+                  "print('test x', flush=True); sys.stderr.write('Doc-tests b\\n')")
+        _, out, err, _ = measure.run([sys.executable, "-c", script], ".", dict(os.environ), 30, merge_stderr=True)
+        self.assertEqual(out.splitlines(), ["Running a", "test x", "Doc-tests b"])
+        self.assertEqual(err, "")
+
+    def test_the_tests_lane_does_not_report_a_junit_file_an_earlier_run_left(self):
+        """An implementation that leaves the old file in place reports its times, and records them as
+        the baseline, when the build fails or the run times out."""
+        with tempfile.TemporaryDirectory() as temp:
+            report = Path(temp) / "target" / "profile-tests" / "nextest" / "profile" / "junit.xml"
+            report.parent.mkdir(parents=True)
+            report.write_text(JUNIT, encoding="utf-8")
+            context = measure.Context(temp, Path(temp) / "scratch")
+            for outcome in ((None, "", "timed out", 1.0), (101, "", "build failed", 1.0)):
+                report.write_text(JUNIT, encoding="utf-8")
+                with unittest.mock.patch.object(measure.shutil, "which", return_value="/usr/bin/x"), \
+                        unittest.mock.patch.object(measure, "run", return_value=outcome):
+                    rows, note = measure.run_tests(context)
+                self.assertEqual(rows, [], outcome)
+                self.assertIsNotNone(note)
+                self.assertFalse(report.exists())
+
+    def test_the_report_time_fallback_asks_for_cargos_status_lines_so_each_test_keeps_its_binary(self):
+        """An implementation of the fallback that reads only stdout gets the test lines without the
+        `Running` and `Doc-tests` lines cargo writes to stderr, and files every test under one binary."""
+        status = "Running unittests src/lib.rs (target/debug/deps/core-0123456789abcdef)\n"
+        tests = "test a ... ok <1.000s>\n"
+
+        def cargo(args, cwd, env, timeout, merge_stderr=False):
+            return (0, status + tests, "", 1.0) if merge_stderr else (0, tests, status, 1.0)
+
+        with tempfile.TemporaryDirectory() as temp:
+            context = measure.Context(temp, Path(temp) / "scratch")
+            with unittest.mock.patch.object(measure.shutil, "which", lambda name: None if name == "cargo-nextest" else "/usr/bin/x"), \
+                    unittest.mock.patch.object(measure, "run", cargo):
+                rows, _ = measure.run_tests(context)
+        self.assertIn("tests:core", keyed(rows))
+        self.assertNotIn("tests:", keyed(rows))
+
     @unittest.skipUnless(hasattr(os, "fork"), "needs a pty")
     def test_a_terminal_start_ends_when_the_output_is_still_and_a_silent_program_has_none(self):
         """An implementation timing to the end of the process reports the sleep after the screen was
