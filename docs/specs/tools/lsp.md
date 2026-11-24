@@ -234,12 +234,15 @@ file stays trusted. The other names are the file system's answer about the repor
 file's bytes. They can lower the label and never raise it. Where the lookup of the other names could
 not finish, because the walk reached the search cap, a directory could not be listed, or a name is
 not UTF-8, the location is untrusted, since the name that was not found may carry a rule that says
-so.
+so. A location the server spells in another Unicode form of the workspace directory than the one it
+was opened under is asked about under its name below the directory
+([TRUST-18](../trust-map.md#TRUST-18)), so it is untrusted where the file is.
 
 `verified-by: bravebot_agent::lsp::a_location_reported_through_a_link_to_a_distrusted_file_is_untrusted`
 `verified-by: bravebot_agent::lsp::a_location_reported_through_a_hard_link_to_a_distrusted_file_is_untrusted`
 `verified-by: bravebot_agent::lsp::a_location_whose_other_names_could_not_be_found_is_untrusted`
 `verified-by: bravebot_agent::lsp::a_respelled_location_of_a_distrusted_file_is_still_untrusted`
+`verified-by: bravebot_agent::lsp::a_location_of_a_distrusted_file_in_another_unicode_form_is_still_untrusted`
 
 **The label is not a function of the answer's text, and nothing here decides from a name.** The
 paths go to the kernel and a label comes back. Which wording the answer uses ("outside the

@@ -717,9 +717,25 @@ egress too and no rule about a website governs it, which [fetch-url.md](tools/fe
 out, and a command line that talks to the network is judged as the command line it is.
 
 A file named with `@`, `--file` or a drop is judged the same way before it is vouched for or opened,
-and a covered one is left out of the turn with a notice to the person. An `lsp` answer leaves out a
-location in a covered file without saying how many it left out, and its hover text, which names no
-file, is withheld while any rule covers reading a path.
+and a covered one is left out of the turn with a notice to the person. A name inside the workspace
+that is spelled absolutely, in the workspace's own spelling or in another Unicode form of it, is
+asked about under its name below the workspace as well, which is the name a project rule is written
+against. A drop is read wherever it lies, so an absolute name is also asked about under the name
+it lands on once its links are followed (`Path::canonicalize`, which is applied to an absolute name
+only, so a relative name is never resolved against the directory the process is in). A landing
+whose name is not UTF-8 has no spelling a rule can be written about, so it is left out while a
+`Read` deny rule is in force. A covered project file that is dropped or attached is left out under
+either name.
+
+The comparison with the workspace directory joins names that differ only in Unicode form: a volume
+that keeps `cafe\u{301}` and `caf\u{e9}` apart holds two directories, and a rule about a file below
+the workspace covers the file at the same place below the other-form directory as well. That adds
+a refusal and never removes one, and a directory that differs in a letter is not joined
+([PATH-007](../best-practices/paths.md#PATH-007)).
+
+An `lsp` answer leaves out a location in a covered file without saying how many it left out,
+whichever Unicode form of the workspace directory the server spells the location in, and its hover
+text, which names no file, is withheld while any rule covers reading a path.
 
 **Why.** A file whose contents are off limits is not protected if it can be overwritten, so the two
 families are consulted together for a write. Enumerating a directory and searching it both report
@@ -743,7 +759,14 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_core::permissions::an_allow_rule_is_matched_in_the_spelling_it_was_written_in`
 `verified-by: bravebot_core::policy::a_denied_step_refuses_the_whole_line`
 `verified-by: bravebot_agent::turn::a_named_file_a_deny_rule_covers_is_left_out_of_the_turn`
+`verified-by: bravebot_agent::turn::a_project_file_a_relative_deny_rule_covers_is_left_out_when_named_absolutely`
+`verified-by: bravebot_agent::workspace::a_relative_name_is_not_resolved_against_the_process_directory_when_asked_about_a_rule`
+`verified-by: bravebot_agent::workspace::a_link_outside_the_root_to_a_covered_file_inside_it_is_covered`
+`verified-by: bravebot_agent::workspace::a_dropped_file_whose_landing_is_not_utf8_is_covered_while_a_deny_rule_is_in_force`
+`verified-by: bravebot_agent::workspace::a_deny_rule_covers_the_same_file_below_a_directory_that_differs_only_in_unicode_form`
 `verified-by: bravebot_agent::lsp::a_location_in_a_denied_file_is_left_out_of_an_answer`
+`verified-by: bravebot_agent::lsp::a_location_spelled_in_another_unicode_form_than_the_root_is_left_out_by_a_deny_rule`
+`verified-by: bravebot_core::spelling::a_name_is_below_a_root_spelled_in_another_unicode_form`
 `verified-by: bravebot_agent::cmdline::a_rule_refuses_a_line_before_its_program_is_looked_for`
 `verified-by: bravebot_agent::turn::a_denied_program_is_refused_by_the_rule_and_not_for_being_absent`
 `verified-by: bravebot_agent::turn::a_project_relative_deny_rule_refuses_a_redirection_to_the_file`

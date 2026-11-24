@@ -1510,6 +1510,7 @@ holds ([DELEGATE-4](#DELEGATE-4)), and a limit takes some of it away.
 `verified-by: bravebot_agent::turn::a_delegate_cannot_write_outside_the_files_its_definition_names`
 `verified-by: bravebot_agent::turn::a_delegate_cannot_write_through_a_link_out_of_the_files_its_definition_names`
 `verified-by: bravebot_agent::turn::a_delegate_cannot_write_through_a_link_outside_its_files_to_one_inside`
+`verified-by: bravebot_agent::tools::tests::confinement::a_write_limit_refuses_an_absolute_name_that_spells_the_root_in_the_other_unicode_form`
 `verified-by: bravebot_agent::turn::a_limited_delegates_redirection_is_held_to_its_definitions_files`
 
 <a id="DELEGATE-30"></a>
