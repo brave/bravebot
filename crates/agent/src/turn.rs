@@ -3515,6 +3515,21 @@ where
     // conversation, and not what the turn goes on to do.
     conversation.opening_done();
 
+    // Where the session's own directory is, said once per process in the conversation and not in
+    // the system prompt (INSTR-9). Its name is made from the process id and the clock, so it
+    // differs on every start, and the system prompt is the front of every request: a prefix cache
+    // is matched from the first byte, so a path there would make a new process write the whole
+    // prompt again and read none of it. Said to a delegate as well, whose conversation is its own
+    // and whose prompt does not hold the path. Marked only where something was said, and not part
+    // of a snapshot, so a resumed session names its new directory after the old one. A compaction
+    // that takes the note out of the request carries it across (`Conversation::compacted`).
+    if !conversation.scratch_said()
+        && let Some(note) = crate::preamble::scratch_note(workspace)
+    {
+        conversation.push_composed_from(Message::user(note), Composed::Notice, Provenance::Driver);
+        conversation.scratch_was_said();
+    }
+
     // The count and names of what the default listing leaves out, put in the conversation once
     // per session rather than said again every turn (SKILL-19): the count tells the planner
     // whether searching could find anything at all, and the names are a hint for when it might

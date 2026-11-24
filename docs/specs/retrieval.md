@@ -220,6 +220,8 @@ does next.
 
 `verified-by: bravebot_agent::conversation::a_retrieval_cut_keeps_rounds_whole`
 `verified-by: bravebot_agent::conversation::a_pinned_skill_is_sent_after_the_cut`
+`verified-by: bravebot_agent::conversation::a_pinned_scratch_note_is_sent_after_the_cut`
+`verified-by: bravebot_agent::conversation::a_scratch_note_a_summary_carries_is_sent_after_a_later_cut`
 
 <a id="RETRIEVE-11"></a>
 ### RETRIEVE-11: the key goes only to the host it was issued for

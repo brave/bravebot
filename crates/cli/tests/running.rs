@@ -20700,9 +20700,17 @@ fn a_task_continuing_the_latest_session_adds_a_turn_to_its_record() {
 fn a_gateway_doing_what_each_task_names() -> Gateway {
     a_gateway(r#"["tools"]"#, |body| {
         let request: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+        // The message naming the session's own directory follows the task in a new process
+        // (INSTR-9), so the task is the last message that is not it.
         let last = request["messages"]
             .as_array()
-            .and_then(|messages| messages.last())
+            .and_then(|messages| {
+                messages.iter().rev().find(|message| {
+                    !message
+                        .to_string()
+                        .contains("The scratch directory of this session is")
+                })
+            })
             .cloned()
             .unwrap_or_default();
         let task = match last["role"] == "user" {
