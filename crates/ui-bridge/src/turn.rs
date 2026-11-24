@@ -28,6 +28,7 @@ use bravebot_core::event::Sink;
 use bravebot_core::file_authority::FileAuthority;
 use bravebot_core::todo::Row;
 use serde_json::{Value, json};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
@@ -299,6 +300,8 @@ pub struct BridgeReporter {
     prompt_at: Option<usize>,
     /// The task list as the turn last wrote it, kept for the record (SESSION-23).
     task_list: Vec<Row>,
+    /// The files the turn's successful writes landed on. See [`BridgeReporter::written`].
+    written: Vec<PathBuf>,
     /// The agents the conversation has started, which the rules for are
     /// [`bravebot_agent::roster::Roster`]'s and the terminal uses as well. Shared with the session
     /// so the list lasts across turns (VIEW-35).
@@ -322,6 +325,7 @@ impl BridgeReporter {
             reporting_for: None,
             prompt_at: None,
             task_list: Vec::new(),
+            written: Vec::new(),
             roster: Arc::default(),
             reports: None,
             published: None,
@@ -397,6 +401,13 @@ impl BridgeReporter {
     /// The task list the turn last wrote, whichever way it ended. Empty where it wrote none.
     pub fn task_list(&self) -> &[Row] {
         &self.task_list
+    }
+
+    /// The files the turn's writes landed on, each once, in the order first written, whichever
+    /// way the turn ended. A write that failed is left out. The session keeps these to ask git
+    /// which are still uncommitted (OPEN-1).
+    pub fn written(&self) -> &[PathBuf] {
+        &self.written
     }
 
     /// Where the turn's prompt landed in the recounted conversation, if it got that far.
@@ -666,6 +677,11 @@ impl Reporter for BridgeReporter {
 
     fn tool_finished(&mut self, activity: Activity) {
         self.say("tool.finished", wire::activity(&activity));
+        if let Some(written) = activity.written.filter(|_| !activity.failed)
+            && !self.written.contains(&written.landed)
+        {
+            self.written.push(written.landed);
+        }
     }
 }
 
@@ -1303,3 +1319,7 @@ mod answering_tests;
 #[cfg(test)]
 #[path = "notice_tests.rs"]
 mod notice_tests;
+
+#[cfg(test)]
+#[path = "written_tests.rs"]
+mod written_tests;
