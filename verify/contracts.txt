@@ -159,6 +159,15 @@ crates/core/src/capability.rs::clone: assumes external
 crates/core/src/capability.rs::ConnectorName: assumes external_body
 crates/core/src/capability.rs::clone: assumes external
 crates/core/src/capability.rs::clone: assumes external
+crates/core/src/capability.rs::clone: assumes external
+crates/core/src/capability.rs::same_capability: assumes external_body
+crates/core/src/capability.rs::copy_of_alias: assumes external_body
+crates/core/src/capability.rs::copy_of: assumes external_body
+crates/core/src/capability.rs::contains: assumes external_body
+crates/core/src/capability.rs::within: assumes external_body
+crates/core/src/capability.rs::iter: assumes external
+crates/core/src/capability.rs::revoke_mcp_call: assumes external_body
+crates/core/src/capability.rs::from_iter: assumes external
 crates/core/src/command.rs::discards: assumes external_body
 crates/core/src/command.rs::clone: assumes external
 crates/core/src/compare.rs::same_path_buf: assumes external_body
@@ -179,6 +188,9 @@ crates/core/src/policy.rs::precommitted_into: assumes external_body
 crates/core/src/policy.rs::deny: assumes external_body
 crates/core/src/policy.rs::allow: assumes external_body
 crates/core/src/policy.rs::before_capability: assumes external_body
+crates/core/src/policy.rs::capabilities_held: assumes external_body
+crates/core/src/policy.rs::refuse_ungranted: assumes external_body
+crates/core/src/policy.rs::allow_granted: assumes external_body
 crates/core/src/policy.rs::rules_for_host: assumes external_body
 crates/core/src/policy.rs::hold_to_the_host_of: assumes external_body
 crates/core/src/policy.rs::allow_fetched_body: assumes external_body

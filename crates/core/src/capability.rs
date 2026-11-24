@@ -265,25 +265,86 @@ impl fmt::Display for Capability {
 ///
 /// Deliberately immutable once built: a run cannot acquire new capabilities partway
 /// through, which is what stops a compromised step from escalating.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub struct CapabilitySet {
     granted: Vec<Capability>,
 }
 
+// Written out rather than derived, because Verus gives no specification to a derived `Clone` of a
+// struct holding a `Vec` of a type it does not clone.
+impl Clone for CapabilitySet {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn clone(&self) -> Self {
+        Self {
+            granted: self.granted.clone(),
+        }
+    }
+}
+
+/// Whether two capabilities are the same, server and connector names included.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+fn same_capability(a: &Capability, b: &Capability) -> bool {
+    a == b
+}
+
+/// A copy of `alias`, equal to it.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+fn copy_of_alias(alias: &ServerAlias) -> ServerAlias {
+    alias.clone()
+}
+
+/// A copy of `capability`, equal to it.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+fn copy_of(capability: &Capability) -> Capability {
+    capability.clone()
+}
+
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 impl CapabilitySet {
     /// An empty set. Grants nothing, which is the right default for untrusted work.
     pub fn none() -> Self {
-        Self::default()
+        Self {
+            granted: Vec::new(),
+        }
     }
 
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
     pub fn contains(&self, capability: &Capability) -> bool {
-        self.granted.contains(capability)
+        let mut at = 0;
+        while at < self.granted.len() {
+            if same_capability(&self.granted[at], capability) {
+                return true;
+            }
+            at += 1;
+        }
+        false
+    }
+
+    /// The part of this set that `parent` holds too.
+    ///
+    /// What a run is carved out of its parent with: everything it holds is held by both, so
+    /// narrowing by a parent never adds a capability the parent lacks.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    pub fn within(&self, parent: &CapabilitySet) -> CapabilitySet {
+        let mut kept: Vec<Capability> = Vec::new();
+        let mut at = 0;
+        while at < self.granted.len() {
+            // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+            let parent_holds = parent.contains(&self.granted[at]);
+            if parent_holds {
+                kept.push(copy_of(&self.granted[at]));
+            }
+            at += 1;
+        }
+        CapabilitySet { granted: kept }
     }
 
     pub fn is_empty(&self) -> bool {
         self.granted.is_empty()
     }
 
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
     pub fn iter(&self) -> impl Iterator<Item = Capability> + '_ {
         self.granted.iter().cloned()
     }
@@ -295,17 +356,31 @@ impl CapabilitySet {
     /// is what makes a grant the thing a call asks about rather than a property the session
     /// recorded. A grant withdrawn stops answering at the next call rather than at the next
     /// session.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
     pub fn revoke_mcp_call(&mut self, alias: &ServerAlias) -> bool {
-        let withdrawn = Capability::McpCall(alias.clone());
-        let before = self.granted.len();
+        let withdrawn = Capability::McpCall(copy_of_alias(alias));
+        let mut kept: Vec<Capability> = Vec::new();
+        let mut found = false;
+        let mut at = 0;
         // Only the grant naming this server: the others are separate capabilities that this
         // one says nothing about.
-        self.granted.retain(|granted| granted != &withdrawn);
-        self.granted.len() != before
+        while at < self.granted.len() {
+            // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+            let other = !same_capability(&self.granted[at], &withdrawn);
+            if other {
+                kept.push(copy_of(&self.granted[at]));
+            } else {
+                found = true;
+            }
+            at += 1;
+        }
+        self.granted = kept;
+        found
     }
 }
 
 impl FromIterator<Capability> for CapabilitySet {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
     fn from_iter<I: IntoIterator<Item = Capability>>(capabilities: I) -> Self {
         let mut granted: Vec<_> = capabilities.into_iter().collect();
         granted.sort();

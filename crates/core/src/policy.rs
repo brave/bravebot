@@ -1730,24 +1730,43 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Check that a capability was granted before it is exercised.
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
     pub fn before_capability(&mut self, capability: Capability) -> Gated<()> {
-        if !self.capabilities.contains(&capability) {
-            // A delegate started without a capability its definition asked for says why, from the
-            // list the kernel built when it approved the delegate (DELEGATE-33).
-            let why = match self.started_without.contains(&capability) {
-                true => {
-                    ", because this delegate was started without it: the run that started it \
-                         does not hold it"
-                }
-                false => "",
-            };
-            return Err(self.deny(
-                "capability",
-                Principle::Capability,
-                format!("capability '{capability}' was not granted for this turn{why}"),
-            ));
+        let granted = self.capabilities_held().contains(&capability);
+        if !granted {
+            return Err(self.refuse_ungranted(&capability));
         }
-        self.allow("capability", format!("{capability} granted"));
+        self.allow_granted(&capability);
         Ok(())
+    }
+
+    /// The capabilities this run holds, for a contract to read.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn capabilities_held(&self) -> &crate::capability::CapabilitySet {
+        &self.capabilities
+    }
+
+    /// The refusal for a capability this run was not granted.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn refuse_ungranted(&mut self, capability: &Capability) -> Denial {
+        // A delegate started without a capability its definition asked for says why, from the
+        // list the kernel built when it approved the delegate (DELEGATE-33).
+        let why = match self.started_without.contains(capability) {
+            true => {
+                ", because this delegate was started without it: the run that started it does \
+                 not hold it"
+            }
+            false => "",
+        };
+        self.deny(
+            "capability",
+            Principle::Capability,
+            format!("capability '{capability}' was not granted for this turn{why}"),
+        )
+    }
+
+    /// The trail line for a capability this run was granted.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn allow_granted(&mut self, capability: &Capability) {
+        self.allow("capability", format!("{capability} granted"));
     }
 
     /// Withdraw the grant to call tools on one MCP server, for the rest of this run.
@@ -6221,7 +6240,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                         ),
                     );
                 }
-                held.into_iter().collect()
+                // What the call keeps is still only what this run holds.
+                held.into_iter()
+                    .collect::<crate::capability::CapabilitySet>()
+                    .within(&self.capabilities)
             }
         };
 
