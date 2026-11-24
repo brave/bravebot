@@ -134,9 +134,12 @@ fn in_a_terminal() -> Command {
     ]);
     #[cfg(target_os = "linux")]
     {
+        // The path goes into a shell line, so it has to be text. A path that is not would name a
+        // different file once rendered, so it is refused here.
+        let program = exe.to_str().expect("the test binary's path is UTF-8");
         let line = format!(
             "'{}' --exact {TEST} --nocapture --test-threads=1",
-            exe.display().to_string().replace('\'', r"'\''")
+            program.replace('\'', r"'\''")
         );
         command.args(["-qec", &line, "/dev/null"]);
     }
