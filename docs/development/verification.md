@@ -11,6 +11,7 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 |---|---|
 | `Integrity::meet`, `Confidentiality::join` | Each returns the pessimistic answer |
 | `Capability::output_label`, `Policy::observe`, `Policy::before_fetch`, `Policy::before_search` | Whatever a capability observes is labelled untrusted: a fetch and a search public, every other read private, and a write has no label |
+| `CapabilitySet::contains`, `CapabilitySet::within`, `CapabilitySet::revoke_mcp_call`, `Policy::before_capability` | A capability is used exactly where the run holds it. A set narrowed by a parent holds only what both hold, so a delegate and a turn addressed to a definition hold nothing their parent lacks, and withdrawing a server's grant takes that grant and no other |
 | `Label::degrades_to` | It is the axis-by-axis order taint travels in, which `crates/core/src/spec.rs` proves a lattice with `(T,priv)` and `(U,pub)` incomparable, in which the taint of two labels is their least upper bound |
 | `Label::is_trusted`, `Label::is_public` | Each reads its axis |
 | `Labelled::label`, `Labelled::declassify` | Each returns the label or the value held |

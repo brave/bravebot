@@ -7,6 +7,16 @@
 # docs/development/verification.md says how a contract is written and run.
 
 crates/core/src/capability.rs::output_label: r => ensures crate::spec::output_label_is_untrusted(*self, r),
+crates/core/src/capability.rs::same_capability: r => ensures r == (*a == *b),
+crates/core/src/capability.rs::copy_of_alias: r => ensures r == *alias,
+crates/core/src/capability.rs::copy_of: r => ensures r == *capability,
+crates/core/src/capability.rs::none: r => ensures forall|capability: Capability| !r.spec_holds(capability),
+crates/core/src/capability.rs::contains: r => ensures r == self.spec_holds(*capability),
+crates/core/src/capability.rs::contains/loop: invariant at <= self.granted.len(), forall|before: int| 0 <= before < at ==> #[trigger] self.granted@[before] != *capability, decreases self.granted.len() - at,
+crates/core/src/capability.rs::within: r => ensures forall|capability: Capability| #[trigger] r.spec_holds(capability) ==> self.spec_holds( capability, ) && parent.spec_holds(capability),
+crates/core/src/capability.rs::within/loop: invariant at <= self.granted.len(), forall|k: int| #![trigger kept@[k]] 0 <= k < kept@.len() ==> (exists|i: int| 0 <= i < at && #[trigger] self.granted@[i] == kept@[k]) && parent.spec_holds(kept@[k]), decreases self.granted.len() - at,
+crates/core/src/capability.rs::revoke_mcp_call: r => ensures forall|capability: Capability| #[trigger] final(self).spec_holds(capability) ==> old(self).spec_holds(capability), !final(self).spec_holds(Capability::McpCall(*alias)), r == old(self).spec_holds(Capability::McpCall(*alias)),
+crates/core/src/capability.rs::revoke_mcp_call/loop: invariant at <= self.granted.len(), withdrawn == Capability::McpCall(*alias), forall|k: int| #![trigger kept@[k]] 0 <= k < kept@.len() ==> (exists|i: int| 0 <= i < at && #[trigger] self.granted@[i] == kept@[k]) && kept@[k] != withdrawn, found <==> exists|i: int| 0 <= i < at && #[trigger] self.granted@[i] == withdrawn, decreases self.granted.len() - at,
 crates/core/src/colour_codes.rs::code_end: r => ensures r is Some ==> start + 2 <= r->Some_0 < bytes.len() && bytes@[r->Some_0 as int] == b'm', r is Some ==> r->Some_0 <= start + 2 + most,
 crates/core/src/colour_codes.rs::code_end/loop: invariant parameters == start + 2, room == bytes.len() - parameters, taken <= room, decreases room - taken,
 crates/core/src/command.rs::?: r => ensures r == crate::spec::null_device(*path),
@@ -70,6 +80,8 @@ crates/core/src/policy.rs::precommitted: r => ensures r == spec_precommitted(*se
 crates/core/src/policy.rs::precommitted_into: r => ensures r == spec_precommitted_into(*self, *slot, destination@),
 crates/core/src/policy.rs::deny: r => ensures spec_context(*final(self)) == spec_context(*old(self)),
 crates/core/src/policy.rs::allow: ensures spec_context(*final(self)) == spec_context(*old(self)),
+crates/core/src/policy.rs::before_capability: r => ensures r is Ok <==> spec_capabilities(*old(self)).spec_holds(capability),
+crates/core/src/policy.rs::capabilities_held: r => ensures *r == spec_capabilities(*self),
 crates/core/src/policy.rs::refuse_a_denied_host: r => ensures r is Err <==> spec_rules_for_host(*old(self), host@) == crate::permissions::Decision::Ruled( crate::permissions::Ruling::Deny, ),
 crates/core/src/policy.rs::rules_for_host: r => ensures r == spec_rules_for_host(*self, host@),
 crates/core/src/policy.rs::before_fetch: r => ensures r is Ok ==> crate::spec::output_label_is_untrusted(Capability::WebFetch, Some(r->Ok_0)),
@@ -159,6 +171,12 @@ crates/core/src/capability.rs::clone: assumes external
 crates/core/src/capability.rs::ConnectorName: assumes external_body
 crates/core/src/capability.rs::clone: assumes external
 crates/core/src/capability.rs::clone: assumes external
+crates/core/src/capability.rs::clone: assumes external
+crates/core/src/capability.rs::same_capability: assumes external_body
+crates/core/src/capability.rs::copy_of_alias: assumes external_body
+crates/core/src/capability.rs::copy_of: assumes external_body
+crates/core/src/capability.rs::iter: assumes external
+crates/core/src/capability.rs::from_iter: assumes external
 crates/core/src/command.rs::discards: assumes external_body
 crates/core/src/command.rs::clone: assumes external
 crates/core/src/compare.rs::same_path_buf: assumes external_body
@@ -178,7 +196,9 @@ crates/core/src/policy.rs::precommitted: assumes external_body
 crates/core/src/policy.rs::precommitted_into: assumes external_body
 crates/core/src/policy.rs::deny: assumes external_body
 crates/core/src/policy.rs::allow: assumes external_body
-crates/core/src/policy.rs::before_capability: assumes external_body
+crates/core/src/policy.rs::capabilities_held: assumes external_body
+crates/core/src/policy.rs::refuse_ungranted: assumes external_body
+crates/core/src/policy.rs::allow_granted: assumes external_body
 crates/core/src/policy.rs::rules_for_host: assumes external_body
 crates/core/src/policy.rs::hold_to_the_host_of: assumes external_body
 crates/core/src/policy.rs::allow_fetched_body: assumes external_body

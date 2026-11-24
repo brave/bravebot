@@ -645,3 +645,23 @@ replace: self.refuse_if_denied("write", read, path) => Ok(())
 mutation: refuse_denied_write lets a write a deny rule on edits covers through
 file: crates/core/src/policy.rs
 replace: self.refuse_if_denied("write", edited, path)?; => let _ = edited;
+
+mutation: CapabilitySet::contains answers that a set holds whatever it is asked about
+file: crates/core/src/capability.rs
+replace: if same_capability(&self.granted[at], capability) { => if true {
+
+mutation: CapabilitySet::within keeps a capability the parent does not hold
+file: crates/core/src/capability.rs
+replace: let parent_holds = parent.contains(&self.granted[at]); => let parent_holds = true;
+
+mutation: CapabilitySet::revoke_mcp_call keeps the grant it withdraws
+file: crates/core/src/capability.rs
+replace: let other = !same_capability(&self.granted[at], &withdrawn); => let other = true;
+
+mutation: Policy::before_capability lets through a capability the run was not granted
+file: crates/core/src/policy.rs
+replace: let granted = self.capabilities_held().contains(&capability); => let granted = true;
+
+mutation: CapabilitySet::revoke_mcp_call says it withdrew nothing when it withdrew a grant
+file: crates/core/src/capability.rs
+replace: found = true; => found = false;
