@@ -805,6 +805,12 @@ fn no_label(message: &'static str) -> Denial {
     }
 }
 
+/// How a refusal names a call to `tool` of the server declared as `alias`.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+fn server_call(alias: &str, tool: &str) -> String {
+    format!("{alias}:{tool}")
+}
+
 /// Which question decided whether a fetch is put to a person.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(verus_keep_ghost, verus_verify)]
@@ -1868,8 +1874,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let Some(host) = crate::url::host_of(url) else {
             return Ok(());
         };
-        let decision = self.permissions.for_host(&host);
-        self.refuse_if_denied("fetch", decision, &host)
+        self.refuse_a_denied_host(&host)
+    }
+
+    /// Refuse a fetch from `host` a `deny` rule covers.
+    fn refuse_a_denied_host(&mut self, host: &str) -> Gated<()> {
+        let decision = self.rules_for_host(host);
+        self.refuse_if_denied("fetch", decision, host)
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn rules_for_host(&self, host: &str) -> crate::permissions::Decision {
+        self.permissions.for_host(host)
     }
 
     /// Whether a person has to approve fetching `url`.
@@ -2009,8 +2025,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// search does not happen, so a prompt would put a question to somebody that their settings file
     /// has already closed.
     pub fn before_search_rules(&mut self) -> Gated<()> {
-        let decision = self.permissions.for_search();
+        let decision = self.rules_for_search();
         self.refuse_if_denied("search", decision, "a web search")
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn rules_for_search(&self) -> crate::permissions::Decision {
+        self.permissions.for_search()
     }
 
     /// Whether a person has to approve this search.
@@ -2194,8 +2215,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Matched on the alias and the tool and never on the arguments, which are what the planner
     /// wrote (SERVERS-7). In the same position as [`Policy::before_fetch_rules`], for its reason.
     pub fn before_mcp_call_rules(&mut self, alias: &str, tool: &str) -> Gated<()> {
-        let decision = self.permissions.for_mcp(alias, tool);
-        self.refuse_if_denied("mcp_call", decision, &format!("{alias}:{tool}"))
+        let decision = self.rules_for_mcp(alias, tool);
+        let call = server_call(alias, tool);
+        self.refuse_if_denied("mcp_call", decision, &call)
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn rules_for_mcp(&self, alias: &str, tool: &str) -> crate::permissions::Decision {
+        self.permissions.for_mcp(alias, tool)
     }
 
     /// Whether a person has to approve calling `tool` of the server declared as `alias`.
@@ -3088,14 +3115,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         decision: crate::permissions::Decision,
         what: &str,
     ) -> Gated<()> {
-        if decision == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Deny) {
-            return Err(self.deny(
-                gate,
-                Principle::Capability,
-                format!("a deny rule in the settings file covers {what}"),
-            ));
+        let denied =
+            decision == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Deny);
+        if denied {
+            return Err(self.refuse_a_deny_rule(gate, what));
         }
         Ok(())
+    }
+
+    /// The refusal for an action a `deny` rule covers, naming `what`.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn refuse_a_deny_rule(&mut self, gate: &'static str, what: &str) -> Denial {
+        self.deny(
+            gate,
+            Principle::Capability,
+            format!("a deny rule in the settings file covers {what}"),
+        )
     }
 
     /// Refuse a read a `deny` rule covers.
@@ -3104,10 +3139,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// A deny rule is the one thing that stops one, which is what makes it able to say a file is
     /// off limits rather than merely unvouched for.
     pub fn before_read(&mut self, path: &str) -> Gated<()> {
-        let decision = self
-            .permissions
-            .for_path(crate::permissions::Subject::Read, path);
+        let decision = self.rules_for_read(path);
         self.refuse_if_denied("read", decision, path)
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn rules_for_read(&self, path: &str) -> crate::permissions::Decision {
+        self.permissions
+            .for_path(crate::permissions::Subject::Read, path)
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn rules_for_edit(&self, path: &str) -> crate::permissions::Decision {
+        self.permissions
+            .for_path(crate::permissions::Subject::Edit, path)
     }
 
     /// Whether a `deny` rule covers reading `path`, asked without refusing anything.
@@ -3147,14 +3192,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// either, so a `Read` deny rule stops a write to it. Claude Code does the same, and the reason
     /// is that a file whose contents are off limits is not protected if it can be overwritten.
     pub fn refuse_denied_write(&mut self, path: &str) -> Gated<()> {
-        for subject in [
-            crate::permissions::Subject::Edit,
-            crate::permissions::Subject::Read,
-        ] {
-            let decision = self.permissions.for_path(subject, path);
-            self.refuse_if_denied("write", decision, path)?;
-        }
-        Ok(())
+        // Both asked before either refusal is recorded, so each answer is the rules as they were.
+        let edited = self.rules_for_edit(path);
+        let read = self.rules_for_read(path);
+        self.refuse_if_denied("write", edited, path)?;
+        self.refuse_if_denied("write", read, path)
     }
 
     /// Refuse a write to `path` when a limit this run's definition, or one above it, put on the

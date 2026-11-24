@@ -160,6 +160,7 @@ crates/core/src/policy.rs::ExDenial: assumes external_type_specification
 crates/core/src/policy.rs::ExDenial: assumes external_body
 crates/core/src/policy.rs::no_observation: assumes external_body
 crates/core/src/policy.rs::no_label: assumes external_body
+crates/core/src/policy.rs::server_call: assumes external_body
 crates/core/src/policy.rs::describe_the_answers: assumes external_body
 crates/core/src/policy.rs::Policy: assumes external_body
 crates/core/src/policy.rs::precommitted: assumes external_body
@@ -167,11 +168,17 @@ crates/core/src/policy.rs::precommitted_into: assumes external_body
 crates/core/src/policy.rs::deny: assumes external_body
 crates/core/src/policy.rs::allow: assumes external_body
 crates/core/src/policy.rs::before_capability: assumes external_body
+crates/core/src/policy.rs::rules_for_host: assumes external_body
 crates/core/src/policy.rs::hold_to_the_host_of: assumes external_body
 crates/core/src/policy.rs::allow_fetched_body: assumes external_body
+crates/core/src/policy.rs::rules_for_search: assumes external_body
 crates/core/src/policy.rs::hold_search_to_the_host_of: assumes external_body
 crates/core/src/policy.rs::allow_search_results: assumes external_body
+crates/core/src/policy.rs::rules_for_mcp: assumes external_body
 crates/core/src/policy.rs::record_observed: assumes external_body
+crates/core/src/policy.rs::refuse_a_deny_rule: assumes external_body
+crates/core/src/policy.rs::rules_for_read: assumes external_body
+crates/core/src/policy.rs::rules_for_edit: assumes external_body
 crates/core/src/policy.rs::context_integrity: assumes external_body
 crates/core/src/policy.rs::absorb: assumes external_body
 crates/core/src/policy.rs::refuse_wrong_kind: assumes external_body
