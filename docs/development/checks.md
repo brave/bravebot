@@ -238,7 +238,7 @@ failures reach the caller, and that scanner failures cannot pass as empty scans.
 half also holds `check-npm` to reaching the npm tests and the lockfile lint's own cases before
 any lockfile is read, and to failing rather than passing when those tests are no longer there. It runs
 `check-all-selftest`, `check-reviewdog-selftest`, `check-rebase-selftest`, `check-affected-selftest`,
-`check-peer-advisories-selftest`, `check-peer-features-selftest`, `check-pr-fix-selftest`, `check-pr-worktree-selftest`, `check-maintenance-selftest`, `check-session-review-selftest` and `check-review-ready-selftest`, which can also run separately. `check-affected-selftest` holds
+`check-peer-advisories-selftest`, `check-peer-features-selftest`, `check-pr-fix-selftest`, `check-pr-worktree-selftest`, `check-maintenance-selftest`, `check-profile-selftest`, `check-session-review-selftest` and `check-review-ready-selftest`, which can also run separately. `check-affected-selftest` holds
 each rule of the classifier, and holds every workflow condition reading it to running its job on
 anything but an explicit `false`.
 To also exercise the installed reviewdog binary, set `REVIEWDOG_TEST_BINARY` to its
@@ -385,6 +385,21 @@ clippy's opinionated lints over the code that ships, which `make check-maintenan
 it compiles. `docs/maintenance-reviewed` holds what reviewers decided, so a later run reaches
 candidates it has not read. [smells.md](../../agents/skills/maintenance/smells.md) says which smell
 each lane covers and which a lint already refuses.
+
+`make check-profile` measures instead of reading. It runs the real programs with `HOME` pointed at a
+scratch directory and prints the ones over a threshold, or well over what `docs/profile-reviewed`
+recorded at an earlier commit, and exits zero whatever it finds: the wall time of each test and test
+binary (from cargo-nextest's JUnit output, or from `cargo test -- --report-time` where nextest is not
+installed), the median of a cold `bravebot --version` and of the terminal client's first screen, the
+slowest compile units of a cold `cargo build --release --timings` and the ones on its critical path, the
+size of each release binary and, where cargo-bloat is installed, the crates behind it, and the wall time
+of each script `check-scripts` and the commit hook run. A lane whose tool is missing says so and has no
+candidates. It builds the workspace in release mode, so it takes as long as that does and nothing runs it
+in CI. Its selftest, `make check-profile-selftest`, pins how each lane reads a tool's output and ranks it
+on fixture text, and `check-scripts` runs it. It is the measuring half of the
+[profile skill](../../agents/skills/profile/SKILL.md), whose reviewers read the code behind each
+candidate and draft an issue for the ones worth fixing. `docs/profile-reviewed` holds the value each key
+had, so a later run reports growth as well as slowness. `LANES="tests size"` limits the run.
 
 Wherever this page says a check fails a pull request, what does the failing is not the job going
 red. A job reports. What holds a merge is branch protection's list of required contexts, which is
