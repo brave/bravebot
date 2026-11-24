@@ -483,7 +483,7 @@ const STREAM_CHUNK_BYTES: usize = 1024;
 const DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
 
 /// A request to send.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "each flag is a separate answer the caller gives about one request"
@@ -512,6 +512,29 @@ pub struct Request {
     /// Whether the client certificate is presented to the host of [`Request::url`]. See
     /// [`Request::with_client_certificate`].
     pub client_certificate: bool,
+}
+
+/// A request prints the names of its headers and never their values, since a value can be a
+/// credential. The body is not printed either: it can carry one as well.
+impl fmt::Debug for Request {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let names = |headers: &[(String, String)]| -> Vec<String> {
+            headers.iter().map(|(name, _)| name.clone()).collect()
+        };
+        f.debug_struct("Request")
+            .field("method", &self.method)
+            .field("url", &self.url)
+            .field("headers", &names(&self.headers))
+            .field("socket_headers", &names(&self.socket_headers))
+            .field("body_bytes", &self.body.as_ref().map(Vec::len))
+            .field("reply", &self.reply)
+            .field("idle", &self.idle)
+            .field("patient_on_this_machine", &self.patient_on_this_machine)
+            .field("redirects_refused", &self.redirects_refused)
+            .field("refusal_read", &self.refusal_read)
+            .field("client_certificate", &self.client_certificate)
+            .finish()
+    }
 }
 
 /// How long a reply may take, stated by the request that asks for it.
@@ -1543,6 +1566,10 @@ fn is_transient_call(error: &ureq::Error) -> bool {
 /// ureq names the reply's own deadline, [`Timeouts::reply`] or the bound its request stated, as
 /// the wait for the response, which it keeps counting from the headers while the body arrives. Any
 /// other failure, the gap bound among them, is the connection's.
+///
+/// ureq wraps the gap bound ([`ureq::Timeout::RecvBody`]) in an I/O error of kind `Other`, which
+/// [`is_transient_io`] does not name, so a wrapped ureq error is classified by its variant as a
+/// failed call is. An I/O error that wraps nothing keeps being classified by its kind alone.
 fn body_failure(url: &str, error: &std::io::Error) -> EgressError {
     let cause = error
         .get_ref()
@@ -1560,7 +1587,7 @@ fn body_failure(url: &str, error: &std::io::Error) -> EgressError {
         detail: cause
             .map_or_else(|| io_failure(error), call_failure)
             .to_string(),
-        transient: is_transient_io(error),
+        transient: is_transient_io(error) || cause.is_some_and(is_transient_call),
     }
 }
 
@@ -2185,6 +2212,45 @@ mod tests {
             let body = body_failure(url, &std::io::Error::from(kind));
             assert!(!body.is_transient(), "{kind:?} on a body was asked again");
         }
+    }
+
+    /// ureq reports a body that went quiet past the gap bound as an I/O error of kind `Other`
+    /// wrapping its own error, which the kind alone cannot name. A reply that stopped arriving is a
+    /// connection that gave out, while a wrapped error that is the request being wrong, and the
+    /// reply's own deadline, are not.
+    #[test]
+    fn a_body_that_went_quiet_is_worth_another_attempt() {
+        let url = "https://example.com/";
+        let wrapped = |error: ureq::Error| std::io::Error::other(error);
+
+        let quiet = body_failure(url, &wrapped(ureq::Error::Timeout(ureq::Timeout::RecvBody)));
+        assert!(
+            quiet.is_transient(),
+            "a quiet body was sent once: {quiet:?}"
+        );
+        assert!(
+            matches!(&quiet, EgressError::Transport { detail, .. } if detail == "the request timed out"),
+            "a quiet body was worded as {quiet:?}"
+        );
+
+        let late = body_failure(
+            url,
+            &wrapped(ureq::Error::Timeout(ureq::Timeout::RecvResponse)),
+        );
+        assert!(
+            matches!(late, EgressError::OutOfTime { .. }),
+            "a reply past its deadline was reported as {late:?}"
+        );
+        assert!(
+            !late.is_transient(),
+            "a reply past its deadline was sent again"
+        );
+
+        let malformed = body_failure(url, &wrapped(ureq::Error::BadUri("x".into())));
+        assert!(
+            !malformed.is_transient(),
+            "a wrapped error that is not the connection was sent again: {malformed:?}"
+        );
     }
 
     /// How a lookup fails. An I/O error is what ureq reports for the system's: its kind is
@@ -3879,5 +3945,63 @@ mod tests {
             assert!(!attempt.read_request, "the request reached the server");
         }
         drop(logged);
+    }
+
+    /// A request printed with `{:?}` names its headers and holds none of their values, in either
+    /// header list or in the body. The regression it rejects: the derived `Debug`, which prints
+    /// every value, so a key sent in a header reaches a log line that formats the request.
+    #[test]
+    fn a_request_prints_its_header_names_and_never_their_values() {
+        let request = Request::post("https://example.test/path", b"body-sentinel".to_vec())
+            .header("X-Test-Header", "sentinel-value")
+            .socket_header("X-Test-Socket-Header", "sentinel-value");
+        let printed = format!("{request:?}");
+        assert!(printed.contains("X-Test-Header"), "{printed}");
+        assert!(printed.contains("X-Test-Socket-Header"), "{printed}");
+        assert!(!printed.contains("sentinel-value"), "{printed}");
+        assert!(!printed.contains("body-sentinel"), "{printed}");
+    }
+
+    /// NET-7: the certificates a transport names are what a handshake is put to, and they replace
+    /// the built-in set. Rejects a client that ignores the named roots (the handshake with the test
+    /// authority's server then fails), one that trusts the built-in set alone, and one that trusts
+    /// whatever it is shown (a handshake with an authority that did not sign the server then
+    /// succeeds).
+    #[test]
+    fn named_roots_decide_who_a_handshake_trusts() {
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        let authority = directory.path().join("authority.pem");
+        let other = directory.path().join("other.pem");
+        fixtures::write_authority(&authority);
+        fixtures::STRANGER.write_certificate(&other);
+        let server = fixtures::Server::start(false, vec![fixtures::ok("answered")], None);
+        let reached_by = |roots: TrustRoots| {
+            let egress =
+                Egress::with_transport(Timeouts::default(), &Transport::stated(roots, None, None));
+            sent_to_a_provider(&egress, Request::get(server.url("/v1/models")))
+        };
+
+        let named = reached_by(TrustRoots::Named {
+            file: Some(authority),
+            directory: None,
+        });
+        let built_in = reached_by(TrustRoots::Bundled);
+        let another = reached_by(TrustRoots::Named {
+            file: Some(other),
+            directory: None,
+        });
+
+        assert!(
+            matches!(&named, Ok(response) if response.status == 200),
+            "the authority that signed the server is trusted when it is named: {named:?}"
+        );
+        assert!(
+            matches!(built_in, Err(EgressError::Transport { .. })),
+            "the built-in set does not hold the test authority: {built_in:?}"
+        );
+        assert!(
+            matches!(another, Err(EgressError::Transport { .. })),
+            "naming a different authority does not leave the built-in set or the first one trusted: {another:?}"
+        );
     }
 }

@@ -137,8 +137,10 @@ from the label the delegate's own context earned.
 ### AGENT-5: one call may fan a task out, and every delegate it starts is gated on its own
 
 `each` names one delegate per entry. Each is told the shared `task` followed by its own entry,
-and is otherwise a delegate like any other: it passes the same gate, takes its own number, and
-holds its own copy of what a person has vouched for. A call naming more than eight, or naming
+and is otherwise a delegate like any other: it passes the same gate, takes its own number, holds
+its own copy of the command approvals a person has given, which come back to the session when it
+ends ([delegation.md](../delegation.md)), and shares the one live file authority with its parent
+and siblings ([trust-map.md](../trust-map.md)). A call naming more than eight, or naming
 none, is refused and starts nothing. The text of `each` says that one call starts at most that
 many and that a further call with the same `task` starts more, and takes the figure from the one
 the refusal enforces. A call that meets the turn's ceiling on delegates
@@ -161,6 +163,14 @@ field turning one sentence into an unbounded number of runs at once is worth a b
 `verified-by: bravebot_agent::turn::a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not`
 `verified-by: bravebot_agent::turn::a_fan_out_that_names_no_delegate_is_refused_and_starts_nothing`
 `verified-by: bravebot_agent::tools::the_each_field_says_one_call_starts_at_most_the_fan_out_limit`
+`verified-by: bravebot_agent::tools::an_empty_each_is_refused_with_a_sentence_saying_it_was_empty`
+`verified-by: bravebot_agent::tools::each_delegate_is_told_the_shared_task_followed_by_its_own_entry`
+`verified-by: bravebot_agent::turn::a_command_approved_always_in_one_delegate_stays_out_of_a_sibling`
+`verified-by: bravebot_core::policy::what_a_person_vouched_for_running_inside_a_delegate_is_kept`
+`verified-by: bravebot_core::policy::a_delegate_that_answered_nothing_takes_nothing_away`
+`verified-by: bravebot_agent::turn::a_delegate_that_stopped_after_a_person_vouched_still_brings_the_answer_home`
+`verified-by: bravebot_agent::turn::overlapping_delegate_writes_follow_effect_order_in_both_collection_orders`
+`verified-by: bravebot_core::file_authority::completion_observes_ancestor_decisions_but_not_sibling_decisions`
 
 <a id="AGENT-6"></a>
 ### AGENT-6: `mcp_servers` lists the servers a worker keeps, and can only take servers away

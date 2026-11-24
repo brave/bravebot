@@ -556,4 +556,32 @@ mod tests {
             "before the failure\n"
         );
     }
+
+    /// CRED-11: "a person putting one somewhere is theirs to do and this does not reach it". A line
+    /// the person typed in shell mode is run as typed, even where it writes what looks like a
+    /// credential into a file, because nothing is left to endorse: the person who would be asked is
+    /// the person who wrote it. The regression it rejects is the planner's scan of a command line
+    /// (CRED-11's first paragraph) applied to this road too, which would refuse the person's own
+    /// line and leave the file unwritten. The value is built from pieces so that no line of this
+    /// file is one.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_line_the_person_typed_is_run_though_it_writes_what_looks_like_a_credential() {
+        let directory = crate::testutil::scratch_dir("shell-person-credential");
+        std::fs::remove_dir_all(&directory).ok();
+        std::fs::create_dir_all(&directory).expect("scratch");
+        let value = ["AKIA", "IOSFODNN7", "EXAMPLE"].concat();
+        let line = format!("printf 'AWS_ACCESS_KEY_ID={value}\\n' > person.env");
+
+        let ran = run(&line, &directory, &Cancel::new()).expect("the line ran");
+
+        assert!(ran.succeeded(), "{ran:?}");
+        assert_eq!(
+            std::fs::read_to_string(directory.join("person.env")).ok(),
+            Some(format!("AWS_ACCESS_KEY_ID={value}\n")),
+            "the person's own line was not run as typed"
+        );
+        std::fs::remove_dir_all(&directory).ok();
+    }
 }

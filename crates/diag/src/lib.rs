@@ -136,6 +136,16 @@ impl Log {
         }
     }
 
+    /// Changes how much is written from here on. The file already made, the state directory and a
+    /// failure to open are kept, so the lines that follow go into the same file (DIAG-2).
+    pub fn set_level(&mut self, level: Level) {
+        self.level = level;
+    }
+
+    pub fn level(&self) -> Level {
+        self.level
+    }
+
     /// Writes one line if `level` is within what was asked for. The file is made here, on the
     /// first line, so a run with nothing to report leaves nothing behind. A failure to write is
     /// dropped: the log is never the reason a run stops.
@@ -345,6 +355,23 @@ pub fn configure(level: Level, state: Option<PathBuf>) {
     *guard = Some(Log::new(level, state));
 }
 
+/// The level this process is logging at, or `None` before [`configure`] has run. Nothing is read
+/// from a file to answer (DIAG-6).
+pub fn level() -> Option<Level> {
+    let guard = LOG.lock().unwrap_or_else(|e| e.into_inner());
+    guard.as_ref().map(Log::level)
+}
+
+/// Changes the level of the log [`configure`] set up and keeps its file, so one process still
+/// writes one file and retention runs once (DIAG-2). Calling [`configure`] again instead would
+/// open a second file. Before [`configure`] has run this does nothing.
+pub fn set_level(level: Level) {
+    let mut guard = LOG.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(log) = guard.as_mut() {
+        log.set_level(level);
+    }
+}
+
 fn record(level: Level, event: &'static str, fields: &[(&'static str, Field)]) {
     let mut guard = LOG.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(log) = guard.as_mut() {
@@ -370,6 +397,14 @@ mod tests {
 
     fn scratch() -> tempfile::TempDir {
         tempfile::tempdir().expect("a scratch directory")
+    }
+
+    /// The tests that use the process's one log take this first, so they do not see each other's
+    /// level or file.
+    static GLOBAL: Mutex<()> = Mutex::new(());
+
+    fn global() -> std::sync::MutexGuard<'static, ()> {
+        GLOBAL.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn only_file(dir: &Path) -> PathBuf {
@@ -650,5 +685,53 @@ mod tests {
         assert_eq!(Level::parse("debug"), Some(Level::Debug));
         assert_eq!(Level::parse("trace"), None);
         assert_eq!(Level::parse("INFO"), None);
+    }
+
+    /// DIAG-2. Raising the level mid-run keeps the file already made, so one process's log is one
+    /// file and retention does not run again. Configuring again would open a second file.
+    #[test]
+    fn raising_the_level_keeps_writing_into_the_same_file() {
+        let _global = global();
+        let tmp = scratch();
+        configure(Level::Error, Some(tmp.path().to_path_buf()));
+        error("first.failure", &[]);
+        debug("hidden.detail", &[]);
+        set_level(Level::Debug);
+        assert_eq!(level(), Some(Level::Debug));
+        debug("later.detail", &[]);
+        let text = fs::read_to_string(only_file(&tmp.path().join(DIRECTORY))).unwrap();
+        assert!(text.contains("ERROR first.failure"), "{text}");
+        assert!(!text.contains("hidden.detail"), "{text}");
+        assert!(text.contains("DEBUG later.detail"), "{text}");
+        *LOG.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// Lowering the level stops the detail that was being written, and failures still go to the
+    /// same file.
+    #[test]
+    fn a_line_above_a_lowered_level_is_not_written() {
+        let tmp = scratch();
+        let mut log = Log::new(Level::Debug, Some(tmp.path().to_path_buf()));
+        log.record(Level::Debug, "early.detail", &[]);
+        log.set_level(Level::Error);
+        assert_eq!(log.level(), Level::Error);
+        log.record(Level::Info, "late.step", &[]);
+        log.record(Level::Debug, "late.detail", &[]);
+        log.record(Level::Error, "late.failure", &[]);
+        let text = fs::read_to_string(only_file(&tmp.path().join(DIRECTORY))).unwrap();
+        assert!(text.contains("DEBUG early.detail"), "{text}");
+        assert!(!text.contains("late.step"), "{text}");
+        assert!(!text.contains("late.detail"), "{text}");
+        assert!(text.contains("ERROR late.failure"), "{text}");
+    }
+
+    /// Before the process has chosen where to log there is no log to change, so a level set then
+    /// makes no log and no level is reported.
+    #[test]
+    fn set_level_before_configure_does_nothing() {
+        let _global = global();
+        *LOG.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        set_level(Level::Debug);
+        assert_eq!(level(), None);
     }
 }

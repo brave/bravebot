@@ -3,10 +3,7 @@
 //! person granted. These work on typed names and the file system's answers about directories. None
 //! of it reads a file's bytes or gives anything a label.
 
-use super::{
-    BACKSLASH_SEPARATES, Workspace, WorkspaceError, destination, expand_home, locked,
-    refuse_unkeyable,
-};
+use super::{Workspace, WorkspaceError, destination, expand_home, locked, refuse_unkeyable};
 use crate::scratch::ScratchDirectory;
 use bravebot_i18n::t;
 use std::path::{Component, Path, PathBuf};
@@ -16,7 +13,7 @@ use std::sync::Arc;
 /// sits: absolute, resolvable, and a directory, reported in that order. It reads only the name and
 /// file system metadata and assigns no label. The caller's own earlier and later checks stay with
 /// the caller, since their order decides which error a name that fails several reports.
-fn existing_directory(directory: &str) -> Result<PathBuf, WorkspaceError> {
+pub(super) fn existing_directory(directory: &str) -> Result<PathBuf, WorkspaceError> {
     let candidate = Path::new(directory);
     if !candidate.is_absolute() {
         return Err(WorkspaceError::Invalid {
@@ -264,8 +261,21 @@ impl Workspace {
                          tools inside the workspace",
             });
         }
-        let canonical = existing_directory(directory)?;
+        let canonical = (self.door_resolver)(directory)?;
+        self.admit_resolved_directory(directory, canonical, self.door_backslash_separates)
+    }
 
+    /// The refusals of [`Workspace::resolve_directory`] that look at where `canonical`, the name
+    /// `directory` resolved to, sits. `backslash_separates` is the host's answer about what
+    /// separates, which a caller outside the tests takes from the workspace's host answer
+    /// (`BACKSLASH_SEPARATES` unless a test supplied one): asked of a name from another host, it
+    /// lets the refusal of an unkeyable name be exercised everywhere.
+    pub(super) fn admit_resolved_directory(
+        &self,
+        directory: &str,
+        canonical: PathBuf,
+        backslash_separates: bool,
+    ) -> Result<PathBuf, WorkspaceError> {
         if canonical.starts_with(&self.root) {
             return Err(WorkspaceError::Invalid {
                 path: directory.to_string(),
@@ -308,7 +318,7 @@ impl Workspace {
             });
         }
 
-        refuse_unkeyable(&canonical, directory, BACKSLASH_SEPARATES)?;
+        refuse_unkeyable(&canonical, directory, backslash_separates)?;
 
         Ok(canonical)
     }
@@ -616,8 +626,21 @@ impl Workspace {
         if !kept.is_empty() {
             return Err(WorkspaceError::KeepsCheckouts { ids: kept });
         }
-        let canonical = existing_directory(directory)?;
+        let canonical = (self.door_resolver)(directory)?;
+        self.move_root_to(directory, canonical, self.door_backslash_separates)
+    }
 
+    /// The part of [`Workspace::change_root`] that looks at where `canonical`, the name
+    /// `directory` resolved to, sits, and the move itself. `backslash_separates` is the host's
+    /// answer about what separates, which a caller outside the tests takes from the workspace's
+    /// host answer (`BACKSLASH_SEPARATES` unless a test supplied one): asked of a name from another
+    /// host, it lets the refusal of an unkeyable name be exercised everywhere.
+    pub(super) fn move_root_to(
+        &mut self,
+        directory: &str,
+        canonical: PathBuf,
+        backslash_separates: bool,
+    ) -> Result<Moved, WorkspaceError> {
         if canonical == self.root {
             return Err(WorkspaceError::Invalid {
                 path: directory.to_string(),
@@ -645,7 +668,7 @@ impl Workspace {
             });
         }
 
-        refuse_unkeyable(&canonical, directory, BACKSLASH_SEPARATES)?;
+        refuse_unkeyable(&canonical, directory, backslash_separates)?;
 
         bravebot_sandbox::programs::keep_out_with_checkout(&canonical);
         // The old root among them: it is a directory that was open, and after this it is not.

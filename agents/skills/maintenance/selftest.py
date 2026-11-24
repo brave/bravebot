@@ -1286,6 +1286,38 @@ class KeptInPlace(unittest.TestCase):
                 for text in texts:
                     self.assertRegex(text, r"Issue #\d+")
 
+    def test_every_entry_names_functions_that_still_exist_in_its_file(self):
+        entries = m.read_kept(HERE.parents[2])
+        self.assertEqual(m.missing_kept_functions(HERE.parents[2], entries), {})
+
+    def test_a_function_an_entry_names_that_is_not_in_its_file_is_reported_missing(self):
+        with tree(
+            {
+                "crates/a/src/lib.rs": "fn keep_me() {}\n",
+                str(m.KEPT_IN_PLACE): "## crates/a/src/lib.rs\n\nIssue #1. `keep_me` and `gone_now` stay.\n",
+            }
+        ) as root:
+            entries = m.read_kept(root)
+            self.assertEqual(m.missing_kept_functions(root, entries), {"crates/a/src/lib.rs": ["gone_now"]})
+
+    def test_a_type_qualified_name_is_matched_by_its_bare_method_on_another_receiver(self):
+        with tree(
+            {
+                "crates/a/src/lib.rs": "impl Workspace {\n    fn grep_shaped(&self) {}\n}\nself.grep_shaped();\n",
+                str(m.KEPT_IN_PLACE): "## crates/a/src/lib.rs\n\nIssue #1. `Workspace::grep_shaped` stays.\n",
+            }
+        ) as root:
+            self.assertEqual(m.missing_kept_functions(root, m.read_kept(root)), {})
+
+    def test_a_backtick_file_name_is_not_checked_as_a_function(self):
+        with tree(
+            {
+                "crates/a/src/lib.rs": "fn keep_me() {}\n",
+                str(m.KEPT_IN_PLACE): "## crates/a/src/lib.rs\n\nIssue #1. `keep_me` stays, per `labels.md`.\n",
+            }
+        ) as root:
+            self.assertEqual(m.missing_kept_functions(root, m.read_kept(root)), {})
+
 
 class Reading(unittest.TestCase):
     """Where reviewers read, and what the prompt tells them to do while they do."""

@@ -43,7 +43,7 @@ Windows clippy runs, which each compile different blocks. Place the comment dire
 allocator ([SANDBOX-34](../specs/sandboxing.md#SANDBOX-34), [LAYER-4](../specs/layering.md#LAYER-4)).
 
 Lints the tree has hundreds of sites of are held to the base instead: `make check-lint-increase`
-runs clippy over the libraries and binaries at the merge base and at the branch, and fails when a lint
+runs clippy over every target at the merge base and at the branch, and fails when a lint
 reports more sites in a crate than it did. Mark a site that is right with
 `#[expect(clippy::lint, reason = "...")]`. `make check` runs it after clippy, CI runs it on pull
 requests, and [contrib/README.md](../../contrib/README.md#check-lint-increasepy) lists the lints.
@@ -95,8 +95,8 @@ list.
 `make check-security` also fails a lookup of a program by name (`find`, `find_on`, `find_in`, `resolve`) in a
 production file that `LOOKUPS_LISTED` in the same script does not count, and a `main` that does not
 call `keep_out_where_this_ran()` before it matches the command. A command that opens no
-session has recorded only that directory, so a new lookup is read for what is recorded when it runs
-(SANDBOX-30).
+session has read the record of earlier processes and recorded the directory it ran in, so a new
+lookup is read for what is recorded when it runs (SANDBOX-30).
 
 Then run the tests the diff is under, scoped as tightly as the diff is: `cargo test -p bravebot-tui
 --lib` for the interface, `cargo test -p bravebot-agent --test workspace` for one test binary. A
@@ -516,7 +516,13 @@ cross-compiles, which clippy allows because it stops before linking, so no Windo
 involved and the suite is not run on one. CI's `Desktop on Windows` job runs the file helper's
 suite and the walkthrough on a Windows runner, and CI's `Awkward names on Windows` job runs the
 pair tests over file names there and asks the volume which characters it opens as an ASCII letter
-(`program_word_fold`), which no local target does. Worth running for
+(`program_word_fold`), which no local target does. CI's `Sandbox on Windows` job runs the search
+for programs ([SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)): `checkout_in_search` and the named
+unit tests of `programs.rs`, which no local target runs on Windows either. The `Awkward names on
+Windows` job also runs the check of a named settings file
+([PERM-14](../specs/permissions.md#PERM-14)) and the record of directories a stage may write. A test
+that plants a program on Windows gives it an extension of `PATHEXT`, because a bare name is found
+only with one. Worth running for
 anything with a platform branch in it, and for any test that has one: a `#[cfg(unix)]` left off a
 test is invisible from every platform that has `unix`.
 

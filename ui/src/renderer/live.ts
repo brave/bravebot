@@ -1,6 +1,8 @@
 import type { Enhancement } from './enhancing'
+import type { Handoff } from './handoff'
 import type { RetryDue } from './retry'
 import type { FileAttachment } from '../shared/files'
+import type { AsideRow } from '../shared/aside'
 import type { Staged, Staging } from './staging'
 import type {
   Checking,
@@ -39,6 +41,21 @@ export interface Queued {
    * bridge when the turn ends and is never sent as a prompt (CMD-8).
    */
   schedule?: string
+  /**
+   * Set for a typed `/recap` line that waits for the turn, which the bridge refused while it ran
+   * (CMD-16). It is asked of the bridge when the turn ends and is never sent as a prompt.
+   */
+  aside?: 'recap'
+  /**
+   * Set for a typed `/manifest` line that waits for the turn, which the bridge refused while it ran:
+   * its task. It starts a plan run when the turn ends and is never sent as a prompt (MANIFEST-9).
+   */
+  manifest?: string
+  /**
+   * Set for a typed `/plan` line that waits for the turn: its task, `''` for `/plan` alone. When the
+   * turn ends it sets plan mode and then sends the task alone, never the typed line (MODE-12).
+   */
+  plan?: string
 }
 
 /** A line sent into the running turn, kept as written until the turn says it has read it. */
@@ -76,6 +93,8 @@ export interface Live {
   todos: TodoRow[]
   /** The notes kept on this session's record, oldest first. Shown beside it, never sent. */
   notes?: SessionNote[]
+  /** The `/btw` and `/recap` answers of this session, oldest first. Shown beside it, never sent. */
+  asides?: AsideRow[]
   quarantine: Shown[]
   phase: Waiting | null
   /**
@@ -213,6 +232,18 @@ export interface Live {
   interjected?: Interjection[]
   /** The turn that is running is the bot's memory update, which takes no line from the person. */
   consolidating?: boolean
+  /**
+   * What is running is a Compact Conversation… request and not a turn (CMD-34). It is drawn as a
+   * turn, and a message typed meanwhile waits for it rather than going into it.
+   */
+  compacting?: boolean
+  /** A Hand Off to New Chat… request that is out, or a brief in the box that Send starts a new chat from (SESSION-34). */
+  handoff?: Handoff | null
+  /**
+   * The chat this one was handed off from (SESSION-34). The title is carried for the reason
+   * `forkedFrom`'s is, and falls back to the id.
+   */
+  handedOffFrom?: { id: string; title: string } | null
   attachments?: FileAttachment[]
   /** Why the last message did not go: a name written with `@` that is not a text file in the project. */
   sendRefused?: string | null

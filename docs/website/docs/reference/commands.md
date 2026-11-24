@@ -18,10 +18,11 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/request` | | Show the last request sent to the model, and where each part of it came from |
 | `/model` | `[session]` | Choose which model to think with, for every session or, with `session`, for this one only |
 | `/theme` | `[name]` | Choose which theme paints the interface |
-| `/effort` | `[level]` | Choose how hard to think before answering |
+| `/effort` | `[session] [level]` | Choose how hard to think before answering, for every session or, with `session`, for this one only |
 | `/variant` | `[name \| off]` | Pick a named set of options the model offers, list them, or drop the pick |
 | `/config` | | Choose how the input box edits text |
 | `/language` | `[tag \| auto]` | Choose the interface language for the next start, or drop the choice |
+| `/crash-reports` | `[on \| off]` | Say whether crash reports are on and what holds them off, or turn them on or off from the next start |
 | `/add-dir` | `<path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
 | `/rename` | `<name>` | Call this conversation something else |
@@ -47,7 +48,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/loop` | `[[interval] <prompt> \| stop [n]]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/after` | `<delay> <prompt>` | Send a prompt once, after a delay |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
-| `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
+| `/watch` | `[<path> \| stop <n>]` | Watch a file, list the watched files, or stop one by its number |
 | `/schedule` | `[<subcommand>]` | List and manage the entries `bravebot schedule` keeps on this machine |
 | `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
 | `/outputs` | | Open what the commands this session ran printed, background jobs included. Alt-L does the same |
@@ -70,7 +71,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/memory` | | List each definition's memory, where it is kept and whether it is withheld |
 | `/mcp` | `[list \| reconnect [alias] \| disable <alias> \| remove <alias>]` | List the MCP servers, start one that is not running, turn one off for the session, or remove one for good |
-| `/plugin` | `[add <path> \| list \| remove <name> \| enable <name> \| disable <name>]` | Install a plugin from a folder on this machine after you confirm it, list the installed ones, or remove, enable or disable one |
+| `/plugin` | `[add <path or git url[#ref]> \| list \| update <name> \| remove <name> \| enable <name> \| disable <name>]` | Install a plugin from a folder on this machine or from a git URL after you confirm it, list the installed ones, fetch an installed one's source again and update it after you confirm what changed, or remove, enable or disable one |
 | `/lsp` | | Say which language servers this session has started |
 | `/open` | `[edit] [n \| address \| path]` | List the links in the latest reply, and open one by its number, or open an address or a file you type |
 | `/init` | | Have the planner draft an `AGENTS.md` for this project |
@@ -113,7 +114,7 @@ Reports everything the session knows about itself:
   transcript says one was kept but not where;
 - the model in force, and whether it was chosen or defaulted. Where the server substituted a
   different one, the model that actually answered is shown beside it;
-- the [effort level](#effort-level), and whether this model reads one;
+- the [effort level](#effort-session-level), and whether this model reads one;
 - which deployment the endpoint names, and **which tier the last turn ran on**, rather than which
   tier the build was compiled to reach;
 - the confinement available here, and under `workspace-write` on a Linux kernel older
@@ -346,21 +347,43 @@ the pick. A name the model does not offer changes nothing and says which it does
 session and is not written anywhere. Typed while a turn runs, it is taken at once and the next turn is
 the first sent with it.
 
-## `/effort [level]`
+## `/effort [session] [level]`
 
 Opens a picker of the five levels (`low`, `medium`, `high`, `xhigh` and `max`) above a row for
 asking for no level at all, so a first pick is not permanent. With a word, `/effort high` takes it
-directly. Tab finishes a started level, so `/effort h` becomes `/effort high`, and leaves a start that fits more than one level, such as `m`, as typed. A word that names no level changes nothing and says so rather than reaching a request
-field. Typed while a turn runs with nothing waiting, `/effort high` is taken at once and the next turn
-is the first sent at it, since the running one keeps the level it began with. On a model of a ChatGPT
-account the level is fixed for the whole session instead: the account is sent the level the session began
-with, and the choice applies from the next session. The bare `/effort` waits for the turn to end.
+directly. The title and the first footer row say what Enter does. Opened with `/effort`, the picker
+records the pick in `~/.bravebot`, so it outlives the session. A word that names no level changes
+nothing and says so rather than reaching a request field.
 
-The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory,
+`/effort session` opens the same picker in the other scope: Enter puts the level in force for this
+session only and records nothing, so the next session opens on the level it would have had. Tab or
+Shift-Tab in the picker switches between the two scopes. `/effort session high` takes a level for this
+session only without opening the picker. The row for no level, taken in this scope, puts no level in
+force for this session and leaves the record as it is. A level set this way outranks every settings
+file and [`--effort`](cli.md#--effort-level) for this session, and the info panel and
+[`/status`](#status) say it is for this session only. `/clear`, `/handoff` and `/branch` keep it.
+`/resume` opens another session, which opens on the level a new session would have. `session` is the
+only word `/effort` takes besides the levels, and it is matched whole and in lower case, so
+`/effort sessions` and `/effort Session high` are refused. A word after `session` that names no level
+changes nothing and says so.
+
+Typing `/effort ` offers `session` and the five levels after the caret, and typing `/effort session `
+offers the levels. Tab finishes a started word, so `/effort s` becomes `/effort session` and
+`/effort session h` becomes `/effort session high`, and leaves a start that fits more than one level,
+such as `m`, as typed.
+
+Typed while a turn runs with nothing waiting, `/effort high` and `/effort session high` are taken at
+once and the next turn is the first sent at the level, since the running one keeps the level it began
+with. The bare `/effort` and `/effort session` open their picker over the turn, which keeps running. On
+a model of a ChatGPT account the level is fixed for the whole session instead: the account is sent the
+level the session began with, a level chosen with `/effort` applies from the next session, and one
+chosen with `/effort session` applies from `/clear` and is not recorded.
+
+A level chosen with `/effort` is written to `~/.bravebot`, so it applies in every directory,
 except one whose own settings name an [`effort`](../customize/configuration.md#effort): that key
 outranks the choice, and the one in your own `~/.bravebot/settings.json` answers only while no level
-is recorded. Picking the row for none removes the record, so from the next session your own file's
-level answers again. See
+is recorded. Taking the row for none in the every-session scope removes the record, so from the next session your
+own file's level answers again. See
 [Choosing how hard to think](../customize/effort.md), which is also
 where the two cases worth knowing are: the models that read no level, and the Brave endpoint, which
 accepts one and discards it.
@@ -395,6 +418,24 @@ The choice is written to `~/.bravebot/language`, so it applies in every director
 nothing, an incognito one for example, says the choice was not saved and keeps none. See
 [Choosing a language](../customize/language.md) for the order the sources are
 read in, and for `BRAVEBOT_LOCALE`, which answers over this choice.
+
+## `/crash-reports [on | off]`
+
+Says whether crash reports are on and, when they are off, what holds them off: an incognito session,
+your administrator's managed settings, `BRAVEBOT_CRASH_REPORTS=0` in the environment, or your own
+settings file. A second line says whether this session sends reports, since a build with no address
+to send them to sends none.
+
+`/crash-reports off` writes `"crashReports": false` into your own `~/.bravebot/settings.json`, and
+`/crash-reports on` writes `true`. Every other key in the file is kept, and a file that is not a
+settings document is left as it was and the answer says nothing was kept. The choice applies from the
+next start, so a session that was sending reports can still write one until it exits. While an
+incognito session, the managed file's `false` or the variable holds reports off, both words are
+refused, the answer names which one holds them off, and nothing is written. Any other word changes
+nothing and says what the command takes. Typed while a turn runs, it is carried out at once.
+
+The desktop app's **Send crash reports to Brave** switch reads and writes the same key. See
+[`crashReports`](../customize/configuration.md#crashreports) for what a report holds.
 
 ## `/add-dir <path>`
 
@@ -644,7 +685,7 @@ Six things end a loop, and each says so:
 | the session moves on | `/clear`, and leaving, which end every loop; so does setting a goal |
 | age | seven days after it started |
 
-**A loop, a [goal](#goal-condition) and a [watch](#watch-stop-n) are never live together**, because a
+**A loop, a [goal](#goal-condition) and a [watch](#watch-path--stop-n) are never live together**, because a
 session does one of the three at a time. Several loops may be live together, since the rule is about kinds. Whichever of a loop and a goal was asked for second stands,
 and the one it replaced is reported as stopped. Asking for either ends every live watch.
 
@@ -763,18 +804,19 @@ clean`, spends all ten rounds and gives up, and nothing warns you in advance. Ev
 the whole conversation, so ten rounds of a long session cost more than ten ordinary turns.
 :::
 
-## `/watch [stop <n>]`
+## `/watch [<path> | stop <n>]`
 
-Lists the files this session is watching, and ends one by its number.
+Lists the files this session is watching, ends one by its number, and arms one on a path you type.
 
 ```
 /watch             # what is live, numbered
 /watch stop 2      # end that one, leaving the others
+/watch notes.md    # watch notes.md, armed by you
 ```
 
-**It arms none.** A watch is asked for in a prompt, and what a command is needed for is the half you
-cannot read off the transcript: which watches are live, and how to end one. See
-[Watches](../using/watches.md) for what a watch observes and what a firing puts in the conversation.
+Typed while a turn runs, `/watch <path>` waits in the queue and arms the watch once the turn ends.
+See [Watches](../using/watches.md) for what a watch observes, which paths can be armed and what a
+firing puts in the conversation.
 
 | Bound | Value |
 |---|---|
@@ -920,15 +962,15 @@ A file written into the session's own directory is not counted as a change not b
 ## `/todos`
 
 Prints the session's plan in the transcript: every task, in the plan's order, with its status in
-words beside its mark (`pending`, `in progress`, `completed` or `cancelled`) and its text wrapped
+words beside its mark (`pending`, `in progress`, `waiting`, `completed` or `cancelled`) and its text wrapped
 to the width and never cut. A heading above it says how many tasks are done, and how many are
 cancelled where any are. The info panel draws only the rows it has room for, each cut to its width,
 and this is the whole plan. A session with no plan says so.
 
 The plan is the one the panel draws, and while a turn runs it is the list that turn has reported so
-far. A task that is neither completed nor cancelled is drawn with the mark and ink the panel gives it
+far. A task that is neither completed, cancelled nor waiting is drawn with the mark and ink the panel gives it
 when you type the command: filled while a turn is running, and hollow and dim while none is, when the
-whole row matches the panel's. What is printed is the
+whole row matches the panel's. A waiting task keeps its own mark whether or not a turn is running. What is printed is the
 plan as it stood then, so a later report from the planner, or the end of the turn, does not change
 it. It is no part of the conversation: no turn starts, nothing is sent, and it is not saved with the
 session or put in an export. The text of a task is the planner's, so a control character in it is
@@ -944,10 +986,14 @@ the chord in force, where the plan has room for it.
 ## `/mcp [list | reconnect [alias] | disable <alias> | remove <alias>]`
 
 Bare or as `list`, it names each [MCP server](../customize/mcp-servers.md) the session runs and how its
-tools stand, and each server your settings request that is not running, saying whether it was turned
-off. `reconnect` starts every requested server that is not running and was not turned off here, and
-`reconnect weather` starts that one, including one turned off. A start takes the road a session takes
-as it opens, so a server whose declaration changed, or that nobody approved, is put to you again.
+tools stand, and each server your settings request or an installed plugin carries that is not running,
+saying whether it was turned off. A plugin turned off with `/plugin disable` is named on one line, and
+none of its servers is listed. `reconnect` starts every requested server that is not running and was
+not turned off here, and
+`reconnect weather` starts that one, including one turned off. A plugin's server is named
+`<plugin>_<alias>` and `reconnect` and `disable` accept that name, which `remove` does not. A start
+asks what a session asks as it opens, so a server whose declaration changed, or that nobody approved,
+is put to you again.
 `disable weather` stops the server and drops its grant. It writes nothing, so the next session starts
 the server as before.
 
@@ -971,13 +1017,20 @@ form waits for the turn to end. See
 ## `/plugin`
 
 Typed by you, and by nothing else: no tool the model is offered installs or changes a plugin, and a
-line that arrives in pasted text is not this command. `add <path>` reads the folder at `<path>` on
-this machine and installs it into the plugins directory under `~/.bravebot`, after you confirm what it
-holds. Where nobody can be asked, such as a one-shot run, nothing is installed. `list` prints each
-installed plugin's name, version, source, digest and whether it is enabled. `remove` deletes the
+line that arrives in pasted text is not this command. `add <path or git url[#ref]>` installs a plugin
+into the plugins directory under `~/.bravebot`, after you confirm what it holds. A `<path>` is a folder
+on this machine. A git URL, with an optional `#<ref>`, first asks about the host, then fetches the
+repository and shows the commit it resolved to before it asks to install. Where nobody can be asked, such as a
+one-shot run, nothing is installed. `list` prints each
+installed plugin's name, version, source, resolved commit, digest and whether it is enabled. `remove` deletes the
 plugin's folder and its record, `disable` keeps it installed and offers nothing from it, and
-`enable` turns it back on without asking again. All three take the plugin's name. `update` is not
-built. Every form waits for a running turn to end. See [Plugins](../customize/plugins.md).
+`enable` turns it back on without asking again for a folder that has not changed. All three take the
+plugin's name, and `remove` also withdraws the plugin's hook and server answers. A plugin's hooks and
+servers each ask their own question before they first run or start. `update <name>` fetches the
+plugin's recorded source again, and where the files differ shows what was added, removed or changed and
+replaces the plugin only after you answer `y`. It asks about the host first for a git source, asks
+nothing when the files are the same, and withdraws the answers for the plugin's hooks and servers so
+each asks again. Every form waits for a running turn to end. See [Plugins](../customize/plugins.md).
 
 ## `/caffeinate`
 
@@ -1081,6 +1134,10 @@ own record and the session records its name, so the session still resumes as a c
 In [plan mode](../security/permission-modes.md) a plan with a write in it does
 not run at all, decided from the frozen plan before the plan is put to anybody. See
 [Plan first, then execute](../using/manifest-mode.md) for the `--mode manifest` form.
+
+The desktop window takes the same line in its composer. Typed while a turn runs, it waits until the
+turn ends. It refuses a line with an attached file, so name the file in the task. See
+[From the desktop app](../using/manifest-mode.md#from-the-desktop-app).
 
 ## `/memory`
 
@@ -1446,8 +1503,9 @@ turn left it and stays resumable. Servers started for this process keep running.
 
 It is refused, with a line saying why, for an id that is no session of this directory, for the
 session already open, for a [manifest run](../using/manifest-mode.md#a-manifest-run-is-recorded-but-cannot-be-continued),
-and for a session a running background session holds. Where this directory records no other session
-it says so. Typed while a turn runs it waits for the turn to end. The word takes an id and nothing
+and for a session a running background session holds. An id that is no session of this directory gets
+the one line "no session with that id in this directory", whether or not the directory records another
+session. Typed while a turn runs it waits for the turn to end. The word takes an id and nothing
 else, and none of what you type after it is sent to the planner.
 
 ## `/bg`
@@ -1733,11 +1791,11 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/outputs`, `/sessions`, `/panel`, `/sidebar`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, `/issues`, `/prs`, `/mcp` in the two forms that only list (the bare word and `list`), and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch` in every form but `/watch <path>`, `/outputs`, `/sessions`, `/panel`, `/sidebar`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, `/issues`, `/prs`, `/mcp` in the two forms that only list (the bare word and `list`), and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. So is `/btw`, which is asked beside the turn over the exchange the turn last sent and changes nothing the turn holds, and which a line waiting ahead of it does not hold back; only a `/btw` already waiting does. `/exit` waits for the turn like the commands that end the session, and does not stop it. The exception is a line of the same command already waiting, which they wait behind, so
-`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/theme`, `/config` and `/language` change only how the screen
+`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/theme`, `/config`, `/language` and `/crash-reports` change only how the screen
 is drawn, what the box edits in or what a later start reads, so they are carried out as you type them whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/model`, `/effort`, `/advisor`, `/style` and `/sandbox` change what the session keeps, and are carried out as you
 type them unless a line waiting ahead of them could change what they act on. Behind such a line they wait too, so `/rename` typed after a
@@ -1750,7 +1808,7 @@ included. `/rename` and `/note` act on the name and the notes the session's reco
 carried out as you type them behind a command line, behind `/add-dir`, `/memory`, `/reach`, `/mcp`, `/style`, `/forget-trust`, `/issue`, `/pr`,
 `/sandbox`, `/model`, `/effort` and `/advisor`, and behind a waiting `/note` or `/rename`: a `/note` typed behind a waiting `!make` is written at once.
 `/model`, `/effort` and `/advisor` choose what a request is built with, so each waits behind a prompt, behind a command that sends a
-request or leaves for another session, and behind the other two. Behind a command line, `/clear`, `/undo`, `/rewind`, `/hunks`, `/memory`,
+request or leaves for another session, and behind the other two. `/effort session`, with or without a level, waits as `/effort` does. Behind a command line, `/clear`, `/undo`, `/rewind`, `/hunks`, `/memory`,
 `/reach`, `/branch`, `/add-dir`, `/cd`, `/mcp`, `/rename`, `/note`, `/style`, `/forget-trust`, `/issue`, `/pr` or `/sandbox` they are carried
 out as you type them. `/style` picks what every turn opens its prompt with, so it waits behind a prompt, behind a command that begins a turn, behind `/clear`, `/cd`, `/add-dir`,
 `/reach` and `/branch`, which move or end the paths a style file under `~/.bravebot` may not be read from, and behind `/handoff`, `/resume`, `/bg` and `/exit`, which
@@ -1759,10 +1817,10 @@ begin another session; behind a command line, `/compact`,
 directory, which a program a prompt or a command line runs can change the meaning of by making a `.git` entry, so it waits behind those as well as behind the
 commands that start a session here, move the directory or leave the session, and behind `/undo`, `/rewind`, `/hunks` and `/mcp`; it is carried out as you type it behind `/compact`, `/btw`, `/recap`, `/memory`, `/add-dir`, `/reach`, `/branch`, `/after` and the settings commands
 above it. What they say goes into the history as you type them,
-so it scrolls with the rest, and stays there when the turn ends. `/model`, `/theme`, `/effort` and `/config` alone open their list
+so it scrolls with the rest, and stays there when the turn ends. `/model`, `/theme`, `/effort` and `/config` alone, and `/model session` and `/effort session`, open their list
 over the turn, which keeps running behind it: Escape closes the list without stopping the turn, and
 a question the turn asks takes the screen until you have answered it. A list still open when the turn
-ends stays open. A model picked this way is the next turn's, and the turn running keeps its own.
+ends stays open. A model or a level picked this way, in either scope, is the next turn's, and the turn running keeps its own.
 
 Every other command typed mid-turn comes off the box and joins the lines waiting for the turn to end,
 exactly as a prompt does: the box clears, the history remembers it, and it is drawn under the box

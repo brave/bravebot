@@ -5,6 +5,9 @@ status: normative
 governs:
   - crates/config/src/hooks.rs
   - crates/agent/src/hooks.rs
+  - crates/agent/src/plugin_hooks.rs
+  - crates/config/src/hooks_approved.rs
+  - crates/tui/src/confirm/hook.rs
   - crates/agent/src/turn.rs
   - crates/agent/src/turn/hooked.rs
   - crates/agent/src/turn/result.rs
@@ -59,9 +62,12 @@ comes back into the conversation.
 ### HOOK-1: a hook is declared in the user's own state directory and nowhere else
 
 Hooks are read from `hooks.json` in `~/.bravebot`, which is the directory holding what is the
-user's own. No other file declares one. A checkout carries no hooks, a directory somebody happens
+user's own. No other file declares one, with one exception: the hooks file of a plugin the person
+installed, which is read from that plugin's own directory under `~/.bravebot/plugins` and fires only
+after the question HOOK-11 describes. A checkout carries no hooks, a directory somebody happens
 to start a session in carries none, and there is no layer, no merge and no override: one file, in
-one place, and where the platform names no profile directory there are no hooks at all.
+one place, beside the plugin hooks that were installed and answered for, and where the platform
+names no profile directory there are no hooks at all.
 
 **Why.** The settings files are read from three places and two of them sit in a checkout, so a
 command named in one would be a command that arrived with a clone. That is why
@@ -379,6 +385,7 @@ by hand, and the failure it most often has is a typo.
 `verified-by: bravebot_agent::hooks::a_hook_is_stopped_at_the_timeout_it_declared`
 `verified-by: bravebot_agent::hooks::a_hook_may_outlive_the_default_bound_by_declaring_more`
 `verified-by: bravebot_agent::turn::a_stopped_hook_says_the_timeout_it_declared`
+`verified-by: bravebot_agent::turn::a_hook_that_ended_badly_says_the_moment_and_the_program`
 `verified-by: bravebot_config::hooks::an_entry_may_state_its_own_timeout`
 `verified-by: bravebot_config::hooks::an_unusable_timeout_drops_the_entry`
 `verified-by: bravebot_agent::turn::a_turn_that_failed_still_says_what_its_hooks_said`
@@ -401,6 +408,7 @@ by hand, and the failure it most often has is a typo.
 `verified-by: bravebot_agent::hooks::a_session_hook_that_goes_wrong_is_said_naming_the_moment_and_program`
 `verified-by: bravebot_agent::hooks::a_file_changed_hook_that_could_not_start_is_said`
 `verified-by: bravebot_cli::running::a_session_hook_that_could_not_start_is_said_whether_the_run_answered_or_failed`
+`verified-by: bravebot_ui_bridge::session_hooks::a_turn_hook_that_cannot_run_is_said_whether_the_turn_answered_or_failed`
 
 <a id="HOOK-8"></a>
 ### HOOK-8: one reader decides what a hook is, and what it read is what is shown
@@ -574,6 +582,114 @@ path in the hook that ends a session is the path its twin started from, whatever
 `verified-by: bravebot_ui_bridge::closing_tests::a_session_that_never_began_has_no_end_among_the_workers_a_close_returns`
 `verified-by: bravebot_ui_bridge::workers::a_worker_that_follows_the_rest_runs_after_them_and_is_counted_while_it_waits`
 
+<a id="HOOK-11"></a>
+### HOOK-11: a hook from a plugin fires only after a person answered a question about it, and only while the plugin's directory is the one that was installed
+
+A plugin names at most one hooks file ([plugins.md](plugins.md)). It is read from the plugin's own
+directory under `~/.bravebot/plugins`, by the reader HOOK-3 and HOOK-7 describe, and only while the
+plugin is enabled. A `${PLUGIN_ROOT}` in an argument is replaced with the absolute path of that
+directory before the argument is shown or digested, and in no other place. A checkout carries no
+plugin and a plugin directory found in a workspace offers nothing, so HOOK-1 holds for it.
+
+Installing a plugin approves none of its hooks. Before a hook of a plugin first fires, a question
+names the plugin, the moment and every word of the argv as it will run, drawn behind the margin
+untrusted text is drawn behind. It is asked at the first moment the hook would fire, in a session a
+person is watching, and at most once in a session. A `y` is the only yes. It fires the hook and is
+recorded as one line in `~/.bravebot/hooks-approved`: a digest of the plugin's name, the moment, the
+expanded argv and the digest of the plugin's directory recorded at install, followed by the plugin's
+name. A later session that finds the line asks nothing. A no, and any other key, records nothing,
+the hook does not fire and the question is asked again in a later session. Where nobody can be
+asked, the hook does not fire. The person's own hooks in `hooks.json` are never asked about.
+
+No permission mode answers the question, bypassing included, and no rule or setting does: only a
+person's `y` approves a hook. An incognito session asks it and does not write the line, says so in
+the question, and keeps the yes until the session ends.
+
+The digest is the one the line above states: the plugin's name, the moment, the expanded argv and the
+tree digest. It holds no `tool`, `path` or `timeout`, so two hooks of one plugin with the same moment
+and argv share one yes, and the tree digest pins the set of hooks and every field of each.
+
+| Moment | A plugin's hook |
+|---|---|
+| `turn-started`, `turn-finished`, `checkout-made`, `tool-finished`, `compacted` | asked at its first firing, then fires after a yes |
+| `prompt-shown` | fires only where an earlier answer was yes. It fires while another question is on screen and puts none |
+| `session-started` | asked after the opening screen is drawn in the full-screen interface, and before the first prompt in a session in lines, then fires after a yes |
+| `session-ended` | fires only where an earlier answer was yes, in this session or recorded. It is never asked, since the interface is being left |
+| `file-changed` | in the full-screen interface alone, asked at the first change that would run the entry. An entry whose `path` is empty, absolute, holds `..` or has a drive prefix is not watched and says nothing; the person's own entries are not held to this. The question waits while the input box holds a draft or the Sessions screen is open, so a key typed for something else is not taken as the answer |
+
+A one-shot run, the desktop interface, an editor over ACP and the local host fire no hook of a plugin
+at any moment, since none of them can put the question. A session started with `--safe` reads none.
+
+Before a hook of a plugin fires, the plugin's directory is hashed again and compared with the digest
+recorded at install, and that comes before the question and before any earlier yes is honoured. A
+directory that differs, cannot be read or has no record stops every hook of the plugin: nothing is
+asked, nothing fires, and a notice names the plugin once in the session. The recorded yes stays in the
+file. A plugin turned off after a yes fires nothing from the next moment on, with its yes unchanged,
+and turned on again it asks nothing for a directory that still matches. Removing a plugin takes its
+lines out of `hooks-approved`, so installing the same files again is asked about again. A hook of a
+plugin is told the moment and nothing else, its output is not read and it decides nothing, as HOOK-5
+and HOOK-6 say of every hook.
+
+**Why.** A hook is a program that runs on the person's machine with their access, and a plugin is
+files somebody else wrote. The yes to the install listing was about reading a list, and running a
+program the first time is a decision about that program, so it is asked where the program would
+run, in a session the person is watching. The digest holds the plugin's directory as well as the
+argv because a hook is usually an argv that starts a script in the plugin, and an approval bound to
+the argv alone would still hold after the script changed. The directory is hashed before the question
+too, so a changed plugin is not put to a person as though it were the one they listed.
+
+No mode answers it, for the reason a recorded line outlives the mode: a yes is kept against a
+program somebody else wrote, and a record saying the person approved it must be one they gave.
+`session-ended` and `prompt-shown` never ask because the moment either fires is one where a question
+cannot be put, and a hook that is left unasked there fires after the person has answered it at
+another moment.
+
+`verified-by: bravebot_agent::plugin_hooks::a_plugin_hook_runs_nothing_until_the_question_is_answered_yes`
+`verified-by: bravebot_agent::plugin_hooks::a_hook_answered_yes_is_not_asked_again_in_the_session`
+`verified-by: bravebot_agent::plugin_hooks::a_no_leaves_the_hook_silent_and_is_asked_again_in_a_later_session`
+`verified-by: bravebot_agent::plugin_hooks::a_recorded_yes_is_not_asked_again_in_a_later_session`
+`verified-by: bravebot_agent::plugin_hooks::where_nobody_can_be_asked_no_plugin_hook_fires`
+`verified-by: bravebot_agent::plugin_hooks::a_disabled_plugin_carries_no_hook`
+`verified-by: bravebot_agent::plugin_hooks::the_persons_own_hooks_are_never_asked_about`
+`verified-by: bravebot_agent::plugin_hooks::a_state_directory_that_is_not_named_gives_no_plugin_hook`
+`verified-by: bravebot_agent::plugin_hooks::a_script_edited_after_a_yes_stops_the_hook_and_names_the_plugin_once`
+`verified-by: bravebot_agent::plugin_hooks::a_tree_that_differs_is_not_asked_about`
+`verified-by: bravebot_agent::plugin_hooks::the_join_that_never_asks_hashes_the_directory_again`
+`verified-by: bravebot_agent::plugin_hooks::a_plugin_disabled_after_a_yes_fires_nothing_and_keeps_its_answer`
+`verified-by: bravebot_agent::incognito::a_yes_to_a_plugin_hook_in_a_private_session_is_not_written_down`
+`verified-by: bravebot_agent::plugin_hooks::enabling_an_unchanged_plugin_asks_nothing_and_a_changed_one_does_not_fire`
+`verified-by: bravebot_agent::plugin_hooks::a_removed_plugin_is_asked_about_again_when_it_is_installed_again`
+`verified-by: bravebot_agent::plugin_hooks::a_plugin_hook_is_told_the_moment_only_and_its_output_is_not_read`
+`verified-by: bravebot_agent::plugin_hooks::a_turn_fires_a_plugin_hook_only_after_a_yes`
+`verified-by: bravebot_agent::plugin_hooks::a_no_leaves_a_plugin_hook_silent_and_the_next_session_asks_again`
+`verified-by: bravebot_agent::plugin_hooks::a_turn_nobody_can_ask_about_fires_no_plugin_hook`
+`verified-by: bravebot_agent::plugin_hooks::a_script_edited_after_a_yes_stops_the_hook_and_the_turn_names_the_plugin_once`
+`verified-by: bravebot_agent::plugin_hooks::a_hook_on_tool_finished_asks_through_the_lent_confirmer_and_fires_after_a_yes`
+`verified-by: bravebot_agent::plugin_hooks::a_plugin_hook_on_session_started_fires_only_after_a_yes_in_a_watched_session`
+`verified-by: bravebot_agent::plugin_hooks::a_no_at_session_started_is_asked_again_in_a_later_session`
+`verified-by: bravebot_agent::plugin_hooks::a_plugin_hook_on_session_ended_fires_only_one_already_answered_and_never_asks`
+`verified-by: bravebot_agent::plugin_hooks::a_plugin_hook_on_file_changed_asks_then_fires`
+`verified-by: bravebot_agent::plugin_hooks::a_no_at_file_changed_is_asked_once_and_again_in_a_later_session`
+`verified-by: bravebot_agent::plugin_hooks::a_changed_tree_stops_the_session_moments_and_file_changed`
+`verified-by: bravebot_agent::plugin_hooks::a_plugin_entry_naming_a_file_outside_the_directory_is_not_watched`
+`verified-by: bravebot_agent::permission_mode::no_mode_answers_the_question_about_a_plugins_hook`
+`verified-by: bravebot_config::hooks_approved::the_digest_follows_the_plugin_the_moment_the_argv_and_the_tree`
+`verified-by: bravebot_config::hooks_approved::the_digest_is_a_sha256_over_the_documented_length_prefixed_fields`
+`verified-by: bravebot_config::hooks_approved::a_line_that_is_not_a_digest_and_a_name_approves_nothing`
+`verified-by: bravebot_config::hooks_approved::a_yes_is_one_line_and_is_written_once`
+`verified-by: bravebot_config::hooks_approved::withdrawing_a_plugin_removes_its_lines_and_leaves_the_others_as_they_are`
+`verified-by: bravebot_tui::confirm::hook::the_question_names_the_plugin_the_moment_and_every_word_of_the_argv`
+`verified-by: bravebot_tui::confirm::hook::a_yes_that_will_not_be_written_says_so`
+`verified-by: bravebot_tui::confirm::hook::only_a_y_approves_and_a_lost_terminal_is_a_no`
+`verified-by: bravebot_tui::confirm::hook::no_yes_is_taken_before_every_word_of_a_long_argv_has_been_drawn`
+`verified-by: bravebot_approval::lib::the_hook_question_in_lines_marks_the_plugins_words_and_pictures_control_characters`
+`verified-by: bravebot_cli::plain::a_plugin_hook_is_asked_in_lines_and_only_a_yes_approves`
+`verified-by: bravebot_cli::plain::a_plugin_hook_at_the_start_of_a_lines_session_is_asked_and_runs_only_after_a_yes`
+`verified-by: bravebot_cli::running::a_one_shot_run_fires_no_plugin_hook_even_one_the_person_said_yes_to`
+`verified-by: bravebot_tui::session_moments_tests::a_plugin_hook_at_the_start_is_asked_after_the_screen_is_up_and_runs_after_the_yes`
+`verified-by: bravebot_tui::session_moments_tests::a_plugin_question_is_put_only_with_an_empty_box_and_no_sessions_screen`
+`verified-by: by-construction (a session started with --safe reads no plugin hook because the reader of plugin hooks in crates/agent/src/plugin_hooks.rs returns none while the safe flag is engaged, and the desktop interface, ACP and the local host fire none because their confirmers take the default of the confirmer trait, which says nobody can be asked about a hook)`
+
 ## The file
 
 ```json
@@ -691,3 +807,24 @@ path in the hook that ends a session is the path its twin started from, whatever
   time between two looks is not seen, as a watch a turn armed is not ([FSWATCH-3](file-watches.md#FSWATCH-3)).
 - **A hook added to the file while a session runs is not part of it.** The hooks a session fires at
   its end are the ones it read at its start (HOOK-10).
+- **A plugin hook only on `session-ended` fires only after an earlier yes.** The question is never
+  put as the interface is left (HOOK-11), so the hook runs once the person has answered yes to a hook
+  of that plugin at another moment, or an earlier session recorded the yes.
+- **A `file-changed` question of a plugin waits while the person has a draft.** The question is put
+  only with an empty input box and no Sessions screen open, so a key typed into a draft is never the
+  answer. The run of that entry is delayed until the box is empty or the interface is left, and a
+  question the interface leaves unanswered is a no that records nothing.
+- **The desktop interface, an editor over ACP and the local host cannot approve a plugin hook, so
+  none runs there.** Their confirmers cannot put the question (HOOK-11). A person who wants a
+  plugin's hooks in one of them answers in the full-screen interface or in lines first, which records
+  the yes for every later session that finds the plugin unchanged.
+- **The plugin hooks file's dropped entries are counted in the install listing and not shown.** The
+  reader leaves out an entry it cannot use (HOOK-7), and the install prompt says how many it passed
+  over and not what they said, since a dropped entry's text is not carried anywhere.
+- **A notice that a plugin no longer matches its record is a plain sentence.** The plugin's name is
+  validated to letters, digits and hyphens at install, so it holds no control character, and no
+  front end draws a notice's parts behind the margin. The hook question, which shows words the
+  plugin wrote, is drawn behind it.
+- **A plugin hook only on `prompt-shown` waits for another moment to ask.** A question is on screen
+  when that moment fires and cannot put another, so the hook fires only once the person has answered
+  yes to it in this session or an earlier one.

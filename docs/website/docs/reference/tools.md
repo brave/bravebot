@@ -40,7 +40,10 @@ that is merely carried.
 | [`propose_rule`](#propose_rule) | `scope` | `text`, `reason` | **yes, that is what it is for** |
 | [`set_link`](#set_link) | `kind`, `url` | none | no |
 
-Five more are offered only where they mean something.
+Six more are offered only where they mean something.
+[`web_search`](#web_search) goes to a session whose settings name a Brave Search API key, as a variable
+in `webSearch.env` that holds text or a file in `webSearch.keyFile`, so not
+to one without it and not to a delegate.
 [`request_path`](#request_path) goes wherever `run` is confined, so not to a delegate.
 [`schedule_next`](#schedule_next) goes to a turn that will be asked again: one inside a self-paced
 [`/loop`](commands.md#loop-interval-prompt), and one on a line you typed in a session that can send
@@ -233,9 +236,10 @@ The glob is literal and the matcher does not backtrack. Matching is case-sensiti
 group such as `{r,R}eadme*` covers both cases. A call with a `pattern` whose result holds no file
 says so, and names a character class, an extended glob or a leading `!` as syntax the matcher does
 not have. A truncated listing says it was truncated. A listing given a `depth` takes at most 200
-files from any one directory and names a directory it cut with how many of its files it left out;
-where the names are quarantined, that count comes beside the directory's reference. Listing it with
-no depth shows the rest, up to the cap of 2,000 entries.
+files and at most 200 subdirectories from any one directory, and names a directory it cut with how
+many of its files and subdirectories it left out; where the names are quarantined, those counts come
+beside the directory's reference. Listing it with no depth shows the rest of its files and the
+files under its subdirectories, up to the cap of 2,000 entries, and names no subdirectory.
 
 ## `repo_map`
 
@@ -881,6 +885,45 @@ answered without the header, so a page that is only ever HTML arrives as it did 
 above the wildcard would cost more than sending no header at all, since an endpoint that serves both
 a compact form and a full page reads that as a request for the page.
 
+## `web_search`
+
+Searches the web through the [Brave Search API](https://api-dashboard.search.brave.com/documentation).
+It is offered only where a variable named in `webSearch.env` holds a key or `webSearch.keyFile` names a
+key file ([setting it up](../customize/configuration.md#websearchenv)). **You approve every search,
+unless a `WebSearch`
+rule allows it.**
+
+| Parameter | |
+|---|---|
+| `service` | `web`, `news`, `videos`, `images`, `llm_context` (page text prepared for a model), `suggest`, `spellcheck` or `places` |
+| `q` | the query, at most 600 characters and 75 words for `web` and `llm_context`, and 400 and 50 for the others. `places` may go without one |
+| the vendor's own | `country`, `search_lang`, `ui_lang`, `count`, `offset`, `safesearch`, `spellcheck`, `freshness`, `text_decorations`, `result_filter`, `units`, `extra_snippets`, `operators`, `operators_fallback`, `include_fetch_metadata`, `maximum_number_of_urls`, `maximum_number_of_tokens`, `context_threshold_mode`, `maximum_number_of_tokens_per_url`, and for `places` `latitude`, `longitude`, `location` and `radius`. Each service takes the ones the vendor documents for it, with the vendor's ranges |
+| `read` | `true` to ask for the results in the result of this call, which is given only where the session is offered `vet_content`, as for [`fetch_url`](#fetch_url) |
+
+A value outside the documented type, range or set is refused before you are asked and before anything
+is sent, and the refusal names the argument. Goggles, answers, rich results and local points of
+interest are not offered, and no argument takes a URL or a host.
+
+**What comes back is quarantined.** The results are a reference, untrusted and public, as a fetched
+page is: the planner may hand it to [`spawn_processor`](#spawn_processor) or write it to a file with
+[`write_file`](#write_file), and cannot read it or be told what it says.
+
+**You are shown the query.** The prompt draws the search URL, with the query in it, and the host it
+will reach, which is always `api.search.brave.com`. In the terminal it is drawn as a fetch is, under
+the words of a fetch. Your answer is for that one search and nothing is remembered. A `WebSearch` rule in
+`allow` answers the prompt, and `deny` refuses without asking. The rule takes no specifier, and a
+`WebFetch` rule does not cover a search. An `allow` rule stops answering once the planner has been
+shown content of yours that is private, since a query may carry some, and the search asks then.
+
+**The key goes in one header to one host.** It is read from the variable or the file when a search is
+made, a variable that holds text before the file, and sent as
+`X-Subscription-Token` to `api.search.brave.com`. A variable you name in `webSearch.env` is withheld
+from every program the [`run`](#run) tool starts, since a program it starts inherits the environment.
+A redirect to another host is refused without
+asking, and the key does not go there. A failure is reported in bravebot's own words, by its kind
+(a refused key, a plan that does not cover the request, a rejected request, a rate limit, no answer);
+nothing of what the service wrote is shown to the planner.
+
 ## `download_url`
 
 Saves what an `http` or `https` URL serves to a file in the workspace, byte for byte.
@@ -1309,16 +1352,21 @@ Records the task list for what the planner is doing.
 
 The whole list every time: it replaces the previous one. There is no routing here, because nothing is
 touched. An unrecognised status reads as outstanding work. A task marked `cancelled` is struck
-through and counted apart from the finished ones.
+through and counted apart from the finished ones. A task marked `waiting` is still open, but its
+next step is not the planner's, such as one that needs a person or an outside event. It is not
+struck through, not drawn as work being done and not dimmed as left open, and it is counted apart
+from the finished ones.
 
 A turn whose last list still has a task pending or in progress when the planner answers is not
-ended there. The planner is told how many tasks are open, and nothing about them, and is asked to
-send the list again with each task marked completed or cancelled. Where work remains it leaves the
+ended there, unless every open task is marked waiting. The planner is told how many tasks are open
+and how many of those are waiting, and nothing about them, and is asked to send the list again with
+each task marked completed, cancelled or waiting. Where work remains it leaves the
 tasks open and says in its answer what is left. This happens at most once in a turn: a list the planner
 sends in answer to the question is not asked about again in that turn. A later turn asks about the
 same list again only if it did work after the list: it ran many rounds, changed a file or ran a
 program. A turn that only read, or answered at once, is not asked. A long turn that leaves the list
-untouched is also reminded part way through, with the number of open tasks and nothing about them. A list the
+untouched is also reminded part way through, with the number of open tasks, how many of them are
+waiting and nothing about them, unless every open task is waiting. A list the
 planner wrote in a session that has read something untrusted is not counted. A reply that stopped at
 the output limit ends the turn as it stands.
 

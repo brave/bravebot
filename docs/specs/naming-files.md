@@ -7,6 +7,10 @@ governs:
   - crates/tui/src/state.rs
   - crates/tui/src/state/attachments.rs
   - crates/tui/src/state/completion.rs
+  - crates/tui/src/state/queue.rs
+  - crates/tui/src/state/standing.rs
+  - crates/tui/src/app/turns.rs
+  - crates/tui/src/loops.rs
   - crates/cli/src/main.rs
   - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
@@ -245,8 +249,9 @@ In a session the same id leaves the turn without the excerpt and says why in the
 
 A manifest run, a session with no words in it, a record another program wrote or a front end this
 build does not know, and a session whose planner had been shown private content are not quoted. Only
-a line the person wrote is read for mentions, so a prompt the driver composed adds nothing. The
-desktop message box does not offer sessions and sends the line as typed.
+a line the person wrote is read for mentions, so a prompt the driver composed adds nothing, and an
+`@session:<id>` behind a folded paste marker adds nothing either (NAME-12). The desktop message box
+does not offer sessions and sends the line as typed.
 
 **Why.** A person who wants something from an older conversation otherwise has to resume all of it.
 The record holds only what the planner was allowed to hold ([sessions.md](sessions.md)), and the person chose the
@@ -261,16 +266,28 @@ row so the cost is known before sending.
 `verified-by: bravebot_session::excerpt::one_turn_longer_than_the_bound_is_cut_rather_than_dropped`
 `verified-by: bravebot_session::excerpt::a_session_that_used_tools_says_their_results_are_not_included`
 `verified-by: bravebot_session::excerpt::a_record_that_is_not_the_planners_to_repeat_is_refused`
+`verified-by: bravebot_session::excerpt::a_record_holding_imported_words_is_refused_as_not_ours`
+`verified-by: bravebot_session::excerpt::a_front_end_this_build_knows_is_quoted_and_an_unknown_one_is_not`
+`verified-by: bravebot_session::excerpt::a_record_with_no_front_end_word_is_quoted`
+`verified-by: bravebot_session::excerpt::a_holds_word_that_is_missing_or_not_public_is_refused_as_private`
+`verified-by: bravebot_session::excerpt::a_well_formed_id_with_no_record_is_not_found`
+`verified-by: bravebot_session::excerpt::each_refusal_says_its_own_reason_and_names_the_session`
 `verified-by: bravebot_session::excerpt::an_id_that_is_not_a_session_name_is_not_looked_up`
 `verified-by: bravebot_mentions::lib::a_session_reference_is_not_a_file_and_is_read_back_by_its_id`
 `verified-by: bravebot_mentions::lib::a_session_row_completes_to_its_reference_and_enter_sends_it_finished`
 `verified-by: bravebot_tui::references::an_at_sign_offers_past_sessions_after_the_files`
+`verified-by: bravebot_tui::app::tests::mentioned_sessions::the_at_list_says_how_old_each_session_is_and_offers_the_newest_first`
 `verified-by: bravebot_tui::references::a_word_narrows_sessions_by_title_and_not_by_what_is_drawn_beside_them`
 `verified-by: bravebot_tui::references::the_sessions_are_read_only_while_a_reference_is_typed`
 `verified-by: bravebot_tui::references::tab_completes_a_session_and_enter_sends_it_finished`
 `verified-by: bravebot_tui::render::a_session_row_carries_its_title_and_a_file_row_does_not`
 `verified-by: bravebot_tui::app::naming_a_past_session_adds_its_words_only_from_a_line_the_person_wrote`
+`verified-by: bravebot_tui::app::a_session_mention_inside_a_folded_paste_names_no_session`
 `verified-by: bravebot_tui::app::the_sessions_an_at_offers_leave_out_the_open_one`
+`verified-by: bravebot_tui::app::the_note_for_a_named_session_says_how_many_characters_it_added`
+`verified-by: bravebot_tui::app::a_session_that_cannot_be_quoted_is_left_out_with_the_reason_it_was`
+`verified-by: bravebot_ui_bridge::mentions::the_window_is_offered_no_past_session`
+`verified-by: bravebot_ui_bridge::mentions::the_window_sends_a_session_mention_as_typed_with_nothing_of_the_session`
 `verified-by: bravebot_agent::turn::a_named_session_is_added_to_the_message_and_the_trail_holds_only_its_size`
 `verified-by: bravebot_cli::main::a_session_ref_flag_names_a_session_once`
 `verified-by: bravebot_cli::running::a_session_ref_brings_an_earlier_session_into_a_new_run`
@@ -329,11 +346,32 @@ letters in the path of most of a large tree, and the terminal draws every row un
 ### NAME-12: a name that cannot be sent is refused where Enter is pressed
 
 Before a line is sent or queued, the terminal surveys each `@name` it holds, in the line as the box
-shows it, and the desktop app does the same at `turn.send` (NAME-9). The words behind a folded paste
-marker are sent as text and name no file: they are not surveyed, and an `@` in them does not vouch
-for a path. The person cannot see or edit those words in the box, so a refusal over one could not
-be answered by removing the `@`. The desktop app has no folded paste. A name under a reference
-directory's alias is surveyed in the directory it resolves to. A name that
+shows it, and the desktop app does the same at `turn.send` (NAME-9). The turn reads the names it
+acts on from that same line: the files it vouches for and the `@session:<id>` mentions it quotes
+(NAME-10). The words behind a folded paste marker are sent as text and name nothing. They are not
+surveyed, an `@` in them does not vouch for a path, and an `@session:<id>` in them adds no session
+excerpt. This holds for any number of pastes in a line and whatever a paste holds, the text of
+another paste included. Words typed into the box that equal an earlier paste's text are typed words,
+and their names are read.
+
+The session keeps the line as the box showed it when the line leaves the box, and the turn that line
+begins reads its names from that line and from no other text. That covers a line sent, a line queued
+behind a running turn, a command whose argument becomes the prompt (`/plan`, `/agent`, a picked
+definition), a command that wraps the argument in words of the driver (`/help`, `/review`), the
+brief of a `/handoff`, every tick of a `/loop` or `/after`, and every tick of a loop a turn arms for
+itself, which keeps the line of the turn that armed it. A turn is begun with a `NamesFrom`, which
+is either that line or nothing, and the code that reads a turn's names takes the `NamesFrom` and
+not the words of the prompt, so a path that starts a turn has to say where its names come from. A
+turn the driver begins from its own sentences (a goal sending the work back, a watch firing,
+`/init`) says nothing and reads no name. A command a click stands for was never typed in the box and
+reads the names in its words only while the session holds no folded paste. The words are not
+searched for a paste's text, which a trimmed paste or words typed to equal it would defeat. The
+person cannot see or edit the words behind a marker, so a refusal over one could not be answered by
+removing the `@`. The desktop app sends `turn.send` the line as its box showed it, as `shown`, and
+the bridge reads the names there, keeping only those the prompt also gives, so `shown` can leave a
+name out and never adds one.
+
+A name under a reference directory's alias is surveyed in the directory it resolves to. A name that
 is not a text file in the project (missing, a directory written without its slash, binary, outside
 the workspace, or under a reference directory whose path has no text spelling) refuses the send.
 A name that is a file the program is not allowed to read, or that the disk fails to read, refuses
@@ -359,14 +397,55 @@ vouching depend on them.
 the turn on a workspace failure after the prompt is recorded. A pasted request in it cannot be got
 back.
 
+A name behind a folded paste marker names nothing, because the box showed the person only the
+marker and sending the line did not choose the file. Text copied from a page can hold an `@name`,
+and a rule recorded for it would trust that file for the rest of the session (NAME-3).
+
+The line is kept where it leaves the box, and the words are not searched for the pastes afterwards.
+A search needs the paste's exact text, and a command trims the argument it takes, so a paste ending
+in a newline is not found in the words of `/help`, `/review`, `/plan` or a loop's repeated prompt. A
+turn that cannot tie its words to a line reads no name from them, so no word of such a turn is
+taken for the person's typing.
+
 `verified-by: bravebot_tui::references::enter_refuses_a_name_that_is_not_a_file_and_keeps_the_line`
 `verified-by: bravebot_tui::references::enter_refuses_a_directory_a_binary_file_and_a_path_outside_the_project`
 `verified-by: bravebot_tui::references::the_refusal_names_each_bad_name_and_not_the_good_one`
 `verified-by: bravebot_tui::references::a_refused_line_keeps_its_folded_paste`
 `verified-by: bravebot_tui::references::a_handle_inside_a_folded_paste_is_sent_as_text`
+`verified-by: bravebot_ui_bridge::mentions::a_send_reads_names_in_the_shown_line_and_never_adds_one`
 `verified-by: bravebot_tui::references::a_name_typed_beside_a_folded_paste_is_still_refused`
 `verified-by: bravebot_tui::references::while_a_turn_works_a_handle_inside_a_folded_paste_is_queued`
 `verified-by: bravebot_tui::app::a_name_inside_a_folded_paste_names_no_file`
+`verified-by: bravebot_tui::app::a_name_inside_a_folded_paste_gives_the_turn_no_file`
+`verified-by: bravebot_tui::app::a_name_typed_in_the_line_gives_the_turn_its_file`
+`verified-by: bravebot_tui::app::a_folded_paste_naming_a_file_leaves_no_rule_for_it_in_the_trust_map`
+`verified-by: bravebot_tui::app::a_name_in_a_paste_that_holds_an_earlier_paste_names_no_file`
+`verified-by: bravebot_tui::app::a_name_in_typed_words_equal_to_an_earlier_paste_is_read`
+`verified-by: bravebot_tui::state::a_paste_holding_an_earlier_paste_is_put_back_whole`
+`verified-by: bravebot_tui::state::a_stopped_turn_puts_back_a_paste_that_holds_an_earlier_paste`
+`verified-by: bravebot_tui::state::typed_words_equal_to_an_earlier_paste_are_not_put_behind_its_marker`
+`verified-by: bravebot_tui::state::a_queued_line_begins_its_turn_from_the_line_the_box_showed`
+`verified-by: bravebot_tui::state::every_tick_of_a_loop_reads_its_names_from_the_line_the_box_showed`
+`verified-by: bravebot_tui::state::a_help_or_review_line_reads_no_name_from_a_paste_ending_in_a_newline`
+`verified-by: bravebot_tui::state::a_loop_a_turn_arms_reads_no_name_from_the_paste_that_turn_held`
+`verified-by: bravebot_tui::state::an_after_line_reads_its_names_from_the_line_the_box_showed`
+`verified-by: bravebot_tui::state::a_queued_command_line_begins_its_turn_from_the_line_the_box_showed`
+`verified-by: bravebot_tui::state::a_paste_that_spells_another_pastes_marker_is_sent_as_it_was_pasted`
+`verified-by: bravebot_tui::state::a_line_from_no_box_is_put_back_behind_the_longest_paste_it_holds`
+`verified-by: bravebot_tui::state::a_turn_begun_with_no_line_reads_no_name_whatever_its_words_hold`
+`verified-by: bravebot_tui::state::a_turn_the_driver_begins_does_not_read_the_names_of_the_turn_before_it`
+`verified-by: bravebot_tui::state::the_init_turn_reads_no_name_even_after_a_line_that_named_a_file`
+`verified-by: bravebot_tui::state::a_queued_line_and_a_hurried_batch_read_the_names_typed_in_their_lines_only`
+`verified-by: bravebot_tui::state::a_click_line_reads_its_names_only_while_the_session_holds_no_paste`
+`verified-by: bravebot_tui::state::names::the_lines_of_a_batch_are_read_as_the_lines_they_were_joined_from`
+`verified-by: bravebot_tui::state::names::a_part_with_no_line_adds_no_words_to_a_batch`
+`verified-by: bravebot_tui::app::a_handoff_brief_names_nothing_from_a_paste_in_it`
+`verified-by: bravebot_tui::app::a_prompt_from_the_command_line_names_the_files_it_names`
+`verified-by: bravebot_tui::state::an_addressed_turn_keeps_the_line_its_task_was_taken_from`
+`verified-by: bravebot_tui::app::the_task_a_turn_is_built_with_holds_no_file_or_session_a_paste_named`
+`verified-by: bravebot_tui::app::a_help_or_review_line_names_nothing_from_a_paste_ending_in_a_newline`
+`verified-by: bravebot_tui::app::a_plan_or_agent_line_names_nothing_from_a_paste_ending_in_a_newline`
+`verified-by: bravebot_tui::app::a_folded_paste_naming_agents_md_keeps_it_out_of_the_next_turns_system_prompt`
 `verified-by: bravebot_tui::references::a_refused_line_keeps_its_attachments`
 `verified-by: bravebot_tui::references::a_name_under_a_reference_alias_is_surveyed_in_its_directory`
 `verified-by: bravebot_tui::references::a_prompt_the_driver_composed_is_never_surveyed`
@@ -415,6 +494,15 @@ several files failed, or what is wrong with it.
 
 ## Known costs
 
+- **A turn begun with no line the box held reads no name.**
+  The turns begun that way are the driver's own, a goal sending the work back, a watch firing and
+  `/init`, and they name no file in any case (NAME-1). A turn added later begins with a
+  `NamesFrom`, which is the line it came from or nothing, so it cannot read a name by leaving the
+  choice out. A command a click stands for reads the names in its words while the session holds no
+  folded paste and none after one.
+- **A name inside a folded paste is never taken as a file.** The program does not list the names
+  found behind a marker for the person to confirm. A file that pasted text mentions is named by
+  typing its `@name` in the line.
 - **Content you have not read is content you are vouching for.** Be as careful naming a file as
   answering yes to a directory. The planner will act on what it says.
 - **A tree of more than 10,000 names is searched only as far as the bound.** The walk goes one

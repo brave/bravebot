@@ -106,6 +106,33 @@ export async function stagePaste(session: unknown, copied: Buffer | null, check:
   return { kind: 'staged', picture: { id, noun: fits.noun, thumbnail: small.isEmpty() ? undefined : small.toDataURL() } }
 }
 
+/** Asks the bridge's `pastes.clean` to remove the characters that draw as nothing from `text`. */
+export type Clean = (text: string) => Promise<unknown>
+
+/**
+ * Pasted `text` with the characters that draw as nothing removed (PASTE-10), or `null` for a
+ * session this process does not hold or text that is not a string.
+ *
+ * The removal, the count and the note are the bridge's (`pastes.clean`), the terminal's function
+ * and catalog message, so this process holds no character list of its own. A bridge that does not
+ * answer, or answers something else, gives `unclean`, so the raw text is never pasted.
+ */
+export async function cleanPaste(session: unknown, text: unknown, clean: Clean): Promise<PasteOutcome | null> {
+  if (typeof session !== 'string' || rootForSession(session) === undefined) return null
+  if (typeof text !== 'string') return null
+  let answer: unknown
+  try {
+    answer = await clean(text)
+  } catch {
+    return { kind: 'unclean' }
+  }
+  const { text: cleaned, removed, note } = (answer ?? {}) as Record<string, unknown>
+  if (typeof cleaned !== 'string' || typeof removed !== 'number' || !Number.isInteger(removed) || removed < 0) return { kind: 'unclean' }
+  if (note === undefined) return { kind: 'text', text: cleaned, removed }
+  if (typeof note !== 'string') return { kind: 'unclean' }
+  return { kind: 'text', text: cleaned, removed, note }
+}
+
 /**
  * The pictures `ids` grant in `session`, in the order given, as the bridge's `images` entries.
  *

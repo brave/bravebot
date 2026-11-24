@@ -272,6 +272,14 @@ test('after declining the note lists the proposed rules and the directories stil
   assert.ok(markup.includes('they are not open'), markup)
 })
 
+test('a key that was not read as written is counted with what the note says is not in force, and is drawn in the note', () => {
+  const dropped = rules({ droppedKeys: ['permissions.denyy in /home/someone/project/.bravebot/settings.json is not read by this build'] })
+  assert.equal(questions.notInForceCount(dropped), 1)
+  const markup = render(SessionNotices, { forkedFrom: null, kept: null, vetting: false, rules: dropped, refused: [], onOpenParent: () => {}, onManage: () => {} })
+  assert.ok(markup.includes('1 permission setting is not in force'), markup)
+  assert.ok(markup.includes('permissions.denyy in '), markup)
+})
+
 test('a refused folder the rules do not list by that name is still said, with its reason', () => {
   const refused = [{ directory: '/elsewhere', shownDirectory: '/elsewhere', problem: 'gone', shownProblem: 'gone' }]
   assert.equal(questions.notInForceCount(rules(), refused), 1)

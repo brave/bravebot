@@ -32,7 +32,8 @@ clause that is built whole names its tests. A clause with a part still to build 
 The supervisor and the restart of a process that ends between turns ([BG-11](#BG-11),
 [BG-12](#BG-12)) are built. `/bg` is built. The idle stop ([BG-13](#BG-13)) is built, and the session in lines has
 no loop and no watch yet, so those two conditions of it hold of every session; `/detach` is built.
-`bravebot sessions` on a terminal is a list grouped by state that attaches ([BG-16](#BG-16)). A question from an
+`bravebot sessions` on a terminal is a list grouped by state that attaches ([BG-16](#BG-16)). The
+desktop app's list of the same sessions ([BG-17](#BG-17)) is built. A question from an
 MCP server that has to be started is held like any other, and is drawn as a foreground session
 draws it. A `stopped` or `interrupted` session is started again from `attach` or `reply` by a terminal,
 resuming the record the process wrote after each turn (for `interrupted`, the terminal says first
@@ -110,6 +111,20 @@ and the check compares with the mode start-up chose, so after `/cd` into or out 
 settings choose another mode the session is handed over and goes on in the mode that checkout's
 settings choose, with nothing said.
 
+The desktop window's Chat › Continue in Background… ([CMD-34](commands.md#CMD-34)) hands an open chat
+with no turn running to a background session as `/bg` does, through the bridge's
+`session.background`. The bridge closes the chat first, because it holds the record's lock until the
+chat's work has ended ([SESSION-38](sessions.md#SESSION-38)), then starts the process with the
+`bravebot` program installed beside it, in the chat's project and permission mode, and waits for the
+session to be listed as `/bg` does. A start that fails or does not come up in time is said in a
+sentence, the chat stays closed, and its record is left to be opened again from the list. It is
+refused, and the chat stays open, in bypass or auto, for an incognito chat or
+one with no record yet, after Sandbox moved the chat to a mode other than the one its settings
+choose, while a turn, a compaction or a question beside the work runs, while a goal or a watch is
+set, on a system where background sessions do not run, and where the `bravebot` program is not
+installed beside the bridge. Each refusal is a sentence saying why, and nothing is started. A chat
+handed over is listed as running in the background, and opening it again is refused as BG-9 says.
+
 Nothing else starts one. The planner has no tool for it, a delegate cannot, and neither can a hook,
 a loop tick, a watch or a file the session read. A prompt that arrived on a pipe is untrusted input
 and does not start one either.
@@ -127,6 +142,14 @@ the whole of what they asked for.
 `verified-by: bravebot_cli::background::the_host_is_started_with_the_mode_it_runs_in`
 `verified-by: bravebot_cli::running::a_handed_over_session_runs_in_the_mode_it_was_given`
 `verified-by: bravebot_cli::running::bg_is_refused_with_what_it_cannot_carry_and_without_a_terminal`
+`verified-by: bravebot_session::jobs::a_host_program_that_does_not_exist_starts_nothing_and_takes_back_its_line`
+`verified-by: bravebot_ui_bridge::background::each_refusal_of_bg_is_made_from_what_the_bridge_holds`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_with_no_record_is_not_handed_to_the_background`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_in_bypass_or_auto_is_not_handed_to_the_background`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_with_a_turn_running_is_not_handed_to_the_background`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_handed_to_the_background_runs_there_and_is_refused_when_opened`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_whose_background_session_does_not_start_is_left_to_be_opened_again`
+`verified-by: bravebot_session::jobs::each_refusal_of_a_hand_over_is_its_own_and_comes_in_one_order`
 
 <a id="BG-3"></a>
 ### BG-3: the supervisor moves process state and decides nothing from content
@@ -380,6 +403,17 @@ the prompt on screen, so it could be taken for an answer to a write or a run it 
 `bravebot sessions stop <id>` stops a turn that is running, then ends the process and sets the state
 to `stopped`. The record is kept and is resumable. No session is without a way to be stopped.
 
+The desktop app's chat list shows a chat whose record a background process holds as running in the
+background. It does this while that process's state ([BG-6](#BG-6)) is `working`, `needs input` or
+`idle`. The bridge's `session.list` gives each chat that state word, or nothing for a chat with no
+roster entry, and gives no other fact about the process. The chat's right-click menu offers Stop
+Background Session and does not offer Open. Stop Background Session asks the bridge's
+`session.background.stop` with the chat's whole id. The bridge stops the session as `bravebot
+sessions stop` does, through the same roster call with the same five-second wait, and keeps the
+record. It answers `stopped`, or `not-running` for an entry whose process had already ended, or no
+such session for an id with no entry. A stopped chat opens again from the list, as a stopped session
+is resumed.
+
 There is one supervisor per account. A terminal that starts a session ([BG-2](#BG-2)), for the first
 time or again, starts the supervisor once that session's process is alive, unless one is running.
 It watches every process it finds alive and ends when none is. A supervisor already running is found
@@ -403,6 +437,14 @@ stays after its last session is a standing process the person did not ask for.
 `verified-by: bravebot_cli::supervisor::a_process_that_comes_alive_is_watched_within_a_few_ticks`
 `verified-by: bravebot_cli::background::the_supervisor_is_started_as_the_hidden_command_from_the_root`
 `verified-by: bravebot_session::jobs::the_supervisors_lock_is_not_an_entry_of_the_roster`
+`verified-by: bravebot_ui_bridge::backgrounding::session_list_says_which_chats_a_background_process_holds`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_handed_to_the_background_is_stopped_from_the_window_and_keeps_its_record`
+`verified-by: bravebot_ui_bridge::backgrounding::stopping_a_background_session_that_is_not_running_says_so_and_an_unknown_id_is_no_such_session`
+`verified-by: bravebot_ui_bridge::background::a_stop_answers_stopped_or_not_running`
+`verified-by: bravebot_ui_bridge::background::a_stop_of_an_id_with_no_entry_is_no_such_session`
+`verified-by: bravebot_ui_bridge::background::a_stop_that_fails_is_internal_with_a_sentence`
+`verified-by: bravebot_ui_bridge::background::a_stop_of_a_dead_entry_marks_it_stopped`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/ux-state.test.mjs asserts that listSessions marks a chat with no open window whose state is working, needs-input or idle as running in the background and leaves a stopped, interrupted or absent state unmarked, and ui/scripts/commands.test.mjs asserts that such a row's menu holds Stop Background Session and not Open, that the router sends the chat's id to stopBackground, and the Stopped, Not running and problem notices each answer of session.background.stop gives; ui/scripts/drive-background.mjs stops a handed-over chat in a real window, finds it stopped in bravebot sessions, and opens it again; make check-ui runs the tests)`
 
 <a id="BG-12"></a>
 ### BG-12: a process that ends between turns is restarted, and one that ends in a turn is not repeated
@@ -476,6 +518,10 @@ loop.
 `verified-by: bravebot_cli::running::a_reply_from_a_terminal_starts_a_stopped_session_with_it`
 `verified-by: bravebot_cli::running::an_attach_from_a_terminal_starts_a_stopped_session`
 `verified-by: bravebot_cli::host::a_hosted_session_waits_an_hour_before_it_ends`
+`verified-by: bravebot_cli::host::a_session_that_has_ended_its_wait_tells_a_reply_and_an_attach_it_is_stopping`
+`verified-by: bravebot_cli::background::a_reply_answered_stopping_is_a_failure_and_only_ok_is_not`
+`verified-by: bravebot_cli::background::an_attach_answered_stopping_is_a_failure_and_only_ok_joins`
+`verified-by: bravebot_cli::running::a_reply_refused_as_stopping_starts_the_session_when_it_is_asked_again_once_stopped`
 
 <a id="BG-14"></a>
 ### BG-14: a background session in a git repository works in a checkout of its own
@@ -484,7 +530,7 @@ loop.
 the way a delegate's checkout is made ([checkouts.md](checkouts.md)), and the session works in it:
 its file tools reach it, and its programs start in it. The session keeps the checkout, the record
 lists it, and a person removes it as they remove any other. A running session holds the checkout's
-lock, so the opening sweep ([CHECKOUT-16](checkouts.md#CHECKOUT-16), which nothing yet builds)
+lock, so the opening sweep ([CHECKOUT-16](checkouts.md#CHECKOUT-16), built for Unix)
 does not take it.
 
 Outside a git repository the session works in the directory it was started in. The list shows the
@@ -590,6 +636,46 @@ in, so the mode ([BG-8](#BG-8)) and a held prompt ([BG-7](#BG-7)) are as they ar
 `verified-by: bravebot_cli::background::a_control_character_in_what_was_typed_cannot_reach_any_field_of_a_row`
 `verified-by: bravebot_cli::running::sessions_lists_an_entry_with_no_process_as_interrupted`
 
+<a id="BG-17"></a>
+### BG-17: the desktop app lists the roster grouped by state, and a row only copies the attach command
+
+The desktop app shows the roster, across every project, in a section of its sidebar headed
+"Background sessions". The section is not shown while the roster is empty. Its rows, their order
+and their headings are those of [BG-16](#BG-16): rows made from the tasks of the Sessions screen's
+listing, under a heading for each state in the words and the order of BG-16, with the number of
+sessions under each heading, no heading for a state no session is in, and the most recently written
+session first within a state. A row shows the start of the session's id, its name, how long since
+it was last written, and its state with the word for the kind of prompt held where one is. A name
+of more than 28 columns is cut with an ellipsis. Below the list, the working directory and the last
+prompt the person typed are shown for the selected session.
+
+These are fields of a [BG-5](#BG-5) line, and the section draws no others: no reply, tool result,
+file content, command output or question text. Control characters are pictured as they are in a
+line. The app takes the rows from the bridge, which builds them from the roster as the terminal
+list does, and draws no field the bridge did not send.
+
+The section reads the roster again once a second while it is shown. A session whose state changed
+moves under the heading for its new state, and stays selected if it was selected.
+
+A row does not attach, reply, stop or start a process, and answers no held prompt ([BG-7](#BG-7),
+[BG-9](#BG-9), [BG-10](#BG-10), [BG-11](#BG-11)). Its one action copies the line
+`bravebot attach <id>`, with the start of the id that the row shows, so the person can attach from
+a terminal.
+
+**Why.** Attaching is done in a terminal ([BG-9](#BG-9)), and a `stopped` or `interrupted` session
+is started again only by a terminal's `attach` or `reply` ([BG-2](#BG-2)). The desktop app finds a
+session and gives the person the command that opens it. With the rows and the words of BG-16, a
+session is named and placed the same way in both front ends.
+
+`verified-by: bravebot_ui_bridge::background::background_sessions_are_listed_in_state_order_and_most_recent_first_within_a_state`
+`verified-by: bravebot_ui_bridge::background::background_groups_carry_the_terminal_heading_and_a_count`
+`verified-by: bravebot_ui_bridge::background::background_state_words_are_the_terminal_row_words`
+`verified-by: bravebot_ui_bridge::background::background_state_is_the_word_the_roster_json_uses`
+`verified-by: bravebot_ui_bridge::background::a_background_row_carries_only_the_listed_fields`
+`verified-by: bravebot_ui_bridge::background::an_empty_or_absent_background_roster_lists_no_sessions`
+`verified-by: bravebot_session::listing::a_control_character_in_a_roster_row_is_pictured`
+`verified-by: by-construction (the bridge sends the groups with their headings, order, counts and state words, which the tests above hold, and the desktop renderer is not a crate this workspace compiles, so ui/scripts/background-list.test.mjs holds that it reads the sessions in the order sent and the copied line; ui/scripts/drive-background-sessions.mjs drives the section in a real window against a mocked background.list: the headings and counts, a row's id, name, time and state, the 28-column cut, the selected row's directory and prompt, the selected row moving under its new heading, the copy button as its only action writing bravebot attach and the short id, every row and the copy button sending the bridge nothing but background.list so no row control starts, replies to or stops a session, no reads while the list is hidden, and no section while the roster is empty)`
+
 ## What this changes in other specs
 
 None of the following is true of a build that has no background sessions, and each is marked where
@@ -627,6 +713,9 @@ it is stated.
   start is made for sessions that never edit. One at the first edit moves the working directory
   during a session.
 - **Whether a row can reply, stop or show more.** [BG-16](#BG-16) attaches and does nothing else.
+  A row of the desktop app's list ([BG-17](#BG-17)) only copies the attach command, because the
+  desktop app has no terminal to attach in. The desktop app's chat list stops a session from a
+  chat's menu ([BG-11](#BG-11)).
   Replying from a row is not specified. Stopping from a row, and a list of more than the background
   sessions, are in [sessions-screen.md](sessions-screen.md), which opens from a terminal with Left over an
   empty box. Showing what a session last wrote would put bytes a session produced in the list, which

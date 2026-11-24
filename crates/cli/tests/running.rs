@@ -18,6 +18,7 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+use bravebot_i18n::t;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -2447,6 +2448,80 @@ fn a_session_hook_that_could_not_start_is_said_whether_the_run_answered_or_faile
     assert!(stderr.contains("/no/such/closer"), "{stderr}");
 }
 
+/// T6, S15, PLUGIN-7: `bravebot -p` fires no plugin hook, because nobody can be asked. The plugin is
+/// installed and enabled and a yes for its hook is already recorded in `hooks-approved`, so a run that
+/// fired it would. The marker the hook writes stays absent and the approvals file is as it was.
+///
+/// Rejects: a one-shot run that reads a plugin's hooks and fires one recorded earlier.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_run_fires_no_plugin_hook_even_one_the_person_said_yes_to() {
+    use std::os::unix::fs::PermissionsExt;
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let scratch =
+        Scratch::new("cli-running-plugin-hook-one-shot").with_settings(&settings_for(&gateway));
+    let state = scratch.path.join(".bravebot");
+    let marker = scratch.path.join("plugin-hook-ran");
+    let source = scratch.path.join("plugin-source");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("plugin.toml"),
+        "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nhooks = \"hooks.json\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("hooks.json"),
+        r#"{"hooks":[
+            {"on":"turn-started","run":["${PLUGIN_ROOT}/hook.sh"]},
+            {"on":"turn-finished","run":["${PLUGIN_ROOT}/hook.sh"]},
+            {"on":"session-started","run":["${PLUGIN_ROOT}/hook.sh"]},
+            {"on":"session-ended","run":["${PLUGIN_ROOT}/hook.sh"]}
+        ]}"#,
+    )
+    .unwrap();
+    let script = source.join("hook.sh");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bravebot_agent::plugins::install(&source, &state).expect("install the plugin");
+
+    // A yes recorded for every hook the plugin carries, as a person's earlier answers would be.
+    let tree = bravebot_agent::plugins::read_record(&state, "demo")
+        .expect("a record")
+        .digest;
+    let hooks = bravebot_agent::plugins::installed_hooks(&state, "demo")
+        .expect("a hooks file")
+        .expect("readable");
+    let mut recorded = String::new();
+    for hook in hooks.hooks.declared() {
+        let digest = bravebot_config::hooks_approved::Digest::of(
+            "demo",
+            hook.moment().as_str(),
+            hook.run(),
+            &tree,
+        );
+        recorded.push_str(&format!("{digest} demo\n"));
+    }
+    std::fs::write(state.join("hooks-approved"), &recorded).unwrap();
+
+    let answered = bravebot(&scratch.path, AT_A_GATEWAY, &["-p", "say something"]);
+    let (_, stderr) = said(&answered);
+    assert!(answered.status.success(), "{stderr}");
+    assert!(
+        !marker.exists(),
+        "a plugin hook fired in a run nobody could be asked in: {:?}",
+        std::fs::read_to_string(&marker)
+    );
+    assert_eq!(
+        std::fs::read_to_string(state.join("hooks-approved")).unwrap(),
+        recorded,
+        "the run changed the approvals"
+    );
+}
+
 /// HOOK-10 in a session in lines: `session-started` fires once however many prompts follow, and
 /// `session-ended` fires when the input ends. The regression it rejects is a session that fires its
 /// start at each prompt, which runs a command meant to run once as often as the person types.
@@ -2664,10 +2739,22 @@ fn language_a_run_says_its_failure_in(
     cwd: Option<&Path>,
     environment: &[(&str, &str)],
 ) -> &'static str {
+    language_a_run_with_says_its_failure_in(scratch, cwd, environment, &[])
+}
+
+/// The same with `flags` typed before the prompt, such as `--incognito`.
+fn language_a_run_with_says_its_failure_in(
+    scratch: &Scratch,
+    cwd: Option<&Path>,
+    environment: &[(&str, &str)],
+    flags: &[&str],
+) -> &'static str {
     let mut held = FAILS_OVER_ITS_ENDPOINT.to_vec();
     held.push(("BRAVEBOT_LOCALE", ""));
     held.extend_from_slice(environment);
-    let (_, stderr) = said(&run(&scratch.path, cwd, &held, &["-p", "say something"]));
+    let mut arguments = flags.to_vec();
+    arguments.extend(["-p", "say something"]);
+    let (_, stderr) = said(&run(&scratch.path, cwd, &held, &arguments));
     match (
         stderr.contains("erreur de configuration"),
         stderr.contains("configuration error"),
@@ -2714,6 +2801,34 @@ fn a_language_saved_by_the_command_outranks_the_settings_file() {
     assert_eq!(
         language_a_run_says_its_failure_in(&scratch, None, &[("LANG", "fr_FR.UTF-8")]),
         "en-US"
+    );
+}
+
+/// INCOG-2. An incognito start reads the language the person recorded and opens in it: the choice
+/// outlives nothing, but what was kept before the session is still the person's. The shell says
+/// English and the recorded file says French, so a start that skipped the read under `--incognito`
+/// would answer in English. The same start without the flag is the control that the file is read
+/// at all.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_incognito_start_opens_in_the_language_the_person_recorded() {
+    let scratch = Scratch::new("cli-running-language-incognito").with_state("language", "fr\n");
+    let shell = [("LANG", "en_US.UTF-8")];
+
+    assert_eq!(
+        language_a_run_with_says_its_failure_in(&scratch, None, &shell, &[]),
+        "fr",
+        "the recorded language was not read without the flag"
+    );
+    assert_eq!(
+        language_a_run_with_says_its_failure_in(&scratch, None, &shell, &["--incognito"]),
+        "fr",
+        "an incognito start did not open in the recorded language"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".bravebot/language")).expect("the file"),
+        "fr\n",
+        "an incognito start rewrote the recorded language"
     );
 }
 
@@ -3678,6 +3793,105 @@ fn doctor_starts_no_aws_from_the_checkout_it_runs_in() {
     assert!(
         !marker.exists(),
         "the aws in the checkout was started: {stdout}{stderr}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "session   signed in"),
+        "the installed aws was not the one asked: {stdout}{stderr}"
+    );
+}
+
+/// SANDBOX-30 over two processes: a directory a session opened is one a stage of that session
+/// could write, so `doctor` in a later process, run from another directory with that directory
+/// first on `PATH`, asks the `aws` behind it and not the one a stage left there. The first process
+/// is a run that opens the directory with `--add-dir`, which records it in the state directory.
+/// The planted `aws` is written between the runs, as the stage of the first would have written
+/// it. The control is a later process with a state directory that holds no record, which starts
+/// the planted program, so what keeps it from starting is the record. Rejects a record that is
+/// never written, one that is never read, and one that is read into a set the lookup does not
+/// use.
+#[cfg(unix)]
+#[test]
+fn doctor_starts_no_aws_from_a_directory_an_earlier_process_granted() {
+    let (_gateway, scratch, cwd, beside) = a_directory_beside_whose_notes_the_model_reads(
+        "cli-running-doctor-aws-granted-earlier",
+        "notes.md",
+    );
+    let installed = aws_stand_in(&scratch);
+    let marker = scratch.path.join("planted-aws");
+
+    let earlier = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &[
+            "--add-dir",
+            beside.to_str().expect("a path that is text"),
+            "-p",
+            "hello",
+        ],
+    );
+    let (_, stderr) = said(&earlier);
+    assert!(earlier.status.success(), "{stderr}");
+    let record = std::fs::read_to_string(scratch.path.join(".bravebot").join("stage-writes"))
+        .unwrap_or_default();
+    assert!(
+        record.contains(&format!("directory\t{}\n", beside.display())),
+        "the run that opened the directory did not record it: {record:?}"
+    );
+
+    let body = format!("printf x >> '{}' 2>/dev/null; exit 255", marker.display());
+    stand_in(&beside.join("bin"), "aws", &body);
+    let path = std::env::join_paths([beside.join("bin").as_path(), Path::new(&installed)])
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let settings = r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}},
+            "model": "opus"}"#;
+    std::fs::write(
+        scratch.path.join(".bravebot").join("settings.json"),
+        settings,
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("aws-work"), "").unwrap();
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", path.as_str()),
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-east-1"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+
+    // The control: the same directory and `PATH` under a state directory with no record.
+    let without = Scratch::new("cli-running-doctor-aws-granted-earlier-control")
+        .with_settings(settings)
+        .with_file("aws-work", "");
+    let control = bravebot_started_in(
+        &without.path,
+        &checkout_in(&without),
+        &environment,
+        &["doctor"],
+    );
+    let (stdout, stderr) = said(&control);
+    assert!(
+        marker.exists(),
+        "the control did not start the planted aws, so it shows nothing: {stdout}{stderr}"
+    );
+    std::fs::remove_file(&marker).unwrap();
+
+    let later = bravebot_started_in(
+        &scratch.path,
+        &checkout_in(&scratch),
+        &environment,
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&later);
+    assert!(
+        !marker.exists(),
+        "the aws in a directory an earlier process opened was started: {stdout}{stderr}"
     );
     assert!(
         stdout
@@ -4658,6 +4872,44 @@ fn the_setting_that_opens_sessions_in_auto_leaves_a_one_shot_run_asking() {
     );
 }
 
+/// MODE-1: a one-shot run given no mode flag, with no setting, opens asking. A write nobody can
+/// approve is refused on status 4 and the file is not written, and the planner is not told it is in
+/// plan mode, which refuses a write too and so would give the same status. The faults it rejects are
+/// a default that answers the write (accepting edits, auto or bypass: the file appears) and a
+/// default of plan mode (the system prompt carries its instruction).
+#[test]
+fn a_one_shot_run_with_no_flag_and_no_setting_opens_asking() {
+    let gateway = a_gateway_asking_for_a_write();
+    let scratch =
+        Scratch::new("cli-running-one-shot-opens-asking").with_settings(&settings_for(&gateway));
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["-p", "write out.txt"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(4), "{stdout}{stderr}");
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "a one-shot run with no flag wrote the file"
+    );
+    let asked: Vec<String> = gateway.asked.try_iter().collect();
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains(r#""name":"write_file""#)),
+        "the planner was never offered the write: {asked:?}"
+    );
+    for body in &asked {
+        assert!(
+            !body.contains("so writing is refused while it lasts"),
+            "a one-shot run with no flag opened in plan mode: {body}"
+        );
+    }
+}
+
 /// CLI-6: a write nobody could approve is an effect a gate refused, so the run exits on status 4
 /// and says `BB1004`, however calmly the planner then reports it. The reply still reaches stdout.
 ///
@@ -5583,6 +5835,116 @@ fn doctor_names_a_restriction_that_names_nothing() {
     );
 }
 
+/// BACKEND-36 and SERVERS-12 on a machine whose configuration cannot be used: `doctor` still names
+/// a key nothing reads and a key a settings file wrote twice, with the file, and prints no value.
+/// The configuration error is an endpoint that names no scheme, the case the test of the status
+/// above uses, and the status stays the configuration one.
+///
+/// Rejects a report that prints the dropped-entry lines only where the configuration loads: its
+/// author is not told anywhere else, and a settings file with a misspelled restriction is as likely
+/// to sit beside a broken endpoint as beside a working one.
+#[test]
+fn doctor_names_a_dropped_key_when_the_configuration_has_an_error() {
+    let scratch = Scratch::new("cli-running-unread-with-error").with_settings(
+        r#"{"statusLine": "a-command-nothing-else-prints",
+            "permissions": {"deny": ["Read(a-rule-nothing-else-prints)"], "deny": []}}"#,
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "ai-chat.example.invalid"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "the report did not end on the configuration status: {stdout}{stderr}"
+    );
+    let file = scratch.path.join(".bravebot").join("settings.json");
+    assert!(
+        stdout.contains(&format!("statusLine in {}", file.display())),
+        "an unread key was left unnamed because the configuration has an error: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "permissions.deny is written more than once in {}",
+            file.display()
+        )),
+        "a repeated key was left unnamed because the configuration has an error: {stdout}"
+    );
+    assert!(
+        !stdout.contains("a-command-nothing-else-prints")
+            && !stdout.contains("a-rule-nothing-else-prints"),
+        "the report printed what a key was set to: {stdout}"
+    );
+}
+
+/// RUN-28 from the process that reads the file: `doctor` says, for each pattern in `run.scrubEnv`,
+/// the pattern and one variable it reached, in the order the entries are written, says nothing for
+/// an exact entry, and prints no value.
+///
+/// An implementation that leaves the pattern lines out of the report passes every test of the
+/// matching in `bravebot-config`, since none of them runs `doctor`. The exact entry names a
+/// variable this process holds, so a report that listed exact entries as well would print a line
+/// for it. The two patterns are written in the opposite order to their names, so a report that
+/// sorted them would swap the lines.
+#[test]
+fn doctor_names_what_a_pattern_in_the_scrub_list_reached() {
+    let scratch = Scratch::new("cli-running-scrub-pattern").with_settings(
+        r#"{"run": {"scrubEnv": ["BRAVEBOT_DOCTOR_ZED_?",
+                                 "BRAVEBOT_DOCTOR_EXACT",
+                                 "BRAVEBOT_DOCTOR_ALPHA_*"]}}"#,
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+            ("BRAVEBOT_DOCTOR_ZED_1", "a-zed-value-nothing-prints"),
+            ("BRAVEBOT_DOCTOR_EXACT", "an-exact-value-nothing-prints"),
+            ("BRAVEBOT_DOCTOR_ALPHA_ONE", "an-alpha-value-nothing-prints"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "doctor did not run: {stderr}");
+    let line_of = |needle: &str| {
+        stdout
+            .lines()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("no line holds `{needle}`: {stdout}"))
+    };
+    let zed = line_of("BRAVEBOT_DOCTOR_ZED_? selected BRAVEBOT_DOCTOR_ZED_1");
+    let alpha = line_of("BRAVEBOT_DOCTOR_ALPHA_* selected BRAVEBOT_DOCTOR_ALPHA_ONE");
+    assert!(
+        zed < alpha,
+        "the lines are not in the order the entries are written: {stdout}"
+    );
+    assert!(
+        !stdout.contains("BRAVEBOT_DOCTOR_EXACT"),
+        "an exact entry was given a line: {stdout}"
+    );
+    for value in [
+        "a-zed-value-nothing-prints",
+        "an-exact-value-nothing-prints",
+        "an-alpha-value-nothing-prints",
+    ] {
+        assert!(
+            !stdout.contains(value),
+            "the report printed the value of a variable: {stdout}"
+        );
+    }
+}
+
 /// BACKEND-36 for a repeated key, from the process that reads the file: a key one settings file
 /// writes twice is named with its file and key path, the values are not printed, a deny written
 /// first still applies, and the run passes.
@@ -6367,6 +6729,60 @@ fn a_one_shot_run_draws_the_control_characters_of_a_checkouts_rule_as_pictures()
     );
 }
 
+/// BACKEND-36, RETRIEVE-23: a one-shot run names the keys of its settings that were not read or were
+/// written twice on stderr before the task, in the sentences `doctor` uses, once each, and never
+/// what a key was set to. Nobody runs `doctor` for a run nobody watches, so a misspelled key in a
+/// checkout's file reads to its writer as a restriction in force.
+///
+/// Rejects a run that leaves these to `doctor`, one that says a key once for each layer, one that
+/// prints a value, and one that sends the note to stdout, which carries the reply and nothing else.
+/// The run goes to the end, which is what shows the notes were not an error that stopped it.
+#[test]
+fn a_one_shot_run_names_the_keys_its_settings_dropped_on_stderr() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("done"));
+    let scratch =
+        Scratch::new("cli-running-one-shot-dropped-keys").with_settings(&settings_for(&gateway));
+    let cwd = scratch.path.join("checkout");
+    let project = cwd.join(".bravebot");
+    std::fs::create_dir_all(&project).expect("create the project directory");
+    std::fs::write(
+        project.join("settings.json"),
+        r#"{"statusLine": "a-command-nobody-prints",
+            "permissions": {"deny": ["Read(a-rule-nobody-prints)"], "deny": []}}"#,
+    )
+    .expect("write the project layer");
+
+    let output = bravebot_started_in(&scratch.path, &cwd, AT_A_GATEWAY, &["-p", "say hello"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "the run did not finish: {stderr}");
+    let file = project.join("settings.json");
+    let named = |needle: &str| stderr.lines().filter(|line| line.contains(needle)).count();
+    assert_eq!(
+        named(&format!("statusLine in {}", file.display())),
+        1,
+        "{stderr}"
+    );
+    assert_eq!(
+        named(&format!(
+            "permissions.deny is written more than once in {}",
+            file.display()
+        )),
+        1,
+        "{stderr}"
+    );
+    for value in ["a-command-nobody-prints", "a-rule-nobody-prints"] {
+        assert!(
+            !stderr.contains(value) && !stdout.contains(value),
+            "a value is said: {stdout}{stderr}"
+        );
+    }
+    assert!(
+        !stdout.contains("statusLine"),
+        "a note was written to stdout, which carries the reply: {stdout}"
+    );
+}
+
 /// LAYER-3 for `permissions check`: the rule that decided a call, and a checkout's `allow` rule
 /// that would have, are named back to the person, and both are text the checkout wrote.
 #[test]
@@ -6424,9 +6840,12 @@ fn permissions_check_draws_the_control_characters_of_a_checkouts_rules_as_pictur
 /// of the input is what the run reads at its first question, so a session that opens ends itself
 /// rather than waiting for as long as the suite is allowed to run.
 ///
-/// Linux, because the two `script` commands in the world take different arguments and report the
-/// child's status differently, and the job that runs this suite is Linux.
-#[cfg(target_os = "linux")]
+/// Unix, where [`in_a_terminal_command`] chooses the arguments of whichever `script` the system
+/// has. [`in_a_terminal_answering`] builds on Unix too, and holds the input open on the BSD
+/// `script` until the run ends; the tests that need a status through typed input stay Linux only,
+/// since the two `script` commands in the world report a child's status differently once input is
+/// typed at them, and the job that runs this suite is Linux.
+#[cfg(unix)]
 fn in_a_terminal(home: &Path, environment: &[(&str, &str)], arguments: &[&str]) -> Output {
     in_a_terminal_run(home, None, environment, arguments)
 }
@@ -6444,7 +6863,7 @@ fn in_a_terminal_started_in(
     in_a_terminal_run(home, Some(cwd), environment, arguments)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn in_a_terminal_run(
     home: &Path,
     cwd: Option<&Path>,
@@ -6462,7 +6881,9 @@ fn in_a_terminal_run(
 ///
 /// Written whole before the run asks anything. The terminal holds typed lines until something reads
 /// them, which is what a person typing ahead gets too, so each question reads the next line.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
 fn in_a_terminal_answering(
     home: &Path,
     environment: &[(&str, &str)],
@@ -6476,15 +6897,71 @@ fn in_a_terminal_answering(
         .stderr(Stdio::piped())
         .spawn()
         .expect("script runs the built binary in a terminal");
-    child
-        .stdin
-        .take()
-        .expect("the terminal's input")
+    let mut input = child.stdin.take().expect("the terminal's input");
+    input
         .write_all(answers.as_bytes())
         .expect("type the answers");
-    child
-        .wait_with_output()
-        .expect("script runs the built binary in a terminal")
+    if cfg!(target_os = "linux") {
+        drop(input);
+    } else {
+        // The BSD `script` sends the end of the input into the terminal as soon as its own stdin
+        // closes, ahead of a line the run has not read yet, so the first question reads the end
+        // of the input and not the answer. The input is held open until the run ends, which it
+        // does on its own after the questions the test answers.
+        std::mem::forget(input);
+    }
+    // The run ends on its own after the questions the test answers. One that asks more than the
+    // answers cover would wait for input that never comes on the BSD `script`, so the wait is
+    // bounded and the child is stopped, which fails the test with what it had written.
+    let mut written = Vec::new();
+    for stream in [
+        child
+            .stdout
+            .take()
+            .map(|s| Box::new(s) as Box<dyn Read + Send>),
+        child
+            .stderr
+            .take()
+            .map(|s| Box::new(s) as Box<dyn Read + Send>),
+    ] {
+        let mut stream = stream.expect("the terminal's output");
+        written.push(std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).ok();
+            bytes
+        }));
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("script can be waited on") {
+            break Some(status);
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill().ok();
+            child.wait().ok();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let mut streams = written
+        .into_iter()
+        .map(|reader| reader.join().unwrap_or_default());
+    let (stdout, stderr) = (
+        streams.next().unwrap_or_default(),
+        streams.next().unwrap_or_default(),
+    );
+    let Some(status) = status else {
+        panic!(
+            "the run asked for more than the answers given and was stopped after 120 seconds:\n{}{}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+    };
+    Output {
+        status,
+        stdout,
+        stderr,
+    }
 }
 
 #[cfg(unix)]
@@ -9760,6 +10237,43 @@ fn an_exported_key_is_importable_and_the_refusal_names_the_command() {
     );
 }
 
+/// IMPORT-8: `--json` is one of the cases that never ask, and its refusal is the same refusal, so
+/// with a key exported it names the command that asks, on stderr and in the result object on
+/// stdout. A refusal that left the line out where `--json` was given passes the tests that run
+/// `-p` alone.
+#[test]
+fn a_json_first_run_names_the_import_command_and_asks_nothing() {
+    let scratch = Scratch::new("cli-running-import-json");
+    let environment = [
+        NOTHING_CONFIGURED,
+        &[("OPENAI_API_KEY", "sk-proj-exported-nobody-may-see")],
+    ]
+    .concat();
+
+    let output = bravebot(
+        &scratch.path,
+        &environment,
+        &["--json", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(
+        stderr.contains("An API key for a model service bravebot can use is exported here")
+            && stderr.contains("bravebot auth login import"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("bravebot auth login import"),
+        "the result object did not name the command: {stdout}"
+    );
+    assert!(
+        !stdout.contains("nobody-may-see") && !stderr.contains("nobody-may-see"),
+        "the key was shown: {stdout}{stderr}"
+    );
+    assert!(!scratch.settings().exists(), "a --json run wrote settings");
+}
+
 /// IMPORT-4, IMPORT-8: a key exported beside a host of its own cannot be written at the endpoint
 /// compiled in, so the refusal says it was left, before the routes, by the variable's name and
 /// never its value or the host, and names no command that would only ask nothing.
@@ -9914,6 +10428,53 @@ fn a_first_run_with_a_claude_code_key_command_writes_an_entry_naming_the_variabl
     }
 }
 
+/// IMPORT-4: at a start that can ask, what the source holds and the import leaves is said once,
+/// before the question, and an answer of `y` writes the import without saying it again after the
+/// written line: the refusal that follows names the routes and not the lines already drawn.
+/// Rejects a start that reads the sources again after the import was written (the heading and the
+/// `- model:` line are said a second time) and one that says them after the question and not
+/// before it.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn an_import_answered_yes_says_what_was_left_once_and_before_the_question() {
+    let scratch = Scratch::new("cli-running-import-left-answered-yes")
+        .with_file(".claude/settings.json", CLAUDE_CODE_KEY_COMMAND);
+
+    let output = in_a_terminal_answering(&scratch.path, NOTHING_CONFIGURED, &["--plain"], "y\n");
+
+    let (transcript, _) = said(&output);
+    let heading = "Found in Claude Code and not imported:";
+    assert_eq!(
+        transcript.matches(heading).count(),
+        1,
+        "the heading was not said exactly once: {transcript}"
+    );
+    assert_eq!(
+        transcript.matches("- model:").count(),
+        1,
+        "what was left was not said exactly once: {transcript}"
+    );
+    let left = transcript.find("- model:").expect("checked above");
+    let question = transcript
+        .find("Import this from Claude Code?")
+        .unwrap_or_else(|| panic!("no import was offered: {transcript}"));
+    let written = transcript
+        .find("imported what Claude Code configured into")
+        .unwrap_or_else(|| panic!("the import was not said to be written: {transcript}"));
+    assert!(left < question && question < written, "{transcript}");
+    assert!(
+        transcript
+            .match_indices(heading)
+            .chain(transcript.match_indices("- model:"))
+            .all(|(at, _)| at < written),
+        "what was left was said again after the write: {transcript}"
+    );
+    let file = std::fs::read_to_string(scratch.settings()).expect("the import was written");
+    assert!(file.contains("ANTHROPIC_API_KEY"), "{file}");
+}
+
 /// IMPORT-8: a one-shot run has nobody to ask, so it reads no answer and writes nothing, and its
 /// refusal names the command that does ask.
 #[test]
@@ -10000,6 +10561,299 @@ fn a_settings_file_the_import_would_take_too_large_is_named_in_place_of_the_comm
         std::fs::read_to_string(scratch.settings()).expect("read"),
         padded
     );
+}
+
+/// IMPORT-8: `doctor` repeats the refusal, so with something importable its report carries the
+/// line naming the source and the command that asks, asks nothing itself and writes nothing. Where
+/// the settings file is one the import cannot write, the file is named in place of the command. A
+/// `doctor` that printed the how-to without the import line passes the other `doctor` tests.
+#[test]
+fn doctor_with_something_importable_names_the_import_command_and_asks_nothing() {
+    let importable = Scratch::new("cli-running-doctor-import-importable")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK);
+
+    let output = bravebot(&importable.path, NOTHING_CONFIGURED, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.contains("Claude Code") && line.contains("bravebot auth login import")),
+        "the report did not name the source and the command: {stdout}{stderr}"
+    );
+    assert!(!stdout.contains("Import this"), "{stdout}");
+    assert!(
+        !importable.settings().exists(),
+        "doctor wrote settings: {stdout}"
+    );
+
+    let broken = r#"{"env": {"AWS_REGION": "eu-central-1",}"#;
+    let unwritable = Scratch::new("cli-running-doctor-import-unwritable")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK)
+        .with_settings(broken);
+
+    let output = bravebot(&unwritable.path, NOTHING_CONFIGURED, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("does not hold a settings document"),
+        "the report did not name the file: {stdout}{stderr}"
+    );
+    assert!(!stdout.contains("auth login import"), "{stdout}");
+    assert_eq!(
+        std::fs::read_to_string(unwritable.settings()).expect("read"),
+        broken
+    );
+}
+
+/// IMPORT-8: with no source holding anything and no model server answering, `import-providers` on a
+/// terminal says that nothing was found, as the words for "found nothing" and not those for
+/// "already set", ends successfully and writes no settings. It runs in a terminal because the
+/// command reads the real standard input and error, which no function test reaches. Rejects a
+/// command that prints nothing, ends non-zero, or writes an empty settings file.
+#[cfg(unix)]
+#[test]
+fn import_providers_with_nothing_to_find_says_so_and_writes_nothing() {
+    let scratch = Scratch::new("cli-running-import-providers-nothing-found");
+
+    let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, &["import-providers"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    assert!(
+        transcript.contains(
+            "neither Claude Code nor opencode configures a model service bravebot can use"
+        ),
+        "the command did not say it found nothing: {transcript}"
+    );
+    assert!(
+        !transcript.contains("nothing is left to import"),
+        "a machine with nothing found was told its names are already set: {transcript}"
+    );
+    assert!(
+        !scratch.settings().exists(),
+        "a run that found nothing wrote settings"
+    );
+}
+
+/// IMPORT-8: where everything a source holds is already in the person's settings, the command says
+/// that nothing is left to import, which is a different sentence from finding nothing. The
+/// settings already hold each name Claude Code's Bedrock setup would add. Rejects a command whose
+/// `settled` answer is dropped or inverted, which says "found nothing" to a person who has already
+/// imported everything.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn import_providers_with_every_name_already_set_says_nothing_is_left() {
+    let settings = r#"{
+        "env": {
+            "BRAVEBOT_USE_BEDROCK": "1",
+            "AWS_REGION": "eu-central-1",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        },
+        "model": "sonnet"
+    }"#;
+    let scratch = Scratch::new("cli-running-import-providers-settled")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK)
+        .with_settings(settings);
+
+    let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, &["import-providers"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    assert!(
+        transcript.contains("nothing is left to import"),
+        "the command did not say that nothing is left: {transcript}"
+    );
+    assert!(
+        !transcript.contains("neither Claude Code nor opencode"),
+        "names that were already set were reported as not found: {transcript}"
+    );
+    assert!(
+        !transcript.contains("Import this"),
+        "the command asked about names the file already holds: {transcript}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.settings()).expect("the settings"),
+        settings,
+        "the command changed a file it had nothing to add to"
+    );
+}
+
+/// IMPORT-4, IMPORT-8: a run that has nothing to import still says what it found in a source and
+/// left, by name and never by value, and says it before the sentence that nothing is left. Rejects
+/// a command that returns on finding nothing to ask before the lines about what was left are drawn.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn import_providers_with_only_what_is_left_names_it_before_saying_nothing_is_found() {
+    let scratch = Scratch::new("cli-running-import-providers-left").with_file(
+        ".claude/settings.json",
+        r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-ant-oat01-a-token-nobody-may-see"}}"#,
+    );
+
+    let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, &["import-providers"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    let heading = transcript
+        .find("Found in Claude Code and not imported:")
+        .unwrap_or_else(|| panic!("what was left was not introduced: {transcript}"));
+    let left = transcript
+        .find("ANTHROPIC_AUTH_TOKEN")
+        .unwrap_or_else(|| panic!("what was left was not named: {transcript}"));
+    let nothing = transcript
+        .find("neither Claude Code nor opencode")
+        .unwrap_or_else(|| panic!("the nothing-found sentence is missing: {transcript}"));
+    assert!(heading < left && left < nothing, "{transcript}");
+    assert!(
+        !transcript.contains("a-token-nobody-may-see"),
+        "the value was drawn: {transcript}"
+    );
+    assert!(!scratch.settings().exists(), "the run wrote settings");
+}
+
+/// IMPORT-4: at a start that can ask (three terminals, nothing configured, not incognito) what a
+/// source holds and the import leaves is said once, by name and never by value, before the
+/// refusal's routes, whether the source holds nothing importable or something that is asked about.
+/// Rejects a start that refuses with an empty `Looked` before the sources are offered (the lines
+/// are lost), and one that reads the sources again after the offer (the lines are said twice).
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_start_that_can_ask_says_what_it_found_and_left_before_the_refusal() {
+    // Only what cannot be imported: nothing is asked, the lines are said, the start refuses.
+    let scratch = Scratch::new("cli-running-import-left-at-start").with_file(
+        ".claude/settings.json",
+        r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-ant-oat01-a-token-nobody-may-see"}}"#,
+    );
+    let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, &["--plain"]);
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    assert!(!transcript.contains("Import this"), "{transcript}");
+    assert_eq!(
+        transcript
+            .matches("Found in Claude Code and not imported:")
+            .count(),
+        1,
+        "the heading was not said exactly once: {transcript}"
+    );
+    assert_eq!(
+        transcript.matches("- ANTHROPIC_AUTH_TOKEN:").count(),
+        1,
+        "the name was not said exactly once: {transcript}"
+    );
+    let left = transcript
+        .find("- ANTHROPIC_AUTH_TOKEN:")
+        .expect("checked above");
+    let route = transcript
+        .find("amazon-bedrock")
+        .unwrap_or_else(|| panic!("the refusal's routes were not said: {transcript}"));
+    assert!(
+        left < route,
+        "what was left came after the routes: {transcript}"
+    );
+    assert!(
+        !transcript.contains("a-token-nobody-may-see"),
+        "the value was drawn: {transcript}"
+    );
+    assert!(!scratch.settings().exists(), "the start wrote settings");
+
+    // Something importable beside something left: the left line comes before the question, and
+    // the unanswered question is declined and refused.
+    let scratch = Scratch::new("cli-running-import-left-with-question")
+        .with_file(".claude/settings.json", CLAUDE_CODE_KEY_COMMAND);
+    let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, &["--plain"]);
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    let left = transcript
+        .find("- model:")
+        .unwrap_or_else(|| panic!("the model left was not said: {transcript}"));
+    let question = transcript
+        .find("Import this")
+        .unwrap_or_else(|| panic!("nothing was asked: {transcript}"));
+    assert!(left < question, "{transcript}");
+    assert_eq!(transcript.matches("- model:").count(), 1, "{transcript}");
+    assert!(
+        !transcript.contains("in-the-command-nobody-may-see"),
+        "the command was drawn: {transcript}"
+    );
+}
+
+/// CLI-15: a session in lines given `--vet` resolves auto-vetting on from the flag and says, after
+/// the line about the skipped permissions, that bypass refuses what a check objects to. Without the
+/// flag it says the first line and nothing about vetting. The notice is printed from the value the
+/// session is handed, so a hand-off that resolves the standing answer to a constant, or that
+/// prints the vetting line whenever the flag is present, is told apart from the required one by the
+/// two runs. Rejects `standing_vetting` returning false whatever the flag said, and a notice that is
+/// said for a run that has auto-vetting off.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_session_in_lines_given_the_vet_flag_says_what_bypass_refuses() {
+    let said_with = |name: &str, extra: &[&str]| {
+        let gateway = a_gateway(r#"["tools"]"#, answered("all done"));
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let mut arguments = vec!["--plain", "--dangerously-skip-permissions"];
+        arguments.extend_from_slice(extra);
+        let output = in_a_terminal(&scratch.path, AT_A_GATEWAY, &arguments);
+        said(&output).0
+    };
+    let flag_line = "--dangerously-skip-permissions: nothing will be asked";
+    let vetting_line = "bypass is on with auto-vetting";
+
+    let vetted = said_with("cli-running-plain-bypass-vet", &["--vet"]);
+    let flag = vetted
+        .find(flag_line)
+        .unwrap_or_else(|| panic!("the flag's line was not said: {vetted}"));
+    let screens = vetted
+        .find(vetting_line)
+        .unwrap_or_else(|| panic!("the vetting line was not said under --vet: {vetted}"));
+    assert!(
+        flag < screens,
+        "the lines came in the wrong order: {vetted}"
+    );
+
+    let plain = said_with("cli-running-plain-bypass-no-vet", &[]);
+    assert!(plain.contains(flag_line), "{plain}");
+    assert!(
+        !plain.contains(vetting_line),
+        "a session without auto-vetting said what auto-vetting refuses: {plain}"
+    );
+}
+
+/// IMPORT-8: `doctor` and a one-shot run never ask, even where stdin, stdout and stderr are all
+/// terminals, which is the case where a start would ask. Each ends on the configuration status,
+/// names the command that asks, and writes nothing. Rejects either path calling the start-up
+/// import, which asks wherever all three are terminals, instead of only looking.
+#[cfg(unix)]
+#[test]
+fn doctor_and_a_one_shot_run_in_a_terminal_name_the_import_command_and_do_not_ask() {
+    for (name, arguments) in [
+        ("doctor", &["doctor"][..]),
+        ("one-shot", &["-p", "hi"][..]),
+        ("json", &["-p", "hi", "--json"][..]),
+    ] {
+        let scratch = Scratch::new(&format!("cli-running-import-terminal-{name}"))
+            .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK);
+
+        let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, arguments);
+
+        let (transcript, _) = said(&output);
+        assert_eq!(output.status.code(), Some(3), "{name}: {transcript}");
+        assert!(
+            !transcript.contains("Import this"),
+            "{name} asked in a terminal: {transcript}"
+        );
+        assert!(
+            transcript.contains("bravebot auth login import"),
+            "{name} did not name the command that asks: {transcript}"
+        );
+        assert!(!scratch.settings().exists(), "{name} wrote settings");
+    }
 }
 
 /// IMPORT-8: an import is a write, which an incognito session will not do.
@@ -13322,6 +14176,70 @@ fn a_continued_run_given_the_workspace_flag_reads_a_project_file_as_trusted() {
     );
 }
 
+/// CLI-25. A run carrying on a session starts from the trust map its record holds, with no flag
+/// given, so a file the session's person vouched for reaches the planner as its own words. Rejects a
+/// continued run that starts from the fallback map and leaves the recorded one out. The control
+/// continues a record whose map has no rule for the file and reads it quarantined, so the words the
+/// planner sees are the recorded rule's doing. `--trust-workspace` is not given, since it trusts the
+/// working directory whichever map the run started from.
+#[test]
+fn a_continued_run_starts_from_the_trust_map_its_record_held() {
+    let (gateway, scratch, cwd) =
+        a_project_whose_notes_the_model_reads("cli-running-trust-recorded-continued");
+    let earlier = || {
+        let run = bravebot_started_in(
+            &scratch.path,
+            &cwd,
+            AT_A_GATEWAY,
+            &["--json", "-p", "hello"],
+        );
+        let (stdout, stderr) = said(&run);
+        assert!(run.status.success(), "{stderr}");
+        session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"))
+    };
+    let (for_the_control, for_the_rule) = (earlier(), earlier());
+    assert_ne!(for_the_control, for_the_rule);
+    let _ = requests(&gateway);
+
+    let mut record = the_record(&scratch, &for_the_rule);
+    assert!(
+        record["trust"].is_array(),
+        "the first run recorded no trust map: {record}"
+    );
+    record["trust"] = serde_json::json!([{"path": "notes.md", "integrity": "trusted"}]);
+    std::fs::write(
+        the_record_file(&scratch, &for_the_rule),
+        serde_json::to_vec(&record).expect("encode the record"),
+    )
+    .expect("write the record back");
+
+    let without = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &["--resume", &for_the_control, "-p", "read the notes"],
+    );
+    let (_, stderr) = said(&without);
+    assert!(without.status.success(), "{stderr}");
+    assert!(
+        !the_planner_saw_the_notes(&gateway),
+        "the continued run trusted a file its record held no rule for"
+    );
+
+    let with = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &["--resume", &for_the_rule, "-p", "read the notes"],
+    );
+    let (_, stderr) = said(&with);
+    assert!(with.status.success(), "{stderr}");
+    assert!(
+        the_planner_saw_the_notes(&gateway),
+        "the continued run did not start from the trust map its record held"
+    );
+}
+
 /// CLI-1: in a one-shot run that trusts its workspace, an `allow` rule over a file lets an edit of it
 /// land, and a rule over another file does not. The trust map alone refuses the same edit
 /// (`a_one_shot_run_that_trusts_its_workspace_still_refuses_a_write_without_the_skip_flag`), so the
@@ -13636,6 +14554,85 @@ fn a_reference_a_settings_file_declares_is_read_quarantined_beside_a_trusted_add
         !the_planner_saw_the_notes(&gateway),
         "a reference was trusted with the directory the command line opened"
     );
+}
+
+/// CLI-11, REFER-3. A reference a settings file declares is reachable by absolute path, as a
+/// directory opened with `--add-dir` is, and nothing in it is trusted: the planner's read of a file
+/// in it comes back as a quarantined result, not as the refusal for a path outside the workspace and
+/// not as the file's words. The run names no `--add-dir`, so the reference is the only thing that
+/// opens the directory. The control declares no reference and reads the same path, which is
+/// refused as outside the workspace. Rejects a workspace built without `with_references`, or from
+/// the project layer, where the existing assertion that the words did not reach the planner also
+/// holds because the read was refused.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_reference_a_settings_file_declares_is_reachable_and_read_quarantined() {
+    let words = "THE-WORDS-IN-THE-PROJECT-NOTES";
+    let reads_of = |name: &str, declared: bool| -> Vec<String> {
+        let path = Arc::new(std::sync::OnceLock::<String>::new());
+        let given = Arc::clone(&path);
+        let gateway = a_gateway_whose_model_reads(move || {
+            given
+                .get()
+                .cloned()
+                .expect("the path is set before the run")
+        });
+        let scratch = Scratch::new(name);
+        let cwd = scratch.path.join("project");
+        std::fs::create_dir_all(&cwd).expect("create the project");
+        let referenced = scratch.path.join("referenced");
+        std::fs::create_dir_all(&referenced).expect("create the referenced directory");
+        std::fs::write(referenced.join("notes.md"), words).expect("write the notes");
+        let referenced = referenced.canonicalize().expect("the referenced directory");
+        let mut settings: serde_json::Value =
+            serde_json::from_str(&settings_for(&gateway)).expect("the settings are JSON");
+        if declared {
+            settings["references"] = serde_json::json!({"docs": referenced.display().to_string()});
+        }
+        let scratch = scratch.with_settings(&settings.to_string());
+        path.set(referenced.join("notes.md").display().to_string())
+            .expect("the path is set once");
+
+        let output = bravebot_started_in(
+            &scratch.path,
+            &cwd,
+            AT_A_GATEWAY,
+            &["--trust-workspace", "-p", "read the notes"],
+        );
+
+        let (_, stderr) = said(&output);
+        // The control's read is refused by a gate, which a run reports as status 4.
+        let expected = if declared { 0 } else { 4 };
+        assert_eq!(output.status.code(), Some(expected), "{name}: {stderr}");
+        if !declared {
+            assert!(
+                stderr.contains("resolves outside the workspace"),
+                "the control was not refused as outside the workspace: {stderr}"
+            );
+        }
+        requests(&gateway)
+    };
+    let tool_result_of = |sent: &[String]| -> String {
+        let last = sent.last().expect("the planner was asked again");
+        assert!(last.contains(r#""role":"tool""#), "{last}");
+        last.clone()
+    };
+
+    let with = reads_of("cli-running-reference-reachable", true);
+    let with = tool_result_of(&with);
+    assert!(
+        with.contains("could not be shown to you"),
+        "the read of a reference was not a quarantined result: {with}"
+    );
+    assert!(!with.contains(words), "a reference was trusted: {with}");
+
+    let without = reads_of("cli-running-reference-undeclared", false);
+    let without = tool_result_of(&without);
+    assert!(
+        !without.contains("could not be shown to you"),
+        "a directory nothing declared was reachable: {without}"
+    );
+    assert!(!without.contains(words), "{without}");
 }
 
 /// CLI-11, TRUST-10. The rule recorded for an added directory is about the directory as it was
@@ -14033,6 +15030,47 @@ fn the_agent_flag_outranks_the_agent_setting() {
     let (stdout, stderr) = said(&output);
     assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
     assert!(stdout.contains(r#""agent":"scribe""#), "{stdout}");
+}
+
+/// ADDRESS-13: the name a continued session's record carries outranks the `agent` setting, so a
+/// session does not change definition when the setting is edited. The setting names `scribe`
+/// throughout and the first run was started under `rule-reviewer` with the flag, so a run that put
+/// the setting above the record would be addressed to `scribe` and say the setting chose it.
+#[test]
+fn a_recorded_definition_outranks_the_agent_setting_on_a_continued_run() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch = Scratch::new("cli-running-agent-setting-record")
+        .with_settings(&settings_naming_an_agent(&gateway, "scribe"))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        )
+        .with_state(
+            "agents/scribe.md",
+            &a_definition("scribe", "kind: reader\n"),
+        );
+
+    let (output, stdout, stderr) =
+        a_recorded_run(&scratch, &["--agent", "rule-reviewer", "-p", "FIRST"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    let _ = requests(&gateway);
+
+    let (output, stdout, stderr) = a_recorded_run(&scratch, &["-p", "SECOND", "--continue"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains(r#""agent":"rule-reviewer""#) && !stdout.contains("scribe"),
+        "the setting outranked the recorded definition: {stdout}"
+    );
+    assert!(
+        !stderr.contains("the agent setting chose this definition"),
+        "the run said the setting chose its definition: {stderr}"
+    );
+    let sent = requests(&gateway).join("\n");
+    assert!(
+        sent.contains("addressed this turn to rule-reviewer")
+            && !sent.contains("addressed this turn to scribe"),
+        "the continued turn was not addressed to the recorded definition: {sent}"
+    );
 }
 
 /// ADDRESS-13: a checkout's `agent` key chooses nothing, because nobody vouched for the file that
@@ -15720,6 +16758,42 @@ fn a_completion_script_names_every_command_and_flag_the_usage_table_lists() {
     }
 }
 
+/// CMD-21, CLI-20. `--help` lists `/effort` with the word `session` and the five levels, as the box
+/// draws them after `/effort `, and `/model` with `[session]`. The row is read off the printed
+/// table of interactive commands, whose first column is the command and its hint. The faults it
+/// rejects are the usage table printing the levels alone, which leaves the form `/effort session`
+/// undiscoverable from `--help`, and a hint written out again in the usage code that drifts from
+/// the one the box draws.
+#[test]
+fn help_lists_the_effort_command_with_the_session_word_and_the_levels() {
+    let scratch = Scratch::new("cli-running-help-effort-row");
+    let output = bravebot(&scratch.path, &[], &["--help"]);
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+
+    let row = |command: &str| {
+        stdout
+            .lines()
+            .find(|line| line.starts_with(&format!("  {command} ")))
+            .unwrap_or_else(|| panic!("--help has no row for {command}: {stdout}"))
+            .trim_start()
+            .split("  ")
+            .take(2)
+            .collect::<Vec<_>>()
+            .join("  ")
+    };
+    assert!(
+        row("/effort").starts_with("/effort [session | low | medium | high | xhigh | max]"),
+        "{}",
+        row("/effort")
+    );
+    assert!(
+        row("/model").starts_with("/model [session]"),
+        "{}",
+        row("/model")
+    );
+}
+
 /// CLI-20. The script is the same wherever it is asked for and whatever the home holds, and asking
 /// leaves the home as empty as it was. A completer that listed agent definitions or session ids
 /// would read the state directory, so its output would differ between these two homes.
@@ -16975,6 +18049,107 @@ fn a_reply_from_a_terminal_starts_a_stopped_session_with_it() {
     assert!(!listed.contains("stopped"), "{listed}");
 }
 
+/// BG-13: a reply that a session refused as stopping is not remembered against it. Asked again once
+/// the session is `stopped`, the terminal starts it with the reply as its prompt.
+///
+/// The first reply meets a process that says `stopping` (a socket the test answers on, with the
+/// session's lock held, as a session that has run out its idle time and not yet ended looks). The
+/// refusal is a failure that says to reply again. The lock and the socket are then released, which
+/// is the session having ended, and the same command from a terminal starts it. It rejects a
+/// terminal that keeps the refusal (a mark left by the first attempt, or the refusal read from the
+/// entry again) and goes on refusing the second attempt.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_reply_refused_as_stopping_starts_the_session_when_it_is_asked_again_once_stopped() {
+    use std::os::unix::net::UnixListener;
+
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    a_stopped_session_with_one_turn(&home, &gateway);
+
+    let roster = bravebot_session::jobs::Roster::at(home.0.join(".bravebot/jobs"));
+    let lease = roster
+        .claim(SESSION_ID)
+        .expect("claim the entry")
+        .expect("the host that stopped has let it go");
+    let token = roster.issue_attach_token(SESSION_ID).expect("a secret");
+    let socket = roster.socket_of(SESSION_ID).expect("a socket path");
+    std::fs::remove_file(&socket).ok();
+    let listener = UnixListener::bind(&socket).expect("a socket the stopping session answers on");
+    let (heard, asked) = mpsc::channel();
+    // The thread polls for the connection against a deadline. When no reply arrives it returns
+    // without sending, which the receive below reports as a failure with a message.
+    std::thread::spawn(move || {
+        listener.set_nonblocking(true).expect("poll for the reply");
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => return,
+            }
+        };
+        stream.set_nonblocking(false).expect("blocking reads");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(60)))
+            .expect("timeout");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+        let mut lines = Vec::new();
+        for _ in 0..3 {
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("a line");
+            lines.push(line.trim().to_string());
+        }
+        writeln!(stream, "stopping").expect("the answer");
+        heard.send(lines).ok();
+    });
+
+    let refused = bravebot(&home.0, &[], &["reply", "3f2a9c1e", "and the tests"]);
+    let heard_lines = asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the reply reached the stopping session");
+    let (out, err) = said(&refused);
+    assert!(!refused.status.success(), "{out}{err}");
+    assert!(
+        err.contains("is stopping after an hour idle. Reply again to start it."),
+        "{err}"
+    );
+    assert!(
+        !out.contains("Sent to"),
+        "a reply to a stopping session was reported as sent: {out}"
+    );
+    assert_eq!(
+        heard_lines,
+        [token, "reply".to_string(), "and the tests".to_string()]
+    );
+
+    // The session has ended: nothing holds its lock and nothing listens.
+    drop(lease);
+    std::fs::remove_file(&socket).ok();
+    roster.withdraw_attach_token(SESSION_ID);
+
+    let output = in_a_terminal(
+        &home.0,
+        AT_A_GATEWAY,
+        &["reply", "3f2a9c1e", "and the tests"],
+    );
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{out}{err}");
+    assert!(out.contains("Sent to"), "{out}{err}");
+    let second = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the reply reached the gateway");
+    assert!(second.contains("and the tests"), "{second}");
+    assert!(second.contains("fix the build"), "{second}");
+}
+
 /// BG-10, BG-12: `reply` from a terminal starts an interrupted session, after saying that the turn it
 /// was in is not repeated. The earlier conversation and the reply are in the request, with the
 /// driver's note that the last turn never finished, and that note is not written to the record.
@@ -17168,6 +18343,8 @@ fn a_record_a_running_session_holds_is_not_resumed() {
 /// copy it, and no process is started and nothing reaches the gateway.
 #[cfg(unix)]
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
 fn a_record_a_terminal_holds_is_not_resumed_or_started_again() {
     let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
     let home = ShortHome::new();
@@ -17186,6 +18363,8 @@ fn a_record_a_terminal_holds_is_not_resumed_or_started_again() {
         .open(record_directory.join(format!("{SESSION_ID}.lock")))
         .expect("the lock file");
     holder.try_lock().expect("nothing holds the record yet");
+    let record_path = record_directory.join(format!("{SESSION_ID}.json"));
+    let record_before = std::fs::read(&record_path).expect("read the record");
 
     for arguments in [&["--resume", SESSION_ID][..], &["--continue"][..]] {
         let output = bravebot_started_in(&home.0, &work, AT_A_GATEWAY, arguments);
@@ -17261,6 +18440,12 @@ fn a_record_a_terminal_holds_is_not_resumed_or_started_again() {
     assert!(
         gateway.asked.try_recv().is_err(),
         "a refused task reached the gateway"
+    );
+
+    assert_eq!(
+        std::fs::read(&record_path).expect("read the record"),
+        record_before,
+        "a refused continuation rewrote the record a terminal holds"
     );
 
     // Once the holder has ended the record is free, and the same words are not said.
@@ -17889,6 +19074,70 @@ fn a_background_session_says_its_mode_to_whoever_attaches() {
     let _ = host.wait();
 }
 
+/// MODE-1, BG-8: a background session opens asking even where the person's own settings say
+/// `permissions.startInAuto: true`, which opens the sessions a person starts in auto. The host
+/// reads those settings, so a host that opened its session through the path that reads the key
+/// would say the auto mode to whoever attaches and would answer a write itself, with nobody there.
+/// The attach is replayed the asking line and not the auto one, and the write the model asks for
+/// is held for the attached person, so the file is absent and the roster reports that the session
+/// needs input.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_background_session_opens_asking_where_the_setting_opens_sessions_in_auto() {
+    use std::os::unix::net::UnixStream;
+
+    let gateway = a_gateway(r#"["tools"]"#, |_| writing_out_txt());
+    let home = ShortHome::new();
+    let (mut host, socket) =
+        a_started_host(&home, &gateway, r#"{"permissions": {"startInAuto": true}}"#);
+
+    let mut terminal = UnixStream::connect(&socket).expect("attach");
+    terminal
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .expect("timeout");
+    writeln!(terminal, "{}\nattach", a_token(&socket)).expect("attach");
+    let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
+    let shown = shown_until(&mut seen, "asking before it acts");
+    assert!(
+        !shown.contains("auto mode on"),
+        "the host opened in auto: {shown}"
+    );
+    shown_until(&mut seen, "trust this directory?");
+    writeln!(terminal, "n").expect("answer the question");
+
+    // The write is put to the person attached and waits for them.
+    let held = shown_until(&mut seen, "out.txt");
+    assert!(!held.contains("auto mode on"), "{held}");
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let mut stream = UnixStream::connect(&socket).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .expect("timeout");
+        write!(stream, "{}\nreply\nyes\n", a_token(&socket)).expect("write");
+        let mut answer = String::new();
+        BufReader::new(stream)
+            .read_line(&mut answer)
+            .expect("an answer");
+        if answer.trim() == "needs-input" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "the session never reported needing input: {answer}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        !home.0.join("work/out.txt").exists(),
+        "a background session wrote under a setting that is for sessions the person starts"
+    );
+
+    let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    host.wait().ok();
+}
+
 /// A background session whose settings request a server nobody approved, attached and past the
 /// trust question, with the server question on screen.
 #[cfg(unix)]
@@ -18481,6 +19730,534 @@ fn a_one_shot_task_opening_with_slash_plugin_add_installs_nothing() {
     );
 }
 
+/// A listener that counts the connections made to it. A git-source plugin is recorded with its
+/// address, so a request to the recorded source shows up here.
+#[cfg(unix)]
+struct ConnectionCounter {
+    port: u16,
+    count: Arc<AtomicUsize>,
+}
+
+#[cfg(unix)]
+impl ConnectionCounter {
+    fn start() -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a listener");
+        let port = listener.local_addr().expect("an address").port();
+        let count = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&count);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                if stream.is_ok() {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        });
+        Self { port, count }
+    }
+
+    fn connections(&self) -> usize {
+        self.count.load(Ordering::SeqCst)
+    }
+}
+
+/// PLUGIN-9: starting a session makes no network request for an installed plugin.
+/// The plugin is enabled, carries a hook, and is recorded as a git source at a listener this test
+/// owns, with a ref that is a branch name, so an update check at start would fetch it. The run
+/// reads the plugin's hooks and is given a prompt. The listener has taken no connection afterwards.
+/// The control is a connection the test makes itself, which the listener counts, so a counter that
+/// never counts cannot pass.
+///
+/// Rejects: a session start that fetches, resolves or otherwise contacts the recorded source of
+/// an installed plugin to look for an update.
+#[cfg(unix)]
+#[test]
+fn starting_a_session_makes_no_request_for_an_installed_git_source_plugin() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let scratch =
+        Scratch::new("cli-running-plugin-no-fetch-at-start").with_settings(&settings_for(&gateway));
+    let state = scratch.path.join(".bravebot");
+    let source = scratch.path.join("plugin-source");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("plugin.toml"),
+        "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nhooks = \"hooks.json\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("hooks.json"),
+        r#"{"hooks":[{"on":"turn-started","run":["${PLUGIN_ROOT}/hook.sh"]}]}"#,
+    )
+    .unwrap();
+    std::fs::write(source.join("hook.sh"), "#!/bin/sh\n").unwrap();
+    bravebot_agent::plugins::install(&source, &state).expect("install the plugin");
+    let digest = bravebot_agent::plugins::read_record(&state, "demo")
+        .expect("a record")
+        .digest;
+    let remote = ConnectionCounter::start();
+    std::fs::write(
+        state.join("plugins").join("demo.record"),
+        format!(
+            "source = https://127.0.0.1:{}/demo.git\nrequested-ref = main\ncommit = {}\n\
+             version = 1.0.0\nenabled = true\ndigest = {digest}\n",
+            remote.port,
+            "a".repeat(40)
+        ),
+    )
+    .unwrap();
+    let recorded = bravebot_agent::plugins::read_record(&state, "demo").expect("a git record");
+    assert!(
+        matches!(
+            recorded.source,
+            bravebot_agent::plugin_source::Source::Git { .. }
+        ),
+        "the record is a git source"
+    );
+
+    let output = bravebot(&scratch.path, AT_A_GATEWAY, &["-p", "say something"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(stdout.contains("all done"), "{stdout}{stderr}");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        remote.connections(),
+        0,
+        "a session start made a request to the recorded source"
+    );
+    let record_after = std::fs::read_to_string(state.join("plugins").join("demo.record")).unwrap();
+    assert!(record_after.contains("commit = aaaa"), "{record_after}");
+
+    std::net::TcpStream::connect(("127.0.0.1", remote.port)).expect("the control connects");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while remote.connections() == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(remote.connections(), 1, "control: the counter counts");
+}
+
+/// PLUGIN-1, PLUGIN-9, CLI-31: a one-shot task opening with `/plugin update` changes nothing. A plugin
+/// is installed from a source that has since changed, so an update that ran would replace it, and
+/// the run is told `/plugin update demo` as its task. The plugin's record, its directory and the
+/// approval files are as they were, and the planner's request carries the line as the person's
+/// words. Rejects a one-shot path that dispatches the line to the plugin updater.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_task_opening_with_slash_plugin_update_changes_nothing() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("all done"));
+    let scratch =
+        Scratch::new("cli-running-one-shot-plugin-update").with_settings(&settings_for(&gateway));
+    let state = scratch.path.join(".bravebot");
+    let source = scratch.path.join("a-plugin-source");
+    std::fs::create_dir_all(source.join("skills").join("hello")).expect("a plugin directory");
+    let manifest = |version: &str| {
+        std::fs::write(
+            source.join("plugin.toml"),
+            format!(
+                "name = \"demo\"\nversion = \"{version}\"\ndescription = \"A demo\"\nskills = \"skills\"\n"
+            ),
+        )
+        .expect("a manifest");
+    };
+    manifest("1.0.0");
+    std::fs::write(
+        source.join("skills").join("hello").join("SKILL.md"),
+        "---\nname: hello\ndescription: Says hello.\n---\n\nBody.\n",
+    )
+    .expect("a skill");
+    bravebot_agent::plugins::install(&source, &state).expect("install the plugin");
+    manifest("2.0.0");
+    std::fs::write(
+        source.join("skills").join("hello").join("SKILL.md"),
+        "---\nname: hello\ndescription: Says more.\n---\n\nBody.\n",
+    )
+    .expect("an edited skill");
+    let record = state.join("plugins").join("demo.record");
+    let skill = state
+        .join("plugins")
+        .join("demo")
+        .join("skills")
+        .join("hello")
+        .join("SKILL.md");
+    let (record_before, skill_before) = (
+        std::fs::read(&record).expect("a record"),
+        std::fs::read(&skill).expect("a skill"),
+    );
+
+    let output = bravebot(&scratch.path, AT_A_GATEWAY, &["-p", "/plugin update demo"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert_eq!(std::fs::read(&record).expect("a record"), record_before);
+    assert_eq!(std::fs::read(&skill).expect("a skill"), skill_before);
+    assert!(!state.join("hooks-approved").exists());
+    assert!(!state.join("mcp-approved").exists());
+    let asked = requests(&gateway);
+    assert!(
+        asked.iter().any(|body| body.contains("/plugin update")),
+        "the line was not sent as words: {asked:?}"
+    );
+}
+
+/// Installs the plugin `demo` into `scratch`'s state directory. It carries the servers the text
+/// `servers` declares as its `servers.json`, and each of `files` (a name and its contents) beside it.
+fn a_plugin_carrying_servers(scratch: &Scratch, servers: &str, files: &[(&str, &str)]) {
+    let source = scratch.path.join("plugin-source");
+    std::fs::create_dir_all(&source).expect("create the plugin source");
+    std::fs::write(
+        source.join("plugin.toml"),
+        "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nservers = \"servers.json\"\n",
+    )
+    .expect("write the manifest");
+    std::fs::write(source.join("servers.json"), servers).expect("write the servers");
+    for (name, contents) in files {
+        std::fs::write(source.join(name), contents).expect("write a file of the plugin");
+    }
+    bravebot_agent::plugins::install(&source, &scratch.path.join(".bravebot"))
+        .expect("install the plugin");
+}
+
+/// The commands that list a plugin's servers, each with its name and its arguments: `mcp list`, `mcp
+/// get` for the joined alias `alias`, and `doctor`.
+fn the_commands_that_list_servers(alias: &str) -> [(&'static str, Vec<&str>); 3] {
+    [
+        ("bravebot mcp list", vec!["mcp", "list"]),
+        ("bravebot mcp get", vec!["mcp", "get", alias]),
+        ("bravebot doctor", vec!["doctor"]),
+    ]
+}
+
+/// A run of `arguments` whose standard input is a pipe that is closed before the run reads it, so
+/// the run finds the end of the input and not the null device [`bravebot`] gives it.
+fn bravebot_with_a_closed_pipe(scratch: &Scratch, arguments: &[&str]) -> Output {
+    let mut command = prepared(&scratch.path, None, CONFIGURED, arguments);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("the built binary runs");
+    drop(child.stdin.take());
+    child.wait_with_output().expect("the run ends")
+}
+
+/// Every path under `directory`, relative to it, with the bytes of each file and `None` for each
+/// directory.
+fn the_tree_under(directory: &Path) -> std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> {
+    fn walk(
+        root: &Path,
+        at: &Path,
+        found: &mut std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>,
+    ) {
+        for entry in std::fs::read_dir(at).expect("read a directory") {
+            let path = entry.expect("an entry").path();
+            let relative = path
+                .strip_prefix(root)
+                .expect("under the root")
+                .to_path_buf();
+            if path.is_dir() {
+                found.insert(relative, None);
+                walk(root, &path, found);
+            } else {
+                found.insert(relative, Some(std::fs::read(&path).expect("read a file")));
+            }
+        }
+    }
+    let mut found = std::collections::BTreeMap::new();
+    walk(directory, directory, &mut found);
+    found
+}
+
+/// Asserts that no path was added, removed or changed between two trees, naming the paths and not
+/// printing their bytes.
+fn assert_the_same_tree(
+    before: &std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>,
+    after: &std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>,
+    what: &str,
+) {
+    let added: Vec<_> = after
+        .keys()
+        .filter(|path| !before.contains_key(*path))
+        .collect();
+    let removed: Vec<_> = before
+        .keys()
+        .filter(|path| !after.contains_key(*path))
+        .collect();
+    let changed: Vec<_> = before
+        .iter()
+        .filter(|(path, bytes)| after.get(*path).is_some_and(|now| now != *bytes))
+        .map(|(path, _)| path)
+        .collect();
+    assert!(
+        added.is_empty() && removed.is_empty() && changed.is_empty(),
+        "{what} wrote to the state directory: added {added:?}, removed {removed:?}, changed {changed:?}"
+    );
+}
+
+/// SERVERS-10, SERVERS-14, PLUGIN-7: a stored variable a plugin's server declares is named and never
+/// printed. The plugin's server holds `TOKEN` with a value in its `env`, and `bravebot mcp list`,
+/// `bravebot mcp get demo_local` and `bravebot doctor` print neither that value on stdout nor on
+/// stderr. `get` names `TOKEN` as stored, so a `get` that drew nothing cannot pass, and `list` and
+/// `doctor` print the plugin's row, so a listing that failed before printing it cannot pass either.
+///
+/// Rejects: a plugin block that draws a server's stored values with their values (the plugin's
+/// declaration is untrusted text, and what it holds is a secret the person stored, SERVERS-10), and a
+/// `get` that leaves the variable out.
+#[test]
+fn a_plugin_servers_stored_variable_is_named_by_get_and_its_value_is_printed_by_nothing() {
+    let secret = "hunter2-plugin-secret";
+    let scratch = Scratch::new(&format!(
+        "cli-running-plugin-server-secret-{}",
+        std::process::id()
+    ));
+    a_plugin_carrying_servers(
+        &scratch,
+        &format!(
+            r#"{{"servers":{{"local":{{"transport":"stdio","argv":["/opt/local-mcp"],"env":{{"TOKEN":"{secret}"}}}}}}}}"#
+        ),
+        &[],
+    );
+
+    for (command, arguments) in the_commands_that_list_servers("demo_local") {
+        let output = bravebot(&scratch.path, CONFIGURED, &arguments);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(0), "{command}: {stdout}{stderr}");
+        assert!(
+            !stdout.contains(secret) && !stderr.contains(secret),
+            "{command} printed the stored value: {stdout}{stderr}"
+        );
+        assert!(
+            stdout.contains("demo_local"),
+            "{command} did not list the plugin's server: {stdout}"
+        );
+        // Only `get` draws a declaration, so only its output names the stored variable. `list` and
+        // `doctor` print a row for the server and no `env`, so the check would fail for them.
+        if command == "bravebot mcp get" {
+            assert!(
+                stdout.contains(&t!(mcp_variable_stored, name = "TOKEN")),
+                "{command} did not name the stored variable: {stdout}"
+            );
+        }
+    }
+}
+
+/// SERVERS-14, SERVERS-27: listing is not starting. The plugin carries an http server at an address
+/// a listener this test owns takes connections on, and a stdio server whose script writes a file
+/// into the scratch directory if it is ever run. After `bravebot mcp list`, `bravebot mcp get` for
+/// each of the two and `bravebot doctor`, the listener has taken no connection and the file does
+/// not exist. The control is a connection the test makes itself, which the listener counts, so a
+/// counter that never counts cannot pass. Unix only, as the listener is.
+///
+/// Rejects: a plugin block that connects to the remote server to ask what it serves or whether it
+/// is up, and one that starts the stdio server to probe it. A stdio server may be unconfined on
+/// this host, which does not matter here: nothing may run it at all.
+#[cfg(unix)]
+#[test]
+fn listing_a_plugins_servers_starts_none_of_them_and_contacts_none_of_them() {
+    let remote = ConnectionCounter::start();
+    let scratch = Scratch::new(&format!(
+        "cli-running-plugin-server-not-started-{}",
+        std::process::id()
+    ));
+    let marker = scratch.path.join("server-ran");
+    a_plugin_carrying_servers(
+        &scratch,
+        &format!(
+            r#"{{"servers":{{"remote":{{"transport":"http","url":"http://127.0.0.1:{}/mcp"}},"local":{{"transport":"stdio","argv":["/bin/sh","${{PLUGIN_ROOT}}/server.sh"]}}}}}}"#,
+            remote.port
+        ),
+        &[(
+            "server.sh",
+            &format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
+        )],
+    );
+
+    for alias in ["demo_remote", "demo_local"] {
+        for (command, arguments) in the_commands_that_list_servers(alias) {
+            let output = bravebot(&scratch.path, CONFIGURED, &arguments);
+
+            let (stdout, stderr) = said(&output);
+            assert_eq!(output.status.code(), Some(0), "{command}: {stdout}{stderr}");
+            assert!(
+                stdout.contains(alias),
+                "{command} did not list {alias}: {stdout}"
+            );
+        }
+    }
+
+    // The listener counts a connection in a thread of its own after it accepts it, so the sleep
+    // gives that thread time to count one a listing made before the count is read. The control
+    // connection after the count is what makes a zero mean something: it shows that this listener
+    // counts a connection made to it.
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        remote.connections(),
+        0,
+        "a listing connected to the plugin's remote server"
+    );
+    assert!(!marker.exists(), "a listing ran the plugin's stdio server");
+    std::net::TcpStream::connect(("127.0.0.1", remote.port)).expect("the control connects");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while remote.connections() == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(remote.connections(), 1, "control: the counter counts");
+}
+
+/// SERVERS-14, SERVERS-27: listing asks nothing. A plugin's server nobody has approved is the one a
+/// session at a terminal asks about at its first use, and `bravebot mcp list`, `bravebot mcp get` and
+/// `bravebot doctor` say it is unapproved without asking. Each is run with the null device as its
+/// standard input and again with a pipe closed before the run reads it: neither prints the question
+/// or the answer prompt, read from the catalog, and each exits with 0.
+///
+/// What this pins and what it does not: neither standard input it uses is a terminal, and a
+/// command asks only where a person is present (standard input and standard output both
+/// terminals), so this test cannot fail on a listing that asks only when a person is present. The
+/// unit test `list_get_and_examined_ask_a_present_person_nothing_and_leave_the_server_unapproved`
+/// in crates/cli/src/mcp.rs pins a present person. That a listing cannot ask is also true by
+/// construction: `held_by_plugins` and `hold_plugin_server` take no `Asker`.
+///
+/// Rejects: a plugin block that puts the first-use question to the person while it lists, which
+/// would print the question and wait on a standard input that holds nothing.
+#[test]
+fn listing_a_plugins_servers_asks_no_question_whatever_standard_input_holds() {
+    let scratch = Scratch::new(&format!(
+        "cli-running-plugin-server-no-question-{}",
+        std::process::id()
+    ));
+    a_plugin_carrying_servers(
+        &scratch,
+        r#"{"servers":{"remote":{"transport":"http","url":"http://127.0.0.1:1/mcp"},"local":{"transport":"stdio","argv":["/opt/local-mcp"]}}}"#,
+        &[],
+    );
+    let question = t!(mcp_question).to_string();
+    let answers = t!(servers_answer).to_string();
+    assert!(!question.is_empty() && !answers.is_empty());
+
+    for closed_pipe in [false, true] {
+        let input = match closed_pipe {
+            true => "a pipe closed at once",
+            false => "the null device",
+        };
+        for (command, arguments) in the_commands_that_list_servers("demo_local") {
+            let output = match closed_pipe {
+                true => bravebot_with_a_closed_pipe(&scratch, &arguments),
+                false => bravebot(&scratch.path, CONFIGURED, &arguments),
+            };
+
+            let (stdout, stderr) = said(&output);
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{command} with {input}: {stdout}{stderr}"
+            );
+            assert!(
+                stdout.contains("demo_local"),
+                "{command} with {input} did not list the plugin's server: {stdout}"
+            );
+            for text in [&question, &answers] {
+                assert!(
+                    !stdout.contains(text.as_str()) && !stderr.contains(text.as_str()),
+                    "{command} with {input} asked {text:?}: {stdout}{stderr}"
+                );
+            }
+        }
+    }
+}
+
+/// SERVERS-14, SERVERS-27: listing writes nothing. A state directory holds a declared server, an
+/// installed plugin that carries two, and no approval. The tree under it, every path and the bytes
+/// of every file, is the same after `bravebot mcp list`, after `bravebot mcp get` for each of the
+/// plugin's servers and after `bravebot doctor`, and no `mcp-home` directory exists, which a session
+/// that starts a plugin's server creates for it.
+///
+/// Rejects: a plugin block that records an answer, an approval or a digest as it lists, one that
+/// creates the directory a started server runs in, and one that rewrites `mcp.json` or the plugin's
+/// record.
+#[test]
+fn listing_a_plugins_servers_writes_nothing_into_the_state_directory() {
+    let scratch = Scratch::new(&format!(
+        "cli-running-plugin-server-writes-nothing-{}",
+        std::process::id()
+    ))
+    .with_state(
+        "mcp.json",
+        r#"{"servers":{"docs":{"transport":"http","url":"http://127.0.0.1:1/docs"}}}"#,
+    );
+    a_plugin_carrying_servers(
+        &scratch,
+        r#"{"servers":{"remote":{"transport":"http","url":"http://127.0.0.1:1/mcp"},"local":{"transport":"stdio","argv":["/opt/local-mcp"]}}}"#,
+        &[],
+    );
+    let state = scratch.path.join(".bravebot");
+    let before = the_tree_under(&state);
+    assert!(
+        before.contains_key(Path::new("mcp.json"))
+            && before.contains_key(Path::new("plugins").join("demo").as_path()),
+        "the state directory holds the declaration and the plugin: {:?}",
+        before.keys().collect::<Vec<_>>()
+    );
+
+    for (command, arguments) in [
+        ("bravebot mcp list", vec!["mcp", "list"]),
+        ("bravebot mcp get", vec!["mcp", "get", "demo_remote"]),
+        ("bravebot mcp get", vec!["mcp", "get", "demo_local"]),
+        ("bravebot doctor", vec!["doctor"]),
+    ] {
+        let output = bravebot(&scratch.path, CONFIGURED, &arguments);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(0), "{command}: {stdout}{stderr}");
+        assert_the_same_tree(&before, &the_tree_under(&state), command);
+        assert!(
+            !state.join("mcp-home").exists(),
+            "{command} created the directory a started server runs in"
+        );
+        assert!(
+            !state.join("mcp-approved").exists(),
+            "{command} recorded an approval"
+        );
+    }
+}
+
+/// SANDBOX-30: a command that opens no session reads the record of the directories earlier
+/// processes let a stage write and appends nothing to it, and makes none where there was none. A
+/// state directory that holds a record is the same after `doctor` and `mcp list`, byte for byte,
+/// and one that holds none holds none. The two-process test beside the lookups is the control: a
+/// run that opens a session with `--add-dir` does write the record, so this test does not pass for
+/// a record that is never written. Rejects a command that switches the record's writer on before
+/// it knows a session opens, so that `doctor` appends the directory it ran in.
+#[test]
+fn a_command_that_opens_no_session_leaves_the_record_of_stage_writes_as_it_found_it() {
+    let seeded = "directory\t/bravebot-seeded-directory\n";
+    let with =
+        Scratch::new("cli-running-no-session-record-kept").with_state("stage-writes", seeded);
+    let without = Scratch::new("cli-running-no-session-record-none");
+
+    for (command, arguments) in [
+        ("bravebot doctor", vec!["doctor"]),
+        ("bravebot mcp list", vec!["mcp", "list"]),
+    ] {
+        for scratch in [&with, &without] {
+            let output = bravebot(&scratch.path, CONFIGURED, &arguments);
+            let (stdout, stderr) = said(&output);
+            assert!(
+                output.status.code().is_some() && !format!("{stdout}{stderr}").is_empty(),
+                "{command} did not run to its end: {stdout}{stderr}"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(with.path.join(".bravebot").join("stage-writes"))
+                .expect("the record is still there"),
+            seeded,
+            "{command} changed a record it found"
+        );
+        assert!(
+            !without.path.join(".bravebot").join("stage-writes").exists(),
+            "{command} made a record where there was none"
+        );
+    }
+}
+
 /// A one-shot run answering `reply` at `gateway`, with `arguments` after the flags that ask for
 /// the result object.
 fn a_recorded_run(scratch: &Scratch, arguments: &[&str]) -> (Output, String, String) {
@@ -18532,6 +20309,166 @@ fn a_one_shot_run_in_bypass_says_what_bypass_refuses_only_with_auto_vetting_on()
     assert!(
         !plain.contains(vetting_line),
         "a run without auto-vetting said what auto-vetting refuses: {plain}"
+    );
+}
+
+/// CLI-15: `--vet` makes a check that finds nothing answer for the run, so the output the planner
+/// asked to read reaches it with nobody asked. The planner reads a file nobody vouched for, then
+/// asks `vet_content` to show it, and the check's word is `safe`. Without the flag the one-shot
+/// run has nobody to ask and the bytes are kept back, so the same script tells the two runs apart.
+/// Rejects a one-shot task built with auto-vetting off whatever the command line said, which
+/// leaves the notice on stderr (computed on its own) intact and keeps every verdict from answering.
+#[test]
+fn a_one_shot_run_given_the_vet_flag_lets_a_check_that_finds_nothing_release_the_bytes() {
+    const WORDS: &str = "THE-WORDS-IN-THE-PROJECT-NOTES";
+    // The exit status is 0 for a run no gate refused anything in, and 4 for one whose release was
+    // refused.
+    let planner_rounds_with = |name: &str, extra: &[&str], status: i32| -> Vec<String> {
+        let rounds = Arc::new(AtomicUsize::new(0));
+        let counted = rounds.clone();
+        let gateway = a_gateway(r#"["tools"]"#, move |body| {
+            // The check made of the file is not a round of the script.
+            if body.contains("prompt-injection classifier") {
+                return a_reply_from(
+                    "reasons-only",
+                    r#"{"verdict": "safe", "reason": "nothing addressed to a reader"}"#,
+                );
+            }
+            match counted.fetch_add(1, Ordering::SeqCst) {
+                0 => a_tool_call_from("reasons-only", "read_file", r#"{"path":"notes.md"}"#),
+                1 => a_tool_call_from(
+                    "reasons-only",
+                    "vet_content",
+                    r#"{"ref":"ref:1","expects":"a few words of notes"}"#,
+                ),
+                _ => a_reply_from("reasons-only", "all done"),
+            }
+        });
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("create the project");
+        std::fs::write(project.join("notes.md"), WORDS).expect("write notes");
+        let mut arguments = extra.to_vec();
+        arguments.extend(["-p", "read the notes"]);
+
+        let output = bravebot_started_in(&scratch.path, &project, AT_A_GATEWAY, &arguments);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(status),
+            "{extra:?}: {stdout}{stderr}"
+        );
+        let bodies: Vec<String> = gateway
+            .asked
+            .try_iter()
+            .filter(|body| !body.contains("prompt-injection classifier"))
+            .collect();
+        assert_eq!(bodies.len(), 3, "{extra:?}: {bodies:?}");
+        assert!(
+            !bodies[1].contains(WORDS),
+            "{extra:?}: the file reached the planner before anything vouched for it: {}",
+            bodies[1]
+        );
+        bodies
+    };
+
+    let vetted = planner_rounds_with("cli-running-vet-flag", &["--vet"], 0);
+    assert!(
+        vetted[2].contains(WORDS),
+        "a check that found nothing did not release the bytes under --vet: {}",
+        vetted[2]
+    );
+
+    let unvetted = planner_rounds_with("cli-running-vet-flag-absent", &[], 4);
+    assert!(
+        !unvetted[2].contains(WORDS),
+        "the bytes reached the planner with nobody asked and no --vet: {}",
+        unvetted[2]
+    );
+}
+
+/// CLI-15: with bypass the flag is what makes a verdict able to refuse. A one-shot run given
+/// `--dangerously-skip-permissions --vet` keeps the bytes back from the planner where the check
+/// says `unsafe` and where it cannot be completed, and ends on the status for a refused release.
+/// The same script without `--vet` answers the release yes unshown, so the bytes reach the planner.
+/// Rejects a one-shot task built with auto-vetting off whatever the command line said (the check
+/// is skipped and bypass releases everything), which the notice on stderr, computed separately,
+/// does not show.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_bypassing_one_shot_run_given_the_vet_flag_keeps_back_bytes_a_check_objects_to() {
+    const WORDS: &str = "THE-WORDS-IN-THE-NOTES-A-CHECK-OBJECTS-TO";
+    // `check` is the answer to the classifier's request, or `None` for a service that fails it.
+    let bodies_with = |name: &str, extra: &[&str], check: Option<&'static str>| -> Vec<String> {
+        let rounds = Arc::new(AtomicUsize::new(0));
+        let counted = rounds.clone();
+        let gateway = a_gateway(r#"["tools"]"#, move |body| {
+            if body.contains("prompt-injection classifier") {
+                return match check {
+                    Some(reply) => a_reply_from("reasons-only", reply),
+                    None => http(500, r#"{"error": {"message": "the check cannot be made"}}"#),
+                };
+            }
+            match counted.fetch_add(1, Ordering::SeqCst) {
+                0 => a_tool_call_from(
+                    "reasons-only",
+                    "run",
+                    r#"{"command":"sed -n p notes.md","why":"read the notes"}"#,
+                ),
+                1 => a_tool_call_from("reasons-only", "read_output", r#"{"ref":"ref:1"}"#),
+                _ => a_reply_from("reasons-only", "all done"),
+            }
+        });
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("create the project");
+        std::fs::write(project.join("notes.md"), WORDS).expect("write notes");
+        let mut arguments = vec!["--dangerously-skip-permissions"];
+        arguments.extend_from_slice(extra);
+        arguments.extend(["-p", "read the notes"]);
+
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let output = bravebot_started_in(&scratch.path, &project, &environment, &arguments);
+
+        let (stdout, stderr) = said(&output);
+        let kept_back = !extra.is_empty();
+        assert_eq!(
+            output.status.code(),
+            Some(if kept_back { 4 } else { 0 }),
+            "{extra:?} {check:?}: {stdout}{stderr}"
+        );
+        gateway
+            .asked
+            .try_iter()
+            .filter(|body| !body.contains("prompt-injection classifier"))
+            .collect()
+    };
+
+    let objected = bodies_with(
+        "cli-running-bypass-vet-unsafe",
+        &["--vet"],
+        Some(r#"{"verdict": "unsafe", "reason": "addressed to a reader"}"#),
+    );
+    assert!(
+        objected.iter().all(|body| !body.contains(WORDS)),
+        "bytes a check called unsafe reached the planner under bypass and --vet: {objected:?}"
+    );
+    let unanswered = bodies_with("cli-running-bypass-vet-unanswered", &["--vet"], None);
+    assert!(
+        unanswered.iter().all(|body| !body.contains(WORDS)),
+        "bytes a check could not assess reached the planner under bypass and --vet: {unanswered:?}"
+    );
+
+    let unscreened = bodies_with(
+        "cli-running-bypass-no-vet-unsafe",
+        &[],
+        Some(r#"{"verdict": "unsafe", "reason": "addressed to a reader"}"#),
+    );
+    assert!(
+        unscreened.iter().any(|body| body.contains(WORDS)),
+        "bypass without --vet did not release the bytes: {unscreened:?}"
     );
 }
 
@@ -18763,9 +20700,17 @@ fn a_task_continuing_the_latest_session_adds_a_turn_to_its_record() {
 fn a_gateway_doing_what_each_task_names() -> Gateway {
     a_gateway(r#"["tools"]"#, |body| {
         let request: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+        // The message naming the session's own directory follows the task in a new process
+        // (INSTR-9), so the task is the last message that is not it.
         let last = request["messages"]
             .as_array()
-            .and_then(|messages| messages.last())
+            .and_then(|messages| {
+                messages.iter().rev().find(|message| {
+                    !message
+                        .to_string()
+                        .contains("The scratch directory of this session is")
+                })
+            })
             .cloned()
             .unwrap_or_default();
         let task = match last["role"] == "user" {
@@ -18818,6 +20763,23 @@ fn the_record_file(scratch: &Scratch, id: &str) -> PathBuf {
         .find(|file| file.file_name().to_string_lossy() == format!("{id}.json"))
         .unwrap_or_else(|| panic!("no record named {id} under {records:?}"))
         .path()
+}
+
+/// Every record file under `scratch`'s home, or none where no run created the sessions directory.
+fn the_record_files(scratch: &Scratch) -> Vec<PathBuf> {
+    let records = scratch.path.join(".bravebot").join("sessions");
+    std::fs::read_dir(records)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .flat_map(|project| std::fs::read_dir(project.path()).into_iter().flatten())
+        .flatten()
+        .map(|file| file.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .collect()
 }
 
 /// The record named `id` under `scratch`'s home, as it is on disk.
@@ -19034,6 +20996,71 @@ fn a_program_a_continued_task_runs_is_a_gap_on_every_point_an_undo_could_reach()
     }
 }
 
+/// CLI-25 and CLI-1: a command the session's person vouched for is not handed to a continued run,
+/// which refuses the line because nobody is there to approve it, and the record still holds the
+/// vouch afterwards for the session that is next resumed interactively.
+///
+/// The faults this rejects: handing the record's vouched commands to the continued run, which then
+/// runs `echo hello` unasked and exits 0, and writing the record back without them, which leaves the
+/// next interactive resume asking again about a command its person had vouched for. The entry is the
+/// spelling a run of `echo hello` resolves to under the PATH below, so the refusal is the withholding
+/// and not an entry that never matched.
+#[cfg(unix)]
+#[test]
+fn a_continued_run_is_not_handed_the_commands_its_record_vouched_for_and_the_record_keeps_them() {
+    let gateway = a_gateway_doing_what_each_task_names();
+    let scratch = Scratch::new("cli-running-continued-vouched-commands")
+        .with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+
+    let id = a_writing_run(&scratch, &project, &["-p", "FIRST-QUESTION"]);
+    // The file `echo` resolves to under the PATH the continued run is given below.
+    let echo = ["/usr/bin/echo", "/bin/echo"]
+        .into_iter()
+        .find(|candidate| Path::new(candidate).exists())
+        .expect("a system echo");
+    let vouched = serde_json::json!([{"program": echo, "args": ["hello"], "directory": ""}]);
+    let mut record = the_record(&scratch, &id);
+    assert_eq!(record["programs"], serde_json::json!([]));
+    record["programs"] = vouched.clone();
+    std::fs::write(
+        the_record_file(&scratch, &id),
+        serde_json::to_vec(&record).expect("a record serialises"),
+    )
+    .expect("write the record back");
+
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("PATH", "/usr/bin:/bin"));
+    let output = bravebot_started_in(
+        &scratch.path,
+        &project,
+        &environment,
+        &["--json", "-p", "RUN-ECHO", "--continue"],
+    );
+    let (stdout, stderr) = said(&output);
+
+    assert_eq!(output.status.code(), Some(4), "{stdout}{stderr}");
+    let object: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    let refusals = object["refusals"].as_array().expect(&stdout);
+    assert_eq!(refusals.len(), 1, "{stdout}");
+    assert_eq!(refusals[0]["gate"], "approval", "{stdout}");
+    assert_eq!(
+        refusals[0]["reason"], "run: the line was not approved and did not run",
+        "{stdout}"
+    );
+    assert_eq!(session_of(&stdout), Some(id.clone()), "{stdout}");
+    let after = the_record(&scratch, &id);
+    assert_eq!(
+        after["turns"], 2,
+        "the continued turn was not written: {after:#?}"
+    );
+    assert_eq!(
+        after["programs"], vouched,
+        "the record lost the commands its person vouched for: {after:#?}"
+    );
+}
+
 /// CLI-25 and CLI-3: piped input stays a reference across the continuation. The planner is never
 /// handed the bytes, in the first run or the follow-up, and the follow-up is told the reference it
 /// holds no longer names anything, which is what a record written without the quarantine says.
@@ -19090,8 +21117,78 @@ fn a_continued_run_is_never_shown_the_bytes_an_earlier_pipe_carried() {
     );
 }
 
+/// Every file under `scratch`'s sessions directory (records, trails, indexes and locks) with its
+/// bytes, or nothing where no run created the directory.
+fn the_sessions_tree(scratch: &Scratch) -> std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> {
+    let sessions = scratch.path.join(".bravebot").join("sessions");
+    match sessions.exists() {
+        true => the_tree_under(&sessions),
+        false => Default::default(),
+    }
+}
+
+/// BACKEND-51: a Vertex key is in no session record. A one-shot turn against a `google-vertex`
+/// service holding a known key is recorded, and no file under the home's `.bravebot/sessions` (the
+/// record, the trail beside it, the index) holds the key. The record is asserted to exist, so a run
+/// that wrote nothing does not pass. Rejects a record writer that stores the resolved credential
+/// or the request headers.
+#[test]
+fn a_vertex_key_is_in_no_session_record_after_a_turn() {
+    const KEY: &str = "AIza-a-vertex-key-nobody-may-record";
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch = Scratch::new("cli-running-vertex-record").with_settings(&format!(
+        r#"{{
+            "provider": {{
+                "google-vertex": {{
+                    "env": ["GOOGLE_API_KEY"],
+                    "options": {{"baseURL": "http://127.0.0.1:{}/v1", "maxRetries": 0}},
+                    "models": {{"reasons-only": {{}}}}
+                }}
+            }},
+            "model": "google-vertex/reasons-only"
+        }}"#,
+        gateway.port
+    ));
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("GOOGLE_API_KEY", KEY));
+
+    let output = bravebot(
+        &scratch.path,
+        &environment,
+        &["--json", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(
+        session_of(&stdout).is_some(),
+        "the run was not recorded, so there is nothing to search: {stdout}"
+    );
+    assert!(
+        !requests(&gateway).is_empty(),
+        "no request reached the service"
+    );
+    let mut searched = 0;
+    for (path, bytes) in the_sessions_tree(&scratch) {
+        let Some(bytes) = bytes else { continue };
+        searched += 1;
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(KEY),
+            "{} holds the key",
+            path.display()
+        );
+    }
+    assert!(
+        searched > 0,
+        "no file under the sessions directory was searched"
+    );
+}
+
 /// CLI-25 and INCOG-3: an incognito run writes no record, says so by a null session, and leaves
 /// `--continue` with nothing to find.
+///
+/// No file at all is written under the sessions directory, so a run that wrote its record or its
+/// trail somewhere `--continue` does not look is rejected as well.
 #[test]
 fn an_incognito_run_is_not_recorded_and_cannot_be_continued() {
     let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
@@ -19101,6 +21198,15 @@ fn an_incognito_run_is_not_recorded_and_cannot_be_continued() {
 
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(stdout.contains(r#""session":null"#), "{stdout}");
+    let written: Vec<_> = the_sessions_tree(&scratch)
+        .into_iter()
+        .filter(|(_, bytes)| bytes.is_some())
+        .map(|(path, _)| path)
+        .collect();
+    assert!(
+        written.is_empty(),
+        "an incognito run wrote a record, a trail or an index: {written:?}"
+    );
     let _ = requests(&gateway);
 
     let (output, stdout, _) = a_recorded_run(&scratch, &["-p", "follow up", "--continue"]);
@@ -19110,6 +21216,193 @@ fn an_incognito_run_is_not_recorded_and_cannot_be_continued() {
     assert!(
         requests(&gateway).is_empty(),
         "a follow-up with nothing to carry on was sent"
+    );
+}
+
+/// CLI-25: a run that failed writes no record and says so by a null session, and `--continue`
+/// after it carries on the last turn that completed. A run that reported the id of a record
+/// anyway, or wrote one holding the failed turn, would have the follow-up answer a conversation
+/// that holds the prompt that never got a reply.
+#[test]
+fn a_failed_run_writes_no_record_and_a_continuation_carries_on_the_last_completed_turn() {
+    let reply = answered("a reply");
+    let gateway = a_gateway(r#"["tools"]"#, move |body| {
+        match body.contains("FAIL-NOW") {
+            true => http(500, r#"{"error": {"message": "nothing here answers"}}"#),
+            false => reply(body),
+        }
+    });
+    let scratch =
+        Scratch::new("cli-running-failed-run-session").with_settings(&settings_for(&gateway));
+
+    let (output, stdout, stderr) = a_recorded_run(&scratch, &["-p", "FAIL-NOW"]);
+
+    assert_eq!(output.status.code(), Some(1), "{stdout} {stderr}");
+    assert!(stdout.contains(r#""ok":false"#), "{stdout}");
+    assert!(stdout.contains(r#""reason":"failed""#), "{stdout}");
+    assert!(stdout.contains(r#""session":null"#), "{stdout}");
+    assert_eq!(session_of(&stdout), None, "{stdout}");
+    assert!(
+        the_record_files(&scratch).is_empty(),
+        "a failed first run left a record"
+    );
+    let _ = requests(&gateway);
+
+    let (_, first, _) = a_recorded_run(&scratch, &["-p", "FIRST-QUESTION"]);
+    let id = session_of(&first).expect("the first run named its session");
+    let before = std::fs::read(the_record_file(&scratch, &id)).expect("read the record");
+    let _ = requests(&gateway);
+
+    let (output, stdout, stderr) = a_recorded_run(&scratch, &["-p", "FAIL-NOW", "--continue"]);
+
+    assert_eq!(output.status.code(), Some(1), "{stdout} {stderr}");
+    assert!(stdout.contains(r#""ok":false"#), "{stdout}");
+    assert!(stdout.contains(r#""session":null"#), "{stdout}");
+    assert_eq!(session_of(&stdout), None, "{stdout}");
+    assert_eq!(
+        the_record_files(&scratch).len(),
+        1,
+        "a failed run wrote a record"
+    );
+    assert_eq!(
+        std::fs::read(the_record_file(&scratch, &id)).expect("read the record"),
+        before,
+        "a failed run changed the record it continued"
+    );
+    let _ = requests(&gateway);
+
+    let (output, third, stderr) = a_recorded_run(&scratch, &["-p", "THIRD-QUESTION", "--continue"]);
+
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(session_of(&third), Some(id), "{third}");
+    let sent = requests(&gateway);
+    let sent = sent.last().expect("the third task reached the gateway");
+    assert!(
+        sent.contains("FIRST-QUESTION") && sent.contains("THIRD-QUESTION"),
+        "the continuation lost the last turn that completed: {sent}"
+    );
+    assert!(
+        !sent.contains("FAIL-NOW"),
+        "the continuation carried the turn that failed: {sent}"
+    );
+}
+
+/// CLI-25: `--incognito` with `--resume <id>` or `--continue` runs the task over the record's
+/// conversation and writes nothing back: the result object carries a null session, and every file
+/// under the sessions directory (the record and the trail beside it) is byte for byte what it was.
+/// Rejects a continuation that saves the turn into the ordinary record, or appends to its trail,
+/// while incognito.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_incognito_run_over_a_record_leaves_the_record_and_its_trail_as_they_were() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch =
+        Scratch::new("cli-running-incognito-continued").with_settings(&settings_for(&gateway));
+    let (_, first, _) = a_recorded_run(&scratch, &["-p", "FIRST-QUESTION"]);
+    let id = session_of(&first).expect("the first run named its session");
+    let before = the_sessions_tree(&scratch);
+    assert!(
+        before.values().any(|bytes| bytes.is_some()),
+        "the first run wrote nothing to compare against"
+    );
+    let _ = requests(&gateway);
+
+    for arguments in [
+        vec![
+            "--incognito",
+            "-p",
+            "INCOGNITO-FOLLOW-UP",
+            "--resume",
+            id.as_str(),
+        ],
+        vec!["--incognito", "-p", "INCOGNITO-FOLLOW-UP", "--continue"],
+        vec![
+            "--incognito",
+            "--resume",
+            id.as_str(),
+            "-p",
+            "INCOGNITO-FOLLOW-UP",
+        ],
+    ] {
+        let (output, stdout, stderr) = a_recorded_run(&scratch, &arguments);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{arguments:?}: {stdout}{stderr}"
+        );
+        assert!(
+            stdout.contains(r#""session":null"#),
+            "{arguments:?}: the run named a session: {stdout}"
+        );
+        let sent = requests(&gateway);
+        let sent = sent.last().expect("the task reached the gateway");
+        assert!(
+            sent.contains("FIRST-QUESTION") && sent.contains("INCOGNITO-FOLLOW-UP"),
+            "{arguments:?}: the task did not run over the record's conversation: {sent}"
+        );
+        assert_the_same_tree(
+            &before,
+            &the_sessions_tree(&scratch),
+            &format!("{arguments:?}"),
+        );
+    }
+}
+
+/// CLI-25: a continuation that is refused, for an id that names no record, a `--resume` with no
+/// id, `--mode manifest`, or a record a manifest run wrote, leaves every file under the sessions
+/// directory as it was and creates none. Rejects a refusal made after the record was opened for
+/// writing, which would leave a lock, a rewritten record or an empty one behind.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_refused_continuation_writes_nothing_under_the_sessions_directory() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch =
+        Scratch::new("cli-running-continued-refused-writes").with_settings(&settings_for(&gateway));
+    let (_, stdout, _) = a_recorded_run(&scratch, &["-p", "first"]);
+    let id = session_of(&stdout).expect("the first run named its session");
+    let _ = requests(&gateway);
+
+    let before = the_sessions_tree(&scratch);
+    for arguments in [
+        vec!["-p", "next", "--resume", "no-such-id"],
+        vec!["-p", "next", "--resume"],
+        vec!["--mode", "manifest", "-p", "next", "--continue"],
+        vec!["--mode", "manifest", "-p", "next", "--resume", id.as_str()],
+    ] {
+        let (output, stdout, _) = a_recorded_run(&scratch, &arguments);
+
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stdout}");
+        assert_the_same_tree(
+            &before,
+            &the_sessions_tree(&scratch),
+            &format!("{arguments:?}"),
+        );
+    }
+
+    // A record a manifest run wrote is refused by id and by `--continue`.
+    let path = the_record_file(&scratch, &id);
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("read the record")).expect("JSON");
+    record["manifest"] = serde_json::json!({});
+    std::fs::write(&path, serde_json::to_vec(&record).expect("encode")).expect("write the record");
+    let before = the_sessions_tree(&scratch);
+    for arguments in [
+        vec!["-p", "next", "--resume", id.as_str()],
+        vec!["-p", "next", "--continue"],
+    ] {
+        let (output, stdout, _) = a_recorded_run(&scratch, &arguments);
+
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stdout}");
+        assert_the_same_tree(
+            &before,
+            &the_sessions_tree(&scratch),
+            &format!("{arguments:?}"),
+        );
+    }
+    assert!(
+        requests(&gateway).is_empty(),
+        "a refused run sent a request"
     );
 }
 
@@ -19577,6 +21870,139 @@ fn a_question_carries_the_commands_since_the_last_one_on_stdin() {
     assert_eq!(given, ["echo second-command"], "{output}");
     let (_, given) = what_a_question_was_given(&output, 2);
     assert!(given.is_empty(), "a repeated question was given {given:?}");
+}
+
+/// SHELLINT-2. A line that is `@bravebot` and nothing else is a question with no words after the
+/// name, and it is not recorded, so it is not part of the next question. The regression this
+/// rejects is a hook that skips only `@bravebot` followed by a space: the bare line would be
+/// recorded after it ran and would head the lines of the next question.
+#[cfg(unix)]
+#[test]
+fn a_question_with_no_words_after_the_name_is_not_recorded() {
+    let scratch = Scratch::new("cli-running-shell-init-bare-question");
+    let output = a_bash_session(
+        &scratch,
+        &[
+            "echo first-command",
+            "@bravebot",
+            "echo second-command",
+            "@bravebot \"and now?\"",
+        ],
+    );
+
+    let (arguments, given) = what_a_question_was_given(&output, 0);
+    assert_eq!(arguments, "-p", "{output}");
+    assert!(
+        given.contains(&"echo first-command".to_string()),
+        "the line before the bare question was not given: {output}"
+    );
+    let (arguments, given) = what_a_question_was_given(&output, 1);
+    assert_eq!(arguments, "-p and now?", "{output}");
+    assert_eq!(
+        given,
+        ["echo second-command"],
+        "the bare question was recorded: {output}"
+    );
+}
+
+/// SHELLINT-2. A question typed after white space is a question as much as one typed at the margin,
+/// with words after the name or none, and it is not recorded. The regression this rejects is a
+/// hook that takes off only the two spaces `history` puts between its number and the line: an
+/// indented question would be recorded after it ran and would head the lines of the next one.
+#[cfg(unix)]
+#[test]
+fn an_indented_question_is_not_recorded() {
+    let scratch = Scratch::new("cli-running-shell-init-indented-question");
+    let output = a_bash_session(
+        &scratch,
+        &[
+            "echo first-command",
+            "  @bravebot \"what did I run?\"",
+            "echo second-command",
+            "   @bravebot",
+            "echo third-command",
+            "@bravebot \"and now?\"",
+        ],
+    );
+
+    let (arguments, given) = what_a_question_was_given(&output, 0);
+    assert_eq!(arguments, "-p what did I run?", "{output}");
+    assert!(
+        given.contains(&"echo first-command".to_string()),
+        "the line before the indented question was not given: {output}"
+    );
+    let (arguments, given) = what_a_question_was_given(&output, 1);
+    assert_eq!(arguments, "-p", "{output}");
+    assert_eq!(
+        given,
+        ["echo second-command"],
+        "the indented question was recorded: {output}"
+    );
+    let (arguments, given) = what_a_question_was_given(&output, 2);
+    assert_eq!(arguments, "-p and now?", "{output}");
+    assert_eq!(
+        given,
+        ["echo third-command"],
+        "the indented bare question was recorded: {output}"
+    );
+}
+
+/// SHELLINT-2. The suite runs the bash hook in a real `bash` and does not run zsh or fish, so the
+/// text of the two other hooks is read: the function each shell calls before a command takes the
+/// leading white space off the line, as the bash hook does, records nothing for an empty line, for
+/// `@bravebot`, and for `@bravebot` followed by a space, and does all of that before it writes. The
+/// regressions this rejects are a hook of either shell that drops one of the three, which would
+/// record a question as part of the next one in that shell only, and one that judges the line as
+/// typed, which would record an indented question where bash does not.
+#[test]
+fn the_zsh_and_fish_hooks_skip_a_question_line_before_they_record() {
+    let scratch = Scratch::new("cli-running-shell-init-skip-arms");
+    for (shell, header, closing, trimmed, skipped, write) in [
+        (
+            "zsh",
+            "__bravebot_record() {",
+            "}",
+            "line=${line#\"${line%%[![:space:]]*}\"}",
+            "''|'@bravebot'|'@bravebot'[[:space:]]*) ;;",
+            "print -r --",
+        ),
+        (
+            "fish",
+            "function __bravebot_record --on-event fish_preexec",
+            "end",
+            "string trim --left",
+            "case '' '@bravebot' '@bravebot *'",
+            "printf '%s\\n'",
+        ),
+    ] {
+        let script = a_shell_init_script(&scratch.path, shell);
+        let mut lines = script.lines();
+        assert!(
+            lines.by_ref().any(|line| line == header),
+            "{shell} defines no `{header}`: {script}"
+        );
+        let body: Vec<&str> = lines.take_while(|line| *line != closing).collect();
+        let trim = body
+            .iter()
+            .position(|line| line.contains(trimmed))
+            .unwrap_or_else(|| panic!("{shell} never trims with `{trimmed}`: {body:?}"));
+        let skip = body
+            .iter()
+            .position(|line| line.trim() == skipped)
+            .unwrap_or_else(|| panic!("{shell} does not skip `{skipped}`: {body:?}"));
+        assert!(
+            trim < skip,
+            "{shell} judges the line before it takes the leading white space off: {body:?}"
+        );
+        let record = body
+            .iter()
+            .position(|line| line.contains(write))
+            .unwrap_or_else(|| panic!("{shell} never writes with `{write}`: {body:?}"));
+        assert!(
+            skip < record,
+            "{shell} writes the line before it skips a question: {body:?}"
+        );
+    }
 }
 
 /// SHELLINT-2, SHELLINT-4. The directory and the file are the person's alone however the shell's
@@ -20758,6 +23184,174 @@ fn a_one_shot_run_shows_nothing_a_servers_stderr_writes() {
     assert_none_of_what_a_noisy_server_writes_was_shown(&stdout, "a one-shot run's stdout");
 }
 
+/// SERVERS-15: a server whose handshake is not answered within the bound its declaration gives
+/// is left out of a one-shot run, with a line on stderr giving the reason.
+///
+/// The server reads what it is sent and never answers. Its declaration gives `startup_timeout_secs`
+/// of 1, so the handshake is over after one second, where the default of 60 seconds would hold the
+/// run for a minute. The controls are the model's request, which was made without the server's
+/// tool, so the run went on without the server and did not stop at the handshake, and the run's
+/// length, which is under the 8 seconds a handshake is given up on after (three times the bound and
+/// five seconds) and far under the default.
+///
+/// The wrong implementations this rejects are a run that leaves the server out and says nothing
+/// (the note is built in `agent::servers` and written by the one-shot start), and one that reads the
+/// declaration's bound as the default, which waits a minute and says it was 60 seconds.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_run_says_why_a_server_that_never_answered_its_handshake_was_left_out() {
+    if !bravebot_sandbox::confinement_works_here() {
+        return skipped("confinement is unavailable, so the server cannot be started");
+    }
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let settings = settings_for(&gateway).replacen('{', r#"{"mcp": {"request": ["weather"]},"#, 1);
+    let argv = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "while IFS= read -r line; do :; done".to_string(),
+    ];
+    let declared = serde_json::json!({"servers": {"weather": {
+        "transport": "stdio", "argv": argv, "variables": ["PATH"],
+        "startup_timeout_secs": 1}}})
+    .to_string();
+    let declaration = bravebot_config::mcp::Declarations::parse(&declared)
+        .expect("the declarations read")
+        .get("weather")
+        .expect("an entry for weather")
+        .declaration
+        .expect("a declaration");
+    assert_eq!(
+        declaration.timeouts().startup(),
+        Duration::from_secs(1),
+        "the declaration did not carry its bound"
+    );
+    let scratch = Scratch::new("cli-running-oneshot-slow-handshake")
+        .with_settings(&settings)
+        .with_state("mcp.json", &declared)
+        .with_state("mcp-approved", &format!("{}\n", declaration.digest()));
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("PATH", "/usr/bin:/bin"));
+
+    let started = std::time::Instant::now();
+    let output = bravebot(
+        &scratch.path,
+        &environment,
+        &["--dangerously-skip-permissions", "-p", "say something"],
+    );
+    let took = started.elapsed();
+    let offered = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run went on to the gateway without the server");
+    let (_, stderr) = said(&output);
+
+    assert!(
+        !offered.contains("mcp__weather__forecast"),
+        "a server that never answered was kept: {offered}"
+    );
+    let about_it: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.contains("weather") && line.contains("handshake"))
+        .collect();
+    let [note] = about_it.as_slice() else {
+        panic!("the run did not say once why weather was left out: {stderr:?}");
+    };
+    assert!(
+        note.contains("initialize timed out after 1 seconds"),
+        "the note does not give the reason and the declared bound: {note:?}"
+    );
+    assert!(
+        took < Duration::from_secs(40),
+        "the run waited on a handshake past the bound its declaration gave: {took:?}\n{stderr}"
+    );
+}
+
+/// SERVERS-15, Known costs: a session in lines in a terminal, with a server that never answers its
+/// handshake, opens once the bound has passed and not before, and it opens: the wait ends at three
+/// times the bound and 5 seconds at the latest. The run is bounded here, so a start that waits on
+/// the server for as long as it lives fails this test and does not hang the suite.
+///
+/// The server reads what it is sent and never answers; its declaration gives `startup_timeout_secs`
+/// of 1. The session opens (its opening line is in the transcript) without the server (the note says
+/// why), it took the bound to open (a start that never waited does not report a server left out),
+/// and it opened under the 8 seconds the bound allows, with 32 seconds for the process to start.
+/// Rejects a start that waits for the handshake with no bound or with the default of 60 seconds, and
+/// a start that opens at once and starts the server's handshake in the background with no note.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_session_in_lines_with_a_server_that_never_answers_opens_within_the_bound_the_start_allows() {
+    if !bravebot_sandbox::confinement_works_here() {
+        return skipped("confinement is unavailable, so the server cannot be started");
+    }
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let settings = settings_for(&gateway).replacen('{', r#"{"mcp": {"request": ["weather"]},"#, 1);
+    let argv = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "while IFS= read -r line; do :; done".to_string(),
+    ];
+    let declared = serde_json::json!({"servers": {"weather": {
+        "transport": "stdio", "argv": argv, "variables": ["PATH"],
+        "startup_timeout_secs": 1}}})
+    .to_string();
+    let declaration = bravebot_config::mcp::Declarations::parse(&declared)
+        .expect("the declarations read")
+        .get("weather")
+        .expect("an entry for weather")
+        .declaration
+        .expect("a declaration");
+    let scratch = Scratch::new("cli-running-lines-slow-handshake")
+        .with_settings(&settings)
+        .with_state("mcp.json", &declared)
+        .with_state("mcp-approved", &format!("{}\n", declaration.digest()));
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("PATH", "/usr/bin:/bin"));
+
+    let mut terminal = in_a_terminal_command(
+        &scratch.path,
+        None,
+        &environment,
+        &["--plain", "--dangerously-skip-permissions"],
+    );
+    let started = std::time::Instant::now();
+    let child = terminal
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("script runs the built binary in a terminal");
+    let (sender, ended) = mpsc::channel();
+    std::thread::spawn(move || {
+        sender.send(child.wait_with_output()).ok();
+    });
+    let output = ended
+        .recv_timeout(Duration::from_secs(90))
+        .expect("the session did not open within 90 seconds of a server that never answered")
+        .expect("the run ends");
+    let took = started.elapsed();
+
+    let (transcript, _) = said(&output);
+    assert!(
+        transcript.contains("in lines"),
+        "the session did not open: {transcript}"
+    );
+    assert!(
+        transcript
+            .lines()
+            .any(|line| line.contains("weather") && line.contains("handshake")),
+        "the start did not say that weather was left out: {transcript}"
+    );
+    assert!(
+        took >= Duration::from_secs(1),
+        "the start did not wait for the handshake's bound: {took:?}"
+    );
+    assert!(
+        took < Duration::from_secs(40),
+        "the session opened after waiting on a handshake past its bound: {took:?}\n{transcript}"
+    );
+}
+
 /// CLI-26: a list that names nothing, a name that is no tool, and the flags where nothing offers a
 /// tool are each refused as a bad argument before any configuration is read.
 #[test]
@@ -20791,18 +23385,25 @@ fn a_tool_limit_that_limits_nothing_is_refused_by_name() {
 
 /// CLI-26: the commands that start neither a session nor a task are refused both flags, each with
 /// the argument status and its own name in the refusal. The `doctor` row of the test above is one of
-/// twelve, and a list that lost any other would take the flag and ignore it.
+/// seventeen written out here, by name and not read from the list the code refuses by, and a list
+/// that lost any of them would take the flag and ignore it. `bug-report` is the one command of that
+/// kind that is not refused (`the_commands_that_start_no_session_refuse_every_flag_that_shapes_one`
+/// in main.rs pins it).
 #[test]
 fn the_tool_limit_is_refused_beside_each_command_that_starts_no_session_or_task() {
     let scratch = Scratch::new("cli-running-tools-refused-commands");
     for command in [
+        "acp",
         "doctor",
+        "update",
         "auth",
         "mcp",
         "permissions",
         "sessions",
         "stats",
         "schedule",
+        "skill",
+        "trigger",
         "attach",
         "reply",
         "import-leo-creds",
@@ -21302,6 +23903,60 @@ fn a_trigger_run_stops_at_the_first_question_and_clear_deletes_it() {
     assert!(said(&again).0.contains("has no question kept"));
     let unknown = bravebot(&scratch.path, &[], &["trigger", "clear", "nothing-here"]);
     assert_eq!(unknown.status.code(), Some(2));
+}
+
+/// MODE-1: a run a delivery starts opens asking even where the person's own settings say
+/// `permissions.startInAuto: true`. The model asks to write `out.txt`; nobody is there to approve
+/// it, so the file is not written and the second request is made with the write refused. The
+/// trigger's run is the one-shot path started again by the listener, so a listener that carried the
+/// setting into it (an `--auto` among the arguments, or a mode read where the entry is fired) would
+/// let a delivery write unasked. The write is observed at the second request, which a run that
+/// wrote would make after the file exists.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_trigger_run_opens_asking_where_the_setting_opens_sessions_in_auto() {
+    let gateway = a_gateway_asking_for_a_write();
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&settings_for(&gateway)).expect("settings");
+    settings["permissions"] = serde_json::json!({"startInAuto": true});
+    let scratch =
+        Scratch::new("cli-running-trigger-start-in-auto").with_settings(&settings.to_string());
+    let secret = a_trigger(&scratch, &[], "deploy", "push", &[]);
+    let at = serving(&scratch, AT_A_GATEWAY);
+    let answer = delivered(
+        &at,
+        "/deploy",
+        Some(&bravebot_signing::webhook::signature(
+            &secret, "push", b"{}",
+        )),
+        b"{}",
+    );
+    assert!(answer.starts_with("HTTP/1.1 202 "), "{answer}");
+
+    let mut sent = Vec::new();
+    for _ in 0..2 {
+        sent.push(
+            gateway
+                .asked
+                .recv_timeout(Duration::from_secs(60))
+                .expect("the run reached the gateway twice"),
+        );
+    }
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "a trigger run wrote under a setting that is for sessions"
+    );
+    assert!(
+        sent[0].contains(r#""name":"write_file""#),
+        "the planner was never offered the write: {}",
+        sent[0]
+    );
+    for body in &sent {
+        assert!(
+            !body.contains("permission classifier"),
+            "a trigger run opened in auto and asked the classifier: {body}"
+        );
+    }
 }
 
 /// CLI-26: where `--no-shell` took `run` away, `read_git`'s description does not send the planner
@@ -21934,6 +24589,46 @@ fn permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names() {
             "{unmatched:?}"
         );
     }
+}
+
+/// PERM-1, WEBSEARCH-2 and CLI-30: `WebSearch` takes no specifier, is decided by the family's own rule
+/// and by no `WebFetch` rule, and a word after it names no call. The faults this rejects: a
+/// `WebFetch` deny answering for a search, and the family unknown to the report.
+#[test]
+fn permissions_check_decides_a_web_search_by_its_own_family() {
+    let scratch = Scratch::new("cli-running-permissions-check-web-search").with_settings(
+        r#"{"permissions": {"deny": ["WebFetch(domain:example.com)"], "ask": ["WebSearch"]}}"#,
+    );
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(&checkout).expect("create the checkout");
+    let home = scratch.settings().display().to_string();
+    assert_eq!(
+        permissions_check(&scratch, &checkout, &["WebSearch"]),
+        [
+            "decision: ask".to_string(),
+            "rule: WebSearch".to_string(),
+            format!("file: {home}"),
+        ]
+    );
+
+    let fetch_only = Scratch::new("cli-running-permissions-check-web-search-none")
+        .with_settings(r#"{"permissions": {"deny": ["WebFetch(domain:example.com)"]}}"#);
+    assert_eq!(
+        permissions_check(&fetch_only, &fetch_only.path, &["WebSearch"]),
+        ["decision: no rule matches, so the ordinary gates decide"]
+    );
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        &[],
+        &["permissions", "check", "WebSearch", "weather"],
+    );
+    assert!(
+        !output.status.success(),
+        "a word after WebSearch named a call"
+    );
+    assert!(said(&output).0.is_empty());
 }
 
 /// PERM-3 and CLI-30 on real directories: `permissions check` decides `Read .ENV` by the casefold
@@ -24649,6 +27344,53 @@ fn a_line_does_not_approve_a_write() {
     assert!(
         lines.iter().any(|line| line["event"] == "refusal"),
         "{lines:?}"
+    );
+}
+
+/// RULE-3, PROMPT-9, CLI-36: a program reading lines cannot approve a rule write, so propose_rule
+/// is never put to it and nothing is appended to AGENTS.md.
+#[test]
+fn a_lines_run_refuses_a_rule_proposal() {
+    let gateway = a_gateway_following(
+        vec![
+            Model::Calls(
+                "propose_rule",
+                serde_json::json!({
+                    "text": "Always use tabs.",
+                    "scope": "home",
+                    "reason": "stated"
+                })
+                .to_string(),
+            ),
+            Model::Words("finished"),
+        ],
+        None,
+    );
+    let scratch = Scratch::new("cli-lines-rule").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::start(&scratch, &["-p", "propose a rule"]);
+    run.send(r#"{"type":"answer","id":1,"choices":[[0]]}"#);
+    let (lines, status, stderr) = run.finish();
+
+    assert_eq!(status, Some(0), "{stderr}");
+    assert!(
+        !scratch.path.join(".bravebot/AGENTS.md").exists(),
+        "a rule was appended to AGENTS.md by a lines run"
+    );
+    assert!(
+        !lines.iter().any(|line| line["event"] == "question"),
+        "a question event was emitted to lines: {lines:?}"
+    );
+    let sent = bodies(&gateway);
+    assert!(
+        sent[1].contains("Nobody could be asked to keep the rule"),
+        "unexpected response to planner: {}",
+        sent[1]
+    );
+    assert!(
+        !sent[1].contains("The user chose: Keep this rule"),
+        "the planner was told the rule was kept: {}",
+        sent[1]
     );
 }
 

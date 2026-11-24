@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { buildSync } from 'esbuild'
 import { readFileSync } from 'node:fs'
+import { allowedMethods } from './allow-list.mjs'
 
 const require = createRequire(import.meta.url)
 
@@ -71,45 +72,54 @@ test('the request handler refuses session.new, session.open, session.delete, ses
 const GATED = ['session.new', 'session.open', 'session.delete', 'session.purge', 'session.import']
 const NO_GATE = {
   'models.list': 'answered in the main process, which reads the configuration of the folder it is given and opens no session',
-  'effort.get': 'answered with the folder of the session the window names, whose settings it reads, and opens no session',
+  'effort.get': 'answered with the folder of the session the window names, whose settings it reads, and the handle of that session, whose starting level it reads, and opens no session',
   'session.list': 'the sanitiser drops a directory the window states, so the window cannot choose the store',
   'manifest.read': 'reads a store record and opens nothing',
   'connectors.preview': 'a stdio connector\'s own working folder, typed into the form',
   'connectors.connect': 'a stdio connector\'s own working folder, typed into the form',
   'session.folders.close': 'names a folder only to take it away from the session, which the agent refuses unless it is open there',
+  'session.stats': 'reads records and opens no session; a directory it names is held to mayOpenSessionIn by a check of its own, since it may name none',
 }
 const TAKES_NO_DIRECTORY = [
-  'agent.info', 'session.fork', 'session.close', 'session.mode', 'session.sandbox', 'session.rewind',
+  'agent.info', 'session.fork', 'session.close', 'session.mode', 'session.sandbox', 'session.limit', 'session.variant', 'session.rewind',
   'session.note', 'session.folders.list',
-  'turn.send', 'turn.cancel', 'turn.interject', 'session.enhance', 'session.enhance.cancel', 'mentions.offer', 'mentions.named', 'confirm.reply', 'run.reply',
+  'session.report.cost', 'session.report.context', 'session.report.request', 'session.report.status',
+  'turn.send', 'turn.cancel', 'turn.interject', 'session.enhance', 'session.enhance.cancel', 'session.compact', 'session.compact.cancel', 'session.handoff', 'session.handoff.cancel', 'session.background', 'session.btw', 'session.recap', 'session.aside.cancel', 'mentions.offer', 'mentions.named', 'confirm.reply', 'run.reply',
   'output.reply', 'vouch.reply', 'vet.reply', 'fetch.reply', 'server.reply', 'manifest.run',
   'manifest.reply', 'exposure.reply', 'mcp-server.reply', 'mcp-tools.reply', 'mcp-call.reply',
   'mcp-move.reply', 'host.reply', 'ask.reply', 'trust.reply', 'rules.reply',
   // Opens the folder the bridge resolved from the checkout's settings and put in its question; the
   // window names only the question it answers.
   'folder.reply',
-  'permissions.list', 'permissions.revoke',
-  'doctor', 'changelog.read', 'schedule.command', 'hooks.inspect', 'language.get', 'language.set', 'usage_ping.get', 'usage_ping.set',
-  'usage_ping.notice_due', 'usage_ping.mark_notice_shown', 'crash_reports.notice_due',
-  'crash_reports.mark_notice_shown', 'connectors.list', 'connectors.disconnect', 'connectors.remove',
+  'permissions.list', 'permissions.check', 'permissions.revoke',
+  'doctor', 'changelog.read', 'window.title', 'schedule.command', 'hooks.inspect', 'language.get', 'language.set', 'usage_ping.get', 'usage_ping.set',
+  'usage_ping.notice_due', 'usage_ping.mark_notice_shown', 'crash_reports.get', 'crash_reports.set',
+  'crash_reports.notice_due', 'crash_reports.mark_notice_shown', 'connectors.list', 'connectors.disconnect',
+  'connectors.remove',
   'settings.inspect', 'watches.list', 'watches.add', 'watches.stop', 'update.status',
   'accounts.list', 'accounts.signOut', 'effort.set',
+  // Reads the roster of every project and opens nothing; the bridge takes no parameter for it.
+  'background.list',
+  // Takes a record's whole id and stops the process holding it; the session record is not touched.
+  'session.background.stop',
 ]
-
-function allowedMethods(index) {
-  const body = /const ALLOWED = new Set\(\[([^\]]*)\]\)/.exec(index)
-  assert.ok(body, 'the allow-list is a literal set the test can read')
-  return [...body[1].matchAll(/'([^']+)'/g)].map(each => each[1])
-}
 
 test('every method the window may send is classified by whether it carries a directory', () => {
   const index = readFileSync('src/main/index.ts', 'utf8')
   const allowed = allowedMethods(index)
+  assert.ok(allowed, 'the allow-list is a literal set the test can read')
   assert.ok(allowed.length > 40, 'the list was read whole')
   const placed = [...GATED, ...Object.keys(NO_GATE), ...TAKES_NO_DIRECTORY]
   assert.deepEqual(allowed.filter(name => !placed.includes(name)), [], 'a method added to ALLOWED is placed here, and gated if it opens or deletes a session by directory')
   assert.deepEqual(placed.filter(name => !allowed.includes(name)), [], 'and a name that left ALLOWED leaves this list')
   assert.equal(new Set(placed).size, placed.length, 'and no method is in two of the sets')
+})
+test('the request handler refuses a session.stats directory the app did not offer, and lets one with no directory through', () => {
+  const index = readFileSync('src/main/index.ts', 'utf8')
+  const gate = /if \(method === 'session\.stats'\) \{\s*const directory = ([^\n]*)\n\s*if \(directory !== undefined && directory !== null && !mayOpenSessionIn\(directory\)\) \{\s*return \{ error/.exec(index)
+  assert.ok(gate, 'a named folder the app did not offer is answered with an error')
+  assert.equal(gate[1], GATE_ARGUMENT, 'and what it checks is the directory the window named')
+  assert.ok(index.indexOf('bridge.request(method', gate.index) > gate.index, 'and the check comes before the request is forwarded')
 })
 test('the request handler forwards a session list through the sanitiser, which drops a directory', () => {
   const index = readFileSync('src/main/index.ts', 'utf8')

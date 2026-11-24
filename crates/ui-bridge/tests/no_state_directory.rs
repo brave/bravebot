@@ -268,7 +268,9 @@ fn a_desktop_session_with_no_state_directory_runs_its_turn_and_writes_nothing() 
 }
 
 /// With no state directory the window is told a bug report cannot be made and nothing of a newer
-/// release, and asking writes nothing: there is nowhere for a log or a record to be (DIAG-9).
+/// release, its settings report names no log directory, raising the log level says nothing will
+/// be written, and asking writes nothing: there is nowhere for a log or a record to be (DIAG-9,
+/// DIAG-5, DIAG-11).
 #[test]
 fn with_no_state_directory_there_is_no_bug_report_and_no_update_record() {
     let scratch = Scratch::new("bridge-no-state-directory-report");
@@ -287,12 +289,27 @@ fn with_no_state_directory_there_is_no_bug_report_and_no_update_record() {
     let report = until(&said, |message| message["id"] == 1);
     send(&mut child, 2, "update.status", json!({}));
     let status = until(&said, |message| message["id"] == 2);
+    send(&mut child, 3, "settings.inspect", json!({}));
+    let settings = until(&said, |message| message["id"] == 3);
+    send(
+        &mut child,
+        4,
+        "diagnostic_log.set",
+        json!({"level": "debug"}),
+    );
+    let raised = until(&said, |message| message["id"] == 4);
     let _ = child.kill();
     let _ = child.wait();
 
     assert_eq!(report["ok"]["available"], false, "{report}");
     assert_eq!(report["ok"]["text"], "", "{report}");
     assert!(status["ok"]["newer"].is_null(), "{status}");
+    // DIAG-5: there is no directory to name, and this process writes no log.
+    assert!(settings["ok"]["logs"]["directory"].is_null(), "{settings}");
+    assert_eq!(settings["ok"]["logs"]["writing"], false, "{settings}");
+    // DIAG-4, DIAG-11: the level is recorded, and the window is told nothing will be written.
+    assert_eq!(raised["ok"]["level"], "debug", "{raised}");
+    assert_eq!(raised["ok"]["writing"], false, "{raised}");
     assert_eq!(
         scratch.contents(),
         before,

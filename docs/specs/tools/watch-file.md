@@ -104,6 +104,7 @@ would outlive everything that could act on one.
 `verified-by: bravebot_agent::tools::tests::watching::a_surface_that_keeps_no_watches_is_not_offered_the_tool`
 `verified-by: bravebot_agent::tools::tests::watching::a_call_to_watch_a_file_from_a_delegate_or_a_surface_with_no_watches_is_answered_as_an_unknown_name`
 `verified-by: bravebot_agent::turn::a_run_that_keeps_no_watches_answers_a_call_to_arm_one_as_an_unknown_name`
+`verified-by: bravebot_agent::tools::tests::watching::a_surface_that_keeps_no_watches_answers_the_tool_itself_as_an_unknown_name`
 
 <a id="ARM-6"></a>
 ### ARM-6: where this tool is offered, the read's description sends a question about one file to it

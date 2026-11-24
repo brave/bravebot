@@ -187,6 +187,19 @@ impl Hook {
         self.timeout.map(std::time::Duration::from_secs)
     }
 
+    /// This hook with `change` applied to each word of its program and arguments and to nothing
+    /// else: the moment, the tool, the watched path and the bound are as they were read.
+    ///
+    /// A plugin's `${PLUGIN_ROOT}` is replaced this way (PLUGIN-13). The first word is never made
+    /// blank by it, since a replacement only lengthens a word that held the text.
+    #[must_use]
+    pub fn mapping_run(&self, change: impl Fn(&str) -> String) -> Self {
+        Self {
+            run: self.run.iter().map(|word| change(word)).collect(),
+            ..self.clone()
+        }
+    }
+
     /// Whether this entry names a call that does not happen at its moment, so nothing fires it.
     ///
     /// Answered here because an editor showing somebody this entry has to say so, and working it
@@ -198,7 +211,7 @@ impl Hook {
     }
 
     /// Whether this entry fires for `moment`, for a call on `tool` where there was one.
-    fn fires(&self, moment: Moment, tool: Option<&str>) -> bool {
+    pub fn fires(&self, moment: Moment, tool: Option<&str>) -> bool {
         if self.moment != moment {
             return false;
         }
@@ -207,6 +220,31 @@ impl Hook {
             (Some(_), None) => false,
             (Some(wanted), Some(called)) => wanted == called,
         }
+    }
+}
+
+/// The keys of one entry this reader reads.
+const ENTRY_KEYS: [&str; 5] = ["on", "tool", "path", "run", "timeout"];
+
+/// What a hooks file said that [`Hooks::parse_accounting`] did not keep.
+///
+/// Counts only. Nothing the file wrote is carried here, so a listing can say how much was left out
+/// without drawing any of it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Unkept {
+    /// Entries passed over: an unknown moment, no program, a word that is not a string, a bound
+    /// outside the range, or a `file-changed` entry with no path.
+    pub dropped: usize,
+    /// Keys of the root object other than `hooks`.
+    pub root_keys: usize,
+    /// Keys in a kept entry that this reader does not read.
+    pub entry_keys: usize,
+}
+
+impl Unkept {
+    /// Whether the file said nothing this reader left out.
+    pub fn is_none(&self) -> bool {
+        self.dropped == 0 && self.root_keys == 0 && self.entry_keys == 0
     }
 }
 
@@ -233,6 +271,14 @@ impl Hooks {
         read(text).0
     }
 
+    /// These hooks and nothing else, in this order, for a list somebody else decided to fire.
+    ///
+    /// A plugin's hooks that the person approved are put into one of these so they run through the
+    /// code a hook of the person's own runs through (PLUGIN-7).
+    pub fn from_hooks(hooks: Vec<Hook>) -> Self {
+        Self { hooks }
+    }
+
     /// Whether anything is declared at all, so a turn that has no hooks can say so without
     /// looking at a moment.
     pub fn is_empty(&self) -> bool {
@@ -245,6 +291,53 @@ impl Hooks {
     /// at a moment is a question about a moment.
     pub fn declared(&self) -> &[Hook] {
         &self.hooks
+    }
+
+    /// These hooks with `change` applied to each word of every program and its arguments.
+    #[must_use]
+    pub fn mapping_run(&self, change: impl Fn(&str) -> String) -> Self {
+        Self {
+            hooks: self
+                .hooks
+                .iter()
+                .map(|hook| hook.mapping_run(&change))
+                .collect(),
+        }
+    }
+
+    /// Read hooks JSON and say how much of it was not kept.
+    ///
+    /// [`Self::parse`] passes over what it cannot use, which is right for a turn and would let a
+    /// listing show less than a file carries. This returns what was kept with the counts of what
+    /// was not, or `None` where the text is not an object with a `hooks` array.
+    pub fn parse_accounting(text: &str) -> Option<(Self, Unkept)> {
+        let serde_json::Value::Object(root) = serde_json::from_str(text).ok()? else {
+            return None;
+        };
+        let serde_json::Value::Array(entries) = root.get("hooks")? else {
+            return None;
+        };
+        let mut unkept = Unkept {
+            dropped: 0,
+            root_keys: root.keys().filter(|key| key.as_str() != "hooks").count(),
+            entry_keys: 0,
+        };
+        let mut hooks = Vec::with_capacity(entries.len());
+        for value in entries {
+            match entry(value) {
+                Some(hook) => {
+                    unkept.entry_keys += value.as_object().map_or(0, |object| {
+                        object
+                            .keys()
+                            .filter(|key| !ENTRY_KEYS.contains(&key.as_str()))
+                            .count()
+                    });
+                    hooks.push(hook);
+                }
+                None => unkept.dropped += 1,
+            }
+        }
+        Some((Self { hooks }, unkept))
     }
 
     /// The hooks that fire for `moment`, in the order the file declared them.
@@ -372,10 +465,7 @@ fn accounted(value: &serde_json::Value, hook: &Hook) -> bool {
     let Some(object) = value.as_object() else {
         return false;
     };
-    if object
-        .keys()
-        .any(|key| !matches!(key.as_str(), "on" | "tool" | "path" | "run" | "timeout"))
-    {
+    if object.keys().any(|key| !ENTRY_KEYS.contains(&key.as_str())) {
         return false;
     }
     // An editor composing the file back from the entries has no field for a path, so an entry with

@@ -77,7 +77,7 @@ Before you use it:
 
 ## The development relay
 
-The relay lets an app on a phone or emulator drive `bravebot-host` for the stage-3d experiment. It is a development transport for synthetic data. It does not resolve U1 or authorize control of a real session.
+The relay lets an app on a phone or emulator drive `bravebot-host` for the stage-3d experiment. It is a development transport for synthetic data. It does not close the untested local-control cases or authorize control of a real session.
 
 ```sh
 bravebot-host --sessions-root <root> --workspace <dir> \

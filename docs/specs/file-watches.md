@@ -23,7 +23,7 @@ documented-by: docs/website/docs/using/watches.md
 
 ## Scope
 
-A standing watch on one path: a thing a turn arms and that fires later, on a change, with no turn
+A standing watch on one path: a thing a turn or a person arms and that fires later, on a change, with no turn
 running to notice. What a watch may observe, what a firing puts into the conversation, when it is
 allowed to fire, how long one lives, what ends one, and where a live one is shown.
 
@@ -198,6 +198,8 @@ the one prompt in this system nobody can label would be the one carrying bytes o
 `verified-by: bravebot_agent::watch::a_fire_for_each_change_says_one_of_three_fixed_things_about_the_path`
 `verified-by: bravebot_tui::state::a_removal_and_an_appearance_are_each_reported_as_what_they_were`
 `verified-by: bravebot_tui::state::a_fires_prompt_carries_the_watch_and_the_path_and_nothing_else`
+`verified-by: bravebot_tui::app::a_path_named_in_a_fires_prompt_vouches_for_nothing`
+`verified-by: bravebot_tui::app::a_line_typed_with_no_fire_in_flight_is_the_persons_and_names_its_files`
 
 <a id="FSWATCH-5"></a>
 ### FSWATCH-5: a fire waits for an idle session and never interrupts, and changes while a turn runs are one fire
@@ -389,8 +391,9 @@ armed it to learn.
 ### FSWATCH-10: a live watch is on the screen, with the turn that armed it
 
 `/status` lists every live watch: a number that names it, the path, which turn armed it, and how
-long it has left. A session with no live watch says nothing about watches. A fire announces itself,
-naming the watch it came from.
+long it has left. A watch a person armed with `/watch <path>` ([FSWATCH-13](#FSWATCH-13)) is listed
+as armed by you instead of by a turn. A session with no live watch says nothing about watches. A
+fire announces itself, naming the watch it came from.
 
 The number is what a person ends one by ([FSWATCH-9](#FSWATCH-9)), so it is stable for the life of
 the watch: watches are numbered in the order they were armed, and a number is not reused when the
@@ -409,6 +412,8 @@ they asked for it.
 `verified-by: bravebot_agent::watch::a_number_is_not_reused_when_the_watch_it_named_ends`
 `verified-by: bravebot_agent::watch::a_live_watch_reports_its_path_the_turn_that_armed_it_and_what_is_left`
 `verified-by: bravebot_tui::state::a_session_with_no_watch_says_so_when_asked`
+`verified-by: bravebot_tui::status::the_report_says_a_watch_was_armed_by_the_person`
+`verified-by: bravebot_tui::state::a_watch_the_person_armed_is_listed_as_armed_by_them`
 
 <a id="FSWATCH-11"></a>
 ### FSWATCH-11: a watch is never written down, and the process ending is what reaps it
@@ -451,14 +456,67 @@ one write.
 `verified-by: bravebot_agent::watch::a_path_out_of_reach_is_refused_rather_than_armed`
 `verified-by: bravebot_tui::state::a_path_that_cannot_be_looked_at_is_refused_and_said_so`
 
+<a id="FSWATCH-13"></a>
+### FSWATCH-13: a person arms a watch by typing its path
+
+`/watch <path>` arms a watch on that path, armed by the person rather than by a turn. The path is
+the rest of the line, taken whole so a path with spaces works, with one leading `@` removed. A bare
+number is not read as a path, since it is almost always `/watch stop <n>` mistyped, and a path with
+a control character is not read at all. A path starting with `~` is armed as the absolute path it
+stands for, as a turn's is ([FSWATCH-7](#FSWATCH-7)).
+
+The gate is the first look every later pass takes ([FSWATCH-7](#FSWATCH-7)), asked the same way: a
+path inside the working directory is reached, a path outside it is reached only under bypass in a
+trusted project, and any other path is refused and says so. A typed path is the person's own, so no
+promotion is recorded for it. A directory is refused ([FSWATCH-2](#FSWATCH-2)). A path already
+watched arms nothing new and names the watch that is on it, whether it is spelled as the watch's
+path is or another way the working directory resolves to the same file (`./notes.md` for
+`notes.md`, or a link to it). A ninth watch is refused as a turn's is
+([FSWATCH-8](#FSWATCH-8)).
+
+Under a loop or a goal it arms nothing, and the refusal says how to end the loop (`/loop stop`) or
+the goal (`/goal clear`). Typed while a turn is running, the line arms nothing then: it waits
+in the queue ([CMD-8](commands.md#CMD-8)) and arms the watch once the turn ends, so the person
+does not type it again; listing and stopping are carried out at once. The report shows the watch as armed by you
+([FSWATCH-10](#FSWATCH-10)), and it fires, coalesces, ages and ends like any other. Its fire's
+prompt is the same sentence a turn's watch fires with ([FSWATCH-4](#FSWATCH-4)): the path in it is
+one the person typed, so it is not untrusted bytes either, and it cannot have changed since.
+
+**Why the person is refused under a loop or a goal.** A person starting a loop or a goal ends the
+watches because the second request stands ([FSWATCH-6](#FSWATCH-6)). Applied here that would end
+the person's own loop or goal to arm a watch, which is a larger consequence than typing a path
+suggests. Refusing and naming the command that clears it leaves the choice with them.
+
+**Why nothing is armed while a turn runs.** The first look may need the trust map, which a running
+turn holds ([FSWATCH-7](#FSWATCH-7)). The terminal already holds the line, so it keeps it until the
+turn ends, as it does a `/loop` or a `/goal` that would start something.
+
+**Why a person may arm one at all.** Nothing about a watch needs a planner until it fires, and a
+watch on a path the person typed is one they named, which answers the cost below of a week-long
+channel opened on a path nobody named.
+
+`verified-by: bravebot_agent::watch::a_watch_armed_by_the_person_says_so`
+`verified-by: bravebot_agent::watch::watching_names_the_live_watch_on_a_path`
+`verified-by: bravebot_tui::watch_command::a_path_arms_a_watch_on_it`
+`verified-by: bravebot_tui::watch_command::anything_else_is_answered_by_saying_what_the_command_takes`
+`verified-by: bravebot_tui::app::the_watch_command_lists_and_stops_and_hands_a_path_to_the_loop`
+`verified-by: bravebot_tui::app::typing_watch_and_a_path_arms_a_watch_that_fires_on_a_write`
+`verified-by: bravebot_tui::app::typing_watch_on_a_directory_is_refused`
+`verified-by: bravebot_tui::app::typing_watch_on_a_path_outside_the_project_is_refused_outside_bypass`
+`verified-by: bravebot_tui::app::typing_watch_with_a_path_while_a_turn_runs_waits_for_the_turn`
+`verified-by: bravebot_tui::app::a_watch_the_person_armed_under_a_relative_path_ends_on_cd`
+`verified-by: bravebot_tui::state::a_person_arms_a_watch_and_it_fires_like_any_other`
+`verified-by: bravebot_tui::state::a_person_cannot_arm_a_watch_under_a_loop_or_a_goal_and_is_told_how_to_clear_it`
+`verified-by: bravebot_tui::state::a_person_arming_a_ninth_watch_is_refused`
+`verified-by: bravebot_tui::app::typing_watch_on_a_path_already_watched_arms_nothing_new`
+`verified-by: bravebot_agent::watch::watching_does_not_match_a_relative_watch_armed_under_another_directory`
+`verified-by: bravebot_agent::watch::a_path_is_armable_unless_empty_or_holding_a_control_character`
+`verified-by: bravebot_tui::state::a_path_the_person_cannot_reach_is_refused_and_said_so`
+`verified-by: bravebot_tui::state::a_watch_the_person_armed_is_listed_as_armed_by_them`
+`verified-by: bravebot_tui::status::the_report_says_a_watch_was_armed_by_the_person`
+
 ## Open questions
 
-- Whether a person may arm a watch themselves, with a command, rather than only by asking for one in
-  a prompt. `/watch` lists them and ends one and arms none. A `file-changed` hook
-  ([HOOK-2](hooks.md#HOOK-2)) runs a person's own command for a named file and begins no turn, so
-  it answers the part of this that asks for no planner. Nothing here needs a planner, and a
-  person who wants to be told when a file changes is the one case where the whole feature costs a
-  turn only at the moment it fires.
 - Whether the five-second look should become an operating-system notification. The observable
   difference is latency, and the cost is a dependency and a per-platform surface, so it is a
   question about the bound rather than about any clause here.
@@ -488,5 +546,5 @@ one write.
   than a question put to a person, which [tools/read-file.md](tools/read-file.md) states, and a
   watch asks exactly what a read asks. So a week-long channel about a path can be opened by a
   promotion, on a path the person may never have named. The screen and the bounds are the whole of
-  what answers for it, which puts the guarantee on somebody reading `/status`, and it is the
-  strongest argument for letting a person arm one themselves.
+  what answers for it, which puts the guarantee on somebody reading `/status`. A person who wants
+  the path to be one they named can arm the watch with `/watch <path>` ([FSWATCH-13](#FSWATCH-13)).

@@ -139,7 +139,7 @@ use results::{
     MAX_CONTEXT_LINES, MAX_LINE, MAX_MAP_BYTES, MAX_MAP_FILE_BYTES, MAX_MATCH_LINE, MAX_MATCHES,
     MAX_PAGE_CHARS, MAX_PAGE_LINES, MAX_SEARCH_TIME, MAX_TALLIED_FILES,
 };
-pub(crate) use results::{MAX_ENTRIES, MAX_FILES_PER_DIRECTORY};
+pub(crate) use results::{MAX_ENTRIES, MAX_FILES_PER_DIRECTORY, MAX_SUBDIRECTORIES_PER_DIRECTORY};
 pub use touched::TouchedRecord;
 use touched::{Touched, place_by_spelling};
 pub(crate) use tree_mark::TreeMark;
@@ -347,6 +347,14 @@ pub struct Workspace {
     /// Whether a name a run opens is judged as Windows reads it: the host's answer, and one a test
     /// supplies so the run tool's refusal is exercised on any host.
     windows_names: bool,
+    /// Whether a backslash separates on the host the two doors that open a directory by name
+    /// (`/add-dir` and `/cd`) judge a resolved name for: [`BACKSLASH_SEPARATES`], or the answer a
+    /// test supplies so the Windows answer is asked of the public doors on any host (TRUST-18).
+    door_backslash_separates: bool,
+    /// How those two doors turn the name they were given into a directory that exists: the file
+    /// system's answer, or one a test supplies so a name spelled as Windows spells it can reach the
+    /// doors on a host that cannot resolve it.
+    door_resolver: fn(&str) -> Result<PathBuf, WorkspaceError>,
     /// The home directory a leading `~` stands for, read from the environment when the workspace
     /// is built (TRUST-10).
     ///
@@ -551,6 +559,8 @@ impl Workspace {
             #[cfg(unix)]
             identity: directory_identity,
             windows_names: cfg!(windows),
+            door_backslash_separates: BACKSLASH_SEPARATES,
+            door_resolver: reach::existing_directory,
             home: crate::home::profile(),
             state: crate::home::directory(),
             stores: crate::home::directory()
@@ -744,6 +754,22 @@ impl Workspace {
         self
     }
 
+    /// Give the two doors that open a directory by name (`/add-dir` and `/cd`) the answer a host
+    /// where `backslash_separates` is `true` would give them, and `resolve` in place of the file
+    /// system's resolution of the name, so a Windows spelling reaches the public doors on any host
+    /// (TRUST-18).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_door_host(
+        mut self,
+        backslash_separates: bool,
+        resolve: fn(&str) -> Result<PathBuf, WorkspaceError>,
+    ) -> Self {
+        self.door_backslash_separates = backslash_separates;
+        self.door_resolver = resolve;
+        self
+    }
+
     /// Whether the file tools here are held to the primary root by a settings layer (PERM-16).
     ///
     /// For a caller that has to say why a directory was refused before it asks the workspace, and
@@ -839,11 +865,44 @@ impl Workspace {
         // Only a `deny` rule about reading can answer yes, so with none in force the landing,
         // which asks the file system, cannot change the answer. A status asks this of every
         // tracked path.
-        policy.any_read_is_denied()
-            && (policy.read_is_denied(named)
-                || self
-                    .landing(named)
-                    .is_some_and(|landed| policy.read_is_denied(&landed)))
+        if !policy.any_read_is_denied() {
+            return false;
+        }
+        let asked = |name: &str| self.name_or_landing_is_denied(policy, name);
+        // The rules about a project file are written against its name below the root, so an
+        // absolute name inside the root is asked about under that name too, in whichever Unicode
+        // form it spells the root. A drop is read where it lands (`resolve_attachment`), which
+        // canonicalizes an absolute name and no other, so the name an absolute one lands on is asked
+        // about the same way. A relative name is never resolved against the process's directory:
+        // it names a file below the root, and the process may be somewhere else.
+        asked(named)
+            || self.below_root(named).is_some_and(|inside| asked(&inside))
+            || Path::new(named)
+                .is_absolute()
+                .then(|| Path::new(named).canonicalize().ok())
+                .flatten()
+                .is_some_and(|landed| self.landed_name_is_denied(policy, &landed))
+    }
+
+    /// Whether a `deny` rule covers reading `name`, as written or as the file lands once its links
+    /// are followed.
+    fn name_or_landing_is_denied<S: Sink>(&self, policy: &Policy<'_, S>, name: &str) -> bool {
+        policy.read_is_denied(name)
+            || self
+                .landing(name)
+                .is_some_and(|landed| policy.read_is_denied(&landed))
+    }
+
+    /// Whether a `deny` rule covers reading the file a drop lands on, asked under its name below
+    /// the root, which is the name a project rule is written against. Called only while a rule
+    /// about reading is in force, so a landing that is not UTF-8 is covered: no rule can be written
+    /// about it, and its lossy rendering is the name of a different file (PATH-001).
+    fn landed_name_is_denied<S: Sink>(&self, policy: &Policy<'_, S>, landed: &Path) -> bool {
+        let Some(text) = landed.to_str() else {
+            return true;
+        };
+        self.below_root(text)
+            .is_some_and(|inside| self.name_or_landing_is_denied(policy, &inside))
     }
 
     /// Whether a rule covers reading any of `names`, the other names a file has. Where they could
@@ -2875,9 +2934,14 @@ struct Collected<'a> {
     links: usize,
     /// The most files taken from any one directory, or `None` for no such cap. Set only by a
     /// depth-bounded listing (LIST-5).
-    per_directory: Option<usize>,
-    /// Directories `per_directory` cut, each with how many of its files were left out.
-    partly_listed: Vec<(String, usize)>,
+    files_per_directory: Option<usize>,
+    /// The most subdirectories taken from any one directory, whether the walk goes into them or
+    /// stops at them, or `None` for no such cap. Set only by a depth-bounded listing (LIST-5), and
+    /// a budget of its own, so the files a directory holds do not spend it.
+    subdirectories_per_directory: Option<usize>,
+    /// Directories the two caps above cut, each with how many of its files and how many of its
+    /// subdirectories were left out, in that order. A directory is here once, however it was cut.
+    partly_listed: Vec<(String, usize, usize)>,
     /// How many files the walk met that the trust map does not vouch for, which
     /// [`WalkRules::keeping_only_vouched`] sets aside instead of collecting.
     ///
@@ -2887,7 +2951,8 @@ struct Collected<'a> {
 }
 
 impl Collected<'_> {
-    /// How much of the cap has been spent. A file set aside as unvouched is not counted.
+    /// How much of the cap has been spent. A file set aside as unvouched is not counted, and a
+    /// directory a per-directory cap cut is one entry however much it left out.
     fn len(&self) -> usize {
         self.files.len() + self.stopped_at.len() + self.partly_listed.len()
     }
@@ -3140,7 +3205,8 @@ impl Workspace {
                 links: 0,
                 // Only a bounded listing, whose purpose is the shape of the tree. An unbounded one
                 // asked for every file, and keeps the one cap over the whole walk.
-                per_directory: depth.map(|_| MAX_FILES_PER_DIRECTORY),
+                files_per_directory: depth.map(|_| MAX_FILES_PER_DIRECTORY),
+                subdirectories_per_directory: depth.map(|_| MAX_SUBDIRECTORIES_PER_DIRECTORY),
                 partly_listed: Vec::new(),
                 unvouched: 0,
             };
@@ -3184,7 +3250,7 @@ impl Workspace {
             // outside the boundary like the walk, and it can only lower the label.
             let mut keyed = self.walked_keys(&walk_names, &relative, &root, &found, true);
             keyed.extend(self.walked_keys(&walk_names, &relative, &root, &stopped_at, false));
-            let cut: Vec<String> = partly_listed.iter().map(|(name, _)| name.clone()).collect();
+            let cut: Vec<String> = partly_listed.iter().map(|(n, ..)| n.clone()).collect();
             keyed.extend(self.walked_keys(&walk_names, &relative, &root, &cut, false));
             // The walk above reads directory entries and no file's bytes, and runs outside the
             // boundary so a long walk does not hold an effect out (TRUST-4). What is listed is
@@ -3209,8 +3275,8 @@ impl Workspace {
             // is sorted here is what a walk kept, and sorting after a cap cannot choose what it
             // kept.
             //
-            // A directory the per-directory cap cut leaves files out as the whole-walk cap does, so
-            // the listing is reported as truncated either way (LIST-4).
+            // A directory a per-directory cap cut leaves files or subdirectories out as the
+            // whole-walk cap does, so the listing is reported as truncated either way (LIST-4).
             let at_the_cap = found.len() + stopped_at.len() + partly_listed.len() > MAX_ENTRIES;
             let truncated = at_the_cap || !partly_listed.is_empty();
             found.truncate(MAX_ENTRIES);
@@ -3293,7 +3359,8 @@ impl Workspace {
                 withheld: false,
                 unreadable: false,
                 links: 0,
-                per_directory: None,
+                files_per_directory: None,
+                subdirectories_per_directory: None,
                 partly_listed: Vec::new(),
                 unvouched: 0,
             };
@@ -3599,7 +3666,8 @@ impl Workspace {
                     withheld: false,
                     unreadable: false,
                     links: 0,
-                    per_directory: None,
+                    files_per_directory: None,
+                    subdirectories_per_directory: None,
                     partly_listed: Vec::new(),
                     unvouched: 0,
                 };
@@ -4551,13 +4619,16 @@ impl Workspace {
     /// one and stops only at the end of the tree or when the files it collects pass `limit`
     /// (MAP-5, Known costs).
     ///
-    /// `shown` is the name `directory` is reported under if the per-directory cap cuts it. The
+    /// `shown` is the name `directory` is reported under if a per-directory cap cuts it. The
     /// caller supplies it: the first call passes the root's name, and each recursive call passes
     /// the relative name it already built for the subdirectory. So the walk tests no name to tell
     /// the root from a subdirectory.
     #[expect(
         clippy::too_many_arguments,
-        reason = "the walk's arguments plus the name a cut directory is reported under"
+        clippy::too_many_lines,
+        reason = "the walk's arguments plus the name a cut directory is reported under; the body \
+                  takes a directory's files and then its subdirectories in order, each counted \
+                  against its own cap after the rules"
     )]
     fn walk_filtered<S: Sink>(
         &self,
@@ -4606,7 +4677,7 @@ impl Workspace {
         files.sort();
         directories.sort();
 
-        // Files this directory gave the listing, and files past `per_directory` it did not.
+        // Files this directory gave the listing, and files past `files_per_directory` it did not.
         let mut taken = 0;
         let mut left_out = 0;
         for path in files {
@@ -4641,17 +4712,31 @@ impl Workspace {
             }
             // Counted after the include and the rules, so the number left out is of files the
             // listing would have shown, and the cap is decided from that count alone.
-            if collected.per_directory.is_some_and(|most| taken >= most) {
+            if collected
+                .files_per_directory
+                .is_some_and(|most| taken >= most)
+            {
                 left_out += 1;
                 continue;
             }
             taken += 1;
             collected.files.push(relative);
         }
+        // Where this directory is recorded in `collected.partly_listed`, once it is. One record
+        // however the directory was cut, so it is named once and is one entry against the cap.
+        let mut recorded = None;
         if left_out > 0 {
-            collected.partly_listed.push((shown.to_string(), left_out));
+            recorded = Some(collected.partly_listed.len());
+            collected
+                .partly_listed
+                .push((shown.to_string(), left_out, 0));
         }
 
+        // Subdirectories this directory gave the walk, whether it went into them or stopped at
+        // them, and subdirectories past `subdirectories_per_directory` it did not. Counted from the
+        // sorted names the walk already uses, after the rules below, so the cap is decided from the
+        // count alone and a directory a rule fences is neither kept nor counted as left out.
+        let mut taken_directories = 0;
         for path in directories {
             if collected.len() > limit {
                 return Ok(true);
@@ -4666,6 +4751,20 @@ impl Workspace {
                 }
                 continue;
             }
+            if collected
+                .subdirectories_per_directory
+                .is_some_and(|most| taken_directories >= most)
+            {
+                let at = *recorded.get_or_insert_with(|| {
+                    collected.partly_listed.push((shown.to_string(), 0, 0));
+                    collected.partly_listed.len() - 1
+                });
+                if let Some(record) = collected.partly_listed.get_mut(at) {
+                    record.2 += 1;
+                }
+                continue;
+            }
+            taken_directories += 1;
             if remaining.is_some_and(|left| left <= 1) {
                 collected.stopped_at.push(relative);
                 continue;
@@ -4750,6 +4849,24 @@ impl Workspace {
         bravebot_core::spelling::to_slash(&named, backslash_separates).into_owned()
     }
 
+    /// `named` spelled below the root, or `None` where it is not at or below it.
+    ///
+    /// The root is the form the platform resolved to, which on Windows is `\\?\C:\proj`, and a
+    /// name a person or a program typed is `C:\proj\x`. Compared as [`Path`] components the two
+    /// have different prefixes and nothing is below the root, so a caller that asks the file system
+    /// about the relative name asks about the absolute one instead, which
+    /// [`Workspace::resolve`] refuses inside the root. [`bravebot_core::spelling::below`] compares
+    /// them in one spelling.
+    pub(crate) fn below_root(&self, named: &str) -> Option<String> {
+        self.below_root_where(named, BACKSLASH_SEPARATES)
+    }
+
+    /// [`Workspace::below_root`] with the host's answer about the separator supplied, so a test
+    /// states it on any host.
+    fn below_root_where(&self, named: &str, backslash_separates: bool) -> Option<String> {
+        bravebot_core::spelling::below(&self.root, named, backslash_separates)
+    }
+
     /// The name the trust map holds a rule about `named` under.
     ///
     /// Every rule is recorded about a directory a person opened, under the name that directory was
@@ -4784,6 +4901,24 @@ impl Workspace {
     /// project's ([`bravebot_core::spelling::to_key`]).
     pub(crate) fn trust_key(&self, named: &str) -> String {
         self.keyed(named, BACKSLASH_SEPARATES, self.home.as_deref())
+    }
+
+    /// The name a window of a read is recorded and looked up under (READ-8): the trust key of the
+    /// name with a leading `./` taken off, so `./a.txt` and `a.txt` are one file.
+    ///
+    /// [`Workspace::trust_key`] leaves a leading `./` on a relative name, because the trust map
+    /// takes it off itself when it is asked. A record of what the planner was shown has no such
+    /// step, so a repeat spelled the other way would be sent again for lines it holds. Made from the
+    /// name the planner typed alone, so no byte of the file decides it.
+    pub(crate) fn window_key(&self, named: &str) -> String {
+        let plain: PathBuf = Path::new(named)
+            .components()
+            .filter(|component| !matches!(component, Component::CurDir))
+            .collect();
+        match plain.to_str() {
+            Some(plain) if !plain.is_empty() => self.trust_key(plain),
+            _ => self.trust_key(named),
+        }
     }
 
     /// The name the trust map is asked about for a file a walk of `root` reported as `reported`,
@@ -5178,6 +5313,55 @@ mod tests {
             !after_moving.contains(&parent),
             "the directory above the checkouts was held, which refuses every program under it"
         );
+    }
+
+    /// CMDLINE-8: a directory a stage was let write with `request_path` is one a program can be put
+    /// in, on `$PATH` or not, so it is in the set a program may not resolve into. A directory a stage
+    /// was let only read is not, since nothing could have been written there, and a read grant that
+    /// a later grant makes a write one is. Rejects a set that leaves out the write grants, which
+    /// proves a program in a virtualenv's `bin` outside the project as the system's, and one that
+    /// holds read grants too, which refuses every program in a directory the person only let a stage
+    /// read.
+    #[test]
+    fn a_directory_a_stage_was_let_write_is_one_a_program_may_not_resolve_into_and_one_it_was_let_read_is_not()
+     {
+        let parent = crate::testutil::scratch_dir("unproven-path-reach");
+        let _ = std::fs::remove_dir_all(&parent);
+        let directories: Vec<PathBuf> = ["root", "written", "read", "upgraded"]
+            .into_iter()
+            .map(|name| {
+                std::fs::create_dir_all(parent.join(name)).expect("scratch");
+                parent.join(name).canonicalize().expect("canonical")
+            })
+            .collect();
+        let [root, written, read, upgraded] = &directories[..] else {
+            panic!("four directories");
+        };
+        let workspace = Workspace::new(root).expect("workspace");
+        assert!(
+            !workspace.unproven_directories().contains(written),
+            "the control: the directory is in the set before any grant"
+        );
+
+        workspace.grant_path_reach(written.clone(), true, "writes".to_string());
+        workspace.grant_path_reach(read.clone(), false, "reads".to_string());
+        workspace.grant_path_reach(upgraded.clone(), false, "reads".to_string());
+        workspace.grant_path_reach(upgraded.clone(), true, "writes".to_string());
+
+        let held = workspace.unproven_directories();
+        assert!(
+            held.contains(written),
+            "a directory a stage was let write was not held: {held:?}"
+        );
+        assert!(
+            held.contains(upgraded),
+            "a read grant a later grant made a write grant was not held: {held:?}"
+        );
+        assert!(
+            !held.contains(read),
+            "a directory a stage was let only read was held: {held:?}"
+        );
+        assert!(held.contains(root), "the working directory was dropped");
     }
 
     /// CHECKOUT-23. A name the driver recorded for a write is relative to the root it was written
@@ -6331,6 +6515,131 @@ mod tests {
         );
     }
 
+    /// Each door that opens a directory by name asks for the refusal itself, so a share, a device
+    /// path or a drive-relative name is refused by `/add-dir` and by `/cd` alike (TRUST-18). The
+    /// guard is tested alone above; a door that stopped calling it would still pass that test, and
+    /// `/cd` would then replace the working directory with a name the map reads inside the project.
+    /// Each door is given the host's answer, so the Windows answer is asked of it where the tests
+    /// run. A refused move leaves the working directory where it was.
+    #[test]
+    fn each_door_that_opens_a_directory_by_name_refuses_one_the_trust_map_cannot_key() {
+        let base = crate::testutil::scratch_dir("bravebot-unkeyable-doors");
+        let _ = std::fs::remove_dir_all(&base);
+        let project = base.join("project");
+        let elsewhere = base.join("elsewhere");
+        std::fs::create_dir_all(&project).expect("create the project");
+        std::fs::create_dir_all(&elsewhere).expect("create a directory beside it");
+        let elsewhere = elsewhere.canonicalize().expect("canonical name");
+        let named = elsewhere.to_str().expect("utf-8 path");
+
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        let root = workspace.root().to_path_buf();
+
+        for (unkeyable, backslash_separates) in [
+            (r"\\server\share\x", true),
+            (r"\\?\UNC\server\share", true),
+            ("C:other", true),
+            (r"C:\other", false),
+        ] {
+            let opened = workspace
+                .admit_resolved_directory(unkeyable, PathBuf::from(unkeyable), backslash_separates)
+                .expect_err("the door that adds a directory opened a name with no key");
+            assert!(
+                matches!(&opened, WorkspaceError::Invalid { path, .. } if path == unkeyable),
+                "{unkeyable}: {opened:?}"
+            );
+            let moved = workspace
+                .move_root_to(unkeyable, PathBuf::from(unkeyable), backslash_separates)
+                .expect_err("the door that moves the root moved it to a name with no key");
+            assert!(
+                matches!(&moved, WorkspaceError::Invalid { path, .. } if path == unkeyable),
+                "{unkeyable}: {moved:?}"
+            );
+            assert_eq!(
+                workspace.root(),
+                root,
+                "{unkeyable}: a refused move changed the working directory"
+            );
+        }
+        assert!(workspace.added_directories().is_empty());
+
+        // The same doors admit a name the map can key, so the refusals above are the key's.
+        assert_eq!(
+            workspace
+                .admit_resolved_directory(named, elsewhere.clone(), BACKSLASH_SEPARATES)
+                .expect("a directory with a key was refused"),
+            elsewhere
+        );
+        let moved = workspace
+            .move_root_to(named, elsewhere.clone(), BACKSLASH_SEPARATES)
+            .expect("a move to a directory with a key was refused");
+        assert_eq!(moved.root, elsewhere);
+        assert_eq!(workspace.root(), elsewhere);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// The public doors, `/add-dir` (`resolve_directory`) and `/cd` (`change_root`), ask the
+    /// refusal of an unkeyable name with the host's answer about what separates, so on a host
+    /// where a backslash separates an ordinary directory, which the platform canonicalises as
+    /// `\\?\C:\...`, is admitted and a share is refused (TRUST-18). The test above gives the
+    /// inner functions the answer; this one gives it to the workspace and calls the doors. A door
+    /// that passed a literal `false` would refuse every real directory on Windows, and nothing run
+    /// on another host would notice.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_public_doors_admit_an_ordinary_directory_where_a_backslash_separates() {
+        fn named_as_it_is(name: &str) -> Result<PathBuf, WorkspaceError> {
+            Ok(PathBuf::from(name))
+        }
+
+        let base = crate::testutil::scratch_dir("bravebot-door-host");
+        std::fs::remove_dir_all(&base).ok();
+        std::fs::create_dir_all(&base).expect("create the project");
+
+        let windows = Workspace::new(&base)
+            .expect("workspace")
+            .with_door_host(true, named_as_it_is);
+        assert_eq!(
+            windows
+                .resolve_directory(r"\\?\C:\other")
+                .expect("the door that adds a directory refused an ordinary Windows directory"),
+            PathBuf::from(r"\\?\C:\other")
+        );
+        let refused = windows
+            .resolve_directory(r"\\server\share\x")
+            .expect_err("the door that adds a directory opened a share");
+        assert!(
+            matches!(&refused, WorkspaceError::Invalid { path, .. } if path == r"\\server\share\x"),
+            "{refused:?}"
+        );
+
+        let mut windows = windows;
+        let root = windows.root().to_path_buf();
+        let moved = windows
+            .change_root(r"\\?\C:\other")
+            .expect("the door that moves the root refused an ordinary Windows directory");
+        assert_eq!(moved.root, PathBuf::from(r"\\?\C:\other"));
+        assert_eq!(moved.closed, vec![root]);
+        let mut windows = Workspace::new(&base)
+            .expect("workspace")
+            .with_door_host(true, named_as_it_is);
+        let root = windows.root().to_path_buf();
+        windows
+            .change_root(r"\\server\share\x")
+            .expect_err("the door that moves the root moved it to a share");
+        assert_eq!(windows.root(), root);
+
+        // The host where a backslash does not separate keeps refusing the same name: `C:\other`
+        // is a file name there, which the key cannot spell from `/`.
+        let elsewhere = Workspace::new(&base)
+            .expect("workspace")
+            .with_door_host(false, named_as_it_is);
+        elsewhere
+            .resolve_directory(r"\\?\C:\other")
+            .expect_err("a drive-letter name was admitted where a backslash does not separate");
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     /// Windows hands back a directory it canonicalised as `\\?\C:\...`, and a planner names one as
     /// `C:\...`, so both have to reach the one key a rule about the directory is held under, and
     /// that key has to read as a root rather than as a name under the project. The same name is a
@@ -6445,6 +6754,312 @@ mod tests {
             "a name that exists is never respelled"
         );
         assert_eq!(workspace.respelled_when_missing("absent file.txt"), None);
+    }
+
+    /// A file in the project named the way a person types it on Windows, `C:\work\project\x`, is
+    /// below the workspace root the platform resolved to `\\?\C:\work\project`, and its lookup of
+    /// other names is made under the relative name `Workspace::resolve` accepts. Compared by
+    /// components the two read as different prefixes, the name is taken for one outside the
+    /// project, and the lookup is made for an absolute name that `resolve` refuses inside the root,
+    /// so a file with a second name keeps none. The host's answer about the separator is given, so
+    /// this runs on any host.
+    #[test]
+    fn a_name_typed_with_a_drive_letter_is_below_the_workspace_root_that_resolved_to_a_verbatim_path()
+     {
+        let scratch = crate::testutil::scratch_dir("bravebot-verbatim-root");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).expect("create scratch");
+        let mut workspace = Workspace::new(&scratch).unwrap();
+        workspace.root = PathBuf::from(r"\\?\C:\work\project");
+
+        for (typed, below) in [
+            (r"C:\work\project\src\a.md", Some("src/a.md")),
+            (r"\\?\C:\work\project\src\a.md", Some("src/a.md")),
+            ("C:/work/project/src/a.md", Some("src/a.md")),
+            (r"C:\work\project", Some("")),
+            (r"C:\work\project-other\a.md", None),
+            (r"C:\work\a.md", None),
+        ] {
+            assert_eq!(
+                workspace.below_root_where(typed, true).as_deref(),
+                below,
+                "'{typed}'"
+            );
+        }
+        assert_eq!(
+            workspace.below_root_where(r"C:\work\project\a.md", false),
+            None,
+            "a name holding a backslash was read as a drive where a slash is the only separator"
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A server or a command line may spell the workspace's directory in another Unicode form than
+    /// the one the root was opened under, and a volume such as APFS opens both as one directory. The
+    /// name is below the root in either form, in both directions, and the part after the root is
+    /// as the name spelled it, so a lookup is made under the relative name `Workspace::resolve`
+    /// accepts.
+    #[test]
+    fn a_name_in_another_unicode_form_of_the_root_is_below_the_workspace_root() {
+        for (made_as, tag) in [("cafe\u{301}", "nfd"), ("caf\u{e9}", "nfc")] {
+            let scratch = crate::testutil::scratch_dir(&format!("below-root-unicode-{tag}"));
+            std::fs::remove_dir_all(&scratch).ok();
+            let directory = scratch.join(made_as);
+            std::fs::create_dir_all(directory.join("held/src")).unwrap();
+            let workspace = Workspace::new(&directory).unwrap();
+            let parent = workspace.root.parent().unwrap().to_path_buf();
+            for spelled in ["cafe\u{301}", "caf\u{e9}"] {
+                let typed = parent.join(spelled).join("held/src/lib.rs");
+                let typed = typed.to_string_lossy();
+                for backslash_separates in [false, true] {
+                    assert_eq!(
+                        workspace
+                            .below_root_where(&typed, backslash_separates)
+                            .as_deref(),
+                        Some("held/src/lib.rs"),
+                        "root made as {tag}, name spelled {spelled:?}"
+                    );
+                }
+                let longer = parent.join(format!("{spelled}x")).join("held/src/lib.rs");
+                assert_eq!(
+                    workspace.below_root_where(&longer.to_string_lossy(), false),
+                    None,
+                    "a directory whose name only starts like the root's is not the root"
+                );
+            }
+            std::fs::remove_dir_all(&scratch).ok();
+        }
+    }
+
+    /// A policy whose rules deny reading `rule`, for a question asked of the rules alone.
+    fn denying_reads<'a>(
+        sink: &'a mut bravebot_core::RecordingSink,
+        rule: &str,
+    ) -> Policy<'a, bravebot_core::RecordingSink> {
+        use bravebot_core::permissions::{Anchors, Permissions};
+        use bravebot_core::{CapabilitySet, ReleasePlan, Routing};
+
+        let (permissions, rejected) =
+            Permissions::parse(&[format!("Read({rule})")], &[], &[], &Anchors::none());
+        assert!(rejected.is_empty(), "the rule did not parse");
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "read");
+        Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead]),
+            sink,
+        )
+        .unwrap()
+        .with_permissions(permissions)
+    }
+
+    /// A drop is read where it lands, and a landing that is not UTF-8 has no spelling a rule can be
+    /// written against, so it is covered while a `deny` rule about reading is in force (PERM-7,
+    /// PATH-001). Its lossy rendering is the name of a different file, so a rule that does not cover
+    /// that name must not decide for the real one. Rejects asking the rules about the lossy text. A
+    /// landing that is text and that no rule covers is still not covered. The landing is built
+    /// from bytes rather than made on disk, since not every volume can hold such a name.
+    #[cfg(unix)]
+    #[test]
+    fn a_dropped_file_whose_landing_is_not_utf8_is_covered_while_a_deny_rule_is_in_force() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let scratch = crate::testutil::scratch_dir("deny-landing-bytes");
+        std::fs::remove_dir_all(&scratch).ok();
+        std::fs::create_dir_all(&scratch).unwrap();
+        let workspace = Workspace::new(&scratch).unwrap();
+        let mut sink = bravebot_core::RecordingSink::new();
+        let policy = denying_reads(&mut sink, "held/src/lib.rs");
+
+        let invalid = workspace
+            .root()
+            .join(OsStr::from_bytes(b"other-\xff"))
+            .join("main.rs");
+        assert!(invalid.to_str().is_none(), "the landing is text");
+        assert!(
+            workspace.landed_name_is_denied(&policy, &invalid),
+            "a landing that is not UTF-8 was not covered"
+        );
+        let text = workspace.root().join("other").join("main.rs");
+        assert!(
+            !workspace.landed_name_is_denied(&policy, &text),
+            "a landing that is text and that no rule covers was covered"
+        );
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    /// A relative name is a file below the workspace root and is never looked up against the
+    /// directory the process happens to be in. With the root one level above that directory, the
+    /// relative `Cargo.toml` is no file of the root's, and a rule about the process directory's own
+    /// `Cargo.toml` (written below the root) does not cover it. Rejects canonicalizing a relative
+    /// name, which resolves it against the process directory and finds the covered file. The control
+    /// is the same file named absolutely and the name below the root, which the rule covers.
+    #[test]
+    fn a_relative_name_is_not_resolved_against_the_process_directory_when_asked_about_a_rule() {
+        let here = std::env::current_dir().unwrap();
+        assert!(
+            here.join("Cargo.toml").is_file(),
+            "the fixture file is gone"
+        );
+        let above = here.parent().unwrap();
+        let below = here.file_name().unwrap().to_string_lossy().into_owned();
+        let workspace = Workspace::new(above).unwrap();
+        assert!(
+            !workspace.root().join("Cargo.toml").exists(),
+            "the root holds a Cargo.toml of its own"
+        );
+        let mut sink = bravebot_core::RecordingSink::new();
+        let policy = denying_reads(&mut sink, &format!("{below}/Cargo.toml"));
+
+        let named = workspace.root().join(&below).join("Cargo.toml");
+        assert!(
+            workspace.rule_denies_reading(&policy, &format!("{below}/Cargo.toml")),
+            "the control, the name below the root, was not covered"
+        );
+        assert!(
+            workspace.rule_denies_reading(&policy, &named.to_string_lossy()),
+            "the control, the same file named absolutely, was not covered"
+        );
+        assert!(
+            !workspace.rule_denies_reading(&policy, "Cargo.toml"),
+            "a relative name was resolved against the process directory"
+        );
+    }
+
+    /// A drop is read where it lands, so an absolute name outside the root that is a link to a file
+    /// inside it is covered by a rule written against the file's name below the root. The name asked
+    /// about is spelled outside the root, so neither the name nor its lookup under the root finds
+    /// the file. The control is a link to a file no rule covers.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_outside_the_root_to_a_covered_file_inside_it_is_covered() {
+        let scratch = crate::testutil::scratch_dir("deny-link-from-outside");
+        std::fs::remove_dir_all(&scratch).ok();
+        let project = scratch.join("project");
+        std::fs::create_dir_all(project.join("held/src")).unwrap();
+        std::fs::write(project.join("held/src/lib.rs"), "x").unwrap();
+        std::fs::write(project.join("main.rs"), "x").unwrap();
+        let outside = scratch.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(project.join("held/src/lib.rs"), outside.join("held.rs"))
+            .unwrap();
+        std::os::unix::fs::symlink(project.join("main.rs"), outside.join("main.rs")).unwrap();
+        let workspace = Workspace::new(&project).unwrap();
+        let mut sink = bravebot_core::RecordingSink::new();
+        let policy = denying_reads(&mut sink, "held/src/lib.rs");
+
+        let spelled = |file: &str| {
+            workspace
+                .root()
+                .parent()
+                .unwrap()
+                .join("outside")
+                .join(file)
+        };
+        assert!(
+            workspace.rule_denies_reading(&policy, &spelled("held.rs").to_string_lossy()),
+            "a link from outside the root to a covered file was not covered"
+        );
+        assert!(
+            !workspace.rule_denies_reading(&policy, &spelled("main.rs").to_string_lossy()),
+            "a link from outside the root to an uncovered file was covered"
+        );
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    /// PATH-007: comparing the root with a name in canonical Unicode form joins two directories that
+    /// differ only in the form of their name. A volume such as ext4 holds `cafe\u{301}` and
+    /// `caf\u{e9}` apart as two directories and APFS opens one, and a rule about a file below the
+    /// root covers the file at the same place below the other-form directory on both, which only
+    /// adds a refusal (TRUST-18). Both directories are made, with different text in each. A
+    /// directory that differs in a letter (`cafe`) stays a different directory and is not covered.
+    #[test]
+    fn a_deny_rule_covers_the_same_file_below_a_directory_that_differs_only_in_unicode_form() {
+        let decomposed = "cafe\u{301}";
+        let composed = "caf\u{e9}";
+        for (made_as, other, tag) in [(decomposed, composed, "nfd"), (composed, decomposed, "nfc")]
+        {
+            let scratch = crate::testutil::scratch_dir(&format!("deny-joins-forms-{tag}"));
+            std::fs::remove_dir_all(&scratch).ok();
+            for directory in [made_as, other, "cafe"] {
+                std::fs::create_dir_all(scratch.join(directory).join("held/src")).unwrap();
+                std::fs::write(
+                    scratch.join(directory).join("held/src/lib.rs"),
+                    format!("made as {directory}"),
+                )
+                .unwrap();
+            }
+            // On a volume that folds the two forms the second directory is the first, which is
+            // the same answer for the rule and only changes what the failure message says.
+            let apart = std::fs::read_to_string(scratch.join(made_as).join("held/src/lib.rs"))
+                .is_ok_and(|text| text == format!("made as {made_as}"));
+            let workspace = Workspace::new(scratch.join(made_as)).unwrap();
+            let mut sink = bravebot_core::RecordingSink::new();
+            let policy = denying_reads(&mut sink, "held/src/lib.rs");
+            let parent = workspace.root().parent().unwrap().to_path_buf();
+            for (directory, covered) in [(made_as, true), (other, true), ("cafe", false)] {
+                let named = parent.join(directory).join("held/src/lib.rs");
+                assert_eq!(
+                    workspace.rule_denies_reading(&policy, &named.to_string_lossy()),
+                    covered,
+                    "root made as {tag}, {directory:?} {}",
+                    if apart { "held apart" } else { "folded" }
+                );
+            }
+            std::fs::remove_dir_all(&scratch).ok();
+        }
+    }
+
+    /// The window a read is recorded under (READ-8) tells two files the volume holds apart from one
+    /// file with two spellings. A step that joins two files, such as dropping a trailing dot or space
+    /// as a Windows host does, gives both one window, and a read of the second is then answered with
+    /// a notice about lines the planner was shown of the first. Every pair of names in the shared
+    /// list is made side by side in a directory and asked for its two keys. A pair the volume opens as
+    /// one file is skipped, as the pair test of the trust key in `tests/workspace.rs` skips it. The
+    /// leading `./` is the one thing the key takes off, so each name has the same key with it as
+    /// without.
+    #[test]
+    fn two_names_the_volume_holds_apart_have_two_window_keys_and_a_leading_dot_slash_changes_none()
+    {
+        let root = crate::testutil::scratch_dir(&format!("window-keys-{}", std::process::id()));
+        let fresh = || {
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).expect("create scratch");
+            Workspace::new(&root).unwrap()
+        };
+        let names = crate::testutil::aliases::held_names();
+
+        let workspace = fresh();
+        for (name, _) in &names {
+            assert_eq!(
+                workspace.window_key(&format!("./{name}")),
+                workspace.window_key(name),
+                "a leading ./ changed the window of {name:?}"
+            );
+        }
+
+        let mut asked = 0;
+        for (index, (first, _)) in names.iter().enumerate() {
+            for (second, _) in &names[index + 1..] {
+                let workspace = fresh();
+                if !crate::testutil::aliases::two_files(&root, first, second) {
+                    continue;
+                }
+                asked += 1;
+                assert_ne!(
+                    workspace.window_key(first),
+                    workspace.window_key(second),
+                    "{first:?} and {second:?} are two files and have one window"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            asked > crate::testutil::aliases::least_pairs(),
+            "only {asked} pairs were two files: the alphabet is not being used"
+        );
     }
 
     /// The name the workspace hands back and the key it asks the map about are both spelled from

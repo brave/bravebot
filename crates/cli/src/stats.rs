@@ -12,21 +12,10 @@
 use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
 use bravebot_session::search;
-use bravebot_session::sessions;
-use bravebot_session::stats::{Scope, Spent, Totals};
-use std::collections::BTreeMap;
+use bravebot_session::stats::{MOST_DAYS, Scope, Spent, Totals, since_days_ago};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-
-/// The longest model name printed, in characters.
-const LONGEST_MODEL: usize = 60;
-
-const SECONDS_IN_A_DAY: u64 = 86_400;
-
-/// The most days a count may name. The sentence says the number back through a message that counts
-/// in `i64`, and a larger one would be printed as another number than the one the cut used.
-const MOST_DAYS: u64 = i64::MAX as u64;
 
 /// What was asked for, once the words are read.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -49,9 +38,7 @@ pub(crate) fn command(args: &[String]) -> ExitCode {
         },
         None => None,
     };
-    let since = request
-        .days
-        .map(|days| sessions::now().saturating_sub(days.saturating_mul(SECONDS_IN_A_DAY)));
+    let since = request.days.and_then(since_days_ago);
 
     let totals = bravebot_session::stats::totals(Scope {
         project: project.as_deref(),
@@ -178,28 +165,19 @@ fn width(cell: &str) -> usize {
     bravebot_tui::wrap::display_width(cell)
 }
 
-/// A row for each model, the one that spent most first. Grouped on the name as it is shown, so two
-/// names that differ only in what cleaning removes are one row rather than two that read alike. A
-/// name with nothing left after cleaning shows as nothing, so it is the row for no name at all.
+/// A row for each model, the one that spent most first, as [`Totals::by_shown_model`] groups and
+/// orders them, with the row for no name labelled `unknown`.
 fn by_model(totals: &Totals) -> Vec<(String, Spent)> {
-    let mut shown: BTreeMap<String, Spent> = BTreeMap::new();
-    for (model, spent) in &totals.by_model {
-        let name = model
-            .as_deref()
-            .map(|name| search::clean(name, LONGEST_MODEL))
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| t!(stats_model_unknown).to_string());
-        shown.entry(name).or_default().merge(*spent);
-    }
-    let mut rows: Vec<(String, Spent)> = shown.into_iter().collect();
-    rows.sort_by(|(left_name, left), (right_name, right)| {
-        right
-            .tokens
-            .cmp(&left.tokens)
-            .then(right.sessions.cmp(&left.sessions))
-            .then_with(|| left_name.cmp(right_name))
-    });
-    rows
+    totals
+        .by_shown_model()
+        .into_iter()
+        .map(|(name, spent)| {
+            (
+                name.unwrap_or_else(|| t!(stats_model_unknown).to_string()),
+                spent,
+            )
+        })
+        .collect()
 }
 
 /// What the figures cover. The directory is the person's own, typed or standing in, and is cleaned

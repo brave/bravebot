@@ -61,10 +61,12 @@ pub enum Action {
     ChooseTheme,
     /// Apply a theme by name without opening the picker.
     SetTheme(String),
-    /// Ask how hard to think. Needs the terminal, so the loop runs it.
-    ChooseEffort,
-    /// Take a level by name without opening the picker.
-    SetEffort(String),
+    /// Ask how hard to think, and for how long the pick lasts: the picker opens in the scope the
+    /// person typed (`/effort` or `/effort session`). Needs the terminal, so the loop runs it.
+    ChooseEffort(crate::model_prompt::Scope),
+    /// Take a level by name without opening the picker, recorded or for this session only
+    /// according to the scope (`/effort <level>` or `/effort session <level>`).
+    SetEffort(String, crate::model_prompt::Scope),
     Variant(String),
     /// Say which model the planner may consult, take one by name, or drop the choice. Empty says.
     /// Needs the configuration to resolve the name against, which the loop owns.
@@ -77,6 +79,9 @@ pub enum Action {
     /// Say which language the interface is in, choose one for the next start, or give the choice
     /// back. Empty says.
     Language(String),
+    /// Say whether crash reports are on and what holds them off, or save the person's own choice
+    /// for the next start. Empty says.
+    CrashReports(String),
     /// Ask how the box should edit. Needs the terminal, so the loop runs it.
     ChooseEditing,
     /// Open another directory. Needs the workspace and the trust map, which the loop owns.
@@ -128,6 +133,7 @@ pub enum Action {
         String,
         Vec<crate::state::AttachedImage>,
         Vec<crate::state::Attached>,
+        crate::state::NamesFrom,
     ),
     /// Start a new session here. Needs the conversation and the session record, which the loop owns.
     Clear,
@@ -181,6 +187,10 @@ pub enum Action {
     /// Withdraw the remembered answer about the working directory. Needs the workspace, which the
     /// loop owns, and leaves this session's map as it is.
     ForgetTrust,
+    /// Arm a standing watch on the path a person typed after `/watch`. Needs the workspace, the
+    /// live mode and the trust map, which the loop owns, since the first look is taken through the
+    /// same gate as every later one.
+    ArmWatch(String),
     /// List the checkouts the session keeps. Needs the workspace, which the loop owns.
     ListCheckouts,
     /// List what the session left open (OPEN-5). Needs the workspace, which the loop owns.
@@ -1375,9 +1385,12 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // The marker is what says the pick stands: with it deleted the line is an ordinary prompt.
         KeyCode::Enter if session.pick_stands() && !session.completion_would_change_the_line() => {
             match session.take_summons() {
-                Some(commanded) => {
-                    Action::Address(commanded.line, commanded.pasted, commanded.attached)
-                }
+                Some(commanded) => Action::Address(
+                    commanded.line,
+                    commanded.pasted,
+                    commanded.attached,
+                    commanded.names,
+                ),
                 None => Action::None,
             }
         }
@@ -2562,6 +2575,9 @@ fn click_command(session: &mut Session, line: &str) -> Action {
         pasted: Vec::new(),
         attached: Vec::new(),
         typed_at: std::time::Instant::now(),
+        // A click stands for a command nobody typed in the box, so no line says which words were
+        // typed.
+        names: session.names_from_words_nobody_pasted(line),
     };
     if !matches!(session.status, Status::Working | Status::Running) {
         return dispatch_command(session, commanded);

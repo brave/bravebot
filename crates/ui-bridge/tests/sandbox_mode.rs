@@ -691,9 +691,8 @@ fn a_chosen_mode_is_what_the_next_turns_program_is_held_to() {
 }
 
 /// With no window choice, the bridge reads the settings again for every turn, so a mode the
-/// person's settings ask for while a session is open holds from that session's next turn.
-/// SANDBOX-22 says the bridge reads the mode from the settings and not when, so this pins the
-/// bridge as it is. The failure this rejects is a session that keeps the mode it opened under after
+/// person's settings ask for while a session is open holds from that session's next turn
+/// (SANDBOX-22). The failure this rejects is a session that keeps the mode it opened under after
 /// the file changed.
 #[test]
 fn a_mode_the_settings_ask_for_while_a_session_is_open_holds_from_its_next_turn() {
@@ -712,4 +711,101 @@ fn a_mode_the_settings_ask_for_while_a_session_is_open_holds_from_its_next_turn(
         "the turn ran under the mode the session opened with"
     );
     assert_eq!(front.question_or_the_end()["event"], "turn.done");
+}
+
+/// Send a turn, approve the `run` call the planner makes, and return what the tool handed back to
+/// the model. `extra` fields are added to the `turn.send` request.
+fn run_once(
+    front: &mut FrontEnd,
+    rounds: &mpsc::Receiver<String>,
+    session: &str,
+    extra: &Value,
+) -> String {
+    let mut params = json!({"session": session, "prompt": "do the work"});
+    for (key, value) in extra.as_object().into_iter().flatten() {
+        params[key] = value.clone();
+    }
+    let sent = front.answered("turn.send", message_ids::with_fresh(params));
+    assert!(sent.get("ok").is_some(), "the turn was refused: {sent}");
+    let mut next = front.question_or_the_end();
+    if next["event"] == "run.request" {
+        front.reply("run.reply", session, &next, "approve");
+        next = front.question_or_the_end();
+    }
+    assert_eq!(next["event"], "turn.done", "{next}");
+    let told: Vec<String> = rounds.try_iter().collect();
+    let results = tool_results(told.last().unwrap());
+    results
+        .rsplit("Result of run")
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn confinement_is_usable() -> bool {
+    bravebot_sandbox::base::Prelude::current().is_some()
+        && bravebot_sandbox::confinement_works_here()
+}
+
+/// The project directory is fixed when a session opens. A turn that names another directory, as a
+/// client that tried to move the session would, still runs its program in the directory the session
+/// opened on. The failure this rejects is a bridge that lets a later request move the session's
+/// project, which would move what the device's authorization covered.
+#[test]
+fn a_session_stays_in_the_directory_it_opened_on() {
+    if !confinement_is_usable() {
+        return;
+    }
+    let scratch = Scratch::new("bridge-scope-directory");
+    let elsewhere = scratch.path.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let command = format!(
+        "/bin/sh -c 'test \"$PWD\" = {}'",
+        scratch.project().display()
+    );
+    let (endpoint, rounds) = a_planner(move |_, this_turn| {
+        (this_turn == 0).then(|| ("run", json!({"command": command.clone()})))
+    });
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _) = front.session(&scratch, true);
+
+    let told = run_once(
+        &mut front,
+        &rounds,
+        &session,
+        &json!({"directory": elsewhere.display().to_string()}),
+    );
+    assert!(
+        told.contains("It exited 0."),
+        "the program ran somewhere other than the session's directory: {told}"
+    );
+}
+
+/// How long a `run` call may take is read from the settings at the start of every turn, so a
+/// limit written while a session is open applies from its next turn (the scope sources table in architecture.md). The failure this rejects
+/// is a session that keeps the limits it opened under.
+#[test]
+fn a_run_time_limit_written_while_a_session_is_open_holds_from_its_next_turn() {
+    if !confinement_is_usable() {
+        return;
+    }
+    let scratch = Scratch::new("bridge-scope-run-limit");
+    let (endpoint, rounds) = a_planner(|_, this_turn| {
+        (this_turn == 0).then(|| ("run", json!({"command": "/bin/sleep 4"})))
+    });
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _) = front.session(&scratch, true);
+
+    let before = run_once(&mut front, &rounds, &session, &json!({}));
+    assert!(before.contains("It exited 0."), "{before}");
+
+    settings(
+        &scratch,
+        r#"{"run": {"defaultSeconds": 1, "maxSeconds": 1}}"#,
+    );
+    let after = run_once(&mut front, &rounds, &session, &json!({}));
+    assert!(
+        after.contains("was still running after 1 second and was stopped"),
+        "the limit written after the session opened did not apply: {after}"
+    );
 }

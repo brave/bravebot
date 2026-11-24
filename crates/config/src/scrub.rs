@@ -140,7 +140,11 @@ pub fn names_against(settings: &Settings, environment: &[String]) -> Vec<String>
         return Vec::new();
     }
     with_listed(
-        credentials_of(crate::gateway_variable_names(settings.providers())),
+        {
+            let mut variables = crate::gateway_variable_names(settings.providers());
+            crate::add_web_search_variables(&mut variables, settings);
+            credentials_of(variables)
+        },
         settings.scrubbed(),
         environment,
     )

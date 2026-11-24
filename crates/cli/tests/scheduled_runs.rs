@@ -1111,6 +1111,145 @@ fn at_a_gateway_asking(name: &str) -> (Scratch, Vec<(&'static str, String)>) {
     (scratch, environment)
 }
 
+/// A chat gateway on loopback that lists one model and answers a chat request with a call to
+/// `write_file` for `out.txt`, and with "all done" once the conversation holds a tool result.
+/// A request that offers no tools (a classifier's or a judge's) is answered `allow`, so a run that
+/// opened in auto and put a question to a classifier would get its yes. Every chat request body is
+/// sent on the channel. Returns the port and the receiver.
+fn a_gateway_asking_for_a_write() -> (u16, std::sync::mpsc::Receiver<String>) {
+    let listener = open_files::bind_mock_server();
+    let port = listener.local_addr().unwrap().port();
+    let (sender, asked) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            reader.read_line(&mut request).ok();
+            let mut length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; length];
+            reader.read_exact(&mut body).ok();
+            let (kind, text) = if request.starts_with("GET") {
+                (
+                    "application/json",
+                    r#"{"data": [{"id": "reasons-only", "context_length": 262144, "supported_parameters": ["tools"]}]}"#.to_string(),
+                )
+            } else {
+                let body = String::from_utf8_lossy(&body).into_owned();
+                let delta = if !body.contains(r#""tools""#) {
+                    serde_json::json!({"role": "assistant", "content": "allow"})
+                } else if body.contains(r#""role":"tool""#) {
+                    serde_json::json!({"role": "assistant", "content": "all done"})
+                } else {
+                    serde_json::json!({"role": "assistant", "tool_calls": [{
+                        "index": 0, "id": "call-1", "type": "function",
+                        "function": {"name": "write_file",
+                            "arguments": r#"{"path":"out.txt","contents":"hi"}"#}}]})
+                };
+                let finish = if delta.get("tool_calls").is_some() {
+                    "tool_calls"
+                } else {
+                    "stop"
+                };
+                let frame = serde_json::json!({"model": "reasons-only", "choices": [{
+                    "index": 0, "delta": delta, "finish_reason": finish}]});
+                sender.send(body).ok();
+                (
+                    "text/event-stream",
+                    format!("data: {frame}\n\ndata: [DONE]\n\n"),
+                )
+            };
+            let reply = format!(
+                "HTTP/1.1 200 \r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{text}",
+                text.len()
+            );
+            stream.write_all(reply.as_bytes()).ok();
+            stream.flush().ok();
+        }
+    });
+    (port, asked)
+}
+
+/// MODE-1: a scheduled run opens asking even where the home settings say
+/// `permissions.startInAuto: true`, so a write nobody can approve is refused on status 4 and the
+/// file is not made. The setting is in the home settings file, the only place the key is read, so
+/// the fixture is one a session the person starts would open in auto from. The run reaches the
+/// write (the gateway sees the planner offered `write_file` and asked for it). Rejects a
+/// scheduled firing that takes its mode from `Settings::start_in_auto()` (auto answers the write,
+/// so `out.txt` exists and the status is 0), and one that stores or passes `--auto` for an entry
+/// that was added with no mode flag.
+#[test]
+fn a_scheduled_run_opens_asking_where_the_home_settings_open_sessions_in_auto() {
+    let scratch = Scratch::new("schedule-start-in-auto");
+    let (port, asked) = a_gateway_asking_for_a_write();
+    let home = scratch.path.join("home/.bravebot");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join("settings.json"),
+        format!(
+            r#"{{
+                "provider": {{"openrouter": {{
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {{"baseURL": "http://127.0.0.1:{port}/api/v1"}}
+                }}}},
+                "model": "openrouter/reasons-only",
+                "permissions": {{"startInAuto": true}}
+            }}"#
+        ),
+    )
+    .unwrap();
+    assert!(
+        out(&added(&scratch, &[])).contains("Added schedule 1."),
+        "the entry was not added"
+    );
+    let entry = std::fs::read_to_string(scratch.state().join("1.entry")).unwrap();
+    assert!(
+        entry.lines().any(|line| line == "mode=read"),
+        "an entry added with no mode flag stored another mode: {entry}"
+    );
+
+    let mut command = scratch.command(&["schedule", "run-now", "1"]);
+    for (name, value) in [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ("OPENROUTER_API_KEY", "a-token"),
+    ] {
+        command.env(name, value);
+    }
+    let ran = command.output().unwrap();
+    let said = out(&ran);
+    assert!(
+        said.contains("schedule 1 ran, status 4"),
+        "{said}{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+
+    let bodies: Vec<String> = asked.try_iter().collect();
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains(r#""name":"write_file""#)),
+        "the planner was never offered the write: {bodies:?}"
+    );
+    assert!(
+        !scratch.path.join("work/out.txt").exists(),
+        "a scheduled run wrote under a setting that is for sessions"
+    );
+    let history = std::fs::read_to_string(scratch.state().join("1.history")).unwrap();
+    assert_eq!(history.split(' ').nth(1), Some("4"), "{history}");
+}
+
 /// `run-now` of entry 1 in `scratch` with `environment` set on the child only.
 fn run_now_with(scratch: &Scratch, environment: &[(&'static str, String)]) -> Output {
     let mut command = scratch.command(&["schedule", "run-now", "1"]);

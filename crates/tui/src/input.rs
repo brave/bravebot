@@ -68,9 +68,25 @@ fn pending() -> MutexGuard<'static, VecDeque<(TermEvent, bool)>> {
 }
 
 /// Whether the event [`read`] last returned was the whole of what was waiting.
-fn alone() -> &'static AtomicBool {
-    static ALONE: AtomicBool = AtomicBool::new(true);
-    &ALONE
+///
+/// A process-wide value, as the terminal is one stream. Under test it is the calling thread's, as
+/// the script a test reads from is, so that two tests that each read events do not overwrite one
+/// another's answer, and so that a test can read it back after driving the session through
+/// [`read`].
+#[cfg(not(test))]
+static ALONE: AtomicBool = AtomicBool::new(true);
+
+#[cfg(test)]
+thread_local! {
+    static ALONE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// Record whether the event [`read`] is handing out arrived alone.
+fn note_alone(on_its_own: bool) {
+    #[cfg(not(test))]
+    ALONE.store(on_its_own, Ordering::Relaxed);
+    #[cfg(test)]
+    ALONE.with(|held| held.set(on_its_own));
 }
 
 /// Whether the terminal last reported being in front of the person.
@@ -140,7 +156,14 @@ fn note_focus(event: &TermEvent) {
 /// Read straight after a [`read`], by the one caller that asks. It is a property of the last event
 /// handed out rather than of the terminal now, so asking later asks about the wrong event.
 pub fn the_last_event_arrived_alone() -> bool {
-    alone().load(Ordering::Relaxed)
+    #[cfg(not(test))]
+    {
+        ALONE.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    {
+        ALONE.with(std::cell::Cell::get)
+    }
 }
 
 /// The key press an event is, or `None` for an event that is not one.
@@ -204,6 +227,12 @@ pub fn poll(timeout: Duration) -> io::Result<bool> {
 /// Reads what the terminal has waiting into the queue, as a [`read`] would, so a caller asking
 /// this and then reading sees the events in the order they were written.
 pub fn next_is_a_stream() -> io::Result<bool> {
+    // A test's script is read one event at a time and never from a terminal, which a test process
+    // may not have, so it holds no stream.
+    #[cfg(test)]
+    if script::installed() {
+        return Ok(false);
+    }
     if pending().is_empty() {
         if !event::poll(Duration::ZERO)? {
             return Ok(false);
@@ -254,11 +283,11 @@ pub fn is_a_move(event: &TermEvent) -> bool {
 pub fn read() -> io::Result<TermEvent> {
     #[cfg(test)]
     if let Some(scripted) = script::next() {
-        alone().store(true, Ordering::Relaxed);
+        note_alone(script::arrive_alone());
         return scripted;
     }
     if let Some((event, on_its_own)) = take_next(&mut pending()) {
-        alone().store(on_its_own, Ordering::Relaxed);
+        note_alone(on_its_own);
         note_focus(&event);
         return Ok(event);
     }
@@ -272,7 +301,7 @@ pub fn read() -> io::Result<TermEvent> {
             "the terminal was read and nothing was queued",
         )
     })?;
-    alone().store(on_its_own, Ordering::Relaxed);
+    note_alone(on_its_own);
     note_focus(&event);
     Ok(event)
 }
@@ -281,8 +310,8 @@ pub fn read() -> io::Result<TermEvent> {
 ///
 /// Held for one thread, so tests that each drive a prompt run side by side without sharing events.
 /// While a script is held every [`read`] on the thread answers from it, each event arriving alone
-/// as a person's does, and a read past the end is the stream being lost, which every prompt
-/// refuses on rather than waiting for.
+/// as a person's does unless the script was held with [`hold_together`], and a read past the end is
+/// the stream being lost, which every prompt refuses on rather than waiting for.
 #[cfg(test)]
 pub(crate) mod script {
     use super::{TermEvent, io};
@@ -292,6 +321,7 @@ pub(crate) mod script {
     thread_local! {
         static EVENTS: RefCell<Option<VecDeque<TermEvent>>> = const { RefCell::new(None) };
         static RAN_DRY: Cell<bool> = const { Cell::new(false) };
+        static TOGETHER: Cell<bool> = const { Cell::new(false) };
     }
 
     /// The script, until it is dropped.
@@ -300,14 +330,29 @@ pub(crate) mod script {
     impl Drop for Held {
         fn drop(&mut self) {
             EVENTS.with(|events| *events.borrow_mut() = None);
+            TOGETHER.with(|together| together.set(false));
         }
     }
 
-    /// Make `events` what this thread reads.
+    /// Make `events` what this thread reads, each arriving alone.
     pub(crate) fn hold(events: impl IntoIterator<Item = TermEvent>) -> Held {
         EVENTS.with(|held| *held.borrow_mut() = Some(events.into_iter().collect()));
         RAN_DRY.with(|dry| dry.set(false));
+        TOGETHER.with(|together| together.set(false));
         Held
+    }
+
+    /// Make `events` what this thread reads, each arriving with the others as the events of one read
+    /// of the terminal do: [`super::the_last_event_arrived_alone`] answers `false` after each.
+    pub(crate) fn hold_together(events: impl IntoIterator<Item = TermEvent>) -> Held {
+        let held = hold(events);
+        TOGETHER.with(|together| together.set(true));
+        held
+    }
+
+    /// Whether the event a read answers from the script arrives alone.
+    pub(super) fn arrive_alone() -> bool {
+        !TOGETHER.with(Cell::get)
     }
 
     /// Whether a read found the script empty.

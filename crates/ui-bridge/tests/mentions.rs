@@ -1,7 +1,20 @@
 //! NAME-9: the window names a file with `@` through the bridge, on the terminal's rules.
+//! NAME-10: it offers no past session and sends a `@session:<id>` line as typed.
+#![allow(
+    clippy::unwrap_used,
+    reason = "the profile helper unwraps, and a test that unwraps fails at the line that did"
+)]
 
+#[allow(
+    dead_code,
+    reason = "undo_endpoint.rs is shared by several test binaries, and this one does not use tool"
+)]
+#[path = "../../tui/src/undo_endpoint.rs"]
+mod endpoint;
 #[path = "../test-support/message_ids.rs"]
 mod message_ids;
+#[path = "../../session/test-support/profile.rs"]
+mod test_profile;
 use bravebot_ui_bridge::bridge::Bridge;
 use bravebot_ui_bridge::protocol::{Event, Request};
 use serde_json::{Value, json};
@@ -217,43 +230,185 @@ fn an_entry_holding_a_no_break_space_is_written_so_the_prompt_names_it() {
 
 /// NAME-9: `turn.send` reads the names out of the prompt itself and refuses one that cannot go,
 /// before a turn starts, and a prompt the app composed names nothing.
+///
+/// The composed prompt is accepted and starts a turn, so the test runs in an isolated profile
+/// against a stand-in model endpoint and waits for that turn to end. No other request leaves the
+/// test.
+#[expect(
+    clippy::expect_used,
+    reason = "a test that stops at the call that failed, with the message saying which"
+)]
 #[test]
 fn a_send_naming_a_file_that_cannot_go_is_refused_before_the_turn() {
-    let (mut bridge, events) = harness();
-    let project = project(&mut bridge);
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let (config, requests, server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let mut window = isolated("mentions-refuses-before-the-turn", &config.endpoint);
+    std::fs::write(window.root.with_file_name("outside.txt"), "secret\n").unwrap();
 
     let refusal = call(
-        &mut bridge,
+        &mut window.bridge,
         "turn.send",
         message_ids::with_fresh(
-            json!({ "session": &project.session, "prompt": "read @../outside.txt" }),
+            json!({ "session": &window.session, "prompt": "read @../outside.txt" }),
         ),
     )
     .expect_err("an outside name");
     assert!(refusal.contains("@../outside.txt"), "{refusal}");
     assert!(
-        !events
+        !window
+            .events
             .lock()
             .expect("not poisoned")
             .iter()
             .any(|event| event.name == "turn.started"),
         "a turn started for a refused send"
     );
+    assert_eq!(
+        requests.try_iter().count(),
+        0,
+        "the refused send reached the model"
+    );
 
-    let composed = call(
-        &mut bridge,
+    call(
+        &mut window.bridge,
         "turn.send",
         message_ids::with_fresh(json!({
-            "session": &project.session,
+            "session": &window.session,
             "prompt": "bring your memory up to date, @../outside.txt",
             "composed": "consolidation",
         })),
+    )
+    .expect("a prompt the app composed was read for names");
+    wait_for_turn_end(&window.events);
+    server.join().unwrap();
+    assert_eq!(
+        requests.try_iter().count(),
+        1,
+        "expected the composed send to reach the stand-in endpoint once"
     );
+}
+
+/// The name and data of the first event that ends a turn, once one has arrived. The wait is
+/// bounded, so a turn that never ends fails the test.
+#[expect(
+    clippy::expect_used,
+    reason = "a poisoned lock means another thread of the test already failed"
+)]
+fn wait_for_turn_end(events: &Mutex<Vec<Event>>) -> (&'static str, Value) {
+    let until = std::time::Instant::now() + endpoint::LIMIT;
+    loop {
+        let ended = events
+            .lock()
+            .expect("not poisoned")
+            .iter()
+            .find(|event| matches!(event.name, "turn.done" | "turn.error"))
+            .map(|event| (event.name, event.data.clone()));
+        if let Some(ended) = ended {
+            return ended;
+        }
+        assert!(std::time::Instant::now() < until, "the turn never ended");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Send `params` as `turn.send`, again while the answer is that an earlier turn is still running.
+///
+/// An accepted send starts a turn, and the bridge refuses a send for a running turn before it reads
+/// the names, so a send that follows one is decided by the names only once that turn has ended.
+/// Every attempt carries a fresh message id, since the bridge replays the answer it recorded for an
+/// id it has seen. The wait is bounded, so a turn that never ends fails the test.
+fn send_when_idle(bridge: &mut Bridge, params: &Value) -> Result<Value, String> {
+    let until = std::time::Instant::now() + endpoint::LIMIT;
+    loop {
+        let answer = call(bridge, "turn.send", message_ids::with_fresh(params.clone()));
+        match &answer {
+            Err(refusal)
+                if refusal.starts_with("TurnInFlight") && std::time::Instant::now() < until =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            _ => return answer,
+        }
+    }
+}
+
+/// NAME-12: a name inside the words of a folded paste is sent as text. The window sends the line as
+/// its box showed it as `shown`, and the bridge reads the names there, so an `@` the person pasted
+/// refuses nothing. A name `shown` gives that the prompt does not is not read either, so `shown`
+/// cannot name a file the sent words never named.
+///
+/// The two sends that are accepted each start a turn against a stand-in endpoint, and the next send
+/// waits for that turn to end, so each send is decided by the names and not by a turn still running.
+/// Both must succeed, and the third must be refused as a bad request that names the file.
+///
+/// The faults this rejects: the names read out of the prompt when `shown` is given, which refuses
+/// the pasted name, and a name read out of `shown` alone, which `turn.send` then refuses.
+#[expect(
+    clippy::expect_used,
+    reason = "a test that stops at the call that failed, with the message saying which"
+)]
+#[test]
+fn a_send_reads_names_in_the_shown_line_and_never_adds_one() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let (config, requests, server) =
+        endpoint::endpoint(vec![endpoint::answer(), endpoint::answer()], None);
+    let mut window = isolated("mentions-reads-the-shown-line", &config.endpoint);
+    std::fs::write(window.root.with_file_name("outside.txt"), "secret\n").unwrap();
+
+    send_when_idle(
+        &mut window.bridge,
+        &json!({
+            "session": &window.session,
+            "prompt": "look at this\nlog line @../outside.txt\nmore\nend",
+            "shown": "look at this [Pasted text #1 +3 lines]",
+        }),
+    )
+    .expect("a name inside a folded paste was read");
+
+    send_when_idle(
+        &mut window.bridge,
+        &json!({
+            "session": &window.session,
+            "prompt": "look at this",
+            "shown": "look at this @../outside.txt",
+        }),
+    )
+    .expect("a name only `shown` gives was read");
+
+    let typed = send_when_idle(
+        &mut window.bridge,
+        &json!({
+            "session": &window.session,
+            "prompt": "read @../outside.txt and\nthe\npasted\nwords",
+            "shown": "read @../outside.txt and [Pasted text #2 +4 lines]",
+        }),
+    )
+    .expect_err("a name typed beside a folded paste is still read");
     assert!(
-        !composed
-            .as_ref()
-            .is_err_and(|refusal| refusal.contains("@../outside.txt")),
-        "a prompt the app composed was read for names: {composed:?}"
+        typed.starts_with("BadRequest") && typed.contains("@../outside.txt"),
+        "{typed}"
+    );
+
+    server.join().unwrap();
+    assert_eq!(
+        requests.try_iter().count(),
+        2,
+        "expected one request at the stand-in endpoint for each of the two accepted sends"
+    );
+    let started = window
+        .events
+        .lock()
+        .expect("not poisoned")
+        .iter()
+        .filter(|event| event.name == "turn.started")
+        .count();
+    assert_eq!(
+        started, 2,
+        "expected one turn.started for each of the two accepted sends and none for the refused one"
     );
 }
 
@@ -302,4 +457,196 @@ fn the_window_names_a_file_under_a_reference_alias() {
     )
     .expect("a file under a reference is a named file");
     assert_eq!(named["files"].as_array().expect("files").len(), 1);
+}
+
+/// A project directory the profile owns, with a settings file beside it that points the model at
+/// `endpoint`, and a session opened on it and its trust question answered.
+struct Isolated {
+    bridge: Bridge,
+    events: Arc<Mutex<Vec<Event>>>,
+    root: std::path::PathBuf,
+    session: String,
+}
+
+fn isolated(name: &str, endpoint: &str) -> Isolated {
+    let root = test_profile::project(name);
+    std::fs::create_dir_all(&root).unwrap();
+    let root = std::fs::canonicalize(root).unwrap();
+    std::fs::write(root.join("README.md"), "read me\n").unwrap();
+    let settings = root.with_file_name(format!("{name}-test-settings.json"));
+    std::fs::write(
+        &settings,
+        json!({"model": "mention-test/test", "provider": {"mention-test": {
+            "options": {"baseURL": endpoint}, "models": {"test": {}}
+        }}})
+        .to_string(),
+    )
+    .unwrap();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&events);
+    let mut bridge = Bridge::new(Box::new(move |event| {
+        sink.lock().expect("not poisoned").push(event);
+    }))
+    .with_settings(Some(settings));
+    let opened = call(
+        &mut bridge,
+        "session.new",
+        json!({ "directory": root.display().to_string() }),
+    )
+    .expect("opens");
+    let session = opened["session"].as_str().expect("a handle").to_string();
+    call(
+        &mut bridge,
+        "trust.reply",
+        json!({ "session": &session, "trusted": true }),
+    )
+    .expect("answered");
+    Isolated {
+        bridge,
+        events,
+        root,
+        session,
+    }
+}
+
+/// Store a record of an earlier session of `root`, titled `title`, holding one exchange. The id is
+/// the one a record is stored under in the profile's session store.
+fn an_earlier_session(root: &std::path::Path, id: &str, title: &str) {
+    use bravebot_aichat::protocol::Message;
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.push(Message::user("a question asked long ago"));
+    conversation.push(Message::assistant("an answer given long ago"));
+    let directory = bravebot_session::sessions::project_directory(root).expect("a store");
+    std::fs::create_dir_all(&directory).unwrap();
+    let record = json!({
+        "id": id, "directory": root.display().to_string(), "title": title,
+        "started": 1, "updated": 2, "front": "terminal",
+        "conversation": conversation.snapshot(),
+    });
+    std::fs::write(directory.join(format!("{id}.json")), record.to_string()).unwrap();
+    assert_eq!(
+        bravebot_session::sessions::list(root)
+            .iter()
+            .filter(|row| row.id == id)
+            .count(),
+        1,
+        "the stored session is not one the terminal's list would offer"
+    );
+}
+
+/// NAME-10: the desktop message box offers no sessions. With an earlier session stored in the
+/// project, `@` and a word of its title offer files and nothing of kind `session` or with a
+/// `session:` path, and `@session:` offers nothing, where the terminal offers the session for each.
+/// Rejects a bridge that adds the past-sessions rows to the window's list.
+#[test]
+fn the_window_is_offered_no_past_session() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let mut window = isolated("mentions-offers-no-session", "http://127.0.0.1:9");
+    std::fs::write(window.root.join("parser-notes.md"), "notes\n").unwrap();
+    an_earlier_session(&window.root, "20260101T000000-aaaa", "parser rewrite plan");
+
+    for line in [
+        "@",
+        "read @pars",
+        "read @rewrite",
+        "@session:",
+        "@session:2026",
+    ] {
+        let answer = call(
+            &mut window.bridge,
+            "mentions.offer",
+            json!({ "session": &window.session, "line": line, "definitions": true }),
+        )
+        .expect("answered");
+        for entry in answer["entries"].as_array().expect("entries") {
+            assert_ne!(entry["kind"], json!("session"), "{line:?} offered {entry}");
+            let path = entry["path"].as_str().expect("a path");
+            assert!(
+                !path.starts_with("session:") && !path.contains("20260101T000000-aaaa"),
+                "{line:?} offered a session as {entry}"
+            );
+        }
+    }
+    // The files are still offered, so an empty list above is not an answer that offers nothing.
+    let answer = call(
+        &mut window.bridge,
+        "mentions.offer",
+        json!({ "session": &window.session, "line": "read @pars" }),
+    )
+    .expect("answered");
+    assert_eq!(offered(&answer), vec!["parser-notes.md"]);
+}
+
+/// NAME-10: the desktop sends the line as typed. A line naming `@session:<id>` of a stored session
+/// is neither refused nor read as a file (`mentions.named` names no file), and the model is sent the
+/// line with nothing of the session added: no excerpt heading, none of that session's words.
+/// Rejects a bridge that reads the line for sessions as the terminal does.
+#[test]
+fn the_window_sends_a_session_mention_as_typed_with_nothing_of_the_session() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let (config, requests, server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let mut window = isolated("mentions-sends-session-as-typed", &config.endpoint);
+    an_earlier_session(&window.root, "20260101T000000-aaaa", "parser rewrite plan");
+    let line = "carry on from @session:20260101T000000-aaaa please";
+
+    let named = call(
+        &mut window.bridge,
+        "mentions.named",
+        json!({ "session": &window.session, "prompt": line }),
+    )
+    .expect("a session mention is not refused");
+    assert_eq!(named["files"], json!([]), "a session was read as a file");
+
+    call(
+        &mut window.bridge,
+        "turn.send",
+        message_ids::with_fresh(json!({"session": &window.session, "prompt": line})),
+    )
+    .expect("a send naming a session is not refused");
+    let until = std::time::Instant::now() + endpoint::LIMIT;
+    loop {
+        assert!(std::time::Instant::now() < until, "the turn never ended");
+        let ended = window
+            .events
+            .lock()
+            .expect("not poisoned")
+            .iter()
+            .any(|event| matches!(event.name, "turn.done" | "turn.error"));
+        if ended {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    server.join().unwrap();
+    let done = window
+        .events
+        .lock()
+        .expect("not poisoned")
+        .iter()
+        .find(|event| matches!(event.name, "turn.done" | "turn.error"))
+        .map(|event| (event.name, event.data.clone()))
+        .expect("an event");
+    assert_eq!(done.0, "turn.done", "{:?}", done.1);
+
+    let sent = requests.recv().unwrap();
+    let request: Value = serde_json::from_str(&sent).unwrap();
+    let user: Vec<String> = request["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "user")
+        .map(|message| message["content"].to_string())
+        .collect();
+    let holds_line = user.iter().any(|content| content.contains(line));
+    assert!(holds_line, "the line was not sent as typed: {user:?}");
+    assert!(
+        !sent.contains("Excerpt of an earlier session")
+            && !sent.contains("a question asked long ago")
+            && !sent.contains("an answer given long ago"),
+        "the desktop added words of the session the line named: {sent}"
+    );
 }

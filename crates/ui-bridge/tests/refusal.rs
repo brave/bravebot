@@ -599,6 +599,7 @@ fn an_unanswerable_mcp_question_refuses() {
             declaration: &declaration,
             program: None,
             changed: false,
+            plugin: None,
         }),
         Answer::No
     );
@@ -720,6 +721,7 @@ fn a_server_question_gets_the_answer_that_was_sent() {
             declaration: &declaration,
             program: None,
             changed: false,
+            plugin: None,
         });
         assert!(answerer.join().expect("the answerer should not panic"));
         assert_eq!(answered, sent);

@@ -3,7 +3,10 @@
    single inspector rather than as five panels that grew up separately. */
 
 .context { display: flex; flex-direction: column; overflow: hidden; }
-.context-content { flex: 1; min-height: 0; overflow-y: auto; }
+/* Sized by the column, never by its panels, like `.entries`. Without this, a column of panels taller
+   than the window scrolls under the custom 10px scrollbar of base.css and the renderer process
+   ends with SIGSEGV when the pointer moves over the window (#3581). */
+.context-content { flex: 1; min-height: 0; overflow-y: auto; contain: size layout style; }
 .context-content[hidden] { display: none; }
 .context-files .context-content { display: flex; flex-direction: column; overflow: hidden; }
 .context-files .context-content[hidden] { display: none; }
@@ -15,8 +18,18 @@
   padding: 0 var(--leo-spacing-xl);
   border-bottom: 1px solid var(--border-subtle);
 }
+/* The tabs and, at the end of the row, the Choose sections menu. The tabs keep the bottom edge so
+   their underline still sits on the head's border. */
+.context-head-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--leo-spacing-m);
+}
+.context-sections { align-self: center; }
 .inspector-tabs {
   display: block;
+  flex: 1;
+  min-width: 0;
   margin-bottom: -1px;
   --leo-tab-item-font: var(--type-meta-strong);
 }
@@ -65,6 +78,10 @@
   --leo-icon-size: var(--icon-control);
 }
 .panel-empty leo-icon { flex: none; }
+/* Every Overview section turned off. The line is a panel's own empty row inside `.panel-inner`, so
+   it starts at the same left edge as "No notes.". This adds the space above it and the 1px border
+   Leo's Collapse draws round a panel's contents, transparent here as it is there. */
+.context-all-off { padding-top: var(--leo-spacing-l); border-inline: 1px solid transparent; }
 
 /* ------------------------------------------------------------------ rows */
 
@@ -100,6 +117,10 @@
    row, but its hollow mark (the marker's own default ink) keeps it apart from `done` and
    `cancelled`, since nobody struck it. */
 .todos li.left-open { color: var(--ink-tertiary); }
+/* A row waiting on a person or an outside event: open on purpose, so it is neither struck nor
+   dimmed as abandoned, and not the running row's accent. Its icon and warning ink set it apart from
+   `done` (success) and `active` (accent). */
+.todos li.waiting .marker { color: var(--status-warning); }
 
 /* A note is the person's own words, so it keeps its line breaks and wraps rather than truncating. */
 .notes li {
@@ -112,6 +133,19 @@
 .note-turn { color: var(--ink-tertiary); font: var(--type-caption); }
 .note-text { color: var(--ink-primary); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .note-add { margin-top: var(--leo-spacing-m); }
+
+/* An aside is a question and the model's answer, laid out like a note: the answer wraps and keeps its line breaks. */
+.asides { list-style: none; margin: 0; padding: 0; }
+.asides li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-xs);
+  padding: var(--leo-spacing-s) var(--leo-spacing-m);
+  font: var(--type-meta);
+}
+.aside-question { color: var(--ink-secondary); font-weight: 600; overflow-wrap: anywhere; user-select: text; }
+.aside-answer { color: var(--ink-primary); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.aside-note { color: var(--ink-tertiary); font: var(--type-caption); }
 
 .file-row, .confined-row {
   display: flex;

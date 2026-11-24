@@ -2013,6 +2013,40 @@ def read_kept(root):
     return entries
 
 
+# A backtick-quoted name in an entry that reads as code: an identifier, optionally `Type::method`,
+# optionally called with `()`. Excludes file names (a dot or a slash), multi-word phrases and
+# anything else an entry also quotes, such as `labels.md`, `mod tests` or `Ok(outcome)`.
+KEPT_FUNCTION = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*(?:\(\))?)`")
+
+
+def kept_function_names(text):
+    """The names `KEPT_FUNCTION` finds in an entry's text, with a trailing `()` dropped."""
+    return [name[:-2] if name.endswith("()") else name for name in KEPT_FUNCTION.findall(text)]
+
+
+def missing_kept_functions(root, entries):
+    """`entries` (as `read_kept` returns them), with each name `kept_function_names` finds that is
+    not a word in its file's text, as `{path: [name, ...]}`. A name with a `Type::` prefix is
+    looked for by its last segment, since an entry may name a method by its type while the file
+    calls it on a variable. A path that is not a file is skipped; `read_kept`'s own file-existence
+    check catches that."""
+    missing = {}
+    for path, texts in entries.items():
+        try:
+            content = (Path(root) / path).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        absent = []
+        for text in texts:
+            for name in kept_function_names(text):
+                local = name.rsplit("::", 1)[-1]
+                if not re.search(r"\b" + re.escape(local) + r"\b", content) and name not in absent:
+                    absent.append(name)
+        if absent:
+            missing[path] = absent
+    return missing
+
+
 def render_candidate(candidate, kept=None):
     lines = [f"- **{candidate['id']}** `{candidate['path']}:{candidate['line']}` {candidate['detail']}"]
     for name in ("specs", "guards"):

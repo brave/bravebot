@@ -259,6 +259,19 @@ pub fn breakpoints_given_up(model: &str) -> bool {
     refusals(model).caching
 }
 
+/// Record `model` as refusing the breakpoints, as two refused requests that did not begin together
+/// do, so a caller above this crate can reach the state [`breakpoints_given_up`] reports without a
+/// service that refuses them. Used by tests of the callers; nothing in the product calls it.
+#[doc(hidden)]
+pub fn record_breakpoints_refused_for_test(model: &str) {
+    let found = Refusals {
+        caching: true,
+        ..refusals(model)
+    };
+    remember(model, found, next_call());
+    remember(model, found, next_call());
+}
+
 /// Record what a model refused, as found by the call numbered `call`.
 fn remember(model: &str, found: Refusals, call: u64) {
     remember_at(model, found, call, Instant::now());
@@ -399,6 +412,26 @@ impl From<EgressError> for BedrockError {
             EgressError::Stopped { .. } => Self::Cancelled,
             other => Self::Egress(other),
         }
+    }
+}
+
+/// What a read of a reply's body that failed is reported as.
+///
+/// A read that failed before any of the body arrived is not sent again whatever the transport calls
+/// it: a silence that long is a model still thinking as often as a dead connection, and a second
+/// request waits out the same silence and is billed for it
+/// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)). Streamed or whole, the reply was
+/// asked for and the service had the request.
+fn not_sent_again(error: EgressError) -> BedrockError {
+    match error {
+        EgressError::Transport { url, detail, .. } => {
+            BedrockError::Egress(EgressError::Transport {
+                url,
+                detail,
+                transient: false,
+            })
+        }
+        other => other.into(),
     }
 }
 
@@ -690,15 +723,23 @@ impl<'a> BedrockClient<'a> {
     ) -> Result<Completion, BedrockError> {
         let (http, model) = self.build(request, false)?;
         self.call.spent.sent();
-        let response = self.egress.fetch(policy, http, Label::untrusted_public())?;
+        // The body is read in pieces so that a failure before the status, which sent nothing the
+        // service could have processed, is told from a failure while the body arrives, which is
+        // not sent again ([`not_sent_again`]). Nothing is stopped part way: the body is read to its
+        // end, as the egress layer reads one it hands back whole.
+        let mut stream =
+            self.egress
+                .fetch_streaming(policy, http, Label::untrusted_public(), None)?;
 
         // The envelope is protocol, like the JSON envelope in the other backend: the bytes come out
         // to find the reply inside, and the reply is relabelled with exactly the label it arrived
         // under.
-        let label = response.body.label();
-        let (bytes, label) = policy
-            .decode_transport("converse", label)
-            .decode(response.body);
+        let label = stream.label();
+        let decoding = policy.decode_transport("converse", label);
+        let mut bytes = Vec::new();
+        while let Some(piece) = stream.next_chunk().map_err(not_sent_again)? {
+            bytes.extend(decoding.decode(piece).0);
+        }
 
         // Decode the bill independently of the assistant's content.
         let envelope: serde_json::Value =
@@ -884,7 +925,7 @@ impl<'a> BedrockClient<'a> {
                 Arrived::Piece(piece) => piece,
                 Arrived::Ended => break,
                 Arrived::StoppedPartWay => return Err(self.stopped_part_way(request)),
-                Arrived::Failed(e) => return Err(e.into()),
+                Arrived::Failed(e) => return Err(not_sent_again(e)),
                 Arrived::Cancelled => return Err(BedrockError::Cancelled),
             };
 
@@ -1445,6 +1486,50 @@ mod tests {
         );
     }
 
+    /// BACKEND-27: a streamed request that carried the breakpoints and was answered clears the
+    /// doubt an earlier refusal left, as a whole reply does. Without that, a refusal after the
+    /// answered stream completes the pair held before it and records a model that reads the
+    /// breakpoints as one that refuses them.
+    ///
+    /// Rejects: `settle_doubt` not called on the streaming path, which leaves the doubt standing
+    /// across an answered stream.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_streamed_answer_that_carried_the_breakpoints_clears_the_doubt() {
+        let model = "a-model-refused-once-and-then-streamed-an-answer";
+        let config = config_for(model);
+        let request = ChatRequest::new(model, vec![Message::user("hello")]);
+
+        let (result, sent) = stream_against(
+            &config,
+            &request,
+            vec![refused_with(REFUSED_CACHING_STATUS), answered()],
+        );
+        result.expect("the streamed request without the breakpoints answers");
+        assert!(marked(&sent[0]) && !marked(&sent[1]), "{sent:?}");
+        assert!(!refusals(model).caching, "one answered probe was recorded");
+
+        let (result, sent) = stream_against(&config, &request, vec![answered()]);
+        result.expect("the next streamed request answers");
+        assert!(
+            marked(&sent[0]),
+            "a later request lost its breakpoints: {}",
+            sent[0]
+        );
+
+        // The answered stream cleared the doubt, so a refusal after it is a first one again.
+        let (result, _) = stream_against(
+            &config,
+            &request,
+            vec![refused_with(REFUSED_CACHING_STATUS), answered()],
+        );
+        result.expect("the streamed request without the breakpoints answers");
+        assert!(
+            !refusals(model).caching,
+            "a refusal after an answered stream completed the pair held before it"
+        );
+    }
+
     /// A probe that settled nothing must leave no trace, or one unrelated refusal costs the session
     /// its caching for good.
     #[test]
@@ -1591,6 +1676,87 @@ mod tests {
         assert!(refusals(model).caching);
     }
 
+    /// Requests that began together count once through the client that makes them, which is where
+    /// the number a refusal is recorded under is chosen. A request is held after the server has read
+    /// it, so its call has begun; a second request begins, is refused and is answered, which holds
+    /// the doubt; and the held one is then refused and answered, which is the same event and so
+    /// records nothing. A request that begins after both is the second one.
+    ///
+    /// The regressions it rejects are a client that numbers a refusal when it is recorded rather
+    /// than when its call began, which counts a burst as many, and one that never numbers it, which
+    /// never records a model at all.
+    #[test]
+    fn requests_begun_together_are_one_refusal_when_made_through_the_client() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        use std::io::Write;
+        let model = "a-model-refused-by-a-burst-of-clients";
+        let config = config_for(model);
+        let request = ChatRequest::new(model, vec![Message::user("hello")]);
+        let refused_then_answered = || vec![refused_with(REFUSED_CACHING_STATUS), whole_reply()];
+
+        // A server that holds its first response until released, once it has read the request.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (arrived, began) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            for (number, response) in refused_then_answered().into_iter().enumerate() {
+                let (mut stream, _) = listener.accept().unwrap();
+                read_request(&mut stream);
+                if number == 0 {
+                    let _ = arrived.send(());
+                    // A test that stopped before releasing drops the sender, which ends the wait.
+                    let _ = released.recv_timeout(Duration::from_secs(30));
+                }
+                stream.write_all(&response).unwrap();
+            }
+        });
+        let held = Request::post(format!("http://{address}/converse"), b"{}".to_vec());
+        let first = std::thread::spawn(move || {
+            let config = config_for(model);
+            let request = ChatRequest::new(model, vec![Message::user("hello")]);
+            let egress = Egress::new();
+            let mut client = BedrockClient::new(&config, &egress);
+            client.test_request = Some(held);
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "test");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            client.complete(&mut policy, &request).is_ok()
+        });
+        began
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the first request reached its server");
+
+        let (result, _) = complete_against(&config, &request, refused_then_answered());
+        result.expect("the request without the breakpoints answers");
+        assert!(!refusals(model).caching, "one answered probe was recorded");
+
+        release.send(()).unwrap();
+        assert!(first.join().unwrap(), "the held request answered");
+        assert!(
+            !refusals(model).caching,
+            "two requests that began together were recorded as two refusals"
+        );
+
+        let (result, _) = complete_against(&config, &request, refused_then_answered());
+        result.expect("the request without the breakpoints answers");
+        assert!(
+            refusals(model).caching,
+            "a request that began after the doubt did not complete the pair"
+        );
+    }
+
     /// A record of a refusal lapses, so a model that was refused for another reason is tried
     /// again, and a record is not kept past the time it is worth. The regression it rejects is a
     /// record that lasts as long as the process.
@@ -1604,13 +1770,16 @@ mod tests {
         remember(model, found, next_call());
         remember(model, found, next_call());
         let now = Instant::now();
+        // Thirty minutes as the spec states them, not the constant that is meant to hold them: a
+        // test written in terms of the constant passes for whatever the constant is changed to.
+        let thirty_minutes = Duration::from_secs(30 * 60);
         assert!(refusals_at(model, now).caching);
         assert!(
-            !refusals_at(model, now + REFUSAL_LASTS + Duration::from_secs(1)).caching,
+            !refusals_at(model, now + thirty_minutes + Duration::from_secs(1)).caching,
             "the record outlived its time"
         );
         assert!(
-            refusals_at(model, now + REFUSAL_LASTS - Duration::from_secs(1)).caching,
+            refusals_at(model, now + thirty_minutes - Duration::from_secs(1)).caching,
             "the record lapsed early"
         );
     }
@@ -2064,6 +2233,10 @@ mod tests {
         );
         assert!(result.is_err(), "the third request was sent");
         assert_eq!(sent.len(), 2);
+        assert!(
+            marked(&sent[0]) && !marked(&sent[1]),
+            "the first request carried the breakpoints and the one asked again carried none: {sent:?}"
+        );
         assert_eq!(refusals(model), Refusals::default(), "the probe failed too");
     }
 
@@ -2660,14 +2833,28 @@ mod tests {
         request: &ChatRequest,
         responses: Vec<Vec<u8>>,
     ) -> (Result<Completion, BedrockError>, Vec<serde_json::Value>) {
+        complete_against_with(
+            &Egress::new(),
+            config,
+            request,
+            responses.into_iter().map(|r| (r, false)).collect(),
+        )
+    }
+
+    /// As [`complete_against`], through `egress`, against [`scripted_with_silences`].
+    fn complete_against_with(
+        egress: &Egress,
+        config: &Bedrock,
+        request: &ChatRequest,
+        responses: Vec<(Vec<u8>, bool)>,
+    ) -> (Result<Completion, BedrockError>, Vec<serde_json::Value>) {
         use bravebot_core::{
             capability::{Capability, CapabilitySet},
             event::RecordingSink,
             policy::{ReleasePlan, Routing},
         };
-        let (http, received) = scripted_responses(responses);
-        let egress = Egress::new();
-        let mut client = BedrockClient::new(config, &egress);
+        let (http, received) = scripted_with_silences(responses);
+        let mut client = BedrockClient::new(config, egress);
         client.test_request = Some(http);
         let mut sink = RecordingSink::new();
         let mut routing = Routing::new();
@@ -2970,6 +3157,32 @@ mod tests {
                 ))
             ),
             "a reply that never began was reported as {result:?}"
+        );
+        assert_eq!(sent.len(), 1, "a silence before the reply was sent again");
+    }
+
+    /// A whole reply whose status arrived and whose body then went quiet is the same silence as a
+    /// streamed one, so it is not sent again either: the service has the request, and a second one
+    /// is billed. A request that never reached the service is still sent again.
+    #[test]
+    fn a_whole_reply_that_never_began_is_not_sent_again() {
+        let model = "a-model-whose-whole-reply-never-began";
+        let (result, sent) = complete_against_with(
+            &impatient(),
+            &config_for(model),
+            &writing_a_file(model),
+            vec![silent_from_the_start(), (whole_reply(), false)],
+        );
+
+        assert!(
+            matches!(
+                result,
+                Err(BedrockError::Egress(bravebot_net::EgressError::Transport {
+                    transient: false,
+                    ..
+                }))
+            ),
+            "a whole reply that never began was reported as {result:?}"
         );
         assert_eq!(sent.len(), 1, "a silence before the reply was sent again");
     }

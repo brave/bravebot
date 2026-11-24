@@ -905,6 +905,94 @@ fn injected_text_in_a_file_cannot_add_a_step() {
     );
 }
 
+/// The driver starts exactly the steps the plan holds, once each and in the plan's order, and no
+/// other. `Outcome::steps` is the plan's length, so it cannot tell a skipped, repeated, reordered
+/// or appended step from a faithful run: the order and the count are read from what the driver
+/// announced as it started each step and from the record it kept of each.
+///
+/// Three reads of files with different contents and an answer about the middle one, so a driver
+/// that skips a step that "nobody reads" (the first and last read), runs the steps in another
+/// order, or appends a step of its own is told apart from one that walks the plan.
+#[test]
+fn the_driver_runs_every_step_of_the_plan_once_and_in_plan_order() {
+    let scratch = Scratch::new("every-step-in-order");
+    std::fs::write(scratch.path.join("a.md"), "first file").unwrap();
+    std::fs::write(scratch.path.join("b.md"), "second file").unwrap();
+    std::fs::write(scratch.path.join("c.md"), "third file").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "one"}},
+            {"capability": "FILE_READ", "args": {"path": "b.md", "out_slot": "two"}},
+            {"capability": "FILE_READ", "args": {"path": "c.md", "out_slot": "three"}},
+            {"capability": "ANSWER", "args": {"from_slot": "two"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("read the three files and answer with the second"),
+        skipping_permissions!(),
+        &mut reporter,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the run");
+
+    let planned = [
+        "read a.md into one",
+        "read b.md into two",
+        "read c.md into three",
+        "answer from two",
+    ];
+    let started: Vec<&str> = reporter
+        .started
+        .iter()
+        .map(|activity| activity.target.as_str())
+        .collect();
+    assert_eq!(started, planned, "the steps the driver started");
+    let finished: Vec<&str> = reporter
+        .finished
+        .iter()
+        .map(|activity| activity.target.as_str())
+        .collect();
+    assert_eq!(finished, planned, "the steps the driver finished");
+
+    let attempt = outcome.attempt.as_ref().expect("the run's record");
+    assert_eq!(attempt.steps.len(), planned.len(), "{:?}", attempt.steps);
+    for (index, (recorded, expected)) in attempt.steps.iter().zip(planned).enumerate() {
+        assert!(
+            recorded.starts_with(&format!("{}. [", index + 1)) && recorded.contains(expected),
+            "step {} was recorded as {recorded:?}, the plan said {expected:?}",
+            index + 1
+        );
+    }
+    assert_eq!(outcome.steps, planned.len());
+    assert!(
+        outcome.reply_for_display().contains("second file"),
+        "the answer was not the middle read: {}",
+        outcome.reply_for_display()
+    );
+
+    // The plan and the shape were the only model calls: a step the driver made up would not have
+    // asked either, but a step that ran twice or a transform it added would have.
+    for _ in 0..2 {
+        let _ = received.recv();
+    }
+    assert!(
+        received.try_recv().is_err(),
+        "the run made a model call the plan did not hold"
+    );
+}
+
 /// MODE-3 holds over a manifest run, and it has to hold from the plan rather than from the write
 /// prompt. A body the plan carried into a path the person already vouched for needs no approval, so
 /// the confirmer is never reached and plan mode's refusal there never fires: the write just lands.
@@ -3737,6 +3825,73 @@ fn the_shape_call_is_told_an_agent_will_read_the_workspace() {
         shaping.contains("Never ask for anything to be pasted"),
         "the shape call may still ask the user to paste code"
     );
+}
+
+/// The two planning requests of a manifest run for `task`, as the mock server received them.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn planning_requests_of(task: &Task, name: &str) -> (String, String) {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join("a.md"), "hello").expect("write a.md");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "doc"}},
+            {"capability": "ANSWER", "args": {"from_slot": "doc"}},
+        ])),
+    ]);
+    let mut sink = RecordingSink::new();
+    manifest::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        task,
+        skipping_permissions!(),
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("runs");
+    (
+        received.recv().expect("the shape request"),
+        received.recv().expect("the fit request"),
+    )
+}
+
+/// INSTR-12: the planner of a manifest run is sent no output style. A task carrying `concise` has
+/// the same two planning requests, byte for byte, as one carrying none, and neither holds the
+/// style's words. The manifest planner builds its prompts from constants and takes nothing from
+/// `Task::style`, so this rejects an implementation that opens either planning call's system
+/// prompt with the session's style, as a person's turn does.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_style_in_force_is_not_sent_to_the_planner_of_a_manifest_run() {
+    let concise = bravebot_agent::styles::named("concise")
+        .cloned()
+        .expect("concise ships with the build");
+    assert!(
+        concise.words.contains("Lead with the result"),
+        "the style's words changed, so the assertions below look for nothing"
+    );
+
+    let (plain_shape, plain_fit) = planning_requests_of(&Task::new("show me a.md"), "style-none");
+    let (styled_shape, styled_fit) = planning_requests_of(
+        &Task::new("show me a.md").with_style(Some(concise.clone())),
+        "style-concise",
+    );
+
+    for (call, request) in [("shape", &styled_shape), ("fit", &styled_fit)] {
+        assert!(
+            !request.contains("Lead with the result") && !request.contains(concise.words.as_ref()),
+            "the {call} request carried the session's style: {request}"
+        );
+    }
+    assert_eq!(
+        styled_shape, plain_shape,
+        "a style changed the shape request"
+    );
+    assert_eq!(styled_fit, plain_fit, "a style changed the fit request");
 }
 
 /// A manifest step's change note is built inside the kernel too.

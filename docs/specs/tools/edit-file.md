@@ -137,7 +137,11 @@ a passage inside the cut known to have landed only from the count.
 labelled, exactly as a read is, so `Policy::present` decides whether the planner sees it. Where the
 label is untrusted the result is the count alone, because a quarantined excerpt would take the
 confirmation down with it and a planner that cannot be told its edit landed is worse off than one
-told only that. [EDIT-2](#EDIT-2) is what makes the file itself trusted by this point.
+told only that. The label is the integrity of the context the edit was worked out in. The file is
+trusted by this point because [EDIT-2](#EDIT-2) refuses to locate a passage in anything else, and a
+context that has met something untrusted is refused before the edit is worked out, so no turn
+reaches the count-alone result today. It is kept as a second refusal of the same kind, and the
+choice between the two results is made from a label and nothing else.
 
 **The lines are a read of the file, and are scanned as one is.** The excerpt is text from the file
 handed to the planner, so before the result is returned the lines it shows are scanned for
@@ -152,6 +156,8 @@ lines around it are not shown because the file holds what looks like a credentia
 nothing of the finding ([CRED-19](../credential-protection.md#CRED-19)).
 
 `verified-by: bravebot_agent::turn::an_edit_shows_the_lines_it_changed`
+`verified-by: bravebot_agent::tools::tests::editing::an_edit_result_shows_its_lines_only_for_a_trusted_body`
+`verified-by: bravebot_agent::tools::tests::editing::an_edit_result_is_the_headline_alone_and_untrusted_where_the_choice_was_the_count`
 `verified-by: bravebot_agent::turn::an_edit_does_not_show_the_planner_a_credential_beside_the_change_unless_the_person_agrees`
 `verified-by: bravebot_agent::turn::an_edit_shows_the_lines_around_the_change_once_the_person_agrees_and_asks_once`
 `verified-by: bravebot_agent::turn::an_agreement_to_show_a_file_covers_the_lines_an_edit_shows`

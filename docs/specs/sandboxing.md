@@ -17,6 +17,7 @@ governs:
   - crates/sandbox/src/address.rs
   - crates/sandbox/src/scope.rs
   - crates/cli/src/push_identity.rs
+  - crates/agent/src/plugin_git.rs
   - crates/sandbox/src/mode.rs
   - crates/config/src/sandbox.rs
   - crates/config/src/sandbox_network.rs
@@ -25,6 +26,7 @@ governs:
   - crates/agent/src/reach.rs
   - crates/sandbox/src/rules.rs
   - crates/sandbox/src/programs.rs
+  - crates/agent/src/stage_record.rs
   - crates/sandbox/src/openshell.rs
   - crates/tui/src/status.rs
   - crates/tui/src/opener.rs
@@ -49,7 +51,7 @@ guards:
       - crates/tui/src/editor.rs: 2
   - symbol: find_in_with
     sites:
-      - crates/sandbox/src/programs.rs: 11
+      - crates/sandbox/src/programs.rs: 14
       - crates/tui/src/clipboard.rs: 4
 documented-by:
   - docs/website/docs/security/security.md
@@ -1049,8 +1051,9 @@ while that file has a second hard link; the person edits the file through a tool
 removes the extra link. A refusal of one file is by path, so the rest of its directory stays
 writable under the row that covers it. On Linux and Windows the file is not held back, and the
 withholding of its grants replaces the hold: a named file in a directory a stage may write grants
-nothing, and a person who wants its rules in force names a file outside the working directory and
-the directories added with `--add-dir`, `/add-dir` or `--sandbox-allow-write`. The temporary,
+nothing, and a person who wants its rules in force names a file outside the working directory, the
+directories added with `--add-dir`, `/add-dir` or `--sandbox-allow-write` and the directories an
+earlier process recorded ([SANDBOX-30](#SANDBOX-30)). The temporary,
 scratch, state and cache directories a policy writes are not counted as directories a stage may
 write for this, so a named file inside one of them is not withheld on Linux and Windows although a
 stage can write it there.
@@ -1062,6 +1065,8 @@ The auto mode's classifier is kept from a line with a git stage for the same rea
 
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_the_other_protected_names_beneath_it`
+`verified-by: bravebot_sandbox::macos::a_write_row_does_not_change_rename_into_or_remove_an_entry_of_a_git_directory`
+`verified-by: bravebot_sandbox::macos::a_write_row_does_not_change_the_owner_or_the_access_list_of_a_git_directory_or_a_protected_name`
 `verified-by: bravebot_sandbox::macos::a_write_row_inside_a_protected_directory_is_writable_under_itself`
 `verified-by: bravebot_sandbox::macos::every_name_in_the_shared_list_is_in_the_profile`
 `verified-by: bravebot_agent::protected_names::the_sandbox_and_the_file_tools_hold_back_the_same_names`
@@ -2709,6 +2714,7 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::the_program_cargo_runs_for_a_target_is_removed_and_its_target_directory_is_not`
 `verified-by: bravebot_agent::usability::the_loader_variables_are_removed_from_the_stored_login_gh_whatever_they_hold`
 `verified-by: bravebot_agent::usability::the_token_variables_are_removed_from_the_stored_login_gh`
+`verified-by: bravebot_agent::usability::a_generic_name_that_selects_code_is_checked_on_the_stored_login_gh`
 `verified-by: bravebot_agent::usability::the_twelve_host_variables_that_move_a_read_row_or_hand_over_a_socket_are_removed`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_a_template_directory`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_configuration_that_names_a_hooks_directory`
@@ -2883,8 +2889,10 @@ program with no profile and nothing would hold its network shut; the refusal say
 `completion` and the two `import-` commands) run past a refusal, so that the person can read what it
 says and sign in.
 
-The desktop and the bridge have no flag, and read the mode from the settings and the pin. `off` is
-read there as `workspace-write`, because a window has no line that shows its programs are unconfined. A
+The desktop and the bridge have no flag, and read the mode from the settings and the pin at the start
+of every turn, so a settings edit made while a session is open applies from its next turn, unless a
+window has chosen a mode for the session with `session.sandbox`, which replaces the settings mode
+from the next turn. `off` is read there as `workspace-write`, because a window has no line that shows its programs are unconfined. A
 subagent's programs run under the mode of the session that started it, and the mode is not in the
 session record, so a resumed session takes the mode its start-up chose and not the one it was
 saved under. `/sandbox` alone says the mode in force and the flag or file that chose it, in the words `doctor`
@@ -3075,6 +3083,7 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_ui_bridge::wire::a_window_may_name_strict_read_only_or_workspace_write_and_no_other_sandbox_mode`
 `verified-by: bravebot_ui_bridge::wire::a_refused_sandbox_mode_names_the_file_and_the_floor`
 `verified-by: bravebot_ui_bridge::wire::a_refused_sandbox_mode_says_whether_it_reads_or_writes_more_than_the_pin`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_mode_the_settings_ask_for_while_a_session_is_open_holds_from_its_next_turn`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_window_chooses_the_mode_the_next_turn_runs_under`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_read_only_window_refuses_file_writes_before_accepting_edits`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_read_only_window_refuses_a_writing_manifest_before_approval`
@@ -3227,7 +3236,10 @@ rule and is returned to the caller to report. A host that is an IP address, in b
 compared in one form, an IPv4 address inside an IPv6 one (IPv4-mapped, `::ffff:0:0/96`, or NAT64,
 `64:ff9b::/96`) as that IPv4 address, so a denied `93.184.216.34` also refuses
 `[::ffff:93.184.216.34]` and `[64:ff9b::5db8:d822]`. The deprecated IPv4-compatible form
-`::a.b.c.d` is an IPv6 address. A denied entry wins over an allowed one in either order, and a
+`::a.b.c.d` is an IPv6 address. Every other numeric spelling of an address, such as `2130706433`,
+`0x7f000001`, `0177.0.0.1` and `127.1`, is a name in this comparison, although
+`canonical_host` in `bravebot-core` reads each as an address. What such a name resolves to is checked
+as below. A denied entry wins over an allowed one in either order, and a
 name no allowed entry covers is refused, so an empty list refuses every host. No list
 means no proxy and no filtering. The defaults a caller adds to a list are code: `github.com`,
 `api.github.com` and `*.githubusercontent.com` for a stage carrying the remote scope, and for a
@@ -3500,6 +3512,9 @@ says nothing about them.
 `verified-by: bravebot_sandbox::proxy::the_trail_records_the_host_as_the_request_spelled_it`
 `verified-by: bravebot_sandbox::address::every_class_the_issue_names_is_not_public`
 `verified-by: bravebot_sandbox::address::an_ipv4_address_in_ipv6_clothes_is_classified_as_the_ipv4_address`
+`verified-by: bravebot_agent::two_implementations_agree::an_ipv4_address_inside_an_ipv6_one_is_read_as_that_ipv4_address_by_core_and_by_the_host_list`
+`verified-by: bravebot_agent::two_implementations_agree::an_address_is_classified_as_the_address_it_carries`
+`verified-by: bravebot_agent::two_implementations_agree::a_number_written_another_way_is_an_address_to_core_and_a_name_to_the_host_list`
 `verified-by: bravebot_agent::confine::the_trail_names_the_hosts_asked_for_and_what_the_list_decided`
 `verified-by: bravebot_agent::confine::the_trail_carries_no_byte_of_a_name_that_is_not_a_host`
 `verified-by: bravebot_agent::confine::the_trail_names_the_entry_that_decided_and_a_session_without_a_list_records_nothing`
@@ -3548,6 +3563,7 @@ says nothing about them.
 `verified-by: bravebot_config::settings::no_allowed_hosts_is_no_list_and_an_empty_one_is_a_list`
 `verified-by: bravebot_config::settings::the_home_layer_may_write_every_host_key`
 `verified-by: bravebot_config::settings::a_checkout_may_deny_a_host_and_never_allow_one`
+`verified-by: bravebot_config::settings::a_sandbox_block_that_is_not_an_object_takes_no_setting_away`
 `verified-by: bravebot_config::settings::a_checkouts_list_alone_does_not_start_filtering`
 `verified-by: bravebot_config::settings::a_named_file_may_list_hosts_wherever_it_sits`
 `verified-by: bravebot_config::settings::a_misshapen_host_key_is_reported_and_not_read`
@@ -3620,8 +3636,19 @@ compared this way; a name without one is resolved by the volume. The comparison 
 the name as written, or both sides in canonical decomposition with case folded out as
 [TRUST-2](trust-map.md#TRUST-2) folds it, whatever the volume does, since asking the volume would
 need a file made in the tree and a refusal that names a file the volume holds apart errs toward holding
-back. A glob in `allowRead` is compared exactly, since an allowance that names more adds reach the
+back. The sandbox keeps its own copy of that fold, since it does not depend on the trust map, and a
+test in `bravebot-agent` holds the copy to `canonical_key`. A glob in `allowRead` is compared exactly,
+since an allowance that names more adds reach the
 person did not write.
+
+A relative entry is read from a directory, and a name in that directory is a name and not a
+pattern, whatever characters it holds, so a `*` or `?` in it is a character. The same path written
+out as an absolute entry has no such directory, so the `*` or `?` is a wildcard there: a write list
+refuses it, and a read list meets every sibling name the wildcard meets. A wildcard has no spelling
+as a plain character, so no absolute entry means what the relative one meant when a name of the
+directory holds `*` or `?`. `bravebot_sandbox::rules::can_anchor_an_absolute_entry` says whether a
+directory can anchor an absolute spelling that keeps the entry's meaning: it is false where a name
+of the directory holds either character, and a root or a Windows prefix is not a name.
 
 An entry of `denyRead` or `denyWrite` that names a path that is not on disk keeps the spelling it
 was written in beneath the part that is. A volume that opens a name under every canonically
@@ -3702,6 +3729,11 @@ because the path it names is the one the person was protecting.
 
 `verified-by: bravebot_sandbox::rules::a_name_is_met_by_a_star_and_a_question_mark_and_nothing_looser`
 `verified-by: bravebot_sandbox::rules::an_entry_is_read_from_where_its_spelling_says`
+`verified-by: bravebot_sandbox::rules::an_entry_is_read_by_name_to_the_absolute_path_it_spells`
+`verified-by: bravebot_sandbox::rules::the_sandbox_judges_the_path_the_reading_returns_and_refuses_for_the_reason_it_gives`
+`verified-by: bravebot_sandbox::rules::a_directory_anchors_an_absolute_entry_only_where_no_name_in_it_holds_a_wildcard`
+`verified-by: bravebot_sandbox::rules::a_windows_prefix_does_not_count_as_a_name_holding_a_wildcard`
+`verified-by: bravebot_sandbox::rules::the_absolute_spelling_of_an_entry_is_read_the_same_exactly_where_the_directory_can_anchor_it`
 `verified-by: bravebot_sandbox::rules::an_entry_that_starts_with_a_variable_is_refused_in_every_list`
 `verified-by: bravebot_sandbox::rules::a_link_is_judged_by_where_it_leads`
 `verified-by: bravebot_sandbox::rules::a_write_row_over_the_home_or_the_root_is_refused`
@@ -3720,6 +3752,9 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_sandbox::rules::a_question_mark_in_a_deny_glob_meets_a_letter_with_its_marks`
 `verified-by: bravebot_sandbox::rules::a_question_mark_in_a_deny_glob_meets_a_syllable_and_a_letter_that_folds_to_two`
 `verified-by: bravebot_sandbox::rules::a_deny_glob_still_meets_every_name_it_met_as_written`
+`verified-by: bravebot_agent::two_implementations_agree::the_trust_maps_fold_joins_the_names_the_table_lists`
+`verified-by: bravebot_agent::two_implementations_agree::a_deny_glob_names_a_file_wherever_the_trust_maps_fold_joins_the_two_names`
+`verified-by: bravebot_agent::two_implementations_agree::a_deny_glob_names_no_file_the_trust_maps_fold_holds_apart`
 `verified-by: bravebot_sandbox::rules::an_allow_glob_meets_names_exactly`
 `verified-by: bravebot_sandbox::rules::a_match_is_judged_where_it_leads_and_the_directory_it_is_read_from_is_not_a_pattern`
 `verified-by: bravebot_sandbox::rules::a_request_under_a_denial_of_the_person_is_refused`
@@ -3759,6 +3794,7 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_agent::confirm::the_persons_filesystem_lists_are_said_once_and_only_where_they_exist`
 `verified-by: bravebot_config::settings::the_home_layer_may_write_every_filesystem_list`
 `verified-by: bravebot_config::settings::a_checkout_may_add_a_refusal_and_never_an_allowance`
+`verified-by: bravebot_config::settings::a_sandbox_block_that_is_not_an_object_takes_no_setting_away`
 `verified-by: bravebot_config::settings::a_named_file_may_widen_wherever_it_sits`
 `verified-by: bravebot_config::settings::a_misshapen_filesystem_list_is_reported_and_a_blank_entry_is_left_out`
 `verified-by: bravebot_config::settings::the_sandbox_block_is_unread_unless_it_holds_only_the_filesystem_lists`
@@ -3771,6 +3807,8 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_tui::status::filesystem_rules_are_reported_by_count_and_file_and_never_by_path`
 `verified-by: bravebot_tui::logo::filesystem_rules_are_named_on_the_opening_screen_and_none_is_not`
 `verified-by: bravebot_agent::confine::a_denied_read_is_refused_by_name_and_by_glob_and_its_neighbour_is_not`
+`verified-by: bravebot_agent::confine::a_denied_read_glob_refuses_a_confined_read_of_a_file_under_another_case`
+`verified-by: bravebot_agent::confine::a_denied_read_glob_refuses_a_confined_read_of_a_file_under_another_unicode_form`
 `verified-by: bravebot_agent::confine::a_denied_read_holds_back_a_directory_the_base_reads`
 `verified-by: bravebot_agent::confine::an_allowed_read_lifts_the_table_and_never_reaches_a_private_key`
 `verified-by: bravebot_agent::confine::the_narrower_of_an_allowed_and_a_denied_write_decides`
@@ -3964,6 +4002,7 @@ more than the person read.
 `verified-by: bravebot_tui::confirm::run::the_keep_keys_approve_and_remember_the_reach_only`
 `verified-by: bravebot_tui::confirm::run::the_keep_keys_are_unbound_where_the_prompt_does_not_offer_them`
 `verified-by: bravebot_tui::confirm::run::the_keep_keys_wait_for_the_rows_saying_what_they_remember`
+`verified-by: bravebot_tui::confirm::run::the_keep_keys_wait_for_the_reach_rows_in_a_real_draw`
 `verified-by: bravebot_tui::confirm::run::a_prompt_offering_to_keep_a_request_names_what_would_be_kept`
 `verified-by: bravebot_agent::turn::a_kept_credential_scope_asks_about_a_later_vouched_line_and_quarantines_its_output`
 `verified-by: bravebot_agent::turn::a_kept_scope_asks_about_a_remembered_line_in_a_later_session`
@@ -4115,7 +4154,7 @@ directories, including a unix socket under such a row on macOS, where a network-
 follows a write row. A program directory the account owns or can write, such as a Homebrew prefix, is
 left out of the places bravebot finds its own helpers ([SANDBOX-30](#SANDBOX-30)) once a stage's
 policy holds it, and stays left out for the life of the process, after the permission mode
-changes. The rows are read from the directories as they are when a stage's policy is built, so a
+changes, and in later processes through the record [SANDBOX-30](#SANDBOX-30) describes. The rows are read from the directories as they are when a stage's policy is built, so a
 directory made inside a directory spread around a refusal by an earlier stage of the same run is
 not covered until the next. A program directory on the account's search path, such as
 `~/.local/bin`, `~/.cargo/bin` or a Homebrew prefix, is written like any other, so a program a stage
@@ -4414,7 +4453,8 @@ person's access to `~/.ssh`, `~/.aws` and `~/.bravebot`, are the AWS CLI (`aws`)
 tools, `osascript`, the inhibitor `/caffeinate` starts, a hook's program, the `crontab`, `launchctl` and `systemctl` that `bravebot schedule` and `/schedule` run and the destination program of a scheduled entry ([SCHEDULE-7](schedule.md#SCHEDULE-7), [SCHEDULE-8](schedule.md#SCHEDULE-8)), a language server, the
 editor Ctrl-G opens, which `v` uses as well and a ctrl-click on a file path starts without this agent's own credentials ([CRED-14](credential-protection.md#CRED-14)), the browser opener that `auth login chatgpt` and a click on a link in the terminal
 interface start (`open`, `xdg-open` or `rundll32`, [CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13)), the credential authority ([CONNECTOR-2](connectors.md#CONNECTOR-2)), the `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` runs
-([SANDBOX-16](#SANDBOX-16)), and what `doctor --sandbox-check` runs with no sandbox
+([SANDBOX-16](#SANDBOX-16)), the `git` that `/plugin add` runs to fetch a plugin source
+([PLUGIN-3](plugins.md#PLUGIN-3)), and what `doctor --sandbox-check` runs with no sandbox
 ([SANDBOX-21](#SANDBOX-21)): the `gh` of the stored-login row, the programs of a workflow's setup
 stages, and the programs of a workflow run again without the sandbox as the control, `git`, `sh`,
 `cat` and `touch` among them. Each is resolved to an absolute path before it is started, from the
@@ -4457,16 +4497,23 @@ file. A new spawn that looks a name up through
   not when a prompt describes the stage or the server, and is never removed from it, because
   closing a directory does not remove a file already written there. A server's rows are recorded
   from the policy it is launched under, after the rows its backend cannot name are dropped and
-  before the launch.
+  before the launch. The directories that earlier `bravebot` processes recorded are in the set as
+  well: a process reads that record when it starts, before any program is looked up, and a
+  directory it read is never removed from the set either.
 - **The checkout holding a directory is left out with it.** The `bin` of a checkout can be first on
   `PATH` and hold a file a contributor added, which a session opened in a subdirectory of the
   checkout would start in place of the installed program, unconfined. The same function,
   `bravebot_sandbox::programs::keep_out_with_checkout`, records a directory and its checkout for a
   directory a session opens, adds or moves to, and for every command that opens no session.
-  Every command is a new process, which knows of no directory a stage wrote in an earlier session,
-  so `main` records the directory the process ran in, and the checkout holding it, once, before the
-  command line is read and before any command is dispatched. A command added later is covered
-  without a call of its own, and `bravebot schedule`, `bravebot auth login chatgpt`,
+  Every command is a new process. `main` reads the record of the directories earlier processes let
+  a stage write, then records the directory the process ran in, and the checkout holding it, once,
+  before the command line is read and before any command is dispatched. A command that opens no
+  session holds the directory it ran in in memory and appends nothing to the record, and makes none
+  where there was none. A session starts appending where it builds its workspace: the terminal client,
+  the session in lines, the host of a background session and a one-shot run, and `bravebot acp` before
+  it serves. The checkout
+  holding a directory is left out in the process that opened the directory and is not appended with
+  it. A command added later is covered without a call of its own, and `bravebot schedule`, `bravebot auth login chatgpt`,
   `bravebot auth login bedrock`, `bravebot auth status` and both `doctor` commands start the
   programs they look up under that record. A deep link that moves the process to another directory
   records that directory as well. Where the working directory cannot be read nothing is recorded.
@@ -4481,8 +4528,8 @@ file. A new spawn that looks a name up through
   the same function, `bravebot_sandbox::programs::with_checkout`, to decide which files count as the
   plan's ([SANDBOX-20](#SANDBOX-20)), and leaves out a checkout that is the account's home directory
   or holds it, which this lookup does not. A virtualenv or tool directory a stage was granted elsewhere
-  is not known to a command that opens no session. A program either doctor command starts is also
-  started without this agent's own credentials ([CRED-14](credential-protection.md#CRED-14)).
+  is known to a command that opens no session where an earlier process recorded it. A program
+  either doctor command starts is also started without this agent's own credentials ([CRED-14](credential-protection.md#CRED-14)).
   The same nearest checkout is the one `confine.rs` counts among the places a plan could have
   written ([SANDBOX-14](#SANDBOX-14), [SANDBOX-18](#SANDBOX-18)).
 - **A link is judged where it leads.** A `PATH` entry that links into one of them is left out,
@@ -4512,7 +4559,7 @@ file. A new spawn that looks a name up through
   The editor Ctrl-G opens, a hook's program, the credential authority, the inhibitor `/caffeinate`
   starts, a clipboard tool or `osascript`, the browser opener that `auth login chatgpt` and a
   click on a link start, the
-  `ssh-keygen`, `ssh` and `git` of `doctor --push-identity`, and the AWS CLI are started with
+  `ssh-keygen`, `ssh` and `git` of `doctor --push-identity`, the `git` of `/plugin add`, and the AWS CLI are started with
   bravebot's `PATH` reduced to the entries the lookup searches, in the order
   they were written, so a `#!/usr/bin/env` shebang in the editor, the hook, a clipboard tool, the
   browser opener or an `aws` that is a script, a launcher script, an `$EDITOR` of `env vim`, a `ProxyCommand` in the
@@ -4562,7 +4609,7 @@ file. A new spawn that looks a name up through
 
   | Variable | Names |
   |---|---|
-  | `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `GCONV_PATH`, `LOCPATH`, `MUSL_LOCPATH`, `DYLD_INSERT_LIBRARIES`, `PYTHONPATH`, `XDG_DATA_DIRS`, `PYENV_HOOK_PATH` | a list of directories (`Names::Directories`), split as `PATH` is |
+  | `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `GCONV_PATH`, `LOCPATH`, `MUSL_LOCPATH`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`, `PYTHONPATH`, `XDG_DATA_DIRS`, `PYENV_HOOK_PATH` | a list of directories (`Names::Directories`), split as `PATH` is |
   | `LD_ORIGIN_PATH`, `PYTHONUSERBASE`, `PYTHONPYCACHEPREFIX`, `PYTHONHOME`, `DEVELOPER_DIR`, `GIT_EXEC_PATH`, `ASDF_DATA_DIR`, `PYENV_ROOT` | one directory (`Names::Directory`) |
   | `BASH_ENV`, `ASDF_CONFIG_FILE` | one file (`Names::File`) |
   | `NODE_OPTIONS`, `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS`, `CLOUDSDK_PYTHON_ARGS`, `NLSPATH`, `SHELLOPTS`, `PS4`, `PYENV_VERSION`, `PYTHONPLATLIBDIR`, every `GIT_CONFIG_` name, every `BASH_FUNC_` name and every `ASDF_<tool>_VERSION` name | options or configuration (`Names::Options`), which can name code whatever they hold |
@@ -5120,6 +5167,30 @@ file. A new spawn that looks a name up through
   person's shell has no use here. The tests in `crates/cli/src/push_identity.rs` hand `started` an
   environment and read the one it gives the program, so they start no real `ssh`.
 
+  The `git` that `/plugin add` starts to fetch a plugin source ([PLUGIN-3](plugins.md#PLUGIN-3)) is
+  found with `Resolved::find_on`, started with `programs::start_against`, and given
+  `Inherits::Without` this agent's own credentials, `SearchPath::Reduced` and `CodeSelectors::Checked`
+  with the list `CODE_SELECTORS` in `crates/agent/src/plugin_git.rs`. A `git` found only in a directory
+  a stage may write reads as not installed, and the install is refused before the host is asked
+  about. The list is the generic table and:
+
+  | Variable | Names | Why it selects code |
+  |---|---|---|
+  | `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_PROXY_COMMAND` | options | the program `git` runs to reach a host |
+  | `GIT_ASKPASS` | options | the program `git` runs to ask for a credential |
+  | `GIT_EDITOR`, `GIT_PAGER`, `GIT_EXTERNAL_DIFF` | options | a program `git` runs to edit, page or compare |
+  | `SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE`, `SSH_SK_PROVIDER`, `SSH_SK_HELPER`, `SSH_PKCS11_HELPER` | options | as in the table above, for the `ssh` that `git` starts |
+  | `GIT_TEMPLATE_DIR` | a directory | a directory whose `hooks` are copied into a repository `git init` makes |
+  | `XDG_CONFIG_HOME` | a directory | the directory holding the `git/config` `git` reads, which can name a program |
+
+  `GIT_SSL_*` name a certificate or a key and no program, so they are left as set. The start removes
+  `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`,
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES` and `GIT_COMMON_DIR` by name, so each step works in the
+  directories it names itself, and sets `GIT_TERMINAL_PROMPT=0`. The tests in
+  `crates/agent/src/plugin_git.rs` and `crates/agent/src/plugin_git/safety_tests/environment_tests.rs` hand the
+  start an environment and read the one the program gets, and one of them starts a real `git` with a
+  marker-writing selector set to show the marker is not written.
+
   The `powershell` that the clipboard tool and `/caffeinate` start on Windows is started by
   `powershell::start` in `crates/tui/src/powershell.rs`, which both call. It gives a program whose
   name is `powershell` (with or without `.exe`, in any case) this list, a program whose name is
@@ -5157,7 +5228,7 @@ file. A new spawn that looks a name up through
   | File | Start | Names read | Basis |
   |---|---|---|---|
   | `crates/sandbox/src/macos.rs` | `xcode-select -p`, which `DEVELOPER_DIR` redirects | `DEVELOPER_DIR`, which is in the generic table and is also removed at the call | the binary's strings on macOS 26.6 hold no other upper-case variable name |
-  | `crates/schedule/src/schedule.rs` | `crontab -l` and `crontab -`, `launchctl load` and `unload` | `crontab` names `EDITOR` and `VISUAL` for `crontab -e`, which no start runs. `launchctl` names `DYLD_INSERT_LIBRARIES` (in the generic table), `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX`. `systemctl --user` is not an empty-list start. Its four starts (`--user daemon-reload` twice, `--user enable --now` and `--user disable --now`, each through `succeeds`, which sends stdin, stdout and stderr to `/dev/null`) are given `SYSTEMCTL_CODE_SELECTORS`: `DBUS_SESSION_BUS_ADDRESS` (`Names::Options`) and `SYSTEMD_UNIT_PATH` (`Names::Directories`). The bullet on `systemd-inhibit` and `systemctl --user` under "What a checked start does not cover" has the basis and the Linux run of `systemctl`. None of the four passes `edit`, `-H` or `-M` | the strings of the macOS binaries for `crontab` and `launchctl`. `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX` are not in the generic table and were not shown to change what `launchctl` loads |
+  | `crates/schedule/src/schedule.rs` | `crontab -l` and `crontab -`, `launchctl load` and `unload` | `crontab` names `EDITOR` and `VISUAL` for `crontab -e`, which no start runs. `launchctl` names `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH` and `DYLD_FRAMEWORK_PATH` (all in the generic table) and `DYLD_IMAGE_SUFFIX` (not in it). `systemctl --user` is not an empty-list start. Its four starts (`--user daemon-reload` twice, `--user enable --now` and `--user disable --now`, each through `succeeds`, which sends stdin, stdout and stderr to `/dev/null`) are given `SYSTEMCTL_CODE_SELECTORS`: `DBUS_SESSION_BUS_ADDRESS` (`Names::Options`) and `SYSTEMD_UNIT_PATH` (`Names::Directories`). The bullet on `systemd-inhibit` and `systemctl --user` under "What a checked start does not cover" has the basis and the Linux run of `systemctl`. None of the four passes `edit`, `-H` or `-M` | the strings of the macOS binaries for `crontab` and `launchctl`. `DYLD_IMAGE_SUFFIX` is not in the generic table and was not shown to change what `launchctl` loads |
   | `crates/sandbox/src/openshell.rs` | the `openshell` CLI, for each `sandbox` subcommand and for `sandbox exec` | none. The start passes `Inherits::Only(["HOME"])`, so no other variable reaches the CLI | the start's own argument. A changed `HOME` is not checked |
   | `crates/tui/src/powershell.rs` | `xclip` and `xsel`, the clipboard tools that are not `powershell`, `osascript`, `systemd-inhibit` or `wl-copy`, with `pbcopy`, `clip` and `/usr/bin/caffeinate`, which are started through the same function | `xclip` 0.13 and `xsel` 1.2.1 read no variable of their own that selects code, and the libraries they use read names that select a socket, a credential file or data only (`DISPLAY`, `XAUTHORITY`, `XENVIRONMENT`, `XLOCALEDIR`, `XCOMPOSEFILE`). On macOS `pbcopy` and `caffeinate` hold no upper-case variable name in their strings. `systemd-inhibit` and `wl-copy` have lists of their own and are not empty-list starts. `xclip` was run on Linux under Xvfb and `xsel` was not | `xclip.c`, `xclib.c` of xclip 0.13, `xsel.c` of xsel 1.2.1, libX11 1.8.7, libxcb 1.16 and libXau 1.0.11, read for `getenv`, `exec*`, `dlopen` and `popen`; the strings of the macOS binaries for the other two |
   | `crates/agent/src/usability.rs` | the stored-login `gh auth token` | `GH_TOKEN` and the three other token names, which the start removes. Other variables `gh` reads were not looked for in the program | the call's own removals |
@@ -5194,12 +5265,44 @@ program is in, as when bravebot runs as root, none is found under a row of that 
 A program a person keeps in a `bin` of the nearest checkout holding a directory a session opens,
 adds or moves to reads as not installed to every lookup above for the rest of the process, whether
 the session was opened at the checkout's root or below it, and every command, whether or not it
-opens a session, leaves out the one holding the directory it ran in. The record is made in the
-process that starts the program and lives for that process only. A program a stage wrote in an
-earlier `bravebot` process, in a directory that process was granted and this one was not, is not
-known to this one, so a lookup in a later process can find it. No record is kept between
-processes: one would hold a directory nobody can say is still granted, and a `bravebot` that never
-ran a stage has no use for it. Where the account's home directory holds a `.git`, such as a dotfiles
+opens a session, leaves out the one holding the directory it ran in.
+
+A later process also leaves out the directories a stage may write, because they are kept in a file.
+The record is `stage-writes` in the state directory (`$BRAVEBOT_HOME` or `~/.bravebot`), created
+with mode 0600 in a directory with mode 0700. Each line is a word, a tab and an absolute path, and
+the path is the bytes of the directory. On Unix a line carries those bytes as they are, so a
+directory whose path is not UTF-8 has a line, is read back as that directory, and is not confused
+with the directory whose name is its replacement-character rendering. Where a path is not bytes
+(Windows) a line can carry only text, so a directory whose path is not text is not written. The
+word `directory` marks a directory a stage may write whatever the account can do. The word
+`where-the-account-can` marks a row that came with the whole machine under bypass
+([SANDBOX-28](#SANDBOX-28)), which is judged where the account owns or can write what it holds, so
+`/usr/bin` stays searched. A line that is malformed, relative, a path that is not text on Windows
+or begins with another word is skipped. Both spellings of a directory, as given and as resolved,
+are recorded, so a directory
+reached through a link has a line for each. Nothing inside
+the system temporary directory is recorded, so no session scratch directory is, and the home
+directory and every directory above it are not appended, whichever spelling of the home or of the
+directory is given: a `HOME` that is a link to the real home and a session opened on the resolved
+home are both the home. Where the home cannot be resolved nothing is appended. The checkout above a
+session directory is
+left out in the process that opened the directory and is not appended with it. `main` and the three
+bridge binaries (`bravebot-rpc`, `bravebot-acp` and `bravebot-host`) read the record before any
+lookup. A session starts appending where it builds its workspace, and the bridge binaries and
+`bravebot acp` start before they serve. A command that opens no session records the directory it
+ran in in memory and appends nothing, so `doctor`, `mcp list` and `mcp get` leave the state
+directory as they found it. An incognito session reads the record and appends nothing. The record
+is read from the state directory only, never from a checkout or from a path a stage may write. It is
+read to 256 KiB or 2048 lines, and nothing is appended once either bound is reached or where the
+record is there and cannot be read, since its size is then not known. A line that could not be
+written is handed on again the next time its directory is recorded. A line is never
+removed, and a person clears the record by deleting the file. A line names a directory and no
+program, so a line a stage forged (a confined stage cannot write the state directory; an unconfined
+stage under sandbox mode `off` can write anything) can only leave a directory out of a search, and
+never makes a file found or trusted. A path in the record that is no longer granted costs only a
+program under it reading as not installed.
+
+Where the account's home directory holds a `.git`, such as a dotfiles
 repository, a session opened in a directory below the home that has no nearer `.git` leaves out the
 home as its checkout, so `~/bin` and every other directory under the home that is on `PATH` is not
 searched and a program kept in one reads as not installed. A session opened below a nearer checkout
@@ -5546,6 +5649,23 @@ shown by running the program, or not entirely:
   - **`aws` script**: the names, and the versions, are in the AWS table above. Run: Homebrew
     `awscli` 2.39.7 and pip `awscli` 1.46.3 (scripts), and the frozen 2.37.12 executable. Version
     2.39.7 was also read from source.
+  - **`DYLD_LIBRARY_PATH` and `DYLD_FRAMEWORK_PATH`, for the Homebrew `aws` script**. Run on macOS
+    26.6, arm64, with the Homebrew `awscli` 2.39.7 bottle (Python 3.15.2, ad hoc signed, no
+    hardened-runtime flag). `DYLD_LIBRARY_PATH` naming a scratch directory holding a
+    `libssl.4.dylib` that re-exports the real one ran its constructor and wrote the marker, and
+    the control without the variable wrote none. `DYLD_FRAMEWORK_PATH` naming a directory with a
+    planted `Python.framework/Versions/3.15/Python` also ran its constructor.
+    `DYLD_FALLBACK_LIBRARY_PATH` did not run the same planted `libssl.4.dylib`, because dyld finds
+    the library at its install name first and never falls back to the directory the name gives.
+    Both names are in the generic table (`Names::Directories`) so every checked start removes
+    one that names a directory a stage may write, the same way `LD_LIBRARY_PATH` does for the
+    Linux loader. The Developer ID release (`/usr/local/bin/bravebot`, team KL8N8XSYF4) is signed
+    with the hardened runtime and no `com.apple.security.cs.allow-dyld-environment-variables`
+    entitlement: a small program with that signature printed `getenv(DYLD_LIBRARY_PATH)=(null)`
+    and no `DYLD_` entry in `environ`, where the same program signed ad hoc kept both, because
+    dyld strips every `DYLD_` name from a hardened-runtime process before `main` runs. A
+    `bravebot` built from source (`target/debug/bravebot`, ad hoc, linker-signed) keeps and
+    forwards the names, which is the build this check protects.
   - **`gio open`**. Run on macOS with Homebrew `gio` 2.90.1: a planted library whose constructor
     writes a marker ran under `GIO_EXTRA_MODULES` and under `GIO_MODULE_DIR`, for `gio open
     x-probe://a` and for `gio open /etc/hosts`, and did not run without them. Source, GLib 2.86.0
@@ -6363,13 +6483,34 @@ shown by running the program, or not entirely:
   `GOPROXY`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*`,
   `PYTHONBREAKPOINT`, `npm_config_cache` and the others above) were observed by hand, and no test
   repeats them.
-- A file a stage wrote in an earlier process is not known to a later one. The record of directories a
-  stage may write lasts one process, and a command that opens no session records only the directory
-  it ran in and the checkout holding it. A program a stage planted in a directory that no later
-  command runs in, a virtualenv's `bin` among them, is found by that command if the directory is on
-  its `PATH`. Closing this takes a record that outlives the process, which holds a path a session
-  once wrote and nothing it removed. It is not built. [#3901](https://github.com/brave/bravebot/issues/3901)
-  tracks it.
+- The record of directories a stage may write, which outlives the process, has these costs:
+  - A directory recorded once is left out of every later search, so a program a person keeps in a
+    `bin` under an `--add-dir` directory (for example `--add-dir ~/.cargo`) reads as not installed
+    in later commands too.
+  - The record is removed only by deleting the file `stage-writes`.
+  - At 256 KiB or 2048 lines the record stops growing, so a directory a later session opens is left
+    out for that process only, and a program a stage plants there is found by a later process.
+  - An incognito session reads the record and does not extend it, so a directory granted in an
+    incognito session is not known later.
+  - The file is read as written, so a directory that is no longer granted costs only a program under
+    it reading as not installed.
+  - A session opened on the home directory or on a directory holding it appends nothing, so a later
+    process does not leave out a program a stage planted under the home directory.
+  - A directory whose path holds a line break, and on Windows a directory whose path is not text, is
+    left out in the process that records it and is not written to the record, because a line holds
+    one path and a line break ends it, and on Windows a line can carry only text. A later process
+    finds a program a stage planted there.
+  - A program an earlier process's stage planted in a directory that this session was not opened
+    on and that no stage of this plan could be given is judged by its name by the scope and
+    closed-network decisions ([SANDBOX-16](#SANDBOX-16), [SANDBOX-20](#SANDBOX-20)) and by the test
+    for `git` ([SANDBOX-18](#SANDBOX-18)): a file called `aws`, `curl` or `git` there earns what
+    the name earns. The same set decides whether a plain line is held ([RUN-5](tools/run.md#RUN-5),
+    which holds only on macOS) and whether a public key in the person's home may be offered to a
+    stage, so a program or key file in such a directory is read as one no stage of the plan could
+    have written. The search for programs bravebot starts itself and
+    [CMDLINE-8](tools/command-line.md#CMDLINE-8) leave the directory out, and these decisions
+    read the session's own directories, their checkouts, the directories it left and the rows a
+    stage may be given, and not the record.
 - A stage opened in a subdirectory of a checkout, `git` included, reads the enclosing `.git` and
   writes none of it. Under `workspace-write` and `read-only` the run base reads the whole machine
   except the credential locations, so the enclosing `.git/config`, its hooks and the values of
@@ -6380,12 +6521,22 @@ shown by running the program, or not entirely:
   person granted to write. A program the enclosing configuration names, such as `core.fsmonitor`,
   runs in the profile of the stage that started git, because a child inherits the confinement. In
   `strict` mode a stage reads only its listed rows, and the enclosing checkout is not among them.
-  Only the reads and the refused writes under the default mode have a test. It is not gated on a
-  platform, and its recorded runs are on Linux. Nothing runs `strict` mode, bypass or a program the
-  configuration names.
-- The lookups and the check of a `--settings` file on Windows have no test and no run.
-  The checkout is found with the same function there, and `programs::program_name`
-  reads a Windows executable name, but no test of this clause runs on Windows.
+  On macOS, tests run `git status` and `git hook run pre-commit` from a subdirectory, with a
+  `core.fsmonitor` program and a `pre-commit` hook set in the enclosing `.git`, each trying a write
+  into that `.git`, a write beside the session directory and a write into `~/.ssh`. Under the
+  default mode both programs run in the profile of the stage and all three writes are refused.
+  Under bypass the same programs write the enclosing `.git` and the directory beside the session and
+  are refused `~/.ssh`, so the write into the enclosing `.git` is a cost of bypass. Under `strict`
+  git cannot open the enclosing `.git` and runs neither program, and a `strict` stage opened on the
+  checkout runs both. The same cases are not run on Linux, where Landlock applies the rows, or on
+  Windows. The reads and the refused writes under the default mode have a test that is gated on
+  Unix. It runs on macOS and on Linux where confinement works, and returns without running where
+  it does not.
+- The lookups and the check of a `--settings` file on Windows are tested by the named tests that
+  CI's `Sandbox on Windows` and `Awkward names on Windows` jobs run, which nobody has run on a
+  Windows machine outside CI. Off Unix a directory is compared by name only and the account is taken
+  to own and be able to write every path, so the comparison by device and inode, a link into a
+  directory left out and the ownership check of a row under bypass have no Windows test.
   [#3901](https://github.com/brave/bravebot/issues/3901) tracks it.
 - A checkout marked by something other than a `.git`, such as `.hg` or `.jj`, is not found by
   `with_checkout`, and neither is a layout with no `.git` above the working directory. The directory
@@ -6576,6 +6727,13 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_cli::push_identity::the_start_is_given_bin_sh_for_shell_whatever_the_person_has`
 `verified-by: bravebot_cli::push_identity::a_developer_directory_a_stage_may_write_is_not_handed_to_the_start`
 `verified-by: bravebot_cli::push_identity::a_developer_directory_outside_every_directory_a_stage_may_write_still_reaches_the_start`
+`verified-by: bravebot_agent::plugin_git::the_variables_that_name_a_program_for_git_or_ssh_are_removed`
+`verified-by: bravebot_agent::plugin_git::the_generic_selectors_apply_and_a_certificate_variable_is_left_alone`
+`verified-by: bravebot_agent::plugin_git::this_agents_credentials_and_the_repository_variables_are_not_passed`
+`verified-by: bravebot_agent::plugin_git::a_git_found_only_where_a_stage_may_write_reads_as_not_installed`
+`verified-by: bravebot_agent::plugin_git::safety_tests::environment_tests::variables_that_select_code_set_in_the_persons_environment_do_not_reach_the_clone`
+`verified-by: bravebot_agent::plugin_git::safety_tests::environment_tests::a_template_directory_in_the_persons_environment_is_not_used_by_the_clone`
+`verified-by: bravebot_agent::plugin_git::safety_tests::environment_tests::an_ssh_a_stage_planted_first_on_the_persons_path_is_not_run_by_the_clone`
 `verified-by: bravebot_connector::lib::an_authority_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_agent::lsp::a_server_found_only_where_a_stage_may_write_is_not_installed`
 `verified-by: bravebot_tui::caffeinate::the_inhibitor_runs_the_installed_cat_and_never_one_a_stage_may_have_written`
@@ -6745,9 +6903,54 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_sandbox::checkout_in_search::a_command_that_recorded_its_directory_does_not_find_the_checkouts_bin`
 `verified-by: bravebot_sandbox::checkout_in_search::a_value_naming_a_file_in_the_bin_of_the_checkout_holding_a_recorded_directory_is_withheld`
 `verified-by: bravebot_sandbox::checkout_in_search::a_mercurial_or_jujutsu_checkout_is_not_recognised`
+`verified-by: bravebot_sandbox::programs::a_directory_is_handed_to_the_record_once_however_often_it_is_recorded`
+`verified-by: bravebot_sandbox::programs::the_checkout_holding_a_directory_is_left_out_but_not_handed_to_the_record`
+`verified-by: bravebot_sandbox::programs::a_row_that_came_with_the_machine_is_handed_on_in_its_own_class_and_judged_where_the_account_can_write`
+`verified-by: bravebot_sandbox::programs::nothing_in_the_system_temporary_directory_is_handed_on`
+`verified-by: bravebot_sandbox::programs::a_path_a_line_cannot_carry_is_not_handed_on`
+`verified-by: bravebot_sandbox::programs::a_directory_whose_path_is_not_text_is_handed_on_as_its_bytes`
+`verified-by: bravebot_sandbox::programs::a_record_with_a_path_that_is_not_text_loads_that_path_and_not_its_lookalike`
+`verified-by: bravebot_sandbox::programs::a_bad_line_that_is_not_text_does_not_stop_the_lines_after_it`
+`verified-by: bravebot_sandbox::programs::a_program_planted_in_a_directory_that_is_not_text_is_not_found_once_it_is_recorded`
+`verified-by: bravebot_sandbox::programs::a_record_adds_only_the_lines_that_can_be_read`
+`verified-by: bravebot_sandbox::programs::a_record_is_read_to_its_bounds`
+`verified-by: bravebot_sandbox::programs::a_recorded_directory_that_no_longer_exists_costs_the_lookup_nothing_else`
+`verified-by: bravebot_sandbox::programs::loading_a_record_leaves_its_directories_out_and_removes_none_this_process_recorded`
+`verified-by: bravebot_sandbox::programs::a_loaded_directory_is_not_handed_on_again_and_a_machine_row_is_not_one_a_stage_wrote`
+`verified-by: bravebot_sandbox::programs::a_directory_reached_through_a_link_is_handed_on_under_both_spellings`
+`verified-by: bravebot_sandbox::programs::a_line_the_record_could_not_write_is_handed_on_again`
+`verified-by: bravebot_sandbox::programs::a_loaded_machine_row_leaves_the_system_programs_searched`
+`verified-by: bravebot_sandbox::stage_record_across_processes::a_later_process_leaves_out_a_directory_an_earlier_process_recorded`
+`verified-by: bravebot_sandbox::stage_record_across_processes::a_later_process_reading_a_malformed_record_finds_what_it_would_have_found`
+`verified-by: bravebot_sandbox::stage_record_across_processes::a_later_process_with_no_record_file_finds_what_it_would_have_found`
+`verified-by: bravebot_agent::stage_record::a_missing_record_reads_as_empty`
+`verified-by: bravebot_agent::stage_record::lines_appended_are_read_back_in_order`
+`verified-by: bravebot_agent::stage_record::the_record_and_its_directory_are_private_to_the_account`
+`verified-by: bravebot_agent::stage_record::a_record_at_the_size_bound_takes_no_more_and_is_read_to_a_whole_line`
+`verified-by: bravebot_agent::stage_record::a_record_with_bytes_that_are_not_text_is_handed_on_as_it_is`
+`verified-by: bravebot_agent::stage_record::a_directory_that_is_or_holds_the_home_is_not_recorded`
+`verified-by: bravebot_agent::stage_record::a_directory_is_the_home_by_the_spelling_it_resolves_to`
+`verified-by: bravebot_agent::stage_record::a_record_at_the_byte_bound_alone_takes_no_more`
+`verified-by: bravebot_agent::stage_record::a_record_at_the_line_bound_alone_takes_no_more`
+`verified-by: bravebot_agent::stage_record::a_record_that_cannot_be_read_is_not_appended_to`
+`verified-by: bravebot_agent::stage_record_home_link::a_home_reached_through_a_link_is_not_appended_by_either_spelling`
+`verified-by: bravebot_ui_bridge::layering::every_binary_here_reads_the_record_of_stage_writes_before_it_appends_to_it`
+`verified-by: bravebot_config::settings::layered_withholds_a_named_file_inside_a_directory_an_earlier_process_recorded`
+`verified-by: bravebot_agent::stage_record::a_directory_a_session_records_is_appended_to_the_record_once_and_read_back`
+`verified-by: bravebot_agent::stage_record::a_row_that_came_with_the_machine_is_appended_in_its_own_class`
+`verified-by: bravebot_agent::stage_record::a_sessions_scratch_and_the_temporary_directory_are_not_appended_and_its_directory_is`
+`verified-by: bravebot_agent::stage_record::the_checkout_above_a_sessions_directory_is_not_appended`
+`verified-by: bravebot_agent::stage_record::a_directory_added_to_a_session_is_appended`
+`verified-by: bravebot_agent::stage_record::a_directory_that_is_or_holds_the_home_is_not_appended`
+`verified-by: bravebot_agent::stage_record_incognito::an_incognito_session_reads_the_record_and_adds_nothing_to_it`
+`verified-by: bravebot_cli::running::doctor_starts_no_aws_from_a_directory_an_earlier_process_granted`
 `verified-by: bravebot_agent::confine::the_checkout_above_the_session_directory_is_a_place_the_plan_could_have_written`
 `verified-by: bravebot_agent::confine::a_git_in_the_checkout_above_the_session_directory_does_not_write_a_git_directory`
 `verified-by: bravebot_agent::confine::a_stage_in_a_subdirectory_reads_the_enclosing_git_directory_and_writes_none_of_it`
+`verified-by: bravebot_agent::confine::a_program_the_enclosing_git_directory_names_runs_confined_and_writes_nothing_outside_the_session`
+`verified-by: bravebot_agent::confine::a_strict_stage_in_a_subdirectory_runs_no_program_the_enclosing_git_directory_names`
+`verified-by: bravebot_agent::confine::a_bypass_stage_in_a_subdirectory_lets_a_program_the_enclosing_git_directory_names_write_that_directory_and_no_credential`
+`verified-by: bravebot_sandbox::checkout_in_search::a_directory_value_naming_the_bin_of_the_checkout_holding_a_recorded_directory_is_withheld`
 `verified-by: bravebot_agent::confine::a_program_in_the_checkout_above_the_session_carries_no_scope_by_its_name`
 `verified-by: bravebot_agent::confine::a_program_in_the_checkout_above_the_session_does_not_keep_a_closed_network_by_its_name`
 `verified-by: bravebot_agent::proof_road_checkout::a_program_in_a_relative_path_entry_is_judged_under_the_directory_the_stage_runs_in`

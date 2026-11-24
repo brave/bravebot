@@ -361,6 +361,25 @@ mod tests {
         );
     }
 
+    /// A waiting task is still open, so it is not ticked, and the export gives its status word.
+    ///
+    /// Rejects an export that ticks every task that is not open work being done, which would show a
+    /// task that waits on someone as finished.
+    #[test]
+    fn a_waiting_task_is_exported_unticked_with_its_status_word() {
+        use bravebot_core::todo::{Row, Status};
+        let row = Row {
+            content: "rerun CI".to_string(),
+            as_the_planner_had_it: "rerun CI".to_string(),
+            marker: "",
+            status: Status::Waiting,
+        };
+        assert_eq!(
+            task_list(&[row]),
+            "**Tasks:**\n\n- [ ] rerun CI (waiting)\n\n"
+        );
+    }
+
     /// SESSION-17: a task is exported as the model wrote it, so a file name shown on the screen in
     /// place of a reference is not written.
     ///

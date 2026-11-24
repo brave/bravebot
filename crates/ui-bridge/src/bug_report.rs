@@ -99,6 +99,26 @@ mod tests {
         );
     }
 
+    /// With no log yet, the report still names the log directory, which the settings report
+    /// carries (DIAG-5).
+    #[test]
+    fn the_report_names_the_log_directory_when_there_is_no_log() {
+        let settings = serde_json::to_string_pretty(&json!({
+            "logs": { "directory": "/h/.bravebot/logs", "writing": true, "level": "info" }
+        }))
+        .unwrap();
+        let report = text(Some("0.19.0"), "0.19.0", "linux-x86_64", &settings, None);
+        assert!(
+            report.contains("\"directory\": \"/h/.bravebot/logs\""),
+            "{report}"
+        );
+        assert!(report.contains("\"level\": \"info\""), "{report}");
+        assert!(
+            report.ends_with("== newest diagnostic log, to attach separately ==\nnone\n"),
+            "{report}"
+        );
+    }
+
     /// An interface version that is not a version's shape is not written, so a line break or a
     /// sentence cannot reach the file through it.
     #[test]

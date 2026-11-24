@@ -26,6 +26,15 @@ export function apply(
         return { ...old, entries: [...old.entries, t.watchFired(message.data.number, message.data.path)] }
       case 'schedule.ran':
         return { ...old, entries: [...old.entries, t.scheduleAnswered(message.data)] }
+      // An answer to `/btw` or `/recap`: a row to read and an aside of the session, never a prompt
+      // and never part of what a turn sends (CMD-8, CMD-16).
+      case 'aside.done': {
+        const done = message.data
+        const asides = done.status === 'answered'
+          ? [...(old.asides ?? []), { question: done.question, answer: done.answer ?? null, kept: done.kept === true }]
+          : old.asides
+        return { ...old, asides, entries: [...old.entries, t.asideAnswered(done)] }
+      }
       case 'watch.ended':
         return { ...old, entries: [...old.entries, t.narrated(`Watch ${message.data.number} ended: ${message.data.reason}${message.data.message ? `. ${message.data.message}` : ''}`)] }
       case 'turn.started':
@@ -92,7 +101,7 @@ export function apply(
       case 'server.request':
         return { ...old, entries: [...old.entries, t.askedServer(message.data)] }
       case 'manifest.request':
-        return { ...old, entries: [...old.entries, t.askedManifest(message.data, t.narrowing(old.rules))] }
+        return { ...old, entries: [...t.withoutNarratedPlan(old.entries, message.data.steps), t.askedManifest(message.data, t.narrowing(old.rules))] }
       case 'exposure.request':
         return { ...old, entries: [...old.entries, t.askedExposure(message.data)] }
       case 'mcp-server.request':

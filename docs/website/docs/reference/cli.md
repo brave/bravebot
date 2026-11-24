@@ -322,7 +322,7 @@ bravebot --effort high "why does this test fail only on the second run?"
 ```
 
 Names how hard the model is asked to think for one run, in the words
-[`/effort`](commands.md#effort-level) takes (`low`, `medium`, `high`, `xhigh` and `max`, in any
+[`/effort`](commands.md#effort-session-level) takes (`low`, `medium`, `high`, `xhigh` and `max`, in any
 case), and outranks every other way one is named. Where no flag names one, a run asks for the level a
 session opening in the same directory would: an [`effort`](../customize/configuration.md#effort) key
 in the checkout's settings or the file `--settings` names, then the level `/effort` recorded, then the
@@ -967,8 +967,10 @@ local files belong to whoever made the checkout. It reports:
 - for each AWS account, whether it is signed in, and `bravebot auth login bedrock` where signing in
   is what is missing;
 - which settings files are in force, and which of them won a name more than one set;
-- any top-level key in a settings file that this build does not read, by name and file, never its
-  value: the file still applies and the report still passes;
+- any key in a settings file that this build does not read, at the top level or inside `permissions`,
+  `sandbox.filesystem` or `run`, by name and file, never its value: the file still applies and the
+  report still passes. A key a file wrote twice and a managed `retrieval` value that pins nothing
+  are named the same way. A session names all of these as it opens;
 - any project or local settings file whose `provider` block or `model` key was ignored, since those two
   are read from your own file and the one `--settings` names;
 - whether a gateway key is stored by `bravebot auth login gateway`, without printing it;
@@ -1116,7 +1118,10 @@ be read. `auth status import` is refused, since an import keeps no sign-in. `aut
 asks about each gateway a provider block names and about a service whose key is stored with no block
 naming it, and `auth status gateway openai` asks about that id whether or not a block names it. A
 key stored for `openai`, `openrouter` or `anthropic` with no block naming it is reported as not
-signed in, since no session sends it, and `auth login gateway <id>` records the block.
+signed in, since no session sends it, and `auth login gateway <id>` records the block. A block that
+names an `options.keyFile` that gives no key is reported as not signed in, with the file named only
+as the setting, and storing a key with `auth login gateway <id>` makes the stored key win over the
+file. The desktop accounts list says the same.
 
 ## `import-leo-creds`
 
@@ -1174,6 +1179,7 @@ servers and tools are asked about again. `add`, `approve`, `enable`, `disable`, 
 bravebot permissions check Bash git push origin main
 bravebot permissions check Read src/secret.env
 bravebot permissions check WebFetch https://api.example.com/v1
+bravebot permissions check WebSearch
 bravebot permissions check Mcp weather:get_forecast
 ```
 
@@ -1181,7 +1187,8 @@ Loads the [`permissions` rules](../customize/configuration.md#permissions) as a 
 this directory would and says which of deny, ask or allow decides the call, which rule, and which
 settings file wrote it. The first of deny, then ask, then allow that matches decides, however
 specific a later rule is. `Read` and `Edit` take one path, `Bash` a program and its arguments as
-separate words, `WebFetch` a host or a URL (only the host is matched) and `Mcp` a `server:tool`.
+separate words, `WebFetch` a host or a URL (only the host is matched), `WebSearch` nothing more, since
+a rule for it takes no specifier, and `Mcp` a `server:tool`.
 
 ```text
 decision: ask
@@ -1519,7 +1526,7 @@ are in [Reading the transcript](../using/transcript.md#the-scroller).
 | `/cost` | Show what each turn of this session has spent |
 | `/model [session]` | Choose which model to think with, for every session or, with `session`, for this one only |
 | `/theme [name]` | Choose which theme paints the interface |
-| `/effort [low \| medium \| high \| xhigh \| max]` | Choose how hard to think before answering |
+| `/effort [session \| low \| medium \| high \| xhigh \| max]` | Choose how hard to think before answering |
 | `/config` | Choose how the input box edits text |
 | `/language [tag \| auto]` | Choose the interface language for the next start, or drop the choice |
 | `/add-dir <path> \| close <path>` | Open another directory and trust it for this session, or close one |

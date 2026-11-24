@@ -3,6 +3,7 @@ import { SettingsGroup } from './SettingsGroup'
 import { useDelayedFlag } from '../hooks'
 import type { AgentSettings as Report, Hook, HooksDocument, Limits, Refusal } from '../../shared/agent-settings'
 import { composeHooks, unusableTimeout } from '../../shared/agent-settings'
+import { isLogLevel, type LogLevel } from '../../shared/protocol'
 import { Alert, Button, Dropdown, Icon, Input, ProgressRing } from '../nala'
 import { Skeleton } from './Skeleton'
 const fieldText = (event: { value?: unknown; target?: EventTarget | null }): string | null => {
@@ -18,6 +19,32 @@ const refusalText = (refusal: Refusal, on: string, off: string): string => {
 }
 const grouped = new Intl.NumberFormat('en-US')
 const runLimit = (value: number | null, unit: string): string => value === null ? 'Built-in' : `${grouped.format(value)} ${unit}`
+const spendLimit = ({ limit, path }: NonNullable<Limits['session']>): string =>
+  limit === null ? 'None' : `${grouped.format(limit.count)} ${limit.unit}${path ? ` (set in ${path})` : ''}`
+
+/**
+ * The diagnostic log level of the running agent (DIAG-11). The level shown is the one the agent
+ * reported, and choosing another only asks for it; what the agent then reports is shown next.
+ * It is the value of the Diagnostics table's Log detail row, with its note under it.
+ */
+export function LogDetail({ level, busy, onChoose }: {
+  level: LogLevel
+  busy: boolean
+  onChoose: (level: LogLevel) => void
+}): React.JSX.Element {
+  return <>
+    <Dropdown value={level} size="small" disabled={busy} data-test="settings-log-level"
+      onChange={(detail) => { const value = detail.value; if (isLogLevel(value) && value !== level) onChoose(value) }}>
+      {/* Leo drops `aria-*` on the element, so the field is named through its label slot,
+          hidden because the row's label beside it already says it. */}
+      <span slot="label" className="visually-hidden">Log detail</span>
+      <leo-option value="error">Errors only</leo-option>
+      <leo-option value="info">Errors and steps (info)</leo-option>
+      <leo-option value="debug">Everything (debug)</leo-option>
+    </Dropdown>
+    <p className="settings-log-note" data-test="settings-log-level-note">Applies until you quit the app. To report a problem, choose a higher level, reproduce it, then choose Report a Bug… from the Help menu. Higher levels record the hosts the agent contacts.</p>
+  </>
+}
 
 function LimitsInForce({ limits }: { limits: Limits }): React.JSX.Element {
   return <>
@@ -28,6 +55,7 @@ function LimitsInForce({ limits }: { limits: Limits }): React.JSX.Element {
       <dt>Command time limit</dt><dd>{runLimit(limits.run.defaultSeconds, 'seconds')}</dd>
       <dt>Longest a call may ask for</dt><dd>{runLimit(limits.run.maxSeconds, 'seconds')}</dd>
       <dt>Command output shown to the model</dt><dd>{runLimit(limits.run.maxOutput, 'bytes')}</dd>
+      {limits.session && <><dt>Session spend limit</dt><dd data-test="settings-session-limit">{spendLimit(limits.session)}</dd></>}
     </dl>
     {limits.unreadable.map(item => <Alert key={`${item.name}:${item.path}`} type="warning" role="alert">
       <code>permissions.{item.name}</code> in <span className="settings-path">{item.path}</span> is not true or false, so it has no effect.
@@ -110,6 +138,13 @@ export function AgentSettings({ session, onChanged, onDirty }: {
       if (next) { setReport(next); onChanged(); setStatus(clear ? 'Run override cleared.' : 'Run override selected. Future turns and model discovery use it.'); await load() }
     } catch (error) { setProblem(String(error)) } finally { setBusy(false) }
   }
+  const chooseLevel = async (level: LogLevel) => {
+    setBusy(true); setProblem(''); setStatus('')
+    try { await window.bravebot.setLogLevel(level) }
+    catch (error) { setProblem(String(error)); setBusy(false); return }
+    // Read back rather than assumed: the section shows the level the agent reports it is in.
+    await load()
+  }
   // A file the agent passed over in part is the person's to edit: composing it back from the
   // entries it did read would drop the rest.
   const editable = !!document && document.entire
@@ -126,6 +161,15 @@ export function AgentSettings({ session, onChanged, onDirty }: {
           <p>For a custom certificate authority, set <code>SSL_CERT_FILE</code> or <code>SSL_CERT_DIR</code> before opening the app. These replace bundled roots. Proxy and certificate changes require restarting the app.</p>
         </section>
         <section className="settings-block"><h3>Diagnostics</h3>
+          {/* The window only shows the string the bridge sent; nothing here reads the folder. */}
+          {report.logs && <dl><dt>Diagnostic log</dt><dd className="settings-log">{report.logs.directory === null
+            ? <p data-test="settings-log-none">No state directory is set, so no log is kept.</p>
+            : !report.logs.writing
+              ? <p data-test="settings-log-none">This session keeps nothing, so no log is written.</p>
+              : <><p className="settings-path" data-test="settings-log-directory">{report.logs.directory}</p><p className="settings-log-note">{report.logs.level === 'info' || report.logs.level === 'debug'
+                ? 'Logs are written here as the agent works.'
+                : 'Logs are written here when something fails. It may be empty until then.'}</p></>}</dd>
+            {report.logs.writing && <><dt>Log detail</dt><dd className="settings-log"><LogDetail level={isLogLevel(report.logs.level) ? report.logs.level : 'error'} busy={busy} onChoose={(level) => void chooseLevel(level)} /></dd></>}</dl>}
           <p>Read the agent’s configuration again, after changing a file or the environment.</p>
           <div className="settings-actions"><Button size="small" kind="outline" onClick={() => void load()} isDisabled={busy}><Icon name="refresh" slot="icon-before" />Refresh diagnostics</Button></div>
         </section>

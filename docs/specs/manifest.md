@@ -158,9 +158,13 @@ plan is asked of does not add one ([BACKEND-15](backends.md#BACKEND-15)).
 `verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_slot_that_no_planner_reads`
 `verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_unread_slot_and_the_act_sends_the_released_text`
 `verified-by: bravebot_agent::manifest::injected_text_in_a_file_cannot_add_a_step`
+`verified-by: bravebot_agent::manifest::the_driver_runs_every_step_of_the_plan_once_and_in_plan_order`
 `verified-by: bravebot_agent::manifest::the_planner_is_shown_capabilities_and_no_tool_names`
 `verified-by: bravebot_agent::manifest::the_planning_requests_through_a_gateway_carry_no_tool_list_the_models_options_state`
 `verified-by: bravebot_agent::manifest::the_registry_and_the_kernel_schema_describe_the_same_tools`
+`verified-by: bravebot_agent::manifest::the_registry_offers_exactly_the_capabilities_the_clause_allows`
+`verified-by: bravebot_agent::manifest::a_step_whose_tool_the_registry_does_not_hold_is_refused_before_it_starts`
+`verified-by: bravebot_core::manifest::the_schema_names_exactly_the_tools_the_clause_allows`
 `verified-by: bravebot_core::manifest::no_action_in_the_schema_fills_a_slot`
 `verified-by: bravebot_agent::manifest_server_calls::a_call_the_schema_or_the_list_cannot_hold_runs_nothing`
 
@@ -200,6 +204,14 @@ the text following the separator byte for byte, as the search tool does
 `verified-by: bravebot_agent::manifest::a_write_lands_where_the_plan_said_and_carries_what_it_never_read`
 `verified-by: bravebot_agent::manifest::a_listing_with_no_pattern_lists_the_tree`
 `verified-by: bravebot_agent::manifest::a_search_step_prints_the_line_unchanged_after_path_and_line_number`
+`verified-by: bravebot_agent::manifest::a_planned_write_goes_to_the_path_the_lock_holds_and_not_the_one_the_step_names`
+`verified-by: bravebot_agent::manifest::a_read_step_reads_the_path_the_lock_holds`
+`verified-by: bravebot_agent::manifest::a_listing_step_lists_the_directory_and_pattern_the_lock_holds`
+`verified-by: bravebot_agent::manifest::a_search_step_searches_the_pattern_directory_and_include_the_lock_holds`
+`verified-by: bravebot_agent::manifest::a_connector_fetch_and_act_send_what_the_lock_holds_and_not_what_the_step_names`
+`verified-by: bravebot_agent::manifest::a_server_call_and_read_name_the_alias_and_tool_the_lock_holds`
+`verified-by: bravebot_agent::manifest::an_apply_step_names_the_server_the_lock_holds`
+`verified-by: bravebot_agent::manifest::an_apply_step_reads_the_tools_the_lock_holds_and_not_the_ones_it_names`
 `verified-by: bravebot_core::manifest::a_connector_fetch_locks_every_routing_field_and_an_omitted_one_as_no_value`
 `verified-by: bravebot_agent::connectors::a_default_never_replaces_a_value_the_plan_gave_in_another_shape`
 `verified-by: bravebot_core::manifest::a_connector_plan_locks_every_routing_field_and_not_its_target_slot`
@@ -254,7 +266,9 @@ named on the command line, or a command typed in a session, which starts one run
 session back afterwards (MANIFEST-11). What a session may not do is hold the mode. A session is
 several turns over one conversation and each of them decides what to do next after the last one
 read something, so a session that was in this mode would be a contradiction; one run started from
-one is not.
+one is not. The desktop composer starts a run the same way, from a typed `/manifest <task>` line
+that it sends as `manifest.run` and never as a prompt
+([CMD-8](commands.md#CMD-8)).
 
 An unknown mode name is refused rather than guessed, because guessing wrong here would silently run
 the mode the user did not ask for.
@@ -269,6 +283,7 @@ observe before it plans. Name a workspace file instead.
 `verified-by: bravebot_cli::main::a_leading_mode_flag_is_a_task_not_an_unknown_option`
 `verified-by: bravebot_agent::manifest::piped_input_is_refused_rather_than_dropped`
 `verified-by: bravebot_tui::app::a_session_can_ask_for_a_manifest_run`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/manifest-command.test.mjs asserts that a typed /manifest <task> starts one manifest.run with the session, task and model and no turn.send, and that manifest.started then manifest.done leave the chat not running with the run's reply after its task row; make check-ui runs it)`
 `verified-by: bravebot_tui::app::a_manifest_run_needs_a_task_to_plan`
 
 <a id="MANIFEST-10"></a>

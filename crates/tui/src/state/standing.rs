@@ -42,11 +42,12 @@ impl Session {
             self.note(t!(loop_full, count = crate::loops::MAX_LIVE));
             return;
         }
-        let number = self.looping.start(crate::loops::Running::armed(
-            prompt.to_string(),
-            wakeup,
-            Instant::now(),
-        ));
+        // The line the turn that asked was begun from, so every tick reads the names the person
+        // typed there and none from words a paste stood for (NAME-12).
+        let number = self.looping.start(
+            crate::loops::Running::armed(prompt.to_string(), wakeup, Instant::now())
+                .names_as(self.turn_names.clone()),
+        );
         self.note(t!(loop_armed_by_the_turn, number = number, after = after));
     }
 
@@ -60,7 +61,12 @@ impl Session {
     ///
     /// The delay counts from `typed`, when the person typed the line. A line typed during a turn is
     /// armed when that turn ends, and a delay that has passed by then is due at once.
-    pub fn start_after(&mut self, request: crate::loops::Request, typed: Instant) {
+    pub fn start_after(
+        &mut self,
+        request: crate::loops::Request,
+        typed: Instant,
+        names: NamesFrom,
+    ) {
         if self.looping.is_full() {
             self.note(t!(loop_full, count = crate::loops::MAX_LIVE));
             return;
@@ -82,7 +88,7 @@ impl Session {
         // Numbered before anything is said about it, so what is said is the number it has.
         let number = self
             .looping
-            .start(crate::loops::Running::after(request, typed));
+            .start(crate::loops::Running::after(request, typed).names_as(names));
         if let crate::loops::Pacing::Once(delay) = pacing {
             // The time left, since a line typed during a turn has already spent part of its delay
             // (LOOP-18). The whole delay stands in only where the line cannot be found, which it
@@ -227,28 +233,84 @@ impl Session {
         under: impl Into<std::path::PathBuf>,
         first: watch::Looked,
     ) {
+        let armed_by = self.turns;
+        self.arm_watch_as(
+            path,
+            under.into(),
+            first,
+            armed_by,
+            Refusals {
+                under_a_loop: t!(watch_not_armed_under_a_loop),
+                under_a_goal: t!(watch_not_armed_under_a_goal),
+                unreadable: t!(watch_not_armed_unreadable, path = path),
+            },
+        );
+    }
+
+    /// The number of the live watch on the file `path` names in `workspace`, under any spelling
+    /// the workspace resolves to it, as the desktop's `watches.add` asks it too.
+    pub fn watch_on(
+        &self,
+        workspace: &bravebot_agent::workspace::Workspace,
+        path: &str,
+    ) -> Option<usize> {
+        self.watches.watching(workspace, path)
+    }
+
+    /// Arm a standing watch on a path the person typed after `/watch`.
+    ///
+    /// The caller took the first look through the same gate every later look goes through, so a
+    /// path out of reach arrives here as [`watch::Looked::OutOfReach`] and is refused. Refused
+    /// under a loop or a goal, because those are the person's own and a watch they arm does not
+    /// end them without saying so; the note says how to clear the one in the way. Whether the path
+    /// is already watched is asked first, of [`Session::watch_on`], by the caller that holds the
+    /// workspace.
+    pub fn arm_watch_by_person(
+        &mut self,
+        path: &str,
+        under: impl Into<std::path::PathBuf>,
+        first: watch::Looked,
+    ) {
+        self.arm_watch_as(
+            path,
+            under.into(),
+            first,
+            watch::BY_THE_PERSON,
+            Refusals {
+                under_a_loop: t!(watch_refused_under_a_loop),
+                under_a_goal: t!(watch_refused_under_a_goal),
+                unreadable: t!(watch_refused_unreadable, path = path),
+            },
+        );
+    }
+
+    /// What [`Session::arm_watch`] and [`Session::arm_watch_by_person`] share: the session's own
+    /// checks, then the registry's, with the sentence each refusal is noted with.
+    fn arm_watch_as(
+        &mut self,
+        path: &str,
+        under: std::path::PathBuf,
+        first: watch::Looked,
+        armed_by: usize,
+        refusals: Refusals,
+    ) {
         if !self.looping.is_empty() {
-            self.note(t!(watch_not_armed_under_a_loop));
+            self.note(refusals.under_a_loop);
             return;
         }
         if self.goal.is_some() {
-            self.note(t!(watch_not_armed_under_a_goal));
+            self.note(refusals.under_a_goal);
             return;
         }
-        match self.watches.arm(
-            path.to_string(),
-            under.into(),
-            self.turns,
-            first,
-            Instant::now(),
-        ) {
+        match self
+            .watches
+            .arm(path.to_string(), under, armed_by, first, Instant::now())
+        {
             Ok(number) => self.note(t!(watch_armed, number = number, path = path)),
             Err(watch::Refused::Full) => {
                 self.note(t!(watch_not_armed_full, count = watch::MAX_LIVE))
             }
-            Err(watch::Refused::NothingToLookAt) => {
-                self.note(t!(watch_not_armed_unreadable, path = path))
-            }
+            Err(watch::Refused::NothingToLookAt) => self.note(refusals.unreadable),
         }
     }
 
@@ -296,7 +358,13 @@ impl Session {
             }
         }
         let prompt = watch::fired(number, &path, change);
-        Some(self.begin_turn(prompt, (Vec::new(), Vec::new()), Vec::new()))
+        // The driver's sentence quoting the path a watch looks at, so the turn names nothing.
+        Some(self.begin_turn(
+            prompt,
+            (Vec::new(), Vec::new()),
+            Vec::new(),
+            NamesFrom::nothing(),
+        ))
     }
 
     /// Whether the turn running now is a watch's fire.
@@ -394,13 +462,23 @@ impl Session {
             .live()
             .iter()
             .map(|watch| {
-                t!(
-                    watch_listed,
-                    number = watch.number(),
-                    path = watch.path(),
-                    turn = watch.armed_by(),
-                    left = crate::loops::spell(watch.left(now))
-                )
+                let left = crate::loops::spell(watch.left(now));
+                if watch.armed_by_the_person() {
+                    t!(
+                        watch_listed_by_you,
+                        number = watch.number(),
+                        path = watch.path(),
+                        left = left
+                    )
+                } else {
+                    t!(
+                        watch_listed,
+                        number = watch.number(),
+                        path = watch.path(),
+                        turn = watch.armed_by(),
+                        left = left
+                    )
+                }
             })
             .collect();
         if lines.is_empty() {
@@ -582,6 +660,9 @@ impl Session {
     pub(super) fn dispatch_tick_of(&mut self, number: usize) -> Option<String> {
         let running = self.looping.get_mut(number)?;
         let (prompt, pasted, attached) = running.dispatching();
+        // Kept from the loop and not from the box, which this tick may come long after the line was
+        // typed on. A tick reads the names of the line the person typed (NAME-12).
+        let names = running.names().clone();
         let count = running.ticks();
         let quiet = running.quiet();
         // The loop's number is always said, the one `/loop stop` takes, so a tick count is never
@@ -598,6 +679,13 @@ impl Session {
         } else {
             self.note(t!(loop_tick, number = number, count = count));
         }
-        Some(self.begin_turn(prompt, (attached, pasted), Vec::new()))
+        Some(self.begin_turn(prompt, (attached, pasted), Vec::new(), names))
     }
+}
+
+/// The sentences a refused arming is noted with, which differ by who asked for the watch.
+struct Refusals {
+    under_a_loop: &'static str,
+    under_a_goal: &'static str,
+    unreadable: String,
 }

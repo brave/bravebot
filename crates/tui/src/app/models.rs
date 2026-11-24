@@ -591,7 +591,7 @@ pub(super) const BUDGET_WAIT: std::time::Duration = bravebot_aichat::models::LIS
 
 /// Take what a roster says about the model in force: its window, what it takes, and whether it
 /// reads an effort level.
-fn adopt_listing(
+pub(super) fn adopt_listing(
     session: &mut Session,
     config: &mut Config,
     models: &[bravebot_aichat::models::Model],
@@ -671,9 +671,18 @@ pub(super) fn note_a_refused_level(session: &mut Session, refused: bool) {
 /// Asked of the backend crate's record, which holds statuses and counts and no content.
 pub(super) fn note_breakpoints_given_up(session: &mut Session, config: &Config) {
     let in_force = model_in_force(session.model(), config).to_string();
-    session.note_breakpoints_given_up(bravebot_agent::backend::breakpoints_given_up(
-        config, &in_force,
-    ));
+    session.note_breakpoints_given_up(breakpoints_given_up_for(config, &in_force));
+}
+
+/// Whether the backend crate's record says `model` refuses the cache breakpoints. The one question
+/// every place that notes the answer asks, so a unit test can state which models the record holds
+/// without a Bedrock request that was refused.
+fn breakpoints_given_up_for(config: &Config, model: &str) -> bool {
+    #[cfg(test)]
+    if let Some(answer) = scripted_breakpoints::answer(model) {
+        return answer;
+    }
+    bravebot_agent::backend::breakpoints_given_up(config, model)
 }
 
 /// Take on what the listing says about the model in force, where there is no session to hold it.
@@ -929,10 +938,7 @@ pub(super) fn model_picked(
         None => t!(session_using_model, model = &chosen.display_name),
     });
     session.note_model_reads_effort(chosen.reads_effort);
-    session.note_breakpoints_given_up(bravebot_agent::backend::breakpoints_given_up(
-        config,
-        &chosen.key,
-    ));
+    session.note_breakpoints_given_up(breakpoints_given_up_for(config, &chosen.key));
     session.note_model_is_account(config.chatgpt_model(&chosen.key).is_some());
     if !chosen.reads_effort && session.effort().is_some() {
         session.note(t!(session_effort_not_read));
@@ -945,6 +951,44 @@ pub(super) fn model_picked(
         crate::model_prompt::Scope::ThisSession => {
             session.choose_model_for_this_session(chosen.key)
         }
+    }
+}
+
+/// The models a unit test says the backend crate's record holds as refusing the cache breakpoints,
+/// on this thread, in place of that record.
+#[cfg(test)]
+pub(super) mod scripted_breakpoints {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static GIVEN_UP: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+    }
+
+    /// The script, until it is dropped.
+    pub(in crate::app) struct Held;
+
+    impl Drop for Held {
+        fn drop(&mut self) {
+            GIVEN_UP.with(|given_up| *given_up.borrow_mut() = None);
+        }
+    }
+
+    /// Make `models`, and no other, the ones recorded as refusing the breakpoints.
+    pub(in crate::app) fn refuse(models: &[&str]) -> Held {
+        GIVEN_UP.with(|given_up| {
+            *given_up.borrow_mut() = Some(models.iter().map(ToString::to_string).collect());
+        });
+        Held
+    }
+
+    /// What the script says of `model`, or nothing where no script is held.
+    pub(super) fn answer(model: &str) -> Option<bool> {
+        GIVEN_UP.with(|given_up| {
+            given_up
+                .borrow()
+                .as_ref()
+                .map(|models| models.iter().any(|named| named == model))
+        })
     }
 }
 

@@ -808,6 +808,22 @@ fn a_cancelled_task_crosses_as_cancelled() {
     );
 }
 
+/// A task that waits crosses as `waiting`. Sent as `pending` or `active` the window would draw it
+/// as work not started or work under way.
+#[test]
+fn a_waiting_task_crosses_as_waiting() {
+    assert_eq!(wire::status(Status::Waiting), "waiting");
+    assert_eq!(
+        wire::row(&Row {
+            content: "rerun CI".into(),
+            as_the_planner_had_it: "rerun CI".into(),
+            marker: "◇",
+            status: Status::Waiting,
+        }),
+        json!({ "content": "rerun CI", "status": "waiting" })
+    );
+}
+
 /// CHECKOUT-14. A front-end is told the working directory's file was written since the checkout the
 /// body comes from was made, so the desktop's question says what the terminal's does.
 #[test]
@@ -2305,6 +2321,7 @@ fn a_server_question_carries_the_declaration_and_no_stored_value() {
         declaration: &declaration,
         program: Some(&program),
         changed: true,
+        plugin: None,
     };
 
     let sent = wire::mcp_server_request(3, &question);
@@ -2391,6 +2408,7 @@ fn a_standing_mcp_answer_takes_an_approval_and_a_literal_true() {
 /// A tool list crosses as the client drew it, a call with each argument as JSON, and a move with
 /// the authority the agent took out of the destination (SERVERS-7, SERVERS-8, SERVERS-11).
 #[test]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
 fn the_mcp_questions_carry_what_a_card_draws() {
     use bravebot_agent::confirm::{
         ListedTool, ListedToolArgument, McpCallRequest, MoveRequest, ToolListRequest,
@@ -2455,6 +2473,29 @@ fn the_mcp_questions_carry_what_a_card_draws() {
     assert_eq!(call["mayStand"], false);
     assert_eq!(call["askedForPrivateArguments"], false);
     assert_eq!(call["also"], json!([]));
+    assert_eq!(
+        call["description"],
+        Value::Null,
+        "a call with no description sends none"
+    );
+
+    let described = wire::mcp_call_request(
+        5,
+        &McpCallRequest {
+            alias: "weather".into(),
+            tool: "get_forecast".into(),
+            arguments: vec![("city".into(), "\"Paris\"".into())],
+            description: Some("the forecast for a city".into()),
+            may_stand: false,
+            asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
+        },
+    );
+    assert_eq!(
+        described["description"], "the forecast for a city",
+        "the card draws the description of the tool from the vouched list"
+    );
 
     let batched = wire::mcp_call_request(
         4,
@@ -2634,6 +2675,45 @@ fn a_host_prompt_carries_the_hosts_and_nothing_else() {
         value,
         json!({"request": 4, "hosts": ["registry.example.com", "10.0.0.1"]})
     );
+}
+
+/// SERVERS-7: the `arguments` array of `mcp-call.request` lists the call's arguments one to an
+/// entry in the order the request holds them, and so does each later call of `also`. The request
+/// carries `zeta`, `alpha`, `mid`, which is neither the sorted nor the reverse order.
+///
+/// A wrong implementation builds the array from a sorted map or sorts it, so a desktop card draws
+/// the rows in another order than the terminal does.
+#[test]
+fn a_calls_arguments_cross_the_wire_in_the_order_the_request_holds_them() {
+    use bravebot_agent::confirm::McpCallRequest;
+    let held = || {
+        vec![
+            ("zeta".to_string(), "1".to_string()),
+            ("alpha".to_string(), "2".to_string()),
+            ("mid".to_string(), "3".to_string()),
+        ]
+    };
+    let call = wire::mcp_call_request(
+        1,
+        &McpCallRequest {
+            alias: "weather".into(),
+            tool: "get_forecast".into(),
+            arguments: held(),
+            description: None,
+            may_stand: false,
+            asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: vec![held()],
+        },
+    );
+
+    let order = json!([
+        {"name": "zeta", "value": "1"},
+        {"name": "alpha", "value": "2"},
+        {"name": "mid", "value": "3"},
+    ]);
+    assert_eq!(call["arguments"], order);
+    assert_eq!(call["also"], json!([order]));
 }
 
 /// AUTO-1, MODE-11: a window can ask for auto, and for no mode past it. The regression it rejects

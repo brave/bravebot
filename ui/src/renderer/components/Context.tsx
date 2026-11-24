@@ -1,15 +1,18 @@
-import { memo, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { FileTree } from './FileTree'
 import { type PanelName } from '../../shared/state'
+import { HIDEABLE, toggleHidden } from '../../shared/panels'
 import { isConfined, type Activity, type SessionNote, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import type { Entry } from '../transcript'
 import { Alert, Button, Collapse, Icon, Label, ProgressRing, TabItem, Tabs, type IconName } from '../nala'
 import { FileGlyph } from './FileGlyph'
 import { IconButton } from './IconButton'
+import { IconMenu } from './IconMenu'
 import { LabelChip } from './LabelChip'
 import { middleTruncate } from '../truncate'
 import { folderName } from '../folders'
 import { t } from '../i18n'
+import type { AsideRow } from '../../shared/aside'
 
 interface Live {
   /** The session's handle. The file tree names it rather than naming a folder. */
@@ -18,6 +21,8 @@ interface Live {
   entries: Entry[]
   todos: TodoRow[]
   notes?: SessionNote[]
+  /** The `/btw` and `/recap` answers of this session, oldest first. */
+  asides?: AsideRow[]
   quarantine: Shown[]
   phase: Waiting | null
   tokens: number
@@ -40,6 +45,18 @@ interface Live {
  * all talking about the same five things.
  */
 
+/** Every panel on: one shared value, so the memoised column is not redrawn for a fresh `[]`. */
+const NONE_HIDDEN: readonly PanelName[] = []
+
+/** The leading icon of each row in the Choose sections menu: the one the panel's empty line uses. */
+const PANEL_ICONS: Record<(typeof HIDEABLE)[number], IconName> = {
+  plan: 'list-checks',
+  read: 'folder',
+  writes: 'edit-box',
+  confined: 'shield-done',
+  notes: 'note',
+  asides: 'message-bubble',
+}
 
 /**
  * The right-hand column: what this session has touched, and the folder it is touching it in.
@@ -50,8 +67,20 @@ interface Live {
  * in there, and what does this file look like in a real editor — is not one the transcript can be
  * asked.
  */
-export const Context = memo(function Context({ live, audit, details, onAddNote, onAddFolder, onCloseFolder }: {
+export const Context = memo(function Context({ live, audit, details, hidden = NONE_HIDDEN, onHidden, sectionsAsked = 0, onAddNote, onAddFolder, onCloseFolder }: {
   live: Live | null
+  /**
+   * The Overview panels a person has turned off, as kept in `bravebot-ui.json` (PANEL-20). Each
+   * takes the same `.off` path the Files tab does, so it keeps its fold.
+   */
+  hidden?: readonly PanelName[]
+  /** Called with the whole new list, in column order, when a person ticks or unticks a section. */
+  onHidden?: (hidden: PanelName[]) => void
+  /**
+   * Raised by one each time the View menu's Choose Sections is picked: the column moves to the
+   * Overview tab and opens the checklist, as `/sidebar` opens the terminal's.
+   */
+  sectionsAsked?: number
   /** Open the dialog that adds a note to this session's record. */
   onAddNote?: () => void
   /** Ask for a folder to open beside the project, through the main process's picker. */
@@ -63,7 +92,16 @@ export const Context = memo(function Context({ live, audit, details, onAddNote, 
   details?: React.ReactNode
 }): React.JSX.Element {
   const [tab, setTab] = useState<'overview' | 'files'>('overview')
-  const off = new Set<PanelName>(tab === 'overview' ? ['files'] : ['plan', 'read', 'writes', 'confined', 'notes'])
+  // Cleared when the checklist closes, so the menu does not open again by itself when a person
+  // later goes to the Files tab and back, which remounts it.
+  const [openRequest, setOpenRequest] = useState(0)
+  useEffect(() => {
+    if (!sectionsAsked) return
+    setTab('overview')
+    setOpenRequest(sectionsAsked)
+  }, [sectionsAsked])
+  const off = new Set<PanelName>(tab === 'overview' ? ['files', ...hidden] : HIDEABLE)
+  const allOff = tab === 'overview' && HIDEABLE.every((name) => off.has(name))
   const reveal = (path: string) => {
     const entry = [...(live?.entries ?? [])].reverse().find((entry) =>
       entry.kind === 'tool' ? fileTarget(entry.activity.target) === path : entry.kind === 'confirm' ? entry.request.path === path : false)
@@ -78,6 +116,7 @@ export const Context = memo(function Context({ live, audit, details, onAddNote, 
   const writes = written(live.entries)
   const replayed = live.entries.filter((entry) => entry.kind === 'replayed-tool')
   const notes = live.notes ?? []
+  const asides = live.asides ?? []
 
   // A session read back off disk has calls in its transcript and nothing behind them:
   // the record keeps what a turn did, not what came of it. Saying "nothing read yet"
@@ -95,6 +134,7 @@ export const Context = memo(function Context({ live, audit, details, onAddNote, 
     writes: 'Changes',
     confined: 'Confined content',
     notes: 'Notes',
+    asides: 'Asides',
     files: 'Files',
   }
 
@@ -112,13 +152,41 @@ export const Context = memo(function Context({ live, audit, details, onAddNote, 
       {/* Wrapped, because `.context > *` hands every direct child of this column the width the
           column will come back at when it unfolds — which a full-width row of buttons plus its
           own margins overflows. The wrapper takes that width and the bar sits inside it. */}
-      <div className="context-head">
+      <div className="context-head context-head-tabs">
         <Tabs className="inspector-tabs" size="small" value={tab} data-test="inspector-tabs"
           onChange={({ value }) => { if (value === 'overview' || value === 'files') setTab(value) }}>
           <TabItem value="overview">Overview</TabItem>
           <TabItem value="files">Files</TabItem>
         </Tabs>
+        {/* Each choice is drawn and saved at once and leaves the menu open (`data-is-interactive`);
+            Escape only closes it (PANEL-20). */}
+        {tab === 'overview' && onHidden && (
+          <IconMenu icon="list-settings" label={t.uiContextSections()} className="context-sections" data-test="context-sections"
+            openRequest={openRequest} onOpen={(open) => { if (!open) setOpenRequest(0) }}>
+            {/* Says what the rows are when none is ticked. Not an item, so the arrow keys pass over
+                it, and hidden from a screen reader, which hears the button's name instead. */}
+            <div className="menu-heading" aria-hidden="true">{t.uiContextSectionsHeading()}</div>
+            {HIDEABLE.map((name) => {
+              const shown = !hidden.includes(name)
+              return (
+                <leo-menu-item key={name} data-role="menuitemcheckbox" data-is-interactive="true" data-panel={name}
+                  aria-checked={shown ? 'true' : 'false'}
+                  onClick={() => onHidden(toggleHidden(hidden, name))}>
+                  <span className="menu-icon-row">
+                    <Icon name={PANEL_ICONS[name]} />
+                    {labels[name]}
+                    <span className="menu-check" aria-hidden="true">{shown && <Icon name="check-normal" />}</span>
+                  </span>
+                </leo-menu-item>
+              )
+            })}
+          </IconMenu>
+        )}
       </div>
+
+      {/* The column stays drawn with its head when every section is off: turning sections off
+          never folds it (PANEL-20). */}
+      {allOff && <div className="panel-inner context-all-off" id="context-all-off"><Empty icon="eye-off">{t.uiContextAllOff()}</Empty></div>}
 
       <Section id="plan" title="Plan"count={live.todos.length} off={off.has('plan')}
         about="The steps the agent has set itself, and which it has done.">
@@ -131,7 +199,7 @@ export const Context = memo(function Context({ live, audit, details, onAddNote, 
               return (
                 <li key={index} className={rowClass}>
                   <span className="marker" aria-hidden="true">
-                    {marker === 'done' ? <Icon name="check-circle-filled" /> : marker === 'cancelled' ? <Icon name="close" /> : marker === 'active' ? <ProgressRing mode="indeterminate" /> : <Icon name="radio-unchecked" />}
+                    {marker === 'active' ? <ProgressRing mode="indeterminate" /> : <Icon name={TODO_ICONS[marker]} />}
                   </span>
                   <span className="todo-text">{row.content}</span>
                   <span className="visually-hidden">{hiddenSuffix}</span>
@@ -267,6 +335,30 @@ export const Context = memo(function Context({ live, audit, details, onAddNote, 
         )}
       </Section>
 
+      {/* The /btw and /recap answers (CMD-8, CMD-16): those the record kept, then those that came in
+          since. Plain text, and never sent to the model. A record keeps no answer that met something
+          untrusted (WATCH-20), so such an answer is shown now and is gone when the chat is reopened. */}
+      <Section id="asides" title="Asides" count={asides.length} off={off.has('asides')}
+        about="Answers to /btw and /recap. Never sent to the model.">
+        {asides.length === 0 ? (
+          <Empty icon="message-bubble">No asides. Type /btw and a question, or /recap.</Empty>
+        ) : (
+          <ul className="asides" data-test="asides">
+            {asides.map((aside, index) => (
+              <li key={index}>
+                <span className="aside-question">{aside.question}</span>
+                {aside.answer === null
+                  ? <span className="aside-note">The record did not keep this answer.</span>
+                  : <span className="aside-answer">{aside.answer}</span>}
+                {aside.answer !== null && !aside.kept && (
+                  <span className="aside-note">This answer is not written down in the record.</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+
       {/* Last, and on purpose. The panels above are derived from the session — what it
           touched and what was noted on it — and this one reads the disk. Putting it under them keeps that boundary
           visible instead of interleaving two kinds of claim.
@@ -299,6 +391,19 @@ export const Context = memo(function Context({ live, audit, details, onAddNote, 
 })
 
 /**
+ * The icon each plan row's marker draws, one apiece. `active` has none: it draws a progress ring,
+ * which only a turn that is working on the row may show.
+ */
+export const TODO_ICONS: Record<Exclude<TodoMarker, 'active'>, IconName> = {
+  done: 'check-circle-filled',
+  cancelled: 'close',
+  waiting: 'pause-circle',
+  open: 'radio-unchecked',
+}
+
+type TodoMarker = 'done' | 'cancelled' | 'active' | 'waiting' | 'open'
+
+/**
  * How a plan row draws, given whether a turn is running.
  *
  * `done` and `cancelled` are settled and draw the same whether or not a turn is running. `active`
@@ -306,11 +411,16 @@ export const Context = memo(function Context({ live, audit, details, onAddNote, 
  * with the row still `active` or `pending`, nothing is working on it, so both draw as left open —
  * the row the planner has not settled, shown with the same hollow mark and dimmed ink as a row
  * that was never started, and no ring that would read as work still going.
+ *
+ * `waiting` is open on purpose: its next step is not the agent's. It draws the same whether or not a
+ * turn is running, with an icon of its own, no ring, and ink that is neither the running row's nor
+ * a settled row's.
  */
 export function todoRowLook(
   row: TodoRow,
   running: boolean,
-): { rowClass: string; marker: 'done' | 'cancelled' | 'active' | 'open'; hiddenSuffix: string } {
+): { rowClass: string; marker: TodoMarker; hiddenSuffix: string } {
+  if (row.status === 'waiting') return { rowClass: 'waiting', marker: 'waiting', hiddenSuffix: ', waiting' }
   if (row.status === 'done') return { rowClass: 'done', marker: 'done', hiddenSuffix: ', done' }
   if (row.status === 'cancelled') return { rowClass: 'cancelled', marker: 'cancelled', hiddenSuffix: ', cancelled' }
   if (row.status === 'active' && running) return { rowClass: 'active', marker: 'active', hiddenSuffix: ', in progress' }

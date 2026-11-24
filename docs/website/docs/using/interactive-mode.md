@@ -445,6 +445,13 @@ a file you took off the line afterwards was never part of it.
 Stopping a turn leaves the queue alone: the next waiting prompt starts as it would after any turn,
 and the rest go on waiting in order.
 
+**A long queue is cut, and a row says how many are left out.** The queue takes at most eight rows
+under the box, four prompts, and no more than the screen has left after what is attached to the line
+and what is put away. When more prompts wait than that, the oldest are drawn and the row after them
+reads `and 9 more waiting`, with the number of prompts not drawn. The transcript keeps the rest of the
+screen however many wait. Every prompt stays queued and goes into the turn in order, drawn or not,
+and the key that sends the queue now moves to the count row. A click on the count row does nothing.
+
 **The desktop app sends Enter into the running turn too.** The planner reads the line at the turn's next
 round boundary, as the words of your own input and under the routing the turn began with. The line is
 drawn under the box as sent to this turn and moves into the transcript when the planner is given it. A
@@ -467,7 +474,8 @@ Only a turn is stopped this way. During a compaction, a question asked aside, a 
 manifest run, Ctrl-Enter only queues the line, and Escape is still the key that stops one. A
 [`/loop`](../reference/commands.md#loop-interval-prompt) ends when its turn is stopped, so Ctrl-Enter ends it as Escape does.
 
-While something is waiting behind a turn, the last waiting row says so. It says so only where the
+While something is waiting behind a turn, the last waiting row says so, or the count row when the
+queue is cut. It says so only where the
 terminal reports the modifier (see Shift-Enter above), because elsewhere Ctrl-Enter arrives as Enter
 and only queues the line. There, **Up**, then **Escape**, then **Enter** gets you the same turn. With
 vi editing, from INSERT mode, that is Escape twice.
@@ -487,7 +495,9 @@ They stay in the prompt history. From your side they were sent, and taking them 
 them.
 
 A click on a waiting prompt does the same for it and the ones typed after it
-([the mouse](transcript.md#what-a-click-does)). The prompts before it keep waiting. Clearing the box is
+([the mouse](transcript.md#what-a-click-does)). The prompts before it keep waiting. On a prompt
+that is drawn this takes back the prompts left out of the drawing too, since they are newer. `clear all`
+removes every waiting prompt, drawn or not. Clearing the box is
 what cancels what came back.
 
 With nothing waiting the key is unchanged: it walks the history, and scrolls once there is nothing

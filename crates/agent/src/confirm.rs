@@ -2310,6 +2310,27 @@ fn tally(count: usize, one: &str, many: &str) -> String {
     }
 }
 
+/// A hook a plugin carries, about to fire for the first time in this session (PLUGIN-7).
+///
+/// Every field is drawn from the plugin's own files except `moment`, which is the driver's word
+/// for the moment. The plugin's name and argv are untrusted: a front end draws them inside the
+/// margin untrusted content is drawn in, and decides nothing from them.
+///
+/// No field names a mode, a rule or a setting, so nothing but a person's answer can approve it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookRequest {
+    /// The plugin's name, as its manifest wrote it.
+    pub plugin: String,
+    /// The moment the hook is attached to, in the word the hooks file spells it with.
+    pub moment: &'static str,
+    /// The program and its arguments with `${PLUGIN_ROOT}` already replaced (PLUGIN-13), one word
+    /// each. These are the words the approval is a digest of.
+    pub argv: Vec<String>,
+    /// Whether a yes is written to `~/.bravebot/hooks-approved`. False in an incognito session and
+    /// where the state directory cannot be written, and then a yes lasts until the session ends.
+    pub records: bool,
+}
+
 /// What a confirmer calls just before it puts a question to a person who can answer it.
 ///
 /// Takes and returns nothing: what it is told is that a question is coming and not what it is
@@ -2541,6 +2562,28 @@ pub trait Confirmer {
     /// new destination with the server's arguments and its session id.
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision;
 
+    /// Whether [`Confirmer::confirm_hook`] puts its question to a person who can answer it.
+    ///
+    /// False unless an implementation says otherwise, so a confirmer written without a thought for
+    /// plugin hooks fires none (PLUGIN-7: where nobody can be asked, the hook does not fire). True
+    /// only for a front end that draws the question and reads an answer. Read once, when a turn
+    /// begins, and never from anything a plugin wrote.
+    fn can_ask_about_a_hook(&self) -> bool {
+        false
+    }
+
+    /// Ask whether a hook a plugin carries may fire, naming the plugin, the moment and the argv
+    /// (PLUGIN-7). Implementations must refuse when they cannot ask.
+    ///
+    /// Separate from [`Confirmer::confirm_run`] because a yes is about a program that will start on a
+    /// moment of every later turn, and is recorded against the plugin's tree digest. No mode and no
+    /// allow rule answers it, as none answers the install prompt (PLUGIN-4): a wrapper passes it to
+    /// the confirmer behind it and nothing else. The refusal is the default body, so a test double
+    /// that does not mention hooks answers no.
+    fn confirm_hook(&mut self, _request: &HookRequest) -> Decision {
+        Decision::Reject
+    }
+
     /// Ask whether programs the planner starts may reach one more path for the rest of the session.
     /// Implementations must refuse when they cannot ask.
     ///
@@ -2707,6 +2750,107 @@ impl Confirmer for Unattended {
     }
 
     /// Nobody is typing.
+    fn interjection(&mut self) -> Option<String> {
+        None
+    }
+}
+
+/// Answers the question about a plugin's hook with one fixed decision and records each time it was
+/// put. Test-only, and named so its use is conspicuous.
+///
+/// It can be asked, so a turn puts the question to it, and it refuses every other question as
+/// [`Unattended`] does.
+#[derive(Debug)]
+pub struct AnswersHooks {
+    /// What every hook question is answered.
+    pub answer: Decision,
+    /// The questions put, in order.
+    pub asked: Vec<HookRequest>,
+}
+
+impl AnswersHooks {
+    pub fn new(answer: Decision) -> Self {
+        Self {
+            answer,
+            asked: Vec::new(),
+        }
+    }
+}
+
+impl Confirmer for AnswersHooks {
+    fn can_ask_about_a_hook(&self) -> bool {
+        true
+    }
+
+    fn confirm_hook(&mut self, request: &HookRequest) -> Decision {
+        self.asked.push(request.clone());
+        self.answer
+    }
+
+    fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
+        Unattended.confirm_server(request)
+    }
+
+    fn confirm_path(&mut self, request: &PathRequest) -> Decision {
+        Unattended.confirm_path(request)
+    }
+
+    fn confirm_host(&mut self, request: &HostRequest) -> Decision {
+        Unattended.confirm_host(request)
+    }
+
+    fn confirm_message(&mut self, request: &MessageRequest) -> MessageDecision {
+        Unattended.confirm_message(request)
+    }
+
+    fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
+        Unattended.confirm_move(request)
+    }
+
+    fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+        Unattended.confirm_manifest(request)
+    }
+
+    fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+        Unattended.confirm_write(request)
+    }
+
+    fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+        Unattended.confirm_run(request)
+    }
+
+    fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
+        Unattended.confirm_read_output(request)
+    }
+
+    fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+        Unattended.confirm_vetted_read(request)
+    }
+
+    fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
+        Unattended.confirm_fetch(request)
+    }
+
+    fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
+        Unattended.confirm_vouch(request)
+    }
+
+    fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision {
+        Unattended.confirm_exposing_read(request)
+    }
+
+    fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
+        Unattended.confirm_tool_list(request)
+    }
+
+    fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
+        Unattended.confirm_mcp_call(request)
+    }
+
+    fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
+        Unattended.ask_user(asking)
+    }
+
     fn interjection(&mut self) -> Option<String> {
         None
     }
@@ -3580,6 +3724,14 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
         self.timing(|inner| inner.confirm_move(request))
+    }
+
+    fn can_ask_about_a_hook(&self) -> bool {
+        self.inner.can_ask_about_a_hook()
+    }
+
+    fn confirm_hook(&mut self, request: &HookRequest) -> Decision {
+        self.timing(|inner| inner.confirm_hook(request))
     }
 
     fn confirm_server(&mut self, request: &ServerRequest) -> Decision {

@@ -514,6 +514,22 @@ for a correction that is not coming. Cut short, the words could say the same wro
 stopping at "into this". The key outranks them on the last row because it is the one way to hurry
 what is waiting, and the rows above it still say where theirs are going.
 
+**A queue that is too long is cut, and a row says how many are left out.** The queue takes at most
+eight rows beneath the box, four prompts of two rows, and no more than the rows the screen has left
+after what is attached to the line and what is put away. A queue that fits is drawn whole. A longer
+one draws its oldest prompts and then one row, `and N more waiting`, where N is the number of prompts
+not drawn, so the count is true at every size. The transcript keeps the rest of the screen, however
+many prompts wait. The oldest are the ones drawn because Up takes everything back from the oldest
+([INPUT-18](#INPUT-18)) and the words that clear the queue are on its row ([MOUSE-28](mouse.md#MOUSE-28)).
+Every prompt stays queued and goes into the turn in order, drawn or not. The key that sends the queue
+now (INPUT-36) moves to the count row, since the last prompt's mark is not drawn. The row is left out
+whole where the width will not hold its words, and the key is left out whole where it does not fit
+beside them.
+
+**Why.** A queue drawn in full takes every row beneath the box and leaves the transcript as little
+as one row, and a queue cut without a count hides how long it is, so a person cannot tell that more
+prompts wait than they see.
+
 **The mark does not say that a wait is running.** While a `job_output` wait runs, a line sent is
 marked like any other behind a turn that will take it, into this turn at its next round, because
 that is what happens: the wait comes back within a tick of the line and the turn takes it at the
@@ -680,6 +696,12 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_tui::app::a_prompt_that_outlived_the_turn_is_sent_once`
 `verified-by: bravebot_tui::app::a_prompt_queued_behind_a_command_is_sent_once_the_command_has_run`
 `verified-by: bravebot_tui::app::what_is_still_waiting_stays_in_step_with_what_is_drawn`
+`verified-by: bravebot_tui::render::a_queue_too_long_for_the_rows_beneath_the_box_says_how_many_more_wait`
+`verified-by: bravebot_tui::render::a_long_queue_leaves_the_transcript_its_rows`
+`verified-by: bravebot_tui::render::the_count_of_prompts_left_out_is_the_prompts_not_drawn_at_every_size`
+`verified-by: bravebot_tui::render::the_offer_to_send_now_moves_to_the_row_counting_the_prompts_left_out`
+`verified-by: bravebot_tui::render::the_count_row_and_the_offer_to_send_now_are_drawn_whole_or_not_at_all`
+`verified-by: bravebot_tui::render::a_list_offered_beneath_a_cut_queue_is_picked_on_the_row_that_draws_it`
 `verified-by: bravebot_agent::turn::a_prompt_typed_mid_turn_reaches_the_planner_on_the_next_round`
 `verified-by: bravebot_agent::turn::a_prompt_typed_mid_turn_is_recorded_as_the_users_own_input`
 `verified-by: bravebot_agent::turn::a_prompt_typed_while_a_delegate_runs_still_reaches_the_turn_that_spawned_it`
@@ -1453,6 +1475,8 @@ answer is to set the budget rather than to compact.
 `verified-by: bravebot_tui::app::a_failed_turn_measures_context_if_requests_were_sent`
 `verified-by: bravebot_tui::app::a_failed_turn_with_no_requests_sent_remains_unmeasured`
 `verified-by: bravebot_agent::conversation::a_restored_conversation_remembers_what_its_last_request_came_to`
+`verified-by: bravebot_tui::app::a_resumed_session_reads_the_context_from_the_request_its_record_measured`
+`verified-by: bravebot_tui::app::a_finished_compaction_reads_what_it_won_back_and_an_unfinished_one_keeps_the_measured_reading`
 `verified-by: bravebot_agent::conversation::compacting_forgets_a_measurement_of_the_conversation_it_replaced`
 `verified-by: bravebot_config::lib::a_default_budget_is_marked_as_guessed`
 `verified-by: bravebot_config::lib::an_advertised_budget_is_not_marked_as_guessed`
@@ -1547,6 +1571,7 @@ vi gives `m` no key, and a box that waited for one would swallow the instruction
 `verified-by: bravebot_tui::sidebar_prompt::escape_and_ctrl_c_close_the_list_and_keep_what_was_changed`
 `verified-by: bravebot_tui::sidebar_prompt::a_space_with_a_modifier_toggles_nothing`
 `verified-by: bravebot_tui::app::a_style_chosen_in_the_config_panel_is_kept_and_said_in_the_transcript`
+`verified-by: bravebot_tui::app::the_config_panel_opened_at_rest_keeps_the_style_taken_and_escape_changes_nothing`
 `verified-by: bravebot_tui::config_prompt::every_row_says_what_it_means`
 
 <a id="INPUT-24"></a>
@@ -2551,6 +2576,20 @@ person than whatever error put it there.
 `verified-by: bravebot_tui::app::the_terminal_is_asked_for_sgr_with_the_tracking_modes_and_given_all_of_it_back_in_order`
 `verified-by: bravebot_tui::app::what_every_way_out_of_the_interface_writes_includes_every_mode_asked_for`
 `verified-by: bravebot_tui::app::the_modes_are_given_back_before_raw_mode_is_left_and_it_is_left_whatever_they_do`
+`verified-by: bravebot_tui::app::disambiguated_keys_are_asked_for_only_where_the_terminal_says_it_understands_them`
+`verified-by: bravebot_tui::app::raw_mode_is_entered_before_anything_is_written_and_the_takeover_ends_where_it_cannot_be`
+`verified-by: bravebot_tui::app::tests::hangup::a_session_that_ends_by_failing_has_handed_the_terminal_back_and_says_how_it_failed`
+`verified-by: bravebot_tui::app::tests::hangup::a_session_that_is_left_has_handed_the_terminal_back_and_returns_what_it_ended_with`
+`verified-by: bravebot_tui::app::tests::hangup::where_the_session_failed_and_the_terminal_cannot_be_handed_back_that_failure_is_returned`
+`verified-by: bravebot_tui::app::tests::handover::the_terminal_is_given_back_before_the_program_runs_and_taken_again_after_it`
+`verified-by: bravebot_tui::app::tests::handover::the_terminal_is_taken_again_when_the_program_failed`
+`verified-by: bravebot_tui::app::tests::handover::nothing_runs_after_a_terminal_that_could_not_be_given_back`
+`verified-by: bravebot_tui::app::tests::handover::a_terminal_that_could_not_be_taken_again_is_returned_as_a_failure`
+`verified-by: bravebot_tui::app::tests::handover::every_handover_goes_through_the_one_that_gives_back_and_takes_again`
+`verified-by: bravebot_tui::app::tests::handover::every_handover_takes_the_terminal_again_with_the_mouse_choice_the_session_holds`
+`verified-by: bravebot_cli::terminal_modes::the_editor_a_prompt_is_written_in_is_started_on_a_terminal_that_is_out_of_raw_mode`
+`verified-by: bravebot_cli::terminal_modes::the_interface_that_draws_has_the_terminal_in_raw_mode_so_a_key_is_not_echoed`
+`verified-by: bravebot_cli::terminal_modes::a_session_in_lines_takes_none_of_what_the_interface_that_draws_takes`
 
 <a id="INPUT-34"></a>
 ### INPUT-34: what arrived together is not two presses
@@ -2613,13 +2652,16 @@ available, spent in the one place where a second press is the whole of what is b
 `verified-by: bravebot_tui::input::the_queue_is_answered_before_the_terminal_and_in_arrival_order`
 `verified-by: bravebot_tui::input::a_press_and_its_own_release_are_one_keystroke`
 `verified-by: bravebot_tui::input::two_keystrokes_in_one_read_arrived_together`
+`verified-by: bravebot_tui::input_alone::the_shipped_reader_says_whether_an_event_arrived_alone`
 `verified-by: bravebot_tui::input::a_report_of_the_mouse_in_the_read_of_a_key_is_not_another_arrival`
 `verified-by: bravebot_tui::input::keys_with_reports_of_the_mouse_among_them_are_still_a_run`
+`verified-by: bravebot_tui::app::what_the_reader_says_arrived_together_reaches_the_rung_that_leaves`
 `verified-by: bravebot_tui::app::two_interrupts_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::two_end_of_transmissions_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::a_press_on_its_own_after_a_run_still_leaves`
 `verified-by: bravebot_tui::app::a_return_that_arrived_with_other_keys_does_not_send`
 `verified-by: bravebot_tui::app::every_refused_return_is_said_and_not_just_the_first`
+`verified-by: bravebot_tui::app::a_return_that_arrived_with_other_keys_is_not_queued_while_a_turn_runs`
 `verified-by: bravebot_tui::app::a_refused_way_out_says_so`
 `verified-by: bravebot_tui::app::a_return_of_its_own_still_sends`
 `verified-by: bravebot_tui::app::a_program_cannot_send_its_own_line_with_an_arrow_and_a_return`

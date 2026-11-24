@@ -30,6 +30,7 @@ governs:
   - crates/tui/src/theme_prompt.rs
   - crates/tui/src/list_picker.rs
   - crates/tui/src/model_prompt.rs
+  - crates/tui/src/effort_prompt.rs
   - ui/src/renderer/components/Transcript.tsx
   - ui/src/renderer/components/ThinkingTail.tsx
   - ui/src/renderer/thinking.ts
@@ -68,6 +69,7 @@ whatever the running turn adds to the transcript below it.
 `verified-by: bravebot_tui::render::the_end_of_a_wrapped_reply_is_visible_when_it_arrives`
 `verified-by: bravebot_tui::render::scrolling_back_changes_the_view`
 `verified-by: bravebot_tui::render::a_reply_arriving_does_not_drag_a_scrolled_back_view_to_the_tail`
+`verified-by: bravebot_tui::render::a_frame_of_a_held_view_counts_from_the_top_and_not_back_from_the_end`
 `verified-by: bravebot_tui::state::a_chunk_of_the_reply_leaves_a_view_scrolled_back_at_rest_where_it_was`
 `verified-by: bravebot_tui::state::nothing_a_running_turn_adds_moves_a_scrolled_back_view`
 
@@ -329,6 +331,7 @@ scheme's own foreground in roughly nine schemes out of ten.
 `verified-by: bravebot_tui::theme::a_light_background_takes_the_deeper_brand_primary`
 `verified-by: bravebot_tui::theme::colorfgbg_with_a_white_background_is_light`
 `verified-by: bravebot_tui::theme::an_osc_reply_with_a_pale_background_is_light`
+`verified-by: bravebot_tui::theme::a_terminal_that_will_not_say_gets_the_dark_shade`
 `verified-by: bravebot_tui::theme::brave_keeps_named_slots_for_the_terminals_own_meanings`
 `verified-by: bravebot_tui::theme::an_aside_is_a_shade_picked_for_the_background_rather_than_a_slot`
 `verified-by: bravebot_tui::theme::an_accent_is_a_shade_picked_for_the_background_rather_than_a_slot`
@@ -477,8 +480,10 @@ need searching.
 `verified-by: bravebot_tui::model_prompt::a_search_matching_nothing_says_so`
 `verified-by: bravebot_tui::model_prompt::an_openai_roster_of_mixed_models_is_one_section_with_every_row_reachable`
 `verified-by: bravebot_tui::model_prompt::the_picker_is_drawn_as_a_centred_panel`
+`verified-by: bravebot_tui::model_prompt::the_picker_is_bordered_and_sits_in_the_middle_of_the_frame`
 `verified-by: bravebot_tui::model_prompt::the_panel_stays_inside_a_tiny_terminal`
 `verified-by: bravebot_tui::model_prompt::tab_switches_the_scope_in_both_directions_and_touches_nothing_else`
+`verified-by: bravebot_tui::model_prompt::tab_leaves_the_search_the_folded_sections_and_the_cursor_where_they_were`
 `verified-by: bravebot_tui::model_prompt::a_picker_opens_in_the_every_session_scope_unless_told_otherwise`
 `verified-by: bravebot_tui::model_prompt::a_picker_opened_by_bare_model_draws_the_every_session_scope_in_title_and_footer`
 `verified-by: bravebot_tui::model_prompt::a_picker_opened_by_model_session_draws_the_this_session_scope_in_title_and_footer`
@@ -598,10 +603,14 @@ that has observed untrusted content those are untrusted bytes and it may not bra
 `verified-by: bravebot_tui::render::a_thought_the_model_wrote_into_the_reply_is_not_drawn`
 `verified-by: bravebot_tui::state::a_thought_arriving_is_not_drawn_at_the_tail`
 `verified-by: bravebot_tui::state::a_finished_reply_keeps_the_answer_and_not_the_thought`
+`verified-by: bravebot_tui::state::a_finished_reply_that_stopped_mid_thought_is_drawn_whole`
 `verified-by: bravebot_tui::state::a_round_that_thought_before_speaking_records_only_what_it_said`
 `verified-by: bravebot_tui::state::a_round_that_only_thought_leaves_no_entry`
+`verified-by: bravebot_tui::state::a_round_that_stopped_mid_thought_is_drawn_whole`
 `verified-by: bravebot_tui::state::a_resumed_reply_leaves_off_its_leading_reasoning_block`
 `verified-by: bravebot_tui::state::a_legacy_resumed_reply_leaves_off_its_leading_reasoning_block`
+`verified-by: bravebot_tui::state::a_resumed_reply_that_stopped_mid_thought_is_drawn_whole`
+`verified-by: bravebot_tui::state::a_legacy_resumed_reply_that_stopped_mid_thought_is_drawn_whole`
 
 
 <a id="VIEW-19"></a>
@@ -661,6 +670,7 @@ than cleared, which is what makes the variable a switch rather than an edit.
 `verified-by: bravebot_tui::logo::the_wordmark_takes_no_colour_where_none_was_asked_for`
 `verified-by: bravebot_tui::logo::the_face_takes_no_colour_where_none_was_asked_for`
 `verified-by: bravebot_tui::lib::a_presentation_variable_says_nothing_beyond_being_set`
+`verified-by: bravebot_tui::theme::the_live_path_reads_no_color_from_the_environment_by_presence`
 
 
 <a id="VIEW-21"></a>
@@ -690,6 +700,8 @@ which is drawn before any file this program reads has been looked for.
 `verified-by: bravebot_tui::indicator::motion_nobody_declined_still_moves`
 `verified-by: bravebot_tui::avatar::the_face_stays_at_rest_where_no_motion_is_asked_for`
 `verified-by: bravebot_tui::lib::a_presentation_variable_says_nothing_beyond_being_set`
+`verified-by: bravebot_tui::indicator::the_live_path_reads_no_motion_from_the_environment_by_presence`
+`verified-by: bravebot_tui::avatar::the_live_face_is_still_where_the_environment_asks_for_no_motion`
 
 
 <a id="VIEW-22"></a>
@@ -755,7 +767,13 @@ a model was slow exactly as it draws a slow program.
 `verified-by: bravebot_cli::progress::a_finished_call_prints_what_it_spent_at_a_model`
 `verified-by: bravebot_cli::progress::a_finished_call_that_asked_no_model_prints_nothing_about_one`
 `verified-by: bravebot_ui_bridge::reporting::what_a_call_spent_at_a_model_reaches_a_front_end`
+`verified-by: bravebot_ui_bridge::reporting::a_wait_under_a_second_crosses_as_zero_seconds`
 `verified-by: bravebot_agent::turn::what_a_check_cost_reaches_the_row_the_call_drew`
+`verified-by: bravebot_agent::turn::what_a_processor_cost_reaches_the_row_the_call_drew`
+`verified-by: bravebot_agent::turn::the_wait_on_a_processor_row_is_the_time_the_model_took`
+`verified-by: bravebot_agent::turn::what_a_processor_that_chose_cost_reaches_the_row_the_call_drew`
+`verified-by: bravebot_agent::turn::what_a_processor_that_wrote_no_document_cost_reaches_the_row_the_call_drew`
+`verified-by: bravebot_agent::turn::what_a_processor_that_failed_cost_reaches_the_row_the_call_drew`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which renders the real transcript row through react-dom and asserts that the figure reaches the markup, written past a minute as the terminal writes it, that a call which asked no model draws none, and that a wait under a second is left off; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
 
 
@@ -1284,13 +1302,14 @@ The accelerator that focuses the composer is not changed by this entry.
 that says how many of its tasks are done, and how many are cancelled where any are. Every task is
 there, in the plan's order, whatever room the info panel has for rows
 ([PANEL-10](info-panel.md#PANEL-10)). A task takes the rows its text needs. The first begins with
-the task's mark and its status in words (`pending`, `in progress`, `completed` or `cancelled`), both
+the task's mark and its status in words (`pending`, `in progress`, `waiting`, `completed` or `cancelled`), both
 read from the status the task carries, and the text follows, wrapped to the width. Every row after
 the first has the same margin, blank where the mark and the status stood. A task no longer
 outstanding is struck through, in the colours the plan has under a turn. A task that is neither
-completed nor cancelled is drawn as work being done where a turn is running as it is printed, with
+completed, cancelled nor waiting is drawn as work being done where a turn is running as it is printed, with
 the mark and ink the panel gives it ([PANEL-10](info-panel.md#PANEL-10)), and left open, with the
-hollow mark and the dim text the panel gives it then, where none is. Its status in words is the one
+hollow mark and the dim text the panel gives it then, where none is. A waiting task is drawn the
+same whether or not a turn is running, with the mark of its own and the ink the panel gives it. Its status in words is the one
 the planner wrote either way.
 
 No row is wider than the transcript, so none is wrapped again outside its margin. The margin is
@@ -1316,6 +1335,8 @@ taken for the interface's own, as a forged margin would be.
 
 `verified-by: bravebot_tui::panel::the_whole_plan_is_printed_with_every_task_its_status_and_none_of_its_text_cut`
 `verified-by: bravebot_tui::panel::a_printed_plan_holds_at_every_width_from_one_column_up`
+`verified-by: bravebot_tui::render::a_waiting_task_is_drawn_with_its_own_mark_whether_or_not_a_turn_runs`
+`verified-by: bravebot_tui::render::transcript::a_finished_entrys_waiting_task_keeps_its_own_mark_at_its_call_site`
 `verified-by: bravebot_tui::panel::a_printed_plan_is_drawn_on_the_screen_as_it_is_laid_out`
 `verified-by: bravebot_tui::panel::a_printed_task_cannot_draw_a_margin_a_mark_or_a_status_of_its_own`
 `verified-by: bravebot_tui::panel::a_printed_plan_stays_as_it_was_when_the_plan_changes`
@@ -1640,6 +1661,62 @@ what the rows contain and the rule is kept ([SCROLL-5](scroller.md#SCROLL-5)).
 `verified-by: bravebot_tui::app::tests::jump::the_hint_under_the_box_stays_while_the_button_is_drawn`
 `verified-by: bravebot_tui::app::tests::jump::a_copy_never_takes_the_words_of_the_button`
 `verified-by: bravebot_tui::render::drawing_the_visible_slice_matches_wrapping_the_whole_transcript`
+
+<a id="VIEW-46"></a>
+### VIEW-46: the effort picker names its scope in the title and the footer, and Tab switches it
+
+`/effort` draws a bordered panel in the middle of the screen, over the session it was opened from,
+with a row for each level and a row for no level, and opens in one of two scopes. The scope is named
+and switched as the model picker's is ([VIEW-14](#VIEW-14)). `/effort` opens it in the scope that
+records the pick for every session, titled `effort · every session`. `/effort session` opens it in
+the scope that records nothing, titled `effort · this session only`. A picker opened with no scope
+named is in the every-session scope. The footer has two rows: the scope line, `Enter: every session
+·  Tab: this session only` or `Enter: this session only  ·  Tab: every session`, and under it the
+keys, `↑↓ choose  ·  Esc keep current`. The keys do not say that Enter selects, because the scope
+line says what Enter does.
+
+Tab and Shift-Tab each switch the scope in both directions, in the picker at rest and while a turn
+runs, and the title and the scope line change with it. They move nothing else: the cursor, the row
+marked `current` and the rows stay as they are, and nothing is typed into the box. Enter takes the row
+under the cursor in the scope the picker is in when it is pressed, and so does a second press on a
+row ([MOUSE-15](mouse.md#MOUSE-15)).
+
+A scope line wider than the panel is drawn whole on a second row, split before the Tab half, and the
+panel is made one row taller for it, so no level is hidden behind the footer. The effort panel is 52
+columns wide, which leaves 49 for the line. At 80 columns the English line, which is 47 columns wide,
+is drawn on one row, and the French line, which is 50 columns wide, is drawn on two. The five levels
+and the row for no level keep their rows in a 24-row terminal in both scopes.
+
+The pickers of `/config`, `/theme` and `/sidebar` have no scope: they draw no scope line and no extra
+footer row, and Tab changes nothing in them.
+
+**Why.** A level that applies to one session and a level that applies to every later session are
+different choices, and a person pressing Enter has to see which one the picker is making. The title
+and the footer both name the scope, and the footer says what Enter does, so no key has to be learned
+from the documentation. One set of rules for the model picker and the effort picker means a person
+who has used one has used both.
+
+`verified-by: bravebot_tui::effort_prompt::a_picker_opens_in_the_every_session_scope_unless_told_otherwise`
+`verified-by: bravebot_tui::effort_prompt::tab_switches_the_scope_in_both_directions_and_touches_nothing_else`
+`verified-by: bravebot_tui::effort_prompt::a_picker_opened_by_bare_effort_draws_the_every_session_scope_in_title_and_footer`
+`verified-by: bravebot_tui::effort_prompt::a_picker_opened_by_effort_session_draws_the_this_session_scope_in_title_and_footer`
+`verified-by: bravebot_tui::effort_prompt::tab_changes_what_the_title_and_footer_say_in_both_directions`
+`verified-by: bravebot_tui::effort_prompt::the_keys_row_does_not_say_enter_selects`
+`verified-by: bravebot_tui::effort_prompt::the_scope_line_wraps_whole_at_forty_columns`
+`verified-by: bravebot_tui::effort_prompt::the_scope_line_stays_on_one_row_at_eighty_columns`
+`verified-by: bravebot_tui::effort_prompt::the_extra_footer_row_takes_no_row_from_a_list_that_fits`
+`verified-by: bravebot_tui::effort_prompt::the_picker_is_drawn_as_a_centred_panel`
+`verified-by: bravebot_tui::effort_prompt::the_panel_stays_inside_a_tiny_terminal`
+`verified-by: bravebot_tui::list_picker::the_row_is_handed_back_with_the_scope_in_force`
+`verified-by: bravebot_tui::list_picker::a_scope_line_wider_than_the_room_is_split_whole_at_its_separator`
+`verified-by: bravebot_tui::list_picker::the_panel_grows_by_the_rows_the_scope_line_takes`
+`verified-by: bravebot_tui::list_picker::a_picker_with_no_scope_has_none_and_ignores_tab`
+`verified-by: bravebot_tui::list_picker::a_panel_with_no_scope_line_draws_no_footer_row`
+`verified-by: bravebot_tui::config_prompt::the_panel_of_preferences_has_no_scope_and_ignores_tab`
+`verified-by: bravebot_tui::theme_prompt::the_theme_picker_has_no_scope_and_ignores_tab`
+`verified-by: bravebot_tui::sidebar_prompt::the_sidebar_checklist_has_no_scope_and_ignores_tab`
+`verified-by: bravebot_tui::app::tab_in_an_open_effort_picker_switches_the_scope_at_rest_and_under_a_turn`
+`verified-by: bravebot_tui::app::the_effort_picker_opened_at_rest_records_by_the_scope_tab_left_it_in`
 
 ## Known costs
 

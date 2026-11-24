@@ -318,7 +318,7 @@ operand therefore leaves the step unproven, so `grep -r TODO src -n` is asked ab
 Five other things leave a step unproven. Naming the program by path rather than by name, since a file
 called `wc` in the directory the line runs in would otherwise answer as the audited one. A name that
 resolves to a file inside the workspace, the checkout holding it, a directory you added or left
-with `/cd`, or a directory a stage was granted to write (and, for a delegate working in a checkout,
+with `/cd`, or a directory a stage was granted to write, or one an earlier process recorded (and, for a delegate working in a checkout,
 the directory the checkout was made from), for the same reason: a `PATH` entry in the project can
 put one there. An environment assignment, which decides what a program loads before its own arguments are read. A
 redirection, which opens a file the argument list does not name. And running anywhere but the
@@ -685,7 +685,8 @@ assignments. You approve the plan, the resolved binaries
 and the directory. The environment is not among them.
 
 The description of `run` tells the planner that these three are removed, and that the variables your
-settings name as a gateway's token or in `run.scrubEnv` are removed too, without listing those. It
+settings name as a gateway's token, as the Brave Search key or in `run.scrubEnv` are removed too,
+without listing those. It
 also says that a program reporting one of them unset says nothing about whether you have set it, so a
 build that fails for want of one is not reported to you as a gap in your setup.
 

@@ -893,6 +893,21 @@ fn watches_require_trust_are_bounded_and_are_not_inherited_by_new_sessions() {
     )
     .unwrap();
     assert_eq!(armed["watches"][0]["path"], "not-yet");
+    // The same file asked for again, spelled the same or another way the project resolves to it,
+    // is the watch already on it and not a second one.
+    for again in ["not-yet", "./not-yet"] {
+        let rows = call(
+            &mut bridge,
+            "watches.add",
+            json!({"session": session, "path": again}),
+        )
+        .unwrap();
+        assert_eq!(
+            rows["watches"].as_array().unwrap().len(),
+            1,
+            "{again} armed a second watch on one file"
+        );
+    }
     let fresh =
         call(&mut bridge, "session.new", json!({"directory": project})).unwrap()["session"].clone();
     assert_eq!(
@@ -938,6 +953,37 @@ fn settings_override_is_validated_and_diagnostics_use_the_linked_agent() {
     );
     let cleared = call(&mut bridge, "settings.select", json!({"path": null})).unwrap();
     assert!(cleared["selected"].is_null());
+}
+
+/// DIAG-5: with a fresh state directory the settings report names `<state>/logs` and says this
+/// process writes there, before any log exists, and asking creates nothing (DIAG-3, DIAG-6).
+#[test]
+fn the_settings_report_names_the_log_directory_before_any_log_exists() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let home = bravebot_agent::home::directory().expect("a state directory");
+    let logs = home.join(bravebot_diag::DIRECTORY);
+    assert!(
+        !logs.exists(),
+        "{} existed before the test asked",
+        logs.display()
+    );
+
+    let (mut bridge, _) = harness();
+    let report = call(&mut bridge, "settings.inspect", json!({})).unwrap();
+
+    assert_eq!(
+        report["logs"]["directory"],
+        logs.to_str().expect("a text path"),
+        "{report}"
+    );
+    assert_eq!(report["logs"]["writing"], true, "{report}");
+    assert!(
+        !logs.exists(),
+        "asking for the report created {}",
+        logs.display()
+    );
 }
 
 /// TRUST-14: a desktop session is given a directory of its own outside the project, says where it
@@ -1022,4 +1068,60 @@ fn schedule_command_is_dispatched_to_the_shared_function() {
     )
     .expect("answered");
     assert_eq!(unclosed["refused"], true, "{unclosed}");
+}
+
+/// Rejects a `/schedule` line that reaches the shared function with a dropped file's or a pasted
+/// picture's marker in it, or that is carried out when its `files` is not a list (DROP-4).
+///
+/// The line removes a schedule no entry is named by, so the shared function refuses it with the
+/// name it was given and nothing is written.
+#[test]
+fn a_file_dropped_onto_a_schedule_line_is_carried_out_as_its_name() {
+    let (mut bridge, _) = harness();
+    let handle = a_trusting_session(&mut bridge);
+    let shown = |answer: &Value| {
+        answer["lines"]
+            .as_array()
+            .expect("lines")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let named = call(
+        &mut bridge,
+        "schedule.command",
+        json!({
+            "session": &handle,
+            "argument": "remove [Image #1]",
+            "files": [{ "marker": "[Image #1]", "name": "shot.png" }],
+        }),
+    )
+    .expect("answered");
+    assert_eq!(named["refused"], true, "{named}");
+    assert!(shown(&named).contains("shot.png"), "{named}");
+    assert!(!shown(&named).contains("[Image #1]"), "{named}");
+
+    let pictured = call(
+        &mut bridge,
+        "schedule.command",
+        json!({
+            "session": &handle,
+            "argument": "remove '[Image #2]'",
+            "pictures": ["[Image #2]"],
+        }),
+    )
+    .expect("answered");
+    assert!(
+        shown(&pictured).contains(bravebot_filetype::markers::A_PICTURE_CANNOT_JOIN_A_COMMAND),
+        "{pictured}"
+    );
+
+    let malformed = call(
+        &mut bridge,
+        "schedule.command",
+        json!({ "session": &handle, "argument": "list", "files": "shot.png" }),
+    );
+    assert_eq!(malformed, Err(ErrorCode::BadRequest));
 }

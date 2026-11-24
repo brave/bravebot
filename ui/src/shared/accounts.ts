@@ -9,7 +9,7 @@
 
 export type AccountWay = 'brave' | 'bedrock' | 'gateway' | 'chatgpt' | 'xai'
 export type Standing = 'signedIn' | 'notSignedIn' | 'unusable' | 'misconfigured'
-export type KeyFrom = 'stored' | 'environment' | 'none'
+export type KeyFrom = 'stored' | 'environment' | 'file' | 'none'
 
 export interface AccountRow {
   way: AccountWay
@@ -139,7 +139,7 @@ export interface SignInWindowState {
 
 const WAYS: readonly string[] = ['brave', 'bedrock', 'gateway', 'chatgpt', 'xai']
 const STANDINGS: readonly string[] = ['signedIn', 'notSignedIn', 'unusable', 'misconfigured']
-const KEY_FROM: readonly string[] = ['stored', 'environment', 'none']
+const KEY_FROM: readonly string[] = ['stored', 'environment', 'file', 'none']
 
 export const isSignInWay = (way: unknown): way is SignInWay => way === 'chatgpt' || way === 'xai' || way === 'bedrock'
 export const isAttempt = (value: unknown): value is Attempt =>

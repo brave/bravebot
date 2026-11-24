@@ -4,6 +4,23 @@ Tools that are useful for working on bravebot but are not part of it. Nothing he
 shipped, and nothing in `crates/` depends on any of it. One is run by CI: `measure-flakes.py`, on a
 weekly schedule, since what it measures takes many runs of an unchanged tree.
 
+## token-bench
+
+Compares the tokens bravebot, Claude Code, Codex and a plain OpenAI-compatible agent loop spend on
+the same tasks, model and cache settings, and ranks them. `bench.py run` runs the scenarios,
+`bench.py report --plot DIR` prints the ranking and draws the plots (matplotlib), and
+`bench.py --selftest` checks the usage parsers and the scoring against output captured from the
+tools. [contrib/token-bench/README.md](token-bench/README.md) says how usage is normalised, how the
+score is computed, and how to compare models and routes such as Bedrock and OpenRouter.
+
+```sh
+contrib/token-bench/bench.py --selftest
+contrib/token-bench/bench.py run --config contrib/token-bench/contestants.example.json
+```
+
+A run spends tokens on every contestant's account, so it is not part of any check. Its output goes
+to `contrib/token-bench/results/`, which git ignores.
+
 ## review-ready.py
 
 Lists the open pull requests a reviewer can pick up now, and waits for the ones GitHub has not yet
@@ -81,6 +98,24 @@ menu has content before the first refresh finishes. It is refreshed on the inter
 wakes and on Refresh Now. A failed refresh keeps the cached list and adds `!` to the icon. A refresh
 that ends with pull requests still not computed as mergeable shows `review-ready.py`'s `incomplete:`
 line in the menu. Nothing in CI builds this app.
+
+## alien-wallpaper
+
+An animated macOS desktop background drawn with Core Graphics: the bravebot bots march across a nebula
+sky with three layers of stars, a ringed planet and a planet horizon. The orange mascot at the bottom
+leads its shots at the formation, bots burst into tiles when hit, a mothership crosses the top now and
+then, and a cleared wave returns in new colours. One window per screen sits at desktop level under
+the icons, on every Space, and ignores the mouse. It pauses while the desktop is covered or the
+displays sleep. A menu bar item pauses and quits it.
+
+```sh
+contrib/alien-wallpaper/install.sh [--fps N] [--login] [--dir DIRECTORY]
+contrib/alien-wallpaper/install.sh --uninstall
+```
+
+`install.sh` builds `AlienWallpaper.swift` with `swiftc` into `~/Applications/AlienWallpaper.app` and
+starts it. `--login` installs a LaunchAgent that starts it at login. `--snapshot FILE.png [--seconds N]
+[--size WxH]` on the binary renders one frame to a PNG. Nothing in CI builds this app.
 
 ## check-toolchain.py
 
@@ -178,10 +213,14 @@ Fails a change that adds sites of a clippy lint the tree has hundreds of.
 `make check` runs clippy with `-D warnings`, so a lint is on only where the tree has no site of it.
 Others, such as `let_underscore_must_use`, `string_slice` and the numeric casts, report hundreds of
 sites in the existing code, and turning one on would need every site fixed or marked in the same
-change. This runs clippy over the libraries and binaries at the merge base and at the checkout, and
-fails when a lint reports more sites in a crate than it did at the base. Nothing is recorded in the
-tree, so no list falls behind the code. Both runs use one toolchain on one host, so a clippy release
-that finds more sites, and code that only another platform compiles, change both counts alike.
+change. This runs clippy over every target at the merge base and at the checkout, and fails when a
+lint reports more sites in a crate than it did at the base. Every target, not only the libraries
+and binaries, since these lints are allow by default and this is the only place any of them is
+counted: a `#[cfg(test)]` block, an integration test, an example, a bench or a `test-support` file
+compiles only for tests and would otherwise add any number of sites unseen. Nothing is recorded in
+the tree, so no list falls behind the code. Both runs use one toolchain on one host, so a clippy
+release that finds more sites, and code that only another platform compiles, change both counts
+alike.
 
 `allow_attributes` is counted too, with far fewer sites: an `#[allow]` that remains is one that
 `unsafe_code` or `dead_code` needs on a platform where the lint does not fire, since an `#[expect]`
@@ -196,10 +235,13 @@ refuses the first new site on its own.
 make check-lint-increase          # or contrib/check-lint-increase.py
 ```
 
-`make check` runs it after clippy, and CI runs it on pull requests. It compiles the workspace twice,
-about twenty seconds each with the dependencies built, and skips a change that touches nothing under
-`crates/` or the manifests. `--base REF` compares with another commit, and `BASE_SHA` sets it
-for CI. `--selftest` checks the verdict on known inputs and runs clippy on none of them.
+`make check` runs it after clippy, and CI runs it on pull requests. It compiles the workspace
+twice; measured locally with the dependencies already built, a clean clippy run over the tests,
+examples and benches as well as the libraries and binaries takes about thirty-five seconds against
+about twenty for the libraries and binaries alone, and a second run with nothing changed is near
+instant either way. It skips a change that touches nothing under `crates/` or the manifests.
+`--base REF` compares with another commit, and `BASE_SHA` sets it for CI. `--selftest` checks the
+verdict on known inputs and runs clippy on none of them.
 
 ## check-versions.py
 
@@ -482,6 +524,10 @@ contrib/terminal-screenshot.py capture.txt
 `--cols` and `--rows` default to the 120x40 `drive_tui.py` runs at and must match the capture
 otherwise, since a frame laid out for one width replayed at another is wrong in a way that still
 looks like a screen. Colour is dropped, so the output survives being quoted and searched.
+
+The title push (`CSI 22;0t`), written before the interface's first title, and the title pop
+(`CSI 23;0t`), written when it hands the terminal back, change no cell and are accepted. Every
+other window operation is still named, since a resize or a move changes what the screen is.
 
 Anything it does not model is named on stderr rather than dropped, and `--strict` exits non-zero on
 one, which is the flag to use before pasting a screen into an issue. `--selftest` checks the replay

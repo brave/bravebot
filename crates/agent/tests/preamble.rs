@@ -10,7 +10,7 @@
 use bravebot_agent::preamble;
 use bravebot_agent::recall::project::{ProjectId, project_id};
 use bravebot_agent::skills::Catalogue;
-use bravebot_agent::workspace::Workspace;
+use bravebot_agent::workspace::{ReferenceProblem, Workspace};
 use bravebot_config::Attribution;
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::RecordingSink;
@@ -616,6 +616,117 @@ fn an_at_path_import_is_expanded_in_place_and_resolved_beside_its_file() {
     assert!(preamble.notices.is_empty(), "{:?}", preamble.notices);
 }
 
+/// INSTR-11: a token that begins with `@` and names a file that is not markdown is ordinary text.
+/// The file is there, so the regression it rejects is an import that goes by the `@` alone and
+/// replaces the token with the text of a file nobody named as an instruction document. Nothing is
+/// reported, because a mention is not a refusal.
+#[test]
+fn an_at_token_naming_a_file_that_is_not_markdown_stays_ordinary_text() {
+    let preamble = composed(
+        "import-not-markdown",
+        &[
+            ("AGENTS.md", "ROOT @docs/notes.txt END"),
+            ("docs/notes.txt", "TEXT-FILE-MUST-NOT-LOAD"),
+        ],
+        &["."],
+    );
+
+    assert!(
+        preamble.text.contains("ROOT @docs/notes.txt END"),
+        "{}",
+        preamble.text
+    );
+    assert!(
+        !preamble.text.contains("TEXT-FILE-MUST-NOT-LOAD"),
+        "{}",
+        preamble.text
+    );
+    assert!(preamble.notices.is_empty(), "{:?}", preamble.notices);
+}
+
+/// INSTR-11: a token that names a markdown file the project does not hold is ordinary text, so
+/// the person is told nothing about it. The regression it rejects: treating every `@name.md` as an
+/// import and reporting the ones with nothing behind them, which warns about a handle or a
+/// mention in every project that writes one.
+#[test]
+fn an_at_token_naming_no_file_stays_ordinary_text_and_is_not_reported() {
+    let preamble = composed(
+        "import-names-nothing",
+        &[("AGENTS.md", "ROOT @docs/missing.md END")],
+        &["."],
+    );
+
+    assert!(
+        preamble.text.contains("ROOT @docs/missing.md END"),
+        "{}",
+        preamble.text
+    );
+    assert!(preamble.notices.is_empty(), "{:?}", preamble.notices);
+}
+
+/// INSTR-11: punctuation that ends the token stays after the imported text, whichever it is. The
+/// regressions it rejects: dropping the punctuation (the sentence loses its stop) and reading it as
+/// part of the path (the import is not found and the token is left as written).
+#[test]
+fn punctuation_ending_an_import_token_stays_after_the_imported_text() {
+    let preamble = composed(
+        "import-trailing-punctuation",
+        &[
+            (
+                "AGENTS.md",
+                "One @docs/a.md, two @docs/b.md); three @docs/c.md!\n",
+            ),
+            ("docs/a.md", "AAA"),
+            ("docs/b.md", "BBB"),
+            ("docs/c.md", "CCC"),
+        ],
+        &["."],
+    );
+
+    assert!(
+        preamble.text.contains("One AAA, two BBB); three CCC!"),
+        "{}",
+        preamble.text
+    );
+    assert!(preamble.notices.is_empty(), "{:?}", preamble.notices);
+}
+
+/// INSTR-11: an import of a file that is there and cannot be read stays as written and the person
+/// is told which file. The file holds bytes that are not text, which the read refuses.
+#[test]
+fn an_import_of_a_file_that_cannot_be_read_stays_as_written_and_is_reported_by_name() {
+    let scratch = Scratch::new("import-unreadable");
+    let project = scratch.directory("project");
+    std::fs::create_dir_all(project.join("docs")).unwrap();
+    std::fs::write(project.join("AGENTS.md"), "ROOT @docs/binary.md END").unwrap();
+    std::fs::write(project.join("docs/binary.md"), [0xff, 0xfe, 0x00, 0x80]).unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy(&mut sink, &["."]);
+    let preamble = preamble::compose(
+        &mut policy,
+        &workspace,
+        None,
+        &Catalogue::default(),
+        None,
+        None,
+        &Attribution::default(),
+    );
+
+    assert!(
+        preamble.text.contains("ROOT @docs/binary.md END"),
+        "{}",
+        preamble.text
+    );
+    assert_eq!(preamble.notices.len(), 1, "{:?}", preamble.notices);
+    assert!(
+        preamble.notices[0].message.contains("docs/binary.md"),
+        "{:?}",
+        preamble.notices
+    );
+}
+
 /// Four hops are followed. The fifth is left as written, and the person is told which file it was.
 #[test]
 fn an_import_nested_past_four_hops_is_left_as_written() {
@@ -790,6 +901,141 @@ fn an_import_outside_the_workspace_is_left_as_written() {
         preamble.text
     );
     assert!(!preamble.text.contains("OUTSIDE-MUST-NOT-LOAD"));
+    // An absolute path and one above the root name no file the project holds, so neither is
+    // reported. A refusal notice for either would tell the person about a path nobody vouched for.
+    assert!(preamble.notices.is_empty(), "{:?}", preamble.notices);
+}
+
+/// INSTR-11: a leading slash names no file the project holds. The regression it rejects: reading
+/// `@/docs/a.md` as `docs/a.md` under the project root, which loads a file the writer did not name.
+/// The file is there, so the import has something to read, and nothing is reported.
+#[test]
+fn a_leading_slash_import_is_not_read_as_relative_to_the_project() {
+    let preamble = composed(
+        "import-leading-slash",
+        &[
+            ("AGENTS.md", "ROOT @/docs/a.md"),
+            ("docs/a.md", "ROOT-RELATIVE-MUST-NOT-LOAD"),
+        ],
+        &["."],
+    );
+
+    assert!(
+        preamble.text.contains("ROOT @/docs/a.md"),
+        "{}",
+        preamble.text
+    );
+    assert!(
+        !preamble.text.contains("ROOT-RELATIVE-MUST-NOT-LOAD"),
+        "{}",
+        preamble.text
+    );
+    assert!(preamble.notices.is_empty(), "{:?}", preamble.notices);
+}
+
+/// INSTR-11: `~/.bravebot/AGENTS.md` is not expanded. The regression it rejects: expanding the
+/// home file's `@path` against the project, which puts a project file inside the person's own
+/// instructions. The project's own import in the same run is the control: it is expanded.
+#[test]
+fn the_home_agents_file_is_not_expanded() {
+    let scratch = Scratch::new("import-home");
+    let home = scratch.directory("home");
+    let project = scratch.directory("project");
+    std::fs::create_dir_all(project.join("docs")).unwrap();
+    std::fs::write(home.join("AGENTS.md"), "HOME-RULES @docs/a.md").unwrap();
+    std::fs::write(project.join("AGENTS.md"), "PROJECT-RULES @docs/b.md").unwrap();
+    std::fs::write(project.join("docs/a.md"), "A-MUST-NOT-LOAD").unwrap();
+    std::fs::write(project.join("docs/b.md"), "B-LOADS").unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let composed = compose_with_home(&workspace, &workspace, &home, &["."]);
+
+    assert!(
+        composed.text.contains("PROJECT-RULES B-LOADS"),
+        "the project's import was not expanded: {}",
+        composed.text
+    );
+    assert!(
+        composed.text.contains("HOME-RULES @docs/a.md"),
+        "{}",
+        composed.text
+    );
+    assert!(
+        !composed.text.contains("A-MUST-NOT-LOAD"),
+        "{}",
+        composed.text
+    );
+}
+
+/// INSTR-11: one refusal is reported once however many times the file is named. The regression it
+/// rejects: a notice for each mention, so a file imported three times is reported three times.
+#[test]
+fn one_refusal_is_reported_once_however_often_the_file_is_named() {
+    let preamble = composed_after_touching(
+        "import-refusal-once",
+        &[
+            ("AGENTS.md", "ROOT @docs/a.md @docs/a.md @docs/a.md"),
+            ("docs/a.md", "A-MUST-NOT-LOAD"),
+        ],
+        &[],
+        &["docs/a.md"],
+    );
+
+    assert!(
+        preamble
+            .text
+            .contains("ROOT @docs/a.md @docs/a.md @docs/a.md"),
+        "{}",
+        preamble.text
+    );
+    assert!(
+        !preamble.text.contains("A-MUST-NOT-LOAD"),
+        "{}",
+        preamble.text
+    );
+    assert_eq!(preamble.notices.len(), 1, "{:?}", preamble.notices);
+    assert!(
+        preamble.notices[0].message.contains("docs/a.md"),
+        "{:?}",
+        preamble.notices
+    );
+}
+
+/// INSTR-11: an import the trust map distrusts stays as written, and the person is told which file
+/// and that it was not loaded because the directory is not trusted. The regression it rejects: an
+/// import left as written with no word to the person, or one told in other words, such as those
+/// for a `deny` rule. The trusted import beside it is the control: it is still expanded.
+#[test]
+fn an_import_of_a_distrusted_file_stays_as_written_and_is_reported_by_name() {
+    let preamble = composed_after_touching(
+        "import-distrusted",
+        &[
+            ("AGENTS.md", "ROOT @docs/a.md @docs/b.md"),
+            ("docs/a.md", "A-MUST-NOT-LOAD"),
+            ("docs/b.md", "B-LOADS"),
+        ],
+        &[],
+        &["docs/a.md"],
+    );
+
+    assert!(
+        preamble.text.contains("ROOT @docs/a.md B-LOADS"),
+        "{}",
+        preamble.text
+    );
+    assert!(
+        !preamble.text.contains("A-MUST-NOT-LOAD"),
+        "{}",
+        preamble.text
+    );
+    assert_eq!(
+        preamble
+            .notices
+            .iter()
+            .map(|notice| notice.message.as_str())
+            .collect::<Vec<_>>(),
+        ["docs/a.md was not loaded: this directory is not trusted"],
+    );
 }
 
 /// A directory nobody vouched for loads no instructions, so there is nothing to parse an import
@@ -1048,8 +1294,10 @@ fn moving_the_working_directory_restates_it() {
 /// The one fact in the block nothing else could tell a turn. The directory is made by this
 /// program rather than named by the user, so a planner never told of it puts what is not part of
 /// the project into the project, which is the file a build, a commit and a reviewer each have to
-/// deal with.
+/// deal with. The prompt says there is one and what it is for, and a sentence in the conversation
+/// names it, since its name changes with every start.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it() {
     let tree = Scratch::new("own-directory");
     let project = tree.directory("project");
@@ -1072,8 +1320,9 @@ fn the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it() {
     };
 
     assert!(
-        preamble.text.contains(&own.display().to_string()),
-        "the session's own directory is not in the preamble: {}",
+        !preamble.text.contains(&own.display().to_string()),
+        "the session's own directory is in the system prompt, which is the front of every request \
+         and differs on every start: {}",
         preamble.text
     );
     assert!(
@@ -1081,6 +1330,59 @@ fn the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it() {
         "the preamble does not say where a program the line starts reads the path: {}",
         preamble.text
     );
+    let said = preamble::scratch_note(&workspace).expect("a session with a directory names it");
+    assert!(
+        said.contains(&own.display().to_string()),
+        "the sentence that names the directory does not name it: {said}"
+    );
+}
+
+/// The prompt is the front of every request, and a prompt cache matches from its first byte, so two
+/// sessions that differ only in the directory each made for itself have to compose the same prompt.
+/// A process that starts with a new directory then reads what the last one wrote.
+///
+/// Rejects an implementation that writes the directory's path back into the prompt: the two texts
+/// differ by it, and the first request of every new process writes the whole prompt again.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn two_sessions_that_differ_only_in_their_own_directory_compose_one_prompt() {
+    let tree = Scratch::new("same-prompt");
+    let project = tree.directory("project");
+    let composed = |own: PathBuf| {
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(own));
+        let mut sink = RecordingSink::new();
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+        )
+    };
+    let first = composed(tree.directory("bravebot-session-1-111-0"));
+    let second = composed(tree.directory("bravebot-session-2-222-7"));
+
+    assert_eq!(first.text, second.text);
+    assert_eq!(first.for_a_person, second.for_a_person);
+    assert!(
+        first.text.contains("BRAVEBOT_SCRATCH_DIR"),
+        "the comparison would pass on a prompt that said nothing of the directory: {}",
+        first.text
+    );
+}
+
+/// A session with no directory of its own names none.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_session_with_no_directory_of_its_own_has_nothing_to_name() {
+    let tree = Scratch::new("no-note");
+    let workspace = Workspace::new(tree.directory("project")).expect("workspace");
+
+    assert!(preamble::scratch_note(&workspace).is_none());
 }
 
 /// A program that fails for something this machine lacks is otherwise handed back to the person as
@@ -2173,6 +2475,122 @@ fn a_reference_that_cannot_open_is_a_notice_and_not_a_line() {
             "no notice names {alias}: {said:?}"
         );
     }
+}
+
+/// REFER-3: an entry naming a file that is not a directory is refused, whatever it holds, so it is
+/// neither reachable nor offered, and the person is told why under the alias they gave it.
+///
+/// Rejects an entry that names a regular file being opened as a directory, and one being kept as a
+/// reference with nothing added for it.
+#[test]
+fn a_reference_that_names_a_file_is_refused_and_opens_nothing() {
+    let scratch = Scratch::new("reference-a-file");
+    let project = scratch.directory("project");
+    let file = scratch.path.join("notes.txt");
+    std::fs::write(&file, "NOT-A-DIRECTORY").unwrap();
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_references(&[reference("notes", &file, Some("some notes"))], &[]);
+
+    assert_eq!(
+        workspace.references().count(),
+        0,
+        "a file was kept as a reference"
+    );
+    assert!(
+        workspace.added_directories().is_empty(),
+        "a file was made reachable: {:?}",
+        workspace.added_directories()
+    );
+    assert!(
+        matches!(
+            workspace.reference_problems(),
+            [(alias, ReferenceProblem::NotOpened(reason))]
+                if alias == "notes" && reason.contains("must be a directory")
+        ),
+        "{:?}",
+        workspace.reference_problems()
+    );
+    let preamble = composed_for(&workspace);
+    assert!(
+        !preamble.text.contains("Reference directories") && !preamble.text.contains("- notes"),
+        "a file was offered to the planner: {}",
+        preamble.text
+    );
+    let said: Vec<_> = preamble
+        .notices
+        .iter()
+        .map(|n| n.message.as_str())
+        .collect();
+    assert!(
+        said.iter()
+            .any(|line| line.contains("notes") && line.contains("must be a directory")),
+        "no notice names the alias and says why: {said:?}"
+    );
+}
+
+/// REFER-3: where a settings layer keeps the file tools inside the workspace, no reference opens,
+/// since reaching one is reaching a directory outside it. The problem names the alias and the key,
+/// and the same entry opens where the key is not set.
+///
+/// Rejects the key being read for `--add-dir` and `/add-dir` and not for the directories a
+/// settings file names.
+#[test]
+fn a_reference_is_not_opened_where_reads_are_kept_inside_the_workspace() {
+    let scratch = Scratch::new("reference-kept-inside");
+    let project = scratch.directory("project");
+    let library = scratch.directory("library");
+    let entries = [reference("lib", &library, Some("the library"))];
+
+    let kept = Workspace::new(&project)
+        .expect("workspace")
+        .with_reads_kept_inside(true)
+        .with_references(&entries, &[]);
+
+    assert_eq!(kept.references().count(), 0, "a reference opened");
+    assert!(
+        kept.added_directories().is_empty(),
+        "a directory was made reachable: {:?}",
+        kept.added_directories()
+    );
+    assert!(
+        matches!(
+            kept.reference_problems(),
+            [(alias, ReferenceProblem::NotOpened(reason))]
+                if alias == "lib" && reason.contains("permissions.readsStayInWorkspace")
+        ),
+        "{:?}",
+        kept.reference_problems()
+    );
+    let preamble = composed_for(&kept);
+    assert!(
+        !preamble.text.contains("Reference directories") && !preamble.text.contains("- lib"),
+        "a reference was offered to the planner: {}",
+        preamble.text
+    );
+    let said: Vec<_> = preamble
+        .notices
+        .iter()
+        .map(|n| n.message.as_str())
+        .collect();
+    assert!(
+        said.iter()
+            .any(|line| line.contains("lib") && line.contains("permissions.readsStayInWorkspace")),
+        "no notice names the alias and the key: {said:?}"
+    );
+
+    let control = Workspace::new(&project)
+        .expect("workspace")
+        .with_reads_kept_inside(false)
+        .with_references(&entries, &[]);
+
+    assert_eq!(control.references().count(), 1);
+    assert!(
+        control.reference_problems().is_empty(),
+        "{:?}",
+        control.reference_problems()
+    );
+    assert!(composed_for(&control).text.contains("- lib: "));
 }
 
 /// REFER-4: a reference closed since it opened is not offered, since its files are refused again.

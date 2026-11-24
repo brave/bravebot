@@ -9,18 +9,48 @@
 // approve a write without reading it. And no menu item may answer one of the agent's five
 // questions, which is asserted directly rather than left to the reader of the command list.
 //
-// Costs nothing: it never sends a prompt. It does drive the fold commands, which share the
-// persisted layout with every other driver, so it puts the columns back before it leaves.
-import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
-import { checker, launchLive, COMPOSER_INPUT, ASSISTANT_BUBBLE, approveTrustIfAsked, SHOTS_DIR } from './drive-support.mjs'
+// Costs nothing. It runs in a temporary world from `drive-world.mjs`: a `HOME`, a profile and a
+// project of its own, and a model service this script serves on 127.0.0.1, which the scratch
+// `settings.json` names as the provider. The one prompt it sends goes to that service, so the
+// transcript has a prompt and a reply to right-click, and the run needs no credentials from the
+// environment or from `~/.bravebot`. The fold commands it drives change a layout of its own, and
+// nothing of a person's `bravebot-ui.json` or `~/.bravebot` is read or written.
+import { mkdirSync, readFileSync, writeFileSync, existsSync, realpathSync, rmSync } from 'node:fs'
+import { constants } from 'node:os'
+import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, COMPOSER_SEND, ASSISTANT_BUBBLE, approveTrustIfAsked, SHOTS_DIR } from './drive-support.mjs'
+import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
+import { allowedMethods } from './allow-list.mjs'
 
 mkdirSync(SHOTS_DIR, { recursive: true })
 
 const { check, problems } = checker()
 
-const { app, page } = await launchLive()
+// The model service answers every request with this sentence. A chat opened in an empty project has
+// no entries, and a transcript entry has no menu to right-click until it has some.
+const REPLY = 'The stand-in model service answers every request with this sentence.'
+const { service } = await startModelService(() => ({ content: REPLY }))
+// A `HOME`, a profile and a project of their own, with the service above as the provider in the
+// scratch `settings.json`. Whether the window can send then does not depend on the credentials a
+// bridge was built with or on the person's environment: the app is launched with only the variables
+// `makeWorld` names. The directory is removed when the program ends, by an exit or by `process.exit`.
+const world = makeWorld('bravebot-drive-menu-', { service })
+process.on('exit', () => rmSync(world.root, { recursive: true, force: true }))
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(signal, () => process.exit(128 + constants.signals[signal]))
+}
+
+const { app, page } = await launchLive(async () => (await launchWorld({ profile: world.profile, env: world.env })).app)
 await page.waitForTimeout(2000)
+// Asked of the app, since a launch that lost its `--user-data-dir` would run on the real profile and
+// look the same from here. A run on any other profile stops here, before it clicks or types anything.
+const userData = await app.evaluate(({ app }) => app.getPath('userData'))
+const onScratchProfile = realpathSync(userData) === realpathSync(world.profile)
+check(onScratchProfile, `the run is on its scratch profile, not the person's (${userData})`)
+if (!onScratchProfile) {
+  await app.close()
+  console.log(`\nRESULT: ${problems.length} failed`)
+  process.exit(1)
+}
 
 /** The whole menu, flattened to something assertable. */
 const readMenu = () =>
@@ -135,28 +165,46 @@ const ALLOWED_IDS = [
   // Opens a dialog for a note kept on the record. It reaches `session.note`, which sends the
   // model nothing.
   'session.note',
+  // Session Status, Token Spend, Context Breakdown and Last Request: each draws a report from a
+  // store the turn writes into (CMD-8). None of them answers a question the agent asked.
+  'session.status', 'session.cost', 'session.context', 'session.request',
+  // Compact Conversation, Hand Off to New Chat and Continue in Background. Each opens a dialog first
+  // (a focus, the next goal, a confirmation) before it reaches its method.
+  'session.compact', 'session.handoff', 'session.background',
   // A setting, not an action: it keeps the computer awake while a turn runs. It reaches no agent
   // method, and the first time it is turned on a dialog says what it does.
   'app.caffeinate',
+  // Unfolds the context column and opens its section checklist. It only changes what the column
+  // draws, and reaches no agent method.
+  'app.sections',
+  // Writes `/manifest ` into the composer. The run starts only when the person sends the line.
+  'turn.plan',
 ]
 const ours = every.filter((i) => i.id && !i.role).map((i) => i.id)
 check(
   ours.every((id) => ALLOWED_IDS.includes(id)),
   `every non-role item is a declared command (${ours.join(', ')})`,
 )
-// What the window may ask the agent for, counted. The number is checked rather than described
-// because it is the one place a feature can widen this app's reach without anybody noticing,
-// and a count that has to be edited is a change somebody has to look at.
+// What the window may ask the agent for: the method names in the main process's allow-list, read
+// by `scripts/allow-list.mjs`, which takes the `//` comments off the literal first, since a comment
+// can hold commas and quotes of its own.
 //
-// Export was the case for keeping it: writing a file to disk is the largest capability this app
-// has taken on and it reaches no agent method at all. Forking is the opposite case and the
-// reason the number became 15. Model discovery adds one read-only method, `models.list`.
-// `session.rewind` puts files back to what they held, and only after a dialog naming each one.
-const allowed = (readFileSync('src/main/index.ts', 'utf8').match(/const ALLOWED = new Set\(\[([^\]]*)\]/) ?? [])[1]
+// The first check is a naming check. It stops a method whose name says it approves or decides from
+// being added to the list without a person noticing. It does not decide what the window may do: the
+// `*.reply` methods (`confirm.reply`, `vouch.reply`, `trust.reply` and the rest) are on the list
+// because they carry the person's answers to the agent's questions through the window, and
+// `scripts/session-directory.test.mjs` classifies each of them. `models.list` is the read-only model
+// discovery the picker needs, so a list without it was read wrong, and a literal that could not be
+// read has no names and fails the second check. `scripts/allow-list.test.mjs` holds the list to the
+// same rules in `make check-ui-build`. How many names there are is not asserted: a number written
+// here has to be edited by hand with every method, and `scripts/session-directory.test.mjs` already
+// fails for a name added to the list and not placed there.
+const allowed = allowedMethods(readFileSync('src/main/index.ts', 'utf8')) ?? []
 check(
-  allowed !== undefined && !/approve|decide/.test(allowed) && allowed.includes("'models.list'") && allowed.split(',').filter((s) => s.trim()).length === 54,
-  'the main-process allow-list is 54 methods including model discovery, rewind, notes, the release notes and the update status, none of which decides anything',
+  !allowed.some((name) => /approve|decide/i.test(name)),
+  `none of the ${allowed.length} method names the window may send approves or decides`,
 )
+check(allowed.includes('models.list'), 'models.list, the read-only model discovery, is on the allow-list')
 
 // --- accelerators are declared (they cannot be *dispatched* from here) -----------------
 // Playwright's keyboard goes into the web contents over CDP; AppKit key equivalents never
@@ -184,12 +232,21 @@ const fresh = await readMenu()
 const freshItem = (id) => fresh.flatMap((m) => m.items).find((i) => i.id === id)
 check(freshItem('session.close').enabled === false, 'with no chat open, Close Chat is grey')
 check(freshItem('turn.send').enabled === false, 'with no session open, Send is grey')
+check(freshItem('turn.plan').enabled === false, 'with no session open, Plan and Run… is grey')
+// Electron reports an item with no accelerator as null.
+check(accel('turn.plan') == null, 'Plan and Run… has no shortcut')
 check(freshItem('turn.cancel').enabled === false, 'with nothing running, Cancel Turn is grey')
 
 const click = (id) =>
   app.evaluate(({ Menu }, id) => Menu.getApplicationMenu().getMenuItemById(id).click(), id)
 
+// A scratch profile has no sessions, so the checks that need a chat open are given one: opening a
+// project starts a chat in it. The folder is inside the temporary directory and is removed with it.
+await openProject(page, app, world.project)
+await page.waitForTimeout(1200)
+
 const hasSessions = (await page.locator('.session').count()) > 0
+check(hasSessions, 'opening a project starts a chat, which the checks below need')
 if (hasSessions) {
   await page.locator('.session').first().click()
   await page.waitForTimeout(1200)
@@ -214,8 +271,43 @@ if (hasSessions) {
     open.flatMap((m) => m.items).find((i) => i.id === 'turn.send').enabled === false,
     'clearing it greys Send again',
   )
+
+  // Plan and Run… is offered with the composer empty, and only writes the start of the line.
+  check(open.flatMap((m) => m.items).find((i) => i.id === 'turn.plan').enabled === true, 'an empty composer leaves Plan and Run… offered')
+  const bubblesBefore = await page.locator('.bubble.user').count()
+  await click('turn.plan')
+  // The click runs in the main process, which then messages the renderer, so the draft is polled
+  // for, up to a deadline, rather than read after a guess at how long that takes.
+  let prefilled = false
+  for (let tries = 0; tries < 100 && !prefilled; tries++) {
+    prefilled = (await page.locator(COMPOSER_INPUT).inputValue()) === '/manifest '
+    if (!prefilled) await page.waitForTimeout(50)
+  }
+  check(prefilled, 'Plan and Run… leaves "/manifest " in the composer')
+  check(
+    // The composer's text field sits inside the leo-textarea's shadow root, so focus is read there.
+    await page.locator(COMPOSER_INPUT).evaluate((el) => el.getRootNode().activeElement === el),
+    'and puts the caret in the composer',
+  )
+  await page.screenshot({ path: `${SHOTS_DIR}/11-menu-plan-prefill.png` })
+  check((await page.locator('.bubble.user').count()) === bubblesBefore, 'and sends nothing')
+  check((await page.locator('.plan-task').count()) === 0, 'and starts no run')
+  await page.locator(COMPOSER_INPUT).fill('')
+  await page.waitForTimeout(400)
+
+  // One prompt to the stand-in model service gives the transcript a prompt and a reply, which the
+  // context-menu checks below right-click. The wait is on the reply and then on the composer being
+  // idle again, since a prompt cannot be forked from while a turn runs.
+  await page.locator(COMPOSER_INPUT).fill('hello')
+  await page.locator(COMPOSER_SEND).click()
+  await page.locator(ASSISTANT_BUBBLE).first().waitFor()
+  await page.locator(COMPOSER_IDLE).waitFor()
+  check(
+    ((await page.locator(ASSISTANT_BUBBLE).first().textContent()) ?? '').includes(REPLY),
+    'a prompt sent to the stand-in model service is answered in the transcript',
+  )
 } else {
-  console.log('  --   no sessions on this machine; skipped the session-dependent checks')
+  console.log('  --   no chat is open; skipped the session-dependent checks')
 }
 
 // --- a menu item actually does something ----------------------------------------------
@@ -258,7 +350,7 @@ check(!(await about.isVisible()), 'Escape closes it — nothing here traps anybo
 
 // The recents chevron beside New session is gone: a new chat starts in the project used last, and
 // the projects opened before are offered by the project menu in a fresh chat's composer and by
-// File ▸ Open Recent. Neither is driven here; this driver only reads the real profile.
+// File ▸ Open Recent. Neither is driven here.
 
 // --- context menus ----------------------------------------------------------------------
 // A real popup is modal and would block the run, so `popup` is replaced with something that
@@ -280,47 +372,45 @@ if (hasSessions) {
     ids.join() === 'context.session.open,context.session.close,context.session.copy-path',
     `and it offers open, close and copy path (${ids.join(', ')})`,
   )
-}
 
-await app.evaluate(() => { globalThis.__pops = [] })
-// A reply rather than any entry: tool lines inside a folded run carry no right-click at all,
-// which is its own small fact and not the one being checked here.
-const bubble = page.locator(ASSISTANT_BUBBLE).first()
-if (await bubble.isVisible().catch(() => false)) {
-  await bubble.click({ button: 'right' })
+  await app.evaluate(() => { globalThis.__pops = [] })
+  // A reply rather than any entry: tool lines inside a folded run carry no right-click at all,
+  // which is its own small fact and not the one being checked here.
+  await page.locator(ASSISTANT_BUBBLE).first().click({ button: 'right' })
   await page.waitForTimeout(400)
-  const pops = await app.evaluate(() => globalThis.__pops)
-  check(pops.length === 1, 'right-clicking a transcript entry opens one menu')
-  const ids = (pops[0] ?? []).map((i) => i.id)
+  const replyPops = await app.evaluate(() => globalThis.__pops)
+  check(replyPops.length === 1, 'right-clicking a transcript entry opens one menu')
+  const replyIds = (replyPops[0] ?? []).map((i) => i.id)
   // The assertion the whole design is for: a transcript entry offers copying and nothing
   // else. A confirm card gets the same one item as a plain reply.
   check(
-    ids.join() === 'context.entry.copy',
-    `and it offers copying and nothing that decides (${ids.join(', ')})`,
+    replyIds.join() === 'context.entry.copy',
+    `and it offers copying and nothing that decides (${replyIds.join(', ')})`,
   )
-}
 
-// A prompt is the one exception, and it is not an exception to the rule above: forking decides
-// nothing. It opens a session holding what was said before that point, and every question the
-// new session raises is asked in its transcript. `drive-fork.mjs` walks what it does.
-await app.evaluate(() => { globalThis.__pops = [] })
-const prompt = page.locator('.bubble.user').first()
-if (await prompt.isVisible().catch(() => false)) {
-  await prompt.click({ button: 'right' })
+  // A prompt is the one exception, and it is not an exception to the rule above: forking decides
+  // nothing. It opens a session holding what was said before that point, and every question the
+  // new session raises is asked in its transcript. `drive-fork.mjs` walks what it does. A prompt
+  // whose turn has ended also offers Rewind to Before This, which asks first in a dialog naming every
+  // file it puts back and decides nothing either. `drive-rewind.mjs` walks that one.
+  await app.evaluate(() => { globalThis.__pops = [] })
+  await page.locator('.bubble.user').first().click({ button: 'right' })
   await page.waitForTimeout(400)
-  const ids = ((await app.evaluate(() => globalThis.__pops))[0] ?? []).map((i) => i.id)
+  const promptIds = ((await app.evaluate(() => globalThis.__pops))[0] ?? []).map((i) => i.id)
   check(
-    ids.join() === 'context.entry.copy,context.entry.fork',
-    `and a prompt offers copying and forking, and still nothing that decides (${ids.join(', ')})`,
+    promptIds.join() === 'context.entry.copy,context.entry.fork,context.entry.rewind',
+    `and a prompt offers copying, forking and rewinding, and still nothing that decides (${promptIds.join(', ')})`,
   )
 }
 
-
-// The columns are shared with the other drivers, so this one puts them back.
+// Double-clicking a divider puts its column back at the default width. The right divider is hidden
+// while no chat is open (`.app.no-session .gutter.right` in shell.css), so this needs the chat the
+// run opened above: with none open, the second double-click waits for the divider to show and times out.
 await page.locator('.gutter').first().dblclick()
 await page.locator('.gutter').nth(1).dblclick()
 await page.waitForTimeout(300)
 await app.close()
+await new Promise((resolve) => service.close(resolve))
 
 if (problems.length > 0) {
   console.log(`\nRESULT: ${problems.length} failed`)

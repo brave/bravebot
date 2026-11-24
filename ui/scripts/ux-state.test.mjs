@@ -564,6 +564,22 @@ test('a call that waited on a model of its own says how long, and one that asked
   assert.doesNotMatch(draw({ ...read, waitedSeconds: 0 }), /at the model/, 'a wait rounded to nothing is drawn')
 })
 
+// DOWNLOAD-3: the note a finished download carries (status, byte count, cleaned content type) is the
+// only place the person is shown what the server said, so a row drawn without it hides it. Rendered
+// through the real row, as the wait above is.
+test('a finished download draws its status, size and content type on its row', () => {
+  const React = require('react')
+  const { renderToStaticMarkup } = require('react-dom/server')
+  const source = buildSync({ entryPoints: ['src/renderer/components/Transcript.tsx'], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react', 'react-dom', 'react/jsx-runtime'] }).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)(require, module, module.exports)
+  const { Row } = module.exports
+
+  const download = { verb: 'Download', target: 'https://example.com/blob', shownTarget: 'https://example.com/blob', note: '203, 3000 bytes, text/x-sentinelsplit', failed: false, untrusted: false, changes: [], waitedSeconds: null }
+  const markup = renderToStaticMarkup(React.createElement(Row, { entry: { kind: 'tool', id: 'row', activity: download, landing: null }, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
+  assert.match(markup, /203, 3000 bytes, text\/x-sentinelsplit/, 'the note of the download is not drawn')
+})
+
 // A window shows every call and, without this, nothing of what it was for. Rendered through the
 // real row for live and replayed calls alike, because the reason arriving and going undrawn is the
 // fault, and a resumed session is read for exactly this. The reason comes after the call, since a
@@ -885,6 +901,17 @@ test('the sidebar lists sessions from the record, the open windows and unsent dr
   assert.equal(key('/p', 'quiet') in listing.info, false, 'a row with neither a bot nor a status has no entry')
   assert.equal(listing.attention, 1)
   assert.equal(list({ ...{ sessions: [summary('asks')], opened: [open('asks', { entries: [asking] })] }, currentKey: key('/p', 'asks') }).attention, 0, 'the session on screen does not ask for attention')
+
+  // A chat a background process is running says so; a stopped, interrupted or never-held one says nothing.
+  const held = (id, background) => ({ ...summary(id), background })
+  const backgrounded = list({
+    sessions: [held('working', 'working'), held('needs', 'needs-input'), held('idle', 'idle'), held('stopped', 'stopped'), held('interrupted', 'interrupted'), held('never', null), held('open', 'idle')],
+    opened: [open('open', { running: true })],
+  })
+  for (const id of ['working', 'needs', 'idle']) assert.equal(backgrounded.info[key('/p', id)]?.status, 'background', `${id} is running in the background`)
+  for (const id of ['stopped', 'interrupted', 'never']) assert.equal(key('/p', id) in backgrounded.info, false, `${id} is not running in the background`)
+  assert.equal(backgrounded.info[key('/p', 'open')].status, 'working', 'a chat open in this window says what the window knows')
+  assert.equal(backgrounded.attention, 0, 'running in the background asks nothing of the reader')
 })
 
 test('a bot is thinking only while no tool of the turn is running, whatever follows the tool in the record', () => {

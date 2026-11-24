@@ -481,6 +481,10 @@ pub struct Conversation {
     /// since written is asked about afresh. Not part of a [`Snapshot`], for the reason `task_list`
     /// is not.
     open_tasks: Option<Labelled<usize>>,
+    /// How many of the tasks `open_tasks` counts are waiting on something outside the planner's
+    /// hands (TURN-12). Counted and labelled as `open_tasks` is, replaced with it, and read only
+    /// through `Policy::read_trusted_content`.
+    waiting_tasks: Option<Labelled<usize>>,
     /// Whether the planner has been asked about the list `open_tasks` counts, or wrote it in answer
     /// to being asked or reminded. A list asked about is asked about again only by a turn that did
     /// work since it (TURN-12).
@@ -525,6 +529,25 @@ pub struct Conversation {
     /// session rather than once per turn, so a session with nothing to say about it at first
     /// still says it once a long description appears, and never repeats it after that.
     long_descriptions_said: bool,
+    /// Whether the planner has already been told, in this process, where the session's own
+    /// directory is.
+    ///
+    /// Not part of a [`Snapshot`], for the reason `skills_overview_said` is not, and for a stronger
+    /// one: the directory is made again for every process, so a resumed session has a new path
+    /// and must say it again after the old one in its record.
+    scratch_said: bool,
+    /// Where the message naming the session's directory sits in `messages`, until a compaction
+    /// takes it out of the request.
+    ///
+    /// Not part of a [`Snapshot`], for the reason `scratch_said` is not.
+    scratch_at: Option<usize>,
+    /// The note naming the session's directory, once a compaction took the message holding it
+    /// out of the request.
+    ///
+    /// Carried byte for byte and put back in the summary (COMPACT-19 does the same for a
+    /// delegate's task), because the system prompt says the first message names the directory and
+    /// nothing says it again once `scratch_said` is set.
+    carried_scratch: Option<String>,
     /// Messages before this position are not sent in a turn's request: a retrieval sent excerpts
     /// of them instead ([RETRIEVE-2](../../../docs/specs/retrieval.md#RETRIEVE-2)).
     ///
@@ -536,7 +559,7 @@ pub struct Conversation {
     /// ([RETRIEVE-28](../../../docs/specs/retrieval.md#RETRIEVE-28)).
     left_out: usize,
     /// What the request sends at the cut in place of what the messages before it carried: the
-    /// task, the task list and the skills (RETRIEVE-10).
+    /// task, the task list, the note naming the session's directory and the skills (RETRIEVE-10).
     ///
     /// Taken when the cut moved and kept with it, so every request until the next move reads the
     /// same.
@@ -633,6 +656,7 @@ impl Conversation {
             reads: ShownReads::default(),
             task_list: None,
             open_tasks: None,
+            waiting_tasks: None,
             open_tasks_asked: false,
             carried_task_list: None,
             task_at: None,
@@ -641,6 +665,9 @@ impl Conversation {
             masked_before: 0,
             skills_overview_said: false,
             long_descriptions_said: false,
+            scratch_said: false,
+            scratch_at: None,
+            carried_scratch: None,
             retrieval_cut: 0,
             left_out: 0,
             pinned: Vec::new(),
@@ -931,6 +958,19 @@ impl Conversation {
         self.open_tasks_asked = in_answer;
     }
 
+    /// Record how many of the open tasks the list counted by [`Conversation::open_tasks_counted`]
+    /// are waiting, as the kernel counted them and labelled as the list is. Called with that call,
+    /// and with `None` where it was.
+    pub fn waiting_tasks_counted(&mut self, waiting: Option<Labelled<usize>>) {
+        self.waiting_tasks = waiting;
+    }
+
+    /// The count of waiting tasks in the planner's latest list, left in place. Labelled as the list
+    /// is: the caller reads it with `Policy::read_trusted_content`.
+    pub fn waiting_tasks(&self) -> Option<&Labelled<usize>> {
+        self.waiting_tasks.as_ref()
+    }
+
     /// The count of open tasks in the planner's latest list, left in place.
     ///
     /// Read by the reminder that a list may be behind the work and by the question put when the
@@ -1034,6 +1074,12 @@ impl Conversation {
             return false;
         }
         self.messages.drain(mark.0..end);
+        // The note is said after the opening, so what the drain removed was in front of it.
+        if let Some(at) = &mut self.scratch_at
+            && *at >= end
+        {
+            *at -= end - mark.0;
+        }
         self.masked_before = self.masked_before.min(mark.0);
         self.prompt_at = None;
         if self.retrieval_cut > mark.0 {
@@ -1075,6 +1121,22 @@ impl Conversation {
     /// Record that it has, so a later turn of the same session does not say it again.
     pub fn skill_overview_was_said(&mut self) {
         self.skills_overview_said = true;
+    }
+
+    /// Whether `scratch_said` is set.
+    pub fn scratch_said(&self) -> bool {
+        self.scratch_said
+    }
+
+    /// Record that the session's directory was named in this process, so a later turn does not
+    /// say it again.
+    ///
+    /// Called with the note just pushed, so a compaction that takes it out of the request can send
+    /// it again.
+    pub fn scratch_was_said(&mut self) {
+        self.scratch_said = true;
+        self.scratch_at = self.messages.len().checked_sub(1);
+        self.carried_scratch = None;
     }
 
     /// See `long_descriptions_said`.
@@ -1529,9 +1591,14 @@ impl Conversation {
                 *position += 1;
             }
         };
-        for position in [&mut self.task_at, &mut self.task_list, &mut self.prompt_at]
-            .into_iter()
-            .flatten()
+        for position in [
+            &mut self.task_at,
+            &mut self.task_list,
+            &mut self.prompt_at,
+            &mut self.scratch_at,
+        ]
+        .into_iter()
+        .flatten()
         {
             after(position);
         }
@@ -1701,8 +1768,9 @@ impl Conversation {
         self.recall_fallback_said = said;
     }
 
-    /// What a cut at `cut` sends in front of the messages it keeps: the delegate's task and the
-    /// task list where the cut passes them, then the skills it passes (RETRIEVE-10).
+    /// What a cut at `cut` sends in front of the messages it keeps: the delegate's task, the task
+    /// list and the note naming the session's directory where the cut passes them, then the skills
+    /// it passes (RETRIEVE-10).
     ///
     /// Each from a position or a tag, as compaction finds them, and never from what a message
     /// says. What an earlier summary carried is carried again once the cut passes the summary.
@@ -1716,8 +1784,13 @@ impl Conversation {
             Some(_) => None,
             None => self.carried_task_list.as_deref(),
         };
+        let scratch = match self.scratch_at {
+            Some(at) if at < cut => self.messages[at].message.content.as_text(),
+            Some(_) => None,
+            None => self.carried_scratch.as_deref(),
+        };
         let mut pinned = Vec::new();
-        if task.is_some() || list.is_some() {
+        if task.is_some() || list.is_some() || scratch.is_some() {
             let mut note = PINNED_PREFIX.to_string();
             if let Some(task) = task {
                 note.push_str("\n\nThe task you were given, word for word:\n");
@@ -1726,6 +1799,10 @@ impl Conversation {
             if let Some(list) = list {
                 note.push_str("\n\nYour task list, as you last wrote it:\n");
                 note.push_str(list);
+            }
+            if let Some(scratch) = scratch {
+                note.push_str("\n\n");
+                note.push_str(scratch);
             }
             pinned.push(Stored {
                 message: Arc::new(Message::user(note)),
@@ -1788,6 +1865,20 @@ impl Conversation {
             Some(at) => self.task_list = Some(at - boundary + 1 + carried.len()),
             None => {}
         }
+        // The same for the note naming the session's directory: nothing says it again once it has
+        // been said, and the system prompt points at it.
+        match self.scratch_at {
+            Some(at) if at < boundary => {
+                self.carried_scratch = self.messages[at]
+                    .message
+                    .content
+                    .as_text()
+                    .map(str::to_string);
+                self.scratch_at = None;
+            }
+            Some(at) => self.scratch_at = Some(at - boundary + 1 + carried.len()),
+            None => {}
+        }
         // A position in the messages the drain below moves. What the summary and the carried
         // skills stand in front of is the same message as before, so the line moves with it.
         self.masked_before = match self.masked_before.checked_sub(boundary) {
@@ -1819,6 +1910,10 @@ impl Conversation {
         if let Some(list) = &self.carried_task_list {
             note.push_str("\n\nYour task list, as you last wrote it:\n");
             note.push_str(list);
+        }
+        if let Some(scratch) = &self.carried_scratch {
+            note.push_str("\n\n");
+            note.push_str(scratch);
         }
         self.messages.insert(
             0,
@@ -2195,6 +2290,7 @@ impl Conversation {
             reads: ShownReads::default(),
             task_list: None,
             open_tasks: None,
+            waiting_tasks: None,
             open_tasks_asked: false,
             carried_task_list: None,
             task_at: None,
@@ -2203,6 +2299,9 @@ impl Conversation {
             masked_before: 0,
             skills_overview_said: false,
             long_descriptions_said: false,
+            scratch_said: false,
+            scratch_at: None,
+            carried_scratch: None,
             retrieval_cut,
             left_out: snapshot.left_out,
             pinned,
@@ -4771,6 +4870,53 @@ mod tests {
         assert!(!note.contains("THE-TASK"), "{note}");
     }
 
+    /// A cut that falls after the note naming the session's directory still leaves the path in the
+    /// request, once, through a second cut as well.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_scratch_note_survives_compaction_once() {
+        let note = "The scratch directory of this session is /tmp/scratch-xyz.";
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("first prompt"));
+        conversation.push_composed_from(Message::user(note), Composed::Notice, Provenance::Driver);
+        conversation.scratch_was_said();
+        for round in 0..20 {
+            a_read_round(&mut conversation, round);
+        }
+        for round in 0..2 {
+            let boundary = conversation
+                .compaction_boundary()
+                .expect("something to compact");
+            conversation.compacted(boundary, &format!("summary {round}"));
+            assert_eq!(holding(&conversation, "/tmp/scratch-xyz"), 1, "cut {round}");
+            for more in 0..20 {
+                a_read_round(&mut conversation, 100 * (round + 1) + more);
+            }
+        }
+    }
+
+    /// A note in the part the cut keeps is sent as it was, not twice.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_scratch_note_the_cut_leaves_in_place_is_not_sent_again() {
+        let mut conversation = Conversation::new();
+        for prompt in ["a", "b", "c", "d", "e", "f", "g", "h"] {
+            an_exchange(&mut conversation, prompt);
+        }
+        conversation.push_composed_from(
+            Message::user("scratch is /tmp/scratch-xyz"),
+            Composed::Notice,
+            Provenance::Driver,
+        );
+        conversation.scratch_was_said();
+        conversation.push(Message::assistant("ok"));
+
+        let boundary = conversation.compaction_boundary().expect("a cut");
+        conversation.compacted(boundary, "they started");
+
+        assert_eq!(holding(&conversation, "/tmp/scratch-xyz"), 1);
+    }
+
     /// COMPACT-19: a conversation nobody recorded a task in gains none, so a person's own long turn
     /// is unchanged.
     #[test]
@@ -6014,6 +6160,68 @@ mod tests {
         assert_eq!(conversation.reads.token_of("big.log", 1, 2000), None);
     }
 
+    /// Excerpts stored in front of the turn's prompt move every message after them one place, so
+    /// the record of what was read moves with them (RETRIEVE-8, RETRIEVE-30). It rejects an
+    /// `insert_excerpts` that leaves read positions as they were: the entry would then name the
+    /// call before its result, the result would be dropped by masking while the planner is still
+    /// told the lines are in front of it, or kept while they are gone.
+    #[test]
+    fn an_excerpt_stored_in_front_of_a_read_moves_the_read_with_its_message() {
+        for retrieved in [true, false] {
+            let mut conversation = Conversation::new();
+            conversation.push(Message::user("read it"));
+            conversation.prompt_given();
+            let mut call = a_call("read_file", r#"{"path":"big.log"}"#);
+            call.id = "call-1".to_string();
+            conversation.push(Message::assistant_calling("looking", vec![call]));
+            conversation.push(Message::tool_result("call-1", "BULK ".repeat(20_000)));
+            conversation.shown_read(a_window("big.log", "tok"));
+            conversation.push(Message::assistant("read it"));
+            assert_eq!(
+                conversation
+                    .reads
+                    .shown
+                    .iter()
+                    .map(|(at, _)| *at)
+                    .collect::<Vec<_>>(),
+                [2]
+            );
+
+            if retrieved {
+                conversation.insert_retrieved("EXCERPTS".into(), vec![(0, 0)], "m".into());
+            } else {
+                conversation.insert_recalled("EXCERPTS".into(), vec![(0, 0)], "m".into());
+            }
+            assert_eq!(
+                conversation.messages()[0].message.content.text(),
+                "EXCERPTS"
+            );
+            assert_eq!(
+                conversation
+                    .reads
+                    .shown
+                    .iter()
+                    .map(|(at, _)| *at)
+                    .collect::<Vec<_>>(),
+                [3],
+                "the read stayed at the position it had before the excerpts went in"
+            );
+
+            for (prompt, answer) in [("second", "b"), ("third", "c"), ("fourth", "d")] {
+                conversation.push(Message::user(prompt));
+                conversation.push(Message::assistant(answer));
+            }
+            assert!(conversation.reads.token_of("big.log", 1, 2000).is_some());
+
+            assert!(conversation.mask_old_results().is_some());
+            assert_eq!(
+                conversation.reads.token_of("big.log", 1, 2000),
+                None,
+                "the result was dropped and the read is still recorded as shown"
+            );
+        }
+    }
+
     /// A result sent as prose is a result too, and is found by its tag.
     #[test]
     fn a_prose_shaped_result_is_dropped_the_same_way() {
@@ -6356,6 +6564,79 @@ mod tests {
             wire(&resumed.with_system("SYSTEM")),
             wire(&conversation.with_system("SYSTEM"))
         );
+    }
+
+    /// RETRIEVE-10. A cut that passes the note naming the session's directory sends the path after
+    /// it, once.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_pinned_scratch_note_is_sent_after_the_cut() {
+        let mut conversation = Conversation::new();
+        an_exchange(&mut conversation, "first");
+        conversation.push_composed_from(
+            Message::user("scratch is /tmp/scratch-xyz"),
+            Composed::Notice,
+            Provenance::Driver,
+        );
+        conversation.scratch_was_said();
+        for n in 0..6 {
+            an_exchange(&mut conversation, &format!("prompt {n}"));
+        }
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        assert!(cut > 3, "the note has to be passed");
+        conversation.cut_for_retrieval(cut);
+
+        let sent = request_texts(&conversation);
+        let holding_path = sent
+            .iter()
+            .filter(|text| text.contains("/tmp/scratch-xyz"))
+            .count();
+        assert_eq!(holding_path, 1, "{sent:?}");
+        assert!(sent[0].starts_with(PINNED_PREFIX), "{}", sent[0]);
+        assert!(
+            sent[0].ends_with("scratch is /tmp/scratch-xyz"),
+            "{}",
+            sent[0]
+        );
+    }
+
+    /// RETRIEVE-10. A summary that carries the note, passed by a later cut, has the path sent after
+    /// that cut as well.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_scratch_note_a_summary_carries_is_sent_after_a_later_cut() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("first prompt"));
+        conversation.push_composed_from(
+            Message::user("scratch is /tmp/scratch-xyz"),
+            Composed::Notice,
+            Provenance::Driver,
+        );
+        conversation.scratch_was_said();
+        for round in 0..20 {
+            a_read_round(&mut conversation, round);
+        }
+        let boundary = conversation
+            .compaction_boundary()
+            .expect("something to compact");
+        conversation.compacted(boundary, "summary");
+        for n in 0..6 {
+            an_exchange(&mut conversation, &format!("later {n}"));
+        }
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        assert!(cut > 1, "the summary has to be passed");
+        conversation.cut_for_retrieval(cut);
+
+        let sent = request_texts(&conversation);
+        let holding_path = sent
+            .iter()
+            .filter(|text| text.contains("/tmp/scratch-xyz"))
+            .count();
+        assert_eq!(holding_path, 1, "{sent:?}");
     }
 
     /// RETRIEVE-10. Nothing is pinned where the cut passes nothing to carry, so a plain bot

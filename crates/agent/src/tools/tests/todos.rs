@@ -153,6 +153,76 @@ fn an_accepted_list_carries_the_count_of_its_open_tasks_at_its_own_label() {
     );
 }
 
+/// TURN-12. The count of waiting tasks is the list's own: labelled as the list is, a subset of the
+/// open count, and refused to the driver where the list is untrusted.
+///
+/// Rejects a waiting count computed from the wrong status (done tasks counted, or all open tasks
+/// counted) and one labelled trusted whatever the list's label.
+#[test]
+fn an_accepted_list_carries_the_count_of_its_waiting_tasks_at_its_own_label() {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::FileRead]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut reporter = RecordingReporter::default();
+    let produced = todo_write(
+        &mut policy,
+        &mut reporter,
+        &SlotStore::new(),
+        &list(&[
+            ("Read the file", "completed"),
+            ("Rerun CI", "waiting"),
+            ("Ask the owner", "waiting"),
+            ("Run the tests", "pending"),
+            ("Document it", "cancelled"),
+        ]),
+    );
+    let waiting = produced
+        .waiting_tasks
+        .expect("an accepted list carries its waiting count");
+    assert_eq!(waiting.label(), policy.context_label());
+    assert_eq!(
+        policy
+            .read_trusted_content("todo_write", &waiting)
+            .expect("the context is trusted"),
+        2
+    );
+    let open = produced.task_list.expect("the open count");
+    assert_eq!(
+        policy
+            .read_trusted_content("todo_write", &open)
+            .expect("trusted"),
+        3
+    );
+
+    let mut untrusted = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::FileRead]),
+        &mut sink,
+    )
+    .expect("policy")
+    .resuming(Integrity::Untrusted);
+    let produced = todo_write(
+        &mut untrusted,
+        &mut reporter,
+        &SlotStore::new(),
+        &list(&[("Rerun CI", "waiting")]),
+    );
+    let waiting = produced.waiting_tasks.expect("count");
+    assert_eq!(waiting.label().integrity, Integrity::Untrusted);
+    assert!(
+        untrusted
+            .read_trusted_content("todo_write", &waiting)
+            .is_err(),
+        "the driver was handed a waiting count made from an untrusted list"
+    );
+}
+
 /// TURN-12. A list written in a context that has met something untrusted is labelled
 /// untrusted, and so is its count, which the turn's trusted read then refuses. A count
 /// labelled trusted whatever the list's label would let the driver decide from content it

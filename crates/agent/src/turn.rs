@@ -47,7 +47,7 @@ mod task;
 
 pub use hooked::Hooked;
 pub(crate) use hooked::trouble_sentences;
-use hooked::{fire_checkout_made, fire_hooks, say_prompt_notices};
+use hooked::{fire_checkout_made, fire_hooks, say_prompt_notices, say_stopped_plugins};
 pub(crate) use prompts::PLANNING;
 use prompts::{FOR_A_PERSON, KEPT_FACTS, KEPT_FACTS_END, OPENING};
 pub use result::*;
@@ -1688,6 +1688,49 @@ fn wait_for_a_wake<C: Confirmer, R: Reporter>(
     waits.note_typed(arrival.typed());
 }
 
+/// What the planner is told of a delegate's report, and what the person is shown of it.
+///
+/// `presented` is what the gate decided the planner may hold, so which arm applies was settled
+/// there (DELEGATE-8). Where the planner was given the words, the person is shown the same words.
+/// Where it was given a reference, the planner's text names the reference and holds none of the
+/// words, and the person is shown the preview every quarantined result is drawn with, marked as
+/// kept from the planner (WATCH-13). `opening` is the driver's own sentence about how the run
+/// ended, which both arms put first.
+///
+/// Nothing here compares the report: the arm is the gate's answer, and the label shown is the
+/// reference's own.
+fn told_and_drawn_report<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    presented: &Presentation,
+    report: &Labelled<String>,
+    kind: &str,
+    opening: &str,
+) -> (String, crate::report::Reported) {
+    match presented {
+        Presentation::Visible(text) => {
+            policy.heard_from_delegate(report.label());
+            (
+                format!("{opening} It reported:\n\n{text}"),
+                crate::report::Reported::Said(text.clone()),
+            )
+        }
+        Presentation::Quarantined(reference) => {
+            let shown = preview_for(policy, "delegate", report);
+            (
+                format!("{opening} {}", reference.describe()),
+                crate::report::Reported::Kept(crate::report::Shown {
+                    as_the_planner_had_it: None,
+                    origin: format!("a {kind} delegate"),
+                    reach: crate::report::Reach::NotThePlanner,
+                    label: reference.label.to_string(),
+                    lines: shown.lines,
+                    preview: shown.preview,
+                }),
+            )
+        }
+    }
+}
+
 /// Take back every delegate that has finished, or wait for one where `wait` is set.
 ///
 /// A report reaches the planner as a message of its own rather than as the result of the call
@@ -1800,36 +1843,15 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 // was given the words, the person may read the same words; where it was given a
                 // reference, they get the preview every quarantined result is drawn with, which
                 // is the same arrangement as a read the planner may not see.
-                let (body, reported) = match &presented {
-                    Presentation::Visible(text) => {
-                        policy.heard_from_delegate(delegated.report.label());
-                        (
-                            format!(
-                                "{TOOL_BUDGET_SPENT} {stopped}The {kind} delegate {id} has finished.{bound} \
-                                 It reported:\n\n{text}"
-                            ),
-                            crate::report::Reported::Said(text.clone()),
-                        )
-                    }
-                    Presentation::Quarantined(reference) => {
-                        let shown = preview_for(policy, "delegate", &delegated.report);
-                        (
-                            format!(
-                                "{TOOL_BUDGET_SPENT} {stopped}The {kind} delegate {id} has finished.{bound} \
-                                 {}",
-                                reference.describe()
-                            ),
-                            crate::report::Reported::Kept(crate::report::Shown {
-                                as_the_planner_had_it: None,
-                                origin: format!("a {kind} delegate"),
-                                reach: crate::report::Reach::NotThePlanner,
-                                label: reference.label.to_string(),
-                                lines: shown.lines,
-                                preview: shown.preview,
-                            }),
-                        )
-                    }
-                };
+                let (body, reported) = told_and_drawn_report(
+                    policy,
+                    &presented,
+                    &delegated.report,
+                    &kind,
+                    &format!(
+                        "{TOOL_BUDGET_SPENT} {stopped}The {kind} delegate {id} has finished.{bound}"
+                    ),
+                );
                 let from = provenance_of(&presented, "delegate report");
                 (note, body, false, Some(reported), from)
             }
@@ -2240,6 +2262,7 @@ fn reads_that_run_together(
     confined_to: Option<&[String]>,
     offered: Option<&[bravebot_aichat::protocol::Tool]>,
     hooks: &bravebot_config::hooks::Hooks,
+    plugin_hooks: &crate::plugin_hooks::PluginHooks,
 ) -> usize {
     let mut counting = repeats.clone();
     let mut together = 0;
@@ -2254,6 +2277,10 @@ fn reads_that_run_together(
                 )
                 .next()
                 .is_some()
+            || plugin_hooks.declares(
+                bravebot_config::hooks::Moment::ToolFinished,
+                Some(&call.function.name),
+            )
             || counting.is_held(call)
         {
             break;
@@ -2327,6 +2354,11 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     //
     // Not read at all in a safe session, which is what leaves no hook to fire.
     let hooks = crate::hooks::in_force(task.home.as_deref());
+    // The hooks enabled plugins carry. Never merged into `hooks`: each moment joins them with the
+    // person's own through `PluginHooks::joined_with`, which asks before one fires (PLUGIN-7).
+    let plugin_hooks = crate::plugin_hooks::PluginHooks::read(task.home.as_deref());
+    let hook_answers = task.account_session().plugin_hook_answers();
+    let can_ask_about_hooks = confirmer.can_ask_about_a_hook();
 
     // The turn moments belong to the turn a person asked for. A delegate is a run inside this one,
     // started by a call the person did not make, so firing "the turn began" for each of them would
@@ -2339,10 +2371,12 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // spawned it armed, so only a turn a person asked for arms it (HOOK-2).
     let prompt_notices = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let prompts_hooked = own
-        && hooks
+        && (hooks
             .firing(bravebot_config::hooks::Moment::PromptShown, None)
             .next()
-            .is_some();
+            .is_some()
+            || (can_ask_about_hooks
+                && plugin_hooks.declares(bravebot_config::hooks::Moment::PromptShown, None)));
     if prompts_hooked {
         // Hook programs can write files outside the backup journal, regardless of their outcome.
         workspace.mark_rewind_gap(crate::rewind::CoverageGap::Hook);
@@ -2350,11 +2384,20 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
             checkout.mark_worked_in();
         }
         let hooks = hooks.clone();
+        let plugin_hooks = plugin_hooks.clone();
+        let session = task.account_session().clone();
         let directory = workspace.root().to_path_buf();
         let notices = std::sync::Arc::clone(&prompt_notices);
         confirmer.alert_when_asking(Some(std::sync::Arc::new(move || {
-            let fired = crate::hooks::fire(
+            // Only a plugin hook already answered yes: this fires with a question on screen.
+            let joined = plugin_hooks.joined_without_asking(
                 &hooks,
+                bravebot_config::hooks::Moment::PromptShown,
+                session.plugin_hook_answers(),
+                can_ask_about_hooks,
+            );
+            let fired = crate::hooks::fire(
+                &joined,
                 bravebot_config::hooks::Moment::PromptShown,
                 None,
                 &directory,
@@ -2367,7 +2410,13 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     }
     let began = match own {
         true => fire_hooks(
-            &hooks,
+            &plugin_hooks.joined_with(
+                &hooks,
+                bravebot_config::hooks::Moment::TurnStarted,
+                None,
+                hook_answers,
+                &mut *confirmer,
+            ),
             bravebot_config::hooks::Moment::TurnStarted,
             None,
             workspace,
@@ -2375,6 +2424,9 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         ),
         false => Vec::new(),
     };
+    // A plugin whose directory no longer matches its record, found while the hooks above were
+    // considered, is named once in a session (PLUGIN-7).
+    let began = [began, say_stopped_plugins(hook_answers, reporter)].concat();
 
     // The driver has written a checkout for this delegate and nothing has run in it: the moment a
     // person's setup command is for (HOOK-2). A delegate that shares its parent's checkout is not
@@ -2386,9 +2438,20 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
             .is_some_and(|checkout| checkout.made_for() == spec.id())
     });
     let set_up = match given {
-        true => fire_checkout_made(&hooks, workspace, reporter),
+        true => fire_checkout_made(
+            &plugin_hooks.joined_with(
+                &hooks,
+                bravebot_config::hooks::Moment::CheckoutMade,
+                None,
+                hook_answers,
+                &mut *confirmer,
+            ),
+            workspace,
+            reporter,
+        ),
         false => Vec::new(),
     };
+    let set_up = [set_up, say_stopped_plugins(hook_answers, reporter)].concat();
 
     // Where the rounds' own hook sentences land. Held here rather than inside the rounds so that
     // a turn which failed part way through still has them: the outcome that would have carried
@@ -2406,6 +2469,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
             task,
             cancel,
             hooks: &hooks,
+            plugin_hooks: &plugin_hooks,
             prompt_notices: &prompt_notices,
             advisor: advisor.as_deref(),
             lent_premium_key,
@@ -2429,7 +2493,13 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
 
     let ended = match own {
         true => fire_hooks(
-            &hooks,
+            &plugin_hooks.joined_with(
+                &hooks,
+                bravebot_config::hooks::Moment::TurnFinished,
+                None,
+                hook_answers,
+                &mut *confirmer,
+            ),
             bravebot_config::hooks::Moment::TurnFinished,
             None,
             workspace,
@@ -2437,6 +2507,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         ),
         false => Vec::new(),
     };
+    let ended = [ended, say_stopped_plugins(hook_answers, reporter)].concat();
 
     // The rounds' sentences alone, for the caller that asked: the two ends of the turn never fire
     // for a delegate, so what its calls fired and what its checkout's setup said are the whole of
@@ -2484,6 +2555,9 @@ struct Inputs<'a> {
     task: &'a Task,
     cancel: &'a Cancel,
     hooks: &'a bravebot_config::hooks::Hooks,
+    /// The hooks enabled plugins carry, asked about before one fires (PLUGIN-7). Kept apart from
+    /// `hooks`, which holds only what the person wrote.
+    plugin_hooks: &'a crate::plugin_hooks::PluginHooks,
     /// What `prompt-shown` hooks said went wrong since the turn last drained it. See [`run_inner`].
     prompt_notices: &'a std::sync::Mutex<Vec<String>>,
     /// The model the planner may consult, where it may consult one. See [`advisor_for`].
@@ -2844,6 +2918,7 @@ where
         task,
         cancel: _,
         hooks: _,
+        plugin_hooks: _,
         prompt_notices: _,
         advisor,
         lent_premium_key,
@@ -2906,7 +2981,14 @@ where
     let delegates = policy.delegates().clone();
 
     let resolved = setup::offered_tools(
-        task, workspace, &delegates, advisor, scheduling, arming, policy,
+        task,
+        workspace,
+        &delegates,
+        advisor,
+        scheduling,
+        arming,
+        policy,
+        config.offers_web_search(),
     );
     // What the list holds, read before the skills are shown so the words around a skill's files name
     // only tools it holds. The list is not changed after this except by adding a server's tools.
@@ -3433,6 +3515,21 @@ where
     // conversation, and not what the turn goes on to do.
     conversation.opening_done();
 
+    // Where the session's own directory is, said once per process in the conversation and not in
+    // the system prompt (INSTR-9). Its name is made from the process id and the clock, so it
+    // differs on every start, and the system prompt is the front of every request: a prefix cache
+    // is matched from the first byte, so a path there would make a new process write the whole
+    // prompt again and read none of it. Said to a delegate as well, whose conversation is its own
+    // and whose prompt does not hold the path. Marked only where something was said, and not part
+    // of a snapshot, so a resumed session names its new directory after the old one. A compaction
+    // that takes the note out of the request carries it across (`Conversation::compacted`).
+    if !conversation.scratch_said()
+        && let Some(note) = crate::preamble::scratch_note(workspace)
+    {
+        conversation.push_composed_from(Message::user(note), Composed::Notice, Provenance::Driver);
+        conversation.scratch_was_said();
+    }
+
     // The count and names of what the default listing leaves out, put in the conversation once
     // per session rather than said again every turn (SKILL-19): the count tells the planner
     // whether searching could find anything at all, and the names are a hint for when it might
@@ -3842,6 +3939,7 @@ where
         task,
         cancel,
         hooks,
+        plugin_hooks,
         prompt_notices: _,
         advisor: _,
         lent_premium_key: _,
@@ -4170,6 +4268,7 @@ where
                     addressed.as_ref().map(|addressed| addressed.tools()),
                     Some(&state.offered),
                     hooks,
+                    plugin_hooks,
                 );
                 examined = index + reads.max(1);
                 if reads > 0 {
@@ -4439,13 +4538,14 @@ where
                 // and the planner is not being given the body: it gets the references, and a
                 // capped sample of a tree read as the whole of it is how a planner concludes a
                 // file it cannot find does not exist.
-                // The directories the per-directory cap cut are the last references, so each is
-                // paired with its count by position and never by a name.
-                let cut: Vec<(String, usize)> = ids
+                // The directories a per-directory cap cut are the last references, so each is
+                // paired with its counts by position and never by a name.
+                let cut: Vec<(String, usize, usize)> = ids
                     [ids.len().saturating_sub(entries.left_out.len())..]
                     .iter()
                     .map(ToString::to_string)
                     .zip(entries.left_out.iter().copied())
+                    .map(|(reference, (files, directories))| (reference, files, directories))
                     .collect();
                 let capped =
                     sentences::listing_capped_note(output.incomplete, entries.at_the_cap, &cut);
@@ -5225,6 +5325,8 @@ where
                 let in_answer = state.reminded.list_answers_a_question();
                 state.reminded.list_accepted(state.steps, state.worked.work);
                 conversation.open_tasks_counted(shown_window.then_some(open), in_answer);
+                conversation
+                    .waiting_tasks_counted(output.waiting_tasks.take().filter(|_| shown_window));
             }
             if let Some(cancelled) = cancellation {
                 attach_vetted_pictures(policy, conversation, &mut attached);
@@ -5866,6 +5968,16 @@ mod tests {
     /// Collect one delegate that came back `came` having done `work`, and return what the planner
     /// was told and the person's note.
     fn collected_with(came: Came, work: crate::outcome::Work) -> (String, String) {
+        let (told, note, _) = collected_and_drawn(came, work);
+        (told, note)
+    }
+
+    /// [`collected_with`], and the report `collect_delegates` handed the reporter for the delegate,
+    /// which is what the person is shown of it.
+    fn collected_and_drawn(
+        came: Came,
+        work: crate::outcome::Work,
+    ) -> (String, String, Option<crate::report::Reported>) {
         type Joined = (
             crate::delegate::Ended,
             crate::outcome::Spent,
@@ -5953,7 +6065,72 @@ mod tests {
             .find(|text| text.contains("delegate d1"))
             .expect("the planner was never told about the delegate");
         let note = reporter.delegates_finished[0].1.clone();
-        (told, note)
+        assert_eq!(
+            reporter.delegates_reported.len(),
+            1,
+            "one delegate was collected and the reporter was told of it other than once"
+        );
+        let drawn = reporter.delegates_reported[0].1.clone();
+        (told, note, drawn)
+    }
+
+    /// WATCH-13 and DELEGATE-8 at the call `collect_delegates` makes, with the delegate's report
+    /// carried through the real presentation step. A report the planner is handed a reference to
+    /// is drawn for the person as `Reported::Kept`, kept from the planner and holding the words as
+    /// a preview, and the planner is told the reference and none of the words. A report it is
+    /// given in words is drawn as `Reported::Said` with the same words.
+    ///
+    /// Rejects a `collect_delegates` that draws a `Said` of the words for a report the planner
+    /// was only handed a reference to (words on screen with no mark, which the clause forbids),
+    /// one that passes `None` for a quarantined report so the person sees nothing of it, one that
+    /// draws a `Kept` for a report the planner read, and one that tells the planner the words of
+    /// a report it may not read.
+    #[test]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn what_collect_delegates_draws_for_the_person_follows_what_the_planner_was_given() {
+        use crate::report::{Reach, Reported};
+
+        let (told, _, drawn) = collected_and_drawn(Came::Untrusted, BUILT);
+        assert!(
+            !told.contains("THE-REPORT-WORDS"),
+            "the planner was given the words of a report it may not read: {told}"
+        );
+        assert!(
+            told.contains("ref:"),
+            "the planner was not given a reference to the report: {told}"
+        );
+        match drawn {
+            Some(Reported::Kept(shown)) => {
+                assert_eq!(
+                    shown.reach,
+                    Reach::NotThePlanner,
+                    "kept from the wrong context"
+                );
+                assert_eq!(shown.origin, "a one-round delegate");
+                assert_eq!(
+                    shown.preview,
+                    vec!["THE-REPORT-WORDS"],
+                    "the person was not given the words as a preview"
+                );
+                assert_eq!(shown.lines, 1);
+                assert_eq!(shown.label, "(U,priv)");
+            }
+            Some(Reported::Said(text)) => {
+                panic!("a report the planner may not read was drawn as said: {text}")
+            }
+            None => panic!("a report the planner was handed a reference to was drawn nowhere"),
+        }
+
+        let (told, _, drawn) = collected_and_drawn(Came::Clean, BUILT);
+        assert!(
+            told.contains("It reported:\n\nTHE-REPORT-WORDS"),
+            "the planner was not given a clean report in words: {told}"
+        );
+        assert_eq!(
+            drawn,
+            Some(Reported::Said("THE-REPORT-WORDS".to_string())),
+            "a report the planner read was not drawn as said, with the same words"
+        );
     }
 
     /// Two commands and one write, as a delegate that edited a file and then built it reports.
@@ -6077,6 +6254,82 @@ mod tests {
                 last_command_failed: false,
             }
         );
+    }
+
+    /// WATCH-13 and DELEGATE-8 for a report the planner was handed a reference to. No turn reaches
+    /// this arm today: a delegate starts from a trusted conversation and nothing it does lowers
+    /// that, so the arm is given a `Presentation::Quarantined` directly. The planner is told the
+    /// reference and none of the words. The person is given the words as a preview, kept from the
+    /// planner, with the label the reference carries and the delegate it came from. A report the
+    /// planner was given in words is the control: said, unmarked, and told in full.
+    #[test]
+    fn a_report_the_planner_was_handed_a_reference_to_is_kept_from_it_and_drawn_marked() {
+        use crate::report::{Reach, Reported};
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "draw a quarantined report");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::default(),
+            &mut sink,
+        )
+        .unwrap();
+        // The label comes from the kernel, as in the tests around this one, so the report is
+        // never given a label the kernel would not.
+        let report = policy
+            .label_piped_input("WHAT-THE-UNVOUCHED-LOOK-FOUND\nand-a-second-line".to_string());
+        let reference = bravebot_core::reference::Reference::new(
+            bravebot_core::SlotId::new("ref:1"),
+            "a reader delegate",
+            2,
+            41,
+            report.label(),
+        );
+        let kept = Presentation::Quarantined(reference.clone());
+
+        let (told, drawn) = told_and_drawn_report(&mut policy, &kept, &report, "reader", "OPENING");
+
+        assert_eq!(
+            told,
+            format!("OPENING {}", reference.describe()),
+            "the planner was told something other than the opening and the reference"
+        );
+        assert!(
+            !told.contains("WHAT-THE-UNVOUCHED-LOOK-FOUND") && !told.contains("It reported"),
+            "the planner was given the words of a report it may not read: {told}"
+        );
+        match drawn {
+            Reported::Kept(shown) => {
+                assert_eq!(
+                    shown.reach,
+                    Reach::NotThePlanner,
+                    "kept from the wrong context"
+                );
+                assert_eq!(
+                    shown.label, "(U,priv)",
+                    "the label drawn is not the reference's"
+                );
+                assert_eq!(shown.origin, "a reader delegate");
+                assert_eq!(shown.as_the_planner_had_it, None);
+                assert_eq!(shown.lines, 2);
+                assert_eq!(
+                    shown.preview,
+                    vec!["WHAT-THE-UNVOUCHED-LOOK-FOUND", "and-a-second-line"],
+                    "the person was not given the words as a preview"
+                );
+            }
+            Reported::Said(text) => {
+                panic!("a report the planner may not read was drawn as said: {text}")
+            }
+        }
+
+        // The control reuses the report above: the words arm takes its text from the presentation
+        // and only the report's confidentiality from the report, so no label is built for it.
+        let said = Presentation::Visible("THE-WORDS".to_string());
+        let (told, drawn) = told_and_drawn_report(&mut policy, &said, &report, "reader", "OPENING");
+        assert_eq!(told, "OPENING It reported:\n\nTHE-WORDS");
+        assert_eq!(drawn, Reported::Said("THE-WORDS".to_string()));
     }
 
     /// DELEGATE-26 where the report is quarantined. The sentence about the bound is the driver's
@@ -7046,6 +7299,94 @@ mod tests {
         );
     }
 
+    /// RUN-15. A delegate never borrows the session's jobs, even from a task that was handed
+    /// them: what it starts ends with its own turn and the session's list stays empty. The same
+    /// line in a person's turn is left running in the session's list, so the delegate's empty
+    /// list is the rule and not a line that never started a job. A delegate that took the
+    /// session's jobs would leave its program running after the turn that spawned it ended.
+    #[test]
+    fn a_delegate_handed_the_sessions_jobs_ends_what_it_starts_with_its_own_turn() {
+        use crate::report::JobEvent;
+
+        let config = Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("http://127.0.0.1:9/never-asked".into()),
+            _ => None,
+        })
+        .unwrap();
+        for (tag, delegated, in_the_session, dropped) in
+            [("delegate", true, 0, 1), ("person", false, 1, 0)]
+        {
+            let scratch = crate::testutil::scratch_dir(&format!("delegate-borrows-no-jobs-{tag}"));
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let mut trust = TrustStore::new("/work");
+            trust.trust(".");
+            let jobs = tools::SessionJobs::new();
+            let task = if delegated {
+                Task::delegated(a_delegate_spec("worker", held(&Task::new(""))))
+            } else {
+                Task::new("start it")
+            }
+            .keeping_jobs(jobs.clone());
+            let mut reporter = crate::report::RecordingReporter::default();
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            crate::backend::scripted::script(vec![
+                ceiling::said(
+                    "",
+                    &[("run", r#"{"command":"sleep 30","background":true}"#)],
+                    None,
+                ),
+                ceiling::said("done", &[], None),
+            ]);
+            let outcome = resume(
+                &config,
+                &Egress::new(),
+                &workspace,
+                &task,
+                &mut Conversation::new(),
+                &mut crate::confirm::ApproveRuns,
+                &mut reporter,
+                &mut sink,
+                trust,
+                TrustedPrograms::new(),
+                None,
+                &Cancel::new(),
+            )
+            .outcome;
+            crate::backend::scripted::clear();
+            outcome.expect("the turn runs");
+
+            let started = reporter
+                .jobs
+                .iter()
+                .filter(|event| matches!(event, JobEvent::Started { .. }))
+                .count();
+            assert_eq!(
+                started, 1,
+                "{tag}: the job did not start: {:?}",
+                reporter.jobs
+            );
+            assert_eq!(
+                jobs.lock().len(),
+                in_the_session,
+                "{tag}: the session's jobs after the turn"
+            );
+            let ended_with_the_turn = reporter
+                .jobs
+                .iter()
+                .filter(|event| matches!(event, JobEvent::Dropped { .. }))
+                .count();
+            assert_eq!(
+                ended_with_the_turn, dropped,
+                "{tag}: jobs the turn ended: {:?}",
+                reporter.jobs
+            );
+        }
+    }
+
     /// A turn holds a grant for each server the session reached and for no other. A worker it
     /// spawns holds the same ones, and a reader and a checker hold none, whatever servers the
     /// delegate's own task names: its grants are its spec's.
@@ -7080,6 +7421,111 @@ mod tests {
             };
             assert_eq!(servers, expected, "a {kind}'s server grants");
         }
+    }
+
+    /// PREM-9: what `/status` says about the tier after a turn is the turn's own `premium`, so it
+    /// is true where a key was handed to the turn's requests and false where none was: no key
+    /// stored, a key stored beside a premium host that is not Brave's, and a delegate that was lent
+    /// none. A turn that set it from the configuration, or to a constant, would report the tier
+    /// the build knows about and not the one the turn ran on.
+    ///
+    /// The backend is the scripted one, so no request leaves and the premium host named here is
+    /// never reached; it only has to be a host `PremiumKey::held` accepts.
+    #[test]
+    fn a_turn_reports_premium_when_it_was_handed_a_key_to_present_and_not_otherwise() {
+        use self::ceiling::said;
+        use self::fallback::{configured, take};
+        use bravebot_aichat::SubscriptionCredential;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Wallet(AtomicUsize);
+        impl crate::shared::Spends for Wallet {
+            fn spend_one(&self) -> SubscriptionCredential {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                SubscriptionCredential {
+                    key: bravebot_config::Secret::new("a-lent-key"),
+                }
+            }
+        }
+
+        let holding = |premium_host: &str| {
+            let mut config = configured(None);
+            config.premium_key = Some(bravebot_config::Secret::new("the-premium-key"));
+            config.premium_endpoint = Some(premium_host.to_string());
+            config
+        };
+        let braves = holding("https://ai-chat-premium.bsg.brave.software");
+        let theirs = holding("http://127.0.0.1:9/their-own-host");
+        let premium_of = |name: &str, config: &Config| {
+            take(
+                name,
+                config,
+                Task::new("look it up"),
+                vec![said("done", &[], None)],
+            )
+            .outcome
+            .expect("the turn answered")
+            .premium
+        };
+
+        assert!(
+            !premium_of("premium-none-held", &configured(None)),
+            "a turn holding no key reported premium"
+        );
+        assert!(
+            !premium_of("premium-not-brave", &theirs),
+            "a key stored beside a host that is not Brave's was reported as sent"
+        );
+        assert!(
+            premium_of("premium-held", &braves),
+            "a turn that was handed the key to present did not report premium"
+        );
+
+        // A delegate looks for no key of its own, so what it reports is whether the turn lent it
+        // one, whatever the configuration holds.
+        let delegated = |name: &str, lent: Option<&dyn crate::shared::Spends>| {
+            let scratch = crate::testutil::scratch_dir(name);
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let mut trust = TrustStore::new("/work");
+            trust.trust(".");
+            crate::backend::scripted::script(vec![said("done", &[], None)]);
+            let task = Task::delegated(a_delegate_spec("reader", CapabilitySet::default()));
+            let outcome = super::delegated(
+                &braves,
+                &Egress::new(),
+                &workspace,
+                &task,
+                &mut Conversation::new(),
+                &mut crate::confirm::ApproveWrites,
+                &mut crate::report::RecordingReporter::default(),
+                &mut bravebot_core::event::RecordingSink::new(),
+                trust,
+                TrustedPrograms::new(),
+                &Cancel::new(),
+                &mut Vouched {
+                    trust: TrustStore::new("/work"),
+                    programs: TrustedPrograms::new(),
+                },
+                &mut Vec::new(),
+                &mut 0,
+                &mut Worked::default(),
+                lent,
+                None,
+            );
+            crate::backend::scripted::clear();
+            outcome.expect("the delegate answered").premium
+        };
+        let wallet = Wallet(AtomicUsize::new(0));
+        assert!(
+            !delegated("premium-delegate-not-lent", None),
+            "a delegate lent no key reported premium because the configuration holds one"
+        );
+        assert!(
+            delegated("premium-delegate-lent", Some(&wallet)),
+            "a delegate that was lent the turn's key did not report premium"
+        );
     }
 
     /// MSG-6, MSG-9: what `take_session_messages` does with a batch it cannot present, and with a
@@ -10444,7 +10890,14 @@ mod tests {
             let none = bravebot_config::hooks::Hooks::default();
             let repeats = crate::repeated_call::Repeats::default();
             let run = |names: &[&str], hooks: &bravebot_config::hooks::Hooks| {
-                reads_that_run_together(&calls(names), &repeats, None, None, hooks)
+                reads_that_run_together(
+                    &calls(names),
+                    &repeats,
+                    None,
+                    None,
+                    hooks,
+                    &crate::plugin_hooks::PluginHooks::default(),
+                )
             };
 
             assert_eq!(run(&["search", "list_files", "search"], &none), 3);
@@ -10476,14 +10929,28 @@ mod tests {
                     .collect()
             };
             assert_eq!(
-                reads_that_run_together(&same(4), &repeats, None, None, &none),
+                reads_that_run_together(
+                    &same(4),
+                    &repeats,
+                    None,
+                    None,
+                    &none,
+                    &crate::plugin_hooks::PluginHooks::default(),
+                ),
                 2
             );
             let mut after_two = crate::repeated_call::Repeats::default();
             after_two.is_held(&same(1)[0]);
             after_two.is_held(&same(1)[0]);
             assert_eq!(
-                reads_that_run_together(&same(3), &after_two, None, None, &none),
+                reads_that_run_together(
+                    &same(3),
+                    &after_two,
+                    None,
+                    None,
+                    &none,
+                    &crate::plugin_hooks::PluginHooks::default(),
+                ),
                 0
             );
         }

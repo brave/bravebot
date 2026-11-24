@@ -30,6 +30,8 @@ export interface CommandActions {
   create: (directory?: string) => void
   closeSession: () => void
   send: () => void
+  /** Write `/manifest ` into the composer and focus it. It sends nothing (CMD-1). */
+  plan: () => void
   cancel: () => void
   /** Move the open session to the next permission mode. */
   cycleMode: () => void
@@ -42,11 +44,31 @@ export interface CommandActions {
   about: () => void
   /** Turn keeping the computer awake during turns on or off. */
   caffeinate: () => void
+  /** Unfold the context column if it is folded and open its Choose sections checklist (PANEL-20). */
+  sections: () => void
   /** Show the release notes the agent carries. */
   changelog: () => void
   /** Ask for a note to keep on the open chat's record. */
   note: () => void
+  /** Ask for an optional task, then set plan mode and, with a task, start a turn planning it (MODE-12). */
+  planTask: () => void
+  /** Ask for an optional focus, then shorten the open chat's conversation (CMD-34). */
+  compact: () => void
+  /** Ask for the next goal, then have a brief for a new chat written toward it (SESSION-34, CMD-34). */
+  handoff: () => void
+  /** Ask to confirm, then hand the open chat to a background session and close it here (BG-2, CMD-34). */
+  background: () => void
   doctor: () => void
+  /** Show the open session's status, its rules only between turns (CMD-8). */
+  status: () => void
+  /** Show what the open session has spent, by turn (CMD-15). */
+  cost: () => void
+  /** Show what the open session's last request was made of, by section (CMD-19). */
+  context: () => void
+  /** Show the last request the open session's turn sent the model, span by span (TRACE-9). */
+  request: () => void
+  /** Show what every recorded session spent, in tokens, as `bravebot stats` totals it (CLI-37). */
+  spend: () => void
   /** Open the bug report, which shows what a saved one would hold before anything is written. */
   bugReport: () => void
   /** Open the session a right-click named. */
@@ -55,6 +77,8 @@ export interface CommandActions {
   closeNamed: (id: string) => void
   /** Put a named session's project directory on the clipboard. */
   copyProjectPath: (id: string) => void
+  /** Stop the background session holding a chat a right-click named, keeping its record (BG-11). */
+  stopBackground: (id: string) => void
   /** Put a named transcript entry's text on the clipboard. */
   copyEntry: (id: string) => void
   /**
@@ -111,6 +135,8 @@ export function useCommandRouter(actions: CommandActions): void {
           return context && act.closeNamed(context.id)
         case 'context.session.copy-path':
           return context && act.copyProjectPath(context.id)
+        case 'context.session.stop-background':
+          return context && act.stopBackground(context.id)
         case 'context.entry.copy':
           return context && act.copyEntry(context.id)
         case 'context.entry.fork':
@@ -131,14 +157,34 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.exportSession('pdf')
         case 'turn.send':
           return act.send()
+        case 'turn.plan':
+          return act.plan()
         case 'turn.cancel':
           return act.cancel()
         case 'mode.cycle':
           return act.cycleMode()
+        case 'session.plan':
+          return act.planTask()
         case 'turn.rewind':
           return act.undoTurn()
         case 'session.note':
           return act.note()
+        case 'session.status':
+          return act.status()
+        case 'session.cost':
+          return act.cost()
+        case 'session.context':
+          return act.context()
+        case 'session.request':
+          return act.request()
+        case 'spend.report':
+          return act.spend()
+        case 'session.compact':
+          return act.compact()
+        case 'session.handoff':
+          return act.handoff()
+        case 'session.background':
+          return act.background()
         case 'view.fold-left':
           return act.toggle('left')
         case 'view.fold-right':
@@ -155,6 +201,8 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.about()
         case 'app.caffeinate':
           return act.caffeinate()
+        case 'app.sections':
+          return act.sections()
         case 'help.changelog':
           return act.changelog()
         case 'help.doctor':

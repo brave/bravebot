@@ -499,6 +499,42 @@ fn a_read_is_sent_to_the_schedule_alone_where_no_watch_can_be_armed() {
     );
 }
 
+/// ARM-5: `watch_file` itself answers a surface that keeps no watches as it answers any name
+/// nobody offered, whoever calls it. The dispatch arm does not repeat this check, so the tool's
+/// own arm is the only refusal, and it has to say the same thing as the catch-all: the wording of
+/// the three refusals above ("a loop is running", "as many watches as it keeps") would tell the
+/// planner there is a watch to wait for.
+/// The control is the same call with room to arm, which arms. The regressions it rejects are the
+/// arm falling into the "no room" refusal (`free` taken as 0), and the arm arming anyway.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_surface_that_keeps_no_watches_answers_the_tool_itself_as_an_unknown_name() {
+    let scratch = Scratch::new("unavailable");
+    std::fs::write(scratch.path.join("a.txt"), "hello\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut count = 0;
+    let (armed_with_room, _) = armed(
+        &workspace,
+        Arming::Allowed { free: 8 },
+        &mut count,
+        json!({"path": "a.txt"}),
+    );
+    assert!(armed_with_room.watch.is_some(), "the control did not arm");
+    assert_eq!(count, 1, "the control did not count its watch");
+
+    let mut count = 0;
+    let (produced, told) = armed(
+        &workspace,
+        Arming::Unavailable,
+        &mut count,
+        json!({"path": "a.txt"}),
+    );
+    assert_eq!(told, "error: no such tool 'watch_file'");
+    assert!(produced.watch.is_none(), "a watch was armed anyway");
+    assert_eq!(count, 0, "a watch the surface cannot keep was counted");
+}
+
 /// A reference names a file this conversation was never shown the name of, and a fire's
 /// prompt carries the path it was armed on into the user's own role. Resolving one here
 /// would put a name off an untrusted listing in the one position nothing can label.
@@ -553,9 +589,11 @@ fn a_surface_that_keeps_no_watches_is_not_offered_the_tool() {
 /// A planner can name a tool it was never offered, and a call that quietly worked would arm
 /// a watch whose fire nobody is there to read, so a delegate and a surface that keeps no
 /// watches are answered as an unknown name at dispatch and arm nothing. The first case is
-/// the control: without it an implementation that refused every call would pass. For a
-/// surface that keeps no watches the dispatch arm and `watch_file` itself both refuse, so
-/// that case fails only when both are removed.
+/// the control: without it an implementation that refused every call would pass. A delegate
+/// is refused by the dispatch arm's `!tools.delegated` conjunct, and a surface that keeps no
+/// watches by `watch_file`'s own `Arming::Unavailable` arm alone (ARM-5), so each case has
+/// one guard that can fail it. A second `Arming::offered()` guard on the dispatch arm would
+/// answer the same words, so none is kept.
 #[test]
 fn a_call_to_watch_a_file_from_a_delegate_or_a_surface_with_no_watches_is_answered_as_an_unknown_name()
  {

@@ -413,7 +413,7 @@ impl SandboxPolicy {
                     || !self
                         .readable
                         .iter()
-                        .any(|row| denied.starts_with(row) && *denied != row)
+                        .any(|row| strictly_beneath(denied, row))
             })
             .map(PathBuf::as_path)
     }
@@ -566,7 +566,15 @@ fn enumerate<'a>(
 fn refused_beneath(path: &Path, refused: &[PathBuf]) -> bool {
     refused
         .iter()
-        .any(|refusal| refusal.starts_with(path) && refusal != path)
+        .any(|refusal| strictly_beneath(refusal, path))
+}
+
+/// Whether `path` is beneath `ancestor` and not the same path, whichever of the ordinary and the
+/// `\\?\` spelling of a Windows drive path each is in. A row can be the temporary directory or a
+/// home the host resolved, which is verbatim, and a refusal is the person's own entry, which is
+/// not, and compared as components the two never nest.
+fn strictly_beneath(path: &Path, ancestor: &Path) -> bool {
+    crate::rules::under(path, ancestor) && !crate::rules::same_path(path, ancestor)
 }
 
 /// `paths` and, for each that is on disk, where it leads, so a refusal written as a link is
@@ -1512,6 +1520,41 @@ mod tests {
         assert!(!relative.is_meaningful());
         assert_eq!(held.denial_without_a_grant(), None);
         assert!(held.is_meaningful());
+    }
+
+    /// A row the host resolved is `\\?\C:\w` and a refusal a person wrote is `C:\w\secret`. Compared
+    /// as components the two never nest, so the refusal is not found beneath the row and a backend
+    /// that cannot hold back a subdirectory grants the row whole. The names are built with `join`
+    /// so they nest the way a drive path does on a host that separates with a backslash, and this
+    /// runs on any host. A sibling that shares the name as a prefix, another drive, and the same
+    /// path in the other spelling are not beneath.
+    #[test]
+    fn a_refusal_is_beneath_a_row_whichever_way_the_drive_path_is_spelled() {
+        let verbatim_row = Path::new(r"\\?\C:\w");
+        let ordinary_row = Path::new(r"C:\w");
+        let secret = PathBuf::from(r"C:\w").join("secret");
+        let verbatim_secret = PathBuf::from(r"\\?\C:\w").join("secret");
+
+        for row in [verbatim_row, ordinary_row] {
+            for refusal in [&secret, &verbatim_secret] {
+                assert!(
+                    refused_beneath(row, std::slice::from_ref(refusal)),
+                    "{refusal:?} under {row:?}"
+                );
+            }
+        }
+        for (row, refusal) in [
+            (verbatim_row, PathBuf::from(r"C:\w")),
+            (verbatim_row, PathBuf::from(r"\\?\C:\w")),
+            (verbatim_row, PathBuf::from(r"C:\w-other").join("secret")),
+            (verbatim_row, PathBuf::from(r"D:\w").join("secret")),
+            (ordinary_row, PathBuf::from(r"\\?\C:\w")),
+        ] {
+            assert!(
+                !refused_beneath(row, std::slice::from_ref(&refusal)),
+                "{refusal:?} is not beneath {row:?}"
+            );
+        }
     }
 
     /// Every row an enumeration grants, named or listed.

@@ -222,6 +222,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font: var(--type-caption);
+  font-variant-numeric: tabular-nums;
   color: var(--ink-secondary);
 }
 .problem-text {
@@ -474,22 +475,52 @@
 /* ---- plan runs */
 
 /* The task of a manifest run. Drawn where a prompt is, and marked so it is not taken for one. */
-.bubble.user.plan-task { border: 1px dashed var(--accent-quiet); }
-.plan-task-mark { display: block; font: var(--type-caption-strong); text-transform: uppercase; opacity: 0.75; margin-bottom: var(--leo-spacing-xs); }
+/* The prompt bubble's shape, with a dashed outline and no fill as the only difference. */
+.bubble.user.plan-task {
+  padding: var(--leo-spacing-l) var(--leo-spacing-2xl);
+  border: 1px dashed var(--accent-quiet);
+  border-radius: var(--radius-bubble);
+  background: transparent;
+  white-space: pre-wrap;
+}
+.plan-task-mark { display: block; align-self: flex-end; font: var(--type-caption-strong); text-transform: uppercase; color: var(--ink-secondary); }
 
 /* What a run released for a screen. Bordered as confined content is, since it can be a file's text. */
 .plan-reply { border: 1px solid var(--confine); border-radius: var(--radius-card); margin: var(--leo-spacing-m) 0; overflow: hidden; }
 .plan-reply-head { display: flex; gap: var(--leo-spacing-m); align-items: baseline; padding: var(--leo-spacing-m) var(--leo-spacing-l); border-bottom: 1px solid var(--border-hairline); font: var(--type-caption); color: var(--ink-secondary); }
 .plan-reply-head .mark { text-transform: uppercase; font: var(--type-caption-strong); color: var(--confine); }
+/* Wrapped, and inset as far as the head and the foot, so a long line stays inside the box. */
+.plan-reply .preview { margin: 0; padding: var(--leo-spacing-m) var(--leo-spacing-l); white-space: pre-wrap; overflow-wrap: anywhere; }
 .plan-reply-foot { padding: var(--leo-spacing-m) var(--leo-spacing-l); border-top: 1px solid var(--border-hairline); font: var(--type-caption); color: var(--ink-secondary); }
+/* A run's id moves to the next line whole, never broken inside. */
+.plan-reply-foot code, .plan-record code, .plan-ended-note code { white-space: nowrap; }
 
 .plan-ended { border: 1px solid var(--border-subtle); border-radius: var(--radius-card); margin: var(--leo-spacing-m) 0; padding: var(--leo-spacing-l); }
 .plan-ended.quiet { border-color: var(--border-hairline); }
 .plan-ended.failed { border-color: var(--removed); }
+.plan-ended > strong { font: var(--type-meta-strong); }
 .plan-ended p { margin: var(--leo-spacing-xs) 0; color: var(--ink-secondary); font: var(--type-caption); }
 /* A command in the sentence is code, in the code type role like the rest of the window's code. The rule names the sentence's paragraph, so the code in the saved run's line below it is not matched. */
 .plan-ended .plan-detail code { font: var(--type-code); overflow-wrap: anywhere; }
-.plan-ended summary { cursor: pointer; font: var(--type-caption); margin-top: var(--leo-spacing-m); }
+/* The decision card's Details fold: no native marker, a small carat that turns when open. */
+.plan-ended summary {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  cursor: pointer;
+  list-style: none;
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  margin-top: var(--leo-spacing-m);
+  --leo-icon-size: var(--icon-caption);
+  --leo-icon-color: var(--ink-tertiary);
+}
+.plan-ended summary::-webkit-details-marker { display: none; }
+.plan-ended summary:hover { color: var(--ink-secondary); }
+.plan-ended summary .chevron { flex: none; }
+.plan-ended details[open] > summary .chevron { transform: rotate(90deg); }
+/* A declined plan's ending, a caption line under the decided card that already shows the plan. */
+.plan-ended-note { margin: var(--leo-spacing-xs) 0 var(--leo-spacing-m); min-height: 0; }
 .plan-text { margin: var(--leo-spacing-xs) 0 0; font: var(--type-code); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
 
 /* A saved plan run, read only. */

@@ -76,9 +76,9 @@ therefore holds in every mode, including the mode that asks about nothing.
 <a id="PERM-1"></a>
 ### PERM-1: a rule names a family of tools, and matches on routing only
 
-A rule is `Tool` or `Tool(specifier)`. Five families exist: `Read` covers every tool that reads or
+A rule is `Tool` or `Tool(specifier)`. Six families exist: `Read` covers every tool that reads or
 enumerates a file, `Edit` covers every tool that changes one, `Bash` covers running a program,
-`WebFetch` covers fetching a URL, and `Mcp` covers calling a tool of a server a person declared
+`WebFetch` covers fetching a URL, `WebSearch` covers `web_search`, and `Mcp` covers calling a tool of a server a person declared
 ([mcp-servers.md](mcp-servers.md)). They are categories rather than tool names, and `Bash` names no
 shell: there is none, and a specifier is matched against one stage's program and arguments.
 
@@ -106,6 +106,12 @@ name as written after ASCII lowercasing, and the name with each label outside AS
 such as a no-break space, `。` (U+3002), `：` (U+FF1A) or a zero-width space, makes the domain
 unreadable ([PERM-11](#PERM-11)) as a port or a path does. What a matching
 rule decides for a fetch, and what it does not decide, is [fetch-url.md](tools/fetch-url.md).
+
+`WebSearch` takes no specifier. A search has no routing a rule could name, since its host is fixed in
+source and its query is the planner's own words, so `WebSearch` alone covers every search and
+`WebSearch(weather)` is unreadable ([PERM-11](#PERM-11)). A `WebFetch` rule does not cover a search and
+a `WebSearch` rule does not cover a fetch. What a rule decides for a search is
+[web-search.md](tools/web-search.md#WEBSEARCH-2).
 
 `Mcp(weather)` and `Mcp(weather:*)` cover every tool of the server declared as `weather`, and
 `Mcp(weather:get_forecast)` covers one of them. Both names are matched whole, so `Mcp(weather)` does
@@ -387,6 +393,8 @@ one of its files succeeds shows the person a protection that is not there.
 `verified-by: bravebot_agent::permissions::a_directory_rule_and_a_rule_holding_dot_dot_cover_the_files_they_name`
 `verified-by: bravebot_agent::turn::a_denied_directory_written_without_a_double_star_is_not_read_by_a_file_under_it`
 `verified-by: bravebot_agent::turn::a_denied_directory_written_without_a_double_star_is_not_written_into`
+`verified-by: bravebot_agent::turn::a_denied_directory_written_without_a_double_star_is_not_read_by_a_redirection_in_a_run_line`
+`verified-by: bravebot_agent::turn::a_denied_directory_written_without_a_double_star_is_not_written_into_by_a_redirection_in_a_run_line`
 `verified-by: bravebot_core::permissions::a_relative_rule_says_nothing_about_an_absolute_path`
 `verified-by: bravebot_core::permissions::an_anchored_pattern_matches_only_where_it_is_anchored`
 `verified-by: bravebot_core::permissions::a_pattern_whose_anchor_is_unknown_is_reported_rather_than_matching_nothing`
@@ -403,18 +411,29 @@ one of its files succeeds shows the person a protection that is not there.
 `verified-by: bravebot_config::settings::an_object_entrys_rule_is_anchored_where_a_line_is`
 
 <a id="PERM-4"></a>
-### PERM-4: a one-segment relative pattern floats where it restricts, not where it grants
+### PERM-4: a relative pattern that starts at a plain directory name floats where it restricts, not where it grants
 
 `Edit(src/**)` in `deny` or `ask` covers a `src` directory at any depth, including a nested copy
-under `vendor`. The same pattern in `allow` covers only the `src` at the top. A pattern written
-from `./` does not float in any list, so `Edit(./src/**)` covers only the `src` at the top.
+under `vendor`. The same pattern in `allow` covers only the `src` at the top. Any pattern with a
+directory part floats this way, however many segments it has: `Edit(src/lib/**)` and `Edit(a/b.md)`
+float the same way, to the `src/lib` or the `a/b.md` under any directory. A pattern whose first
+segment holds a `*` or is `**` does not float, and neither does one written from `./`, so
+`Edit(./src/**)` covers only the `src` at the top in every list.
+
+A bare name is a different case. A pattern with no directory part, such as `Read(.env)`, matches at
+any depth in every list, `allow` included.
 
 **Why.** A rule that restricts should cover the copy somebody forgot about; a rule that grants
 should cover what it says and no more. Anchoring the pattern, as `Edit(./src/**)` or
 `Edit(/src/**)`, pins it to one place in every list.
 
 `verified-by: bravebot_core::permissions::a_single_segment_directory_floats_when_it_restricts_and_not_when_it_grants`
+`verified-by: bravebot_core::permissions::a_relative_pattern_of_several_plain_segments_floats_when_it_restricts_and_not_when_it_grants`
+`verified-by: bravebot_core::permissions::a_bare_name_matches_at_any_depth_in_allow_as_well_as_in_deny_and_ask`
 `verified-by: bravebot_core::permissions::a_dotted_pattern_of_several_segments_stays_at_the_top_in_every_list`
+`verified-by: bravebot_core::permissions::a_relative_pattern_naming_a_file_floats_when_it_restricts_and_not_when_it_grants`
+`verified-by: bravebot_core::permissions::a_pattern_whose_first_segment_holds_a_star_does_not_float_in_any_list`
+`verified-by: bravebot_core::permissions::an_anchored_pattern_matches_only_where_it_is_anchored`
 
 <a id="PERM-5"></a>
 ### PERM-5: a command specifier matches a stage's words, with `*` standing in for any text
@@ -448,6 +467,22 @@ after it are what the line compiler refuses, so a `deny` or `ask` rule holding o
 reading and is matched as written alone. It stays in force, and it is reported
 ([PERM-11](#PERM-11)). An `allow` rule is not read this way and keeps its characters as written: a
 grant that quotes could widen would let a line of a settings file permit more than it says.
+
+The typed reading and the line compiler are two implementations, because `bravebot-core` cannot call
+`bravebot-agent`. A test compiles the text of each rule as a line and asks the rule whether it covers
+the words the compiler built. They differ where a rule is not a line. The compiler ends a word at
+`|`, `||`, `;`, `<`, `>`, `&&` and `&>`, so `echo a|b`, `echo a||b`, `echo a;b` and `echo a&&b` are
+two steps, and `echo a<b`, `echo a>b` and `echo a&>b` are `echo a` with a redirection. A rule keeps
+each of those characters as part of a word, so `Bash(echo a|b)` covers `echo` with the one word
+`a|b` and does not cover `echo a b`. The compiler refuses a single `&` and a `(` or `)` written onto
+a word, as in `echo a&b` and `echo a(b`, and a rule keeps them as characters of the word. It also
+refuses a `(` or `)` after a space where no group can begin or end, as in `echo a (b)`, with the
+general refusal and not the one that says to quote the word, and a rule reads that `(` as the first
+character of a word. The compiler refuses `$`, a backtick and `!`, and a rule keeps them as
+characters. A quoted `$` and `\$` are text in both. The compiler reads `*`, `?`, `[`, `{` and a
+leading `~` as a pattern, a brace expression or the home directory, and a rule reads `*` as its
+wildcard and the others as text. The compiler refuses a quote that is never closed and a backslash
+with nothing after it, and a rule holding one is kept as written and reported.
 
 A `deny` or `ask` rule compares the program word without regard to case and as a Windows host
 reads it: without the dots and spaces it drops from the end of a name, without a `::$DATA` stream
@@ -526,6 +561,12 @@ evaluated on would make the same settings file refuse a line on one machine and 
 `verified-by: bravebot_core::policy::an_allow_rule_does_not_cover_a_program_whose_name_holds_a_space`
 `verified-by: bravebot_core::policy::a_deny_rule_still_covers_a_program_whose_name_holds_a_space`
 `verified-by: bravebot_agent::turn::an_allow_rule_does_not_run_a_program_whose_name_holds_a_space_unasked`
+`verified-by: bravebot_agent::rule_and_line_words::a_deny_rule_covers_the_argv_its_text_compiles_to_as_a_line`
+`verified-by: bravebot_agent::rule_and_line_words::a_deny_rule_covers_the_program_the_line_spells_in_another_form`
+`verified-by: bravebot_agent::rule_and_line_words::a_rule_keeps_a_shell_operator_as_text_where_the_line_ends_a_word_at_it`
+`verified-by: bravebot_agent::rule_and_line_words::a_rule_keeps_dollar_backtick_and_bang_as_text_where_the_line_refuses_them`
+`verified-by: bravebot_agent::rule_and_line_words::a_rule_keeps_pattern_characters_as_text_where_the_line_expands_them`
+`verified-by: bravebot_agent::rule_and_line_words::an_unclosed_quote_and_a_trailing_backslash_are_refused_by_the_line_and_reported_for_the_rule`
 
 <a id="PERM-6"></a>
 ### PERM-6: every stage of a pipeline is judged on its own
@@ -676,9 +717,25 @@ egress too and no rule about a website governs it, which [fetch-url.md](tools/fe
 out, and a command line that talks to the network is judged as the command line it is.
 
 A file named with `@`, `--file` or a drop is judged the same way before it is vouched for or opened,
-and a covered one is left out of the turn with a notice to the person. An `lsp` answer leaves out a
-location in a covered file without saying how many it left out, and its hover text, which names no
-file, is withheld while any rule covers reading a path.
+and a covered one is left out of the turn with a notice to the person. A name inside the workspace
+that is spelled absolutely, in the workspace's own spelling or in another Unicode form of it, is
+asked about under its name below the workspace as well, which is the name a project rule is written
+against. A drop is read wherever it lies, so an absolute name is also asked about under the name
+it lands on once its links are followed (`Path::canonicalize`, which is applied to an absolute name
+only, so a relative name is never resolved against the directory the process is in). A landing
+whose name is not UTF-8 has no spelling a rule can be written about, so it is left out while a
+`Read` deny rule is in force. A covered project file that is dropped or attached is left out under
+either name.
+
+The comparison with the workspace directory joins names that differ only in Unicode form: a volume
+that keeps `cafe\u{301}` and `caf\u{e9}` apart holds two directories, and a rule about a file below
+the workspace covers the file at the same place below the other-form directory as well. That adds
+a refusal and never removes one, and a directory that differs in a letter is not joined
+([PATH-007](../best-practices/paths.md#PATH-007)).
+
+An `lsp` answer leaves out a location in a covered file without saying how many it left out,
+whichever Unicode form of the workspace directory the server spells the location in, and its hover
+text, which names no file, is withheld while any rule covers reading a path.
 
 **Why.** A file whose contents are off limits is not protected if it can be overwritten, so the two
 families are consulted together for a write. Enumerating a directory and searching it both report
@@ -694,6 +751,7 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::tools::tests::confinement::a_rule_over_a_home_file_refuses_a_path_spelled_from_the_home_directory`
 `verified-by: bravebot_agent::permissions::a_full_path_rule_covers_a_project_file_whichever_unicode_form_the_workspace_is_spelled_in`
 `verified-by: bravebot_agent::permissions::a_root_is_read_as_the_root_a_refusal_names_in_either_unicode_form`
+`verified-by: bravebot_agent::permissions::a_full_path_rule_inside_the_workspace_covers_its_relative_names_on_windows`
 `verified-by: bravebot_core::permissions::a_deny_or_ask_rule_covers_every_canonical_spelling_of_a_name`
 `verified-by: bravebot_core::permissions::a_rule_about_a_name_does_not_cover_the_name_with_whitespace_at_an_end`
 `verified-by: bravebot_agent::workspace::a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it`
@@ -701,7 +759,14 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_core::permissions::an_allow_rule_is_matched_in_the_spelling_it_was_written_in`
 `verified-by: bravebot_core::policy::a_denied_step_refuses_the_whole_line`
 `verified-by: bravebot_agent::turn::a_named_file_a_deny_rule_covers_is_left_out_of_the_turn`
+`verified-by: bravebot_agent::turn::a_project_file_a_relative_deny_rule_covers_is_left_out_when_named_absolutely`
+`verified-by: bravebot_agent::workspace::a_relative_name_is_not_resolved_against_the_process_directory_when_asked_about_a_rule`
+`verified-by: bravebot_agent::workspace::a_link_outside_the_root_to_a_covered_file_inside_it_is_covered`
+`verified-by: bravebot_agent::workspace::a_dropped_file_whose_landing_is_not_utf8_is_covered_while_a_deny_rule_is_in_force`
+`verified-by: bravebot_agent::workspace::a_deny_rule_covers_the_same_file_below_a_directory_that_differs_only_in_unicode_form`
 `verified-by: bravebot_agent::lsp::a_location_in_a_denied_file_is_left_out_of_an_answer`
+`verified-by: bravebot_agent::lsp::a_location_spelled_in_another_unicode_form_than_the_root_is_left_out_by_a_deny_rule`
+`verified-by: bravebot_core::spelling::a_name_is_below_a_root_spelled_in_another_unicode_form`
 `verified-by: bravebot_agent::cmdline::a_rule_refuses_a_line_before_its_program_is_looked_for`
 `verified-by: bravebot_agent::turn::a_denied_program_is_refused_by_the_rule_and_not_for_being_absent`
 `verified-by: bravebot_agent::turn::a_project_relative_deny_rule_refuses_a_redirection_to_the_file`
@@ -998,6 +1063,12 @@ sentence about a dropped rule quotes the rule and the file spelled as in
 [PROMPT-1](prompting.md#PROMPT-1), so an invisible character or a trailing space in it is
 written out.
 
+The same holds for what a reader of the settings drops or combines without refusing the file: a key
+in `permissions`, `sandbox.filesystem`, `run` or at the top level that nothing reads, a key a file
+writes twice, and a managed `retrieval` value that pins nothing are named on `doctor` and in the
+session as it opens, in the same sentences, by key path and file and never by value
+([BACKEND-36](backends.md#BACKEND-36), [RETRIEVE-23](retrieval.md#RETRIEVE-23)).
+
 **Why.** A misspelled deny rule reads as protection that is not there, which is the one failure
 here worth interrupting somebody over. Refusing the whole file instead would mean a typo in an
 allow rule quietly removed a deny rule's protection.
@@ -1035,6 +1106,9 @@ allow rule quietly removed a deny rule's protection.
 `verified-by: bravebot_config::settings::an_object_entry_with_no_rule_is_carried_out_to_be_reported`
 `verified-by: bravebot_core::permissions::a_domain_that_names_no_host_is_reported_as_not_a_host`
 `verified-by: bravebot_agent::permissions::a_domain_rule_that_names_no_host_is_reported_in_a_session`
+`verified-by: bravebot_agent::dropped_keys::a_session_start_says_each_kind_once_in_doctors_sentences`
+`verified-by: bravebot_cli::plain::the_opening_names_each_dropped_key_once_in_doctors_sentences_and_no_value`
+`verified-by: bravebot_tui::app::the_startup_notes_name_each_dropped_key_once_in_doctors_sentences_and_no_value`
 
 <a id="PERM-12"></a>
 ### PERM-12: no rules means no change
@@ -1095,8 +1169,9 @@ the write tools and for a `run` redirection ([PERM-9](#PERM-9)), and on macOS th
 refuses a stage every write to it ([SANDBOX-14](sandboxing.md#SANDBOX-14)), so there the file keeps
 granting wherever it sits. On Linux and Windows the sandbox grants a directory with everything in it
 and cannot hold one file back ([#2599](https://github.com/brave/bravebot/issues/2599)), so a named
-file that lies inside a directory a stage may write, the working directory or one `--add-dir`,
-`/add-dir` or `--sandbox-allow-write` opened, is read as a checkout's file is. It grants no `allow`
+file that lies inside a directory a stage may write, the working directory, one `--add-dir`,
+`/add-dir` or `--sandbox-allow-write` opened, or one an earlier process recorded
+([sandboxing.md](sandboxing.md#SANDBOX-30)), is read as a checkout's file is. It grants no `allow`
 rule, no `sandbox.mode` and no `run.network`, which are the keys that matter most, and every other
 key a checkout's file may not set is ignored too (environment values, host lists, filesystem lists,
 git identities and the keys only the home file may set). Its `deny` and `ask` rules, which only
@@ -1152,6 +1227,9 @@ silence reads to whoever wrote it as one in force.
 `verified-by: bravebot_config::named_reach::a_file_in_a_root_is_withheld_only_where_one_file_cannot_be_held_back`
 `verified-by: bravebot_config::named_reach::dot_dot_spellings_are_read_by_where_they_land`
 `verified-by: bravebot_config::named_reach::a_link_to_a_file_inside_a_root_lies_inside_it`
+`verified-by: bravebot_config::named_reach::the_roots_hold_the_directories_an_earlier_process_granted`
+`verified-by: bravebot_config::named_reach::the_roots_are_the_working_directory_then_each_other_directory_once`
+`verified-by: bravebot_config::settings::layered_withholds_a_named_file_inside_a_directory_an_earlier_process_recorded`
 `verified-by: bravebot_cli::doctor::doctor_says_why_a_named_file_in_a_writable_directory_grants_nothing`
 `verified-by: bravebot_cli::plain::the_opening_says_why_a_named_file_in_a_writable_directory_grants_nothing`
 `verified-by: bravebot_tui::app::the_opening_note_says_why_a_named_file_in_a_writable_directory_grants_nothing`
@@ -1164,6 +1242,7 @@ silence reads to whoever wrote it as one in force.
 `verified-by: bravebot_agent::permissions::an_allow_entry_a_checkout_wrote_is_proposed_only_where_it_is_a_rule`
 `verified-by: bravebot_cli::running::doctor_names_a_checkouts_unreadable_allow_entry_rather_than_offering_it`
 `verified-by: bravebot_cli::running::a_session_in_lines_names_an_allow_rule_a_checkout_wrote`
+`verified-by: bravebot_tui::app::the_notes_about_a_checkouts_allow_rule_spell_the_rule_and_the_files`
 
 <a id="PERM-15"></a>
 ### PERM-15: a checkout proposes an allow rule, and a question naming every one grants them
@@ -1402,6 +1481,8 @@ exactly the machine somebody else may have a legitimate say in.
 `verified-by: bravebot_cli::main::the_bypass_flag_is_refused_where_a_layer_made_the_mode_unreachable`
 `verified-by: bravebot_cli::running::the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable`
 `verified-by: bravebot_tui::app::reading_the_rules_of_a_checkout_that_forbids_bypassing_takes_bypass_away`
+`verified-by: bravebot_tui::app::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
+`verified-by: bravebot_tui::mode_trail_tests::bypass_made_unreachable_after_the_flag_is_an_opening_and_then_a_change`
 
 <a id="PERM-18"></a>
 ### PERM-18: every layer may write either, and the strictest value any layer named holds

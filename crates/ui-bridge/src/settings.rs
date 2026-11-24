@@ -107,7 +107,8 @@ fn ignored(settings: &Settings) -> Vec<Value> {
         .collect()
 }
 
-/// What the settings in force say about the two keys that only refuse and the three run limits.
+/// What the settings in force say about the two keys that only refuse, the three run limits and
+/// the session spend limit.
 ///
 /// A limit nobody named is `null`: the built-in figure belongs to the crate that applies it, and
 /// answering with one here would be a second copy. A refusal in force is `true` and names the file
@@ -134,6 +135,12 @@ fn limits(settings: &Settings, managed: &Managed) -> Value {
             "maxSeconds": deadlines.ceiling.map(|d| d.as_secs()),
             "maxOutput": settings.run_output_cap(),
         },
+        // What a session opened under these settings starts with (TURN-8), in the shape
+        // `session.limit` answers with. A checkout's figure that was not obeyed is in `ignored`.
+        "session": {
+            "limit": settings.limit().map(|limit| json!({ "unit": limit.unit.word(), "count": limit.figure })),
+            "path": settings.limit_by(),
+        },
     })
 }
 
@@ -144,6 +151,19 @@ fn managed_named(managed: &Managed, key: &str) -> bool {
         Narrowing::BYPASS_UNREACHABLE => narrowing.bypass_unreachable == Some(true),
         _ => false,
     }
+}
+
+/// The diagnostic log directory under `home`, as `doctor` names it (DIAG-5), whether or not a log
+/// exists in it yet, whether this process writes logs there, and the level in force. The path is
+/// sent as null where it is not UTF-8, so the window is never handed a path that names another
+/// directory (PATH-002).
+fn logs(home: Option<&Path>, writing: bool, level: bravebot_diag::Level) -> Value {
+    let directory = home.map(|home| home.join(bravebot_diag::DIRECTORY));
+    json!({
+        "directory": directory.as_deref().and_then(Path::to_str),
+        "writing": writing,
+        "level": level.as_str(),
+    })
 }
 
 pub fn report(project: Option<&Path>, selected: Option<&Path>) -> Value {
@@ -157,7 +177,8 @@ pub fn report(project: Option<&Path>, selected: Option<&Path>) -> Value {
             c.providers.iter().map(|p| json!({
         "name": p.display_name(), "key": format!("gateway:{}", p.id), "credential": match p.credential(|key| std::env::var(key).ok()) {
             bravebot_config::provider::Credential::Token(_) => "configured",
-            bravebot_config::provider::Credential::Absent => "missing",
+            bravebot_config::provider::Credential::Absent
+            | bravebot_config::provider::Credential::KeyFileUnusable(_) => "missing",
             bravebot_config::provider::Credential::NotNeeded => "not required",
         }
     })).collect::<Vec<_>>()
@@ -173,6 +194,11 @@ pub fn report(project: Option<&Path>, selected: Option<&Path>) -> Value {
         "overrides": settings.overridden().map(|(name, path)| json!({"name": name, "path": path})).collect::<Vec<_>>(),
         "ignored": ignored(&settings),
         "limits": limits(&settings, &managed),
+        "logs": logs(
+            bravebot_agent::home::directory().as_deref(),
+            bravebot_agent::home::writable().is_some(),
+            bravebot_diag::level().unwrap_or(bravebot_diag::Level::Error),
+        ),
         "managed": { "path": managed.path(), "keys": managed.pinned().collect::<Vec<_>>() },
         "network": { "roots": transport.roots().paths(),
             "problem": (!transport.trust_problems().is_empty()).then(|| transport.trust_problems().iter().map(ToString::to_string).collect::<Vec<_>>().join("\n")),
@@ -185,6 +211,61 @@ pub fn report(project: Option<&Path>, selected: Option<&Path>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DIAG-5: the report names `<state directory>/logs`, as `doctor` does, with no log in it.
+    #[test]
+    fn the_report_names_the_diagnostic_log_directory() {
+        let home = Path::new("/home/someone/.bravebot");
+        let answer = logs(Some(home), true, bravebot_diag::Level::Error);
+        assert_eq!(
+            answer["directory"],
+            home.join(bravebot_diag::DIRECTORY).to_str().unwrap()
+        );
+        assert_eq!(answer["directory"], "/home/someone/.bravebot/logs");
+        assert_eq!(answer["writing"], true);
+        assert_eq!(answer["level"], "error");
+    }
+
+    /// The report states the level the log is written at, so Run Diagnostics and the bug report
+    /// say whether the log holds more than failures.
+    #[test]
+    fn the_report_states_the_level_in_force() {
+        let home = Path::new("/home/someone/.bravebot");
+        assert_eq!(
+            logs(Some(home), true, bravebot_diag::Level::Info)["level"],
+            "info"
+        );
+        assert_eq!(
+            logs(Some(home), true, bravebot_diag::Level::Debug)["level"],
+            "debug"
+        );
+        assert_eq!(
+            logs(None, false, bravebot_diag::Level::Debug)["level"],
+            "debug"
+        );
+    }
+
+    /// With no state directory there is no log directory to name, and nothing is written.
+    #[test]
+    fn with_no_home_the_report_names_no_log_directory() {
+        let answer = logs(None, false, bravebot_diag::Level::Error);
+        assert!(answer["directory"].is_null());
+        assert_eq!(answer["writing"], false);
+        assert_eq!(answer["level"], "error");
+    }
+
+    /// A log directory that is not UTF-8 is sent as null, not as a lossy copy that names another
+    /// directory (PATH-002).
+    #[cfg(unix)]
+    #[test]
+    fn a_log_directory_that_is_not_text_is_sent_as_null() {
+        use std::os::unix::ffi::OsStrExt;
+        let home = Path::new(std::ffi::OsStr::from_bytes(b"/h/\xff/.bravebot"));
+        let answer = logs(Some(home), true, bravebot_diag::Level::Error);
+        assert!(answer["directory"].is_null());
+        assert_eq!(answer["writing"], true);
+        assert_eq!(answer["level"], "error");
+    }
 
     /// PERM-19: the managed file's deny rule is in the layers a window reads. Without the
     /// `.under(...)` the stack holds only the person's own rules.
@@ -551,10 +632,10 @@ mod tests {
     #[test]
     fn the_report_names_each_limit_and_the_file_that_asked_for_a_refusal() {
         let (directory, settings) = vetting_layers(
-            Some(r#"{"run": {"defaultSeconds": 90, "maxOutput": 4096}}"#),
+            Some(r#"{"run": {"defaultSeconds": 90, "maxOutput": 4096}, "limit": "200k"}"#),
             Some(
                 r#"{"permissions": {"readsStayInWorkspace": true, "bypassUnreachable": "yes"},
-                    "run": {"maxSeconds": 120}}"#,
+                    "run": {"maxSeconds": 120}, "limit": "100k"}"#,
             ),
         );
         let project = directory.path().join("project/.bravebot/settings.json");
@@ -576,6 +657,11 @@ mod tests {
             report["run"],
             json!({ "defaultSeconds": 90, "maxSeconds": 120, "maxOutput": 4096 })
         );
+        assert_eq!(
+            report["session"],
+            json!({ "limit": { "unit": "tokens", "count": 100_000 }, "path": project }),
+            "the checkout's lower limit is the one in force and its file is named"
+        );
 
         let (_, none) = vetting_layers(None, None);
         let report = limits(&none, &Managed::default());
@@ -585,6 +671,26 @@ mod tests {
             "an unnamed limit was reported as a figure"
         );
         assert_eq!(report["readsStayInWorkspace"]["value"], json!(null));
+        assert_eq!(
+            report["session"],
+            json!({ "limit": null, "path": null }),
+            "a session limit nobody named was reported"
+        );
+    }
+
+    /// A checkout's figure above the person's is not obeyed, so the file the report names for the
+    /// session limit is the person's own.
+    #[test]
+    fn the_session_limit_a_checkout_could_not_widen_names_the_persons_file() {
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"limit": "40 credits"}"#),
+            Some(r#"{"limit": "90 credits"}"#),
+        );
+        let home = directory.path().join("home/settings.json");
+        assert_eq!(
+            limits(&settings, &Managed::default())["session"],
+            json!({ "limit": { "unit": "credits", "count": 40 }, "path": home })
+        );
     }
 
     #[test]

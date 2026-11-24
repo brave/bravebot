@@ -56,6 +56,10 @@ pub enum Subject {
     Bash,
     /// Fetching a URL: `fetch_url`, and every redirect hop it follows.
     WebFetch,
+    /// Searching the web through the first-party search tool, `web_search`. A rule names the family
+    /// and nothing else: a query is the planner's own words, and a rule matching words would be
+    /// the driver deciding from content ([`Unreadable::NotASearchRule`]).
+    WebSearch,
     /// Calling a tool of an MCP server a person declared, named `alias:tool`.
     Mcp,
 }
@@ -68,6 +72,7 @@ impl Subject {
             Self::Edit => "Edit",
             Self::Bash => "Bash",
             Self::WebFetch => "WebFetch",
+            Self::WebSearch => "WebSearch",
             Self::Mcp => "Mcp",
         }
     }
@@ -79,6 +84,7 @@ impl Subject {
             "Edit" => Some(Self::Edit),
             "Bash" => Some(Self::Bash),
             "WebFetch" => Some(Self::WebFetch),
+            "WebSearch" => Some(Self::WebSearch),
             "Mcp" => Some(Self::Mcp),
             _ => None,
         }
@@ -252,7 +258,8 @@ impl CommandPattern {
 struct PathPattern {
     /// Segments, `**` and `*` intact.
     segments: Vec<String>,
-    /// Whether the pattern names a single leading segment and so may float in a deny or ask rule.
+    /// Whether the pattern starts at a plain directory name, has more segments after it, and was
+    /// not written from `./`, so it floats to any depth in a deny or ask rule (PERM-4).
     ///
     /// Claude Code's asymmetry: `Read(secrets/**)` as a deny rule catches a `secrets` directory at
     /// any depth, and the same pattern as an allow rule grants only the one at the top. A rule
@@ -435,6 +442,12 @@ impl Rule {
             }
             Some(specifier) if subject == Subject::Mcp => tool_pattern(specifier)
                 .ok_or_else(|| Rejected::new(text, Unreadable::NotAToolRule))?,
+            // Nothing in a search call is routing a rule could name: the host is fixed in source
+            // and the query is the planner's own words. A rule that matched them would be the
+            // driver deciding from content, so only the bare family is a rule.
+            Some(_) if subject == Subject::WebSearch => {
+                return Err(Rejected::new(text, Unreadable::NotASearchRule));
+            }
             Some(specifier) => {
                 let written = command_pattern(specifier);
                 let typed = match typed_line(specifier) {
@@ -778,6 +791,10 @@ pub enum Unreadable {
     NotAHost,
     /// An `Mcp` rule whose specifier is not `alias` or `alias:tool`.
     NotAToolRule,
+    /// A `WebSearch` rule with a specifier, as `WebSearch(domain:example.com)` or
+    /// `WebSearch(weather)`. A search has no host a person chooses and its query is content, so
+    /// there is nothing a specifier could match.
+    NotASearchRule,
     /// A value where a list of rules belongs, or the `permissions` block holding them, that is
     /// neither: `null`, a string, a list in place of the block.
     NotAList,
@@ -1178,6 +1195,19 @@ impl Permissions {
         // notation or inside IPv6. The host is put in the form the rule was put in.
         let host = canonical_host(host);
         self.deciding(|rule, _| rule.subject == Subject::WebFetch && rule.covers_host(&host))
+    }
+
+    /// What the rules say about a web search.
+    ///
+    /// The family alone: a search carries no routing field a rule could be written against, so one
+    /// `WebSearch` rule covers every search ([`Subject::WebSearch`]).
+    pub fn for_search(&self) -> Decision {
+        decision_of(self.rule_for_search())
+    }
+
+    /// The rule that decides [`Permissions::for_search`].
+    pub fn rule_for_search(&self) -> Option<(Ruling, &Rule)> {
+        self.deciding(|rule, _| rule.subject == Subject::WebSearch)
     }
 
     /// What the rules say about calling `tool` of the server declared as `alias`.
@@ -2725,6 +2755,22 @@ mod tests {
         );
     }
 
+    /// WEBSEARCH-2: `WebSearch` is a family with no specifier, since a search has no routing a rule
+    /// could name. Bare, and with `(*)`, it covers every search; with anything else in brackets it
+    /// is reported as unreadable and dropped. The regressions it rejects: a specifier read as a
+    /// pattern over the query (a decision from content) and a bare rule that covers nothing.
+    #[test]
+    fn a_websearch_rule_takes_no_specifier() {
+        for text in ["WebSearch", "WebSearch(*)"] {
+            let permissions = rules(&[], &[], &[text]);
+            assert_eq!(permissions.for_search(), Decision::Ruled(Ruling::Allow));
+        }
+        for text in ["WebSearch(weather)", "WebSearch(domain:example.com)"] {
+            let rejected = Rule::parse(text, &anchors()).expect_err(text);
+            assert_eq!(rejected.reason, Unreadable::NotASearchRule, "{text}");
+        }
+    }
+
     /// A bare family name and `(*)` are the same rule, and both cover every use.
     #[test]
     fn a_bare_family_name_covers_every_use_of_it() {
@@ -3387,7 +3433,7 @@ mod tests {
     /// path with whitespace at an end.
     #[test]
     fn brackets_holding_only_whitespace_are_empty_in_every_family() {
-        for family in ["Read", "Edit", "Bash", "WebFetch", "Mcp"] {
+        for family in ["Read", "Edit", "Bash", "WebFetch", "WebSearch", "Mcp"] {
             for blank in ["", " ", "\t", "\n", "\u{a0}", "\u{3000}"] {
                 let written = format!("{family}({blank})");
                 let rejected = Rule::parse(&written, &anchors()).expect_err(&written);
@@ -3686,6 +3732,36 @@ mod tests {
         }
     }
 
+    /// PERM-4: a bare name matches at any depth in `allow` as well as in `deny` and `ask`, which is
+    /// where it differs from a pattern with a directory part: `Edit(src/**)` grants only the `src`
+    /// at the top, and `Edit(notes.md)` grants a `notes.md` wherever it turns up. An implementation
+    /// that floats a name only where it restricts leaves the nested copy out of `allow`.
+    #[test]
+    fn a_bare_name_matches_at_any_depth_in_allow_as_well_as_in_deny_and_ask() {
+        for list in 0..3 {
+            let rule = "Edit(notes.md)";
+            let permissions = match list {
+                0 => rules(&[rule], &[], &[]),
+                1 => rules(&[], &[rule], &[]),
+                _ => rules(&[], &[], &[rule]),
+            };
+            for path in ["notes.md", "docs/notes.md", "vendor/pkg/docs/notes.md"] {
+                assert!(
+                    matches!(
+                        permissions.for_path(Subject::Edit, path),
+                        Decision::Ruled(_)
+                    ),
+                    "list {list}: Edit(notes.md) missed {path}"
+                );
+            }
+            assert_eq!(
+                permissions.for_path(Subject::Edit, "docs/notes.txt"),
+                Decision::Unmatched,
+                "list {list}: Edit(notes.md) ruled a different name"
+            );
+        }
+    }
+
     /// A volume that folds case opens `.ENV` when it is asked for `.env`, so a deny rule written
     /// in one spelling covers the other, whichever the planner writes.
     #[test]
@@ -3976,18 +4052,28 @@ mod tests {
     }
 
     /// The documented asymmetry, and the reason for it: a rule that restricts should cover the
-    /// nested copy of what it named, and a rule that grants should cover what it named.
+    /// nested copy of what it named, in `deny` and in `ask`, and a rule that grants should cover
+    /// what it named. An implementation that floats only the `deny` list leaves the nested copy
+    /// unasked about.
     #[test]
     fn a_single_segment_directory_floats_when_it_restricts_and_not_when_it_grants() {
-        let denying = rules(&["Edit(src/**)"], &[], &[]);
-        assert_eq!(
-            denying.for_path(Subject::Edit, "src/app.ts"),
-            Decision::Ruled(Ruling::Deny)
-        );
-        assert_eq!(
-            denying.for_path(Subject::Edit, "vendor/pkg/src/lib.js"),
-            Decision::Ruled(Ruling::Deny)
-        );
+        for (list, ruling) in [("deny", Ruling::Deny), ("ask", Ruling::Ask)] {
+            let rule = "Edit(src/**)";
+            let restricting = match ruling {
+                Ruling::Deny => rules(&[rule], &[], &[]),
+                _ => rules(&[], &[rule], &[]),
+            };
+            assert_eq!(
+                restricting.for_path(Subject::Edit, "src/app.ts"),
+                Decision::Ruled(ruling),
+                "list {list}: src/** missed the workspace's own src"
+            );
+            assert_eq!(
+                restricting.for_path(Subject::Edit, "vendor/pkg/src/lib.js"),
+                Decision::Ruled(ruling),
+                "list {list}: src/** did not float to the nested copy"
+            );
+        }
 
         let allowing = rules(&[], &[], &["Edit(src/**)"]);
         assert_eq!(
@@ -3998,6 +4084,71 @@ mod tests {
             allowing.for_path(Subject::Edit, "vendor/pkg/src/lib.js"),
             Decision::Unmatched
         );
+    }
+
+    /// PERM-4: the floating is decided by where the pattern starts, a plain directory name, and not
+    /// by how many segments follow it. `src/lib/**` has three segments and floats in `deny` and in
+    /// `ask` to the `src/lib` under any directory, but only to a `src/lib` and not to a `lib` or
+    /// to another child of `src`. In `allow` it grants the top `src/lib` alone, and the same
+    /// pattern written from `./` stays at the top in all three lists. An implementation that
+    /// floats only a two-segment pattern leaves the nested copy of `src/lib` unruled.
+    #[test]
+    fn a_relative_pattern_of_several_plain_segments_floats_when_it_restricts_and_not_when_it_grants()
+     {
+        for (list, ruling) in [("deny", Ruling::Deny), ("ask", Ruling::Ask)] {
+            let rule = "Edit(src/lib/**)";
+            let restricting = match ruling {
+                Ruling::Deny => rules(&[rule], &[], &[]),
+                _ => rules(&[], &[rule], &[]),
+            };
+            for path in ["src/lib/a.ts", "vendor/pkg/src/lib/a.js"] {
+                assert_eq!(
+                    restricting.for_path(Subject::Edit, path),
+                    Decision::Ruled(ruling),
+                    "list {list}: src/lib/** did not rule {path}"
+                );
+            }
+            for path in ["vendor/pkg/src/other.js", "lib/a.ts"] {
+                assert_eq!(
+                    restricting.for_path(Subject::Edit, path),
+                    Decision::Unmatched,
+                    "list {list}: src/lib/** ruled {path}, which is not a src/lib"
+                );
+            }
+        }
+
+        let allowing = rules(&[], &[], &["Edit(src/lib/**)"]);
+        assert_eq!(
+            allowing.for_path(Subject::Edit, "src/lib/a.ts"),
+            Decision::Ruled(Ruling::Allow),
+            "allow: src/lib/** missed the workspace's own src/lib"
+        );
+        assert_eq!(
+            allowing.for_path(Subject::Edit, "vendor/pkg/src/lib/a.js"),
+            Decision::Unmatched,
+            "allow: src/lib/** granted the nested copy"
+        );
+
+        for list in 0..3 {
+            let rule = "Edit(./src/lib/**)";
+            let anchored = match list {
+                0 => rules(&[rule], &[], &[]),
+                1 => rules(&[], &[rule], &[]),
+                _ => rules(&[], &[], &[rule]),
+            };
+            assert!(
+                matches!(
+                    anchored.for_path(Subject::Edit, "src/lib/a.ts"),
+                    Decision::Ruled(_)
+                ),
+                "list {list}: ./src/lib/** missed the workspace's own src/lib"
+            );
+            assert_eq!(
+                anchored.for_path(Subject::Edit, "vendor/pkg/src/lib/a.js"),
+                Decision::Unmatched,
+                "list {list}: ./src/lib/** floated to a nested copy"
+            );
+        }
     }
 
     /// PERM-3: `./x` starts at the workspace, and only a specifier with no slash in it is a name
@@ -4055,6 +4206,95 @@ mod tests {
                 permissions.for_path(Subject::Edit, "vendor/pkg/src/lib.js"),
                 Decision::Unmatched,
                 "list {list}: ./src/** floated to a nested copy"
+            );
+        }
+    }
+
+    /// PERM-4: a pattern naming a file under a plain directory, `a/b.md`, floats like a directory
+    /// pattern does: in `deny` and in `ask` it covers the `a/b.md` under any directory, in `allow` it
+    /// grants the one at the top, and written from `./` it stays at the top in all three lists. An
+    /// implementation that floats a pattern only when its last segment is a glob leaves
+    /// `vendor/a/b.md` unruled by a deny or ask rule.
+    #[test]
+    fn a_relative_pattern_naming_a_file_floats_when_it_restricts_and_not_when_it_grants() {
+        for (list, ruling) in [("deny", Ruling::Deny), ("ask", Ruling::Ask)] {
+            let rule = "Edit(a/b.md)";
+            let restricting = match ruling {
+                Ruling::Deny => rules(&[rule], &[], &[]),
+                _ => rules(&[], &[rule], &[]),
+            };
+            for path in ["a/b.md", "vendor/a/b.md"] {
+                assert_eq!(
+                    restricting.for_path(Subject::Edit, path),
+                    Decision::Ruled(ruling),
+                    "list {list}: a/b.md did not rule {path}"
+                );
+            }
+            for path in ["b.md", "vendor/b/b.md"] {
+                assert_eq!(
+                    restricting.for_path(Subject::Edit, path),
+                    Decision::Unmatched,
+                    "list {list}: a/b.md ruled {path}, which is not an a/b.md"
+                );
+            }
+        }
+
+        let allowing = rules(&[], &[], &["Edit(a/b.md)"]);
+        assert_eq!(
+            allowing.for_path(Subject::Edit, "a/b.md"),
+            Decision::Ruled(Ruling::Allow),
+            "allow: a/b.md missed the workspace's own a/b.md"
+        );
+        assert_eq!(
+            allowing.for_path(Subject::Edit, "vendor/a/b.md"),
+            Decision::Unmatched,
+            "allow: a/b.md granted the nested copy"
+        );
+
+        for list in 0..3 {
+            let rule = "Edit(./a/b.md)";
+            let anchored = match list {
+                0 => rules(&[rule], &[], &[]),
+                1 => rules(&[], &[rule], &[]),
+                _ => rules(&[], &[], &[rule]),
+            };
+            assert!(
+                matches!(
+                    anchored.for_path(Subject::Edit, "a/b.md"),
+                    Decision::Ruled(_)
+                ),
+                "list {list}: ./a/b.md missed the workspace's own a/b.md"
+            );
+            assert_eq!(
+                anchored.for_path(Subject::Edit, "vendor/a/b.md"),
+                Decision::Unmatched,
+                "list {list}: ./a/b.md floated to a nested copy"
+            );
+        }
+    }
+
+    /// PERM-4: a pattern whose first segment holds a `*` does not float, whatever follows it, in
+    /// `deny` and in `ask` as in `allow`. `*/src/**` covers the `src` one directory down and not a
+    /// `src` under two. An implementation that floats any pattern with a directory part reaches
+    /// `a/b/src/x` as well.
+    #[test]
+    fn a_pattern_whose_first_segment_holds_a_star_does_not_float_in_any_list() {
+        for list in 0..3 {
+            let rule = "Edit(*/src/**)";
+            let (permissions, ruling) = match list {
+                0 => (rules(&[rule], &[], &[]), Ruling::Deny),
+                1 => (rules(&[], &[rule], &[]), Ruling::Ask),
+                _ => (rules(&[], &[], &[rule]), Ruling::Allow),
+            };
+            assert_eq!(
+                permissions.for_path(Subject::Edit, "a/src/x"),
+                Decision::Ruled(ruling),
+                "list {list}: */src/** missed the src one directory down"
+            );
+            assert_eq!(
+                permissions.for_path(Subject::Edit, "a/b/src/x"),
+                Decision::Unmatched,
+                "list {list}: */src/** floated to a src two directories down"
             );
         }
     }

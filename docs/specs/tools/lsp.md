@@ -234,12 +234,15 @@ file stays trusted. The other names are the file system's answer about the repor
 file's bytes. They can lower the label and never raise it. Where the lookup of the other names could
 not finish, because the walk reached the search cap, a directory could not be listed, or a name is
 not UTF-8, the location is untrusted, since the name that was not found may carry a rule that says
-so.
+so. A location the server spells in another Unicode form of the workspace directory than the one it
+was opened under is asked about under its name below the directory
+([TRUST-18](../trust-map.md#TRUST-18)), so it is untrusted where the file is.
 
 `verified-by: bravebot_agent::lsp::a_location_reported_through_a_link_to_a_distrusted_file_is_untrusted`
 `verified-by: bravebot_agent::lsp::a_location_reported_through_a_hard_link_to_a_distrusted_file_is_untrusted`
 `verified-by: bravebot_agent::lsp::a_location_whose_other_names_could_not_be_found_is_untrusted`
 `verified-by: bravebot_agent::lsp::a_respelled_location_of_a_distrusted_file_is_still_untrusted`
+`verified-by: bravebot_agent::lsp::a_location_of_a_distrusted_file_in_another_unicode_form_is_still_untrusted`
 
 **The label is not a function of the answer's text, and nothing here decides from a name.** The
 paths go to the kernel and a label comes back. Which wording the answer uses ("outside the
@@ -586,12 +589,18 @@ incognito has already accepted.
 `verified-by: bravebot_lsp::server::an_index_an_earlier_build_left_too_deep_is_removed`
 `verified-by: bravebot_lsp::server::a_nested_directory_that_holds_no_index_is_left_where_it_is`
 `verified-by: bravebot_lsp::server::the_cache_is_keyed_by_the_workspace`
+`verified-by: bravebot_lsp::server::a_go_servers_build_cache_is_made_inside_the_index_directory_at_mode_0700`
+`verified-by: bravebot_lsp::server::a_go_servers_build_cache_is_made_when_nothing_was_there`
+`verified-by: bravebot_lsp::server::a_server_that_has_no_index_variable_is_given_the_index_directory_as_its_temporary_one`
+`verified-by: bravebot_lsp::server::the_directory_a_session_indexes_into_has_no_workspace_in_its_name`
+`verified-by: bravebot_lsp::server::a_session_that_cannot_have_an_index_directory_does_not_start_a_server`
 `verified-by: bravebot_lsp::server::an_incognito_session_keeps_nothing_under_the_state_directory`
 `verified-by: bravebot_lsp::server::a_session_that_keeps_nothing_still_indexes_outside_the_workspace`
 `verified-by: bravebot_lsp::server::an_index_a_session_keeps_nothing_of_goes_with_the_session`
 `verified-by: bravebot_lsp::server::a_session_index_directory_is_created_never_adopted`
 `verified-by: bravebot_lsp::server::a_session_with_a_state_directory_indexes_under_it`
 `verified-by: bravebot_lsp::server::the_cache_is_never_read_by_the_driver`
+`verified-by: bravebot_lsp::server::nothing_the_driver_does_with_an_index_reads_a_file_inside_it`
 `verified-by: bravebot_lsp::server::a_server_whose_index_directory_cannot_be_made_private_does_not_start`
 `verified-by: bravebot_lsp::server::starting_a_server_on_an_index_keeps_it_from_being_removed`
 
@@ -724,6 +733,7 @@ always a net positive; the cost here is a wait of at most the bound per write.
 `verified-by: bravebot_agent::lsp::a_write_reports_the_error_lines_a_running_server_found`
 `verified-by: bravebot_agent::lsp::a_write_starts_no_language_server`
 `verified-by: bravebot_agent::lsp::a_write_of_quarantined_bytes_reports_no_diagnostics`
+`verified-by: bravebot_agent::lsp::quarantined_bytes_written_over_a_vouched_path_report_no_diagnostics`
 `verified-by: bravebot_agent::lsp::an_edit_reports_the_error_lines_a_running_server_found`
 `verified-by: bravebot_agent::lsp::an_edit_starts_no_language_server`
 

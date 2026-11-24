@@ -97,9 +97,10 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/trusted/<directory>.jsonl` | the yes to the startup question, one file per directory ([remembering the answer](../security/trust.md#remembering-the-answer)) |
 | `~/.bravebot/untrusted/<directory>.jsonl` | the [delegate definitions' memories](agents.md#memory) a write left untrusted, one per directory |
 | `~/.bravebot/bedrock-refusals.json` | the AWS Bedrock models that refused the request for their thinking to be shown as it happens, each kept for 30 days so the first request of a later session leaves it out; delete the file to ask again |
+| `~/.bravebot/stage-writes` | the directories a confined program may write, one per line, which later sessions leave out of the search for the programs Brave Bot starts itself; delete the file to clear it |
 | `~/.bravebot/history` | prompts you have sent |
 | `~/.bravebot/model` | the model chosen with `/model` |
-| `~/.bravebot/effort` | the effort level chosen with `/effort` |
+| `~/.bravebot/effort` | the effort level chosen with `/effort`; `/effort session` does not write it |
 | `~/.bravebot/theme` | the theme chosen with `/theme` |
 | `~/.bravebot/editor-mode` | the editing style chosen with `/config` |
 | `~/.bravebot/language` | the interface language chosen with `/language` ([details](language.md)) |
@@ -206,7 +207,7 @@ the state directory in a directory of its own.
 
 ## Choosing how hard to think
 
-`/effort` opens a picker of five levels, and writes the choice to `~/.bravebot/effort`. See [Choosing how hard to think](effort.md).
+`/effort` opens a picker of five levels, and writes the choice to `~/.bravebot/effort`. `/effort session` opens the same picker for this session only and writes nothing. See [Choosing how hard to think](effort.md).
 
 ## Choosing a theme
 
@@ -322,7 +323,7 @@ one thing leaves everything else in force:
 | `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `run.scrubEnv` | your own file and the file `--settings` names, whose entries are kept together; a project or local file's list is ignored and reported, and the rest of its `run` block is read as before |
 | `permissions.allow` | your own file's entries, the file `--settings` names, and a project's entries you granted |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories`, `attribution`, `webSearch.keyFile`, `webSearch.env` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
 | `references` | your own file and the file `--settings` names; a project or local file's block is ignored and reported, and a later file's block replaces an earlier one's |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.network.deniedHosts`, `sandbox.network.onUnlisted: refuse` | every file's entries are kept |
@@ -352,8 +353,9 @@ A key written twice inside one file is read the same way, since a JSON parser wo
 and say nothing. Two blocks written under one key are combined, a list that only refuses keeps the
 entries of both (`permissions.deny`, `permissions.ask`, `run.scrubEnv`, `sandbox.filesystem.denyRead`
 and `denyWrite`, `sandbox.network.deniedHosts`), and any other repeated key is read as the later copy.
-`bravebot doctor` names each repeated key with the file and the key's path, and never its value. A key
-written once in each of two files is the layering above and is not a repeat.
+`bravebot doctor` and the session as it opens name each repeated key with the file and the key's path,
+and never its value. A key written once in each of two files is the layering above and is not a
+repeat.
 
 `allow` goes the other way, which is why it is the one list a checkout cannot write by itself. An
 entry there stops a prompt appearing, so one in `.bravebot/settings.json` or
@@ -383,6 +385,8 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `advisorModel` | the model the planner may consult through the `advisor` tool ([below](#advisormodel)) |
 | `fallbackModel` | the model a turn moves to when its own keeps failing ([below](#fallbackmodel)) |
 | `summaryModel` | the model compaction summaries and `/goal` checks run on ([below](#summarymodel)) |
+| `webSearch.keyFile` | the file holding a Brave Search API key, which turns on the `web_search` tool. Your own file and the file `--settings` names only ([below](#websearchkeyfile)) |
+| `webSearch.env` | the variables a Brave Search API key may be read from, which turn on the `web_search` tool. Your own file and the file `--settings` names only ([below](#websearchenv)) |
 | `planModel` | the model a turn that begins in plan mode runs on ([below](#planmodel)) |
 | `processorModel` | the model an isolated processor runs on ([below](#processormodel)) |
 | `commitMessage.instructions` | the format `/commit-message` follows when none is typed ([below](#commitmessageinstructions)) |
@@ -398,7 +402,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `maxRunningDelegates` | the most delegates one turn may have running at once ([below](#maxrunningdelegates)) |
 | `env` | variables, in Claude Code's own shape |
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)); `permissions.startInAuto` opens sessions in the auto mode ([below](#permissionsstartinauto)) |
-| `provider` | an OpenAI-compatible gateway, with any extra request headers it carries ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)) |
+| `provider` | an OpenAI-compatible gateway, with any extra request headers it carries ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)). A gateway's token can be named in `env`, stored with `bravebot auth login gateway`, held in a file `options.keyFile` names, or written as `options.apiKey` ([the credential](providers/openai-compatible.md#the-credential)) |
 | `run.scrubEnv` | further variables to keep from a program the agent runs ([details](../security/sandbox.md#runscrubenv)) |
 | `run.network` | `open` (the default) or `closed`: whether a program the agent runs keeps the network ([details](../security/sandbox.md#runnetwork)) |
 | `sandbox.network.allowedHosts`, `deniedHosts`, `onUnlisted` | the hosts a program the agent runs may reach ([details](../security/sandbox.md#sandboxnetwork)) |
@@ -433,7 +437,8 @@ In `env`, only string values: a number or a boolean is skipped rather than coerc
 
 A key beside those configures nothing and restricts nothing, which is worth saying plainly for
 `sandbox` and `hooks`: a block pasted from another tool's file reads as a restriction in force and is
-not one here. `doctor` names the key and the file, and never what the key was set to.
+not one here. `doctor` and the session as it opens name the key and the file, and never what the key
+was set to.
 
 **The file is the same shape as Claude Code's `~/.claude/settings.json`**, so a block that configures
 one largely configures the other unedited. The three files resolve in the same order Claude Code's do,
@@ -608,6 +613,72 @@ other.** The model is sent the files a processor reads, so a `.bravebot/settings
 
 The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier.
 
+### `webSearch.env`
+
+```json
+{ "webSearch": { "env": ["BRAVE_SEARCH_API_KEY"] } }
+```
+
+The variables that may hold your Brave Search API key, tried in the order written. The first one that
+holds text is the key, and one that is unset or holds only spaces is passed over. A variable that holds
+text is used before the file `webSearch.keyFile` names, and either one offers the
+[`web_search`](../reference/tools.md#web_search) tool. With neither, the tool is not offered.
+
+The variable is read when a search is made, so exporting a new key in a session that is already open
+takes effect for the next search. The tool is on the model's list from the start of a turn: a variable
+you export in the middle of a turn is offered from the next turn, and one you remove in the middle of a
+turn leaves the tool listed, and the search is reported as having no usable key.
+
+A variable that holds text that is not a key is refused, and the key file is not used in its place.
+The text is held to the same rules as a key file's: at most 4,096 bytes of ASCII with no space inside
+it, and a trailing newline is fine.
+
+The variables you name are withheld from every program the `run` tool starts, in the way the variable
+a [provider block's](providers/openai-compatible.md) `env` names is, since a program the tool starts
+inherits the environment of bravebot and a key held there would be handed to each of them. The model is
+told that some variables are withheld and is never told which. `bravebot doctor` says whether the key
+would come from a variable or from the file, naming the variable by its place in the list and never by
+its name, and never prints the key.
+
+**The list is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from no
+other.** A `.bravebot/settings.json` or `.bravebot/settings.local.json` that names it is ignored and
+reported by `bravebot doctor`, so a repository you cloned cannot choose which of your variables is sent
+to a host, or which are kept from your programs. An entry that is blank or is not a string is dropped.
+
+### `webSearch.keyFile`
+
+```json
+{ "webSearch": { "keyFile": "/Users/you/.config/brave-search-key.txt" } }
+```
+
+The file that holds your Brave Search API key. Naming a file that exists offers the
+[`web_search`](../reference/tools.md#web_search) tool, as a variable named in
+[`webSearch.env`](#websearchenv) that holds text does, and with no variable, no setting, or a name that
+is not a file, the tool is not offered. A variable that holds text is used before this file.
+
+To set it up:
+
+1. Get a key from the [Brave Search API dashboard](https://api-dashboard.search.brave.com/).
+2. Save the key alone in a file only you can read, for example with `chmod 600`. The file holds the key
+   and nothing else: at most 4,096 bytes of ASCII with no space inside it, and a final newline is fine.
+3. Write the absolute path of that file as `webSearch.keyFile` in `~/.bravebot/settings.json`.
+
+No command takes the key, because a key typed on a command line is readable by every account on the
+machine. The key is read when a search is made and goes in one request header to
+`api.search.brave.com`. It is not in the query, in a result, in the trail or in anything the model is
+sent.
+
+`bravebot doctor` has a `web search` line that says which source the key would come from, and prints
+the path you wrote for a file and never the key. Its list of credentials names the key at tier Held,
+with the dashboard as the place that revokes it: unsetting the variable, removing the setting or
+removing the file stops this machine using the key and leaves it working at Brave until you revoke it
+there.
+
+**The key file is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from
+no other.** A `.bravebot/settings.json` or `.bravebot/settings.local.json` that names one is ignored and
+reported by `bravebot doctor`, so a repository you cloned cannot choose which file on your machine is
+sent to a host. The value must be an absolute path.
+
 ### `summaryModel`
 
 ```json
@@ -733,7 +804,7 @@ file you did not write.
 ```
 
 How hard the model is asked to think, in the words
-[`/effort`](../reference/commands.md#effort-level) takes: `low`, `medium`, `high`, `xhigh` and `max`,
+[`/effort`](../reference/commands.md#effort-session-level) takes: `low`, `medium`, `high`, `xhigh` and `max`,
 read whatever their case. A word bravebot does not define is no level at all, so nothing you mistype
 reaches a request; the request carries no such field and the service applies its own default.
 
@@ -743,8 +814,10 @@ A level recorded by `/effort` ranks as a recorded model does: it wins over the k
 wins, and the run asks for none. A blank or a value that is not a string names nothing, so the
 record answers, but it hides the key in a file below it: with nothing recorded, the run asks for no
 level. [`--effort`](../reference/cli.md#--effort-level) on a one-shot run, and a level
-picked in the session that is running, win over everything. A session on a model of a ChatGPT account is
-the exception: it is sent the level it began with, so a level picked in it applies from the next session.
+picked in the session that is running, win over everything. A level chosen with `/effort session` is
+such a pick and records nothing, so the next session opens on the level it would have had. A session on
+a model of a ChatGPT account is the exception: it is sent the level it began with, so a level picked in
+it applies from the next session, or from `/clear` where it was chosen with `/effort session`.
 Nothing bakes a level in and no variable names one.
 
 This is the way a **project** can ask for a level, and the way a machine where nobody ever opens the
@@ -754,7 +827,7 @@ different levels.
 
 Everything under [Choosing how hard to think](effort.md) still applies, including
 the two cases worth knowing: the models that read no level, and the Brave endpoint, which accepts one
-and discards it. Taking the row for no level in the picker removes the record rather than writing an
+and discards it. Taking the row for no level in the every-session scope of the picker removes the record rather than writing an
 empty one, so your own file's level answers again in the next session; unset it there if you want
 none.
 
@@ -1156,8 +1229,20 @@ key, and a managed `false` turns reports off whatever your file says. A `.braveb
 checkout can neither turn reports off nor turn them on again after you did, and a build made without
 a submission address, which is every build from source that did not have one set, sends nothing. A
 session started with `--incognito` has no state directory to leave a report in, so it leaves and
-sends none. The terminal says once, on the startup screen, that reports are sent. The desktop
-application does not, so this page and the README are where it is said for that. See
+sends none.
+
+The desktop app writes this key from **Settings → General → Privacy**, under **Send crash reports to
+Brave**. It writes `true` or `false` into your own file and keeps every other key. The switch shows as
+off and cannot be changed while `BRAVEBOT_CRASH_REPORTS=0`, the managed file's `false` or an incognito
+session holds reports off, and says which one does. In the terminal,
+[`/crash-reports [on | off]`](../reference/commands.md#crash-reports-on--off) says the same and writes
+the same key, and refuses a change while one of those three holds reports off. Either way the choice
+applies from the next start. Nothing asks you before the first report. The
+terminal, the desktop app and the editor integration each say once that reports are sent, at the
+first launch that is reporting, and share one record in `~/.bravebot/crash-reports/notice`, so the
+first one you use tells you and the others do not repeat it. The editor integration says it as a
+message in the session at your first prompt. `bravebot-host`, `-p` and `--plain` say nothing, so this
+page and the README are where it is said for those. See
 [Crash reports](../security/security.md#crash-reports) for what leaves the process.
 
 ### `usagePing`
@@ -1389,7 +1474,7 @@ a path no rule covers; these two state a standing refusal instead, and are descr
 the file `--settings` names; a project's own entries are proposed to you in a box when
 the session opens, and work once you grant them. See [how the files combine](#settingsjson) for why.
 
-A rule is `Tool` or `Tool(specifier)`, and names one of five **families**:
+A rule is `Tool` or `Tool(specifier)`, and names one of six **families**:
 
 | Family | Covers |
 |---|---|
@@ -1397,6 +1482,7 @@ A rule is `Tool` or `Tool(specifier)`, and names one of five **families**:
 | `Edit` | every tool that changes one |
 | `Bash` | running a program |
 | `WebFetch` | fetching a URL |
+| `WebSearch` | `web_search`. Takes no specifier: the bare family covers every search, and a rule with something in brackets is reported as unreadable |
 | `Mcp` | calling a tool of an [MCP server](mcp-servers.md#rules): `Mcp(weather)` or `Mcp(weather:get_alerts)` |
 
 These are categories rather than tool names, as they are in Claude Code, so there is no rule spelled
@@ -1460,10 +1546,14 @@ forward-slash form is easier to write. `~/x` starts at your home directory on it
 way. `Read(/D:/work/**)`, with one slash, still starts where any `/x` rule does. A workspace
 rule such as `Read(.env)` does not cover a file on a drive outside the workspace.
 
-**A one-segment relative pattern floats where it restricts and not where it grants.** `Edit(src/**)`
-in `deny` or `ask` covers a `src` directory at any depth, including a copy under `vendor`; the same
-pattern in `allow` covers only the `src` at the top. Anchor it as `Edit(./src/**)` to pin it to the
-top of the workspace in either list.
+**A relative pattern that starts at a plain directory name floats where it restricts and not where
+it grants.** `Edit(src/**)` in `deny` or `ask` covers a `src` directory at any depth, including a
+copy under `vendor`; the same pattern in `allow` covers only the `src` at the top. This holds
+however many segments the pattern has: `Edit(src/lib/**)` in `deny` covers `vendor/pkg/src/lib/a.js`.
+Anchor it as `Edit(./src/**)` to pin it to the top of the workspace in either list.
+
+A bare name is the exception. A pattern with no directory part, such as `Read(.env)`, matches at any
+depth in every list, `allow` included.
 
 A **command** specifier matches a step's program and arguments, with `*` standing in for any text:
 
@@ -1737,10 +1827,10 @@ has the variables, the signing in, and the assumed context window.
 ## Reaching an OpenAI-compatible gateway
 
 A `provider` block in a settings file names a gateway, the models it offers, the variable that
-holds its credential and any extra headers its requests carry. It is opencode's block, so one copied
+holds its credential or the file `options.keyFile` names, and any extra headers its requests carry. It is opencode's block, so one copied
 from `opencode.json` works unedited, and a local Ollama needs no key.
 [Reaching an OpenAI-compatible gateway](providers/openai-compatible.md)
-has the fields, the credential, the headers, which models are offered, and how to name one.
+has the fields, [the credential](providers/openai-compatible.md#the-credential), the headers, which models are offered, and how to name one.
 
 OpenAI is reached with an API key by a block keyed `openai` naming `OPENAI_API_KEY` in `env`, and
 needs no `baseURL`. [OpenAI](providers/openai.md) has the details, including which

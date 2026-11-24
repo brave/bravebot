@@ -284,7 +284,14 @@ would end the credential. The tier is the one entry on that record every credent
 whatever its tier, which is why the record reaches past the two tiers CRED-25 asks an account of.
 
 **What stands where.** Every credential the record holds stands at Held: the signing key, the AWS
-credentials, a gateway's token, the premium key and the ChatGPT and xAI sign-ins. The premium key's
+credentials, a gateway's token, the premium key, the search key and the ChatGPT and xAI sign-ins. The
+search key is the first variable `webSearch.env` names that holds text, or else the file
+`webSearch.keyFile` names, which a person got from the Brave Search API
+dashboard: its walk drops at all three gates as the premium key's does, each recorded as one nobody
+attempted, since the dashboard issues one key, this program presents it itself with nothing deciding a
+use, and nothing here has asked the dashboard for a narrower or shorter one. Revoking it in the
+dashboard is the only thing that ends it, and unsetting the variable or removing the setting or the
+file ends this machine's custody and leaves the key working. The premium key's
 walk drops at all three gates, each recorded as one nobody attempted, as a gateway token's does: the
 premium host issues one key, this program presents it itself with nothing deciding a use, and nothing
 here has asked that host for a narrower or a shorter one. It has no figure for how quickly a leak
@@ -299,6 +306,8 @@ tiers a credential can stand at, and none does.
 `verified-by: bravebot_cli::doctor::each_tier_a_credential_can_stand_at_is_reported_in_its_own_words`
 `verified-by: bravebot_cli::running::doctor_names_the_tier_of_every_credential_it_accounts_for`
 `verified-by: bravebot_cli::running::doctor_accounts_for_the_premium_key_at_the_tier_its_walk_stopped_at`
+`verified-by: bravebot_config::lib::a_search_key_is_held_exactly_when_web_search_is_offered`
+`verified-by: bravebot_config::lib::a_search_key_from_a_variable_is_held_without_a_file`
 
 <a id="CRED-3"></a>
 ### CRED-3: a gate fails only for a stated reason, and dropping pays what the gate says it costs
@@ -496,6 +505,18 @@ what that is worth and where it stops.
 `verified-by: bravebot_agent::turn::a_credential_the_line_itself_carries_stops_the_line`
 `verified-by: bravebot_agent::turn::a_credential_a_run_line_redirects_into_the_tree_does_not_stay_there`
 `verified-by: bravebot_agent::turn::a_credential_the_destination_already_held_does_not_refuse_the_line_carrying_it`
+`verified-by: bravebot_agent::turn::a_credential_a_line_nobody_vouched_for_left_is_not_scanned`
+`verified-by: bravebot_agent::turn::a_credential_a_vouched_line_left_at_a_destination_the_map_distrusts_is_not_scanned`
+`verified-by: bravebot_agent::turn::a_line_carrying_a_credential_is_refused_before_the_person_is_asked_about_it`
+`verified-by: bravebot_agent::turn::a_destination_past_the_scans_budget_is_passed_over_and_one_within_it_is_scanned`
+`verified-by: bravebot_agent::turn::a_credential_inside_a_connection_string_is_kept_out_of_the_tree_as_the_credential_is`
+`verified-by: bravebot_agent::turn::a_credential_written_in_a_form_that_would_authenticate_in_its_place_is_kept_out_of_the_tree`
+`verified-by: bravebot_core::credentials::a_key_in_either_base64_alphabet_padded_or_not_is_found_as_the_key_is`
+`verified-by: bravebot_core::credentials::a_percent_escape_in_lower_or_upper_case_hex_is_read_as_the_byte_it_names`
+`verified-by: bravebot_core::credentials::a_decoding_that_is_not_text_or_holds_a_control_byte_is_dropped`
+`verified-by: bravebot_core::credentials::a_run_or_an_escape_cut_short_is_read_as_far_as_it_goes_and_never_past_the_text`
+`verified-by: bravebot_agent::turn::a_commit_message_carrying_a_credential_stops_the_line_and_commits_nothing`
+`verified-by: bravebot_agent::shell::a_line_the_person_typed_is_run_though_it_writes_what_looks_like_a_credential`
 `verified-by: bravebot_agent::workspace::a_destination_that_is_not_there_has_no_text_to_scan`
 `verified-by: bravebot_agent::workspace::a_destination_exactly_the_size_of_the_budget_is_read_in_full`
 `verified-by: bravebot_agent::workspace::a_destination_one_byte_past_the_budget_is_not_read`
@@ -1137,7 +1158,10 @@ program as an argument. Where a program must receive one, it arrives by environm
 descriptor, or in a file the program is told to read; where the authority can perform the action,
 none of those is needed. A key typed in the desktop window's key window goes from its main process
 to the bridge on the bridge's standard input, in a request no client of the bridge but the main
-process may send, and is never an argument of the bridge or of anything it starts.
+process may send, and is never an argument of the bridge or of anything it starts. The variables a
+provider's `env` and `webSearch.env` name are the environment route this clause allows: this program
+reads the key from them itself, and [RUN-12](tools/run.md#RUN-12) withholds them from every program it
+starts.
 
 **Why.** A command line is world-readable while the process lives: `/proc/<pid>/cmdline` on Linux,
 and `ps` on every platform. The environment is covered by [RUN-12](tools/run.md#RUN-12) because a
@@ -1146,6 +1170,7 @@ approving it prevents nothing, because the disclosure is to every other account 
 rather than to the program. It needs no attacker and no mistake by the model.
 
 `verified-by: bravebot_cli::credential_arguments::no_file_that_starts_a_process_reads_a_credential`
+`verified-by: bravebot_agent::web_search::a_search_returns_a_reference_sends_the_key_in_one_header_and_asks_about_the_query`
 `verified-by: bravebot_ui_bridge::accounts::the_window_stores_a_typed_key_and_says_nothing_of_it`
 `verified-by: bravebot_ui_bridge::accounts::no_client_of_the_host_is_offered_the_accounts_methods`
 `verified-by: by-construction (the main process is not a crate this workspace compiles, so ui/scripts/key-entry.test.mjs drives its own key gate with a stand-in bridge and key window: an ask is dropped for a way that takes no key, a foreign sender, an unfocused window, a row the bridge does not mark as taking a key, a second ask while a key window is open and in the seconds after a cancel; the bridge is asked before anything is typed; whether to replace comes from the bridge and not the page; the key goes to the bridge alone and the page is told only how the key window ended; a refusal keeps the key window open; and closing it, the main window closing or quitting stores nothing; make check-ui runs the test)`
@@ -1173,15 +1198,23 @@ credential would have landed in a file is not thereby told what would end the on
 hold. CRED-15's scan of what a turn reads reports the same way and reaches this record no more
 than the other one does. What exists is the record and one surface that reads it, `doctor`, which
 reports
-what would end each credential this configuration holds, a gateway's bearer token and the premium key
+what would end each credential this configuration holds, a gateway's bearer token, the premium key and the search key
 included, and the ChatGPT sign-in and the xAI sign-in of a machine that made
 one ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6), [XAI-12](xai-sign-in.md#XAI-12)), each reported from its file
 rather than from the configuration, since the file is held on every machine that made a sign-in. A gateway key stored with `bravebot auth login gateway`
 is named as stored, since neither the environment nor a settings file shows where it came from, and
 the account of ending it names `bravebot auth logout gateway` beside revoking it at the gateway. A
-file of those keys it cannot read is named, and the report ends on the failure status, since every
-key in the file has stopped being sent. A scan reaching it later reads that record rather than
-writing a second one.
+gateway token read from the file `options.keyFile` names is accounted for like the others: the key is
+named as found in that file and never printed, and the account says that removing the file, as well
+as deleting the value from the settings file, unsetting the variable or running `bravebot auth logout
+gateway`, ends this machine's custody and leaves the token live at the gateway until it is revoked
+there. A file of those keys it cannot read is named, and the report ends on the failure status, since every
+key in the file has stopped being sent. The
+search key is named by the source it came from: the variable `webSearch.env` names or the file
+`webSearch.keyFile` names, and the account says that unsetting the variable or removing the setting or
+the file ends this machine's custody and that the key keeps working at Brave until it is revoked in the
+Brave Search API dashboard, which is the only surface that revokes it. A scan reaching it later reads
+that record rather than writing a second one.
 
 `verified-by: bravebot_config::lib::a_build_that_cannot_sign_for_itself_holds_no_signing_key_to_account_for`
 `verified-by: bravebot_config::lib::an_aws_account_holds_both_arrangements_and_they_end_differently`
@@ -1193,11 +1226,14 @@ writing a second one.
 `verified-by: bravebot_cli::doctor::what_survives_revoking_is_reported_for_exactly_the_credentials_that_have_one`
 `verified-by: bravebot_config::lib::a_chatgpt_sign_in_is_held_renewed_unaided_and_possibly_outlives_revocation`
 `verified-by: bravebot_cli::doctor::a_stored_gateway_key_is_named_as_stored_and_never_printed`
+`verified-by: bravebot_cli::doctor::the_account_of_a_gateway_token_names_a_key_file_as_a_source_that_ends_custody`
+`verified-by: bravebot_config::lib::a_gateway_key_file_is_a_credential_this_configuration_holds`
 `verified-by: bravebot_cli::running::doctor_names_a_chatgpt_sign_in_by_its_expiry_and_prints_none_of_it`
 `verified-by: bravebot_config::lib::an_xai_sign_in_is_held_renewed_unaided_and_possibly_outlives_revocation`
 `verified-by: bravebot_cli::xai_sign_in::doctor_names_an_xai_sign_in_by_its_expiry_and_prints_none_of_it`
 `verified-by: bravebot_cli::running::doctor_names_a_stored_gateway_key_without_printing_it`
 `verified-by: bravebot_cli::running::doctor_fails_on_a_file_of_gateway_keys_it_cannot_read`
+`verified-by: bravebot_cli::doctor::the_web_search_key_is_reported_by_its_setting_and_never_by_its_value`
 
 ## Why the gate safehouse builds is not available here
 
@@ -1366,6 +1402,14 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   its own config are outside it: the path is the program's business and the driver never learns
   it. What would close this is a scan of the whole tree diff a turn produced, which needs a record
   of what the tree held before it, which is CRED-22's baseline.
+
+- **Only two derived forms of a credential are read.** The scan decodes a line once, as percent
+  escapes and as each run of base64 characters of at least 20 that decodes to text, and reads the
+  result with the provider-shape and connection-string layers. A Basic header over a key and a
+  percent-escaped key are found. An encoding of an encoding, hex, a hash, a key split across lines
+  or one the program builds when it runs is not, and neither is a decoded value only the
+  assignment or whole-file layers would recognise. CRED-11's words "anything derived from one that
+  would authenticate in its place" are met for those two forms and no others.
 
 - **A destination past the scan's budget is passed over.** What a line left is read back for the
   scan, and what it held beforehand is kept so a refused destination can be put back; both are

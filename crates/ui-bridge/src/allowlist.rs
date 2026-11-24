@@ -228,6 +228,9 @@ pub fn check_answer(request: &Request, answers: &[Answer]) -> Result<(), Failure
 pub const DENIED: &[&str] = &[
     // Reach saved sessions, every project's list, and other directories.
     "session.list",
+    "background.list",
+    // Totals what every project's records spent (CLI-37).
+    "session.stats",
     "session.open",
     "session.fork",
     "session.addressed",
@@ -245,9 +248,12 @@ pub const DENIED: &[&str] = &[
     // Change how the host's own sessions behave, which a person at the host decides.
     "session.mode",
     "session.sandbox",
+    "session.limit",
+    "session.variant",
     "settings.inspect",
     "settings.select",
     "permissions.list",
+    "permissions.check",
     "permissions.revoke",
     "hooks.inspect",
     "language.get",
@@ -257,10 +263,16 @@ pub const DENIED: &[&str] = &[
     "usage_ping.set",
     "usage_ping.notice_due",
     "usage_ping.mark_notice_shown",
-    // The crash-report notice belongs to the window, not to a client of the host. Such a client has
-    // no screen to show it on, and whether reports are on in this process is the host's own.
+    // The machine's crash report switch and the one-time notice about it. The notice belongs to the
+    // window, not to a client of the host: such a client has no screen to show it on, and whether
+    // reports are on in this process and the switch are the person's at the host.
+    "crash_reports.get",
+    "crash_reports.set",
     "crash_reports.notice_due",
     "crash_reports.mark_notice_shown",
+    // The level of this process's diagnostic log (DIAG-11). The log is written for the person at
+    // the host to read and attach to a bug report, so only that person chooses how much it holds.
+    "diagnostic_log.set",
     // The machine's recorded effort level, which the terminal shares.
     "effort.get",
     "effort.set",
@@ -282,6 +294,9 @@ pub const DENIED: &[&str] = &[
     "bug-report.compose",
     // What the desktop window reports about its own page, which a client of the host has none of.
     "window.fault",
+    // The text of the desktop window's own title (PANEL-19), which a client of the host has no
+    // window to show.
+    "window.title",
     // Which of the session-bus names the desktop window's main process holds lead to a socket a
     // stage may write (SANDBOX-30). The directories a session may write are those of this process,
     // and a client of the host has no opener to protect.
@@ -304,6 +319,7 @@ pub const DENIED: &[&str] = &[
     "mentions.named",
     "drops.classify",
     "pastes.check",
+    "pastes.clean",
     // Work that runs without a request, or a plan walked as one run.
     "watches.list",
     "watches.add",
@@ -323,6 +339,32 @@ pub const DENIED: &[&str] = &[
     // (INPUT-50). The only client of the host today has no box to put it in.
     "session.enhance",
     "session.enhance.cancel",
+    // The `/cost`, `/context`, `/request` and `/status` reports the window's Chat menu opens
+    // (CMD-19). The only client of the host today has no menu that asks for them, and the last
+    // request holds the session's whole system prompt and the paths of its instruction files.
+    "session.report.cost",
+    "session.report.context",
+    "session.report.request",
+    "session.report.status",
+    // Shortening a conversation, which a person asks for from the window's Chat menu (CMD-34). The
+    // only client of the host today has no menu to ask from.
+    "session.compact",
+    "session.compact.cancel",
+    // Asking for a brief to hand a chat off from, which a person asks for from the window's Chat
+    // menu (SESSION-34, CMD-34). The only client of the host today has no menu to ask from.
+    "session.handoff",
+    "session.handoff.cancel",
+    // Handing a chat to a background session on this machine, which a person asks for from the
+    // window's Chat menu (BG-2, CMD-34), and stopping one, which a person asks for from the chat
+    // list's menu (BG-11). The only client of the host today has no menu to ask from.
+    "session.background",
+    "session.background.stop",
+    // A question asked beside the work, for the `/btw` or `/recap` line a person typed into the
+    // window's own composer (CMD-1, CMD-8, CMD-16). A client of the host is a program, and a
+    // program never types it.
+    "session.btw",
+    "session.recap",
+    "session.aside.cancel",
     // Answers that widen what a session may do or read beyond `trust.reply` above, which are not
     // offered to any client yet.
     "output.reply",
@@ -398,6 +440,7 @@ mod tests {
     fn a_method_the_host_does_not_name_is_refused_whether_or_not_the_bridge_has_it() {
         for method in [
             "session.list",
+            "background.list",
             "settings.select",
             "crash_reports.notice_due",
             "crash_reports.mark_notice_shown",
@@ -515,10 +558,68 @@ mod tests {
         assert_eq!(failure.code, ErrorCode::NotAllowed);
     }
 
+    /// Rejects `session.btw`, `session.recap` and `session.aside.cancel` for a client of the host:
+    /// a program never types the `/btw` or `/recap` line (CMD-1), so the methods are the window's
+    /// alone.
+    #[test]
+    fn asking_beside_the_work_is_denied_to_a_client_of_the_host() {
+        for method in ["session.btw", "session.recap", "session.aside.cancel"] {
+            assert!(DENIED.contains(&method), "{method}");
+            let failure = check(&request(method, json!({"session": "s1"})))
+                .err()
+                .expect("refused");
+            assert_eq!(failure.code, ErrorCode::NotAllowed, "{method}");
+        }
+    }
+
     #[test]
     fn no_method_is_both_offered_and_denied() {
         for operation in OFFERED {
             assert!(!DENIED.contains(&operation.method), "{}", operation.method);
         }
+    }
+
+    /// CRASH-9: the crash report switch and its notice are the person's at the host, so a client of
+    /// the host may call none of the four methods. The faults this rejects are a method moved to
+    /// the offered list, which would let a client turn reports off or mark the notice shown, and a
+    /// method dropped from both lists.
+    #[test]
+    fn the_crash_report_methods_are_denied_to_a_client_of_the_host() {
+        for method in [
+            "crash_reports.get",
+            "crash_reports.set",
+            "crash_reports.notice_due",
+            "crash_reports.mark_notice_shown",
+        ] {
+            assert!(DENIED.contains(&method), "{method} is not denied");
+            assert!(
+                OFFERED.iter().all(|operation| operation.method != method),
+                "{method} is offered"
+            );
+            let failure = check(&request(method, json!({"enabled": false})))
+                .err()
+                .expect("refused");
+            assert_eq!(failure.code, ErrorCode::NotAllowed, "{method}");
+        }
+    }
+
+    /// DIAG-11: the host's diagnostic log is for the person at the host, so a client of the host
+    /// may not change its level. The faults this rejects are the method moved to the offered list,
+    /// which would let a client raise the log to debug, and the method dropped from both lists.
+    #[test]
+    fn diagnostic_log_set_is_denied_to_a_client_of_the_host() {
+        assert!(DENIED.contains(&"diagnostic_log.set"));
+        assert!(
+            OFFERED
+                .iter()
+                .all(|operation| operation.method != "diagnostic_log.set"),
+            "diagnostic_log.set is offered"
+        );
+        assert_eq!(
+            check(&request("diagnostic_log.set", json!({"level": "debug"})))
+                .err()
+                .map(|failure| failure.code),
+            Some(ErrorCode::NotAllowed)
+        );
     }
 }

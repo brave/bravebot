@@ -315,6 +315,46 @@ not reversible), so it is read out of the record rather than un-mangled.
 
 `project` is the basename of `directory`, computed by the agent so both front-ends agree.
 
+#### `background.list`
+
+```json
+{ "id": 1, "method": "background.list" }
+```
+
+Lists the background sessions in the roster, from every project (BG-17). It takes no
+parameters and is read-only: nothing in the protocol attaches to, replies to, stops or starts a
+background session, which only a terminal does (BG-9). The host client is refused it.
+
+```json
+{ "id": 1, "ok": { "groups": [
+  { "state": "needs-input", "heading": "Needs input", "count": 1, "sessions": [
+    { "id": "…", "short": "0a1b2c3d", "name": "fix the parser", "state": "needs-input",
+      "held": "run", "words": "Needs input (run)", "updated": 1756300000,
+      "directory": "/Users/me/repos/thing", "prompt": "fix the parser" }
+  ] }
+] } }
+```
+
+The bridge groups the sessions, so the window only draws them. There is a group for each state a
+session is in, in the order of the terminal list's headings (BG-16): `needs-input`,
+`interrupted`, `working`, `idle`, `stopped`. A state no session is in has no group. Within a
+group, sessions come most recent `updated` first.
+
+- A group's `heading` is the word the terminal list heads that state with, from the message
+  catalog (`idle` is Ready), and `count` the number of its `sessions`.
+- `state` is the BG-6 word, the one `bravebot sessions --json` writes. An entry whose process
+  holds no lock is `interrupted` or `stopped`, never `working`.
+- `held` is the message catalog's words for the kind of prompt held, and `null` unless `state` is
+  `needs-input`.
+- `words` is what the terminal's row says about the state: the heading, with `held` in brackets
+  where a prompt is held (BG-5, SCREEN-16).
+- `short` is the first 8 characters of `id`, which `bravebot attach` takes.
+- `name` is the first line of the session's name and `prompt` the last prompt typed, cut as a
+  title is. Every text field has its control characters pictured (BG-5).
+- `updated` is seconds since the epoch.
+
+No roster, or an empty one, gives `{ "groups": [] }`.
+
 #### `session.open`
 
 ```json
@@ -494,6 +534,48 @@ plain text.
 - `not_a_directory` if the path is not one.
 - `bad_request` if `ids` is not a list of names the listing gives.
 - `no_home` if there is no home directory to read from, or no state directory to copy into.
+
+#### `session.stats`
+
+```json
+{ "id": 11, "method": "session.stats", "params": { "directory": "/Users/me/repos/thing", "days": 7 } }
+```
+
+```json
+{ "id": 11, "ok": {
+  "directory": "/Users/me/repos/thing", "days": 7,
+  "total": { "sessions": 3, "turns": 12, "tokens": 90000,
+             "read": 70000, "written": 8000, "unsplit": 12000 },
+  "models": [
+    { "model": "claude-opus-5-5", "sessions": 2, "turns": 10, "tokens": 88000,
+      "read": 70000, "written": 8000, "unsplit": 10000 },
+    { "model": null, "sessions": 1, "turns": 2, "tokens": 2000,
+      "read": 0, "written": 0, "unsplit": 2000 } ],
+  "unreadable": 0 } }
+```
+
+Totals what the recorded sessions spent, as `bravebot stats --models` does (CLI-37), by calling
+`bravebot_session::stats::totals`. Both params are optional. `directory` keeps the records whose
+stored path is that directory, the way `--project <dir>` does; without it every project is
+totalled. `days` keeps the sessions last written within that many days of 24 hours, the way
+`--days` does. Both are sent back, `directory` resolved and cleaned of the characters a terminal
+would act on, and `null` when not given.
+
+`total` and each row of `models` carry `sessions`, `turns`, `tokens`, `read`, `written` and
+`unsplit`, which is the tokens of sessions that kept no split, so `read + written + unsplit` is
+`tokens`. `models` comes from `Totals::by_shown_model`, the grouping the terminal uses: names are
+cleaned and cut to 60 characters, names that read alike are one row, and rows are ordered by
+tokens, then sessions, then name. `model` is `null` for the sessions whose record names no model,
+or a name with nothing left after cleaning; the client labels it `unknown`. `unreadable` counts the
+entries under the sessions directory that could not be read as a record; they add to no figure and
+are never named. No figure is in money.
+
+The method writes nothing, needs no open session, and answers the same under incognito, where no
+session adds a record.
+
+- `not_a_directory` if `directory` is not one.
+- `bad_request` if `directory` is not a string, or `days` is not a whole number from 1 to
+  9223372036854775807.
 
 #### `session.fork`
 
@@ -839,6 +921,50 @@ session that has not answered the trust question are refused with `bad_request` 
 `session.enhance.cancel` (`{ "session" }`) stops a request that is out and answers `{}` whether or
 not one was.
 
+#### `session.recap`
+
+```json
+{ "id": 9, "method": "session.recap", "params": { "session": "s1", "model": null } }
+→ { "started": true }
+```
+
+Asks the session's model to recap the exchange, and returns before it has answered (CMD-16). The
+request is the one the terminal's `/recap` makes, over the exchange as it stands, with no tools, and
+its answer is cut to 400 characters. The conversation is not changed. The answer is kept as an
+aside in the session's record, labelled `/recap`, its cost is charged to the session, and it arrives
+as an `aside.done` event. A turn that is running is refused with `turn_in_flight`, since `/recap`
+waits for it, and a second question while one is out is refused with `bad_request`. The asides a
+record kept come back as `asides` (`[{ question, answer, kept }]`, `answer` null where the record
+did not keep it) when the session is opened. `session.aside.cancel` (`{ "session" }`) stops a
+question that is out and answers `{}` whether or not one was.
+
+#### `session.btw`
+
+```json
+{ "id": 9, "method": "session.btw", "params": { "session": "s1", "question": "why does it retry", "model": null } }
+→ { "started": true, "besideTurn": false }
+```
+
+Asks the session's model the person's `/btw` question over the exchange as it stands, with no
+tools, and returns before it has answered (CMD-8). The conversation is not changed. The answer is
+kept as an aside in the session's record under the question, its cost is charged to the session, and
+it arrives as an `aside.done` event with `recap` false. An empty question is refused with
+`bad_request`, as is a second question while one is out, a `/recap` included.
+`session.aside.cancel` stops it.
+
+What was staged on the line goes with the question (CMD-5), under the names `turn.send` uses:
+`images` for pictures pasted, `attachments` for absolute paths of pictures and PDFs dropped, read
+before the request under a policy of their own (DROP-4), and `files`, `{ marker, name }` pairs that
+put a dropped text file back into the question as its name. A non-empty `dropped` is refused with
+`bad_request`, because on a `/btw` line a text file is its name. While a turn runs, a non-empty
+`attachments` is refused with `bad_request` in the terminal's words; pasted pictures still go.
+
+While a turn runs, the question is asked over the exchange the turn sent at its latest request,
+under the turn's own file decisions, and the answer is `besideTurn: true`. It is refused with
+`bad_request` before the turn has sent anything. `turn.cancel` stops it with the turn, and its
+`aside.done` is `stopped`. Its `aside.done` arrives as soon as it is answered, even while the turn
+still runs. The row is kept and the record written again once the turn has ended.
+
 #### `mentions.offer`
 
 ```json
@@ -914,6 +1040,21 @@ window shows it as it stands. `bytes` that is not a whole number is `bad_request
 process calls it when it stages a paste, once for the picture as it came off the clipboard and
 again once it is re-encoded, and the renderer cannot.
 
+#### `pastes.clean`
+
+```json
+{ "id": 12, "method": "pastes.clean", "params": { "text": "see​ this" } }
+→ { "text": "see this", "removed": 1, "note": "removed 1 invisible character from that paste" }
+
+{ "id": 13, "method": "pastes.clean", "params": { "text": "see this" } }
+→ { "text": "see this", "removed": 0 }
+```
+
+A text paste with the characters a terminal draws as nothing removed (PASTE-10), by the same
+function the terminal uses (`bravebot_core::invisible::without_invisible`). `removed` is how many
+were taken out. `note` is present only when `removed` is above zero, and is the terminal's note, in
+`en-US` as `pastes.check`'s note is. `text` that is not a string is `bad_request`.
+
 #### `confirm.reply`
 
 ```json
@@ -966,8 +1107,33 @@ and `directory`.
 there is asked, and leaves this session's map as it is. It returns the updated lists, and refuses
 `kind: "remembered"` with `bad_request` where nothing is kept. It also refuses `kind: "command"`
 with `bad_request` when `directory` is not a string or names a tree the session holds no such
-entry in, and then removes nothing; it removes only the entry held in that tree. These methods
-refuse with `turn_in_flight` while the session is running. Revocation can reduce existing grants;
+entry in, and then removes nothing; it removes only the entry held in that tree.
+`permissions.check` takes `session`, `family` and `words` and says which rule decides a call, as
+`bravebot permissions check` does ([CLI-30](../../docs/specs/cli.md#CLI-30)). `family` is one of
+`Read`, `Edit`, `Bash`, `WebFetch`, `WebSearch` or `Mcp`, and `words` is an array of strings: one
+path for `Read` and `Edit`, the program and its arguments for `Bash`, one host or URL for
+`WebFetch` (a URL is read as its host), none for `WebSearch`, and one `server:tool` for `Mcp`.
+It matches the call against the rules the session holds, read when it opened (PERM-12), not the
+files as they are now, and reads, writes, grants and revokes nothing. It returns
+`{ decision, rule, shownRule, file, shownFile, granted, reason, notInForce }`:
+- `decision` is `deny`, `ask` or `allow` for the first rule that matches in that order, `none`
+  where no rule matches, or `shortName` where the command reads an 8.3 short name and is refused
+  before any rule is read (PERM-5).
+- `rule` is the deciding rule as its file spelled it, and `file` the file that wrote it. Both are
+  null unless a rule decides, and `file` is also null where no file is known for the rule.
+- `granted` is true where the rule is a checkout's `allow` rule the person granted (PERM-15);
+  `file` is then the checkout's settings file. It is false otherwise.
+- `reason` is the person's reason for the rule, where their own file gave one, already spelled
+  as text, or null.
+- `notInForce` is `{ rule, shownRule, file, shownFile }` for a checkout `allow` rule nobody
+  granted that would have allowed the call, or null. It is always null where the decision is
+  `deny` or `ask`.
+
+`shownRule` and `shownFile` are `rule` and `file` spelled by `bravebot_agent::confirm::shown_text`
+and `shown_path` (PROMPT-1); a client draws those. It refuses with `bad_request` when `family` is
+not one of the six, `words` is not an array of strings, or the words do not fit the family, such
+as an `Mcp` target with no `:` or `WebSearch` with any words. These methods refuse with
+`turn_in_flight` while the session is running. Revocation can reduce existing grants;
 it cannot add trust.
 
 **Known cost.** A command vouched for in a tree with no text spelling is listed with `directory`
@@ -1133,6 +1299,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `turn.started` | `{ turn, mode }` | `turn.send` accepted |
 | `turn.interjected` | `{ prompt }` | the planner was given the oldest line sent with `turn.interject` |
 | `enhance.done` | `{ status, text?, removed?, limit?, message? }` | what a `session.enhance` came back with: `ready` (`text`, and `removed` characters that draw as nothing taken out), `untrusted`, `unusable` (empty or past `limit` characters), `stopped`, or `failed` (`message`) |
+| `aside.done` | `{ status, question, recap, answer?, kept?, message? }` | what a `session.btw` or `session.recap` came back with: `answered` (`answer`, and `kept`, whether the record keeps it), `stopped`, or `failed` (`message`). `question` is the row's label: the person's question, or `/recap` for a recap |
 | `schedule.ran` | `{ lines, refused, running }`, as `schedule.command` answers | the end of a `/schedule run-now` started by `schedule.command`: the line saying how the run ended, never the run's captured result |
 | `phase` | `{ phase, retry }`, where `retry` is `{ attempt, in_ms, gives_up_in_ms }` while a failed request waits to be sent again and `null` otherwise | `Reporter::phase` |
 | `composing` | `{ call }`, a verb word or `null` | `Reporter::composing`, **a delegate's dropped** |
@@ -1534,7 +1701,8 @@ be opened is. The local host and the ACP server put none of these questions.
   import and skills authoring have no dedicated UI. `bravebot mcp` in a terminal does the first.
 - File browsing, previews and attachments are Electron IPC features, not RPC methods. `@`
   completion is `mentions.offer` and `mentions.named`, what a dropped file is comes from
-  `drops.classify`, and whether a paste fits from `pastes.check`.
+  `drops.classify`, whether a paste fits from `pastes.check`, and pasted text with its hidden
+  characters removed from `pastes.clean`.
 - One `bravebot-rpc` process has one client. There is no multi-client transport.
 
 ---
@@ -1714,6 +1882,10 @@ Still open:
   text. Where the build carries none for that version they are the newest release's, `version`
   names that release and `running` is false. `notes` is null where the build carries no release.
   Nothing is read or fetched, and the window shows `notes` as plain text (CMD-25).
+- `window.title` takes `{ name, state }`, where `state` is `ready`, `working` or `waiting`, and
+  returns `{ title }`: the window's title for the session on screen, built by the same code as the
+  terminal's title, with control characters made visible and cut to 60 characters (PANEL-19). It
+  reads nothing, and a client of the local host is refused it.
 - `caffeinate.confirmed` takes no parameters and returns `{ confirmed }`: whether
   `~/.bravebot/caffeinate` says the person agreed to keeping the computer awake, as `/caffeinate`
   reads it. `caffeinate.confirm` writes that agreement and returns `{ kept }`, false where the
@@ -1866,7 +2038,7 @@ Still open:
   own. A `remember: true` sent where `mayStand` is false is read as a yes to the one call.
 - `session.new`, `session.open`, `session.fork`, `trust.reply`, `rules.reply` and
   `permissions.list` carry `settingsRules`:
-  `{ deny, ask, allow, unreadable, proposed, granted, grantedRecord, directories, filesystem, filesystemIgnored, namedWithheld }`. The first three are the rules in
+  `{ deny, ask, allow, unreadable, proposed, granted, grantedRecord, directories, filesystem, filesystemIgnored, namedWithheld, droppedKeys }`. The first three are the rules in
   force, as the files spelled them, and `shownDeny`, `shownAsk` and `shownAllow` are the same
   lists spelled as text. `unreadable` holds `{ rule, shownRule, said }` for each entry that is
   not a rule, where `shownRule` is `rule` spelled as text and `said` is the agent's sentence about
@@ -1883,7 +2055,10 @@ Still open:
   folders instead. `shownDirectories` holds the same names spelled as `shownPath` is. Each entry of `filesystem` carries `shownPath` and `shownFile` and
   each entry of `filesystemIgnored` carries `shownFile`, spelled the same way. `namedWithheld` is
   the agent's sentence for the file `--settings` named where it is read as a checkout's file (PERM-14),
-  or null.
+  or null. `droppedKeys` holds the agent's sentence for each settings key nothing reads, each key a
+  file wrote twice and a managed `retrieval` value that pins nothing, with the key and the file
+  spelled as `shownPath` is and no value in it (BACKEND-36, RETRIEVE-23). It is empty where there is
+  none and absent from an older bridge.
 - The rules are read when a session opens and kept for its turns. A fork takes its parent's.
   A settings file edited while a session is open governs the next one.
 - A manifest run is passed the session's rules. The agent's runner reads the `Mcp` rules and no

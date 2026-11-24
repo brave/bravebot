@@ -1360,6 +1360,10 @@ fn a_reply_that_stops_arriving_is_given_up_on() {
         matches!(error, EgressError::Transport { .. }),
         "expected a transport failure, got {error:?}"
     );
+    assert!(
+        error.is_transient(),
+        "a connection that went quiet is worth another attempt, got {error:?}"
+    );
 }
 
 /// A request stating that its reply may take a long time has not said the connection may go
@@ -1405,6 +1409,10 @@ fn a_reply_that_stops_arriving_is_given_up_on_however_long_its_request_said_it_m
         assert!(
             matches!(error, EgressError::Transport { .. }),
             "expected a transport failure, streamed: {streamed}, got {error:?}"
+        );
+        assert!(
+            error.is_transient(),
+            "a connection that went quiet is worth another attempt, streamed: {streamed}, got {error:?}"
         );
         assert!(
             started.elapsed() < Duration::from_secs(10),
@@ -1769,6 +1777,71 @@ fn a_body_that_stops_partway_is_a_failure_rather_than_a_short_body() {
         matches!(error, EgressError::Transport { .. }),
         "expected a transport failure, got {error:?}"
     );
+}
+
+/// BACKEND-51 and NET-12: a key the service repeats in the body of its refusal is in no text made
+/// from the failure, no event the policy recorded and no line of the diagnostic log, on either path,
+/// for a request that asked for the body. The key travels in a socket header as a Vertex key does.
+/// The body is read and handed over here, which is what makes the other assertions about a body that
+/// holds the key: a client that put the body into the failure's address, words or log fields would
+/// carry the key out in all of them. The model clients' own tests cannot reach this, since the
+/// Vertex request does not ask for the body of a refusal.
+#[test]
+fn a_key_the_service_repeats_in_a_refusals_body_is_in_no_failure_text_event_or_log_line() {
+    const KEY: &str = "placeholder-key-5d1a9c";
+    let mut said: Vec<(String, String)> = Vec::new();
+
+    for streamed in [false, true] {
+        let base = serve(vec![refusal(
+            "401 Unauthorized",
+            "",
+            &format!(r#"{{"error":{{"message":"API key {KEY} not valid"}}}}"#),
+        )]);
+        let egress = Egress::new();
+        let request = Request::get(&base)
+            .socket_header("x-goog-api-key", KEY)
+            .reading_a_refusal();
+        let path = if streamed { "streamed" } else { "buffered" };
+
+        let log = logged(|| {
+            let mut sink = RecordingSink::new();
+            let mut policy = fetching(&mut sink);
+            let error = if streamed {
+                egress
+                    .fetch_streaming(&mut policy, request, Label::untrusted_public(), None)
+                    .map(|_| ())
+                    .expect_err("a 401 is a failure")
+            } else {
+                refused(&egress, &mut policy, request)
+            };
+            said.push((format!("{path} words"), error.to_string()));
+            said.push((format!("{path} debug"), format!("{error:?}")));
+
+            let EgressError::Status {
+                body: Some(handed), ..
+            } = error
+            else {
+                panic!("the body was not read, so nothing here was tested against it");
+            };
+            let echoed = start_of(&mut policy, handed);
+            assert!(
+                String::from_utf8_lossy(&echoed).contains(KEY),
+                "the body handed over was not the one that holds the key"
+            );
+            said.push((format!("{path} events"), format!("{:?}", sink.events())));
+        });
+        assert!(
+            about(&log, &base)
+                .iter()
+                .any(|line| line.contains("kind=status")),
+            "the refusal was not written to the log, so the log was not read: {log:?}"
+        );
+        said.push((format!("{path} diagnostic log"), log.join("\n")));
+    }
+
+    for (what, text) in &said {
+        assert!(!text.contains(KEY), "the key is in the {what}: {text}");
+    }
 }
 
 /// Serialises the tests that read the process-wide diagnostic log.

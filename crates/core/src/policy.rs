@@ -264,16 +264,37 @@ pub uninterp spec fn spec_precommitted_into<'sink, S: Sink>(
 }
 
 // Whether a policy holds a single-use endorsement for a tool's field at an exact value, which only
-// a person's answer, or a mode answering in their place, issues. Uninterpreted, and
-// `Policy::consume_grant` is assumed to succeed exactly where one is held.
+// a person's answer, or a mode answering in their place, issues. The endorsements are the
+// policy's `Grants`, which Verus proves `spend` against; `Policy` is opaque to Verus, so which
+// endorsements it holds is uninterpreted, and `Policy::consume_grant` is assumed to spend from
+// them.
 #[cfg(verus_keep_ghost)]
 verus! {
-pub uninterp spec fn spec_granted<'sink, S: Sink>(
+pub uninterp spec fn spec_grants<'sink, S: Sink>(policy: Policy<'sink, S>) -> Seq<Grant>;
+
+/// An endorsement is for one tool's field at one exact value, compared as the texts are.
+pub closed spec fn grant_is_for(grant: Grant, tool: Seq<char>, field: Seq<char>, value: Seq<char>) -> bool {
+    grant.tool@ == tool && grant.field@ == field && grant.value@ == value
+}
+
+/// Some unspent endorsement is for this tool's field at this exact value.
+pub open spec fn granted(
+    pending: Seq<Grant>,
+    tool: Seq<char>,
+    field: Seq<char>,
+    value: Seq<char>,
+) -> bool {
+    exists|i: int| 0 <= i < pending.len() && grant_is_for(#[trigger] pending[i], tool, field, value)
+}
+
+pub open spec fn spec_granted<'sink, S: Sink>(
     policy: Policy<'sink, S>,
     tool: Seq<char>,
     field: Seq<char>,
     value: Seq<char>,
-) -> bool;
+) -> bool {
+    granted(spec_grants(policy), tool, field, value)
+}
 
 pub uninterp spec fn spec_slot_name(slot: SlotId) -> Seq<char>;
 }
@@ -453,10 +474,87 @@ impl Routing {
 /// Issued after a human confirms. Consumed by the first matching action check, so an
 /// endorsement cannot authorise a second action or a different value.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Grant {
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
+pub struct Grant {
     tool: String,
     field: String,
     value: String,
+}
+
+/// The endorsements a person's answers issued this turn and no action has spent yet.
+///
+/// [`Grants::issue`] adds one and [`Grants::spend`] takes one out, and those are the only ways to
+/// change the list. An endorsement is for one tool's field at one exact value, so spending one for
+/// any other value finds nothing, and one spent is gone, so a second action finds nothing either.
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
+struct Grants {
+    pending: Vec<Grant>,
+}
+
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+impl Grants {
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        ensures
+            final(self).pending@ == old(self).pending@.push(grant),
+    ))]
+    fn issue(&mut self, grant: Grant) {
+        self.pending.push(grant);
+    }
+
+    /// Take out an endorsement for exactly this tool, field and value, and say whether one was
+    /// there.
+    #[cfg_attr(verus_keep_ghost, verus_spec(spent =>
+        ensures
+            spent == granted(old(self).pending@, tool@, field@, value@),
+            spent ==> exists|i: int|
+                0 <= i < old(self).pending@.len() && grant_is_for(
+                    #[trigger] old(self).pending@[i],
+                    tool@,
+                    field@,
+                    value@,
+                ) && final(self).pending@ == old(self).pending@.remove(i),
+            !spent ==> final(self).pending@ == old(self).pending@,
+    ))]
+    fn spend(&mut self, tool: &str, field: &str, value: &str) -> bool {
+        let mut at = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant
+                at <= self.pending.len(),
+                self.pending@ == old(self).pending@,
+                forall|j: int| 0 <= j < at ==> !grant_is_for(
+                    #[trigger] self.pending@[j],
+                    tool@,
+                    field@,
+                    value@,
+                ),
+            decreases self.pending.len() - at,
+        ))]
+        while at < self.pending.len() {
+            let grant = &self.pending[at];
+            let matches = crate::compare::same_text(&grant.tool, tool)
+                && crate::compare::same_text(&grant.field, field)
+                && crate::compare::same_text(&grant.value, value);
+            if matches {
+                self.pending.remove(at);
+                return true;
+            }
+            at += 1;
+        }
+        false
+    }
+
+    fn len(&self) -> usize {
+        self.pending.len()
+    }
 }
 
 /// What a turn is allowed to release, fixed before any untrusted content is observed.
@@ -549,6 +647,7 @@ pub enum AfterSpendLimit {
 /// What a person said ahead of time about whether a call to a server's tool is asked about, apart
 /// from a rule (SERVERS-7, SERVERS-21).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify, derive(Structural))]
 pub enum McpStanding {
     /// Nothing, so the default question is asked.
     Nothing,
@@ -686,6 +785,164 @@ impl Context {
 fn shown_to_the_planner(label: Label, picture: bool) -> bool {
     let trusted = label.integrity == Integrity::Trusted;
     trusted && !picture
+}
+
+/// Which question decided whether a fetch is put to a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub(crate) enum FetchReason {
+    Ruled(crate::permissions::Ruling),
+    Unanswered,
+}
+
+impl FetchReason {
+    /// Whether the fetch is put to a person.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::fetch_reason_asks(self),
+    ))]
+    fn asks(self) -> bool {
+        match self {
+            Self::Ruled(ruling) => {
+                let fetch_allowed = ruling == crate::permissions::Ruling::Allow;
+                !fetch_allowed
+            }
+            Self::Unanswered => true,
+        }
+    }
+}
+
+/// The question that decides whether a fetch from a host is put to a person: a rule about the
+/// host, and where none matched, the default question. A `deny` rule has refused the fetch before
+/// this is asked ([`Policy::before_fetch_rules`]).
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        crate::spec::fetch_reason_is_sound(rule, r),
+))]
+fn fetch_reason(rule: crate::permissions::Decision) -> FetchReason {
+    if let crate::permissions::Decision::Ruled(ruling) = rule {
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let ruled = FetchReason::Ruled(ruling);
+        return ruled;
+    }
+    FetchReason::Unanswered
+}
+
+/// Which question decided whether a call to a server's tool is put to a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub(crate) enum McpReason {
+    AskedEveryCall,
+    Private,
+    Ruled(crate::permissions::Ruling),
+    PlanApproved,
+    StoppedAsking,
+    Unanswered,
+}
+
+impl McpReason {
+    /// Whether the call is put to a person.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::mcp_reason_asks(self),
+    ))]
+    fn asks(self) -> bool {
+        match self {
+            // The declaration asks about every call, the arguments are private, or nothing
+            // answers for the tool.
+            Self::AskedEveryCall | Self::Private | Self::Unanswered => true,
+            Self::Ruled(ruling) => {
+                let call_allowed = ruling == crate::permissions::Ruling::Allow;
+                !call_allowed
+            }
+            Self::PlanApproved | Self::StoppedAsking => false,
+        }
+    }
+}
+
+/// The question that decides whether a call to a server's tool is put to a person, in the order
+/// they are asked.
+///
+/// A declaration that every call is asked about is read first, and private arguments next, before
+/// any rule or standing answer (SERVERS-21, SERVERS-7, PERM-9). A rule then decides, and only where
+/// none matched does a standing answer: an approved plan or having said to stop asking.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        crate::spec::mcp_reason_is_sound(standing, public_arguments, rule, r),
+))]
+fn mcp_reason(
+    standing: McpStanding,
+    public_arguments: bool,
+    rule: crate::permissions::Decision,
+) -> McpReason {
+    if standing == McpStanding::AskedEveryCall {
+        return McpReason::AskedEveryCall;
+    }
+    // Private arguments are the person's data, which a rule about the tool is not consent to send.
+    let private_arguments = !public_arguments;
+    if private_arguments {
+        return McpReason::Private;
+    }
+    if let crate::permissions::Decision::Ruled(ruling) = rule {
+        return McpReason::Ruled(ruling);
+    }
+    if standing == McpStanding::PlanApproved {
+        return McpReason::PlanApproved;
+    }
+    if standing == McpStanding::StoppedAsking {
+        return McpReason::StoppedAsking;
+    }
+    McpReason::Unanswered
+}
+
+/// Which question decided whether a web search is put to a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub(crate) enum SearchReason {
+    Private,
+    Ruled(crate::permissions::Ruling),
+    Unanswered,
+}
+
+impl SearchReason {
+    /// Whether the search is put to a person.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::search_reason_asks(self),
+    ))]
+    fn asks(self) -> bool {
+        match self {
+            // The planner's context holds private content, or nothing answers for a search.
+            Self::Private | Self::Unanswered => true,
+            Self::Ruled(ruling) => {
+                let search_allowed = ruling == crate::permissions::Ruling::Allow;
+                !search_allowed
+            }
+        }
+    }
+}
+
+/// The question that decides whether a web search is put to a person, in the order they are asked.
+///
+/// A context that holds private content is read first, before any rule: a query is the planner's
+/// own words and may carry that content, and an `allow` rule is a person agreeing in advance to
+/// searches nobody has read (WEBSEARCH-2). A rule about the family then decides, and where none
+/// matched the default question does. A `deny` rule has refused the search before this is asked
+/// ([`Policy::before_search_rules`]).
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        crate::spec::search_reason_is_sound(public_context, rule, r),
+))]
+fn search_reason(public_context: bool, rule: crate::permissions::Decision) -> SearchReason {
+    // Private content is the person's data, which a rule about searching is not consent to send.
+    let private_context = !public_context;
+    if private_context {
+        return SearchReason::Private;
+    }
+    if let crate::permissions::Decision::Ruled(ruling) = rule {
+        return SearchReason::Ruled(ruling);
+    }
+    SearchReason::Unanswered
 }
 
 /// What [`Policy::write_needs_approval`] knows about a write, gathered before it decides.
@@ -997,7 +1254,7 @@ pub struct Policy<'sink, S: Sink> {
     routing: Routing,
     release: ReleasePlan,
     capabilities: CapabilitySet,
-    grants: Vec<Grant>,
+    grants: Grants,
     sink: &'sink mut S,
     /// Every refusal this turn, in order, each as `gate: reason`.
     refusals: Vec<String>,
@@ -1157,6 +1414,12 @@ pub struct Policy<'sink, S: Sink> {
     /// A host other than `fetching` that a person approved this one fetch to be redirected to,
     /// while it is in flight. Set by [`Policy::before_fetch_via`], cleared with `fetching`.
     fetching_via: Option<String>,
+    /// The host a `web_search` call is approved for, while one is in flight.
+    ///
+    /// Set by [`Policy::before_search`] and cleared by [`Policy::search_finished`]. A hop of the
+    /// request that leaves it is refused at the egress gate with no question asked: the search host
+    /// is fixed in source, so a redirect off it is not a destination anybody could have approved.
+    searching: Option<String>,
     /// The host and port a declared MCP server is at, while a request to it is in flight.
     ///
     /// Set by [`Policy::before_server_request`] and cleared by
@@ -1245,7 +1508,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             routing,
             release,
             capabilities,
-            grants: Vec::new(),
+            grants: Grants::default(),
             sink,
             refusals: Vec::new(),
             call_began_at: 0,
@@ -1292,6 +1555,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             fetching: None,
             fetch_hop: None,
             fetching_via: None,
+            searching: None,
             calling_server: None,
             calling_socket: None,
             server_hop: None,
@@ -1325,6 +1589,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            spec_context(*final(self)) == spec_context(*old(self)),
+    ))]
     fn deny(&mut self, gate: &'static str, principle: Principle, message: String) -> Denial {
         self.refusals.push(format!("{gate}: {message}"));
         self.sink.emit(Event::GateBlocked {
@@ -1337,6 +1605,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        ensures
+            spec_context(*final(self)) == spec_context(*old(self)),
+    ))]
     fn allow(&mut self, gate: &'static str, detail: String) {
         self.sink.emit(Event::GatePassed { gate, detail });
     }
@@ -1507,6 +1779,24 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             }
         }
 
+        if let Some(approved) = self.searching.clone() {
+            // The search host is fixed in source, so a hop to any other host is a `Location`
+            // header's choice and nobody was shown it. Refused without a question, and the host it
+            // named is not kept: no person could approve it (WEBSEARCH-7). The refusal names the host
+            // of the request, which this program wrote.
+            let host = crate::url::host_of(url).unwrap_or_default();
+            if host != approved {
+                return Err(self.deny(
+                    "network",
+                    Principle::IntegrityGate,
+                    format!(
+                        "this search was sent to {approved} and redirected somewhere else, which \
+                         is refused without asking"
+                    ),
+                ));
+            }
+        }
+
         if let Some(declared) = self.calling_server.clone() {
             // What a `Location` header names is a server's own bytes, so a refusal repeating it
             // would be writing them into whatever formats that refusal. The declared destination
@@ -1580,23 +1870,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             return true;
         };
 
-        match self.permissions.for_host(&host) {
-            crate::permissions::Decision::Ruled(ruling) => {
-                let needed = ruling != crate::permissions::Ruling::Allow;
-                self.allow(
-                    "approval",
-                    format!(
-                        "a rule in the settings file says {ruling} for {host}, {}",
-                        if needed { "asking" } else { "no prompt" }
-                    ),
-                );
-                needed
-            }
-            crate::permissions::Decision::Unmatched => {
-                self.allow("approval", format!("nothing says who {host} is, asking"));
-                true
-            }
-        }
+        let reason = fetch_reason(self.permissions.for_host(&host));
+        let needed = reason.asks();
+        let said = match reason {
+            FetchReason::Ruled(ruling) => format!(
+                "a rule in the settings file says {ruling} for {host}, {}",
+                if needed { "asking" } else { "no prompt" }
+            ),
+            FetchReason::Unanswered => format!("nothing says who {host} is, asking"),
+        };
+        self.allow("approval", said);
+        needed
     }
 
     /// Record that a person approved fetching this exact URL.
@@ -1683,7 +1967,88 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// [`Policy::before_network`] scopes its host confinement: to the fetch, not to the
     /// connections a person set up themselves.
     pub fn fetch_in_flight(&self) -> bool {
-        self.fetching.is_some()
+        self.fetching.is_some() || self.searching.is_some()
+    }
+
+    /// Refuse a web search a `deny` rule covers, before anybody is asked about it, for the reason
+    /// [`Policy::before_fetch_rules`] refuses a fetch: a rule that refuses is a statement that the
+    /// search does not happen, so a prompt would put a question to somebody that their settings file
+    /// has already closed.
+    pub fn before_search_rules(&mut self) -> Gated<()> {
+        let decision = self.permissions.for_search();
+        self.refuse_if_denied("search", decision, "a web search")
+    }
+
+    /// Whether a person has to approve this search.
+    ///
+    /// Every search asks unless an `allow` rule for the family answers it (WEBSEARCH-2). The destination
+    /// is fixed in source, so the question is about what is sent: the planner's own words. Once the
+    /// planner's context holds private content those words may carry it, and an allow rule is a person
+    /// agreeing in advance to searches nobody has read, so it does not cover a search made then. Which
+    /// of the two holds is the context's label and nothing the query says.
+    pub fn search_needs_approval(&mut self) -> bool {
+        let reason = search_reason(
+            self.context_label().is_public(),
+            self.permissions.for_search(),
+        );
+        let needed = reason.asks();
+        let said = match reason {
+            SearchReason::Ruled(crate::permissions::Ruling::Allow) => {
+                "a rule in the settings file says allow for web searches, no prompt"
+            }
+            SearchReason::Private => {
+                "the planner has been shown private content, which a query may carry, so the \
+                 search asks whatever a rule says"
+            }
+            SearchReason::Ruled(_) | SearchReason::Unanswered => {
+                "nothing says a web search is allowed, asking"
+            }
+        };
+        self.allow("approval", said.to_string());
+        needed
+    }
+
+    /// Record that a person approved this exact request, or that a rule answered for it.
+    ///
+    /// Bound to the URL as it will be sent, so an approval cannot be spent on a different query or
+    /// service, and spent once (WEBSEARCH-3).
+    pub fn endorse_search(&mut self, url: &str) {
+        self.issue_grant("web_search", "url", url.to_string());
+    }
+
+    /// The gate a search passes immediately before the request goes out. Returns the label the
+    /// results will carry.
+    ///
+    /// Always `(U,pub)`, from [`Capability::WebSearch`] (WEBSEARCH-1). While the call is in flight the
+    /// egress gate also holds every hop to the host of `url`.
+    pub fn before_search(&mut self, url: &str) -> Gated<Label> {
+        self.before_capability(Capability::WebSearch)?;
+        self.consume_grant("web_search", "url", url)?;
+        self.searching = Some(crate::url::host_of(url).unwrap_or_default());
+        let label = Capability::WebSearch.output_label().ok_or_else(|| Denial {
+            principle: Principle::Capability,
+            message: "search results must have a label".to_string(),
+        })?;
+        self.allow(
+            "provenance",
+            format!(
+                "web_search: results labelled {label}, because an index may return anything and \
+                 approving a query says nothing about what comes back"
+            ),
+        );
+        Ok(label)
+    }
+
+    /// Say that the search has finished, however it went, so a failed request does not leave the
+    /// turn's later egress held to the search host.
+    pub fn search_finished(&mut self) {
+        self.searching = None;
+    }
+
+    /// Record that a search was put to the person and not approved, so nothing was sent
+    /// (TRACE-1). Fixed text, naming nothing the call carried (TRACE-2).
+    pub fn refuse_unapproved_search(&mut self, call: &str) {
+        self.refuse_unapproved(call, "search", "nothing was sent");
     }
 
     /// Confine egress to where a declared server is, until the request reports back.
@@ -1809,60 +2174,48 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         arguments: Label,
         standing: McpStanding,
     ) -> bool {
-        if standing == McpStanding::AskedEveryCall {
-            self.allow(
+        let reason = mcp_reason(
+            standing,
+            arguments.is_public(),
+            self.permissions.for_mcp(alias, tool),
+        );
+        let needed = reason.asks();
+        match reason {
+            McpReason::AskedEveryCall => self.allow(
                 "approval",
                 format!(
                     "the declaration of {alias} says every call is asked about, so {alias}:{tool} \
                      asks whatever a rule or an earlier answer says"
                 ),
-            );
-            return true;
-        }
-        if !arguments.is_public() {
-            self.allow(
+            ),
+            McpReason::Private => self.allow(
                 "approval",
                 format!(
                     "private arguments to {alias}:{tool}, which releases them to a server past \
                      this policy, asking"
                 ),
-            );
-            return true;
+            ),
+            McpReason::Ruled(ruling) => self.allow(
+                "approval",
+                format!(
+                    "a rule in the settings file says {ruling} for {alias}:{tool}, {}",
+                    if needed { "asking" } else { "no prompt" }
+                ),
+            ),
+            McpReason::PlanApproved => self.record_plan_covered_call(alias, tool),
+            McpReason::StoppedAsking => self.allow(
+                "approval",
+                format!(
+                    "the user said to stop asking for {alias}:{tool} in this project, no \
+                     prompt"
+                ),
+            ),
+            McpReason::Unanswered => self.allow(
+                "approval",
+                format!("nothing answers for {alias}:{tool}, asking"),
+            ),
         }
-        match self.permissions.for_mcp(alias, tool) {
-            crate::permissions::Decision::Ruled(ruling) => {
-                let needed = ruling != crate::permissions::Ruling::Allow;
-                self.allow(
-                    "approval",
-                    format!(
-                        "a rule in the settings file says {ruling} for {alias}:{tool}, {}",
-                        if needed { "asking" } else { "no prompt" }
-                    ),
-                );
-                needed
-            }
-            crate::permissions::Decision::Unmatched if standing == McpStanding::PlanApproved => {
-                self.record_plan_covered_call(alias, tool);
-                false
-            }
-            crate::permissions::Decision::Unmatched if standing == McpStanding::StoppedAsking => {
-                self.allow(
-                    "approval",
-                    format!(
-                        "the user said to stop asking for {alias}:{tool} in this project, no \
-                         prompt"
-                    ),
-                );
-                false
-            }
-            crate::permissions::Decision::Unmatched => {
-                self.allow(
-                    "approval",
-                    format!("nothing answers for {alias}:{tool}, asking"),
-                );
-                true
-            }
-        }
+        needed
     }
 
     /// Record that a person's approval of the plan answered this call to `tool` of `alias`, so
@@ -2236,6 +2589,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             fetching: self.fetching.clone(),
             fetch_hop: self.fetch_hop.clone(),
             fetching_via: self.fetching_via.clone(),
+            searching: self.searching.clone(),
             calling_server: self.calling_server.clone(),
             calling_socket: self.calling_socket.clone(),
             server_hop: self.server_hop.clone(),
@@ -3447,6 +3801,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::value::spec_label_of(
                 series,
             ),
+            spec_context(*final(self)) == spec_context(*old(self)),
     ))]
     pub fn record_answers(
         &mut self,
@@ -6268,10 +6623,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Which number an answer names is a decision taken from untrusted bytes, so it is not taken
     /// here, and not anywhere in the driver. `reader` is a function pointer from a crate that is
     /// not the driver. It captures nothing of the caller's, is handed the text for the width of one
-    /// call and the limit the planner wrote, and gives back one byte. This gate compares neither
-    /// the text nor the byte, and nothing else of the answer is kept. The ninth entry of the Known
-    /// costs in `docs/specs/labels.md` is that reader, and the uses of this gate are pinned there,
-    /// so a second reader of an answer is a moved count.
+    /// call and the limit the planner wrote, and gives back one byte. The type does not stop that
+    /// function from keeping a copy of the text for a later call, so a test in
+    /// `crates/cli/tests/layering.rs` refuses a `static`, a `thread_local!` and interior mutability
+    /// in the crate it comes from. This gate compares neither the text nor the byte, and nothing
+    /// else of the answer is kept. The ninth entry of the Known costs in `docs/specs/labels.md` is
+    /// that reader, and the uses of this gate are pinned there, so a second reader of an answer is a
+    /// moved count.
     ///
     /// **Not a relabel.** The byte is labelled as [`Policy::label_processor_output`] labels a
     /// document: the spec's label met with the label the transport put on the reply, so a number
@@ -8748,7 +9106,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             if climbs_out(word) {
                 return true;
             }
-            let mut keys = keys_for_the_map(&plan.directory, word);
+            let mut keys = keys_for_the_map(&plan.directory, word, self.backslash_separates);
             match &self.operand_names {
                 None => {}
                 Some(found) => match found.get(word.as_str()) {
@@ -8809,7 +9167,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             let answer = match climbs_out(path) {
                 true => Integrity::Untrusted,
                 false => {
-                    let mut keys = keys_for_the_map(&plan.directory, path);
+                    let mut keys =
+                        keys_for_the_map(&plan.directory, path, self.backslash_separates);
                     // The other names the file has (TRUST-2), found by the caller from the file
                     // system, which this crate does not reach. A line whose operands the caller
                     // did not look up is judged by spelling, and one it looked up for and left an
@@ -9650,7 +10009,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             "grant",
             format!("endorsed {}.{} at an exact value", grant.tool, grant.field),
         );
-        self.grants.push(grant);
+        self.grants.issue(grant);
     }
 
     /// Authorise reading a slot's untrusted content.
@@ -10307,20 +10666,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     #[cfg_attr(verus_keep_ghost, verus_spec(r =>
         ensures
             r is Ok <==> spec_granted(*old(self), tool@, field@, concrete@),
+            r is Ok ==> exists|i: int|
+                0 <= i < spec_grants(*old(self)).len() && grant_is_for(
+                    #[trigger] spec_grants(*old(self))[i],
+                    tool@,
+                    field@,
+                    concrete@,
+                ) && spec_grants(*final(self)) == spec_grants(*old(self)).remove(i),
+            r is Err ==> spec_grants(*final(self)) == spec_grants(*old(self)),
     ))]
     fn consume_grant(&mut self, tool: &str, field: &str, concrete: &str) -> Gated<()> {
-        let found = self
-            .grants
-            .iter()
-            .position(|g| g.tool == tool && g.field == field && g.value == concrete);
-
-        match found {
-            Some(index) => {
-                self.grants.remove(index);
+        match self.grants.spend(tool, field, concrete) {
+            true => {
                 self.allow("grant", format!("consumed endorsement for {tool}.{field}"));
                 Ok(())
             }
-            None => Err(self.deny(
+            false => Err(self.deny(
                 "grant",
                 Principle::IntegrityGate,
                 format!(
@@ -10446,14 +10807,35 @@ fn names_a_path(program: &str) -> bool {
 /// Nothing is resolved, only re-spelled, so a name outside the root keeps just its own and the rule
 /// about the directory holding it decides.
 ///
+/// The root and the operand are compared by [`crate::spelling::below`], in three steps. As paths
+/// first, which is the only comparison a root that is not text has. Then, where a backslash
+/// separates, as keys: the root arrives as the host resolved it, `\\?\C:\work`, and a line spells
+/// the same directory `C:\work`, whose first component is not the root's, so compared as paths the
+/// two never nest (TRUST-18). Then component by component in canonical Unicode form, so an operand
+/// spelled `cafe\u{301}` is inside a root spelled `caf\u{e9}` and the reverse (TRUST-18).
+///
 /// [TRUST-9]: ../../../docs/specs/trust-map.md
-fn keys_for_the_map(root: &std::path::Path, operand: &str) -> Vec<String> {
-    let named = std::path::Path::new(operand);
+/// [TRUST-18]: ../../../docs/specs/trust-map.md
+fn keys_for_the_map(
+    root: &std::path::Path,
+    operand: &str,
+    backslash_separates: bool,
+) -> Vec<String> {
     let mut keys = vec![operand.to_string()];
-    match named.strip_prefix(root) {
-        Ok(inside) => keys.push(inside.to_string_lossy().into_owned()),
-        Err(_) if root.starts_with(named) => keys.push(String::new()),
-        Err(_) => {}
+    match crate::spelling::below(root, operand, backslash_separates) {
+        Some(inside) => keys.push(inside),
+        None => {
+            // An operand that is an ancestor of a root that is not text holds it as paths, which
+            // is the one comparison such a root has (PATH-003).
+            let holds_the_root = root.starts_with(std::path::Path::new(operand))
+                || root.to_str().is_some_and(|root| {
+                    crate::spelling::below(std::path::Path::new(operand), root, backslash_separates)
+                        .is_some()
+                });
+            if holds_the_root {
+                keys.push(String::new());
+            }
+        }
     }
     keys
 }
@@ -10571,6 +10953,7 @@ mod tests {
             Capability::FileWrite,
             Capability::ShellExec,
             Capability::WebFetch,
+            Capability::WebSearch,
             Capability::LanguageServer,
         ]
         .into_iter()
@@ -12688,6 +13071,55 @@ five
         );
     }
 
+    /// READ-1: the label of a reserved read is fixed from the trust map when the planner asks, so a
+    /// path nobody vouched for is reserved untrusted and a vouched one trusted, in the reference
+    /// handed back and in the slot. An implementation that gives every reservation
+    /// `Integrity::Trusted` hands the planner a trusted-looking reference to a file it may not see.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_reservation_takes_its_label_from_the_trust_map_when_it_is_made() {
+        let mut sink = RecordingSink::new();
+        let mut store = crate::trust::TrustStore::new("/work");
+        store.trust("src");
+        let mut policy = Policy::begin(
+            routing_with("task", "tidy up"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .unwrap()
+        .with_trust(store);
+
+        let mut slots = SlotStore::new();
+        for (index, (path, trusted)) in [("src/main.rs", true), ("vendor/main.rs", false)]
+            .into_iter()
+            .enumerate()
+        {
+            let slot = SlotId::new(format!("ref:{index}"));
+            let reference = policy
+                .defer(
+                    "read_file",
+                    slot.clone(),
+                    path,
+                    &Labelled::trusted(path.to_string()),
+                    10,
+                    &mut slots,
+                )
+                .expect("a file may be reserved");
+            assert_eq!(
+                reference.label.is_trusted(),
+                trusted,
+                "{path} was reserved at the wrong label: {}",
+                reference.label
+            );
+            assert_eq!(
+                slots.label_of(&slot).map(|label| label.is_trusted()),
+                Some(trusted),
+                "the slot for {path} holds the wrong label"
+            );
+        }
+    }
+
     #[test]
     fn routing_accepts_trusted_public_values() {
         let mut r = Routing::new();
@@ -12803,6 +13235,9 @@ five
                 Capability::ShellExec => Some(Label::untrusted_private()),
                 Capability::LanguageServer => Some(Label::untrusted_private()),
                 Capability::WebFetch => Some(Label::untrusted_public()),
+                // Its own capability, labelled as a fetch is: an index returns what the owners of
+                // the pages wrote.
+                Capability::WebSearch => Some(Label::untrusted_public()),
                 // Whichever server: what a call to one produces is a property of the
                 // protocol, and the alias decides who may make the call rather than what
                 // the answer is labelled.
@@ -12940,6 +13375,53 @@ five
             .declassify(&SlotId::new("other"), Label::untrusted_private())
             .expect_err("unlisted slot must be refused");
         assert_eq!(err.principle, Principle::Confinement);
+    }
+
+    /// A release records the label the bytes leave with: public, at the integrity they had. A
+    /// release recorded as private would tell the trail the bytes never left.
+    #[test]
+    fn a_release_is_recorded_public_at_the_integrity_it_had() {
+        let mut sink = RecordingSink::new();
+        let summary = SlotId::new("summary");
+        let issue = SlotId::new("issue");
+        {
+            let mut policy = Policy::begin(
+                routing_with("path", "out.txt"),
+                ReleasePlan::new()
+                    .allow(summary.clone())
+                    .allow_into(issue.clone(), "github brave/bravebot"),
+                all_capabilities(),
+                &mut sink,
+            )
+            .unwrap();
+
+            policy
+                .declassify(&summary, Label::untrusted_private())
+                .unwrap();
+            policy
+                .declassify_into_place(&issue, "github brave/bravebot", Label::trusted_private())
+                .unwrap();
+        }
+
+        let recorded: Vec<(&str, Label, Label)> = sink
+            .events()
+            .iter()
+            .filter_map(|e| match e {
+                Event::Declassified { slot, from, to, .. } => Some((slot.as_str(), *from, *to)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            recorded,
+            [
+                (
+                    "summary",
+                    Label::untrusted_private(),
+                    Label::untrusted_public()
+                ),
+                ("issue", Label::trusted_private(), Label::trusted_public()),
+            ]
+        );
     }
 
     /// A connector act's slot leaves only to the one place its plan named, fixed before anything
@@ -13759,6 +14241,46 @@ five
         }
     }
 
+    /// A step is taken as started by another name from its file name alone. The path of another
+    /// directory under the file name the program resolved to is the same program, and a path under
+    /// another file name is not (CMDLINE-8). Where the agent finds a program off Unix `started_as`
+    /// is `resolved`, so no step found there is read as renamed and the table alone refuses it; this
+    /// test states what the guard does with each input on every host. Rejects a guard that compares
+    /// the whole path, which refuses the system's `pwd` reached by another directory, and one that is
+    /// never true, which proves `pwd` started as `cwd`.
+    #[test]
+    fn a_step_is_renamed_when_its_file_name_differs_from_the_file_it_resolved_to() {
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &[]);
+        let started = |started_as: &str| {
+            let mut step = step_named("pwd", &[]);
+            step.started_as = std::path::PathBuf::from(started_as);
+            plan_of(vec![step])
+        };
+
+        for same_name in ["/usr/bin/pwd", "/usr/local/bin/pwd"] {
+            let plan = started(same_name);
+            assert!(
+                !policy.plan_needs_approval(&plan),
+                "pwd started as {same_name} asked: it is not another name"
+            );
+            assert!(
+                label_of(&mut policy, &plan).is_trusted(),
+                "pwd started as {same_name} came back untrusted: it is not another name"
+            );
+        }
+
+        let renamed = started("/usr/local/bin/cwd");
+        assert!(
+            policy.plan_needs_approval(&renamed),
+            "pwd started as cwd ran unasked"
+        );
+        assert!(
+            !label_of(&mut policy, &renamed).is_trusted(),
+            "pwd started as cwd came back as the audited program's output"
+        );
+    }
+
     /// A session begun in a subdirectory of a checkout has the checkout's `bin` on `$PATH` as readily
     /// as one begun at its root (`PATH_add ../bin`), so a file there answering to an audited name
     /// runs unasked and prints as the audited program unless the checkout is refused as well as the
@@ -13925,6 +14447,53 @@ five
             );
             assert!(
                 !label_of(&mut policy, &planted).is_trusted(),
+                "{resolved} came back as the audited program's output"
+            );
+        }
+    }
+
+    /// CMDLINE-4, CMDLINE-8: a step whose resolved path is a Windows path, with a backslash and a
+    /// drive, is not read-proven, on every host. The table matches the file name after the last `/`,
+    /// so the whole spelling is the name and no entry answers for it: the line is asked about and
+    /// its output is untrusted, where the same arguments for `/usr/bin/wc` are proven. A step
+    /// started as the file it resolved to is not taken as renamed (`started_as` is `resolved`
+    /// where the agent finds a program off Unix), so the table is what refuses it. Rejects a
+    /// reading of `\` that makes `C:\Windows\System32\wc` the audited `wc`, which would let a `wc`
+    /// anywhere on a Windows machine answer as the table's.
+    #[test]
+    fn a_step_resolved_to_a_windows_path_is_not_read_proven() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(trusting("/work", &["."], &[]))
+            .with_root(std::path::Path::new("/work"));
+        let started = |resolved: &str| {
+            let mut step = step_named("wc", &["-l"]);
+            step.resolved = std::path::PathBuf::from(resolved);
+            step.started_as = std::path::PathBuf::from(resolved);
+            plan_of(vec![step])
+        };
+
+        let control = started("/usr/bin/wc");
+        assert_eq!(policy.operands_read_by(&control), Some(Vec::new()));
+        assert!(
+            !policy.plan_needs_approval(&control),
+            "the proof road is shut for the control"
+        );
+        assert!(label_of(&mut policy, &control).is_trusted());
+
+        for resolved in [
+            r"C:\Windows\System32\wc.exe",
+            r"C:\Windows\System32\wc",
+            r"\\?\C:\Windows\System32\wc.exe",
+        ] {
+            let windows = started(resolved);
+            assert_eq!(policy.operands_read_by(&windows), None, "{resolved}");
+            assert!(
+                policy.plan_needs_approval(&windows),
+                "{resolved} ran unasked"
+            );
+            assert!(
+                !label_of(&mut policy, &windows).is_trusted(),
                 "{resolved} came back as the audited program's output"
             );
         }
@@ -14105,6 +14674,31 @@ five
         assert!(
             policy.plan_needs_approval(&line),
             "a line running in another directory was answered by the wrong rule"
+        );
+    }
+
+    /// The output label of a line run outside the root. A line whose reads are all vouched for is
+    /// trusted when it runs at the root, and the same line run in a subdirectory is the opaque
+    /// default, untrusted and private, whatever the map says about the name `lib.js` there. An
+    /// implementation that checked the directory only where a person is asked would give the
+    /// output of a line it asked about a trusted label.
+    #[test]
+    fn a_line_running_outside_the_project_root_has_the_opaque_output_label() {
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &[]);
+
+        let at_the_root = reading_in("/work", "lib.js");
+        assert_eq!(
+            label_of(&mut policy, &at_the_root),
+            Label::trusted_private(),
+            "the proof road is shut for the control that runs at the root"
+        );
+
+        let outside = reading_in("/work/vendor", "lib.js");
+        assert_eq!(
+            label_of(&mut policy, &outside),
+            Label::untrusted_private(),
+            "the output of a line run outside the root was labelled from its reads"
         );
     }
 
@@ -17646,6 +18240,152 @@ five
         assert!(policy.fetch_needs_approval("https://example.com/docs"));
     }
 
+    /// WEBSEARCH-2: a search nobody has ruled on is put to a person, and an `allow` rule for the family
+    /// answers it. The regression it rejects: a search that goes out unasked because nothing denied
+    /// it, and a `WebFetch` allow rule read as covering a search.
+    #[test]
+    fn a_search_asks_unless_a_websearch_rule_allows_it() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        assert!(policy.search_needs_approval());
+
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&[], &[], &["WebSearch"]));
+        assert!(!policy.search_needs_approval());
+
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&[], &[], &["WebFetch"]));
+        assert!(
+            policy.search_needs_approval(),
+            "a WebFetch rule answered for a search"
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&[], &["WebSearch"], &[]));
+        assert!(policy.search_needs_approval());
+    }
+
+    /// WEBSEARCH-2: once the planner has been shown private content its query may carry some, and an
+    /// allow rule written in advance does not cover that. The regression it rejects: the allow rule
+    /// answering whatever the context holds.
+    #[test]
+    fn an_allow_rule_does_not_cover_a_search_made_after_private_content_was_shown() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_permissions(permissions(&[], &[], &["WebSearch"]))
+            .holding(Confidentiality::Private);
+        assert!(
+            policy.search_needs_approval(),
+            "an allow rule let a query out after private content was shown"
+        );
+    }
+
+    /// WEBSEARCH-2: a `deny` rule for the family refuses before anybody is asked, and a `WebFetch` deny
+    /// rule does not. The regression it rejects: the families sharing one answer.
+    #[test]
+    fn a_websearch_deny_rule_refuses_and_a_webfetch_deny_rule_does_not() {
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&["WebSearch"], &[], &[]));
+        assert!(policy.before_search_rules().is_err());
+
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&["WebFetch"], &[], &[]));
+        assert!(policy.before_search_rules().is_ok());
+    }
+
+    /// WEBSEARCH-1, WEBSEARCH-3: the label comes from the capability and nothing a person says changes
+    /// it, and an approval is for one exact request and is spent once. The regressions it rejects:
+    /// a trusted label after an approval, an approval spent on another query, and one spent twice.
+    #[test]
+    fn approving_a_search_never_trusts_what_comes_back_and_covers_one_request() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let url = "https://api.search.brave.com/res/v1/web/search?q=rust";
+
+        assert!(
+            policy.before_search(url).is_err(),
+            "a search went out with no approval"
+        );
+        policy.endorse_search(url);
+        assert!(
+            policy
+                .before_search("https://api.search.brave.com/res/v1/web/search?q=other")
+                .is_err(),
+            "an approval was spent on another query"
+        );
+        let label = policy.before_search(url).expect("approved");
+        assert_eq!(label, Label::untrusted_public());
+        assert!(
+            policy.before_search(url).is_err(),
+            "an approval was spent twice"
+        );
+    }
+
+    /// WEBSEARCH-7: while a search is in flight every hop must be on the search host, whatever rules
+    /// allow, and the hop is not kept for a question. The regression it rejects: a redirect off the
+    /// host put to a person, or let through by a `WebFetch` allow rule.
+    #[test]
+    fn a_search_cannot_be_redirected_to_another_host_and_the_host_is_not_asked_about() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &[],
+            &[],
+            &["WebFetch(domain:elsewhere.test)"],
+        ));
+        let url = "https://api.search.brave.com/res/v1/web/search?q=x";
+        policy.endorse_search(url);
+        policy.before_search(url).expect("approved");
+
+        assert!(
+            policy
+                .before_network("https://api.search.brave.com/res/x")
+                .is_ok()
+        );
+        assert!(
+            policy
+                .before_network("https://elsewhere.test/landed")
+                .is_err(),
+            "a hop off the search host was let through"
+        );
+        assert!(
+            policy.take_fetch_hop().is_none(),
+            "a hop off the search host was kept to be asked about"
+        );
+
+        policy.search_finished();
+        assert!(
+            policy
+                .before_network("https://elsewhere.test/landed")
+                .is_ok(),
+            "a finished search went on confining the turn's egress"
+        );
+        assert!(!policy.fetch_in_flight());
+    }
+
+    /// WEBSEARCH-7: the egress path scopes its check of what a name resolves to by
+    /// `fetch_in_flight`, so it has to be true for a search from its approval until it finishes.
+    /// The regression it rejects: the flag set for a fetch only, which leaves a search's hops
+    /// resolved without the address check.
+    #[test]
+    fn a_search_is_in_flight_from_its_approval_until_it_finishes() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        assert!(!policy.fetch_in_flight());
+
+        let url = "https://api.search.brave.com/res/v1/web/search?q=x";
+        policy.endorse_search(url);
+        policy.before_search(url).expect("approved");
+        assert!(policy.fetch_in_flight());
+
+        policy.search_finished();
+        assert!(!policy.fetch_in_flight());
+    }
+
     /// A rule that refuses is a statement that the fetch does not happen, so there is nothing
     /// left to put to a person: the prompt would ask them to approve a host their own settings
     /// file has banned, and yes would be overruled at the egress gate a moment later.
@@ -20958,6 +21698,125 @@ five
             .is_trusted(),
             "a line reading a file in the project came back untrusted"
         );
+    }
+
+    /// The root arrives as the host resolved it and a line spells the same directory without the
+    /// `\\?\`, so compared as paths the operand is never inside the root and the key the project's
+    /// own rules are spelled against is not asked (TRUST-9, TRUST-18).
+    #[test]
+    fn an_operand_on_a_drive_letter_is_also_named_relative_to_the_project() {
+        let root = std::path::Path::new(r"\\?\C:\work\project");
+
+        for operand in [
+            r"C:\work\project\secrets\x.txt",
+            r"\\?\C:\work\project\secrets\x.txt",
+            "C:/work/project/secrets/x.txt",
+        ] {
+            assert_eq!(
+                keys_for_the_map(root, operand, true),
+                [operand, "secrets/x.txt"],
+                "{operand} was not named relative to the project"
+            );
+        }
+        assert_eq!(
+            keys_for_the_map(root, r"C:\work", true),
+            [r"C:\work", ""],
+            "a directory holding the project was not named as the project"
+        );
+        assert_eq!(
+            keys_for_the_map(root, r"C:\work\project-other\x.txt", true),
+            [r"C:\work\project-other\x.txt"],
+            "a sibling directory sharing the project's name as a prefix was named inside it"
+        );
+        assert_eq!(
+            keys_for_the_map(root, r"D:\work\project\x.txt", true),
+            [r"D:\work\project\x.txt"],
+            "the same path on another drive was named inside the project"
+        );
+    }
+
+    /// An operand spelled in another Unicode form of the workspace root is the same directory on a
+    /// volume that opens both, so it is named relative to the project as well, in either direction.
+    /// Rejects comparing the root and the operand byte by byte, which leaves the project's own
+    /// relative rules unasked, and a prefix match, which names `cafe\u{301}x` inside `caf\u{e9}`.
+    #[test]
+    fn an_operand_in_another_unicode_form_of_the_root_is_also_named_relative_to_the_project() {
+        let nfc = "/caf\u{e9}";
+        let nfd = "/cafe\u{301}";
+        for (root, operand_root) in [(nfc, nfd), (nfd, nfc)] {
+            let operand = format!("{operand_root}/held/x.txt");
+            assert_eq!(
+                keys_for_the_map(std::path::Path::new(root), &operand, false),
+                [operand.as_str(), "held/x.txt"],
+                "{operand} was not named relative to {root}"
+            );
+            assert_eq!(
+                keys_for_the_map(std::path::Path::new(root), operand_root, false),
+                [operand_root, ""],
+                "{operand_root} was not named as the project {root}"
+            );
+            let sibling = format!("{operand_root}x/held/x.txt");
+            assert_eq!(
+                keys_for_the_map(std::path::Path::new(root), &sibling, false),
+                [sibling.as_str()],
+                "{sibling} was named inside {root}"
+            );
+        }
+    }
+
+    /// A root whose name is not text is held by an operand that names one of its ancestors, as it
+    /// was when the two were compared as paths, and an operand spelled as the root's lossy rendering
+    /// is a different directory and holds nothing (PATH-003). Rejects a comparison that reads the
+    /// root as text and so has no answer for a root that is not.
+    #[cfg(unix)]
+    #[test]
+    fn an_operand_that_holds_a_root_that_is_not_text_is_named_as_the_project() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = std::path::Path::new(std::ffi::OsStr::from_bytes(b"/home/me-\xff/project"));
+        for held in ["/", "/home", "/home/"] {
+            assert_eq!(
+                keys_for_the_map(root, held, false),
+                [held, ""],
+                "{held} holds the project and was not named as it"
+            );
+        }
+        for other in ["/home/me-\u{FFFD}", "/home/me-\u{FFFD}/project", "/homer"] {
+            assert_eq!(
+                keys_for_the_map(root, other, false),
+                [other],
+                "{other} is another directory than the project"
+            );
+        }
+    }
+
+    /// A relative rule of the project decides a line reading a file spelled in another Unicode form
+    /// of the root, and a line reading a sibling that only starts like the root is not that
+    /// project's. Rejects asking the map the operand's own spelling alone: that name is outside
+    /// the project's rules, so the project's rule marking `vendor` untrusted is never consulted.
+    #[test]
+    fn a_line_reading_a_distrusted_file_spelled_in_another_unicode_form_of_the_root_is_untrusted() {
+        for (root, operand_root) in [
+            ("/caf\u{e9}", "/cafe\u{301}"),
+            ("/cafe\u{301}", "/caf\u{e9}"),
+        ] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink)
+                .with_trust(trusting(root, &["."], &["vendor"]))
+                .with_root(std::path::Path::new(root));
+            let reading = |operand: &str| reading_in(root, operand);
+            assert!(
+                !label_of(
+                    &mut policy,
+                    &reading(&format!("{operand_root}/vendor/lib.js"))
+                )
+                .is_trusted(),
+                "{operand_root}/vendor/lib.js read as trusted under {root}"
+            );
+            assert!(
+                !label_of(&mut policy, &reading(&format!("{root}/vendor/lib.js"))).is_trusted(),
+                "the root's own spelling read as trusted"
+            );
+        }
     }
 
     /// The session's own directory arrives as the host resolved it and a key below it on a drive
@@ -25139,6 +25998,42 @@ five
             );
         }
 
+        /// TRACE-1, WEBSEARCH-2: a web search put to the person and not approved is a refusal under
+        /// `approval`, naming the tool, in fixed words that carry nothing the query held (TRACE-2),
+        /// and the turn does not end as clean. The regression it rejects is a no that leaves the
+        /// question in the trail and nothing about its answer.
+        #[test]
+        fn a_search_the_person_did_not_approve_is_a_refusal_under_approval() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.refuse_unapproved_search("web_search");
+            assert!(
+                !turn.finish(),
+                "a turn with an unapproved search ended clean"
+            );
+            let refused: Vec<(&str, Principle, &str)> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GateBlocked {
+                        gate,
+                        reason,
+                        principle,
+                        ..
+                    } => Some((*gate, *principle, reason.as_str())),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                refused,
+                [(
+                    "approval",
+                    Principle::Capability,
+                    "web_search: the search was not approved, so nothing was sent"
+                )]
+            );
+        }
+
         /// TRACE-1: a call to a server's tool put to the person and not approved is a refusal under
         /// `approval`, naming the tool as the alias the person gave the server and the word on its
         /// list, in fixed words that carry nothing the call or the server held (TRACE-2), and the
@@ -26165,7 +27060,7 @@ five
         use crate::delegate::{ADDRESSED, Definition, Definitions, Kind};
 
         /// Every tool name a turn might be offered that the tests below turn on.
-        const OFFERED: [&str; 18] = [
+        const OFFERED: [&str; 19] = [
             "read_file",
             "list_files",
             "write_file",
@@ -26177,6 +27072,7 @@ five
             "todo_write",
             "schedule_next",
             "fetch_url",
+            "web_search",
             "download_url",
             "vet_content",
             "remember",
@@ -26217,6 +27113,7 @@ five
                         "todo_write",
                         "schedule_next",
                         "fetch_url",
+                        "web_search",
                         "download_url",
                         "vet_content",
                         "remember",
@@ -26404,7 +27301,7 @@ five
             let trail = trail(&sink);
             assert!(
                 trail.contains(
-                    "asks for file_write, shell_exec, language_server which this turn does not hold"
+                    "asks for file_write, shell_exec, web_search, language_server which this turn does not hold"
                 ),
                 "the trail does not say what the kind asked for and did not get: {trail}"
             );

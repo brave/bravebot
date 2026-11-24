@@ -19,6 +19,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { BridgeEvent, BridgeFailure } from '../shared/protocol'
 import type { StoredLayout } from '../shared/layout'
+import type { PanelName } from '../shared/state'
 import type { StoredView } from '../shared/view'
 import type { CommandId, ContextCommandId, ContextRef, WindowState } from '../shared/commands'
 import type { ExportOutcome, ExportRequest } from '../shared/export'
@@ -99,21 +100,30 @@ window.addEventListener('drop', (event) => {
  * `data-paste-session`. When the clipboard holds a picture, the picture wins over any text beside it
  * as in the terminal (PASTE-7), so the browser's own paste is cancelled and the main process is
  * asked to stage what is on the clipboard. It reads the clipboard itself: nothing here, and nothing
- * the page holds, carries the bytes. A paste of text alone is left to the browser.
+ * the page holds, carries the bytes. A paste of text alone is cancelled too, and its text, read
+ * off the trusted event, is sent to the main process for the bridge's `pastes.clean` to remove the
+ * characters that draw as nothing (PASTE-10). The page is told the cleaned text and inserts it. A
+ * paste with neither a picture nor text, such as files copied in a file manager, is left to the
+ * browser.
  */
 const pasteListeners = new Set<(paste: Paste) => void>()
 const carriesPicture = (event: ClipboardEvent): boolean =>
   [...(event.clipboardData?.items ?? [])].some((item) => item.kind === 'file' && item.type.startsWith('image/'))
 
 window.addEventListener('paste', (event) => {
-  if (!event.isTrusted || !carriesPicture(event)) return
+  if (!event.isTrusted) return
   const session = event.target instanceof Element
     ? event.target.closest<HTMLElement>('[data-paste-session]')?.dataset.pasteSession
     : undefined
   if (!session) return
+  const picture = carriesPicture(event)
+  const text = picture ? '' : event.clipboardData?.getData('text/plain') ?? ''
+  if (!picture && text === '') return
   event.preventDefault()
   void (async () => {
-    const outcome = await ipcRenderer.invoke('bravebot:pastes:stage', session) as PasteOutcome | null
+    const outcome = picture
+      ? await ipcRenderer.invoke('bravebot:pastes:stage', session) as PasteOutcome | null
+      : await ipcRenderer.invoke('bravebot:pastes:clean', session, text) as PasteOutcome | null
     if (outcome) for (const listener of pasteListeners) listener({ session, outcome })
   })()
 }, true)
@@ -172,6 +182,16 @@ const api = {
   /** Remember where the columns were. Best-effort; the caller does not wait or check. */
   writeLayout(layout: StoredLayout): void {
     void ipcRenderer.invoke('bravebot:layout:write', layout)
+  },
+
+  /** The context-column panels turned off last launch, in column order. Empty means every panel on. */
+  readHiddenPanels(): Promise<PanelName[]> {
+    return ipcRenderer.invoke('bravebot:panels:read') as Promise<PanelName[]>
+  },
+
+  /** Remember which context-column panels are turned off. Best-effort, as `writeLayout` is. */
+  writeHiddenPanels(hidden: PanelName[]): void {
+    void ipcRenderer.invoke('bravebot:panels:write', hidden)
   },
 
   /**
@@ -368,6 +388,7 @@ const api = {
     session: string
     slug: string
     prompt: string
+    shown?: string
     grounded: boolean
     model?: string | null
     attachments?: string[]
@@ -387,6 +408,7 @@ const api = {
     session: string
     slug: string
     prompt: string
+    shown?: string
     model?: string | null
     attachments?: string[]
     drops?: string[]
@@ -453,6 +475,13 @@ const api = {
   selectSettings(clear = false): Promise<import('../shared/agent-settings').AgentSettings | null> {
     return ipcRenderer.invoke('bravebot:settings:select', clear)
   },
+  /**
+   * Change the running agent's diagnostic log level until the app quits (DIAG-11). Rejects a word
+   * that is not a level, and when the agent does not answer.
+   */
+  setLogLevel(level: import('../shared/protocol').LogLevel): Promise<import('../shared/protocol').DiagnosticLogSet> {
+    return ipcRenderer.invoke('bravebot:diagnostic-log:set-level', level)
+  },
   /** Writes the file; reading it back is `hooks.inspect`, which the agent answers. */
   saveHooks(text: string, expected: string | null): Promise<void> { return ipcRenderer.invoke('bravebot:hooks:save', text, expected) },
   /** Ask the user for a project directory, natively. */
@@ -515,6 +544,8 @@ const api = {
       context: ContextRef | null,
     ) => listener(id, context)
     ipcRenderer.on('bravebot:command', handler)
+    // A command chosen with no window builds one, and the main process holds it until this runs.
+    ipcRenderer.send('bravebot:commands:ready')
     return () => ipcRenderer.off('bravebot:command', handler)
   },
 

@@ -1822,11 +1822,21 @@ impl Servers {
     /// A directory the platform will not give this session is reported as a server that did not
     /// start, which is LSP-6 and the same answer the directories below it already give.
     fn index_dir(&mut self, language: &Served) -> LspResult<PathBuf> {
+        self.index_dir_using(language, SessionIndex::create)
+    }
+
+    /// [`Servers::index_dir`] with the creation of the session's own directory passed in, so a
+    /// platform that will not give one can be stood in for.
+    fn index_dir_using(
+        &mut self,
+        language: &Served,
+        create: impl FnOnce() -> std::io::Result<SessionIndex>,
+    ) -> LspResult<PathBuf> {
         if let Some(kept) = cache_for(self.state.as_deref(), &self.root, self.incognito) {
             return Ok(kept);
         }
         if self.session.is_none() {
-            self.session = Some(SessionIndex::create().map_err(|e| LspError::Start {
+            self.session = Some(create().map_err(|e| LspError::Start {
                 language: language.clone(),
                 detail: format!("an index directory for this session could not be created: {e}"),
             })?);
@@ -2587,6 +2597,63 @@ done
                 "the cache must not be reported anywhere a caller could read it: {debug}"
             );
         }
+    }
+
+    /// LSP-10: nothing the driver does with an index opens a file inside it.
+    ///
+    /// A named pipe stands where a file would be read. Opening one for reading waits until something
+    /// opens it for writing, and nothing does, so a read of the marker or of anything inside an
+    /// index never returns. The two functions that touch an index, the one a server start runs and
+    /// the sweep, run on a thread that has to answer within a bound, so a read shows as a test that
+    /// fails rather than one that hangs. A pipe that stays a pipe was also not replaced.
+    #[cfg(unix)]
+    #[test]
+    fn nothing_the_driver_does_with_an_index_reads_a_file_inside_it() {
+        use std::os::unix::fs::FileTypeExt;
+
+        fn pipe_at(path: &Path) {
+            let made = std::process::Command::new("mkfifo")
+                .arg(path)
+                .status()
+                .expect("mkfifo");
+            assert!(made.success(), "mkfifo {}", path.display());
+        }
+
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-never-read-index");
+        // An index whose marker is a pipe, which is where a read of the marker would wait.
+        let marked_by_a_pipe = scratch.join(CACHE_ROOT).join("00000000000000ee");
+        std::fs::create_dir_all(&marked_by_a_pipe).expect("an index");
+        pipe_at(&marked_by_a_pipe.join(USED_MARKER));
+        // An index that is old enough to be removed and holds a pipe where derived bytes would be,
+        // which is where a read of what is about to be removed would wait.
+        let old = index_last_used(&scratch, "00000000000000ff", 40);
+        pipe_at(&old.join("debug").join("pipe"));
+
+        let (done, finished) = std::sync::mpsc::channel();
+        let state = scratch.to_path_buf();
+        let started_on = marked_by_a_pipe.clone();
+        std::thread::spawn(move || {
+            let started = create_cache(&started_on).is_ok();
+            let removed = remove_unused_indexes(&state, thirty_days_ago(), None);
+            let _ = done.send((started, removed));
+        });
+        let (started, removed) = finished
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the driver waited on a pipe inside an index: it reads what the cache holds");
+
+        assert!(
+            started,
+            "a server could not start on an index with a pipe in it"
+        );
+        assert_eq!(removed, 1, "only the old index goes, pipe and all");
+        assert!(!old.exists(), "an old index holding a pipe was kept");
+        assert!(
+            std::fs::symlink_metadata(marked_by_a_pipe.join(USED_MARKER))
+                .expect("the marker is still there")
+                .file_type()
+                .is_fifo(),
+            "a marker that is not a plain file was replaced"
+        );
     }
 
     /// A whole-tree query names no file, so it cannot decide a language and must not be answered by
@@ -3947,6 +4014,296 @@ done
         assert!(index.is_dir(), "{} did not survive", index.display());
     }
 
+    /// A language server that records the variables LSP-10 points at an index directory, and then
+    /// answers like [`REPORTING_SERVER`] so the start completes.
+    #[cfg(unix)]
+    const ENVIRONMENT_SERVER: &str = r#"#!/bin/sh
+here=$(dirname "$0")
+{
+  printf 'GOCACHE=%s\n' "${GOCACHE-unset}"
+  printf 'TMPDIR=%s\n' "${TMPDIR-unset}"
+  printf 'CARGO_TARGET_DIR=%s\n' "${CARGO_TARGET_DIR-unset}"
+} >> "$here/environment"
+reply() {
+  printf 'Content-Length: %s\r\n\r\n%s' "${#1}" "$1"
+}
+while IFS= read -r header; do
+  case "$header" in
+    Content-Length:*) length=$(printf '%s' "$header" | tr -cd '0-9') ;;
+    *) continue ;;
+  esac
+  IFS= read -r _blank
+  body=$(dd bs=1 count="$length" 2>/dev/null)
+  id=$(printf '%s' "$body" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$body" in
+    *'"initialize"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"capabilities\":{}}}"
+      ;;
+    *'"shutdown"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":null}"
+      ;;
+    *'"exit"'*)
+      exit 0
+      ;;
+  esac
+done
+"#;
+
+    /// Start a server written by [`ENVIRONMENT_SERVER`] for `served` and return the index directory
+    /// it was handed and what the server saw in its environment as
+    /// `(GOCACHE, TMPDIR, CARGO_TARGET_DIR)`, both passed to `after` while the scratch directory
+    /// still exists.
+    ///
+    /// `before` runs on the index directory before the server starts, for a test that needs
+    /// something already there.
+    #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn what_a_started_server_saw(
+        name: &str,
+        served: Served,
+        before: impl FnOnce(&Path),
+        after: impl FnOnce(&Path, (String, String, String)),
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _launching = LAUNCHING.lock().unwrap_or_else(|held| held.into_inner());
+        let scratch = crate::testutil::Scratch::new(name);
+        let workspace = scratch.join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create the workspace");
+        let program = scratch.join("server");
+        std::fs::write(&program, ENVIRONMENT_SERVER).expect("write the server");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let state = scratch.join("state");
+        let cache = cache_for(Some(&state), &workspace, false).expect("a cache is given");
+        before(&cache);
+
+        let server = match served {
+            Served::Builtin(language) => {
+                Server::launch(language, &program, &workspace, &cache, &[])
+            }
+            Served::Declared(name) => Server::launch_declared(
+                &Declared {
+                    name: name.to_string(),
+                    command: "server".into(),
+                    args: Vec::new(),
+                    extensions: BTreeMap::new(),
+                    env: Vec::new(),
+                    initialization_options: None,
+                    digest: "one".into(),
+                },
+                &program,
+                &workspace,
+                &cache,
+                &[],
+            ),
+        }
+        .expect("the server starts");
+        drop(server);
+
+        let written = std::fs::read_to_string(scratch.join("environment"))
+            .expect("the server records its environment before it answers");
+        let seen = |prefix: &str| {
+            written
+                .lines()
+                .find_map(|line| line.strip_prefix(prefix))
+                .unwrap_or_else(|| panic!("no {prefix} line in {written}"))
+                .to_string()
+        };
+        // Run before the scratch directory goes, so a test can look at what the start made.
+        after(
+            &cache,
+            (seen("GOCACHE="), seen("TMPDIR="), seen("CARGO_TARGET_DIR=")),
+        );
+    }
+
+    /// LSP-10: a Go server's build cache is a directory of its own inside the index directory, made
+    /// by this process at mode 0700 and narrowed where an earlier run left it open.
+    ///
+    /// It rejects a Go branch that sets `GOCACHE` without making the directory (a server handed one
+    /// that is not there makes it at the umask), and one that makes it with a call that leaves an
+    /// existing directory at the mode it had.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_go_servers_build_cache_is_made_inside_the_index_directory_at_mode_0700() {
+        use std::os::unix::fs::PermissionsExt;
+
+        what_a_started_server_saw(
+            "bravebot-lsp-go-build-cache",
+            Served::Builtin(Language::Go),
+            |cache| {
+                let open = cache.join("go-build");
+                std::fs::create_dir_all(&open).expect("a build cache an earlier run left");
+                std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o755))
+                    .expect("chmod");
+            },
+            |cache, (go_cache, _, _)| {
+                let build = cache.join("go-build");
+                assert_eq!(go_cache, build.to_str().expect("a utf-8 path"));
+                let mode = std::fs::metadata(&build)
+                    .expect("the build cache was made by this process")
+                    .permissions()
+                    .mode()
+                    & 0o777;
+                assert_eq!(mode, 0o700, "STATE-1's mode, for the Go build cache too");
+            },
+        );
+    }
+
+    /// LSP-10: a Go server's build cache is made when nothing was there.
+    ///
+    /// The first test leaves a directory in place, so it cannot tell a branch that makes the
+    /// directory from one that relies on the server to. This one starts with nothing.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_go_servers_build_cache_is_made_when_nothing_was_there() {
+        use std::os::unix::fs::PermissionsExt;
+
+        what_a_started_server_saw(
+            "bravebot-lsp-go-build-cache-new",
+            Served::Builtin(Language::Go),
+            |_| {},
+            |cache, (go_cache, _, _)| {
+                let build = cache.join("go-build");
+                assert_eq!(go_cache, build.to_str().expect("a utf-8 path"));
+                let mode = std::fs::metadata(&build)
+                    .expect("the server was pointed at a directory this process never made")
+                    .permissions()
+                    .mode()
+                    & 0o777;
+                assert_eq!(mode, 0o700);
+            },
+        );
+    }
+
+    /// LSP-10: TypeScript, Python and a declared server are given the index directory as their
+    /// temporary directory, because none of them reads a variable that names an index.
+    ///
+    /// It rejects a launch that drops `TMPDIR`, which leaves them the system temporary directory
+    /// and an index outside the one this process owns and removes.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_server_that_has_no_index_variable_is_given_the_index_directory_as_its_temporary_one() {
+        for (name, served) in [
+            (
+                "bravebot-lsp-tmpdir-typescript",
+                Served::Builtin(Language::TypeScript),
+            ),
+            (
+                "bravebot-lsp-tmpdir-python",
+                Served::Builtin(Language::Python),
+            ),
+            (
+                "bravebot-lsp-tmpdir-declared",
+                Served::Declared("mine".into()),
+            ),
+        ] {
+            let label = format!("{served:?}");
+            what_a_started_server_saw(
+                name,
+                served,
+                |_| {},
+                |cache, (_, tmpdir, _)| {
+                    assert_eq!(
+                        tmpdir,
+                        cache.to_str().expect("a utf-8 path"),
+                        "{label} was not given the index directory as TMPDIR"
+                    );
+                },
+            );
+        }
+    }
+
+    /// LSP-10: where this session keeps nothing, the directory it indexes into is named for the
+    /// process and not for the workspace.
+    ///
+    /// The directory is listable by anybody on the machine, so a name that carried the workspace's
+    /// name or the digest of its path would say which projects somebody is working on. It rejects a
+    /// name derived from the workspace.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_directory_a_session_indexes_into_has_no_workspace_in_its_name() {
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-nothing-of-this-workspace-");
+        let workspace = scratch.join("a-workspace-nobody-else-names");
+        std::fs::create_dir_all(&workspace).expect("create the workspace");
+        let mut servers = Servers::new(workspace.clone(), None, |_| None, false, Vec::new);
+
+        let index = servers
+            .index_dir(&Language::Rust.into())
+            .expect("a directory for this session");
+
+        // session / lsp / digest of the workspace: the first two are named by this process, and the
+        // last is a digest the session directory holds.
+        let digest = index
+            .file_name()
+            .expect("a digest")
+            .to_string_lossy()
+            .to_string();
+        let session = index
+            .parent()
+            .and_then(Path::parent)
+            .expect("the session's own directory")
+            .to_path_buf();
+        let named = session
+            .file_name()
+            .expect("a name")
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            !named.contains("a-workspace-nobody-else-names")
+                && !named.contains(&digest)
+                && !named.contains("nothing-of-this-workspace"),
+            "the session's directory is named for the workspace: {named}"
+        );
+        assert!(
+            !session.starts_with(workspace.canonicalize().expect("the workspace")),
+            "{} is inside the workspace",
+            session.display()
+        );
+    }
+
+    /// LSP-10 and LSP-6: where the directory for a session that keeps nothing cannot be created, the
+    /// server does not start, and nothing is made in the workspace instead.
+    ///
+    /// It rejects a fallback to the workspace (or to any other directory) when the platform refuses,
+    /// which would run the server with an index location that writes into the tree.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn a_session_that_cannot_have_an_index_directory_does_not_start_a_server() {
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-no-session-directory");
+        let workspace = scratch.join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create the workspace");
+        let mut servers = Servers::new(workspace.clone(), None, |_| None, false, Vec::new);
+
+        let refused = servers.index_dir_using(&Language::Rust.into(), || {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "the platform keeps no temporary directory for this account",
+            ))
+        });
+
+        match refused {
+            Err(LspError::Start { detail, .. }) => {
+                assert!(detail.contains("index directory"), "{detail}");
+                assert!(detail.contains("no temporary directory"), "{detail}");
+            }
+            other => panic!("a refused directory must be a server that did not start: {other:?}"),
+        }
+        assert!(
+            std::fs::read_dir(&workspace)
+                .expect("read")
+                .next()
+                .is_none(),
+            "something was made in the workspace instead"
+        );
+    }
+
     #[test]
     fn a_language_is_decided_from_the_extension_alone() {
         assert_eq!(Language::for_path("src/lib.rs"), Some(Language::Rust));
@@ -4470,6 +4827,169 @@ done
             "work begun after settling makes the answer partial"
         );
         assert!(!server.is_indexed());
+    }
+
+    #[cfg(unix)]
+    const STARTED_OUT_OF_ORDER: &str = "bravebot-lsp-started-out-of-order";
+
+    #[cfg(unix)]
+    fn the_server_started_out_of_order(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(STARTED_OUT_OF_ORDER).join("server"))
+    }
+
+    /// PANEL-13: the roster names the started servers in name order, whatever order they started in.
+    ///
+    /// Seven declared servers are started in the reverse of their name order, and the roster is read
+    /// after each start. The running servers are held in a `HashMap`, so a roster built from its keys
+    /// without a sort comes out in an order set by the map's hash seed, which is name order once in
+    /// 5040 times for seven servers, and a roster kept in start order is reverse name order every
+    /// time.
+    ///
+    /// Rejects: a roster published without sorting its programs.
+    #[cfg(unix)]
+    #[test]
+    fn the_roster_names_the_servers_in_name_order_whatever_order_they_started_in() {
+        let (_launching, scratch, _log, template) =
+            a_workspace_with_a_declared_server(STARTED_OUT_OF_ORDER);
+        let letters = ['g', 'f', 'e', 'd', 'c', 'b', 'a'];
+        let declared: Vec<Declared> = letters
+            .iter()
+            .map(|letter| Declared {
+                name: format!("ls-{letter}"),
+                command: format!("ls-{letter}"),
+                extensions: BTreeMap::from([(format!("z{letter}"), "zed".to_string())]),
+                digest: letter.to_string(),
+                ..template.clone()
+            })
+            .collect();
+        let roster = Roster::default();
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_started_out_of_order,
+            false,
+            Vec::new,
+        );
+        servers.reporting_to(roster.clone());
+        servers.declare(declared);
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_that_holds_the_capability(&mut sink);
+
+        let mut started: Vec<String> = Vec::new();
+        for letter in letters {
+            let file = scratch.join(format!("a.z{letter}"));
+            std::fs::write(&file, "one\n").expect("write the file");
+            let file = file.to_str().expect("a utf-8 path");
+            servers
+                .ask(&mut policy, &definition_in(file), &mut |_, _| true)
+                .expect("the declared server answers");
+            started.push(format!("ls-{letter}"));
+            let mut in_name_order = started.clone();
+            in_name_order.sort();
+            assert_eq!(
+                roster.programs(),
+                in_name_order,
+                "after {} servers the roster is not in name order",
+                started.len()
+            );
+        }
+        assert_eq!(servers.running(), letters.len());
+    }
+
+    #[cfg(unix)]
+    const ROSTER_DURING_A_QUESTION: &str = "bravebot-lsp-roster-during-a-question";
+
+    #[cfg(unix)]
+    fn the_server_asked_about_while_others_run(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(ROSTER_DURING_A_QUESTION).join("server"))
+    }
+
+    /// PANEL-13: the rows stay while a question waits on an approval.
+    ///
+    /// The approval callback reads the roster, which is what the panel reads while a question holds
+    /// the set. A second server is asked about with a yes, and a third with a no. The roster names
+    /// the server already running at each wait, still names it after the refusal, and names the
+    /// second server once it has started.
+    ///
+    /// Rejects: a roster emptied or rebuilt from nothing when a question begins, which draws no
+    /// Language servers section for as long as a person is deciding.
+    #[cfg(unix)]
+    #[test]
+    fn the_roster_keeps_naming_the_running_servers_while_a_question_waits_on_an_approval() {
+        let (_launching, scratch, _log, template) =
+            a_workspace_with_a_declared_server(ROSTER_DURING_A_QUESTION);
+        let declared: Vec<Declared> = ['a', 'b', 'c']
+            .iter()
+            .map(|letter| Declared {
+                name: format!("ls-{letter}"),
+                command: format!("ls-{letter}"),
+                extensions: BTreeMap::from([(format!("z{letter}"), "zed".to_string())]),
+                digest: letter.to_string(),
+                ..template.clone()
+            })
+            .collect();
+        let roster = Roster::default();
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_asked_about_while_others_run,
+            false,
+            Vec::new,
+        );
+        servers.reporting_to(roster.clone());
+        servers.declare(declared);
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_that_holds_the_capability(&mut sink);
+        let path_for = |letter: char| {
+            let file = scratch.join(format!("a.z{letter}"));
+            std::fs::write(&file, "one\n").expect("write the file");
+            file.to_str().expect("a utf-8 path").to_string()
+        };
+
+        let waiting_on = roster.clone();
+        let seen_while_a_waits = std::cell::RefCell::new(None);
+        servers
+            .ask(&mut policy, &definition_in(&path_for('a')), &mut |_, _| {
+                *seen_while_a_waits.borrow_mut() = Some(waiting_on.programs());
+                true
+            })
+            .expect("the first declared server answers");
+        assert_eq!(seen_while_a_waits.take(), Some(Vec::<String>::new()));
+        assert_eq!(roster.programs(), ["ls-a"]);
+
+        let seen_while_b_waits = std::cell::RefCell::new(None);
+        servers
+            .ask(&mut policy, &definition_in(&path_for('b')), &mut |_, _| {
+                *seen_while_b_waits.borrow_mut() = Some(waiting_on.programs());
+                true
+            })
+            .expect("the second declared server answers");
+        assert_eq!(
+            seen_while_b_waits.take(),
+            Some(vec!["ls-a".to_string()]),
+            "the running server was not named while a question waited on an approval"
+        );
+        assert_eq!(roster.programs(), ["ls-a", "ls-b"]);
+
+        let seen_while_c_waits = std::cell::RefCell::new(None);
+        let refused = servers.ask(&mut policy, &definition_in(&path_for('c')), &mut |_, _| {
+            *seen_while_c_waits.borrow_mut() = Some(waiting_on.programs());
+            false
+        });
+        assert!(
+            matches!(refused, Err(LspError::Refused { .. })),
+            "{refused:?}"
+        );
+        assert_eq!(
+            seen_while_c_waits.take(),
+            Some(vec!["ls-a".to_string(), "ls-b".to_string()]),
+            "the running servers were not named while a question waited on an approval"
+        );
+        assert_eq!(
+            roster.programs(),
+            ["ls-a", "ls-b"],
+            "a refused question changed which servers are named"
+        );
     }
 
     /// LSP-11: a declaration is the person's word about a language, so it wins over the table, and

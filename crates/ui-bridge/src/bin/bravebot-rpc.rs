@@ -36,41 +36,54 @@ fn main() {
         );
     }
 
+    // The directories an earlier process let a stage write are left out of the search for the
+    // programs this one starts, and each directory a session here opens is added to that record
+    // for the next. Before a program is looked up. See SANDBOX-30.
+    bravebot_agent::stage_record::load();
+    bravebot_agent::stage_record::follow();
+
     // The desktop window is in English only, so the notes this process builds for it are too,
     // whatever the machine's language: a French note in an English window reads as a fault. The
     // terminal chooses from the environment instead (LOCALE-7). This is the one choice, made before
     // anything is said.
     bravebot_i18n::init(bravebot_i18n::Locale::EnUs);
 
-    // Not a security decision. The only argument is `--settings <path>`, which names a
-    // settings file for a developer driving this by hand, and what that file may then grant
-    // is decided by the policy layer rather than here. Nothing is authorised by an argument.
+    // Not a security decision. The arguments are `--settings <path>`, which names a settings file
+    // for a developer driving this by hand, and `--log-level <word>`, which chooses how much the
+    // diagnostic log holds. What that file may then grant is decided by the policy layer rather
+    // than here. Nothing is authorised by an argument.
     // nosemgrep: rust.lang.security.args.args
     let args = std::env::args().skip(1);
-    let settings = match launch("bravebot-rpc", "speak NDJSON on stdin/stdout", args) {
-        Launch::Serve { settings } => settings,
-        Launch::Version(line) => {
-            println!("{line}");
-            return;
-        }
-        Launch::Refused(lines) => {
-            for line in lines {
-                eprintln!("{line}");
+    let (settings, log_level) =
+        match launch("bravebot-rpc", "speak NDJSON on stdin/stdout", true, args) {
+            Launch::Serve {
+                settings,
+                log_level,
+            } => (settings, log_level),
+            Launch::Version(line) => {
+                println!("{line}");
+                return;
             }
-            std::process::exit(2);
-        }
-    };
+            Launch::Refused(lines) => {
+                for line in lines {
+                    eprintln!("{line}");
+                }
+                std::process::exit(2);
+            }
+        };
 
     // As soon as this process knows it is serving, so a panic in anything that follows is covered.
     // A build with nowhere to send reports, or a person who switched them off, gets nothing from
     // this call (CRASH-3, CRASH-4). The directory is the one `home::writable` names, which is none
     // under incognito mode, so nothing would start if this process ever engaged it.
     bravebot_backtrace::start(bravebot_backtrace::Process::Rpc);
-    // The terminal's log, at the terminal's default level and in the same directory, so a failure
-    // in the window leaves the record a bug report names (DIAG-4, DIAG-8). The window has no flag
-    // to raise the level.
+    // The terminal's log, in the same directory, so a failure in the window leaves the record a
+    // bug report names (DIAG-4, DIAG-8). At the level `--log-level` named, or the terminal's
+    // default of `error` when it named none (DIAG-3). The window changes the level later through
+    // `diagnostic_log.set`, which keeps this file open rather than calling `configure` again
+    // (DIAG-11).
     bravebot_diag::configure(
-        bravebot_diag::Level::Error,
+        log_level.unwrap_or(bravebot_diag::Level::Error),
         bravebot_agent::home::writable(),
     );
 

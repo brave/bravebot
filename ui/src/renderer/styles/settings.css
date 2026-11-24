@@ -112,6 +112,13 @@
 .settings-card dd { padding-left: var(--leo-spacing-m); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .settings-card dl > dt:first-of-type,
 .settings-card dl > dt:first-of-type + dd { border-top: 0; }
+/* The diagnostic log value: the path in primary ink, the note under it in secondary ink. */
+.settings-card dd.settings-log > p { margin: 0; }
+.settings-card dd.settings-log > p + p,
+.settings-card dd.settings-log > leo-dropdown + p { margin-top: var(--leo-spacing-m); }
+.settings-card dd.settings-log > .settings-log-note { width: 100%; color: var(--ink-secondary); text-wrap: pretty; }
+/* The log level control, in the row under the log's directory, with its note under it. */
+.settings-card dd.settings-log > leo-dropdown { display: block; width: 240px; max-width: 100%; }
 .settings-card dl.settings-limits-table { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
 
 /* A collapsible inside a card takes the same radius as the tables and boxes in it. */

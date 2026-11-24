@@ -220,6 +220,8 @@ does next.
 
 `verified-by: bravebot_agent::conversation::a_retrieval_cut_keeps_rounds_whole`
 `verified-by: bravebot_agent::conversation::a_pinned_skill_is_sent_after_the_cut`
+`verified-by: bravebot_agent::conversation::a_pinned_scratch_note_is_sent_after_the_cut`
+`verified-by: bravebot_agent::conversation::a_scratch_note_a_summary_carries_is_sent_after_a_later_cut`
 
 <a id="RETRIEVE-11"></a>
 ### RETRIEVE-11: the key goes only to the host it was issued for
@@ -423,8 +425,8 @@ to be able to see that it did, and when.
 and the file `--settings` names say, and `doctor` names `retrieval.enabled` among the managed pins.
 A managed `true` pins nothing. A `retrieval` value that is not a block, or a block whose `enabled`
 is not a boolean, such as `"enabled": "false"` or `"retrieval": false`, pins nothing either, and
-`doctor` names the managed file as holding a `retrieval` value it reads as absent. A block with no
-`enabled` says nothing about the switch and is not reported.
+`doctor` and the session as it opens name the managed file as holding a `retrieval` value it reads
+as absent. A block with no `enabled` says nothing about the switch and is not reported.
 
 **Why.** Turning retrieval off sends nothing anywhere, so a machine's administrator may choose it.
 Turning it on sends the person's conversation to another service, which is the person's choice. A
@@ -436,3 +438,6 @@ the conversation to the endpoint.
 `verified-by: bravebot_config::managed::a_managed_retrieval_false_is_a_pin_and_nothing_else_is`
 `verified-by: bravebot_config::settings::a_managed_false_keeps_retrieval_off_and_a_managed_true_is_not_obeyed`
 `verified-by: bravebot_cli::doctor::doctor_reports_a_managed_retrieval_value_that_pins_nothing`
+`verified-by: bravebot_agent::dropped_keys::a_managed_retrieval_value_that_pins_nothing_is_said_and_a_pin_is_not`
+`verified-by: bravebot_cli::plain::the_opening_names_each_dropped_key_once_in_doctors_sentences_and_no_value`
+`verified-by: bravebot_tui::app::the_startup_notes_name_each_dropped_key_once_in_doctors_sentences_and_no_value`

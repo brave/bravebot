@@ -199,9 +199,10 @@ later turn behaves.
 
 ## Where they end up
 
-What is resolved goes into the **system prompt**, never into the conversation. A session running many
+What is resolved goes into the **system prompt**, not into the conversation. A session running many
 turns carries one copy of its instructions however long it runs, rather than a copy per turn crowding
-out the task.
+out the task. The one standing text kept in the conversation is the names of your own skills and the
+project's skills that the listing leaves out, which are said once per session in a single message.
 
 Sources are resolved afresh every turn, so editing `AGENTS.md` mid-session takes effect on the next
 thing you send. A source that is not there is not an error. No `AGENTS.md`, no skills directory, no
@@ -248,13 +249,14 @@ run a command to learn them:
 | OS version | The kernel release string on Unix, as `uname` reports it. On Windows, the three numbers a build is named by |
 | Shell | `$SHELL`, or `/bin/sh` when that is unset or empty |
 | Today's date | The current UTC date, as `YYYY-MM-DD` |
-| Scratch directory | The directory this session has to itself, on the sessions that have one |
+| Scratch directory | Whether this session has a directory to itself, and what it is for. Its path is not in the system prompt: a message at the start of the conversation names it, because the path changes with every start |
 | Front end | One sentence naming the terminal client, the desktop app, or an editor that hosts the session, set by the program you started it from. Not stated for a one-shot or goal run |
 
 :::caution[These lines are sent to the model with every request]
 The working directory is an absolute path, so on most machines it contains your username, and the
 scratch path may too. The OS version names your build. All of it is part of every request this
-session sends, including the first one, and there is no setting that withholds any of it.
+session sends, the scratch path in the conversation and the rest in the system prompt, and there is
+no setting that withholds any of it.
 
 Nothing else about your machine is added. No environment variables beyond `$SHELL`, no hostname, no
 username on its own, no file contents, no directory listing.

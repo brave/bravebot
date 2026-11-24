@@ -78,11 +78,12 @@ unusable, or the repository was refused), the directory a person opened where th
 and how many of the call's delegates were not started, the withdrawn one included. The delegate
 still takes no number and no place under the ceiling ([DELEGATE-7](delegation.md#DELEGATE-7)).
 
-A write, an edit, a fetch or a save (`write_file`, `edit_file`, `fetch_url` and `download_url`)
-that is put to a person who does not approve it is recorded as a refusal under `approval`, and so is
+A write, an edit, a fetch, a search or a save (`write_file`, `edit_file`, `fetch_url`, `web_search`
+and `download_url`) that is put to a person who does not approve it is recorded as a refusal under `approval`, and so is
 each file `apply_checkout` brings back and a write a manifest run plans. The entry names the tool, or
 the step and its tool, and says the write or the fetch was not approved and nothing was written or
-fetched. A no, a Ctrl-C and a question nobody could be asked are one answer to the policy, so the
+fetched. For a search it says the search was not approved and nothing was sent, and it carries
+nothing of the query ([WEBSEARCH-2](tools/web-search.md#WEBSEARCH-2)). A no, a Ctrl-C and a question nobody could be asked are one answer to the policy, so the
 entry does not tell them apart. A write the credential scan raised doubts about is recorded the same
 way when it is not approved. A `download_url` asks about its host and then about its file, and
 records the question that was answered no: a host that is refused as a fetch, and a file that is
@@ -137,6 +138,7 @@ asked", which is most of what anyone asks it.
 
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_calls_a_vouched_tool_with_the_arguments_it_fixed`
 `verified-by: bravebot_core::policy::a_read_and_a_write_leave_different_trails`
+`verified-by: bravebot_core::policy::a_search_the_person_did_not_approve_is_a_refusal_under_approval`
 `verified-by: bravebot_core::policy::the_mode_reaching_a_directory_is_recorded_with_the_tool_and_the_field_and_trusts_nothing`
 `verified-by: bravebot_core::policy::promotion_appears_in_the_audit_trail`
 `verified-by: bravebot_core::policy::the_audit_trail_records_the_precommit_first`
@@ -469,6 +471,14 @@ key that exports the transcript is inert in it, and an incognito session is unch
 closing it puts the transcript back where it was. Before any turn has sent a request the command
 says so.
 
+The desktop window's Chat › Last Request… ([CMD-15](commands.md#CMD-15)) shows the same view in a
+read-only dialog: the instruction files with their bytes, then each span under its role and label.
+The bridge's `session.report.request` draws every string with
+`bravebot_agent::confirm::printable_spelled`, a span's text line by line so its line breaks are
+kept, and the dialog shows those words as plain text, never as Markdown or HTML. A control character
+in a span is shown as its picture with the one definition above, and the window holds no list of
+the characters to picture.
+
 **Why.** What the planner was sent is the question behind every "why did it do that", and a view
 reconstructed from the transcript would answer it with what the transcript says was sent. The
 label is a claim about authority, so it comes from where the text was composed.
@@ -493,6 +503,10 @@ label is a claim about authority, so it comes from where the text was composed.
 `verified-by: bravebot_tui::render::the_request_view_says_so_when_no_instruction_file_loaded`
 `verified-by: bravebot_tui::state::the_request_view_opens_on_the_last_request_and_closing_restores_the_transcript`
 `verified-by: bravebot_tui::app::the_key_that_writes_the_transcript_out_does_nothing_in_the_request_view`
+`verified-by: bravebot_ui_bridge::reports_tests::the_request_report_names_the_instruction_files_and_labels_each_span`
+`verified-by: bravebot_ui_bridge::reports_tests::the_request_report_pictures_the_control_characters_in_a_span`
+`verified-by: bravebot_ui_bridge::reports_tests::a_reporter_keeps_the_turns_request_and_not_a_delegates`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles, so ui/scripts/reports.test.mjs renders the Last Request… dialog and asserts the instruction files with their bytes come before the spans, each span under its role and label, and a span holding the pictures of an escape and a bell shows them and its markup as text; make check-ui runs it)`
 
 <a id="TRACE-10"></a>
 ### TRACE-10: the trail names the model each processor call asked for

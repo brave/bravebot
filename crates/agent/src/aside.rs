@@ -175,6 +175,32 @@ preamble, no quotation marks, no explanation. The draft is:";
 pub const ENHANCE_LIMIT: usize = 4000;
 const ENHANCE_READ: usize = 2 * ENHANCE_LIMIT;
 
+/// Why a brief to hand a session off from may not be asked for yet (SESSION-34). Each front end
+/// says it in its own words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandoffRefusal {
+    /// There is no goal for the brief to be written for.
+    NoGoal,
+    /// No turn has ended, or the session has no record, so the new session has nothing to link
+    /// back to.
+    NothingToHandOff,
+}
+
+/// Why a handoff toward `goal` may not be asked for yet, or `None` where it may (SESSION-34).
+///
+/// `turns` is how many turns the session has ended, and `recorded` whether it has a record on
+/// disk. Nothing here reads the conversation, so a refusal is decided before any request is made.
+/// A goal of only white space is no goal, since [`Question::handoff`] trims it away.
+pub fn handoff_refusal(goal: &str, turns: usize, recorded: bool) -> Option<HandoffRefusal> {
+    if goal.trim().is_empty() {
+        Some(HandoffRefusal::NoGoal)
+    } else if turns == 0 || !recorded {
+        Some(HandoffRefusal::NothingToHandOff)
+    } else {
+        None
+    }
+}
+
 /// The first prompt of a handed-off session: the brief, what did not cross, and what is next.
 ///
 /// Built by the driver from the brief and the goal, both of which the person has read. They edit
@@ -865,6 +891,43 @@ mod tests {
         );
     }
 
+    /// INSTR-12. Every question the driver writes goes out under its own system prompt and no other
+    /// words: a style the session holds is not a parameter of any of them. The aside, the recap, the
+    /// suggestion and the brief share one prompt, and the draft rewrite has its own. Rejects a
+    /// builder that prepends or substitutes a style's words, or anything else, in the system message.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_question_is_sent_under_its_own_system_prompt_and_no_style() {
+        let conversation = an_exchange();
+        for (name, question, system) in [
+            (
+                "/btw",
+                Question::about(&conversation, "why?", Vec::new()),
+                SYSTEM_PROMPT,
+            ),
+            ("/recap", Question::recap(&conversation), SYSTEM_PROMPT),
+            (
+                "a suggestion",
+                Question::suggest(&conversation),
+                SYSTEM_PROMPT,
+            ),
+            (
+                "a brief",
+                Question::handoff(&conversation, "the parser"),
+                SYSTEM_PROMPT,
+            ),
+            (
+                "a draft rewrite",
+                Question::enhance(&conversation, "fix the parser"),
+                ENHANCE_SYSTEM_PROMPT,
+            ),
+        ] {
+            let request = question.into_request();
+            let first = request.first().expect("a request has a system message");
+            assert_eq!(first.content.text(), system, "{name}");
+        }
+    }
+
     /// A model that ignores the length it was asked for still cannot put more than the limit on
     /// the person's screen or into the record.
     #[test]
@@ -913,6 +976,27 @@ mod tests {
                 .any(|message| message.content.text().contains("add the feature")),
             "the recap was asked without the exchange"
         );
+    }
+
+    /// SESSION-34: no goal (white space is none), no ended turn and no record are each refused, the
+    /// missing goal first, and a goal over a recorded session that has ended a turn is not.
+    #[test]
+    fn a_handoff_is_refused_without_a_goal_an_ended_turn_or_a_record() {
+        assert_eq!(handoff_refusal("", 3, true), Some(HandoffRefusal::NoGoal));
+        assert_eq!(
+            handoff_refusal("  \n", 3, true),
+            Some(HandoffRefusal::NoGoal)
+        );
+        assert_eq!(handoff_refusal("", 0, false), Some(HandoffRefusal::NoGoal));
+        assert_eq!(
+            handoff_refusal("write the tests", 0, true),
+            Some(HandoffRefusal::NothingToHandOff)
+        );
+        assert_eq!(
+            handoff_refusal("write the tests", 3, false),
+            Some(HandoffRefusal::NothingToHandOff)
+        );
+        assert_eq!(handoff_refusal("write the tests", 1, true), None);
     }
 
     /// The brief is asked for over the whole exchange, with the goal in the question, and leaves

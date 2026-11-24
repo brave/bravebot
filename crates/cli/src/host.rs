@@ -1730,6 +1730,29 @@ mod tests {
         assert!(told.starts_with("ok\n"), "{told:?}");
     }
 
+    /// BG-13: a session that has run out its idle time answers a reply with the word `stopping` and
+    /// an attach with the same word, and takes neither.
+    ///
+    /// Driven through `serve` on a socket pair, because the word is what the client reads. It rejects
+    /// a `serve` that writes `ok` for [`Replied::Stopping`], which a client reads as a prompt taken
+    /// by a process that will never read it.
+    #[cfg(unix)]
+    #[test]
+    fn a_session_that_has_ended_its_wait_tells_a_reply_and_an_attach_it_is_stopping() {
+        let shared = an_idle_session(SHORT);
+        assert_eq!(ended_within_a_bound(&shared), None);
+
+        assert_eq!(
+            served(&shared, &format!("{SECRET}\nreply\nand the tests\n")),
+            "stopping\n"
+        );
+        assert!(queued(&shared).is_empty(), "{:?}", queued(&shared));
+        assert_eq!(
+            served(&shared, &format!("{SECRET}\nattach\n")),
+            "stopping\n"
+        );
+    }
+
     /// BG-15: the secret is gone once the session has ended, so a stopped session leaves no way in
     /// for the next process to inherit.
     #[test]

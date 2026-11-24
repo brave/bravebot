@@ -78,9 +78,16 @@ runs in this mode without being asked about, so there this mode does not put eve
 decision somebody made; this one is what holds when they have made none.
 
 `verified-by: bravebot_agent::permission_mode::the_default_mode_asks_about_everything`
+`verified-by: bravebot_agent::permission_mode::asking_puts_a_write_a_run_an_output_a_file_and_a_vouch_to_the_person`
 `verified-by: bravebot_tui::state::a_session_starts_by_asking_about_everything`
 `verified-by: bravebot_tui::app::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
 `verified-by: bravebot_cli::auto_start::the_flag_opens_a_session_in_auto_and_a_start_without_it_asks`
+`verified-by: bravebot_cli::running::a_one_shot_run_with_no_flag_and_no_setting_opens_asking`
+`verified-by: bravebot_cli::scheduled_runs::a_scheduled_run_opens_asking_where_the_home_settings_open_sessions_in_auto`
+`verified-by: bravebot_cli::skill_eval::a_run_that_would_write_is_refused_where_the_home_settings_open_sessions_in_auto`
+`verified-by: bravebot_cli::auto_start::only_the_terminal_client_and_the_windows_bridge_read_the_setting`
+`verified-by: bravebot_cli::running::a_trigger_run_opens_asking_where_the_setting_opens_sessions_in_auto`
+`verified-by: bravebot_cli::running::a_background_session_opens_asking_where_the_setting_opens_sessions_in_auto`
 
 <a id="MODE-2"></a>
 ### MODE-2: accepting edits answers the write prompt and no other, except where the write would create a credential or lands on a protected path
@@ -239,6 +246,15 @@ server wrote, so the hop is refused unasked ([SERVERS-11](mcp-servers.md#SERVERS
 Whether programs may reach a host the allowed-hosts list does not cover is not answered either: the
 host is a name a program chose and a yes would open the network to it for every later command, so
 `onUnlisted: ask` behaves as `refuse` here ([SANDBOX-24](sandboxing.md#SANDBOX-24)).
+The question before a hook an installed plugin carries first fires is not answered either, and neither
+is the first-use question of a server a plugin carries: a yes is recorded against a program somebody
+else wrote, so only a person's `y` approves either, and where nobody can be asked no plugin hook fires
+and no plugin server starts ([HOOK-11](hooks.md#HOOK-11),
+[SERVERS-27](mcp-servers.md#SERVERS-27)).
+
+**A web search is answered as a fetch is.** A search the planner proposed is approved without
+being put to anybody, and in auto it is not put to the classifier, so the question goes to the person
+([WEBSEARCH-2](tools/web-search.md#WEBSEARCH-2), [AUTO-3](auto-mode.md#AUTO-3)).
 
 **A program's write is answered in advance.** Under the sandbox mode `workspace-write` on macOS and Linux,
 in a workspace the person has trusted, the stages of a `run`, a delegate's included, are given at the start
@@ -333,6 +349,9 @@ prompts, which in practice means a container with no network and nothing in it w
 the wrong mode everywhere else, and it is named `--dangerously-skip-permissions` for that reason.
 
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`
+`verified-by: bravebot_agent::web_search::bypass_answers_a_search_and_auto_leaves_it_to_the_person_without_a_classifier_word`
+`verified-by: bravebot_agent::permission_mode::no_mode_answers_the_question_about_a_plugins_hook`
+`verified-by: bravebot_agent::servers::plugin_tests::nothing_but_a_yes_to_that_server_approves_it`
 `verified-by: bravebot_agent::turn::under_bypass_the_file_tools_reach_a_sibling_directory_with_no_request`
 `verified-by: bravebot_agent::turn::outside_bypass_a_sibling_directory_is_refused_and_no_refusal_names_request_path`
 `verified-by: bravebot_agent::turn::under_bypass_a_reference_to_a_listed_file_beside_the_session_is_opened`
@@ -683,6 +702,7 @@ word for bypassing would let a session reach the one mode MODE-5 keeps to the co
 `verified-by: bravebot_tui::app::the_plan_command_without_a_task_sets_the_mode_and_sends_nothing`
 `verified-by: bravebot_tui::app::the_plan_command_sets_plan_mode_rather_than_cycling_to_the_next`
 `verified-by: bravebot_tui::app::the_plan_command_waits_for_the_turn_in_flight`
+`verified-by: bravebot_ui_bridge::permission_mode::a_window_plan_line_sets_plan_mode_and_its_turn_is_sent_only_the_task`
 
 <a id="MODE-13"></a>
 ### MODE-13: `--dangerously-bypass-approvals-and-sandbox` is the bypass flag and the sandbox mode `off`, given together

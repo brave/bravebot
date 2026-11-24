@@ -677,6 +677,36 @@ class Widget : public Base {
         assert_eq!(map.body.lines().count(), map.shown + 1);
     }
 
+    /// MAP-2: within one file, declarations that rank alike are kept earliest line first when the
+    /// budget cuts them. Forty declarations in one file that nothing mentions all score alike, and
+    /// the budget holds some of them, so the ones kept are the first lines of the file and the
+    /// rest are the later ones. The regression it rejects is a tie broken by descending line, which
+    /// keeps the end of the file; removing the line key is an equivalent change, because the sort is
+    /// stable and the symbols arrive in line order, so only the reversal is observable.
+    #[test]
+    fn within_a_file_declarations_that_rank_alike_are_kept_earliest_line_first() {
+        let text: String = (0..40)
+            .map(|n| format!("pub fn declared_at_position_{n:02}() {{}}\n"))
+            .collect();
+        let map = built(&[("only.rs", text.as_str())], MIN_BUDGET);
+
+        assert!(
+            map.shown > 0 && map.shown < map.found,
+            "the budget cut nothing"
+        );
+        for n in 0..40 {
+            let name = format!("declared_at_position_{n:02}()");
+            assert_eq!(
+                map.body.contains(&name),
+                n < map.shown,
+                "{name} with {} of {} kept:\n{}",
+                map.shown,
+                map.found,
+                map.body
+            );
+        }
+    }
+
     /// The budget comes from the planner's call, so a value of nought would otherwise map nothing
     /// and one of any size would ask for the whole of a large repository. A value outside the range
     /// gives the map of the nearest end of it, and one too large to count in characters does not

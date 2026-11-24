@@ -7,15 +7,12 @@
 
 use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
-use bravebot_session::jobs::{Lookup, Mode, Roster, Seen, State, Stopped};
+use bravebot_session::jobs::{Lookup, Mode, Roster, STOP_GRACE, Seen, StartError, State, Stopped};
 use bravebot_session::listing::{Reader, Task};
 use bravebot_tui::sessions_view::{Choice, Row};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
-
-/// How long a stop waits for a session to end before it is killed.
-const GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// The characters of an id a line shows, which is enough to name it to `attach` and `reply`.
 const ID_SHOWN: usize = 8;
@@ -155,7 +152,7 @@ fn stop(typed: &str) -> ExitCode {
             return fail(Ending::Argument, t!(sessions_ambiguous, id = shown(typed)));
         }
     };
-    match roster.stop(&seen.job.id, GRACE) {
+    match roster.stop(&seen.job.id, STOP_GRACE) {
         Ok(Stopped::Stopped) => {
             println!("{}", t!(sessions_stopped, name = shown(&seen.job.name)));
             ExitCode::SUCCESS
@@ -225,7 +222,9 @@ fn launch(roster: &Roster, prompt: &str) -> ExitCode {
 /// `first` is the line the process starts with, left where only it can take it (BG-2); an empty
 /// one starts the session idle. A session started again runs in the directory it worked in, since
 /// its record is found from there. The process runs in `mode` for as long as it runs (BG-8).
-#[cfg(unix)]
+///
+/// The host is this program started again, through [`bravebot_session::jobs::start_host`], and
+/// each way that can fail is said in the words `--bg` has always used.
 fn start_host(
     roster: &Roster,
     id: &str,
@@ -233,132 +232,31 @@ fn start_host(
     directory: Option<&std::path::Path>,
     mode: Mode,
 ) -> Result<(), ExitCode> {
-    use std::process::Stdio;
-    use std::time::{Duration, Instant};
-
-    if let Err(err) = roster.leave_first_prompt(id, first) {
-        return Err(fail(Ending::Failed, t!(bg_spawn_failed, problem = err)));
-    }
-    // The socket of the process that ended, which would otherwise be taken for the new one's. A
-    // live process's socket is its own, and another terminal may have started it a moment ago.
-    if !roster.get(id).is_some_and(|seen| seen.live)
-        && let Some(socket) = roster.socket_of(id)
-    {
-        let _ = std::fs::remove_file(socket);
+    if cfg!(not(unix)) {
+        return Err(fail(Ending::Failed, t!(bg_unsupported)));
     }
     // The host is this same program started again; nothing is trusted from where it says it is.
     // nosemgrep: rust.lang.security.current-exe.current-exe
     let Ok(me) = std::env::current_exe() else {
-        let _ = roster.take_first_prompt(id);
         return Err(fail(Ending::Failed, t!(bg_not_started)));
     };
-    let mut command = host_command(&me, id, directory, mode);
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    if let Err(err) = command.spawn() {
-        let _ = roster.take_first_prompt(id);
-        return Err(fail(Ending::Failed, t!(bg_spawn_failed, problem = err)));
-    }
-    let until = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < until {
-        if roster.get(id).is_some_and(|seen| seen.live)
-            && roster.socket_of(id).is_some_and(|s| s.exists())
-        {
-            ensure_supervisor(roster, &me);
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    let _ = roster.take_first_prompt(id);
-    Err(fail(Ending::Failed, t!(bg_not_started)))
+    bravebot_session::jobs::start_host(&me, roster, id, first, directory, mode).map_err(|err| {
+        fail(
+            Ending::Failed,
+            match err {
+                StartError::Spawn(problem) => t!(bg_spawn_failed, problem = problem),
+                StartError::NotStarted => t!(bg_not_started).to_string(),
+                StartError::Unsupported => t!(bg_unsupported).to_string(),
+            },
+        )
+    })
 }
 
-/// Make sure a supervisor is running, so the process just started is started again if it ends
-/// between turns (BG-11, BG-12).
-///
-/// Done once the process is alive, not before. A supervisor that is about to end lets go of its lock
-/// and then looks at the roster once more, so a process alive by the time this looks at the lock is
-/// one it finds; a lock this finds free belongs to no supervisor and a new one is started. That
-/// order is what leaves no moment in which a live process has neither.
-///
-/// The session is running whatever becomes of this, so it is not undone when the supervisor cannot
-/// be started.
+/// The command that runs the process for `id`, which the supervisor starts again (BG-12).
 #[cfg(unix)]
-fn ensure_supervisor(roster: &Roster, program: &std::path::Path) {
-    use std::process::Stdio;
-    use std::time::{Duration, Instant};
-
-    if roster.has_supervisor() {
-        return;
-    }
-    let mut command = supervisor_command(program);
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let Ok(mut supervisor) = command.spawn() else {
-        return;
-    };
-    // Until it holds its lock, so that the next `--bg` finds it rather than starting another, or
-    // until it has ended: it does when nothing is alive for it to watch.
-    let until = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < until && !roster.has_supervisor() {
-        if !matches!(supervisor.try_wait(), Ok(None)) {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-/// The command that runs the supervisor: the hidden `__bg-supervisor`, from a directory that no
-/// terminal holds open.
-#[cfg(unix)]
-fn supervisor_command(program: &std::path::Path) -> std::process::Command {
-    let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::found_earlier(program),
-        bravebot_sandbox::programs::Inherits::All,
-        bravebot_sandbox::programs::SearchPath::Inherited,
-        // This program started again for the person; it keeps the environment they set (SANDBOX-30).
-        bravebot_sandbox::programs::CodeSelectors::Kept,
-    );
-    command.arg("__bg-supervisor").current_dir("/");
-    command
-}
-
-/// The command that runs the process for `id`: the hidden `__bg-host` with the mode word it runs in.
-#[cfg(unix)]
-pub(crate) fn host_command(
-    program: &std::path::Path,
-    id: &str,
-    directory: Option<&std::path::Path>,
-    mode: Mode,
-) -> std::process::Command {
-    let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::found_earlier(program),
-        bravebot_sandbox::programs::Inherits::All,
-        bravebot_sandbox::programs::SearchPath::Inherited,
-        // This program started again for the person; it keeps the environment they set (SANDBOX-30).
-        bravebot_sandbox::programs::CodeSelectors::Kept,
-    );
-    command.arg("__bg-host").arg(id).arg(mode.word());
-    if let Some(directory) = directory {
-        command.current_dir(directory);
-    }
-    command
-}
-
-#[cfg(not(unix))]
-fn start_host(
-    _roster: &Roster,
-    _id: &str,
-    _first: &str,
-    _directory: Option<&std::path::Path>,
-    _mode: Mode,
-) -> Result<(), ExitCode> {
-    Err(fail(Ending::Failed, t!(bg_unsupported)))
-}
+pub(crate) use bravebot_session::jobs::host_command;
+#[cfg(all(unix, test))]
+use bravebot_session::jobs::supervisor_command;
 
 /// The hidden command a started session runs under, with the mode word it was started with.
 #[cfg(unix)]
@@ -544,6 +442,18 @@ pub(crate) fn attach(args: &[String]) -> ExitCode {
     talk(&roster, &seen)
 }
 
+/// What the first line a session answers an attach with comes to: nothing to say where it took
+/// the terminal, and the failure to give for each word that says it did not (BG-13).
+#[cfg(unix)]
+fn attach_answered(answer: Option<&str>, name: &str) -> Result<(), String> {
+    match answer {
+        Some("ok") => Ok(()),
+        Some("attached") => Err(t!(attach_taken, name = name.to_string()).to_string()),
+        Some("stopping") => Err(t!(attach_stopping, name = name.to_string()).to_string()),
+        _ => Err(t!(attach_not_running, name = name.to_string()).to_string()),
+    }
+}
+
 #[cfg(unix)]
 fn talk(roster: &Roster, seen: &Seen) -> ExitCode {
     use std::io::{BufRead, BufReader, Read};
@@ -572,11 +482,8 @@ fn talk(roster: &Roster, seen: &Seen) -> ExitCode {
         return fail(Ending::Failed, t!(attach_not_running, name = name));
     };
     let mut from = BufReader::new(listening);
-    match crate::host::bounded_line(&mut from).as_deref() {
-        Some("ok") => {}
-        Some("attached") => return fail(Ending::Failed, t!(attach_taken, name = name)),
-        Some("stopping") => return fail(Ending::Failed, t!(attach_stopping, name = name)),
-        _ => return fail(Ending::Failed, t!(attach_not_running, name = name)),
+    if let Err(told) = attach_answered(crate::host::bounded_line(&mut from).as_deref(), &name) {
+        return fail(Ending::Failed, told);
     }
     eprintln!("{}", t!(attach_joined, name = name.clone()));
     eprintln!("{}", mode_line(seen.job.mode));
@@ -700,18 +607,28 @@ fn send(roster: &Roster, seen: &Seen, text: &str) -> ExitCode {
         return fail(Ending::Failed, t!(reply_not_sent, name = name));
     }
     let answer = crate::host::bounded_line(&mut BufReader::new(stream));
-    match answer.as_deref() {
-        Some("ok") => {
-            println!("{}", t!(reply_sent, name = name));
+    match reply_answered(answer.as_deref(), &name, &short_id(&seen.job.id)) {
+        Ok(said) => {
+            println!("{said}");
             ExitCode::SUCCESS
         }
-        Some("working") => fail(Ending::Failed, t!(reply_working, name = name)),
-        Some("stopping") => fail(Ending::Failed, t!(reply_stopping, name = name)),
-        Some("needs-input") => fail(
-            Ending::Failed,
-            t!(reply_needs_input, name = name, id = short_id(&seen.job.id)),
-        ),
-        _ => fail(Ending::Failed, t!(reply_not_sent, name = name)),
+        Err(told) => fail(Ending::Failed, told),
+    }
+}
+
+/// What the line a session answers a reply with comes to: the sentence to print where it took the
+/// prompt, and the failure to give for each word that says it did not (BG-13).
+#[cfg(unix)]
+fn reply_answered(answer: Option<&str>, name: &str, id: &str) -> Result<String, String> {
+    let name = name.to_string();
+    match answer {
+        Some("ok") => Ok(t!(reply_sent, name = name).to_string()),
+        Some("working") => Err(t!(reply_working, name = name).to_string()),
+        Some("stopping") => Err(t!(reply_stopping, name = name).to_string()),
+        Some("needs-input") => {
+            Err(t!(reply_needs_input, name = name, id = id.to_string()).to_string())
+        }
+        _ => Err(t!(reply_not_sent, name = name).to_string()),
     }
 }
 
@@ -738,19 +655,18 @@ fn short_id(id: &str) -> String {
 /// shows as needing input and the one word for its kind, and nothing of what it asks (BG-5,
 /// SCREEN-16). The list (BG-16) is drawn from these.
 fn rows_of(tasks: &[Task]) -> Vec<Row> {
-    tasks
-        .iter()
-        .map(|task| Row {
-            id: task.id.clone(),
-            short: short_id(&task.id),
-            name: shown(task.title.lines().next().unwrap_or("")),
-            state: task.status.process_state().unwrap_or(State::Stopped),
+    bravebot_session::listing::roster_rows(tasks)
+        .into_iter()
+        .zip(tasks)
+        .map(|(row, task)| Row {
+            id: row.id,
+            short: row.short,
+            name: row.name,
+            state: row.state,
             state_words: bravebot_tui::sessions_screen::status_in_words(task.status, task.held),
-            since: bravebot_session::sessions::how_long_ago(task.updated),
-            directory: shown(&task.directory),
-            prompt: shown(&bravebot_session::sessions::title_from(
-                task.prompt.as_deref().unwrap_or(""),
-            )),
+            since: bravebot_session::sessions::how_long_ago(row.updated),
+            directory: row.directory,
+            prompt: row.prompt,
         })
         .collect()
 }
@@ -854,6 +770,56 @@ mod tests {
 
     fn lines_of(seen: &[Seen]) -> Vec<String> {
         super::lines_of(&entry_tasks(seen))
+    }
+
+    /// BG-13: the word a session answers a reply with when it has run out its idle time is a
+    /// failure with the sentence that says to reply again, and the word for a prompt taken is the
+    /// only one that is not.
+    ///
+    /// It rejects a client that reads `stopping` as `ok` (a prompt reported as sent to a process that
+    /// will not read it) and one that gives the generic sentence.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_reply_answered_stopping_is_a_failure_and_only_ok_is_not() {
+        let stopping = reply_answered(Some("stopping"), "build", "3f2a9c1e")
+            .expect_err("a prompt a stopping session will not read was not sent");
+        assert_eq!(
+            stopping,
+            t!(reply_stopping, name = "build".to_string()).to_string()
+        );
+        assert!(stopping.contains("Reply again to start it"), "{stopping}");
+
+        assert_eq!(
+            reply_answered(Some("ok"), "build", "3f2a9c1e"),
+            Ok(t!(reply_sent, name = "build".to_string()).to_string())
+        );
+        for other in [Some("working"), Some("needs-input"), Some("unknown"), None] {
+            let told =
+                reply_answered(other, "build", "3f2a9c1e").expect_err("only ok is a prompt taken");
+            assert_ne!(told, stopping, "{other:?}");
+        }
+    }
+
+    /// BG-13: the same for an attach: `stopping` is a failure that says to attach again, not the
+    /// terminal joined and not the generic not-running sentence.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn an_attach_answered_stopping_is_a_failure_and_only_ok_joins() {
+        let stopping = attach_answered(Some("stopping"), "build")
+            .expect_err("a terminal is not joined to a stopping session");
+        assert_eq!(
+            stopping,
+            t!(attach_stopping, name = "build".to_string()).to_string()
+        );
+        assert!(stopping.contains("Attach again to start it"), "{stopping}");
+
+        assert_eq!(attach_answered(Some("ok"), "build"), Ok(()));
+        for other in [Some("attached"), Some("working"), None] {
+            let told = attach_answered(other, "build").expect_err("only ok joins");
+            assert_ne!(told, stopping, "{other:?}");
+        }
     }
 
     /// BG-9: `/detach` leaves, with space around it too, and nothing that only contains it does,

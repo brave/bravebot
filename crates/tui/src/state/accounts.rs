@@ -39,45 +39,6 @@ pub struct AwaitedListing {
     waited_out: bool,
 }
 
-/// The sections `/context` divides a request into, as indexes into the byte counts.
-const CONTEXT_SYSTEM: usize = 0;
-const CONTEXT_INSTRUCTIONS: usize = 1;
-const CONTEXT_SKILLS: usize = 2;
-const CONTEXT_TOOLS: usize = 3;
-const CONTEXT_TYPED: usize = 4;
-const CONTEXT_PLANNER: usize = 5;
-const CONTEXT_RESULTS: usize = 6;
-const CONTEXT_OTHER: usize = 7;
-
-/// Divide `total` in proportion to `weights`, in whole numbers that add up to exactly `total`.
-///
-/// Each part is rounded down and what is left over goes one apiece to the parts with the largest
-/// remainders, so the shares of a measured count always sum to it. All zeros where the weights
-/// are, since nothing says what the total is made of.
-pub(crate) fn apportion(total: u64, weights: &[u64]) -> Vec<u64> {
-    let sum: u128 = weights.iter().map(|weight| u128::from(*weight)).sum();
-    if sum == 0 {
-        return vec![0; weights.len()];
-    }
-    let mut shares: Vec<u64> = weights
-        .iter()
-        .map(|weight| (u128::from(total) * u128::from(*weight) / sum) as u64)
-        .collect();
-    let mut left = total - shares.iter().sum::<u64>();
-    let mut by_remainder: Vec<usize> = (0..weights.len()).collect();
-    by_remainder.sort_by_key(|index| {
-        std::cmp::Reverse(u128::from(total) * u128::from(weights[*index]) % sum)
-    });
-    for index in by_remainder {
-        if left == 0 {
-            break;
-        }
-        shares[index] += 1;
-        left -= 1;
-    }
-    shares
-}
-
 impl Occupancy {
     /// How full the context is, as a percentage, or `None` where nothing has been measured.
     pub fn percent(&self) -> Option<u64> {
@@ -466,14 +427,18 @@ impl Session {
     /// at a fraction of a fresh one while the record keeps no cache split per turn, so a figure in
     /// money would be composed here rather than measured.
     pub fn report_spend(&mut self) {
-        // A turn still running is charged when it ends, so what it has spent so far is added here:
-        // asked mid-turn (CMD-8), the count of turns already includes it.
-        let mut spend = self.spend.clone();
-        let running = self.running_tokens();
-        if running > 0 {
-            *spend.entry(self.turns).or_default() += running;
-        }
-        let total = self.spent_tokens();
+        // A turn still running is charged when it ends, so what it has spent so far is in the
+        // breakdown: asked mid-turn (CMD-8), the count of turns already includes it.
+        let bravebot_agent::breakdown::Spend {
+            total,
+            rows: spend,
+            unattributed,
+        } = bravebot_agent::breakdown::Spend::of(
+            self.tokens,
+            &self.spend,
+            self.turns,
+            self.running_tokens(),
+        );
         let mut lines = vec![crate::status::Line::new(
             t!(status_this_session),
             if total == 0 && spend.is_empty() {
@@ -495,7 +460,10 @@ impl Session {
             let line = crate::status::Line::new(&label, crate::status::tokens(*spent));
             lines.push(match total {
                 0 => line,
-                total => line.with_note(t!(cost_share, percent = spent * 100 / total)),
+                total => line.with_note(t!(
+                    cost_share,
+                    percent = bravebot_agent::breakdown::share(*spent, total)
+                )),
             });
         }
 
@@ -504,7 +472,6 @@ impl Session {
         // the part it spent before the resume, so an empty breakdown is the far end of this case
         // rather than a case of its own. Left out, the rows would read as an account of the total
         // that quietly does not add up to it.
-        let unattributed = total.saturating_sub(spend.values().sum());
         if unattributed > 0 {
             lines.push(
                 crate::status::Line::new("", crate::status::tokens(unattributed))
@@ -543,53 +510,29 @@ impl Session {
     /// driver composed or carried, scaled to the measured total, so no row is chosen by reading
     /// what a result says and the section names are fixed words.
     pub fn report_context(&mut self) {
-        let used = match self.occupancy {
-            Occupancy::Measured { used, budget, .. } if budget > 0 => used,
-            Occupancy::Compacted { .. } => {
-                self.note(t!(context_compacted));
-                return;
-            }
-            _ => {
+        use bravebot_agent::breakdown::ContextReading;
+        use bravebot_agent::request_view::Section;
+        let measured = match self.occupancy {
+            Occupancy::Measured { used, budget, .. } => Some((used, budget)),
+            _ => None,
+        };
+        let compacted = matches!(self.occupancy, Occupancy::Compacted { .. });
+        let (used, rows) = match ContextReading::of(measured, compacted, self.last_request.as_ref())
+        {
+            ContextReading::NotMeasured => {
                 self.note(t!(context_not_measured));
                 return;
             }
+            ContextReading::Compacted => {
+                self.note(t!(context_compacted));
+                return;
+            }
+            ContextReading::NoRequest { .. } => {
+                self.note(t!(context_no_request));
+                return;
+            }
+            ContextReading::Measured { used, sections, .. } => (used, sections),
         };
-        let Some(view) = self.last_request.as_ref() else {
-            self.note(t!(context_no_request));
-            return;
-        };
-
-        let mut bytes = [0u64; 8];
-        bytes[CONTEXT_TOOLS] = view.tools_bytes;
-        for span in &view.spans {
-            use bravebot_agent::request_view::Provenance;
-            let section = match (span.role, &span.provenance) {
-                ("system", Provenance::TrustedFile(_)) => CONTEXT_INSTRUCTIONS,
-                ("system", Provenance::Trusted("skill list")) => CONTEXT_SKILLS,
-                ("system", _) => CONTEXT_SYSTEM,
-                (
-                    "user",
-                    Provenance::Typed
-                    | Provenance::TypedWithFiles
-                    | Provenance::TypedWithSessions(_),
-                ) => CONTEXT_TYPED,
-                ("assistant", _) => CONTEXT_PLANNER,
-                ("tool", _) => CONTEXT_RESULTS,
-                _ => CONTEXT_OTHER,
-            };
-            bytes[section] += span.text.len() as u64;
-        }
-        let shares = apportion(used, &bytes);
-        let names = [
-            t!(context_section_system),
-            t!(context_section_instructions),
-            t!(context_section_skills),
-            t!(context_section_tools),
-            t!(context_section_typed),
-            t!(context_section_planner),
-            t!(context_section_results),
-            t!(context_section_other),
-        ];
 
         let mut lines = vec![crate::status::Line::new(
             t!(context_total),
@@ -599,13 +542,22 @@ impl Session {
                 crate::render::context_reading(self)
             ),
         )];
-        for (name, share) in names.iter().zip(shares) {
-            if share == 0 {
-                continue;
-            }
+        for (section, share) in rows {
+            let name = match section {
+                Section::System => t!(context_section_system),
+                Section::Instructions => t!(context_section_instructions),
+                Section::Skills => t!(context_section_skills),
+                Section::Tools => t!(context_section_tools),
+                Section::Typed => t!(context_section_typed),
+                Section::Planner => t!(context_section_planner),
+                Section::Results => t!(context_section_results),
+                Section::Other => t!(context_section_other),
+            };
             lines.push(
-                crate::status::Line::new(name, crate::status::tokens(share))
-                    .with_note(t!(cost_share, percent = share * 100 / used)),
+                crate::status::Line::new(name, crate::status::tokens(share)).with_note(t!(
+                    cost_share,
+                    percent = bravebot_agent::breakdown::share(share, used)
+                )),
             );
         }
         self.report(crate::status::Report { lines });

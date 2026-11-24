@@ -446,6 +446,12 @@ fn a_rows_dependency_list_is_what_the_manifest_asks_for() {
 /// Each part is the manifest's lines under the tables of that kind, so [`dependencies`] reads it
 /// with every spelling it already understands. A platform's table counts as the kind it names.
 fn dependencies_by_kind(manifest: &str) -> [BTreeSet<String>; 3] {
+    manifest_parts(manifest).map(|part| workspace_dependencies(&part))
+}
+
+/// The lines of a manifest that belong to each kind of dependency table, in the order
+/// [`dependencies_by_kind`] returns them. Everything outside a dependency table is in the first.
+fn manifest_parts(manifest: &str) -> [String; 3] {
     let mut parts = [String::new(), String::new(), String::new()];
     let mut kind = 0;
     for line in manifest.lines() {
@@ -467,7 +473,7 @@ fn dependencies_by_kind(manifest: &str) -> [BTreeSet<String>; 3] {
         parts[kind].push_str(line);
         parts[kind].push('\n');
     }
-    parts.map(|part| workspace_dependencies(&part))
+    parts
 }
 
 /// Source text with its comments taken out: what follows `//` to the end of its line, and each
@@ -862,6 +868,466 @@ fn the_kernel_and_the_file_type_crate_do_no_io_and_print_nothing() {
     }
 }
 
+/// The crates LAYER-1's rows say do no I/O, each with the dependencies it may ask for, which are the
+/// ones that do none: the kernel and the file-type crate ask for nothing, and the crate that reads a
+/// processor's answer asks for the kernel and for the JSON parser, which reads the text it is handed
+/// and opens nothing. A dependency is added here by deciding that the crate it names does no I/O,
+/// which is the question the manifests test cannot ask: it holds a row's list to the manifest and
+/// grants whatever the row grants.
+const IO_FREE: [(&str, &[&str]); 3] = [
+    ("core", &[]),
+    ("filetype", &[]),
+    ("choice", &["bravebot-core", "serde_json"]),
+];
+
+/// The crates a manifest asks for in the tables its own targets link, `[dependencies]` and the
+/// platform ones, that `allowed` does not name. Every crate is read, not only this workspace's,
+/// since a crate that does I/O may come from outside it. The tables of tests and of the build
+/// script are not read: a test reads fixtures, and the promise is about what the crate does once
+/// it is built.
+fn dependencies_outside(manifest: &str, allowed: &[&str]) -> Vec<String> {
+    let [normal, _, _] = manifest_parts(manifest);
+    dependencies(&normal)
+        .into_iter()
+        .filter(|name| !allowed.contains(&name.as_str()))
+        .collect()
+}
+
+/// A crate that does no I/O may not depend on one that does. The scan above holds the source of
+/// these crates to no `std::fs`, and a dependency is how the same reach comes in without the source
+/// naming it: `bravebot-sandbox` or `rustix` called from the kernel is a file read that no line of
+/// the kernel spells.
+#[test]
+fn the_crates_that_do_no_io_depend_only_on_crates_that_do_none() {
+    let (rows, manifests) = table_and_manifests();
+    let promised: BTreeSet<String> = rows
+        .iter()
+        .filter(|row| row.constraint.to_lowercase().contains("no i/o"))
+        .map(|row| row.name.clone())
+        .collect();
+    let listed: BTreeSet<String> = IO_FREE
+        .iter()
+        .map(|(directory, _)| format!("{PREFIX}{directory}"))
+        .collect();
+    assert_eq!(
+        promised, listed,
+        "the rows of LAYER-1 that say `no I/O` are not the crates this test holds to it. A row \
+         that promises it needs an entry in IO_FREE naming what it may depend on, and an entry \
+         for a crate whose row no longer promises it is a constraint nothing states"
+    );
+    for (directory, allowed) in IO_FREE {
+        let (_, manifest) = manifests
+            .iter()
+            .find(|(member, _)| member.rsplit('/').next() == Some(directory))
+            .unwrap_or_else(|| panic!("{directory} is not a workspace member"));
+        let outside = dependencies_outside(manifest, allowed);
+        assert!(
+            outside.is_empty(),
+            "LAYER-1 says {PREFIX}{directory} does no I/O, and its manifest asks for {outside:?}, \
+             which IO_FREE does not name as a crate that does none ({allowed:?} are). A crate that \
+             does I/O is reached through a dependency without any line of this one saying so"
+        );
+    }
+}
+
+/// The dependency check names the crate behind each spelling a manifest may ask for it in, and
+/// reads neither the tables of tests nor a crate the row grants.
+#[test]
+fn a_dependency_on_a_crate_that_does_io_is_refused() {
+    let granted = ["bravebot-core", "serde_json"];
+    let base = "[package]\nname = \"bravebot-choice\"\n\n";
+    let plain = format!(
+        "{base}[dependencies]\nbravebot-core = {{ path = \"../core\" }}\n\
+         serde_json = {{ workspace = true }}\n\n[dev-dependencies]\nrustix = {{ workspace = true }}\n"
+    );
+    assert!(
+        dependencies_outside(&plain, &granted).is_empty(),
+        "the granted crates, and a test-only one, were refused"
+    );
+    for (asked, refused) in [
+        ("[dependencies]\nrustix = { workspace = true }\n", "rustix"),
+        (
+            "[dependencies]\nbravebot-sandbox = { path = \"../sandbox\" }\n",
+            "bravebot-sandbox",
+        ),
+        ("[dependencies.libc]\nversion = \"0.2\"\n", "libc"),
+        (
+            "[target.'cfg(unix)'.dependencies]\nlibc = \"0.2\"\n",
+            "libc",
+        ),
+        (
+            "[dependencies]\nhost = { package = \"rustix\", workspace = true }\n",
+            "rustix",
+        ),
+        (
+            "[dependencies]\nbravebot-sandbox.workspace = true\n",
+            "bravebot-sandbox",
+        ),
+    ] {
+        let manifest = format!("{base}{asked}");
+        assert_eq!(
+            dependencies_outside(&manifest, &granted),
+            [refused.to_string()],
+            "a dependency that does I/O was not refused: {asked}"
+        );
+    }
+}
+
+/// What a path in a crate that does no I/O may start from, beside the crate's own declarations and
+/// the crates its manifest grants: the standard library, and `vstd`, which only the Verus build
+/// compiles (`#[cfg(verus_keep_ghost)]` or inside `verus!`) and which holds no I/O.
+const ROOTS: [&str; 6] = ["std", "core", "alloc", "crate", "self", "super"];
+const VERIFIER_ROOTS: [&str; 1] = ["vstd"];
+
+/// `pub(crate) use a::b;` without the visibility, and the line unchanged where there is none.
+fn without_visibility(line: &str) -> &str {
+    let Some(rest) = line.strip_prefix("pub") else {
+        return line;
+    };
+    if let Some(inner) = rest.strip_prefix('(') {
+        return inner
+            .split_once(')')
+            .map_or(line, |(_, after)| after.trim_start());
+    }
+    if rest.starts_with(char::is_whitespace) {
+        rest.trim_start()
+    } else {
+        line
+    }
+}
+
+/// The parts of a use tree's braces that a comma separates, leaving the commas of nested braces.
+fn split_top_level(text: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0;
+    for (at, c) in text.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(&text[start..at]);
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&text[start..]);
+    parts
+}
+
+/// Whether what follows a root in a use tree binds the root itself under a name of the importer's
+/// choosing or brings everything under it into scope, rather than naming a path below it:
+/// `std as host`, `std::*` and `std::{self as host}` are those, `std::fmt` and `std::{fmt, io}`
+/// are not.
+fn binds_the_root(after_root: &str) -> bool {
+    let Some(path) = after_root.trim_start().strip_prefix("::") else {
+        return true;
+    };
+    let path = path.trim_start();
+    match path.strip_prefix('{') {
+        Some(group) => {
+            let inner = group.rsplit_once('}').map_or(group, |(inner, _)| inner);
+            split_top_level(inner).iter().any(|item| {
+                let item = item.trim();
+                item.starts_with('*')
+                    || item
+                        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                        .next()
+                        == Some("self")
+            })
+        }
+        None => path.starts_with('*'),
+    }
+}
+
+/// The root of each path one use tree imports, with whether the tree binds that root itself.
+fn roots_of(tree: &str, found: &mut Vec<(String, bool)>) {
+    let tree = tree.trim().trim_start_matches("::").trim_start();
+    if let Some(group) = tree.strip_prefix('{') {
+        let inner = group.rsplit_once('}').map_or(group, |(inner, _)| inner);
+        for part in split_top_level(inner) {
+            roots_of(part, found);
+        }
+        return;
+    }
+    let root: String = tree
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    if root.is_empty() {
+        return;
+    }
+    let binds = binds_the_root(&tree[root.len()..]);
+    found.push((root, binds));
+}
+
+/// The root of every path a source file's non-test code imports with `use` or `extern crate`, one
+/// per path, with whether the import binds that root itself. Test modules and comments are
+/// skipped, as in [`reaching_out`]. An import is read where a line starts with it, which is where
+/// `rustfmt` puts it.
+fn use_roots(source: &str) -> Vec<(String, bool)> {
+    let code = without_comments(&shipped::code_of(source).without_test_modules);
+    let lines: Vec<&str> = code.lines().collect();
+    let mut found = Vec::new();
+    let mut at = 0;
+    while at < lines.len() {
+        let line = without_visibility(lines[at].trim());
+        at += 1;
+        if let Some(rest) = line.strip_prefix("extern crate ") {
+            let name = rest
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .next()
+                .unwrap_or_default();
+            found.push((name.to_string(), true));
+            continue;
+        }
+        let Some(first) = line.strip_prefix("use ") else {
+            continue;
+        };
+        let mut tree = first.to_string();
+        while !tree.contains(';') && at < lines.len() {
+            tree.push(' ');
+            tree.push_str(lines[at].trim());
+            at += 1;
+        }
+        roots_of(tree.split(';').next().unwrap_or_default(), &mut found);
+    }
+    found
+}
+
+/// Whole words that let a crate keep a value between calls: the macro that declares a per-thread
+/// static, and the standard types that hold a value every call can reach.
+///
+/// The item keyword `static` is not in this list because [`keeping_state`] tells it from the
+/// lifetime of the same name.
+const KEEPS_STATE: [&str; 5] = ["thread_local", "Mutex", "RwLock", "OnceLock", "LazyLock"];
+
+/// Parts of a camel-case name that let a crate keep a value between calls. A part is matched and a
+/// substring is not, so `RefCell`, `OnceCell`, `UnsafeCell`, `AtomicU8` and `AtomicBool` are found
+/// and `Cellar` and `Atomically` are not.
+const KEEPS_STATE_PARTS: [&str; 2] = ["Cell", "Atomic"];
+
+/// The parts of a name written in camel case or with underscores: `RefCell` is `Ref` and `Cell`,
+/// and `AtomicU8` is `Atomic` and `U8`.
+fn name_parts(word: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    for piece in word.split('_') {
+        let mut start = 0;
+        let mut before: Option<char> = None;
+        for (at, c) in piece.char_indices() {
+            if c.is_uppercase() && before.is_some_and(|b| b.is_lowercase() || b.is_ascii_digit()) {
+                parts.push(&piece[start..at]);
+                start = at;
+            }
+            before = Some(c);
+        }
+        parts.push(&piece[start..]);
+    }
+    parts.retain(|part| !part.is_empty());
+    parts
+}
+
+/// The words of a source file's non-test code that let it keep a value between calls, each once and
+/// as written.
+///
+/// What is refused is the item keyword `static` (the body of a `thread_local!` or a `lazy_static!`
+/// declares one as well), `thread_local` with or without the `!`, `Mutex`, `RwLock`, `OnceLock`,
+/// `LazyLock`, and any name with a `Cell` or an `Atomic` part. The lifetime `'static`, as in
+/// `&'static str`, is allowed: it is the same word after a quote, a table of constants may use it,
+/// and a reference with that lifetime holds nothing a call can change.
+///
+/// The scan reads text, and a word is a run of letters, digits and underscores. A refused word in a
+/// string literal, in a comment that follows code on its line or inside a `/* */` comment is
+/// reported, and rewording it is the fix. Test modules and whole lines that start with `//` are
+/// skipped, as [`reaching_out`] skips them.
+fn keeping_state(source: &str) -> Vec<String> {
+    let code = shipped::code_of(source).without_test_modules;
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut found: Vec<String> = Vec::new();
+    let mut rest = code.as_str();
+    while let Some(start) = rest.find(is_word) {
+        let from_word = &rest[start..];
+        let end = from_word
+            .find(|c: char| !is_word(c))
+            .unwrap_or(from_word.len());
+        let word = &from_word[..end];
+        // A word is maximal, so the character before every word but the first is not part of one,
+        // and the quote of a lifetime is that character.
+        let is_a_lifetime = rest[..start].ends_with('\'');
+        let refused = (word == "static" && !is_a_lifetime)
+            || KEEPS_STATE.contains(&word)
+            || name_parts(word)
+                .iter()
+                .any(|part| KEEPS_STATE_PARTS.contains(part));
+        if refused && !found.iter().any(|seen| seen == word) {
+            found.push(word.to_string());
+        }
+        rest = &from_word[end..];
+    }
+    found
+}
+
+/// The names a source file's non-test code declares as a module, type or trait. A path may start
+/// from one of these: `use Integrity::*;` names an enum of the crate, and `pub use ask::Answer;`
+/// a module of it.
+fn declared_in(source: &str) -> BTreeSet<String> {
+    let code = without_comments(&shipped::code_of(source).without_test_modules);
+    let words: Vec<&str> = code
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|word| !word.is_empty())
+        .collect();
+    words
+        .windows(2)
+        .filter(|pair| ["mod", "enum", "struct", "trait", "type", "union"].contains(&pair[0]))
+        .map(|pair| pair[1].to_string())
+        .collect()
+}
+
+/// The imports of `source` that start from a name a crate that does no I/O may not use, one
+/// description per import: a root that is not the standard library, the crate itself, a name the
+/// crate declares or a crate in `granted`, and the standard library bound under a name of the
+/// importer's choosing.
+fn imports_outside(source: &str, declared: &BTreeSet<String>, granted: &[&str]) -> Vec<String> {
+    let mut found = Vec::new();
+    for (root, binds) in use_roots(source) {
+        let standard = ["std", "core", "alloc"].contains(&root.as_str());
+        if standard && binds {
+            found.push(format!("{root} bound as a name of its own"));
+        } else if !(ROOTS.contains(&root.as_str())
+            || VERIFIER_ROOTS.contains(&root.as_str())
+            || declared.contains(&root)
+            || granted.iter().any(|name| name.replace('-', "_") == root))
+        {
+            found.push(root);
+        }
+    }
+    found
+}
+
+/// A call through a handle that never names `std::fs` is not seen by the scan above, which reads
+/// `std::` paths: `use std as host;` then `host::fs::read(..)` names no `std::fs`. What can give a
+/// crate such a handle is the name an import starts from, so the roots of the imports of these
+/// crates are held to the standard library, the crate and what its manifest grants.
+#[test]
+fn the_crates_that_do_no_io_import_from_nothing_that_does() {
+    for (directory, granted) in IO_FREE {
+        let files = rust_files(&workspace().join("crates").join(directory).join("src"));
+        assert!(
+            files.len() > 1,
+            "{directory} has {} source files, so this test would pass by scanning almost nothing",
+            files.len()
+        );
+        let sources: Vec<(std::path::PathBuf, String)> = files
+            .into_iter()
+            .map(|file| {
+                let source = std::fs::read_to_string(&file).expect("a source file");
+                (file, source)
+            })
+            .collect();
+        let declared: BTreeSet<String> = sources
+            .iter()
+            .flat_map(|(_, source)| declared_in(source))
+            .collect();
+        let imports: usize = sources
+            .iter()
+            .map(|(_, source)| use_roots(source).len())
+            .sum();
+        assert!(
+            imports > 0,
+            "no import was read out of {directory}, so this test would pass by checking nothing"
+        );
+        for (file, source) in &sources {
+            let found = imports_outside(source, &declared, granted);
+            assert!(
+                found.is_empty(),
+                "LAYER-1 says {directory} does no I/O, and {} imports from {found:?}. A handle that \
+                 never names std::fs reaches the file system without the scan of its paths seeing it",
+                file.display()
+            );
+        }
+    }
+}
+
+/// The import scan sees the handles the path scan cannot, and leaves alone the imports of a crate
+/// that reaches nothing.
+#[test]
+fn the_import_scan_sees_a_handle_the_path_scan_cannot() {
+    let declared = BTreeSet::from(["tables".to_string(), "Integrity".to_string()]);
+    let granted = ["bravebot-core", "serde_json"];
+    for hidden in [
+        "use std as host;\nfn f() { let _ = host::fs::read(p); }",
+        "use std::{self as host};\nfn f() { let _ = host::fs::read(p); }",
+        "use std::*;\nfn f() { let _ = fs::read(p); }",
+        "extern crate std as host;\nfn f() { let _ = host::fs::read(p); }",
+        "use rustix::fs::open;\nfn f() { open(p); }",
+        "use {rustix::fs::open, std::fmt};\nfn f() { open(p); }",
+        "pub(crate) use libc::read as read_file;\n",
+        "use std::fmt;\nuse bravebot_sandbox::{\n    fs as host,\n};\n",
+    ] {
+        assert!(
+            reaching_out(hidden).is_empty(),
+            "the path scan sees this, so it does not show a handle it cannot: {hidden}"
+        );
+        assert!(
+            !imports_outside(hidden, &declared, &granted).is_empty(),
+            "an import of a handle that reaches outside was not seen: {hidden}"
+        );
+    }
+    // A handle another module of the crate re-exports is read where the re-export names the
+    // standard library.
+    let reexported = "mod host {\n    pub use std::fs::read as read_file;\n}\n\
+                      use crate::host::read_file;\nfn f() { read_file(p); }";
+    assert!(
+        !reaching_out(reexported).is_empty(),
+        "a re-export of std::fs was not seen at the line that names it"
+    );
+    assert!(imports_outside(reexported, &declared, &granted).is_empty());
+    for quiet in [
+        "use std::collections::BTreeMap;\nuse std::{fmt, net::IpAddr};\nuse crate::label::Label;\n\
+         use super::tables::{A, B};\nuse self::inner::x;\nuse core::fmt::Debug;\n\
+         use bravebot_core::apply::{Entries, Shape};\nuse serde_json::Value;\n\
+         use std::{\n    collections::BTreeMap,\n    fmt,\n};",
+        "use tables::X;\npub use Integrity::*;",
+        "// use rustix::fs;\nfn f() {}\n/* use libc::read; */\n",
+        "fn f() {}\n#[cfg(test)]\nmod tests {\n    use rustix::fs::open;\n}\nfn h() {}",
+    ] {
+        assert!(
+            imports_outside(quiet, &declared, &granted).is_empty(),
+            "an import that reaches nowhere was reported: {quiet}"
+        );
+    }
+}
+
+/// PROC-16 says one byte is all of an answer that leaves the policy layer, and LAYER-1 says the crate
+/// that reads an answer for a number does no I/O. The reader that crate hands the policy layer is a
+/// `fn` pointer, which captures nothing of the caller's, so the type does not stop that function
+/// from copying the text into a `static` and returning it from another function later. What stops
+/// it is the crate's code never naming a way to keep a value: no `static`, no `thread_local!`, no
+/// interior mutability (`Cell`, `RefCell`, `OnceCell`), no lock or lazily initialised cell
+/// (`Mutex`, `RwLock`, `OnceLock`, `LazyLock`) and no atomic (`AtomicU8`, `AtomicBool`), read off the
+/// source with the tests left out. The lifetime `'static` is allowed, because `&'static str` holds
+/// nothing between calls and a table of constants may need one.
+#[test]
+fn the_reader_of_a_number_keeps_nothing_between_calls() {
+    let files = rust_files(&workspace().join("crates").join("choice").join("src"));
+    assert!(
+        files.len() > 1,
+        "choice has {} source files, so this test would pass by scanning almost nothing",
+        files.len()
+    );
+    for file in files {
+        let source = std::fs::read_to_string(&file).expect("a source file");
+        let found = keeping_state(&source);
+        assert!(
+            found.is_empty(),
+            "PROC-16 says the reader of a number keeps nothing between calls, and {} names \
+             {found:?}, which can keep a value from one call to the next",
+            shipped::relative(&file)
+        );
+    }
+}
+
 /// The ways a source file's non-test code starts a process, one description per use.
 ///
 /// `std::process::id()` reads the helper's own id and starts nothing, so it is the one use of the
@@ -1089,6 +1555,148 @@ fn the_scan_for_the_xai_sign_in_finds_each_way_to_name_it_and_not_a_read_of_the_
     }
 }
 
+/// The forms a shipped file writes to put a path on a turn's `dropped_text` or `attachments` list,
+/// which is what the turn reads unconfined and records a trust rule for. Read as text, so a file
+/// that builds the call from a name it computes is not seen. The leading dot keeps out a local
+/// variable that happens to be called `attachments`, as the ACP prompt's list is, which reaches the
+/// bridge through `turn.send` and is minted there.
+const SUPPLIES_A_DROP: [&str; 11] = [
+    ".with_dropped_text(",
+    ".with_attachment(",
+    ".dropped_text.push(",
+    ".dropped_text.extend(",
+    ".dropped_text = ",
+    ".attachments.push(",
+    ".attachments.extend(",
+    ".attachments = ",
+    "turn::Attachment {",
+    "dropped_text: ",
+    "attachments: ",
+];
+
+/// Whether `text` names the unconfined read a drop's path is given, `read_dropped_text` or
+/// `read_dropped_attachment`.
+fn reads_a_drop(text: &str) -> bool {
+    text.contains("read_dropped_text") || text.contains("read_dropped_attachment")
+}
+
+/// Whether `text` brings the turn's `Attachment` type into scope with a `use` line, which is what
+/// lets a file write the literal `Attachment { .. }` without the path `turn::Attachment {` the list
+/// above reads. A `use` group written over several lines is not seen.
+fn imports_the_attachment_type(text: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("use ") && line.contains("turn::") && line.contains("Attachment")
+    })
+}
+
+/// Whether `text` puts a path on a turn's list of dropped files.
+fn supplies_a_drop(text: &str) -> bool {
+    SUPPLIES_A_DROP.iter().any(|form| text.contains(form))
+        || (imports_the_attachment_type(text) && text.contains("Attachment {"))
+}
+
+/// DROP-1 says nothing but the terminal's drop handling and the bridge's `dropped` and `attachments`
+/// lists mint a drop's trust grant. A drop is a path on `Task::dropped_text` or `Task::attachments`
+/// that the turn reads with `read_dropped_text` or `read_dropped_attachment` and records a rule for,
+/// and nothing about the path says a person dropped it. So the files that put a path on either list
+/// are the task's own builders, the terminal's turn and side request, and the bridge, and the files
+/// that name the reads are the turn, the attached-file reader and the workspace that defines them. A
+/// third file that built a task with a path of its own, a hook, a prompt from a server or a command
+/// line path, would give a model-proposed path the grant. A file a test module declares is a test,
+/// and is not read.
+#[test]
+fn a_dropped_file_reaches_a_turn_from_the_terminal_and_the_bridge_and_nothing_else() {
+    let sources = shipped::sources();
+    let names = |found: fn(&str) -> bool| -> BTreeSet<String> {
+        sources
+            .iter()
+            .filter(|source| found(&source.without_test_modules))
+            .map(|source| source.name.clone())
+            .collect()
+    };
+    assert_eq!(
+        names(supplies_a_drop),
+        [
+            "crates/agent/src/turn/task.rs",
+            "crates/tui/src/app/side_requests.rs",
+            "crates/tui/src/app/turns.rs",
+            "crates/ui-bridge/src/bridge.rs"
+        ]
+        .map(String::from)
+        .into(),
+        "a file that puts a path on a turn's dropped lists"
+    );
+    assert_eq!(
+        names(reads_a_drop),
+        [
+            "crates/agent/src/attached.rs",
+            "crates/agent/src/turn.rs",
+            "crates/agent/src/workspace.rs"
+        ]
+        .map(String::from)
+        .into(),
+        "a file that reads a path as a drop"
+    );
+}
+
+/// The scan above reads the way a file names the grant, so the ways it can be named are held here,
+/// run over the code the scan reads: each builder and each read is found, and a comment, a test
+/// module, a local list that is not the task's and a list that is emptied are not.
+#[test]
+fn the_scan_for_the_drop_grant_finds_each_way_to_name_it_and_not_a_comment_or_a_test_module() {
+    for supplies in [
+        "task = task.with_dropped_text(path);",
+        "task = task.with_attachment(path, media);",
+        "self.dropped_text.push(path.into());",
+        "task.dropped_text.extend(paths);",
+        "task.dropped_text = paths;",
+        "self.attachments.push(Attachment { name, media });",
+        "task.attachments.extend(found);",
+        "task.attachments = found;",
+        "Some(bravebot_agent::turn::Attachment { name, media })",
+        "Task { dropped_text: paths, ..Task::new(prompt) }",
+        "Task { attachments: found, ..Task::new(prompt) }",
+        // The literal written bare, after the type was imported, which names no `turn::` path.
+        "use bravebot_agent::turn::Attachment;\nlet one = Attachment { path, media };",
+        "use bravebot_agent::turn::{Attachment, Task};\nvec![Attachment { path, media }]",
+    ] {
+        let code = shipped::code_of(supplies).without_test_modules;
+        assert!(supplies_a_drop(&code), "{supplies}");
+    }
+    for quiet in [
+        "// task.with_dropped_text(path)\nfn f() {}",
+        "/// the task's `.attachments.push(` is the builder\nfn f() {}",
+        "fn f() {}\n#[cfg(test)]\nmod tests {\n    fn g() { Task::new(\"x\").with_attachment(\"a.png\", \"image/png\"); }\n}\nfn h() {}",
+        "let mut attachments = Vec::new();\nattachments.push(path);",
+        "bare.attachments.clear();\nbare.dropped_text.clear();",
+        "let seen = task.dropped_text.len() + task.attachments.len();",
+        "let same = task.attachments == other.attachments;",
+        "use super::attachments::previews_restaged;\nsuper::attachments::lines_in(&text);",
+        // A type of the same name that is not the turn's, and an import that builds nothing.
+        "struct Attachment { stream: u8 }\nlet one = Attachment { stream: 1 };",
+        "use crate::turn::{Attachment, TurnError};\nfn read(carried: &[Attachment]) {}",
+    ] {
+        let code = shipped::code_of(quiet).without_test_modules;
+        assert!(!supplies_a_drop(&code), "{quiet}");
+    }
+    for reads in [
+        "workspace.read_dropped_text(policy, &path)?;",
+        "workspace.read_dropped_attachment(policy, &path, media)",
+    ] {
+        let code = shipped::code_of(reads).without_test_modules;
+        assert!(reads_a_drop(&code), "{reads}");
+    }
+    for quiet in [
+        "/// See [`Workspace::read_dropped_text`] for why that is the boundary.\nfn f() {}",
+        "fn f() {}\n#[cfg(test)]\nmod tests {\n    fn g() { w.read_dropped_text(p, q); }\n}\nfn h() {}",
+        "workspace.read_text(policy, &path)",
+    ] {
+        let code = shipped::code_of(quiet).without_test_modules;
+        assert!(!reads_a_drop(&code), "{quiet}");
+    }
+}
+
 /// BACKEND-70 says the window's AWS sign-in is started by its main process after its person said
 /// yes. The sign-in that can be stopped from another thread is that one: the agent's wrapper names
 /// it to reach the AWS crate, and the bridge's file for the AWS row is its only caller. The sign-in
@@ -1144,6 +1752,87 @@ fn the_io_scan_sees_a_grouped_import_a_macro_and_skips_tests_and_comments() {
             "a use that reaches nowhere was reported: {quiet}"
         );
     }
+}
+
+/// The scan that holds the crate reading an answer to keeping nothing has to see each way of keeping
+/// a value, or the test of that crate passes on a source that has found one it does not look for.
+/// It also has to leave alone what keeps nothing: a lifetime named `'static`, a name that only
+/// contains a refused word, comment lines and test modules. A scan that refused those would make
+/// the crate's author reword code that is right, and the test would be switched off to pass.
+#[test]
+fn the_state_scan_sees_each_refused_word_and_skips_the_lifetime_tests_and_comments() {
+    let kept: &[(&str, &[&str])] = &[
+        ("static KEPT: u8 = 0;", &["static"]),
+        ("static mut N: u8 = 0;", &["static"]),
+        ("pub static N: u8 = 0;", &["static"]),
+        ("static\nKEPT: u8 = 0;", &["static"]),
+        (
+            "static KEPT: Mutex<String> = Mutex::new(String::new());",
+            &["static", "Mutex"],
+        ),
+        ("thread_local!(N);", &["thread_local"]),
+        (
+            "thread_local! {\n    static N: u8 = 0;\n}",
+            &["thread_local", "static"],
+        ),
+        ("let c: Cell<u8>;", &["Cell"]),
+        ("let c: RefCell<u8>;", &["RefCell"]),
+        ("let c: std::cell::OnceCell<u8>;", &["OnceCell"]),
+        ("let c: UnsafeCell<u8>;", &["UnsafeCell"]),
+        ("let a = AtomicU8::new(0);", &["AtomicU8"]),
+        ("let a: std::sync::atomic::AtomicBool;", &["AtomicBool"]),
+        ("let a: AtomicUsize;", &["AtomicUsize"]),
+        ("let l: RwLock<u8>;", &["RwLock"]),
+        ("let o: OnceLock<u8>;", &["OnceLock"]),
+        ("let l: LazyLock<u8>;", &["LazyLock"]),
+        ("use std::sync::{Arc, Mutex};", &["Mutex"]),
+        (
+            "let s: &'static str = \"a\"; static N: u8 = 0;",
+            &["static"],
+        ),
+        (
+            "static A: u8 = 0; static B: u8 = 0; RefCell RefCell AtomicU8",
+            &["static", "RefCell", "AtomicU8"],
+        ),
+        (
+            "fn f() {}\n#[cfg(test)]\nmod tests {\n    static N: u8 = 0;\n}\nstatic KEPT: u8 = 0;",
+            &["static"],
+        ),
+    ];
+    for &(source, expected) in kept {
+        assert_eq!(
+            keeping_state(source),
+            expected,
+            "the words that keep a value were not the ones in: {source}"
+        );
+    }
+
+    for quiet in [
+        "fn f(s: &'static str) -> &'static str { s }",
+        "const T: [&'static str; 1] = [\"a\"];",
+        "impl<T: 'static> X for T {}",
+        "struct Cellar;\nstruct Atomically;",
+        "let (head, tail) = value.split_once(':')?;",
+        "let statics = 1;\nlet static_table = 2;",
+        "// static KEPT: Mutex<u8>; thread_local! RefCell AtomicU8 OnceLock\nfn f() {}",
+        "/// A static table, a Mutex, a Cell and a LazyLock.\nfn f() {}",
+        "struct S {\n    /// A Cell of an AtomicBool.\n    a: u8,\n}",
+        "fn f() {}\n#[cfg(test)]\nmod tests {\n    static N: u8 = 0;\n    use std::cell::Cell;\n    use std::sync::Mutex;\n}\nfn h() {}",
+    ] {
+        assert_eq!(
+            keeping_state(quiet),
+            Vec::<String>::new(),
+            "a source that keeps nothing was reported: {quiet}"
+        );
+    }
+
+    assert_eq!(name_parts("RefCell"), ["Ref", "Cell"]);
+    assert_eq!(name_parts("OnceCell"), ["Once", "Cell"]);
+    assert_eq!(name_parts("AtomicU8"), ["Atomic", "U8"]);
+    assert_eq!(name_parts("AtomicBool"), ["Atomic", "Bool"]);
+    assert_eq!(name_parts("Cellar"), ["Cellar"]);
+    assert_eq!(name_parts("Atomically"), ["Atomically"]);
+    assert_eq!(name_parts("split_once"), ["split", "once"]);
 }
 
 /// A reader that accepts the wrong shapes enforces nothing, and the wrong shapes here are the ones

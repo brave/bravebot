@@ -50,7 +50,13 @@ see it.
 ### NET-1: this process has one way out, and it is not optional
 
 Every outbound request this process makes goes through a single call. The HTTP client is private to
-that module and no other crate depends on it, so there is no second path that could skip the gate.
+that module and no other crate depends on it, so there is no second path that could skip the gate. A
+`web_search` call sends its request through this call as a `fetch_url` call does
+([WEBSEARCH-7](tools/web-search.md#WEBSEARCH-7)).
+
+A `Request` formats with `{:?}` as the names of its headers and the length of its body, and never
+their values or the bytes, because a header carries a credential: the key of a search, the
+`authorization` of a model backend.
 
 **Why.** This is the whole property, and it is structural rather than a matter of discipline. In
 the design this replaces, using the hardened helper was optional and two of three fetchers
@@ -59,6 +65,8 @@ bypassed the redirect check.
 `verified-by: bravebot_core::policy::network_egress_requires_the_fetch_capability`
 `verified-by: bravebot_net::egress::a_successful_fetch_returns_a_labelled_body`
 `verified-by: bravebot_net::egress::a_fetch_without_the_capability_is_refused`
+`verified-by: bravebot_agent::web_search::a_search_returns_a_reference_sends_the_key_in_one_header_and_asks_about_the_query`
+`verified-by: bravebot_net::lib::a_request_prints_its_header_names_and_never_their_values`
 
 <a id="NET-2"></a>
 ### NET-2: a redirect is revalidated on every hop
@@ -71,10 +79,12 @@ permitted host could hand off to a denied one.
 
 Revalidating is what makes a hop checkable; what the check consists of depends on why the request is
 being made. For a `fetch_url` call it is [FETCH-4](tools/fetch-url.md#FETCH-4), which holds the
-chain to the host a person approved. For this program's own connection to its endpoint it is the
+chain to the host a person approved. For a `web_search` call it is
+[WEBSEARCH-7](tools/web-search.md#WEBSEARCH-7), which refuses a hop to any host but the search host
+whatever rules allow, and asks nobody. For this program's own connection to its endpoint it is the
 capability and nothing more, for the reason that clause gives. Whichever it is, the hop is also held
-to the transport the hop before it used, by [NET-9](#NET-9), and for a `fetch_url` call to the
-address its host resolves to, by [FETCH-8](tools/fetch-url.md#FETCH-8).
+to the transport the hop before it used, by [NET-9](#NET-9), and for a `fetch_url` or a `web_search`
+call to the address its host resolves to, by [FETCH-8](tools/fetch-url.md#FETCH-8).
 
 A request may instead refuse redirects (`Request::refusing_redirects`). A redirect in answer to it is
 returned as the failure it is, with the status it came with, and nothing is sent to the address it names,
@@ -85,6 +95,7 @@ premium host, which the premium key is presented to ([PREM-10](premium-credentia
 
 `verified-by: bravebot_net::egress::every_redirect_hop_is_revalidated`
 `verified-by: bravebot_core::policy::a_fetch_cannot_be_redirected_to_a_host_nobody_approved`
+`verified-by: bravebot_core::policy::a_search_cannot_be_redirected_to_another_host_and_the_host_is_not_asked_about`
 `verified-by: bravebot_net::egress::a_redirect_loop_is_bounded`
 `verified-by: bravebot_net::lib::redirect_status_codes_are_recognised`
 `verified-by: bravebot_net::lib::absolute_redirects_are_used_as_given`
@@ -144,11 +155,12 @@ no other bound: the wait for a reply to begin and the time the whole of it may t
 request and this clause set them, so a gap longer than those leaves the reply to be ended by them.
 A stream waited on through any silence ([NET-10](#NET-10)) is held to no gap, stated or not.
 
-A reply cut at the end of its time is reported as out of time, apart from one that stopped arriving,
-and is not worth another attempt. It was still being written when it was cut, and asked for again it
-is written as long again and billed again. A reply asked for whole within a time its request stated
-is out of time too when that time runs out before any of it arrives, since it is written before any
-of it is sent. Any other reply that never began is a connection that gave out.
+A reply cut at the end of its time is reported as out of time and is not worth another attempt. It
+was still being written when it was cut, and asked for again it is written as long again and billed
+again. A reply that stopped arriving is not cut at the end of its time: it is worth another attempt
+([NET-6](#NET-6)). A reply asked for whole within a time its request stated is out of time too when
+that time runs out before any of it arrives, since it is written before any of it is sent. Any other
+reply that never began is a connection that gave out.
 
 **Why.** One timeout over the whole call cannot tell a slow answer from a dead connection, and
 choosing a single number makes one of those two cases wrong. The same holds between replies: a
@@ -178,6 +190,13 @@ A connection that gave out is worth another attempt: a timeout, a socket that we
 did not resolve, and a network that is down or unreachable. A refusal is not, and only the statuses
 that mean the server is temporarily unable are treated as retryable.
 
+A reply that stopped arriving, meaning the gap allowed between two pieces of it ran out
+([NET-5](#NET-5)), is a timeout of the connection and is worth another attempt, whether the failure
+was met while the body was read whole or in pieces. The transport reports that timeout inside an I/O
+error whose kind names nothing, so it is read from the transport's error variant and never from its
+text. A reply cut at the end of its time stays out of time and is not worth another attempt. An I/O
+error that names no kind of failure and wraps no transport error is not worth another attempt.
+
 A `Retry-After` header on such an answer is read as whole seconds or an IMF-fixdate HTTP date and
 carried on the failure as a duration of at most one hour. A value that is neither, a date already
 past aside, is absent. It is a number that only sets a timer ([BACKEND-54](backends.md#BACKEND-54)):
@@ -200,6 +219,9 @@ told apart by the failure ([Known costs](#known-costs)).
 
 `verified-by: bravebot_net::lib::a_connection_that_gave_out_is_worth_another_attempt_and_a_refusal_is_not`
 `verified-by: bravebot_net::lib::a_network_that_is_down_is_worth_another_attempt`
+`verified-by: bravebot_net::lib::a_body_that_went_quiet_is_worth_another_attempt`
+`verified-by: bravebot_net::egress::a_reply_that_stops_arriving_is_given_up_on`
+`verified-by: bravebot_net::egress::a_reply_that_stops_arriving_is_given_up_on_however_long_its_request_said_it_may_take`
 `verified-by: bravebot_net::lib::a_request_whose_name_did_not_resolve_is_worth_another_attempt`
 `verified-by: bravebot_net::lib::a_lookup_that_failed_another_way_is_reported_as_it_failed`
 `verified-by: bravebot_net::lib::the_systems_own_failed_lookup_is_reported_as_a_host_not_found`
@@ -264,6 +286,8 @@ that nothing is trusted.
 `verified-by: bravebot_net::transport::a_certificate_file_a_settings_file_names_is_what_is_trusted`
 `verified-by: bravebot_net::transport::exported_roots_replace_the_files_rather_than_joining_them`
 `verified-by: bravebot_net::transport::a_client_gets_the_built_in_roots_when_nothing_names_others`
+`verified-by: bravebot_net::transport::a_client_built_from_named_certificates_trusts_exactly_those`
+`verified-by: bravebot_net::lib::named_roots_decide_who_a_handshake_trusts`
 `verified-by: bravebot_net::lib::the_one_way_out_is_built_against_the_stated_transport_rather_than_a_default_client`
 
 <a id="NET-8"></a>
@@ -531,6 +555,7 @@ failed request.
 `verified-by: bravebot_net::egress::a_refusal_after_a_redirect_carries_no_body_and_names_the_url_that_was_asked_for`
 `verified-by: bravebot_net::egress::a_request_that_waits_without_bound_is_not_handed_a_refusals_body`
 `verified-by: bravebot_net::lib::a_refusals_body_is_in_no_text_made_from_the_failure`
+`verified-by: bravebot_net::egress::a_key_the_service_repeats_in_a_refusals_body_is_in_no_failure_text_event_or_log_line`
 
 ## Known costs
 

@@ -1563,6 +1563,38 @@ mod tests {
         }
     }
 
+    /// SERVERS-7: a call's arguments are drawn one to a row in the order the request holds them.
+    /// The request carries `zeta`, `alpha`, `mid`, which is neither the sorted nor the reverse
+    /// order, so the rows read zeta, alpha, mid at every width.
+    ///
+    /// A wrong implementation draws the arguments through a sorted map or reverses them, which the
+    /// order of the other front ends does not do.
+    #[test]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn a_call_prompt_draws_its_arguments_in_the_order_the_request_holds_them() {
+        let request = McpCallRequest {
+            arguments: vec![
+                ("zeta".into(), "1".into()),
+                ("alpha".into(), "2".into()),
+                ("mid".into(), "3".into()),
+            ],
+            ..call(false, None)
+        };
+        for width in [120, 80, 50] {
+            let (rows, _) = call_screen(&request, (width, 30), 0);
+            let screen = rows.join("\n");
+            let at = |name: &str| {
+                rows.iter()
+                    .position(|row| row.contains(&format!("{name}:")))
+                    .unwrap_or_else(|| panic!("{name} is not drawn at {width}: {screen}"))
+            };
+            assert!(
+                at("zeta") < at("alpha") && at("alpha") < at("mid"),
+                "the rows are not in the request's order at {width}: {screen}"
+            );
+        }
+    }
+
     /// A long description shows its first rows until asked for, and says how to see the rest.
     #[test]
     fn a_call_prompt_cuts_a_long_description_until_it_is_expanded() {
@@ -1670,6 +1702,59 @@ mod tests {
         assert!(drawn.contains("tells the reader to read a key"), "{drawn}");
         assert!(drawn.contains("1 Yes, offer them"), "{drawn}");
         assert!(drawn.contains("2 No, continue without them"), "{drawn}");
+    }
+
+    /// The check's banner is drawn above the first tool, whatever it found, so a person has read it
+    /// before the first of the server's words. One drawn below the tools would be read after the
+    /// text it is about.
+    ///
+    /// Rejects: the verdict rows moved after the loop that draws the tools.
+    #[test]
+    fn a_tool_lists_verdict_is_drawn_above_the_first_tool() {
+        let words = |text: String| {
+            text.split_whitespace()
+                .take(4)
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        for (verdict, banner) in [
+            (Verdict::Safe, words(t!(check_safe).to_string())),
+            (Verdict::Unsafe, words(t!(check_unsafe).to_string())),
+            (
+                Verdict::Inconclusive("timed out"),
+                words(t!(check_inconclusive).to_string()),
+            ),
+        ] {
+            let mut request = tool_list();
+            request.verdict = verdict;
+            request.reason = Some("a reason the check gave".into());
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
+            terminal
+                .draw(|frame| {
+                    draw_tool_list(frame, &request, 0, &mut Seen::default());
+                })
+                .expect("draw");
+            let rows: Vec<String> = terminal
+                .backend()
+                .buffer()
+                .content()
+                .chunks(120)
+                .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+                .collect();
+            let banners: Vec<usize> = (0..rows.len())
+                .filter(|at| rows[*at].contains(&banner))
+                .collect();
+            let first_tool = rows
+                .iter()
+                .position(|row| row.contains("weather:get_forecast"))
+                .unwrap_or_else(|| panic!("no row names the tool: {rows:#?}"));
+            assert_eq!(banners.len(), 1, "{banner}: {rows:#?}");
+            assert!(
+                banners[0] < first_tool,
+                "{banner} is drawn on row {} and the first tool on row {first_tool}: {rows:#?}",
+                banners[0]
+            );
+        }
     }
 
     /// `1` and `2` answer the list as its rows say, and Enter does not approve it.

@@ -34,7 +34,7 @@ export type Checking = { lines: number } | { file: 'picture' | 'pdf' }
 export type AgentEntry = { id: string; kind: string; task: string; state: 'working' | 'finished' | 'failed' }
 export type Reach = 'not_the_planner' | 'no_model'
 export type Landing = 'context' | 'quarantined' | 'reserved'
-export type TodoStatus = 'pending' | 'active' | 'done' | 'cancelled'
+export type TodoStatus = 'pending' | 'active' | 'waiting' | 'done' | 'cancelled'
 
 export type Change =
   | { kind: 'kept'; text: string }
@@ -139,6 +139,23 @@ export interface SessionNote {
   text: string
 }
 
+/**
+ * `session.background`'s answer (BG-2, CMD-34): the id of the record a background session now
+ * runs, and the word for the permission mode it runs in. The bridge has closed the chat by then.
+ */
+export interface BackgroundedSession {
+  handedOver: string
+  mode: string
+}
+
+/**
+ * `session.background.stop`'s answer (BG-11): `stopped` when the process was ended, `not-running`
+ * when it had already ended. The session record is kept either way.
+ */
+export interface StoppedBackground {
+  stopped: 'stopped' | 'not-running'
+}
+
 /** `session.note`'s answer: what became of the text, and the session's notes as they now stand. */
 export interface NotedSession {
   noted: 'kept' | 'unwritable' | 'empty'
@@ -197,9 +214,41 @@ export interface SettingsRules {
   shownGrantedRecord?: string | null
   /** The agent's sentence for the file `--settings` named where it is read as a checkout's file, or null. Absent from an older bridge. */
   namedWithheld?: string | null
+  /**
+   * Keys of the settings and managed values that were not read as written (an unread key, a key a file
+   * wrote twice, a managed `retrieval` value that pins nothing), each as the agent's sentence with
+   * the key and file spelled as a name is (PROMPT-1). Absent from an older bridge.
+   */
+  droppedKeys?: string[]
 }
 
 export type FilesystemKey = 'allowRead' | 'denyRead' | 'allowWrite' | 'denyWrite'
+
+/** A family `permissions.check` reads a call in, with the words the call takes. */
+export type RuleCheckFamily = 'Read' | 'Edit' | 'Bash' | 'WebFetch' | 'WebSearch' | 'Mcp'
+
+/**
+ * The answer to `permissions.check`: which rule the session's held rules decide a call by (CLI-30).
+ *
+ * `decision` is the first rule that matches in deny, ask, allow order, `none` where no rule
+ * matches, or `shortName` where the call reads an 8.3 short name and is refused (PERM-5). `rule`,
+ * `file`, `reason` and the `granted` flag are null or false unless a rule decides. `file` is null
+ * where no file is known for the rule. `granted` is true for a checkout rule a person granted, whose
+ * `file` is the checkout's settings file. `notInForce` is a checkout `allow` rule that would have
+ * allowed the call and is not granted; it is null where the call is denied or asked about. Draw
+ * the `shown` fields, which spell the text so a character that draws as nothing is visible (PROMPT-1).
+ */
+export interface RuleCheck {
+  decision: 'deny' | 'ask' | 'allow' | 'none' | 'shortName'
+  rule: string | null
+  shownRule: string | null
+  file: string | null
+  shownFile: string | null
+  granted: boolean
+  /** The person's own reason for the rule, already spelled as text. */
+  reason: string | null
+  notInForce: { rule: string; shownRule: string; file: string; shownFile: string } | null
+}
 
 /** A checkout rule a yes to the rules question granted (PERM-15). */
 export interface GrantedRule extends ProposedRule {
@@ -290,7 +339,20 @@ export interface SessionSummary {
    * `manifest.read` and cannot be opened or continued. Absent from an older bridge.
    */
   manifest?: boolean
+  /**
+   * The id of the record this chat was handed off from (SESSION-34), or null for one that was not.
+   * Absent from an older bridge.
+   */
+  handedOffFrom?: string | null
+  /**
+   * The state of the background process that holds this chat (BG-6), in the roster's words, or
+   * null for a chat no background process has held. Absent from an older bridge.
+   */
+  background?: BackgroundState | null
 }
+
+/** A background session's state, spelled as `State::word()` in `crates/session/src/jobs.rs` (BG-6). */
+export type BackgroundState = 'working' | 'needs-input' | 'idle' | 'stopped' | 'interrupted'
 
 export interface SessionRecord {
   id: string
@@ -366,6 +428,23 @@ export interface SessionSettled extends ProjectQuestionsReport {
   settingsRules?: SettingsRules | null
 }
 
+/** `session.btw`: a question asked over the exchange, at rest or beside the running turn (CMD-8). Answered with `AsideStarted`. */
+export interface BtwParams {
+  session: string
+  question: string
+  model: string | null
+  /** Ids of pictures pasted on the line, which the main process resolves to `images` (CMD-5). */
+  pastes?: string[]
+  /** Ids of pictures and PDFs dropped on the line, which the main process resolves to `attachments`. */
+  drops?: string[]
+  /** Text files dropped on the line, each put back into the question as its name (DROP-4). */
+  files?: { marker: string; name: string }[]
+}
+/** `session.recap`: a recap of the exchange at rest (CMD-16). Refused with `turn_in_flight` while a turn runs. */
+export interface RecapParams { session: string; model: string | null }
+/** `session.aside.cancel`: stops the question that is out, if any. Answered with `{}`. */
+export interface AsideCancelParams { session: string }
+
 export interface OpenedSession extends SessionSettled {
   /** Absent from an older bridge, which kept no rewind points. Newest first. */
   rewind?: RewindPoint[]
@@ -378,6 +457,8 @@ export interface OpenedSession extends SessionSettled {
   todos: Record<string, TodoRow[]>
   /** Absent from an older bridge, which sent none. */
   notes?: SessionNote[]
+  /** The `/btw` and `/recap` asides the record kept, oldest first. Absent from an older bridge. */
+  asides?: import('./aside').AsideRow[]
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
   /** `record.directory` and `keeping` spelled as `ConfirmRequest.shownPath` is (PROMPT-1). The question draws these. */
   shownDirectory: string
@@ -416,6 +497,48 @@ export type SandboxMode = 'workspace-write' | 'read-only' | 'strict'
 
 /** The order the sandbox menu lists them. */
 export const SANDBOX_MODES: readonly SandboxMode[] = ['workspace-write', 'read-only', 'strict']
+
+/** What a session spend limit counts (TURN-8). */
+export type SpendUnit = 'tokens' | 'credits'
+
+/** A session spend limit: a positive count of one unit. */
+export interface SpendLimitFigure {
+  unit: SpendUnit
+  count: number
+}
+
+/**
+ * `session.limit`'s params. Without `limit` the call only reads. A string is read the way the
+ * `limit` setting is (`50000`, `500k`, `20 credits`), and `null` takes the limit away.
+ */
+export interface SessionLimitParams {
+  session: string
+  limit?: string | null
+}
+
+/** `session.limit`'s answer: the limit in force, and what the session has spent in its unit (tokens when there is none). */
+export interface SessionLimit {
+  limit: SpendLimitFigure | null
+  spent: number
+}
+
+/**
+ * `session.variant`'s params (BACKEND-66). `model` is the composer's pick, which can differ from
+ * the session's model until the next `turn.send`. Without `variant` the call only reads. `null` or
+ * `"off"` drops the pick, and a name picks one the model offers.
+ */
+export interface SessionVariantParams {
+  session: string
+  model?: string
+  variant?: string | null
+}
+
+/** `session.variant`'s answer: the model in force, the variant names it offers, and the pick or `null`. */
+export interface SessionVariant {
+  model: string
+  offered: string[]
+  variant: string | null
+}
 
 export function nextPermissionMode(mode: PermissionMode): PermissionMode {
   return PERMISSION_MODES[(PERMISSION_MODES.indexOf(mode) + 1) % PERMISSION_MODES.length]!
@@ -482,6 +605,11 @@ export interface EffortReport {
   recorded: EffortLevel | null
   inForce: EffortLevel | null
   outranked: boolean
+  /**
+   * The level the open session began with, which a model of the ChatGPT account is sent for the
+   * whole session (CHATGPT-10); absent where the window named no open session.
+   */
+  sessionBegan?: EffortLevel | null
 }
 
 /** `language.get`: the catalog the window is read in, and the choice `/language` keeps. */
@@ -516,6 +644,42 @@ export interface UsagePingReport {
 /** `usage_ping.set`: the report after the change, and whether the switch file was written. */
 export interface UsagePingSaved extends UsagePingReport {
   saved: boolean
+}
+
+/** What keeps crash reports off where their switch cannot: `variable` is set for `environment`. */
+export interface CrashReportsReason {
+  code: 'environment' | 'admin' | 'incognito'
+  variable?: string
+}
+
+/** `crash_reports.get`: whether reports are on, and `reason` when the switch cannot change that. */
+export interface CrashReportsReport {
+  enabled: boolean
+  changeable: boolean
+  reason: CrashReportsReason | null
+}
+
+/** `crash_reports.set`: the report after the change, and whether `crashReports` was written. */
+export interface CrashReportsSaved extends CrashReportsReport {
+  saved: boolean
+}
+
+/** A diagnostic log level, as `bravebot-rpc --log-level` and `diagnostic_log.set` take it. */
+export type LogLevel = 'error' | 'info' | 'debug'
+
+export const LOG_LEVELS: readonly LogLevel[] = ['error', 'info', 'debug']
+
+export function isLogLevel(value: unknown): value is LogLevel {
+  return typeof value === 'string' && (LOG_LEVELS as readonly string[]).includes(value)
+}
+
+/**
+ * `diagnostic_log.set`: the level now in force, and whether the log is written at all. `writing` is
+ * false in an incognito run or one with no state directory (DIAG-4).
+ */
+export interface DiagnosticLogSet {
+  level: LogLevel
+  writing: boolean
 }
 
 /**
@@ -1195,10 +1359,24 @@ export interface EventMap {
    * shown. `unusable` is an empty rewrite or one past `limit` characters. `failed` carries `message`.
    */
   'enhance.done': { status: 'ready' | 'untrusted' | 'unusable' | 'stopped' | 'failed'; text?: string; removed?: number; limit?: number; message?: string }
+  /**
+   * What a `session.compact` request came back with (CMD-34). `compacted` carries `summarised`, the
+   * messages no longer sent word for word, and `kept`, those still sent. `nothing` means there was
+   * nothing worth shortening. `failed` carries `message`.
+   */
+  'compact.done': { status: 'compacted' | 'nothing' | 'stopped' | 'failed'; summarised?: number; kept?: number; message?: string }
+  /**
+   * What a `session.handoff` request came back with (SESSION-34). `ready` carries `text`: the brief,
+   * the sentence saying what did not come with it, and the goal. `untrusted` means the exchange met
+   * something the planner is not shown, so no brief is offered. `failed` carries `message`.
+   */
+  'handoff.done': { status: 'ready' | 'untrusted' | 'stopped' | 'failed'; text?: string; message?: string }
   'watch.fired': { number: number; path: string }
   'watch.ended': { number: number; reason: string; message?: string }
   /** The result of a `/schedule run-now` the window started (SCHEDULE-8). Shown, never sent to the model. */
   'schedule.ran': import('./schedule').ScheduleAnswer
+  /** What a `session.btw` or `session.recap` came back with (CMD-8, CMD-16). Shown, never sent to the model. */
+  'aside.done': import('./aside').AsideDone
   /** `retry` is set only on `reconnecting`, while the request waits, and `null` once its attempt is out. */
   phase: { phase: Phase; retry?: RetryEvent | null }
   composing: { call: string | null }

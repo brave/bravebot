@@ -68,7 +68,7 @@ Do not run `pod install`. `ios/Podfile` is a placeholder with no dependencies, k
 
 ## Connect to a host
 
-A development build (`__DEV__`) shows a Port and a Code field on the "Nothing is connected" screen. They reach `bravebot-host` through the development relay in [packages/agent-client](../packages/agent-client/README.md#the-development-relay), which listens only on the computer's 127.0.0.1. Use it with synthetic data only. It does not resolve U1 or authorize control of a real session.
+A development build (`__DEV__`) shows a Port and a Code field on the "Nothing is connected" screen. They reach `bravebot-host` through the development relay in [packages/agent-client](../packages/agent-client/README.md#the-development-relay), which listens only on the computer's 127.0.0.1. Use it with synthetic data only. It does not close the untested local-control cases or authorize control of a real session.
 
 1. Build the host and the client with `make check-agent-client` from the repository root, then start the demo there: `node packages/agent-client/dist/scripts/dev-relay-demo.js --host "$PWD/target/debug/bravebot-host"`. It prints `dev-relay: listening on 127.0.0.1 port <port>; the code for this launch is <code>`.
 2. Carry the port to the device. On Android, `adb reverse tcp:<port> tcp:<port>` for the device or emulator. The iOS simulator shares the computer's 127.0.0.1 and needs nothing. A physical iPhone has no such tunnel and is not supported.

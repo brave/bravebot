@@ -101,6 +101,26 @@ pub(crate) fn say_notices(beside: &mut impl Write, notices: &[String]) {
     }
 }
 
+/// What a one-shot run says before its task about the keys and managed values the readers of
+/// `settings` and of the machine's managed layer dropped or combined: each unread key, each repeated
+/// key and the managed `retrieval` value that pins nothing, once, in the sentences `doctor` uses and
+/// never what a key was set to (BACKEND-36, RETRIEVE-23). A run nobody watches is told nothing by
+/// `doctor`, which it does not run.
+///
+/// The sentences are drawn for a terminal by [`bravebot_agent::dropped_keys`], since the key and
+/// the file are text a checkout chose (LAYER-3). That module reads the managed layer itself, so a
+/// run cannot be given another.
+pub(crate) fn say_dropped_keys(beside: &mut impl Write, settings: &bravebot_config::Settings) {
+    for said in bravebot_agent::dropped_keys::at_session_start_of_this_machine(
+        settings,
+        bravebot_agent::dropped_keys::Spelling::Drawn,
+    ) {
+        // A closed stderr is a reader that stopped listening, so a failed write is dropped as it
+        // is for the notices above.
+        writeln!(beside, "{said}").unwrap_or_default();
+    }
+}
+
 /// What a manifest run that stopped leaves for a person to read (MANIFEST-3): the plan or the
 /// document that would not become one, and the steps that ran. It is printed whether or not
 /// `--trace` was asked for, since a failed plan with no plan to look at is a one-line complaint
@@ -387,4 +407,55 @@ pub(crate) fn refused_with_the_usage(as_json: bool, message: impl std::fmt::Disp
         print_help();
     }
     refused
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{Scratch, pinned};
+
+    /// BACKEND-36, RETRIEVE-23: what a one-shot run says before its task about the managed layer the
+    /// machine holds, which a process test cannot supply because the machine's managed file is at a
+    /// fixed path: the key the managed file wrote twice and the `retrieval` value that pins nothing,
+    /// once each, in the sentences `doctor` uses, and no value.
+    ///
+    /// Rejects a run that makes the notes without the machine's managed layer, which says only what
+    /// the settings dropped, and one that says something where the machine holds no managed file.
+    #[test]
+    fn a_one_shot_run_says_what_its_managed_layer_dropped() {
+        let scratch = Scratch::new("finish-one-shot-managed-notes");
+        let (_, file) = pinned(
+            &scratch,
+            r#"{"retrieval": "false", "models": {"deny": ["a-model-nobody-prints"]}, "models": {}}"#,
+        );
+        let settings = bravebot_config::Settings::default();
+        let mut beside = Vec::new();
+
+        let machine = bravebot_config::managed_file_on_this_thread(&file);
+        say_dropped_keys(&mut beside, &settings);
+        drop(machine);
+
+        let said = String::from_utf8(beside).expect("utf-8");
+        let named = |needle: &str| said.lines().filter(|line| line.contains(needle)).count();
+        assert_eq!(
+            named(&format!(
+                "models is written more than once in {}",
+                file.display()
+            )),
+            1,
+            "{said}"
+        );
+        assert_eq!(
+            named(&format!("retrieval in {}", file.display())),
+            1,
+            "{said}"
+        );
+        assert_eq!(said.lines().count(), 2, "{said}");
+        assert!(!said.contains("a-model-nobody-prints"), "{said}");
+
+        let mut quiet = Vec::new();
+        let _none = bravebot_config::managed_file_on_this_thread(&scratch.path.join("absent.json"));
+        say_dropped_keys(&mut quiet, &settings);
+        assert!(quiet.is_empty(), "{}", String::from_utf8_lossy(&quiet));
+    }
 }

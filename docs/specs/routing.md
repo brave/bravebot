@@ -153,6 +153,9 @@ which is everything a processor produced, is refused as a destination. A number 
 `verified-by: bravebot_core::reference::content_is_not_offered_as_a_destination`
 `verified-by: bravebot_core::policy::a_reference_that_names_no_file_is_not_a_destination`
 `verified-by: bravebot_agent::turn::a_processors_output_cannot_be_a_destination`
+`verified-by: bravebot_agent::turn::a_listed_files_reference_is_a_destination_a_person_is_asked_about`
+`verified-by: bravebot_agent::turn::a_read_through_a_listed_files_reference_is_promoted_and_asks_nobody`
+`verified-by: bravebot_agent::turn::a_write_through_a_reference_is_asked_about_whatever_a_rule_or_the_trust_map_says`
 `verified-by: bravebot_core::policy::a_choice_is_no_reference_to_any_gate_that_takes_text`
 `verified-by: bravebot_agent::turn::a_choice_cannot_be_a_path_a_body_or_a_document_for_a_processor`
 
@@ -167,6 +170,9 @@ Code the planner wrote, shown whole to a person for one page, is the one other c
 
 `verified-by: bravebot_agent::tools::the_tool_set_is_reads_plus_gated_writes`
 `verified-by: bravebot_agent::tools::only_run_takes_a_command_line`
+`verified-by: bravebot_agent::tools::no_shell_is_offered`
+`verified-by: bravebot_agent::tools::the_list_every_scan_reads_holds_each_tool_offered_beside_the_table`
+`verified-by: bravebot_agent::tools::no_tool_built_beside_the_table_is_named_for_a_shell`
 
 <a id="ROUTE-8"></a>
 ### ROUTE-8: an endorsement authorises a destination without relabelling it

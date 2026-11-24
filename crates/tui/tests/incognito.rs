@@ -243,6 +243,128 @@ fn a_choice_applies_to_the_session_and_is_not_recorded() {
     assert_eq!(scratch.contents(), expected);
 }
 
+/// INCOG-2: the theme an ordinary session recorded is the one an incognito session opens on.
+///
+/// `restore_saved` is the startup read, the only place the recorded theme is applied. The test
+/// puts the default in force first and seeds a theme that is not the default, so a startup that
+/// skipped the read under the mode (and so stayed on `brave`) is told apart from one that applied
+/// the recorded name. The read that proves the seeded file is the one being looked at is the
+/// `load_theme` before the call. The call sends no query to a terminal: it reads a file and puts
+/// a palette in force.
+#[test]
+fn the_startup_opens_an_incognito_session_on_the_recorded_theme() {
+    let scratch = Scratch::incognito("startup-theme");
+    scratch.seed("theme", "nord\n");
+    let seeded = scratch.contents();
+    assert_eq!(store::load_theme().as_deref(), Some("nord"));
+
+    bravebot_tui::theme::apply_brave();
+    assert_eq!(
+        bravebot_tui::theme::name(),
+        "brave",
+        "the default is not in force"
+    );
+
+    bravebot_tui::theme::restore_saved();
+
+    assert_eq!(
+        bravebot_tui::theme::name(),
+        "nord",
+        "an incognito session did not open on the recorded theme"
+    );
+    assert_eq!(
+        scratch.contents(),
+        seeded,
+        "restoring the theme wrote to the directory"
+    );
+    assert_eq!(store::load_theme().as_deref(), Some("nord"));
+    bravebot_tui::theme::apply_brave();
+}
+
+/// INCOG-2: the recorded choice an ordinary session made is what an incognito session starts on,
+/// and a choice made inside it takes effect for the session while the files stay as they were.
+///
+/// The session persists, so the only thing between its setters and the files is the mode. A setter
+/// that returned early under incognito would leave the session on the recorded choice, and a startup
+/// that skipped the read would open it on the default; both are told apart here by choosing values
+/// that differ from the recorded ones.
+#[test]
+fn a_choice_takes_effect_for_the_session_and_the_startup_reads_the_recorded_one() {
+    use bravebot_aichat::protocol::Effort;
+    use bravebot_tui::vim::Editing;
+
+    let scratch = Scratch::incognito("session-choices");
+    scratch.seed("model", "claude-sonnet-4-5\n");
+    scratch.seed("effort", "low\n");
+    scratch.seed("editor-mode", "vim\n");
+    let seeded = scratch.contents();
+    let config = bravebot_config::Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("a-signing-key".to_string()),
+        "BRAVE_SERVICES_KEY_ID" => Some("a-key-id".to_string()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some("https://example.invalid".to_string()),
+        _ => None,
+    })
+    .expect("config");
+    let settings = bravebot_config::Settings::default();
+
+    let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+    session.adopt_model(&settings, &config);
+    session.adopt_effort(&settings);
+    session.adopt_editing(None);
+    assert_eq!(
+        session.model(),
+        Some("claude-sonnet-4-5"),
+        "the session did not start on the recorded model"
+    );
+    assert_eq!(
+        session.effort(),
+        Some(Effort::Low),
+        "the session did not start on the recorded effort level"
+    );
+    assert_eq!(
+        session.editing(),
+        Editing::Vi,
+        "the session did not start on the recorded style of editing"
+    );
+
+    session.choose_model("some-other-model", &config);
+    session.choose_effort(Some(Effort::Xhigh));
+    session.choose_editing(Editing::Ordinary);
+    assert_eq!(
+        session.model(),
+        Some("some-other-model"),
+        "an incognito session kept the model it started on after one was chosen"
+    );
+    assert_eq!(
+        session.effort(),
+        Some(Effort::Xhigh),
+        "an incognito session kept the effort level it started on after one was chosen"
+    );
+    assert_eq!(
+        session.editing(),
+        Editing::Ordinary,
+        "an incognito session kept the style of editing it started on after one was chosen"
+    );
+
+    // Asking for no level removes the record in an ordinary session, so it is the choice that would
+    // reach a seeded file here if the mode did not hold.
+    session.choose_effort(None);
+    assert_eq!(session.effort(), None, "choosing no level did not apply");
+
+    for (file, recorded) in [
+        ("model", "claude-sonnet-4-5\n"),
+        ("effort", "low\n"),
+        ("editor-mode", "vim\n"),
+    ] {
+        assert_eq!(
+            std::fs::read_to_string(scratch.own_directory().join(file)).expect("the seeded file"),
+            recorded,
+            "an incognito session changed the recorded {file}"
+        );
+    }
+    assert_eq!(scratch.contents(), seeded);
+}
+
 /// INCOG-3: an incognito session leaves no record of itself, and none that it happened.
 #[test]
 fn no_session_record_is_written() {
@@ -536,4 +658,55 @@ fn the_caffeinate_agreement_is_neither_read_nor_written() {
     let said = session.transcript.last().expect("a note").text.clone();
     assert_eq!(said, bravebot_i18n::t!(caffeinate_on));
     assert_eq!(scratch.contents(), vec!["model".to_string()]);
+}
+
+/// INCOG-2: `/language` in an incognito session saves nothing and says so.
+///
+/// A language applies from the next start and nothing in this session changes with it, so the
+/// command's only effects are the file and the note. The session persists, so the only thing
+/// between the command and the file is the mode. The recorded language is read back first, so the
+/// unchanged file means the command did not reach the directory this test is looking at, and the
+/// listing is compared whole, so a write anywhere else under the directory fails the same assertion.
+/// The note is the one for a choice that could not be kept; the one for a choice that was kept, and
+/// the one for a choice given back, would each be a false report of a write.
+#[test]
+fn a_language_chosen_is_not_saved_and_the_command_says_so() {
+    let scratch = Scratch::incognito("language-command");
+    scratch.seed("language", "fr\n");
+    let seeded = scratch.contents();
+    assert_eq!(
+        store::load_language().as_deref(),
+        Some("fr"),
+        "the seeded directory is not the one being read"
+    );
+
+    let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+    bravebot_tui::app::set_language(&mut session, "en-US");
+    bravebot_tui::app::set_language(&mut session, "auto");
+
+    let notes: Vec<String> = session
+        .transcript
+        .iter()
+        .map(|entry| entry.text.clone())
+        .collect();
+    let not_saved = bravebot_i18n::t!(session_language_not_saved).to_string();
+    assert_eq!(
+        notes,
+        vec![not_saved.clone(), not_saved],
+        "a language chosen in an incognito session was not said to be unsaved"
+    );
+    assert!(
+        !notes.contains(&bravebot_i18n::t!(session_language_set, language = "en-US").to_string()),
+        "the command said a language would be used from the next start"
+    );
+    assert!(
+        !notes.contains(&bravebot_i18n::t!(session_language_auto).to_string()),
+        "the command said the choice was given back"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.own_directory().join("language")).expect("the seeded file"),
+        "fr\n",
+        "an incognito session replaced or removed the recorded language"
+    );
+    assert_eq!(scratch.contents(), seeded);
 }

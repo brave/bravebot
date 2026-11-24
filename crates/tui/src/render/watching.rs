@@ -648,7 +648,8 @@ fn aside_row(
 
     let name = t!(watching_list_aside);
 
-    let spent = 4 + NAME_COLUMN + STANDING_COLUMN + 4;
+    let column = standing_column();
+    let spent = 4 + NAME_COLUMN + column + 4;
     let room = width.saturating_sub(spent);
     let question = padded(&one_line(&aside.question), room);
 
@@ -664,7 +665,7 @@ fn aside_row(
         Span::styled("  ✓ ".to_string(), mark_style),
         Span::styled(format!("{name:<NAME_COLUMN$}"), name_style),
         Span::styled(format!("{question}  "), detail),
-        Span::styled(format!("{standing:<STANDING_COLUMN$}"), standing_style),
+        Span::styled(in_cells(standing, column), standing_style),
     ]);
     picked(line, highlighted)
 }
@@ -709,9 +710,32 @@ fn delegate_row(delegate: &Delegate, highlighted: bool, width: usize) -> Line<'s
     picked(line, highlighted)
 }
 
-/// How wide the word saying whether the planner read a command's output is drawn, so the counts
-/// beside it still line up down the right edge.
-const STANDING_COLUMN: usize = 8;
+/// How wide the word saying where a row's record stands is drawn, so the column after it still
+/// lines up down the right edge.
+///
+/// The widest of the words a row can draw in this language, in terminal cells: whether an aside's
+/// answer is kept or on the screen only, and whether the planner read a command's output. The
+/// words differ in length between languages, so the width is taken from them and is not a
+/// constant.
+fn standing_column() -> usize {
+    [
+        t!(watching_row_kept_answer),
+        t!(watching_row_screen_only),
+        t!(watching_row_read),
+        t!(watching_row_kept),
+    ]
+    .into_iter()
+    .map(|word| word.width())
+    .max()
+    .unwrap_or(0)
+}
+
+/// `word` padded with spaces to `cells` terminal cells. Never cut: a word wider than the column
+/// is drawn whole.
+fn in_cells(word: &str, cells: usize) -> String {
+    let padding = cells.saturating_sub(word.width());
+    format!("{word}{}", " ".repeat(padding))
+}
 
 /// One row for what a command printed: how the run ended, what ran, whether the planner read it,
 /// and how much it printed.
@@ -743,7 +767,8 @@ fn output_row(output: &Output, highlighted: bool, width: usize) -> Line<'static>
     };
     let count = t!(watching_lines, count = output.total);
 
-    let spent = 4 + NAME_COLUMN + STANDING_COLUMN + count.chars().count() + 6;
+    let column = standing_column();
+    let spent = 4 + NAME_COLUMN + column + count.chars().count() + 6;
     let room = width.saturating_sub(spent);
     let command = padded(&command, room);
 
@@ -758,7 +783,7 @@ fn output_row(output: &Output, highlighted: bool, width: usize) -> Line<'static>
         Span::styled(format!("  {mark} "), mark_style),
         Span::styled(format!("{name:<NAME_COLUMN$}"), name_style),
         Span::styled(format!("{command}  "), detail),
-        Span::styled(format!("{standing:<STANDING_COLUMN$}  "), standing_style),
+        Span::styled(format!("{}  ", in_cells(&standing, column)), standing_style),
         Span::styled(count, detail),
     ]);
     picked(line, highlighted)
