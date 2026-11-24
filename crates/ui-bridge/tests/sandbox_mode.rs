@@ -747,6 +747,59 @@ fn confinement_is_usable() -> bool {
         && bravebot_sandbox::confinement_works_here()
 }
 
+/// SANDBOX-29: a window is pointed at the `unconfined` argument after a confined line fails, since
+/// the window draws the question it leads to. The line is a git step in a project whose `.git` is a
+/// file, as a linked worktree's is, so the failure sentence names a route for the git line. The
+/// failure this rejects is a bridge that leaves the turn's task saying the front end cannot ask, so
+/// a window's planner is never told the argument it would be asked about.
+/// `host_process::a_host_client_answering_only_runs_is_not_pointed_at_the_unconfined_argument` is
+/// the same line for a host client, which is not pointed at it.
+#[test]
+fn a_failed_confined_line_in_a_window_names_the_unconfined_argument() {
+    if !confinement_is_usable() {
+        return;
+    }
+    let Some(git) = which_git() else {
+        return;
+    };
+    // The bridge runs with no `PATH`, so the line names git by where it is.
+    let command = format!("{} status", git.display());
+    let scratch = Scratch::new("bridge-unconfined-named");
+    std::fs::write(
+        scratch.project().join(".git"),
+        format!("gitdir: {}\n", scratch.path.join("absent").display()),
+    )
+    .expect("a .git file");
+    let (endpoint, rounds) = a_planner(move |_, this_turn| {
+        (this_turn == 0).then(|| ("run", json!({"command": command.clone()})))
+    });
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _) = front.session(&scratch, true);
+
+    let told = run_once(&mut front, &rounds, &session, &json!({}));
+    assert!(
+        told.contains("is a file"),
+        "the git line did not fail as a linked checkout: {told}"
+    );
+    assert!(
+        told.contains("'unconfined': true"),
+        "a window's planner was not pointed at the unconfined argument: {told}"
+    );
+}
+
+/// Where git is on this machine, which the line above needs.
+fn which_git() -> Option<PathBuf> {
+    [
+        "/usr/bin/git",
+        "/bin/git",
+        "/usr/local/bin/git",
+        "/opt/homebrew/bin/git",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .find(|path| path.exists())
+}
+
 /// The project directory is fixed when a session opens. A turn that names another directory, as a
 /// client that tried to move the session would, still runs its program in the directory the session
 /// opened on. The failure this rejects is a bridge that lets a later request move the session's

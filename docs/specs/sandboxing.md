@@ -4278,9 +4278,9 @@ none to add to.
   redirection names it after whatever remedy it is given, `/add-dir` or none, a credential
   location's included ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). They name
   it only where the request would be accepted and the front end can ask about it, which the
-  terminal interface and a session in lines can, and the desktop and a run with nobody to ask
-  cannot. So a mode that keeps the profile, or a window that refuses the line, is never pointed at
-  an argument it would turn down. A `request_path` refusal also says why the path cannot be lent.
+  terminal interface, a session in lines and the desktop window can, and a host client of the
+  desktop bridge and a run with nobody to ask cannot. So a mode that keeps the profile, or a front
+  end that refuses the line, is never pointed at an argument it would turn down. A `request_path` refusal also says why the path cannot be lent.
   The `run` description of the argument makes it a second attempt: every line starts without it, and
   the planner asks for it only after the same line failed because the sandbox refused it access, not
   after a failure of another kind, saying in `why` what was refused. It also says that the person is
@@ -4369,6 +4369,8 @@ refuse the path.
 `verified-by: bravebot_ui_bridge::refusal::the_window_is_asked_about_an_unconfined_run_and_a_remembering_yes_remembers_nothing`
 `verified-by: bravebot_ui_bridge::answering_tests::a_host_client_answering_runs_is_not_asked_about_an_unconfined_run`
 `verified-by: bravebot_ui_bridge::answerers::only_the_default_set_draws_unconfined_runs`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_failed_confined_line_in_a_window_names_the_unconfined_argument`
+`verified-by: bravebot_ui_bridge::host_process::a_host_client_answering_only_runs_is_not_pointed_at_the_unconfined_argument`
 
 <a id="SANDBOX-32"></a>
 ### SANDBOX-32: a person may remember a reviewed prefix for an unconfined line, for programs on a hand-written list only

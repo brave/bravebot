@@ -4983,6 +4983,9 @@ fn work(work: Work) {
             }
             bravebot_agent::hooks::Watch::Over => reporter.hook_finished(),
         });
+    // Whether this session's answerers can draw a line asked to run with no sandbox, which decides
+    // whether the planner is pointed at the `unconfined` argument (SANDBOX-29).
+    let asks_about_unconfined = answerers.draws_unconfined_runs();
     let mut confirmer = BridgeConfirmer::new(
         emitter.clone(),
         &session,
@@ -5037,6 +5040,7 @@ fn work(work: Work) {
         .with_deadlines(deadlines)
         .with_confined_runs(true)
         .with_sandbox_mode(sandbox)
+        .asking_about_unconfined(asks_about_unconfined)
         .with_auto_vetting(auto_vetting)
         .with_permission_mode(permission_mode.clone())
         // The rules the session opened under, and not the files as they are now (PERM-12).

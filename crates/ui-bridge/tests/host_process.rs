@@ -647,6 +647,119 @@ fn writes_on_request(
     }
 }
 
+/// SANDBOX-29: a host client named with `--answers run` refuses a line asked to run with no sandbox
+/// without asking, so its planner is not pointed at the `unconfined` argument. The line is a git step
+/// in a workspace whose `.git` is a file, the line
+/// `sandbox_mode::a_failed_confined_line_in_a_window_names_the_unconfined_argument` runs in a
+/// window, where the argument is named. The workspace is trusted at startup, so the only thing that
+/// differs from the window is who can answer. The failure this rejects is a bridge that points every
+/// session's planner at the argument, so a host client's turn asks for a line it refuses unasked.
+#[test]
+fn a_host_client_answering_only_runs_is_not_pointed_at_the_unconfined_argument() {
+    if bravebot_sandbox::base::Prelude::current().is_none()
+        || !bravebot_sandbox::confinement_works_here()
+    {
+        return;
+    }
+    let Some(git) = [
+        "/usr/bin/git",
+        "/bin/git",
+        "/usr/local/bin/git",
+        "/opt/homebrew/bin/git",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .find(|path| path.exists()) else {
+        return;
+    };
+    let scratch = Scratch::new();
+    std::fs::write(
+        scratch.project().join(".git"),
+        format!("gitdir: {}\n", scratch.path("absent").display()),
+    )
+    .expect("a .git file");
+    // The host runs with no `PATH`, so the line names git by where it is.
+    let arguments = json!({"command": format!("{} status", git.display())}).to_string();
+    let results = Arc::new(Mutex::new(String::new()));
+    let kept = Arc::clone(&results);
+    let endpoint = a_model_service(
+        move |request| {
+            let messages = request["messages"].as_array().expect("a conversation");
+            let this_turn: Vec<&Value> = messages
+                .iter()
+                .rev()
+                .take_while(|m| m["role"] != "user")
+                .filter(|m| m["role"] == "tool")
+                .collect();
+            if this_turn.is_empty() {
+                return json!({"role": "assistant", "tool_calls": [{"index": 0, "id": "run",
+                    "type": "function",
+                    "function": {"name": "run", "arguments": arguments}}]});
+            }
+            *kept.lock().unwrap() = this_turn
+                .iter()
+                .map(|m| m["content"].as_str().unwrap_or_default())
+                .collect::<Vec<_>>()
+                .join("\n");
+            ends_the_turn(request)
+        },
+        || {},
+    );
+    let mut host = Host::launch_unanswered(Start {
+        home: &scratch.home(),
+        sessions_root: &scratch.root(),
+        workspace: &scratch.project(),
+        relay: &scratch.directory.path().join("relay.sock"),
+        settings: None,
+        current_dir: None,
+        environment: &model_service(&endpoint),
+        stdout: Stdio::null(),
+        stderr: support::discarded(),
+        clients: &[("test", "run")],
+    });
+    let said = host.says_any(&[
+        support::STARTUP_QUESTION,
+        support::NOT_ASKED[0],
+        support::NOT_ASKED[1],
+    ]);
+    if !said.ends_with(support::STARTUP_QUESTION) {
+        // A workspace the host does not ask about is not trusted, and a session that is not trusted
+        // is pointed at nothing whoever answers, so there is nothing to compare.
+        return;
+    }
+    host.command("y");
+    let mut client = host.client();
+    let opened = client.call("session.new", json!({"directory": scratch.project()}));
+    let session = opened["session"].as_str().expect("a handle").to_string();
+    client.call(
+        "session.view.start",
+        json!({"session": session, "version": 1}),
+    );
+    client.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "do the work"})),
+    );
+    let next = client
+        .until(|message| message["event"] == "run.request" || message["event"] == "turn.done");
+    if next["event"] == "run.request" {
+        client.call(
+            "run.reply",
+            json!({"session": session, "request": next["data"]["request"], "decision": "approve"}),
+        );
+        client.event("turn.done");
+    }
+    let told = results.lock().unwrap().clone();
+    assert!(
+        told.contains("is a file"),
+        "the git line did not fail as a linked checkout: {told}"
+    );
+    assert!(
+        !told.contains("'unconfined': true"),
+        "a host client answering only runs was pointed at the unconfined argument: {told}"
+    );
+    client.leave();
+}
+
 /// A client attached to a session whose view it started is asked, and its approval lands.
 #[test]
 fn a_client_attached_with_its_view_started_is_asked_and_its_approval_lands() {
