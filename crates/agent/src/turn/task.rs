@@ -740,6 +740,14 @@ impl Task {
         self
     }
 
+    /// Give the planner `said` about the open loops at the start of the turn (OPEN-4), for a caller
+    /// that does not show them to the person itself. The turn still ends with its own line about
+    /// changes left unbuilt (TURN-4).
+    pub fn telling_open_loops(mut self, said: Option<String>) -> Self {
+        self.open_loops = said;
+        self
+    }
+
     /// Include a text file the user dropped, which may sit anywhere on the disk.
     pub fn with_dropped_text(mut self, path: impl Into<String>) -> Self {
         self.dropped_text.push(path.into());

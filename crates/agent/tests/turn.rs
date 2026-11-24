@@ -22838,6 +22838,23 @@ fn a_caller_that_shows_open_loops_is_not_also_told_of_unbuilt_changes() {
     assert!(unbuilt(&told), "{told:?}");
 }
 
+/// OPEN-4, TURN-4. A caller that tells the planner of the open loops without showing them to the
+/// person has the message reach the planner's first request, and the turn still ends with its own
+/// line about unbuilt changes.
+#[test]
+fn telling_open_loops_reaches_the_planner_and_keeps_the_unbuilt_line() {
+    let said = "Open from earlier in this session: the last command failed. Yours to act on if they still matter.";
+    let (sent, told) = a_turn_that_writes_under(
+        "open-loops-telling",
+        Task::new("edit").telling_open_loops(Some(said.to_string())),
+    );
+    assert!(sent[0].contains(said), "{}", sent[0]);
+    assert!(
+        told.iter().any(|line| line.contains("no command was run")),
+        "{told:?}"
+    );
+}
+
 /// OPEN-1, TURN-4, GROUND-1. A turn whose only write lands in the session's own directory leaves
 /// nothing to build: its record counts no write, the closing line about unbuilt changes is not
 /// said, and the next turn is told nothing of them. A write into the project in the same setup
