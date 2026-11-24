@@ -19538,12 +19538,41 @@ mod tests {
             .expect("the turn runs");
         });
         let mut asked = Vec::new();
-        for message in from_worker {
-            if let ToMain::Path(request) = message {
-                asked.push(request);
-                answer_tx
-                    .send(Reply::Path(bravebot_agent::confirm::Decision::Approve))
-                    .expect("answered");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match from_worker.recv_timeout(left) {
+                Ok(ToMain::Path(request)) => {
+                    asked.push(request);
+                    answer_tx
+                        .send(Reply::Path(bravebot_agent::confirm::Decision::Approve))
+                        .expect("answered");
+                }
+                // Each of these blocks the worker until it is answered, and this loop answers only
+                // a path.
+                Ok(
+                    message @ (ToMain::Write(_)
+                    | ToMain::Run(_)
+                    | ToMain::ReadOutput(_)
+                    | ToMain::Vet(_)
+                    | ToMain::Fetch(_)
+                    | ToMain::Vouch(_)
+                    | ToMain::Exposure(_)
+                    | ToMain::Server(_)
+                    | ToMain::Manifest(_)
+                    | ToMain::ToolList(_)
+                    | ToMain::McpCall(_)
+                    | ToMain::Apply(_)
+                    | ToMain::Move(_)
+                    | ToMain::Host(_)
+                    | ToMain::Hook(_)
+                    | ToMain::Ask(_)),
+                ) => panic!("the turn asked something other than a path: {message:?}"),
+                Ok(_) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("the turn did not finish within a minute")
+                }
             }
         }
         worker.join().expect("the turn finished");
