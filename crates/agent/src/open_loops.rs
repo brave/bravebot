@@ -205,6 +205,47 @@ impl Loops {
         Some(message)
     }
 
+    /// The counts of [`Loops::to_the_person`] as one sentence, for a window that shows what a resumed session left open as
+    /// a notice (OPEN-6): the planner's loops with no owner named, then the person's, said to be
+    /// theirs. `None` where nothing is open, since a resume with nothing open shows nothing.
+    pub fn left_open(&self) -> Option<String> {
+        if self.is_empty() {
+            return None;
+        }
+        let mut groups = Vec::new();
+        groups.extend(self.named(Owner::Planner));
+        if let Some(items) = self.named(Owner::Person) {
+            groups.push(t!(open_loops_left_open_person, items = items));
+        }
+        groups.extend(self.named(Owner::Wait));
+        Some(t!(open_loops_left_open, groups = groups.join("; ")))
+    }
+
+    /// Each open kind of `owner`'s with its count, as the catalog names it, or `None` where none
+    /// is open.
+    fn named(&self, owner: Owner) -> Option<String> {
+        let kinds = self.of(owner);
+        if kinds.is_empty() {
+            return None;
+        }
+        let named: Vec<String> = kinds
+            .into_iter()
+            .map(|kind| {
+                let count = self.count(kind);
+                match kind {
+                    Kind::UnbuiltChanges => t!(open_loops_unbuilt).to_string(),
+                    Kind::FailedCommand => t!(open_loops_failed).to_string(),
+                    Kind::OpenTodos => t!(open_loops_todos, count = count),
+                    Kind::KeptCheckouts => t!(open_loops_checkouts, count = count),
+                    Kind::UncommittedFiles => t!(open_loops_uncommitted, count = count),
+                    Kind::StoppedGoal => t!(open_loops_goal).to_string(),
+                    Kind::RunningJobs => t!(open_loops_jobs, count = count),
+                }
+            })
+            .collect();
+        Some(named.join(", "))
+    }
+
     /// How the planner's message names one open kind.
     fn for_the_planner(&self, kind: Kind) -> String {
         let n = self.count(kind);
@@ -405,6 +446,40 @@ mod tests {
         assert!(told.ended_with(failed.clone()));
         assert!(!told.ended_with(failed));
         assert!(told.ended_with(Loops::default()));
+    }
+
+    /// OPEN-6. The sentence a resumed session's notice shows names the same counts, the planner's
+    /// with no owner and the person's as theirs, and there is none for an empty set.
+    #[test]
+    fn the_sentence_a_resume_shows_names_the_same_counts() {
+        assert_eq!(
+            Loops::from_work(work(2, 1, false, true))
+                .left_open()
+                .as_deref(),
+            Some("Left open from earlier: changes not built, the last command failed.")
+        );
+        assert_eq!(Loops::default().left_open(), None);
+        let resumed = Loops {
+            open_todos: 2,
+            kept_checkouts: 1,
+            uncommitted_files: 3,
+            ..Loops::from_work(work(2, 1, false, true))
+        };
+        assert_eq!(
+            resumed.left_open().as_deref(),
+            Some(
+                "Left open from earlier: changes not built, the last command failed, 2 todos; \
+                 1 kept checkout, 3 files not committed, for you to act on."
+            )
+        );
+        let yours = Loops {
+            kept_checkouts: 1,
+            ..Loops::default()
+        };
+        assert_eq!(
+            yours.left_open().as_deref(),
+            Some("Left open from earlier: 1 kept checkout, for you to act on.")
+        );
     }
 
     /// OPEN-1. A write after the last command leaves the change unbuilt, and a command after it

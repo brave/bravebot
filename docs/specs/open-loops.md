@@ -20,6 +20,10 @@ governs:
   - ui/src/renderer/apply.ts
   - ui/src/renderer/transcript.ts
   - ui/src/renderer/components/Transcript.tsx
+  - ui/src/shared/protocol.ts
+  - ui/src/renderer/live.ts
+  - ui/src/renderer/App.tsx
+  - ui/scripts/drive-open-loops.mjs
 documented-by:
   - docs/website/docs/reference/commands.md
 ---
@@ -183,6 +187,10 @@ What a resume can know:
 
 A record with no work record or last-command status reads as nothing open.
 
+The desktop window shows the same counts as one sentence in a notice at the top of the chat, which stays in view while the chat opens at its end: `Left open from earlier: changes not built, the last command failed; 1 kept checkout, for you to act on.` The planner's loops come first with no owner named, then the person's. The notice goes when the next turn starts or a rewind undoes turns, since either changes what it described.
+
+Undoing a turn takes its writes and commands out of the record, so a resume afterwards reports nothing that turn left open.
+
 `verified-by: bravebot_session::sessions::the_record_keeps_the_work_record_and_the_last_commands_status`
 `verified-by: bravebot_session::sessions::a_record_from_before_open_loops_reads_as_nothing_open`
 `verified-by: bravebot_tui::state::open_loops::a_resumed_session_shows_what_it_left_open`
@@ -192,11 +200,16 @@ A record with no work record or last-command status reads as nothing open.
 `verified-by: bravebot_ui_bridge::running::a_resumed_session_carries_the_work_and_the_files_its_record_kept`
 `verified-by: bravebot_ui_bridge::open_loops::a_desktop_turn_saves_its_work_and_the_files_it_wrote`
 `verified-by: bravebot_ui_bridge::open_loops::a_reopened_session_replies_with_what_it_left_open`
+`verified-by: bravebot_ui_bridge::open_loops::a_reopened_session_that_left_nothing_open_replies_with_no_line`
+`verified-by: bravebot_ui_bridge::open_loops::a_rewound_turn_leaves_nothing_open_on_reopen`
+`verified-by: bravebot_ui_bridge::checkouts::a_reopened_session_counts_the_kept_checkout_it_did_not_apply`
+`verified-by: bravebot_ui_bridge::turn::a_delegates_write_is_not_kept_as_one_the_session_wrote`
+`verified-by: bravebot_agent::open_loops::the_sentence_a_resume_shows_names_the_same_counts`
 `verified-by: bravebot_ui_bridge::open_loops::a_record_with_failing_work_and_open_todos_reads_as_those_loops`
 `verified-by: bravebot_ui_bridge::open_loops::a_record_from_before_open_loops_reads_as_nothing_open`
 `verified-by: bravebot_ui_bridge::open_loops::a_written_file_that_differs_from_head_counts_as_uncommitted`
 `verified-by: bravebot_ui_bridge::open_loops::the_first_turn_after_a_reopen_tells_the_planner_what_was_left_open`
-`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/drive-open-loops.mjs takes a turn through the real bridge that runs a failing command and then writes a file, reopens that chat in a real window and holds that the open-loops session notice shows the bridge's line, and holds that a reopened chat with nothing open and a new chat show no such notice)`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/drive-open-loops.mjs takes turns through the real bridge, reopens each chat in a real window and holds that the open-loops session notice shows the bridge's sentence and stays in view at the end of a chat longer than the window, that with every kind a resume knows open it names each one with the icon on the first line at the minimum window size, and that a reopened chat with nothing open and a new chat show no such notice)`
 
 <a id="OPEN-7"></a>
 ### OPEN-7: open loops never block, and every new sentence is fixed text

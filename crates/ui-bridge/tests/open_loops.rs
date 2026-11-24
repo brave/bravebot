@@ -268,16 +268,94 @@ fn a_reopened_session_replies_with_what_it_left_open() {
 
     let line = opened["openLoops"].as_str().expect("an open-loops line");
     assert_eq!(
-        line,
+        Some(line.to_string()),
         bravebot_agent::open_loops::Loops {
             unbuilt_changes: true,
             failed_command: true,
             ..Default::default()
         }
-        .line()
+        .left_open()
     );
     assert!(!line.contains("out.txt"), "{line}");
     assert!(!line.contains(&*project.to_string_lossy()), "{line}");
+}
+
+/// Close `window`, waiting for what it was still doing so the record it held is free, and open
+/// record `id` of `project` in a new one. The new window and what `session.open` answered.
+fn reopen(mut window: Window, project: &Path, id: &str) -> (Window, Value) {
+    assert!(
+        window.bridge.shut_down(std::time::Duration::from_secs(10)),
+        "the first window's work did not end"
+    );
+    drop(window);
+    let mut reopened = Window::with_settings(Window::settings_of(project));
+    let opened = reopened.call("session.open", json!({"directory": project, "id": id}));
+    (reopened, opened)
+}
+
+/// OPEN-6: a session whose turn wrote nothing and ran nothing replies with no open-loops line, so
+/// the window shows no notice.
+#[test]
+fn a_reopened_session_that_left_nothing_open_replies_with_no_line() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("open-loops-desktop-nothing-open");
+    let endpoint = serve(vec![("JUST-ANSWER", vec![endpoint::answer()])]);
+    let (mut window, session) = Window::on(&project, &endpoint);
+    let done = window.turn(&session, "JUST-ANSWER");
+    assert_eq!(done.name, "turn.done", "{:?}", done.data);
+    let id = done.data["id"]
+        .as_str()
+        .expect("the record's id")
+        .to_string();
+
+    let (_reopened, opened) = reopen(window, &project, &id);
+
+    assert_eq!(opened["openLoops"], Value::Null, "{opened}");
+}
+
+/// OPEN-6, SESSION-19: rewinding a turn that ran a failed command and wrote a file takes what it
+/// did out of the record, so the session reopened afterwards reports nothing that turn left open.
+#[test]
+fn a_rewound_turn_leaves_nothing_open_on_reopen() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("open-loops-desktop-rewound");
+    let endpoint = serve(vec![
+        ("JUST-ANSWER", vec![endpoint::answer()]),
+        (
+            "FAIL-THEN-WRITE",
+            vec![
+                endpoint::tool("run", json!({"command": "ls no-such-file"})),
+                endpoint::tool(
+                    "write_file",
+                    json!({"path": "out.txt", "contents": "written by the turn\n"}),
+                ),
+                endpoint::answer(),
+            ],
+        ),
+    ]);
+    let (mut window, session) = Window::on(&project, &endpoint);
+    let first = window.turn(&session, "JUST-ANSWER");
+    assert_eq!(first.name, "turn.done", "{:?}", first.data);
+    let done = window.turn(&session, "FAIL-THEN-WRITE");
+    assert_eq!(done.name, "turn.done", "{:?}", done.data);
+    let id = done.data["id"]
+        .as_str()
+        .expect("the record's id")
+        .to_string();
+    let record = bravebot_ui_bridge::store::load(&project, &id).expect("the session's record");
+    assert!(record.work.last_command_failed, "{:?}", record.work);
+
+    window.call("session.rewind", json!({"session": session, "steps": 1}));
+
+    let record = bravebot_ui_bridge::store::load(&project, &id).expect("the session's record");
+    assert_eq!(record.work, bravebot_agent::Work::default());
+    assert!(record.written.is_empty(), "{:?}", record.written);
+    let (_reopened, opened) = reopen(window, &project, &id);
+    assert_eq!(opened["openLoops"], Value::Null, "{opened}");
 }
 
 /// OPEN-4, OPEN-6: the first turn after a reopen tells the planner what the session left open, and

@@ -381,6 +381,54 @@ fn a_reopened_session_keeps_its_checkout_and_numbers_the_next_after_it() {
     );
 }
 
+/// OPEN-1, OPEN-6: a reopened session counts a kept checkout it has not applied as left open for
+/// the person, and does not count one it applied. The worker turns make `c1` and `c2`, a third turn
+/// applies `c1`, and the reopen names one kept checkout.
+#[test]
+fn a_reopened_session_counts_the_kept_checkout_it_did_not_apply() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = repository("checkout-open-loops-on-reopen");
+    let mut rules = a_worker_writing("ASK-FOR-ONE", "WORKER-WRITES-ONE", "one.txt");
+    rules.extend(a_worker_writing(
+        "ASK-FOR-TWO",
+        "WORKER-WRITES-TWO",
+        "two.txt",
+    ));
+    rules.push((
+        "ASK-TO-APPLY",
+        vec![
+            endpoint::tool("apply_checkout", json!({"checkout": "c1"})),
+            endpoint::answer(),
+        ],
+    ));
+    let endpoint = serve(rules);
+    let (mut window, session) = Window::on(&project, &endpoint);
+    let id = session_id(&window.turn(&session, "ASK-FOR-ONE"));
+    session_id(&window.turn(&session, "ASK-FOR-TWO"));
+    session_id(&window.turn(&session, "ASK-TO-APPLY"));
+    assert_eq!(
+        std::fs::read_to_string(project.join("one.txt")).unwrap(),
+        "from the delegate: one.txt"
+    );
+
+    let settings = window.settings.clone();
+    // The first window closes and waits for what it was still doing, so the record it held is free.
+    assert!(
+        window.bridge.shut_down(std::time::Duration::from_secs(10)),
+        "the first window's work did not end"
+    );
+    drop(window);
+    let mut reopened = Window::with_settings(settings);
+    let opened = reopened.call("session.open", json!({"directory": project, "id": id}));
+
+    let line = opened["openLoops"].as_str().expect("an open-loops line");
+    assert!(line.contains("1 kept checkout"), "{line}");
+    assert!(line.contains("for you to act on"), "{line}");
+    assert!(!line.contains("2 kept checkouts"), "{line}");
+}
+
 /// CHECKOUT-16: a record naming a checkout whose directory is gone opens, and the records the
 /// session saves from then on go on naming it, so a session that can reach it finds it. The
 /// worker the next turn starts is given a number of its own, and the record names both.

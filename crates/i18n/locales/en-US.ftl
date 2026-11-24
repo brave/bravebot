@@ -3795,6 +3795,10 @@ open-loops-jobs = { $count ->
     [one] { $count } job running
    *[other] { $count } jobs running
     }
+# The same counts as one sentence, which the desktop window shows above a resumed session's
+# transcript (OPEN-6). The planner's kinds come first with no owner named, then the person's.
+open-loops-left-open = Left open from earlier: { $groups }.
+open-loops-left-open-person = { $items }, for you to act on
 # What /unfinished says, to the person only (OPEN-5).
 unfinished-nothing = nothing is open
 unfinished-unbuilt = changes not built, in the files written since the last command:
