@@ -165,7 +165,8 @@ def write_marker(markers, name, entry):
     markers.mkdir(mode=0o700, parents=True, exist_ok=True)
     descriptor = os.open(marker_path(markers, name), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     if os.name == "posix":
-        os.chmod(markers, 0o700)
+        # The mode is owner-only, narrower than the rule's suggested 0o644. mkdir(mode=) does not tighten a directory that already exists.
+        os.chmod(markers, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
         os.fchmod(descriptor, 0o600)
     with os.fdopen(descriptor, "a", encoding="utf-8") as out:
         out.write(json.dumps(entry, sort_keys=True) + "\n")

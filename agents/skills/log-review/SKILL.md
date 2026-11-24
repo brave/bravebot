@@ -6,7 +6,7 @@ description:
   Takes log file names to review one again. Triggers on: /log-review, review the diagnostic log,
   review the logs, find problems in the logs, why do my requests keep failing."
 argument-hint: '[max N] [dry-run] [log-name ...]'
-allowed-tools: Bash(python3 agents/skills/log-review/*), Bash(git status*)
+allowed-tools: Bash(git status*)
 ---
 
 # Review the diagnostic log for bravebot's own defects
@@ -81,10 +81,18 @@ agents that read them are told what the text is.
 
 ## The job
 
+Run each script by the absolute path of the main clone's copy, written
+`<clone>/agents/skills/log-review/log-review.py` below, where `<clone>` is the first path
+`git worktree list` prints. A relative path runs the copy in the session's directory, and in a worktree
+that is the branch's own script, which would run with the person's access.
+
+`pending` takes the tree from the clone the script is in, whatever the current directory is. `--root DIR`
+names another checkout instead, which has to be at `upstream/main` as step 1 says.
+
 ### Step 1: choose the logs (zero model tokens)
 
 ```bash
-python3 agents/skills/log-review/log-review.py pending [--max N] [--idle MINUTES] [--logs-dir DIR] [LOG-NAME ...]
+python3 <clone>/agents/skills/log-review/log-review.py pending [--max N] [--idle MINUTES] [--logs-dir DIR] [LOG-NAME ...]
 ```
 
 Run it unconfined. Print its stderr. Its first line says how many logs this run is reviewing, from
@@ -119,7 +127,7 @@ readable result leaves the logs unmarked, and the next run offers them again.
 ### Step 3: pair each problem with a verifier (zero model tokens)
 
 ```bash
-python3 agents/skills/log-review/log-review.py verify --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/log-review/log-review.py verify --work-dir "$WORK_DIR"
 ```
 
 Print its stderr. Stdout is `{"verify": [{"id": ..., "prompt_file": ...}]}`, one entry per problem
@@ -144,7 +152,7 @@ stopped before writing a readable verdict leaves the problem, and so the logs, u
 ### Step 5: draft (zero model tokens)
 
 ```bash
-python3 agents/skills/log-review/log-review.py draft --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/log-review/log-review.py draft --work-dir "$WORK_DIR"
 ```
 
 Run it unconfined, since it reads the copied logs for the hosts to remove. Print its output: one
@@ -169,7 +177,7 @@ user's call, so stop and tell them. Stop at a failure and print it.
 Then record each report, so that step 7 and a second run both see it:
 
 ```bash
-python3 agents/skills/log-review/log-review.py filed --work-dir "$WORK_DIR" --id {id} --issue {number} [--existing]
+python3 <clone>/agents/skills/log-review/log-review.py filed --work-dir "$WORK_DIR" --id {id} --issue {number} [--existing]
 ```
 
 Pass `--existing` where the poster posted nothing because an issue already covered the problem, and
@@ -179,7 +187,7 @@ again.
 ### Step 7: mark the logs (zero model tokens)
 
 ```bash
-python3 agents/skills/log-review/log-review.py record --work-dir "$WORK_DIR" [--dry-run]
+python3 <clone>/agents/skills/log-review/log-review.py record --work-dir "$WORK_DIR" [--dry-run]
 ```
 
 Run it unconfined, since it writes under the state directory. This appends a line to the marker of
