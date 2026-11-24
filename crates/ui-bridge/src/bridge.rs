@@ -2040,9 +2040,11 @@ impl Bridge {
 
     /// Choose the sandbox mode the session's next turn runs its programs under.
     ///
-    /// `strict` or `workspace-write`: a window has no way to show that nothing confines a program, so
-    /// `off` is refused here whatever the settings say (SANDBOX-22). The managed file is a floor, and
-    /// is read again when the turn starts. A turn already running keeps the mode it began with.
+    /// `strict` or `workspace-write`: a window says a program is unconfined only on the card for one
+    /// line asked to run with no sandbox (SANDBOX-29), and nothing it draws says that every program of
+    /// a session is, so `off` is refused here whatever the settings say (SANDBOX-22). The managed
+    /// file is a floor, and is read again when the turn starts. A turn already running keeps the
+    /// mode it began with.
     fn set_sandbox_mode(&mut self, request: &Request) -> Result<Value, Failure> {
         self.set_sandbox_mode_under(request, &bravebot_config::Managed::load())
     }

@@ -4371,6 +4371,10 @@ refuse the path.
 `verified-by: bravebot_ui_bridge::answerers::only_the_default_set_draws_unconfined_runs`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_failed_confined_line_in_a_window_names_the_unconfined_argument`
 `verified-by: bravebot_ui_bridge::host_process::a_host_client_answering_only_runs_is_not_pointed_at_the_unconfined_argument`
+`verified-by: bravebot_approval::lib::a_run_asking_to_be_unconfined_says_so_and_why_it_is_not_remembered_only_then`
+`verified-by: bravebot_cli::plain::a_run_asking_to_be_unconfined_is_asked_about_as_unconfined`
+`verified-by: bravebot_ui_bridge::wire::a_run_request_says_when_the_line_was_asked_to_run_with_no_sandbox`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/unconfined-run.test.mjs renders a run card for a line asked to run with no sandbox and holds that it draws the bridge's unconfinedNote verbatim in a warning the approval waits on, draws the not-sandboxed and not-remembered sentences, and offers no Trust command and output button, and that a card without the flag draws none of these; make check-ui runs it)`
 
 <a id="SANDBOX-32"></a>
 ### SANDBOX-32: a person may remember a reviewed prefix for an unconfined line, for programs on a hand-written list only
@@ -4411,7 +4415,7 @@ condition below holds, and in no other case it is asked about as [SANDBOX-29](#S
 - **Every condition [SANDBOX-29](#SANDBOX-29) puts on accepting `unconfined` still holds.** The mode
   is not `strict`, `read-only` or `off`, the workspace is trusted, a managed `run.network` is not
   `closed`, and the caller is not a delegate. A rule that says ask, or deny, decides first
-  ([PERM-14](permissions.md#PERM-14)). A front end that cannot ask refuses the request, so a prefix on file is never read by a run with nobody to ask or by the desktop. The mode that
+  ([PERM-14](permissions.md#PERM-14)). A front end that cannot ask refuses the request, so a prefix on file is never read by a run with nobody to ask or by a host client of the desktop bridge. The mode that
   asks nothing does not accept the request either.
 - **The answer is for one tree.** A prefix remembered for the session is forgotten by `/cd`, `/clear`
   and `/branch`. A prefix remembered past the session is written to the record of that directory, in a
