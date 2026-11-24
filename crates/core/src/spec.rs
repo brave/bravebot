@@ -776,4 +776,9 @@ pub(crate) open spec fn search_reason_is_sound(
     }
 }
 
+/// Whether a byte is one of `0-9`, `a-f` or `A-F`.
+pub open spec fn is_hex_digit(byte: u8) -> bool {
+    (b'0' <= byte <= b'9') || (b'a' <= byte <= b'f') || (b'A' <= byte <= b'F')
+}
+
 } // verus!

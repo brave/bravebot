@@ -31,6 +31,9 @@
 use std::hash::{BuildHasher, Hasher};
 use std::sync::OnceLock;
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// What a layer recognised, which is as much as is ever said about a value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -505,18 +508,81 @@ fn decoded_forms(line: &str) -> Vec<String> {
 /// The line with each `%` and two hex digits replaced by the byte they name, or nothing where no
 /// escape was there or the result is not text.
 fn percent_decoded(line: &str) -> Option<String> {
-    let bytes = line.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
+    let (out, changed) = percent_bytes(line.as_bytes());
+    changed.then(|| String::from_utf8(out).ok()).flatten()
+}
+
+/// The value of one hexadecimal digit, or nothing where the byte is not one.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        b'0' <= digit <= b'9' ==> r is Some && r->Some_0 as int == digit as int - 48,
+        b'a' <= digit <= b'f' ==> r is Some && r->Some_0 as int == digit as int - 87,
+        b'A' <= digit <= b'F' ==> r is Some && r->Some_0 as int == digit as int - 55,
+        !(b'0' <= digit <= b'9') && !(b'a' <= digit <= b'f') && !(b'A' <= digit <= b'F')
+            ==> r is None,
+))]
+#[expect(
+    clippy::manual_range_contains,
+    reason = "Verus reads a comparison and not a range, and this function's contract is proved"
+)]
+fn hex_value(digit: u8) -> Option<u8> {
+    if digit >= b'0' && digit <= b'9' {
+        Some(digit - b'0')
+    } else if digit >= b'a' && digit <= b'f' {
+        Some(digit - b'a' + 10)
+    } else if digit >= b'A' && digit <= b'F' {
+        Some(digit - b'A' + 10)
+    } else {
+        None
+    }
+}
+
+/// The byte that the `%` at `at` and the two hex digits after it name, or nothing where the escape
+/// is not whole: the byte is not `%`, fewer than two bytes follow it, or one of them is not a hex
+/// digit. Every offset it reads is inside `bytes`, `Some` means three bytes starting at `at` are
+/// inside it, and a whole escape is always read, including one that ends the text.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    requires
+        at < bytes.len(),
+    ensures
+        r is Some ==> bytes@[at as int] == b'%' && at + 3 <= bytes.len(),
+        bytes@[at as int] == b'%' && at + 3 <= bytes.len()
+            && crate::spec::is_hex_digit(bytes@[at as int + 1])
+            && crate::spec::is_hex_digit(bytes@[at as int + 2]) ==> r is Some,
+))]
+fn escape_at(bytes: &[u8], at: usize) -> Option<u8> {
+    if bytes[at] != b'%' || bytes.len() - at < 3 {
+        return None;
+    }
+    let high = hex_value(bytes[at + 1])?;
+    let low = hex_value(bytes[at + 2])?;
+    Some(high * 16 + low)
+}
+
+/// `bytes` with each `%` and two hex digits replaced by the byte they name, and whether any was.
+///
+/// The output is never longer than the input, where no escape was replaced it is the input, and
+/// where one was it is shorter, since an escape is three bytes in and one out.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r.0@.len() <= bytes@.len(),
+        !r.1 ==> r.0@ == bytes@,
+        r.1 ==> r.0@.len() < bytes@.len(),
+))]
+fn percent_bytes(bytes: &[u8]) -> (Vec<u8>, bool) {
+    let mut out = Vec::new();
     let mut changed = false;
     let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= bytes.len(),
+            out@.len() <= at,
+            !changed ==> out@ == bytes@.subrange(0, at as int),
+            changed ==> out@.len() < at,
+        decreases bytes.len() - at,
+    ))]
     while at < bytes.len() {
-        let escaped = (bytes[at] == b'%')
-            .then(|| bytes.get(at + 1..at + 3))
-            .flatten()
-            .and_then(|pair| std::str::from_utf8(pair).ok())
-            .filter(|pair| pair.bytes().all(|digit| digit.is_ascii_hexdigit()))
-            .and_then(|pair| u8::from_str_radix(pair, 16).ok());
-        match escaped {
+        match escape_at(bytes, at) {
             Some(byte) => {
                 out.push(byte);
                 changed = true;
@@ -528,7 +594,11 @@ fn percent_decoded(line: &str) -> Option<String> {
             }
         }
     }
-    changed.then(|| String::from_utf8(out).ok()).flatten()
+    #[cfg(verus_keep_ghost)]
+    proof_decl! {
+        assert(bytes@.subrange(0, bytes.len() as int) =~= bytes@);
+    }
+    (out, changed)
 }
 
 /// A run of base64 characters, in either alphabet and with or without its padding, as the text it
@@ -537,30 +607,113 @@ fn base64_decoded(run: &str) -> Option<String> {
     if run.len() % 4 == 1 {
         return None;
     }
-    let mut bits: u32 = 0;
-    let mut held: u32 = 0;
-    let mut bytes = Vec::with_capacity(run.len() / 4 * 3);
-    for c in run.bytes() {
-        let sextet = match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' | b'-' => 62,
-            b'/' | b'_' => 63,
-            _ => return None,
-        };
-        bits = (bits << 6) | u32::from(sextet);
-        held += 6;
-        if held >= 8 {
-            held -= 8;
-            bytes.push(u8::try_from((bits >> held) & 0xff).ok()?);
-            bits &= (1 << held) - 1;
-        }
-    }
+    let bytes = base64_bytes(run.as_bytes())?;
     let text = String::from_utf8(bytes).ok()?;
     text.chars()
         .all(|c| !c.is_control() || c.is_whitespace())
         .then_some(text)
+}
+
+/// The six bits a base64 character stands for, in either alphabet, or nothing where the byte is not
+/// one: `A` to `Z` are 0 to 25, `a` to `z` 26 to 51, `0` to `9` 52 to 61, `+` and `-` are 62, `/`
+/// and `_` are 63.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        b'A' <= c <= b'Z' ==> r is Some && r->Some_0 as int == c as int - 65,
+        b'a' <= c <= b'z' ==> r is Some && r->Some_0 as int == c as int - 71,
+        b'0' <= c <= b'9' ==> r is Some && r->Some_0 as int == c as int + 4,
+        c == b'+' || c == b'-' ==> r is Some && r->Some_0 == 62,
+        c == b'/' || c == b'_' ==> r is Some && r->Some_0 == 63,
+        !(b'A' <= c <= b'Z') && !(b'a' <= c <= b'z') && !(b'0' <= c <= b'9')
+            && c != b'+' && c != b'-' && c != b'/' && c != b'_' ==> r is None,
+))]
+#[expect(
+    clippy::manual_range_contains,
+    reason = "Verus reads a comparison and not a range, and this function's contract is proved"
+)]
+fn sextet_of(c: u8) -> Option<u8> {
+    if c >= b'A' && c <= b'Z' {
+        Some(c - b'A')
+    } else if c >= b'a' && c <= b'z' {
+        Some(c - b'a' + 26)
+    } else if c >= b'0' && c <= b'9' {
+        Some(c - b'0' + 52)
+    } else if c == b'+' || c == b'-' {
+        Some(62)
+    } else if c == b'/' || c == b'_' {
+        Some(63)
+    } else {
+        None
+    }
+}
+
+/// The bytes a run of base64 characters encodes, or nothing where a character is not one.
+///
+/// Fewer than eight bits are held between characters, and the bits held are always fewer than
+/// two to the power of how many are held, so a shift never loses a set bit and no shift is by
+/// thirty-two or more. There is at most one byte out for each character in.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r is Some ==> r->Some_0@.len() <= run@.len(),
+))]
+fn base64_bytes(run: &[u8]) -> Option<Vec<u8>> {
+    let mut bits: u32 = 0;
+    let mut held: u32 = 0;
+    let mut bytes = Vec::new();
+    let mut at = 0;
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        assert(0u32 < (1u32 << 0u32)) by (bit_vector);
+    }
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= run.len(),
+            held < 8,
+            bits < (1u32 << held),
+            bytes@.len() <= at,
+        decreases run.len() - at,
+    ))]
+    while at < run.len() {
+        let sextet = sextet_of(run[at])?;
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            // `bits` is below two to the `held`, so six more bits and the sextet fit in the
+            // `held + 6` bits that are then held.
+            assert(((bits << 6) | (sextet as u32)) < (1u32 << (held + 6))) by (bit_vector)
+                requires
+                    held < 8,
+                    bits < (1u32 << held),
+                    sextet < 64,
+            ;
+        }
+        bits = (bits << 6) | (sextet as u32);
+        held += 6;
+        if held >= 8 {
+            held -= 8;
+            #[cfg(verus_keep_ghost)]
+            proof! {
+                // Taking the top byte leaves the bits below `held`, and `1 << held` is at least 1,
+                // so the mask does not underflow.
+                assert((1u32 << held) >= 1) by (bit_vector)
+                    requires
+                        held < 32,
+                ;
+                assert((bits >> held) < 256u32) by (bit_vector)
+                    requires
+                        held < 6,
+                        bits < (1u32 << (held + 8)),
+                ;
+                assert((bits & (((1u32 << held) - 1) as u32)) < (1u32 << held)) by (bit_vector)
+                    requires
+                        held < 32,
+                ;
+            }
+            bytes.push(((bits >> held) & 0xff) as u8);
+            bits &= (1 << held) - 1;
+        }
+        at += 1;
+    }
+    Some(bytes)
 }
 
 /// The names that say the value beside them is a secret.
@@ -1724,6 +1877,10 @@ mod tests {
     /// without importing it or spelling the path out. The crate has no dependencies, so no
     /// library supplies one behind a name this scan does not contain.
     ///
+    /// The one import that is not a hasher or a once-cell is Verus's prelude, which the contracts
+    /// on the byte scanners need. It is behind `cfg(verus_keep_ghost)`, which only Verus sets, so
+    /// a build compiles none of it and the scan still reaches nothing outside the process.
+    ///
     /// Read off the module's own source, up to its tests, because the property is what the code
     /// can reach and an assertion over one scan's output cannot see a call that was never made.
     #[test]
@@ -1734,10 +1891,16 @@ mod tests {
             .next()
             .expect("a module has a beginning");
 
-        for line in code.lines().map(str::trim) {
+        let lines: Vec<&str> = code.lines().map(str::trim).collect();
+        for (at, line) in lines.iter().enumerate() {
             if let Some(imported) = line.strip_prefix("use ") {
+                let verus_prelude = imported == "vstd::prelude::*;"
+                    && at > 0
+                    && lines[at - 1] == "#[cfg(verus_keep_ghost)]";
                 assert!(
-                    imported.starts_with("std::hash::") || imported.starts_with("std::sync::"),
+                    imported.starts_with("std::hash::")
+                        || imported.starts_with("std::sync::")
+                        || verus_prelude,
                     "the classifier imports {imported}, which is not a hasher or a once-cell"
                 );
             }
