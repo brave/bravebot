@@ -6,6 +6,7 @@
 # `python3 contrib/check-verus-contracts.py --write` and say in the pull request why it changed.
 # docs/development/verification.md says how a contract is written and run.
 
+crates/core/src/capability.rs::output_label: r => ensures crate::spec::output_label_is_untrusted(*self, r),
 crates/core/src/colour_codes.rs::code_end: r => ensures r is Some ==> start + 2 <= r->Some_0 < bytes.len() && bytes@[r->Some_0 as int] == b'm', r is Some ==> r->Some_0 <= start + 2 + most,
 crates/core/src/colour_codes.rs::code_end/loop: invariant parameters == start + 2, room == bytes.len() - parameters, taken <= room, decreases room - taken,
 crates/core/src/command.rs::?: r => ensures r == crate::spec::null_device(*path),
@@ -69,8 +70,11 @@ crates/core/src/policy.rs::precommitted: r => ensures r == spec_precommitted(*se
 crates/core/src/policy.rs::precommitted_into: r => ensures r == spec_precommitted_into(*self, *slot, destination@),
 crates/core/src/policy.rs::deny: r => ensures spec_context(*final(self)) == spec_context(*old(self)),
 crates/core/src/policy.rs::allow: ensures spec_context(*final(self)) == spec_context(*old(self)),
+crates/core/src/policy.rs::before_fetch: r => ensures r is Ok ==> crate::spec::output_label_is_untrusted(Capability::WebFetch, Some(r->Ok_0)),
+crates/core/src/policy.rs::before_search: r => ensures r is Ok ==> crate::spec::output_label_is_untrusted(Capability::WebSearch, Some(r->Ok_0)),
 crates/core/src/policy.rs::promote_a_server_move: r => ensures r is Ok <==> spec_granted(*old(self), "mcp_move"@, "alias"@, alias@), r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
 crates/core/src/policy.rs::promote_a_tool_list: r => ensures r is Ok <==> spec_granted(*old(self), "mcp_tools"@, "alias"@, alias@), r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
+crates/core/src/policy.rs::observe: r => ensures r is Ok ==> crate::spec::output_label_is_untrusted(capability, Some(r->Ok_0)), r is Err ==> crate::spec::output_label_is_untrusted(capability, None),
 crates/core/src/policy.rs::context_integrity: r => ensures r == spec_context(*self),
 crates/core/src/policy.rs::absorb: ensures spec_context(*final(self)) == crate::spec::meet(spec_context(*old(self)), observed),
 crates/core/src/policy.rs::record_answers: r => ensures r is Ok <==> crate::value::spec_label_of(series).integrity == Integrity::Trusted, r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::value::spec_label_of( series, ), spec_context(*final(self)) == spec_context(*old(self)),
@@ -139,6 +143,11 @@ crates/core/src/ask.rs::Series: assumes external_body
 crates/core/src/ask.rs::clone: assumes external
 crates/core/src/ask.rs::Answer: assumes external_body
 crates/core/src/ask.rs::clone: assumes external
+crates/core/src/capability.rs::ServerAlias: assumes external_body
+crates/core/src/capability.rs::clone: assumes external
+crates/core/src/capability.rs::ConnectorName: assumes external_body
+crates/core/src/capability.rs::clone: assumes external
+crates/core/src/capability.rs::clone: assumes external
 crates/core/src/command.rs::discards: assumes external_body
 crates/core/src/command.rs::clone: assumes external
 crates/core/src/compare.rs::same_path_buf: assumes external_body
@@ -149,12 +158,20 @@ crates/core/src/policy.rs::authorise: assumes external_body
 crates/core/src/policy.rs::ExSink: assumes external_trait_specification
 crates/core/src/policy.rs::ExDenial: assumes external_type_specification
 crates/core/src/policy.rs::ExDenial: assumes external_body
+crates/core/src/policy.rs::no_observation: assumes external_body
+crates/core/src/policy.rs::no_label: assumes external_body
 crates/core/src/policy.rs::describe_the_answers: assumes external_body
 crates/core/src/policy.rs::Policy: assumes external_body
 crates/core/src/policy.rs::precommitted: assumes external_body
 crates/core/src/policy.rs::precommitted_into: assumes external_body
 crates/core/src/policy.rs::deny: assumes external_body
 crates/core/src/policy.rs::allow: assumes external_body
+crates/core/src/policy.rs::before_capability: assumes external_body
+crates/core/src/policy.rs::hold_to_the_host_of: assumes external_body
+crates/core/src/policy.rs::allow_fetched_body: assumes external_body
+crates/core/src/policy.rs::hold_search_to_the_host_of: assumes external_body
+crates/core/src/policy.rs::allow_search_results: assumes external_body
+crates/core/src/policy.rs::record_observed: assumes external_body
 crates/core/src/policy.rs::context_integrity: assumes external_body
 crates/core/src/policy.rs::absorb: assumes external_body
 crates/core/src/policy.rs::refuse_wrong_kind: assumes external_body

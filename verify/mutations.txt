@@ -593,3 +593,27 @@ replace: let search_allowed = ruling == crate::permissions::Ruling::Allow; => le
 mutation: SearchReason::asks lets a search after private content through
 file: crates/core/src/policy.rs
 replace: // The planner's context holds private content, or nothing answers for a search. => Self::Private => false,
+
+mutation: Capability::output_label labels what a capability observes trusted
+file: crates/core/src/capability.rs
+replace: let observed = Integrity::Untrusted; => let observed = Integrity::Trusted;
+
+mutation: Capability::output_label labels a command's output public
+file: crates/core/src/capability.rs
+replace: let printed = Confidentiality::Private; => let printed = Confidentiality::Public;
+
+mutation: Capability::output_label gives a write an observation to label
+file: crates/core/src/capability.rs
+replace: let effect: Option<Label> = None; => let effect: Option<Label> = Some(Label::new(observed, Confidentiality::Private));
+
+mutation: Policy::observe returns a trusted label for what a capability observed
+file: crates/core/src/policy.rs
+replace: self.record_observed(capability, label); => let label = Label::new(Integrity::Trusted, label.confidentiality);
+
+mutation: Policy::before_fetch returns a trusted label for a fetched body
+file: crates/core/src/policy.rs
+replace: self.allow_fetched_body(label); => let label = Label::new(Integrity::Trusted, label.confidentiality);
+
+mutation: Policy::before_search returns a trusted label for search results
+file: crates/core/src/policy.rs
+replace: self.allow_search_results(label); => let label = Label::new(Integrity::Trusted, label.confidentiality);
