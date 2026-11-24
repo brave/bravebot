@@ -282,8 +282,8 @@ export const RUN_UNCONFINED: RunRequest = {
   directory: DIRECTORY, shownDirectory: DIRECTORY, shownWrites: [], releasesPrivate: false, canBeRemembered: false, ambient: [],
   confinement: null, notSandboxed: 'this is not sandboxed: it runs with the access your own shell has',
   unconfined: true,
-  unconfinedNote: 'the planner asked for this one line to run with no sandbox: no profile holds it, and the next line is held to the session\'s mode again',
-  notRememberedNote: 'a line the planner asked to run with no sandbox is asked about every time, so neither the line nor the request is remembered',
+  unconfinedNote: 'the model asked for this one line to run with no sandbox: no profile holds it, and the next line is held to the session\'s mode again',
+  notRememberedNote: 'a line the model asked to run with no sandbox is asked about every time, so neither the line nor the request is remembered',
   vouches: [], summary: 'Build with no sandbox',
 }
 

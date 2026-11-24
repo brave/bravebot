@@ -1,16 +1,17 @@
 // The run card for a line the planner asked to run with no sandbox (SANDBOX-29), in the real
 // renderer with a mocked bridge: the bridge's warning and not-remembered sentence are drawn, no
-// standing answer is offered, and "Run once" sends a yes that remembers nothing. Screenshots in
-// light and dark land in UNCONFINED_OUTPUT (default: a temp folder).
+// standing answer is offered, and "Run once" sends a yes that remembers nothing. Screenshots of
+// that card and of a run card with the other alerts, in light and dark, land in UNCONFINED_OUTPUT
+// (default: a temp folder).
 //
 //   pnpm run build && xvfb-run -a node scripts/drive-unconfined-run.mjs
 import assert from 'node:assert/strict'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { eventsFor, installBridge, makeProfile } from './acceptance-fixture.mjs'
-import { COMPOSER_NAME } from './drive-support.mjs'
+import { APPROVE_BUTTON, COMPOSER_NAME } from './drive-support.mjs'
 
 const output = process.env.UNCONFINED_OUTPUT || join(tmpdir(), 'bravebot-unconfined-run')
 mkdirSync(output, { recursive: true })
@@ -19,8 +20,8 @@ const app = await electron.launch({
   args: ['.', ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), '--disable-renderer-backgrounding', '--disable-background-timer-throttling', `--user-data-dir=${profile}`],
   cwd: process.cwd(), timeout: 40000, env: { ...process.env, BRAVEBOT_HOME: state },
 })
-const UNCONFINED_NOTE = 'the planner asked for this one line to run with no sandbox: no profile holds it, and the next line is held to the session\'s mode again'
-const NOT_REMEMBERED_NOTE = 'a line the planner asked to run with no sandbox is asked about every time, so neither the line nor the request is remembered'
+const UNCONFINED_NOTE = 'the model asked for this one line to run with no sandbox: no profile holds it, and the next line is held to the session\'s mode again'
+const NOT_REMEMBERED_NOTE = 'a line the model asked to run with no sandbox is asked about every time, so neither the line nor the request is remembered'
 try {
   const page = await app.firstWindow()
   await page.setViewportSize({ width: 1350, height: 900 })
@@ -55,7 +56,41 @@ try {
     await card.screenshot({ path: join(output, `unconfined-run-${theme}.png`) })
     console.log('VISUAL', `unconfined-run-${theme}`)
   }
+
+  // "Run once" opens once the card has been on screen, and sends a yes that remembers nothing.
+  const runOnce = card.locator(`${APPROVE_BUTTON}:not(.always)`)
+  await page.waitForFunction((button) => !button.hasAttribute('disabled') && button.getAttribute('aria-disabled') !== 'true', await runOnce.elementHandle())
+  await runOnce.click()
+  let reply
+  for (let tries = 0; tries < 50 && !reply; tries += 1) {
+    reply = await app.evaluate(() => globalThis.ux.replies.find((r) => r.method === 'run.reply'))
+    if (!reply) await page.waitForTimeout(100)
+  }
+  assert.ok(reply, 'Run once sent no run.reply')
+  const { request, decision, remember } = reply.params
+  assert.deepEqual({ request, decision, remember }, { request: 1, decision: 'approve', remember: false })
+
+  // The other run-card alerts share `.card-alert`: a confined line that is lent a credential
+  // scope and hands the reader's own data to the program.
+  await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'))
+  await emit('run.request', {
+    request: 2, line: 'gh pr list', plan: 'gh pr list',
+    stages: [{ program: 'gh', resolved: '/usr/bin/gh', shownBinary: '/usr/bin/gh', args: ['pr', 'list'], display: 'gh pr list' }],
+    directory, shownDirectory: directory, releasesPrivate: true, ambient: [], canBeRemembered: false,
+    requestedScopes: ['github'], confinement: null, notSandboxed: 'this is not sandboxed: it runs with the access your own shell has',
+    unconfined: false, unconfinedNote: null, notRememberedNote: null, vouches: [], summary: 'List pull requests',
+  })
+  const lent = page.locator('.confirm.run').last()
+  await lent.getByText('github', { exact: true }).waitFor()
+  await lent.scrollIntoViewIfNeeded()
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme)
+    await page.waitForTimeout(450)
+    await lent.screenshot({ path: join(output, `lent-run-${theme}.png`) })
+    console.log('VISUAL', `lent-run-${theme}`)
+  }
   assert.deepEqual(errors, [])
 } finally {
   await app.close()
+  for (const path of [profile, directory, state]) rmSync(path, { recursive: true, force: true })
 }
