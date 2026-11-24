@@ -267,8 +267,9 @@ fn the_apps_are_signed_by_the_script_with_the_identity_the_job_gives() {
 ///
 /// The regression it rejects: skipping the assessment, which is the only check that Gatekeeper
 /// accepts the stapled app, assessing before the script has stapled, assessing with the image's
-/// test (`-t open`), which accepts what `-t exec` refuses, and assessing from a directory the
-/// script's `cd` left behind, which names a bundle that is not there and fails the release.
+/// test (`-t open`), which accepts what `-t exec` refuses, and running `spctl` in a directory
+/// other than the one the path is relative to, which names a bundle that is not there and fails
+/// the release.
 #[test]
 fn a_notarised_app_is_assessed_as_an_executable() {
     if !tools_available() {
@@ -299,8 +300,8 @@ fn a_notarised_app_is_assessed_as_an_executable() {
 ///
 /// The regression it rejects: assessing an image with the executable test, which refuses a disk
 /// image, giving the script only the credentials, which leaves the image unsigned for the service to
-/// refuse, and assessing from a directory the script's `cd` left behind, which names an image that
-/// is not there and fails the release.
+/// refuse, and running `spctl` in a directory other than the one the path is relative to, which
+/// names an image that is not there and fails the release.
 #[test]
 fn a_notarised_image_is_assessed_as_an_installer() {
     if !tools_available() {
