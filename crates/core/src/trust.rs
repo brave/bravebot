@@ -954,20 +954,41 @@ fn tail_beneath<'k>(prefix: &str, key: &'k str) -> &'k str {
 
 /// [`covers`] for two keys already in the form they are compared in.
 fn covers_spelled(prefix: &str, path: &str) -> bool {
+    covers_bytes(prefix.as_bytes(), path.as_bytes())
+}
+
+/// [`covers_spelled`] over the bytes of the two keys.
+///
+/// A `/` is one byte in UTF-8 and never part of a longer character, so comparing bytes is
+/// comparing the segments the two keys spell.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+fn covers_bytes(prefix: &[u8], path: &[u8]) -> bool {
     // The filesystem root covers everything, and is the one key with no segment of its own.
-    if prefix == "/" {
+    let root = prefix.len() == 1 && prefix[0] == b'/';
+    if root {
         return true;
     }
     // The empty key is not a second one of those. It is what a map made against something that is
     // not a path keys its own root under, and a full path is never under such a root.
     if prefix.is_empty() {
-        return !is_absolute_key(path);
+        return path.is_empty() || path[0] != b'/';
     }
-    if path == prefix {
+    if path.len() < prefix.len() {
+        return false;
+    }
+    let mut at = 0;
+    while at < prefix.len() {
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let differs = path[at] != prefix[at];
+        if differs {
+            return false;
+        }
+        at += 1;
+    }
+    if path.len() == prefix.len() {
         return true;
     }
-    path.strip_prefix(prefix)
-        .is_some_and(|rest| rest.starts_with('/'))
+    path[prefix.len()] == b'/'
 }
 
 #[cfg(test)]

@@ -245,4 +245,5 @@ crates/core/src/slot.rs::clone: assumes external
 crates/core/src/slot.rs::as_str: assumes external_body
 crates/core/src/spec.rs::ExPathBuf: assumes external_type_specification
 crates/core/src/spec.rs::ExPathBuf: assumes external_body
+crates/core/src/trust.rs::covers_bytes: assumes external_body
 crates/core/src/vetting.rs::Endorsed: assumes external_body
