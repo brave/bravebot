@@ -477,6 +477,111 @@ fn a_named_file_a_deny_rule_covers_is_left_out_of_the_turn() {
     assert!(body.contains("fn main()"), "an uncovered file was left out");
 }
 
+/// PERM-7: a file in the project that a relative `deny` rule covers is left out of the turn when it
+/// is named with `@`, dropped as text or attached under its absolute name, in the root's own
+/// spelling and in the other Unicode form of it, with the rules built from settings as a session
+/// builds them. Rejects asking the rules about the absolute name alone: the rule is written against
+/// `held/src/lib.rs`, a drop is read where it lands without being confined to the project, and so
+/// the file's bytes reached the planner. The file beside it that no rule covers is dropped or
+/// attached the same way and still reaches the planner, which rejects leaving out every absolute
+/// name while a rule is in force. An absolute `@` name inside the project is refused by the read
+/// itself (`Escapes`), so for `@` only the covered file is named.
+#[test]
+fn a_project_file_a_relative_deny_rule_covers_is_left_out_when_named_absolutely() {
+    let scratch = Scratch::new("absolute-denied");
+    let made = scratch.path.join("cafe\u{301}");
+    std::fs::create_dir_all(made.join("held/src")).unwrap();
+    std::fs::write(made.join("held/src/lib.rs"), "TOKEN=hunter2-the-secret").unwrap();
+    std::fs::write(made.join("main.rs"), "fn main() { todo!() }").unwrap();
+    std::fs::write(
+        made.join("shot.png"),
+        [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+    )
+    .unwrap();
+    let workspace = Workspace::new(&made).unwrap();
+    let settings =
+        bravebot_config::Settings::parse(r#"{"permissions": {"deny": ["Read(held/src/lib.rs)"]}}"#);
+
+    // The root as the workspace spells it, and as the other Unicode form spells it.
+    let root = workspace.root().to_string_lossy().to_string();
+    let other = if root.contains('\u{301}') {
+        root.replace("e\u{301}", "\u{e9}")
+    } else {
+        root.replace('\u{e9}', "e\u{301}")
+    };
+    assert_ne!(root, other, "the two spellings of the root are one");
+
+    for spelled in [root, other] {
+        for gesture in ["dropped", "attached", "at"] {
+            let denied = format!("{spelled}/held/src/lib.rs");
+            let beside = format!(
+                "{spelled}/{}",
+                if gesture == "attached" {
+                    "shot.png"
+                } else {
+                    "main.rs"
+                }
+            );
+            let (permissions, rejected) =
+                bravebot_agent::permissions::from_settings(&settings, None, workspace.root());
+            assert!(rejected.is_empty(), "the rule did not parse");
+            let task = Task::new("what do they say").with_permissions(permissions);
+            let task = match gesture {
+                "at" => task.with_file(denied.clone()),
+                "dropped" => task
+                    .with_dropped_text(denied.clone())
+                    .with_dropped_text(beside),
+                _ => task
+                    .with_attachment(denied.clone(), "image/png")
+                    .with_attachment(beside, "image/png"),
+            };
+            let (endpoint, received) = serve(&reply_with("it is a stub"));
+            let config = config_for(&endpoint);
+            let egress = bravebot_net::Egress::new();
+            let mut sink = RecordingSink::new();
+            let outcome = turns::run_with_trust(
+                &config,
+                &egress,
+                &workspace,
+                &task,
+                &mut bravebot_agent::confirm::ApproveWrites,
+                &mut sink,
+                trusting_the_workspace(),
+            );
+            assert!(
+                outcome.is_ok(),
+                "{gesture} {spelled}: the turn failed: {:?}",
+                outcome.as_ref().err()
+            );
+            let outcome = outcome.unwrap();
+            let body = received.recv().unwrap();
+            assert!(
+                !body.contains("hunter2"),
+                "{gesture} {spelled}: a covered file reached the planner: {body}"
+            );
+            // The covered file is a text file named as a picture, so a leak adds a second picture.
+            let pictures = body.matches("data:image/png;base64,").count();
+            assert_eq!(
+                pictures,
+                usize::from(gesture == "attached"),
+                "{gesture} {spelled}: the covered attachment was sent, or the uncovered one was not: {body}"
+            );
+            assert!(
+                gesture != "dropped" || body.contains("fn main()"),
+                "{gesture} {spelled}: the file no rule covers was left out: {body}"
+            );
+            assert!(
+                outcome
+                    .notices
+                    .iter()
+                    .any(|said| said.contains("held/src/lib.rs")),
+                "{gesture} {spelled}: the person was not told the file was left out: {:?}",
+                outcome.notices
+            );
+        }
+    }
+}
+
 /// PERM-7: a text file dropped on the window is asked of the rules like a named one, under the name
 /// it arrives with, so a covered drop from outside the workspace is not read and an uncovered one
 /// beside it still is.

@@ -1779,10 +1779,21 @@ command line or a language server names a file in it as `C:\proj\x`. `Path` read
 different prefixes, so a comparison by components finds nothing below the directory, and a lookup
 that is made under the relative name is made under an absolute one instead, which
 `Workspace::resolve` refuses inside the root. `bravebot_core::spelling::below` compares both as keys,
-with the drive letter in one case, and is what takes a name below the working directory for its
-relative spelling in the operands of a `run` line ([CMDLINE-8](tools/command-line.md#CMDLINE-8)) and
-in the locations a language server reports ([LSP-3](tools/lsp.md#LSP-3)). Where a slash is the only
-separator `C:\proj\x` is a file at the top of the project and is below nothing.
+with the drive letter in one case, and in the form every canonically equivalent spelling of a name
+shares ([TRUST-2](#TRUST-2)), component by component, so a name spelled `cafe\u{301}` is below a
+directory the platform resolved to `caf\u{e9}` and the reverse. What it returns is the part of the
+name after the directory as the name spelled it. It is what takes a name below the working
+directory for its relative spelling in the operands of a `run` line
+([CMDLINE-8](tools/command-line.md#CMDLINE-8)), including the key a line's reads are asked about
+the map under, and in the locations a language server reports ([LSP-3](tools/lsp.md#LSP-3)).
+Where a slash is the only separator `C:\proj\x` is a file at the top of the project and is below
+nothing.
+
+The Unicode comparison joins two different directories on a volume that keeps `cafe\u{301}` and
+`caf\u{e9}` apart: a name below one is read as below the other, so a rule written about the project
+is asked about both and the weaker answer decides. That lowers trust and adds refusals and never
+raises trust, and a directory that differs in a letter, or whose name only starts like the
+workspace's, is not joined ([PATH-007](../best-practices/paths.md#PATH-007)). Case is not folded.
 
 **Why.** Without the reduction a directory reached by a second spelling of its own name is covered
 by nothing, so a file the user vouched for is quarantined under half its names; on macOS that is
@@ -1801,10 +1812,16 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_agent::workspace::each_door_that_opens_a_directory_by_name_refuses_one_the_trust_map_cannot_key`
 `verified-by: bravebot_agent::workspace::the_public_doors_admit_an_ordinary_directory_where_a_backslash_separates`
 `verified-by: bravebot_agent::workspace::a_directory_on_a_drive_letter_is_opened_under_a_key_spelled_from_slash`
+`verified-by: bravebot_core::policy::an_operand_in_another_unicode_form_of_the_root_is_also_named_relative_to_the_project`
+`verified-by: bravebot_core::policy::a_line_reading_a_distrusted_file_spelled_in_another_unicode_form_of_the_root_is_untrusted`
 `verified-by: bravebot_agent::workspace::a_rule_keyed_on_a_drive_letter_decides_that_directory_and_nothing_else`
 `verified-by: bravebot_core::spelling::a_name_rooted_at_a_drive_letter_is_keyed_from_slash_where_a_backslash_separates`
 `verified-by: bravebot_core::spelling::a_name_with_no_slash_spelling_is_not_keyed_as_a_full_path`
 `verified-by: bravebot_core::spelling::a_name_shaped_like_a_drive_is_a_file_where_a_slash_is_the_only_separator`
+`verified-by: bravebot_core::spelling::a_name_is_below_a_root_spelled_in_another_unicode_form`
+`verified-by: bravebot_core::spelling::what_is_below_the_root_is_the_name_as_spelled_whichever_comparison_found_the_root`
+`verified-by: bravebot_core::policy::an_operand_that_holds_a_root_that_is_not_text_is_named_as_the_project`
+`verified-by: bravebot_agent::workspace::a_name_in_another_unicode_form_of_the_root_is_below_the_workspace_root`
 `verified-by: bravebot_core::policy::a_listing_of_a_distrusted_directory_on_a_drive_letter_is_untrusted`
 `verified-by: bravebot_core::policy::a_line_reading_a_distrusted_file_on_a_drive_letter_is_untrusted`
 `verified-by: bravebot_core::policy::an_operand_on_a_drive_letter_is_also_named_relative_to_the_project`

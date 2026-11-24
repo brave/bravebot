@@ -564,6 +564,12 @@ impl Workspace {
     ///
     /// `None` for an absolute name that is not under the root as written, which has no
     /// workspace-relative spelling; [`Workspace::landing`] is the name it reaches.
+    ///
+    /// The comparison is of the bytes of the name and the root, by design and unlike
+    /// [`Workspace::below_root`], so an absolute name that spells the root in another Unicode form
+    /// is `None` as well. The one caller, the write walk of `refuse_denied_path_as`, then judges
+    /// such a name as the absolute name it is, which a definition's `writes:` limit does not cover,
+    /// so the write is refused (DELEGATE-28). The answer can only add a refusal there.
     pub(crate) fn spelled_in_workspace(&self, named: &str) -> Option<String> {
         let expanded = self.expanded(named);
         let path = Path::new(&expanded);
