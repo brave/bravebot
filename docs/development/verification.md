@@ -27,6 +27,8 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | `Policy::declassify_into_workspace`, `Policy::declassify_written_into_workspace`, `Policy::declassify_checkout_into_workspace` | Each returns the value at public with the integrity it had, so a release never raises integrity |
 | `Policy::endorsed_for_reading` | `read_output`, `promote_vetted` and `promote_vetted_picture` hand a slot to the planner only where it is the kind the gate serves and a single-use endorsement for it was issued |
 | `Policy::promote_a_tool_list`, `Policy::promote_a_server_move` | Each passes exactly when a single-use endorsement for the server's alias was issued, and returns `(T,pub)` |
+| `ReleasePlan::contains`, `ReleasePlan::allows_into`, `Policy::precommitted`, `Policy::precommitted_into` | A slot is precommitted exactly where the plan the turn began with names it, and released to a place exactly where the plan names that slot with that destination byte for byte |
+| `Policy::record_note`, `Policy::promote_reference_for_read` | A note a person typed is kept at `(T,pub)`, and a reference promoted for a read comes back `(T,pub)` |
 | `Policy::adopt_edited_body` | It adopts a body a person edited exactly when the proposed body was `(T,pub)`, and records the saved body at `(T,pub)` |
 | `Policy::record_answers` | It records a reply exactly when the questions were trusted, at the questions' own label |
 | `Policy::label_user_command_output`, `Policy::label_user_configuration`, `Policy::label_kept_fact` | Each gives the first label its provenance names: `(T,priv)` for a command the person typed, `(T,pub)` for their configuration, and trusted at the confidentiality the fact was kept at |
@@ -209,12 +211,16 @@ make check-verus
   to Verus, so their contract is the one on `endorsed_for_reading`, the question each asks before it
   reads the slot.
 - That a release plan, an endorsement or the context integrity is what the session holds.
-  `Policy` is opaque to Verus, so `precommitted`, `precommitted_into`, `consume_grant` and
-  `context_integrity` are assumed to answer the uninterpreted `spec_precommitted`,
-  `spec_precommitted_into`, `spec_granted` and `spec_context`. `Policy::absorb` is assumed to meet
-  `spec_context` by handing the observation to its `Context`, whose `absorb` is proved, and
+  `Policy` is opaque to Verus, so `release_plan`, `consume_grant` and `context_integrity` are
+  assumed to answer the uninterpreted `spec_release_plan`, `spec_granted` and `spec_context`.
+  Which slots and destinations a `ReleasePlan` names is proved of the plan itself, so
+  `precommitted` and `precommitted_into` are proved from `release_plan`. `Policy::absorb` is assumed
+  to meet `spec_context` by handing the observation to its `Context`, whose `absorb` is proved, and
   `consume_grant` to spend from `spec_grants` by handing the call to its `Grants`, whose `spend` is
   proved.
-- `Policy::record_note` and `Policy::promote_reference_for_read`. The first keeps the note in
-  `Policy`, which is opaque to Verus, and the second reads the path out of `SlotStore`.
+- That the note `Policy::record_note` keeps is the one `Policy::take_note` hands on. `keep_note` is
+  assumed to set the uninterpreted `spec_note`, and `record_note` is proved to keep a `(T,pub)`
+  note there.
+- Which path `Policy::promote_reference_for_read` promotes. `SlotStore` is opaque to Verus, so
+  `path_of_reference` is assumed, and the contract says only that the path comes back `(T,pub)`.
 - Any gate without a row above.

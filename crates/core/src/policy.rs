@@ -246,22 +246,48 @@ pub trait ExSink {
 }
 }
 
-// What a contract may say about a policy's release plan, which is fixed before any content is
-// seen: whether it names a slot, and whether it names a slot with a destination. Uninterpreted, and
-// `Policy::precommitted` and `Policy::precommitted_into` are assumed to answer them.
+// The note a person typed beside an answer, until `Policy::take_note` hands it on. `Policy` is
+// opaque to Verus, so this is uninterpreted, and `Policy::keep_note` is assumed to set it.
 #[cfg(verus_keep_ghost)]
 verus! {
-pub uninterp spec fn spec_precommitted<'sink, S: Sink>(
-    policy: Policy<'sink, S>,
-    slot: SlotId,
-) -> bool;
+pub uninterp spec fn spec_note<'sink, S: Sink>(policy: Policy<'sink, S>) -> Option<Labelled<String>>;
+}
 
-pub uninterp spec fn spec_precommitted_into<'sink, S: Sink>(
+// What a contract may say about a policy's release plan, which is fixed before any content is
+// seen. `Policy` is opaque to Verus, so which plan it holds is uninterpreted, and
+// `Policy::release_plan` is assumed to return it. Whether the plan names a slot, or a slot with a
+// destination, is proved of `ReleasePlan` itself.
+#[cfg(verus_keep_ghost)]
+verus! {
+pub uninterp spec fn spec_release_plan<'sink, S: Sink>(policy: Policy<'sink, S>) -> ReleasePlan;
+
+pub open spec fn spec_precommitted<'sink, S: Sink>(policy: Policy<'sink, S>, slot: SlotId) -> bool {
+    spec_release_plan(policy).spec_names(slot)
+}
+
+pub open spec fn spec_precommitted_into<'sink, S: Sink>(
     policy: Policy<'sink, S>,
     slot: SlotId,
     destination: Seq<char>,
-) -> bool;
+) -> bool {
+    spec_release_plan(policy).spec_names_into(slot, destination)
 }
+
+impl ReleasePlan {
+    /// The plan names `slot` as a source.
+    pub closed spec fn spec_names(self, slot: SlotId) -> bool {
+        exists|at: int| 0 <= at < self.sources@.len() && #[trigger] self.sources@[at] == slot
+    }
+
+    /// The plan names `slot` with exactly `destination`.
+    pub closed spec fn spec_names_into(self, slot: SlotId, destination: Seq<char>) -> bool {
+        exists|at: int|
+            0 <= at < self.into@.len() && #[trigger] self.into@[at].0 == slot && self.into@[at].1@
+                == destination
+    }
+}
+}
+
 // Whether a policy holds a single-use endorsement for a tool's field at an exact value, which only
 // a person's answer, or a mode answering in their place, issues. The endorsements are the
 // policy's `Grants`, which Verus proves `spend` against; `Policy` is opaque to Verus, so which
@@ -664,9 +690,18 @@ impl ReleasePlan {
 
 #[cfg_attr(verus_keep_ghost, verus_verify)]
 impl ReleasePlan {
-    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == self.spec_names(*slot),
+    ))]
     pub fn contains(&self, slot: &SlotId) -> bool {
         let mut at = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant
+                at <= self.sources.len(),
+                forall|before: int| 0 <= before < at ==> #[trigger] self.sources@[before] != *slot,
+            decreases self.sources.len() - at,
+        ))]
         while at < self.sources.len() {
             // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
             let named = same_slot(&self.sources[at], slot);
@@ -678,9 +713,19 @@ impl ReleasePlan {
         false
     }
 
-    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == self.spec_names_into(*slot, destination@),
+    ))]
     fn allows_into(&self, slot: &SlotId, destination: &str) -> bool {
         let mut at = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant
+                at <= self.into.len(),
+                forall|before: int| 0 <= before < at ==> !(#[trigger] self.into@[before].0 == *slot
+                    && self.into@[before].1@ == destination@),
+            decreases self.into.len() - at,
+        ))]
         while at < self.into.len() {
             let (named, to) = &self.into[at];
             // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
@@ -1699,12 +1744,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     /// The release plan this turn began with.
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            *r == spec_release_plan(*self),
+    ))]
     fn release_plan(&self) -> &ReleasePlan {
         &self.release
     }
 
     /// Whether the release plan names `slot` as a source.
-    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
     #[cfg_attr(verus_keep_ghost, verus_spec(r =>
         ensures
             r == spec_precommitted(*self, *slot),
@@ -1714,7 +1762,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     /// Whether the release plan names `slot` with `destination`.
-    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
     #[cfg_attr(verus_keep_ghost, verus_spec(r =>
         ensures
             r == spec_precommitted_into(*self, *slot, destination@),
@@ -5280,6 +5327,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Promoted exactly as the model's own choice of file already is, and for the same reasons:
     /// the read changes nothing and cannot leave the workspace. What comes back is `(T,pub)` and
     /// may be used as a read's path and nothing else.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
+    ))]
     pub fn promote_reference_for_read(
         &mut self,
         tool: &str,
@@ -10007,6 +10058,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// taken replaces it rather than joining it.
     ///
     /// [PROMPT-12]: ../../../docs/specs/prompting.md
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        ensures
+            spec_note(*final(self)) is Some,
+            crate::value::spec_label_of(&spec_note(*final(self))->Some_0)
+                == crate::spec::trusted_public(),
+    ))]
     pub fn record_note(&mut self, tool: &str, lead: &str, note: &str) {
         // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
         let label = Label::new(Integrity::Trusted, Confidentiality::Public);
@@ -10017,6 +10074,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     /// The trail line for a note a person typed.
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        ensures
+            spec_note(*final(self)) == spec_note(*old(self)),
+    ))]
     fn allow_note(&mut self, tool: &str, label: Label, note: &str) {
         self.allow(
             "answer",
@@ -10026,6 +10087,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     /// Keep `note` for [`Policy::take_note`], in place of any note kept before.
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        ensures
+            spec_note(*final(self)) == Some(note),
+    ))]
     fn keep_note(&mut self, note: Labelled<String>) {
         self.told = Some(note);
     }
