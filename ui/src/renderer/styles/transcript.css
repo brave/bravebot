@@ -13,6 +13,16 @@
   overflow: hidden;
 }
 
+/* What a turn left open (OPEN-3): one muted line under the reply, in the register of the lines that
+   say what happened on the way to it. Wrapped rather than cut, because each kind it names counts. */
+.open-loops {
+  min-width: 0;
+  padding-inline: var(--leo-spacing-s);
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  overflow-wrap: anywhere;
+}
+
 /* ---- a file being dragged over the conversation
 
    Over the whole column, and inert: the drop itself is taken by the preload wherever it lands in

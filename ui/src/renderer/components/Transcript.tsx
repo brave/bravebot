@@ -2194,6 +2194,10 @@ function Card({
         </div>
       )
 
+    case 'open-loops':
+      // The bridge's line, drawn as sent. Nothing here reads its words.
+      return <div className="open-loops" data-test="open-loops">{entry.text}</div>
+
     case 'narration':
       return <div className={entry.refused ? 'narration refused' : 'narration'}><Icon name="file-text" /><span><FailureSentence text={entry.text} command={entry.command} /></span></div>
 
