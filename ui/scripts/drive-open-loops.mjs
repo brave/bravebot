@@ -168,7 +168,12 @@ try {
   assert.equal((await notice.innerText()).trim(), LINE)
   assert.ok(!(await notice.innerText()).includes('out.txt'), 'the sentence names no path')
   await page.getByText('Paragraph 40 of what the turn found.').waitFor()
-  await page.waitForTimeout(300)
+  await page.waitForFunction(() => {
+    const entries = document.querySelector('.entries')
+    return entries.scrollTop > 0 && entries.scrollHeight - entries.scrollTop - entries.clientHeight < 2
+  }, null, { timeout: 10000 }).catch((error) => {
+    throw new Error(`the chat did not reach its end within 10 s of opening: ${error.message}`)
+  })
   assert.ok(await page.locator('.entries').evaluate((entries) => entries.scrollHeight > entries.clientHeight * 2), 'the transcript is not longer than the window')
   assert.ok(await page.locator('.entries').evaluate((entries) => entries.scrollTop > 0), 'the chat did not open at its end')
   assert.ok(await inView(), 'the notice is out of view when a long chat opens')
