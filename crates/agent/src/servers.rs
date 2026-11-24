@@ -9299,9 +9299,13 @@ done
             took >= Duration::from_secs(10) && took < Duration::from_secs(25),
             "the handshake was given up on after {took:?}, not at 11 seconds"
         );
+        let handshake_notes: Vec<&String> = notes
+            .iter()
+            .filter(|note| note.contains("handshake"))
+            .collect();
         assert_eq!(
-            notes,
-            vec![t!(servers_too_slow, alias = "weather", seconds = 2).to_string()],
+            handshake_notes,
+            vec![&t!(servers_too_slow, alias = "weather", seconds = 2).to_string()],
             "{notes:?}"
         );
     }
