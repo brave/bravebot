@@ -366,10 +366,11 @@ fn a_desktop_turn_and_plan_run_started_through_the_bridge_ask_for_the_recorded_l
         return;
     }
     // A service that needs no credential, so that a request can be built. It answers every
-    // request with a 500 and `maxRetries` of zero sends each request once, so a turn ends as soon
-    // as its level is recorded. A port nothing listens on ends a turn only as fast as the machine
-    // refuses the connection, and a runner that holds the connection open keeps the turn running
-    // past the 30 seconds `dispatch_when_idle` waits for it.
+    // request with a 500 and `maxRetries` of zero sends each request once, so a turn usually ends
+    // as soon as its level is recorded. The level is recorded before the request is sent, so the
+    // test stops each turn and run once it has seen the level. Whatever keeps the request going
+    // past that point then ends at the stop, and not after the 30 seconds `dispatch_when_idle`
+    // waits for the session to be free.
     let service = std::net::TcpListener::bind("127.0.0.1:0").expect("a port on this machine");
     let port = service.local_addr().unwrap().port();
     std::thread::spawn(move || {
@@ -406,6 +407,7 @@ fn a_desktop_turn_and_plan_run_started_through_the_bridge_ask_for_the_recorded_l
         crate::message_ids::with_fresh(json!({"session": handle, "prompt": "say hello"})),
     );
     assert_eq!(levels_after(1), [("turn", Some("high"))]);
+    call("turn.cancel", json!({"session": handle}));
     call(
         "manifest.run",
         json!({"session": handle, "task": "tidy the notes"}),
@@ -414,6 +416,7 @@ fn a_desktop_turn_and_plan_run_started_through_the_bridge_ask_for_the_recorded_l
         levels_after(2),
         [("turn", Some("high")), ("manifest", Some("high"))]
     );
+    call("turn.cancel", json!({"session": handle}));
 
     // The project's own file outranks the pick, for the turn and the run alike.
     std::fs::create_dir_all(directory.path().join(".bravebot")).unwrap();
@@ -426,6 +429,8 @@ fn a_desktop_turn_and_plan_run_started_through_the_bridge_ask_for_the_recorded_l
         "turn.send",
         crate::message_ids::with_fresh(json!({"session": handle, "prompt": "say hello"})),
     );
+    assert_eq!(levels_after(3)[2..], [("turn", Some("max"))]);
+    call("turn.cancel", json!({"session": handle}));
     call(
         "manifest.run",
         json!({"session": handle, "task": "tidy the notes"}),
@@ -434,6 +439,7 @@ fn a_desktop_turn_and_plan_run_started_through_the_bridge_ask_for_the_recorded_l
         levels_after(4)[2..],
         [("turn", Some("max")), ("manifest", Some("max"))]
     );
+    call("turn.cancel", json!({"session": handle}));
 }
 
 /// The ChatGPT account is sent one level for a whole session (BACKEND-22), so a session opened in a
