@@ -122,8 +122,9 @@ files that stay outside the repository:
   "models": {"<profile ARN>": {"name": "bench", "limit": {"context": 200000, "output": 8192}}}}}}
 ```
 
-opencode signs with the AWS profile, so `aws sso login --profile <aws profile>` has to be current. An
-expired session ends the first turn with a `provider.auth` error that the benchmark records.
+opencode signs with the AWS profile, so a current `aws sso login` for that profile is needed (set
+`AWS_PROFILE` to its name). An expired session ends the first turn with a `provider.auth` error
+that the benchmark records.
 
 ## Fairness
 
