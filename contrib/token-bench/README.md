@@ -141,12 +141,18 @@ The benchmark controls these, and each can change a result:
 
 ## Known limits
 
-- Two identical `bravebot -p` calls in a row, with and without `--incognito` and `--safe`, each
-  wrote the whole prefix (about 29,000 tokens with `--safe`) and read nothing from the cache, while
-  rounds inside one invocation did read it. This held for Sonnet 5.5 on the `anthropic` gateway and
-  on a Bedrock profile. An OpenAI model on Bedrock read the cache in full (about 19,800 tokens, three
-  invocations in a row). The cause is not established. Claude Code and Codex read about 90% of
-  their prompt in the same conditions.
+- Within one `bravebot -p` invocation and across invocations, bravebot reads about 99% of its
+  prompt from the cache on Sonnet 5.5 (Bedrock, the Anthropic API, OpenRouter and Brave). Before
+  the session's scratch path moved out of the system prompt (#4513) a new process wrote the whole
+  prefix again, so results from builds older than that commit are not comparable.
+- Routes differ in cost on multi-turn tool conversations. Brave's gateway and OpenRouter take the
+  OpenAI-compatible request body, and `multi_turn` costs about 30% more there than on Bedrock or
+  the Anthropic API, which take native bodies. The other scenarios agree within 1%. The measurement
+  and what was tried are in #4524.
+- A route that needs an account (Brave's premium gateway) fails every scenario with HTTP 401 until
+  the account is set up. The benchmark records that as a failed turn.
+- Brave names models by its own keys. Its roster lists Sonnet 5.5 as `claude-3-sonnet`, with access
+  `premium`, and the free endpoint's `/v1/models` lists the keys without a credential.
 - Cache lifetime is about five minutes on Anthropic models, so a run that spends longer between
   turns than that measures a cold cache.
 - Codex does not report cache writes for these models, so its write cost is zero.

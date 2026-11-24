@@ -3,11 +3,13 @@
     {"name": "bravebot-bedrock", "tool": "bravebot", "model": "${BENCH_BEDROCK_MODEL}",
      "args": ["--safe", "--settings", "${BENCH_BRAVEBOT_SETTINGS}"]},
     {"name": "bravebot-anthropic", "tool": "bravebot", "model": "anthropic/claude-sonnet-5-5", "args": ["--safe"]},
-    {"name": "bravebot-openrouter", "tool": "bravebot", "model": "openrouter/anthropic/claude-sonnet-4.5", "args": ["--safe"]},
+    {"name": "bravebot-brave", "tool": "bravebot", "model": "claude-3-sonnet", "args": ["--safe"]},
+    {"name": "bravebot-openrouter", "tool": "bravebot", "model": "openrouter/anthropic/claude-sonnet-5.5", "args": ["--safe"]},
+    {"name": "bravebot-openai", "tool": "bravebot", "model": "openai/gpt-5.6-luna", "args": ["--safe"], "weights": "openai"},
     {"name": "opencode-bedrock", "tool": "opencode", "model": "amazon-bedrock/${BENCH_BEDROCK_MODEL}",
      "env": {"OPENCODE_CONFIG": "${BENCH_OPENCODE_CONFIG}"}},
     {"name": "claude-bare", "tool": "claude", "args": ["--bare"]},
     {"name": "codex", "tool": "codex", "args": ["--ignore-user-config"]},
-    {"name": "reference-openrouter", "tool": "reference", "model": "anthropic/claude-sonnet-4.5"}
+    {"name": "reference-openrouter", "tool": "reference", "model": "anthropic/claude-sonnet-5.5"}
   ]
 }
