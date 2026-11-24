@@ -115,6 +115,12 @@ pub struct State {
     /// the name it was given. `None` until a turn has reached a server.
     pub model: Option<String>,
     pub todos: BTreeMap<usize, Vec<Row>>,
+    /// What every turn of the session did, summed: the writes and commands an open loop is worked
+    /// out from (OPEN-1). Seeded from the record on resume and saved with it (OPEN-6).
+    pub work: bravebot_agent::Work,
+    /// The files the session's successful writes landed on, each once and in the order first
+    /// written. Seeded from the record on resume and saved with it (OPEN-6).
+    pub written: Vec<PathBuf>,
     /// Preserve terminal side conversations when continuing a session in the UI.
     pub asides: Vec<bravebot_session::sessions::Aside>,
     /// Imported terminal checkpoints stay available with a desktop coverage warning after execution.
@@ -294,6 +300,8 @@ impl State {
             timing: BTreeMap::new(),
             model: None,
             todos: BTreeMap::new(),
+            work: Default::default(),
+            written: Vec::new(),
             asides: Vec::new(),
             rewind: Default::default(),
             first_prompt: None,
@@ -351,6 +359,12 @@ impl State {
             timing: record.timing.clone(),
             model: record.model.clone(),
             todos: record.todo_rows(),
+            work: record.work,
+            written: record
+                .written
+                .iter()
+                .filter_map(bravebot_session::sessions::StoredPath::to_path)
+                .collect(),
             asides: bravebot_session::sessions::recall(project, record).asides,
             rewind: bravebot_session::rewind::RewindStack::of(record.rewind_points(project)),
             first_prompt: Some(record.title.clone()),

@@ -5057,6 +5057,14 @@ fn work(work: Work) {
     state.answers.servers = Some(servers);
     // Kept whatever the outcome: a failed or cancelled turn may still have written.
     state.rewind.keep_backups(workspace.take_backups());
+    // Kept whatever the outcome (GROUND-4): a failed or cancelled turn may still have written or
+    // run something, and the session's open loops are worked out from all of it (OPEN-1).
+    state.work.then(completed.work);
+    for path in reporter.written() {
+        if !state.written.contains(path) {
+            state.written.push(path.clone());
+        }
+    }
 
     // Cleanup has finished on every return, including cancellation and request errors.
     // Whatever the turn's ending: what the planner was shown on a failed turn is not shown again.
@@ -5517,6 +5525,10 @@ pub(crate) fn save(
     let handle = state
         .handle
         .get_or_insert_with(|| crate::running::begin_named(named, handed_off_from, project));
+    // What every turn did and the files it wrote, so a resume in either front end can say what was
+    // left open (OPEN-6).
+    handle.set_work(state.work);
+    handle.set_written(&state.written);
 
     let checkouts = state
         .kept
@@ -7574,6 +7586,10 @@ mod folders_tests;
 #[cfg(test)]
 #[path = "completion_tests.rs"]
 mod completion_tests;
+
+#[cfg(test)]
+#[path = "open_loops_tests.rs"]
+mod open_loops_tests;
 
 // Beside the turn worker rather than the store, because one of them runs a turn.
 #[cfg(test)]
