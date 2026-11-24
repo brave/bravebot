@@ -312,6 +312,9 @@ pub struct BridgeReporter {
     /// Where the exchange is kept at each round for a question asked beside the turn (CMD-8), or
     /// `None` where nothing asks one, so no fork is built.
     published: Option<ExchangeSlot>,
+    /// The files this turn's finished, unfailed write calls landed on, each once in the order first
+    /// written, which the record keeps (OPEN-6). See [`BridgeReporter::written`].
+    written: Vec<std::path::PathBuf>,
 }
 
 impl BridgeReporter {
@@ -329,7 +332,14 @@ impl BridgeReporter {
             roster: Arc::default(),
             reports: None,
             published: None,
+            written: Vec::new(),
         }
+    }
+
+    /// The files this turn's finished write calls landed on, leaving out the ones that failed,
+    /// each once in the order first written, as the terminal gathers them (OPEN-6).
+    pub fn written(&self) -> &[std::path::PathBuf] {
+        &self.written
     }
 
     /// Keep the exchange each round's request is built over in `slot`, replacing the one before.
@@ -676,6 +686,10 @@ impl Reporter for BridgeReporter {
     }
 
     fn tool_finished(&mut self, activity: Activity) {
+        let landed = activity.written.as_ref().filter(|_| !activity.failed);
+        if let Some(written) = landed.filter(|w| !self.written.contains(&w.landed)) {
+            self.written.push(written.landed.clone());
+        }
         self.say("tool.finished", wire::activity(&activity));
         // The turn's own writes only, as `composing` and `thinking` keep to the turn's own. What a
         // delegate wrote in a checkout is counted as a kept checkout instead.

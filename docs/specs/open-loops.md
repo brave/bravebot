@@ -189,6 +189,7 @@ A record with no work record or last-command status reads as nothing open.
 `verified-by: bravebot_ui_bridge::open_loops_tests::the_record_keeps_the_sessions_work_and_written_files`
 `verified-by: bravebot_ui_bridge::open_loops::a_desktop_turn_that_writes_a_file_saves_the_work_and_the_file`
 `verified-by: bravebot_ui_bridge::running::a_resumed_session_carries_the_work_and_the_files_its_record_kept`
+`verified-by: bravebot_ui_bridge::open_loops::a_desktop_turn_saves_its_work_and_the_files_it_wrote`
 
 <a id="OPEN-7"></a>
 ### OPEN-7: open loops never block, and every new sentence is fixed text
