@@ -1615,6 +1615,11 @@ impl Servers {
         self.running.len()
     }
 
+    /// The programs of the servers running, in name order.
+    pub fn programs(&self) -> Vec<String> {
+        self.roster.programs()
+    }
+
     /// Replace what the person's own directory declares.
     ///
     /// Called with what was just read, so a declaration edited mid-session is the one the next

@@ -259,6 +259,16 @@ fn requested_with_plugins(
     requested
 }
 
+/// The servers a session's first start reaches: what the settings request, and each server the
+/// installed, enabled plugins carry that they do not (PLUGIN-7), read from the state
+/// directory `home` names.
+pub fn requested_for_a_first_start(
+    settings: &bravebot_config::Settings,
+    home: &Home,
+) -> Vec<(PathBuf, String)> {
+    requested_with_plugins(settings, home)
+}
+
 /// Reach the servers `requested` names for the workspace at `root`, on this machine's state
 /// directory and managed settings, putting a question to `asker` where one is needed.
 ///
