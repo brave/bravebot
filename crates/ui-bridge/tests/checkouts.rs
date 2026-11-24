@@ -385,6 +385,7 @@ fn a_reopened_session_keeps_its_checkout_and_numbers_the_next_after_it() {
 /// the person, and does not count one it applied. The worker turns make `c1` and `c2`, a third turn
 /// applies `c1`, and the reopen names one kept checkout.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_reopened_session_counts_the_kept_checkout_it_did_not_apply() {
     if !test_profile::in_isolated_profile() {
         return;

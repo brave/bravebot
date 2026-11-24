@@ -60,6 +60,10 @@ fn a_name_that_is_not_utf8_is_listed_beside_its_lossy_lookalike() {
 /// OPEN-6: the files a turn wrote are its own write calls'. A write a delegate reports lands in the
 /// delegate's checkout, so it is not kept as one the session wrote, and the window still hears that
 /// the call finished.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the test reads what was sent, and a send after it stops listening is not a fault"
+)]
 #[test]
 fn a_delegates_write_is_not_kept_as_one_the_session_wrote() {
     let (sender, heard) = std::sync::mpsc::channel();

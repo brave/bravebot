@@ -35,9 +35,10 @@ pub(crate) fn of(state: &State, workspace: &Workspace) -> Loops {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    reason = "a test that unwraps fails at the line that did"
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a scratch directory that is not there needs no removing"
 )]
 mod tests {
     use super::*;

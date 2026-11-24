@@ -6132,6 +6132,10 @@ mod tests {
 
     /// OPEN-1. The open loops count a kept checkout whose delegate ended and that was not
     /// applied, and leave out one that was applied and one whose size is not known yet.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the scratch directory may not exist yet"
+    )]
     #[test]
     fn open_loops_keep_only_checkouts_that_ended_and_were_not_applied() {
         let root = crate::testutil::scratch_dir("open-loops-kept-checkouts");

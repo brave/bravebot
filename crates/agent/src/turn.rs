@@ -9982,6 +9982,7 @@ mod tests {
     /// the message in the turn's first request, and a turn that writes and runs nothing still ends
     /// by saying none of it was built. `with_open_loops`, which shows them, takes that line away.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn telling_the_open_loops_opens_the_turn_and_keeps_the_unbuilt_changes_line() {
         use ceiling::*;
         const SAID: &str = "Open from earlier in this session: changes not built.";

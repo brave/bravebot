@@ -6,8 +6,13 @@
     clippy::unwrap_used,
     reason = "a test that unwraps fails at the line that did"
 )]
+#![expect(clippy::expect_used, reason = "a test fails by panicking")]
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "a send to a window or a scripted reply nobody reads any more is not a fault, and a scratch read that comes up short fails the test where its body is read"
+)]
 
-#[allow(
+#[expect(
     dead_code,
     reason = "undo_endpoint.rs is shared by several test binaries, and open_loops does not use all of it"
 )]
@@ -73,6 +78,11 @@ impl Window {
         ))
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "each caller builds the parameters for this one call"
+    )]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
     fn call(&mut self, method: &str, params: Value) -> Value {
         let line = json!({"id": 1, "method": method, "params": params}).to_string();
         self.bridge
@@ -364,10 +374,10 @@ fn a_rewound_turn_leaves_nothing_open_on_reopen() {
 /// message once, as the history of the first turn, and is not given it a second time.
 #[test]
 fn the_first_turn_after_a_reopen_tells_the_planner_what_was_left_open() {
+    const TOLD: &str = "Open from earlier in this session";
     if !test_profile::in_isolated_profile() {
         return;
     }
-    const TOLD: &str = "Open from earlier in this session";
     let project = project("open-loops-desktop-told");
     let (endpoint, bodies) = serve_recording(vec![
         (
