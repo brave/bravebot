@@ -4,6 +4,23 @@ Tools that are useful for working on bravebot but are not part of it. Nothing he
 shipped, and nothing in `crates/` depends on any of it. One is run by CI: `measure-flakes.py`, on a
 weekly schedule, since what it measures takes many runs of an unchanged tree.
 
+## token-bench
+
+Compares the tokens bravebot, Claude Code, Codex and a plain OpenAI-compatible agent loop spend on
+the same tasks, model and cache settings, and ranks them. `bench.py run` runs the scenarios,
+`bench.py report --plot DIR` prints the ranking and draws the plots (matplotlib), and
+`bench.py --selftest` checks the usage parsers and the scoring against output captured from the
+tools. [contrib/token-bench/README.md](token-bench/README.md) says how usage is normalised, how the
+score is computed, and how to compare models and routes such as Bedrock and OpenRouter.
+
+```sh
+contrib/token-bench/bench.py --selftest
+contrib/token-bench/bench.py run --config contrib/token-bench/contestants.example.json
+```
+
+A run spends tokens on every contestant's account, so it is not part of any check. Its output goes
+to `contrib/token-bench/results/`, which git ignores.
+
 ## review-ready.py
 
 Lists the open pull requests a reviewer can pick up now, and waits for the ones GitHub has not yet

@@ -1,0 +1,11 @@
+{
+  "contestants": [
+    {"name": "bravebot", "tool": "bravebot", "args": ["--safe"]},
+    {"name": "bravebot-full", "tool": "bravebot"},
+    {"name": "bravebot-openrouter", "tool": "bravebot", "model": "openrouter/anthropic/claude-sonnet-4.5", "args": ["--safe"]},
+    {"name": "claude-bare", "tool": "claude", "args": ["--bare"]},
+    {"name": "claude", "tool": "claude"},
+    {"name": "codex", "tool": "codex", "args": ["--ignore-user-config"]},
+    {"name": "reference-openrouter", "tool": "reference", "model": "anthropic/claude-sonnet-4.5"}
+  ]
+}
