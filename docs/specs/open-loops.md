@@ -110,6 +110,10 @@ The line replaces the closing line of [TURN-4](turns.md#TURN-4) ("files changed 
 
 `verified-by: bravebot_tui::state::open_loops::a_turn_that_leaves_loops_open_ends_with_one_line_naming_them`
 `verified-by: bravebot_agent::turn::a_caller_that_shows_open_loops_is_not_also_told_of_unbuilt_changes`
+`verified-by: bravebot_agent::open_loops::the_persons_line_groups_kinds_by_owner_and_names_no_path`
+`verified-by: bravebot_agent::open_loops::the_persons_line_with_nothing_open_is_open_nothing`
+`verified-by: bravebot_ui_bridge::open_loops::a_desktop_turn_ends_with_the_open_loops_when_they_changed`
+`verified-by: bravebot_ui_bridge::open_loops::a_cancelled_turn_carries_the_open_loops_on_its_error`
 
 <a id="OPEN-4"></a>
 ### OPEN-4: the planner is told at the start of the next turn
