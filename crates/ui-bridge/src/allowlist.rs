@@ -615,9 +615,11 @@ mod tests {
                 .all(|operation| operation.method != "diagnostic_log.set"),
             "diagnostic_log.set is offered"
         );
-        let failure = check(&request("diagnostic_log.set", json!({"level": "debug"})))
-            .err()
-            .expect("refused");
-        assert_eq!(failure.code, ErrorCode::NotAllowed);
+        assert_eq!(
+            check(&request("diagnostic_log.set", json!({"level": "debug"})))
+                .err()
+                .map(|failure| failure.code),
+            Some(ErrorCode::NotAllowed)
+        );
     }
 }

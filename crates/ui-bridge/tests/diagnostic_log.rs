@@ -72,10 +72,11 @@ fn an_unavailable_service() -> u16 {
             let mut chunk = [0u8; 8192];
             let complete = |request: &[u8]| {
                 let text = String::from_utf8_lossy(request);
-                let Some(end) = text.find("\r\n\r\n") else {
+                let Some((head, _)) = text.split_once("\r\n\r\n") else {
                     return false;
                 };
-                let head = text[..end].to_ascii_lowercase();
+                let end = head.len();
+                let head = head.to_ascii_lowercase();
                 let length = head
                     .lines()
                     .find_map(|line| line.strip_prefix("content-length:"))
@@ -99,6 +100,10 @@ fn an_unavailable_service() -> u16 {
             } else {
                 "404 Not Found"
             };
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a client that hung up before its answer needs none"
+            )]
             let _ = write!(
                 stream,
                 "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -110,6 +115,16 @@ fn an_unavailable_service() -> u16 {
 
 fn front_end(scratch: &Scratch, endpoint: &str) -> Child {
     front_end_with(scratch, endpoint, &[])
+}
+
+/// Ends the front end and waits for it, so its log is closed before the test reads it.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the front end may have ended already, and the test reads what it left either way"
+)]
+fn stop(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// The front end started with `args` on its command line.
@@ -214,8 +229,7 @@ fn a_desktop_turn_that_cannot_reach_its_service_leaves_a_log() {
     assert!(scratch.logs().is_empty(), "a log before anything failed");
 
     a_turn(&mut child, &said, &scratch, "say done");
-    let _ = child.kill();
-    let _ = child.wait();
+    stop(&mut child);
 
     let logs = scratch.logs();
     assert_eq!(logs.len(), 1, "expected one log: {logs:?}");
@@ -254,8 +268,7 @@ fn a_desktop_agent_started_at_debug_writes_more_than_failures() {
     until(&said, |message| message["event"] == "agent.ready");
 
     a_turn(&mut child, &said, &scratch, "say done");
-    let _ = child.kill();
-    let _ = child.wait();
+    stop(&mut child);
 
     let logs = scratch.logs();
     assert_eq!(logs.len(), 1, "expected one log: {logs:?}");
@@ -295,8 +308,7 @@ fn the_reports_state_the_level_the_desktop_agent_was_started_with() {
         json!({"interface": "0.19.0"}),
     );
     let composed = until(&said, |message| message["id"] == 2);
-    let _ = child.kill();
-    let _ = child.wait();
+    stop(&mut child);
 
     assert_eq!(inspected["ok"]["logs"]["level"], "info", "{inspected}");
     let text = composed["ok"]["text"].as_str().unwrap();
@@ -356,8 +368,7 @@ fn raising_the_level_from_the_window_reaches_the_same_log() {
     assert_eq!(inspected["ok"]["logs"]["level"], "debug", "{inspected}");
 
     a_turn(&mut child, &said, &scratch, "say done");
-    let _ = child.kill();
-    let _ = child.wait();
+    stop(&mut child);
 
     assert_eq!(scratch.logs(), logs, "the raised level opened another log");
     let text = std::fs::read_to_string(&logs[0]).unwrap();
@@ -393,7 +404,7 @@ fn an_unknown_log_level_stops_the_desktop_agent() {
         .env("BRAVEBOT_LOCALE", "en-US")
         .stdin(Stdio::null())
         .output()
-        .expect("the built binary runs");
+        .unwrap();
     assert_eq!(output.status.code(), Some(2), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -420,7 +431,7 @@ fn the_editor_agent_refuses_a_log_level() {
         .env("USERPROFILE", scratch.path.join("home"))
         .stdin(Stdio::null())
         .output()
-        .expect("the built binary runs");
+        .unwrap();
     assert_eq!(output.status.code(), Some(2), "{output:?}");
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("--log-level is not accepted"),
@@ -473,8 +484,7 @@ fn a_window_fault_is_logged_as_fixed_words_and_nothing_the_window_sent() {
         refused.get("error").is_some(),
         "no kind was accepted: {refused}"
     );
-    let _ = child.kill();
-    let _ = child.wait();
+    stop(&mut child);
 
     let logs = scratch.logs();
     assert_eq!(logs.len(), 1, "expected one log: {logs:?}");
