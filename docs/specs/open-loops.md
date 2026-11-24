@@ -13,6 +13,10 @@ governs:
   - crates/tui/src/state/open_loops.rs
   - crates/tui/src/goals.rs
   - crates/tui/src/app/turns.rs
+  - crates/ui-bridge/src/open_loops.rs
+  - crates/ui-bridge/src/bridge.rs
+  - crates/ui-bridge/src/running.rs
+  - crates/ui-bridge/src/turn.rs
 documented-by:
   - docs/website/docs/reference/commands.md
 ---

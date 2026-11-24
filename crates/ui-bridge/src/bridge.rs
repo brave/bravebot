@@ -3183,9 +3183,23 @@ impl Bridge {
             }
         }
         if discard {
-            // The record is gone, so the next prompt names the session again.
+            // The record is gone, so the next prompt names the session again, and nothing it did
+            // is open any longer.
             state.first_prompt = None;
-        } else if state.handle.is_some() {
+            state.work = Default::default();
+            state.written.clear();
+            state.open_loops = Default::default();
+        } else {
+            // The rewound conversation may no longer hold what the planner was told, so the loops
+            // the session now leaves open are told again on the next turn (OPEN-4).
+            if let Some(kept) = &state.kept {
+                workspace = workspace.with_kept_between_turns(kept);
+            }
+            state.open_loops = Default::default();
+            let loops = crate::open_loops::of(state, &workspace);
+            state.open_loops.ended_with(loops);
+        }
+        if !discard && state.handle.is_some() {
             save(
                 &project,
                 state,
