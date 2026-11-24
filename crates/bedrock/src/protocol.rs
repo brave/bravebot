@@ -135,6 +135,7 @@ pub struct ToolConfig {
 #[serde(rename_all = "camelCase")]
 pub enum ToolEntry {
     ToolSpec(ToolSpec),
+    CachePoint(CachePoint),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -500,6 +501,11 @@ impl ConverseRequest {
     /// refuses the whole request rather than reading past the breakpoints. They are also the one
     /// part of a request nobody asked for, so they are what a refusal is worth trying without.
     pub fn without_breakpoints(mut self) -> Self {
+        if let Some(config) = &mut self.tool_config {
+            config
+                .tools
+                .retain(|entry| !matches!(entry, ToolEntry::CachePoint(_)));
+        }
         if let Some(system) = &mut self.system {
             system.retain(|block| !matches!(block, SystemBlock::CachePoint(_)));
         }
@@ -521,6 +527,11 @@ impl ConverseRequest {
             return self;
         };
         let point = CachePoint::lasting(ttl);
+        for entry in self.tool_config.iter_mut().flat_map(|c| &mut c.tools) {
+            if let ToolEntry::CachePoint(held) = entry {
+                *held = point;
+            }
+        }
         for block in self.system.iter_mut().flatten() {
             if let SystemBlock::CachePoint(held) = block {
                 *held = point;
@@ -580,15 +591,17 @@ pub fn request_from(
         })
         .collect();
 
-    // Two breakpoints, which is what this conversation is shaped like. The prompt and the tool
+    // Three breakpoints, which is what this request is shaped like. The prompt and the tool
     // schemas are the same bytes on every round of every turn, and the messages in front of the
     // last one are the same bytes they were a round ago: a turn re-sends its whole history each
     // round, so without these the service reads all of it again every time. One session grew to
     // a hundred thousand tokens over twenty-seven rounds, and paid for every one of them at full
     // price, in seconds as much as in money.
     //
-    // The prefix runs tools, then system, then messages, so the breakpoint on the system prompt
-    // covers the schemas too and the one on the last message covers everything.
+    // The prefix runs tools, then system, then messages. The schemas get a breakpoint of their own
+    // because they are the same bytes in every project, while the prompt names the working
+    // directory, the date and the project's rules: a session in another directory misses at the
+    // prompt and, without a breakpoint behind the schemas, writes them again too (BACKEND-27).
     let system = walked.system.map(|system| {
         vec![
             SystemBlock::Text(system),
@@ -604,7 +617,11 @@ pub fn request_from(
             max_tokens: bravebot_config::bedrock::OUTPUT_LIMIT,
         },
         tool_config: tools.map(|tools| ToolConfig {
-            tools: tools.iter().map(tool_from).collect(),
+            tools: tools
+                .iter()
+                .map(tool_from)
+                .chain([ToolEntry::CachePoint(CachePoint::new())])
+                .collect(),
         }),
         additional_model_request_fields: None,
     }
@@ -1566,9 +1583,43 @@ mod tests {
             "read_file"
         );
         assert_eq!(
+            plain["toolConfig"]["tools"]
+                .as_array()
+                .expect("tools")
+                .len(),
+            1,
+            "the tool list kept its cache point: {plain}"
+        );
+        assert_eq!(
             plain["additionalModelRequestFields"]["output_config"]["effort"],
             "high"
         );
+    }
+
+    /// The tool schemas are the same bytes in every project while the system prompt names the
+    /// working directory and the project's rules, so a cache point closes the tool list as well as
+    /// the prompt: a session in another directory misses at the prompt and still reads the schemas
+    /// back (BACKEND-27). One point after the last tool, and none in a request offering no tools,
+    /// which has no tool list.
+    ///
+    /// Rejects a request that leaves the tool list open, and one that puts a point after each tool.
+    #[test]
+    fn the_tool_list_ends_in_one_cache_point() {
+        let tools = vec![
+            Tool::function("read_file", "Read a file", json!({})),
+            Tool::function("write_file", "Write a file", json!({})),
+        ];
+        let body = body_of(&request_from(
+            &[Message::system("be helpful"), Message::user("hello")],
+            Some(&tools),
+        ));
+        let listed = body["toolConfig"]["tools"].as_array().expect("tools");
+        assert_eq!(listed.len(), 3, "{body}");
+        assert_eq!(listed[1]["toolSpec"]["name"], "write_file");
+        assert_eq!(listed[2], json!({"cachePoint": {"type": "default"}}));
+
+        let toolless = body_of(&request_from(&[Message::user("hello")], None));
+        assert_eq!(toolless.get("toolConfig"), None, "{toolless}");
     }
 
     /// A reply can arrive as several text blocks, and they are one answer.
@@ -1791,18 +1842,24 @@ mod tests {
         assert_eq!(reply.stop_reason.as_deref(), Some("end_turn"));
     }
 
-    /// Every breakpoint carries the lifetime asked for, the prompt's and the conversation's alike,
-    /// and each lifetime is its own word, so a request cannot pass by sending the same one for both.
+    /// Every breakpoint carries the lifetime asked for, the tools', the prompt's and the
+    /// conversation's alike, and each lifetime is its own word, so a request cannot pass by sending
+    /// the same one for all.
     #[test]
     fn a_chosen_lifetime_is_stated_on_every_breakpoint() {
+        let tools = vec![Tool::function("read_file", "Read a file", json!({}))];
         for ttl in bravebot_config::CacheTtl::ALL {
             let request = request_from(
                 &[Message::system("be helpful"), Message::user("hello")],
-                None,
+                Some(&tools),
             )
             .with_cache_ttl(Some(ttl));
             let body = serde_json::to_value(&request).expect("a body");
             let point = serde_json::json!({"type": "default", "ttl": ttl.wire()});
+            assert_eq!(
+                body["toolConfig"]["tools"][1]["cachePoint"], point,
+                "the tools"
+            );
             assert_eq!(body["system"][1]["cachePoint"], point, "the prompt");
             assert_eq!(
                 body["messages"][0]["content"][1]["cachePoint"], point,
