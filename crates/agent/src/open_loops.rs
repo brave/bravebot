@@ -6,6 +6,8 @@
 
 use crate::outcome::Work;
 use crate::tools::tally;
+use crate::workspace::{SessionCheckout, Workspace};
+use bravebot_i18n::t;
 
 /// Whose move an open loop is (OPEN-2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +112,46 @@ impl Loops {
             .into_iter()
             .filter(|kind| kind.owner() == owner && self.count(*kind) > 0)
             .collect()
+    }
+
+    /// The person's line: each open kind with its count, grouped by whose move it is, or
+    /// `open: nothing` (OPEN-3). No path, command, todo text or job name.
+    pub fn to_the_person(&self) -> String {
+        if self.is_empty() {
+            return t!(open_loops_nothing).to_string();
+        }
+        let named = |kinds: Vec<Kind>| -> String {
+            kinds
+                .into_iter()
+                .map(|kind| {
+                    let count = self.count(kind);
+                    match kind {
+                        Kind::UnbuiltChanges => t!(open_loops_unbuilt).to_string(),
+                        Kind::FailedCommand => t!(open_loops_failed).to_string(),
+                        Kind::OpenTodos => t!(open_loops_todos, count = count),
+                        Kind::KeptCheckouts => t!(open_loops_checkouts, count = count),
+                        Kind::UncommittedFiles => t!(open_loops_uncommitted, count = count),
+                        Kind::StoppedGoal => t!(open_loops_goal).to_string(),
+                        Kind::RunningJobs => t!(open_loops_jobs, count = count),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let mut groups = Vec::new();
+        let planner = self.of(Owner::Planner);
+        if !planner.is_empty() {
+            groups.push(t!(open_loops_planner, items = named(planner)));
+        }
+        let person = self.of(Owner::Person);
+        if !person.is_empty() {
+            groups.push(t!(open_loops_person, items = named(person)));
+        }
+        let waiting = self.of(Owner::Wait);
+        if !waiting.is_empty() {
+            groups.push(named(waiting));
+        }
+        t!(open_loops_line, groups = groups.join("; "))
     }
 
     /// What the planner is told at the start of a turn, where any loop is open (OPEN-4).
@@ -223,7 +265,7 @@ pub fn open_todos(rows: &[bravebot_core::todo::Row]) -> Vec<&bravebot_core::todo
 
 /// The checkouts `workspace` keeps for the session and has neither applied nor removed (OPEN-1).
 /// A removed one is no longer listed, and one whose delegate still runs has no size yet.
-pub fn kept_checkouts(workspace: &crate::Workspace) -> Vec<crate::workspace::SessionCheckout> {
+pub fn kept_checkouts(workspace: &Workspace) -> Vec<SessionCheckout> {
     workspace
         .session_checkouts()
         .into_iter()
@@ -525,6 +567,32 @@ mod tests {
             ),
             (3, 3, 1)
         );
+    }
+
+    /// OPEN-3. The person's line names each open kind with its count, grouped by whose move it
+    /// is, with no path, command, todo text or job name.
+    #[test]
+    fn the_persons_line_groups_kinds_by_owner_and_names_no_path() {
+        let loops = Loops {
+            unbuilt_changes: true,
+            failed_command: true,
+            open_todos: 2,
+            running_jobs: vec!["job:1".to_string()],
+            kept_checkouts: 1,
+            uncommitted_files: 3,
+            stopped_goal: true,
+        };
+        assert_eq!(
+            loops.to_the_person(),
+            "open: changes not built, the last command failed, 2 todos (planner); 1 kept \
+             checkout, 3 files not committed, a stopped goal (you); 1 job running"
+        );
+    }
+
+    /// OPEN-3. With nothing open, the line says nothing is open.
+    #[test]
+    fn the_persons_line_with_nothing_open_is_open_nothing() {
+        assert_eq!(Loops::default().to_the_person(), "open: nothing");
     }
 
     /// OPEN-4, OPEN-7. The planner reads its own loops as its work, the person's as theirs, and the
