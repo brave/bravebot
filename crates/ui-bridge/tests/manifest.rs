@@ -880,11 +880,14 @@ fn a_picture_dropped_onto_the_task_reaches_the_planner() {
         .collect();
     let named = parts
         .iter()
-        .position(|part| part["text"] == format!("Dropped file: {shot}"))
-        .unwrap_or_else(|| panic!("the dropped file's path did not reach the planner: {first}"));
+        .position(|part| part["text"] == format!("Dropped file: {shot}"));
     assert!(
-        parts
-            .get(named + 1)
+        named.is_some(),
+        "the dropped file's path did not reach the planner: {first}"
+    );
+    assert!(
+        named
+            .and_then(|named| parts.get(named + 1))
             .is_some_and(|part| part["image_url"]["url"]
                 .as_str()
                 .is_some_and(|url| url == "data:image/png;base64,iVA=")),
@@ -936,7 +939,7 @@ fn a_run_with_a_dropped_picture_is_titled_by_the_files_name() {
     let asked = events
         .iter()
         .find(|event| event["event"] == "manifest.request")
-        .expect("a plan question");
+        .unwrap();
     assert_eq!(
         asked["data"]["task"], "do [Step #1] from [Image #2]",
         "{asked}"
@@ -947,10 +950,7 @@ fn a_run_with_a_dropped_picture_is_titled_by_the_files_name() {
     );
     let ended = events.last().unwrap();
     assert_eq!(ended["event"], "manifest.done", "{ended}");
-    let run = ended["data"]["record"]
-        .as_str()
-        .expect("a record")
-        .to_string();
+    let run = ended["data"]["record"].as_str().unwrap().to_string();
 
     let read = front.record("manifest.read", &scratch, &run);
     assert_eq!(
