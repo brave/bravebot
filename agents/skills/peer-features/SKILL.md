@@ -9,7 +9,7 @@ description:
   competitive gaps, feature parity, compare bravebot with other coding agents, what do Claude Code
   or Codex have that we do not.'
 argument-hint: '[max N] [dry-run] [spec-id | tool ...]'
-allowed-tools: Bash(python3 agents/skills/peer-features/*), Bash(git status*), Bash(git switch -c *), Bash(git add docs/peer-features-reviewed), Bash(git commit *)
+allowed-tools: Bash(git status*), Bash(git switch -c *), Bash(git add docs/peer-features-reviewed), Bash(git commit *)
 ---
 
 # Find the competitive gaps
@@ -98,10 +98,18 @@ that do read them are told what the text is.
 
 ## The job
 
+Run each script by the absolute path of the main clone's copy, written
+`<clone>/agents/skills/peer-features/peer-features.py` below, where `<clone>` is the first path `git worktree list`
+prints. A relative path runs the copy in the session's directory, and in a worktree that is the branch's
+own script, which would run with the person's access.
+
+`pending` takes the tree and the ledger from the clone the script is in, whatever the current directory
+is. `--root DIR` names another checkout instead, which has to be at `upstream/main` as step 1 says.
+
 ### Step 1: what is left to review (zero model tokens)
 
 ```bash
-python3 agents/skills/peer-features/peer-features.py pending [--max N] [UNIT ...]
+python3 <clone>/agents/skills/peer-features/peer-features.py pending [--max N] [UNIT ...]
 ```
 
 Print its stderr: the number of units, how many are reviewed, and the commit being compared. It
@@ -129,7 +137,7 @@ leaves its unit unreviewed, and step 9 records nothing for it.
 ### Step 3: pair each unit that found gaps with a verifier (zero model tokens)
 
 ```bash
-python3 agents/skills/peer-features/peer-features.py verify --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/peer-features/peer-features.py verify --work-dir "$WORK_DIR"
 ```
 
 Print its stderr. Stdout is `{"verify": [{"unit": ..., "prompt_file": ...}]}`.
@@ -155,7 +163,7 @@ No review saw what the others found, so two units that found the same missing ca
 it their own way, and the verifiers confirmed both.
 
 ```bash
-python3 agents/skills/peer-features/peer-features.py merge --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/peer-features/peer-features.py merge --work-dir "$WORK_DIR"
 ```
 
 Print its stderr: how many gaps are confirmed, from how many units, and how many `parity` and
@@ -180,7 +188,7 @@ recorded `tracked`.
 ### Step 7: draft (zero model tokens)
 
 ```bash
-python3 agents/skills/peer-features/peer-features.py draft --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/peer-features/peer-features.py draft --work-dir "$WORK_DIR"
 ```
 
 It refuses, and drafts nothing, while confirmed gaps have no readable groups from step 6 for exactly
@@ -209,7 +217,7 @@ labelling-issues.md gives its description and colour. Stop at a failure and prin
 Then record each report, so that step 9 and a second run both see it:
 
 ```bash
-python3 agents/skills/peer-features/peer-features.py filed --work-dir "$WORK_DIR" --id {id} --issue {number} [--existing]
+python3 <clone>/agents/skills/peer-features/peer-features.py filed --work-dir "$WORK_DIR" --id {id} --issue {number} [--existing]
 ```
 
 Pass `--existing` where the poster posted nothing because an issue already covered the gap, and
@@ -219,7 +227,7 @@ poster again.
 ### Step 9: record (zero model tokens)
 
 ```bash
-python3 agents/skills/peer-features/peer-features.py record --work-dir "$WORK_DIR" [--dry-run]
+python3 <clone>/agents/skills/peer-features/peer-features.py record --work-dir "$WORK_DIR" [--dry-run]
 ```
 
 This writes every decided gap to the ledger, and marks a unit `reviewed` once all of its gaps are

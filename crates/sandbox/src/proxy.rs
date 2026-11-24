@@ -457,9 +457,10 @@ fn connect_target(head: &[u8]) -> Option<(String, u16)> {
 /// an address that is not public and that no entry covers is refused as not public rather than as
 /// not listed, so it is never put to the person. The address is read from the host as the list
 /// compares it, since a trailing dot or a space would otherwise leave the request not listed and
-/// recorded as the bare address, and a yes to that would list it. An answer holding an address a
-/// denied entry covers is refused as denied, so a name the resolver reads as an address, such as
-/// `0x5d.0xb8.216.34`, gets the verdict the address gets.
+/// recorded as the bare address, and a yes to that would list it. A host holding a byte outside
+/// ASCII is not read as an address, since [`normalise`] would trim a non-ASCII space and leave
+/// one. An answer holding an address a denied entry covers is refused as denied, so a name the
+/// resolver reads as an address, such as `0x5d.0xb8.216.34`, gets the verdict the address gets.
 fn decide(
     config: &ProxyConfig,
     host: &str,
@@ -470,9 +471,10 @@ fn decide(
     let admitted = |address: IpAddr| is_public(address) || config.list.names_address(address);
     match config.list.decide(host) {
         Verdict::Refused(Refusal::NotListed)
-            if normalise(host)
-                .parse::<IpAddr>()
-                .is_ok_and(|address| !is_public(address)) =>
+            if host.is_ascii()
+                && normalise(host)
+                    .parse::<IpAddr>()
+                    .is_ok_and(|address| !is_public(address)) =>
         {
             refused(Refusal::NotPublic)
         }
@@ -1292,6 +1294,146 @@ mod tests {
             .map(|decision| decision.host)
             .collect();
         assert_eq!(hosts, [None, None, Some("::1".to_string())]);
+    }
+
+    /// A `CONNECT` host holding a byte outside ASCII is refused with the bytes every refusal is,
+    /// is never resolved, and is recorded as no name, so it is not put to the person under
+    /// `onUnlisted: ask`. The regressions it rejects: resolving the spelling as written, where the
+    /// system resolver may read it as a name a denied entry covers, and recording or asking about
+    /// the program's bytes. The ASCII name beside them is resolved, so the count of lookups is
+    /// one that can rise.
+    #[test]
+    fn a_connect_host_outside_ascii_is_refused_unresolved_and_recorded_as_no_name() {
+        let refusal = std::str::from_utf8(REFUSAL).unwrap();
+        for (target, allowed, denied) in [
+            ("\u{ff45}xample.com:443", "*.com", "example.com"),
+            (
+                "b\u{fc}cher.example:443",
+                "*.example",
+                "xn--bcher-kva.example",
+            ),
+            ("example\u{3002}com:443", "*.com", "example.com"),
+        ] {
+            let (list, invalid) = HostList::parse([allowed], [denied]);
+            assert!(invalid.is_empty());
+            let config = ProxyConfig {
+                list,
+                ports: vec![443],
+            };
+            let lookups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = lookups.clone();
+            let (status, mut stream, decisions) =
+                serve_resolving(config, target, move |_: &str, _: u16| {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    Ok(Vec::new())
+                });
+            assert!(status.starts_with("HTTP/1.1 403"), "{target} {status}");
+            let mut rest = String::new();
+            stream.read_to_string(&mut rest).unwrap();
+            assert!(refusal.ends_with(&rest), "{target} {rest:?}");
+            assert_eq!(lookups.load(Ordering::SeqCst), 0, "{target} was resolved");
+            assert_eq!(
+                decisions,
+                [Decision {
+                    host: None,
+                    verdict: Verdict::Refused(Refusal::NotListed),
+                }],
+                "{target}"
+            );
+        }
+
+        let lookups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = lookups.clone();
+        let (status, _, decisions) = serve_resolving(
+            config_for(&["*.com"]),
+            "www.example.com:443",
+            move |_: &str, _: u16| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                Ok(vec!["127.0.0.1:443".parse().unwrap()])
+            },
+        );
+        assert!(status.starts_with("HTTP/1.1 403"), "{status}");
+        assert_eq!(lookups.load(Ordering::SeqCst), 1);
+        assert_eq!(decisions[0].host.as_deref(), Some("www.example.com"));
+    }
+
+    /// A `CONNECT` host that a non-ASCII space precedes is refused as not listed, never resolved,
+    /// and recorded as no name, whether the rest is a name or an IP address. `normalise` trims
+    /// Unicode whitespace, so a host read after it would be recorded as the bare name or address
+    /// and offered under `onUnlisted: ask`, and a private address would be refused as not public.
+    /// The regressions it rejects: recording the trimmed spelling, and reading the address guard
+    /// before the check for a byte outside ASCII.
+    #[test]
+    fn a_connect_host_behind_a_non_ascii_space_is_refused_unresolved_and_recorded_as_no_name() {
+        let refusal = std::str::from_utf8(REFUSAL).unwrap();
+        for target in [
+            "\u{3000}example.com:443",
+            "\u{a0}api.example.com.:443",
+            "\u{a0}10.0.0.1:443",
+            "\u{3000}127.0.0.1:443",
+            "\u{a0}93.184.216.34:443",
+        ] {
+            let lookups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = lookups.clone();
+            let (status, mut stream, decisions) = serve_resolving(
+                config_for(&["*.com", "10.0.0.1"]),
+                target,
+                move |_: &str, _: u16| {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    Ok(Vec::new())
+                },
+            );
+            assert!(status.starts_with("HTTP/1.1 403"), "{target} {status}");
+            let mut rest = String::new();
+            stream.read_to_string(&mut rest).unwrap();
+            assert!(refusal.ends_with(&rest), "{target} {rest:?}");
+            assert_eq!(lookups.load(Ordering::SeqCst), 0, "{target} was resolved");
+            assert_eq!(
+                decisions,
+                [Decision {
+                    host: None,
+                    verdict: Verdict::Refused(Refusal::NotListed),
+                }],
+                "{target}"
+            );
+        }
+    }
+
+    /// Through a real connection to a running proxy, a `CONNECT` for a fullwidth spelling of a
+    /// denied name under an allowed wildcard gets the same refusal bytes as any other refusal and
+    /// is taken as a name that is not a host name, with none of its bytes. The regression it
+    /// rejects is a proxy that lets the spelling reach the resolver and answers for the name it
+    /// maps to.
+    #[test]
+    fn a_fullwidth_spelling_of_a_denied_name_gets_the_refusal_and_is_recorded_as_no_name() {
+        let proxy = proxy_for(&["*.invalid"], &["example.invalid"], vec![443]);
+        let mut bodies = Vec::new();
+        for target in ["example.invalid:443", "\u{ff45}xample.invalid:443"] {
+            let mut stream = TcpStream::connect(proxy.addr()).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            write!(stream, "CONNECT {target} HTTP/1.1\r\n\r\n").unwrap();
+            let mut body = Vec::new();
+            stream.read_to_end(&mut body).unwrap();
+            bodies.push(body);
+        }
+        assert_eq!(bodies[0], REFUSAL);
+        assert_eq!(bodies[1], REFUSAL);
+        let decisions = proxy.take_decisions().decisions;
+        assert_eq!(decisions.len(), 2);
+        assert_eq!(decisions[0].host.as_deref(), Some("example.invalid"));
+        assert!(matches!(
+            decisions[0].verdict,
+            Verdict::Refused(Refusal::Denied(_))
+        ));
+        assert_eq!(
+            decisions[1],
+            Decision {
+                host: None,
+                verdict: Verdict::Refused(Refusal::NotListed),
+            }
+        );
     }
 
     #[test]
