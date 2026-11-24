@@ -168,6 +168,8 @@ crates/core/src/trust.rs::strength: r => ensures r == crate::spec::strength(deci
 crates/core/src/trust.rs::meet_of_rules: r => ensures r == crate::spec::meet_of_rules(start, bearing@),
 crates/core/src/trust.rs::meet_of_rules/loop: invariant at <= bearing.len(), answer == crate::spec::meet_of_rules(start, bearing@.take(at as int)), decreases bearing.len() - at,
 crates/core/src/trust.rs::weaker: r => ensures r == a || r == b, crate::spec::grants_no_more(r, a), crate::spec::grants_no_more(r, b),
+crates/core/src/trust.rs::covers_bytes: r => ensures r == crate::spec::covers_key(prefix@, path@),
+crates/core/src/trust.rs::covers_bytes/loop: invariant at <= prefix.len(), prefix.len() <= path.len(), prefix.len() > 0, prefix@ != seq![b'/'], forall|before: int| 0 <= before < at ==> path@[before] == prefix@[before], decreases prefix.len() - at,
 crates/core/src/value.rs::new: r => ensures spec_value_of(&r) == value, spec_label_of(&r) == label,
 crates/core/src/value.rs::trusted: r => ensures spec_value_of(&r) == value, spec_label_of(&r) == crate::spec::trusted_public(),
 crates/core/src/value.rs::label: r => ensures r == spec_label_of(&self),
@@ -245,5 +247,4 @@ crates/core/src/slot.rs::clone: assumes external
 crates/core/src/slot.rs::as_str: assumes external_body
 crates/core/src/spec.rs::ExPathBuf: assumes external_type_specification
 crates/core/src/spec.rs::ExPathBuf: assumes external_body
-crates/core/src/trust.rs::covers_bytes: assumes external_body
 crates/core/src/vetting.rs::Endorsed: assumes external_body
