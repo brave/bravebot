@@ -378,7 +378,8 @@ pub struct Task {
     /// Whether the front end can put a line that starts with no sandbox to a person (SANDBOX-29).
     ///
     /// Off unless the caller turns it on. The terminal interface and a session in lines draw the
-    /// question; a window refuses the request without asking, and a run with nobody to ask refuses
+    /// question, and so does the desktop window; a host client of the bridge refuses the request
+    /// without asking, and a run with nobody to ask refuses
     /// every question. A refusal names the `unconfined` argument only where this is on, so a planner
     /// is not pointed at a request its front end would turn down. A delegate is never pointed at it.
     pub asks_about_unconfined: bool,

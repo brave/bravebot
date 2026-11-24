@@ -2892,7 +2892,7 @@ says and sign in.
 The desktop and the bridge have no flag, and read the mode from the settings and the pin at the start
 of every turn, so a settings edit made while a session is open applies from its next turn, unless a
 window has chosen a mode for the session with `session.sandbox`, which replaces the settings mode
-from the next turn. `off` is read there as `workspace-write`, because a window has no line that shows its programs are unconfined. A
+from the next turn. `off` is read there as `workspace-write`, because a window says a program is unconfined only on the card for one line asked to run with no sandbox ([SANDBOX-29](#SANDBOX-29)), and nothing it draws says that every program of a session is. A
 subagent's programs run under the mode of the session that started it, and the mode is not in the
 session record, so a resumed session takes the mode its start-up chose and not the one it was
 saved under. `/sandbox` alone says the mode in force and the flag or file that chose it, in the words `doctor`
@@ -4316,8 +4316,10 @@ none to add to.
   run can fail at it.
 - **Recorded.** The `sandbox` gate's detail names `unconfined` for that run, where it names the
   session's mode for every other ([TRACE-1](trace.md#TRACE-1)).
-- The desktop draws no card for it and refuses, since a window reads `off` as `workspace-write` and has
-  no line showing that a program is unconfined ([SANDBOX-22](#SANDBOX-22)).
+- The desktop window draws a card for it that says the line runs with no sandbox and that no answer
+  to it is remembered, and offers only no and yes to this line once. A yes the window sends with a
+  standing answer is taken as a yes to the line once. A host client named to answer runs may draw no
+  such sentence, so the bridge refuses the request unasked where its answerers are host clients.
 
 **Why.** Without it the only way to run `docker login` or `aws sso login` from a session is to start
 it with `--sandbox off`, which removes the profile from every program for the whole session. The
@@ -4364,7 +4366,9 @@ refuse the path.
 `verified-by: bravebot_agent::turn::an_unconfined_line_is_refused_where_the_session_does_not_accept_it`
 `verified-by: bravebot_agent::turn::an_unconfined_value_that_is_not_a_boolean_is_an_error`
 `verified-by: bravebot_tui::confirm::run::a_run_asking_to_be_unconfined_says_so_and_binds_no_lasting_key`
-`verified-by: bravebot_ui_bridge::refusal::the_window_refuses_an_unconfined_run_without_asking`
+`verified-by: bravebot_ui_bridge::refusal::the_window_is_asked_about_an_unconfined_run_and_a_remembering_yes_remembers_nothing`
+`verified-by: bravebot_ui_bridge::answering_tests::a_host_client_answering_runs_is_not_asked_about_an_unconfined_run`
+`verified-by: bravebot_ui_bridge::answerers::only_the_default_set_draws_unconfined_runs`
 
 <a id="SANDBOX-32"></a>
 ### SANDBOX-32: a person may remember a reviewed prefix for an unconfined line, for programs on a hand-written list only

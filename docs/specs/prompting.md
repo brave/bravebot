@@ -331,6 +331,8 @@ run one keypress settles.
 `verified-by: bravebot_approval::lib::a_run_explains_what_allow_and_remember_grants_only_where_it_is_offered`
 `verified-by: bravebot_approval::lib::a_call_explains_what_allow_and_remember_grants_only_where_it_is_offered`
 `verified-by: bravebot_ui_bridge::acp::a_remembered_run_and_a_standing_call_show_the_sentence_only_then`
+`verified-by: bravebot_ui_bridge::refusal::the_window_is_asked_about_an_unconfined_run_and_a_remembering_yes_remembers_nothing`
+`verified-by: bravebot_ui_bridge::answering_tests::a_host_client_answering_runs_is_not_asked_about_an_unconfined_run`
 `verified-by: bravebot_tui::confirm::vet::the_output_prompt_says_what_approving_does`
 `verified-by: bravebot_tui::confirm::vet::the_vet_prompt_says_what_approving_does_and_does_not_do`
 `verified-by: bravebot_tui::trust_prompt::the_prompt_explains_the_consequence`
