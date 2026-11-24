@@ -374,6 +374,13 @@ gh label create session-analysis --repo brave/bravebot --color 8cad49 \
   --description "Found by reading a recorded bravebot session"
 ```
 
+The [log-review skill](../../agents/skills/log-review/SKILL.md), which files the defects in bravebot
+that recur across its diagnostic log files or show in the retry or start behaviour itself, applies
+`bug` or `enhancement`, an `area` where one is clear, and no axis. It applies no `session-analysis`
+label, because the finding comes from a log and not from a session, and it uses no new label. It
+never files a problem that touches the guarantee, and an issue it files names no host and quotes no
+line of a log.
+
 Issues labelled `BraveBot-Researcher` are filed from the BraveBot researcher, a tool kept outside
 this repository that reads papers, release notes and other tools' documentation for capabilities
 bravebot lacks. Before it files, it checks each finding against main the way the

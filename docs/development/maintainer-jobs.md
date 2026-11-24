@@ -48,6 +48,7 @@ The schedules are how often to run each job. Only the peer-advisories schedule i
 | [`/peer-advisories`](../../agents/skills/peer-advisories/SKILL.md) | Do security advisories published against other coding agents describe a defect bravebot shares? | Weekly | `docs/peer-advisories-vetted` |
 | [`/triage-issues`](../../agents/skills/triage-issues/SKILL.md) | Which open issues are already fixed, stale or still standing, and what are their importance, urgency and size? | Every two weeks, and before a release | none (it edits labels and closes issues) |
 | [`/session-review`](../../agents/skills/session-review/SKILL.md) | Where did bravebot fail or frustrate the person using it, or waste context, cost or time, in recorded sessions? | Weekly, on a machine that has sessions | none (a marker is written beside each session, locally) |
+| [`/log-review`](../../agents/skills/log-review/SKILL.md) | Does bravebot's diagnostic log show a defect in bravebot, such as a retry or a server start that fails the same way across runs? | Weekly, on a machine that has logs | none (a marker is written under the state directory, locally) |
 | [`/security-audit`](../../agents/skills/security-audit/SKILL.md) | Does the rule hold that untrusted content never enters the driver or the planner? | Monthly, and `/security-audit changed` before asking for review on a diff that touches a label, and `security-audit.py --before-pr BASE` before opening a pull request, which stops on a finding at error | none (it skips what the tracker holds) |
 | [`/check-spec`](../../agents/skills/check-spec/SKILL.md) | Does the code do what each spec clause says? | Monthly, and `/check-spec changed` before committing a change to code a spec governs | `docs/check-spec-reviewed` |
 | [`/maintenance`](../../agents/skills/maintenance/SKILL.md) | What code could be deleted, shared or split without changing what it does? | Monthly, and after a large run of feature pull requests | `docs/maintenance-reviewed` |
@@ -71,6 +72,14 @@ never touches an issue a bot opened, and it never sets `urgency/p1`, which is a 
 **session-review.** Sessions are recorded per machine under `~/.bravebot/sessions`, so run it where
 you use bravebot. It skips sessions written in the last 30 minutes. A `/note` typed during a session
 is read as a lead.
+
+**log-review.** Logs are per machine under `~/.bravebot/logs`, so run it where you use bravebot, and
+after `/session-review` on the same machine. Only the 10 newest log files exist, so run it before
+they are pruned. At the default error level a run with no failure leaves no file, so a result with
+nothing to file is normal. It skips files written in the last 30 minutes. A finding has to recur
+across files, because one failure in one file is more likely an outage than a defect. The script
+needs the user's approval to run without the sandbox, because the sandbox refuses the logs
+directory. An issue it files names no host and quotes no line of a log.
 
 **security-audit.** A full run costs many subagent tokens. The deterministic half is
 `make check-security`, which CI runs on every change. The full run is the one to schedule.

@@ -747,12 +747,12 @@ check-affected-containers:
 
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
-	check-maintenance-selftest check-profile-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
+	check-maintenance-selftest check-profile-selftest check-session-review-selftest check-log-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
 	check-review-ready-selftest check-clean-branches-selftest check-verus-contracts-selftest \
 	check-verus-contracts-ledger
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
-	check-maintenance-selftest check-profile-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
+	check-maintenance-selftest check-profile-selftest check-session-review-selftest check-log-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
 	check-review-ready-selftest check-clean-branches-selftest check-verus-contracts-selftest \
 	check-verus-contracts-ledger
 
@@ -791,6 +791,9 @@ check-profile-selftest:
 
 check-session-review-selftest:
 	python3 agents/skills/session-review/selftest.py
+
+check-log-review-selftest:
+	python3 agents/skills/log-review/selftest.py
 
 check-lint-increase-selftest:
 	python3 contrib/check-lint-increase.py --selftest
