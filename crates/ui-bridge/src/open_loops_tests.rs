@@ -3,6 +3,62 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+/// A task list row with `status`.
+fn row(status: bravebot_core::todo::Status) -> bravebot_core::todo::Row {
+    bravebot_core::todo::Row {
+        content: "a task".into(),
+        as_the_planner_had_it: "a task".into(),
+        marker: "■",
+        status,
+    }
+}
+
+/// OPEN-1. A session that wrote and then ran a command that failed, with one task still open on
+/// its newest list, has those loops open and no others.
+#[test]
+fn a_failed_command_after_a_write_and_an_open_todo_are_open_loops() {
+    use bravebot_core::todo::Status;
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = Workspace::new(directory.path()).unwrap();
+    let mut state = State::fresh(TrustStore::new(workspace.root()));
+    state.work.count(true, false, false);
+    state.work.count(false, true, true);
+    // An older list with open rows is not counted: only the newest is the list now.
+    state
+        .todos
+        .insert(1, vec![row(Status::Pending), row(Status::Active)]);
+    state.todos.insert(
+        2,
+        vec![
+            row(Status::Done),
+            row(Status::Pending),
+            row(Status::Cancelled),
+        ],
+    );
+
+    let loops = crate::open_loops::of(&state, &workspace);
+    assert_eq!(
+        loops,
+        bravebot_agent::open_loops::Loops {
+            failed_command: true,
+            open_todos: 1,
+            ..Default::default()
+        }
+    );
+}
+
+/// OPEN-1. A session that has done nothing has nothing open.
+#[test]
+fn a_fresh_session_has_no_open_loops() {
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = Workspace::new(directory.path()).unwrap();
+    let state = State::fresh(TrustStore::new(workspace.root()));
+    assert_eq!(
+        crate::open_loops::of(&state, &workspace),
+        bravebot_agent::open_loops::Loops::default()
+    );
+}
+
 /// OPEN-6. Each desktop turn adds its work and the files it wrote to the session's, and the record
 /// the turn saves carries both, so a resume in either front end starts with what the session did.
 #[test]
