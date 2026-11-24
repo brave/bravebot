@@ -4656,6 +4656,9 @@ fn take_back_checkouts(open: &Open, record: &Record, settings: &Settings) {
         }
         workspace.restore_touched(&record.touched);
         state.kept = Some(workspace.kept_between_turns());
+        // The placed checkouts are open loops of the session's too (OPEN-6).
+        let loops = crate::open_loops::of(&state, &workspace);
+        state.open_loops.ended_with(loops);
     }
 }
 
@@ -4975,7 +4978,10 @@ fn work(work: Work) {
         // it (MEMORY-10). The name is the session's, set from the bot's row, so nothing the turn
         // produced chooses it; the kernel compares it against the set this session resolved.
         .addressing(addressing)
-        .addressing_standing(addressing_standing);
+        .addressing_standing(addressing_standing)
+        // The open loops that changed since the planner was last told (OPEN-4). Told without
+        // silencing TURN-4's line, because the desktop does not draw OPEN-3's line for the person.
+        .telling_open_loops(state.open_loops.for_the_planner());
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }
@@ -5115,6 +5121,10 @@ fn work(work: Work) {
     if !reporter.task_list().is_empty() {
         state.todos.insert(turn, reporter.task_list().to_vec());
     }
+    // The loops this turn left open, whatever its ending, which the next turn tells the planner
+    // of where they changed (OPEN-4).
+    let loops = crate::open_loops::of(&state, &workspace);
+    state.open_loops.ended_with(loops);
 
     let event = match outcome {
         Ok(outcome) => {

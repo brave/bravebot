@@ -15,10 +15,6 @@ use bravebot_agent::open_loops::Loops;
 ///
 /// Running jobs and the stopped goal are always empty. A desktop chat has no background job and
 /// no goal (`background.rs`), so there is nothing for either to count.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the turn flow that reads it is a later task")
-)]
 pub(crate) fn of(state: &State, workspace: &Workspace) -> Loops {
     Loops {
         open_todos: state
