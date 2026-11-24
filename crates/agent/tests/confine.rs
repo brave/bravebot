@@ -59,7 +59,7 @@ mod scratch_root;
 
 /// Real directories with the casefold flag set, shared with the unit tests of the crate.
 #[cfg(target_os = "linux")]
-#[allow(
+#[expect(
     clippy::unwrap_used,
     reason = "the fixture is shared with the unit tests, where an unwrap fails at the line that did"
 )]
