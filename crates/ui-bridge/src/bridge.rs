@@ -1560,6 +1560,12 @@ impl Bridge {
                     forked.answered_by_mode = by_mode;
                     forked.work = work;
                     forked.written = written;
+                    // Taken as the last turn's, as a resume takes it (OPEN-3, OPEN-6). The child
+                    // keeps no checkouts.
+                    if let Ok(workspace) = Workspace::new(&project) {
+                        let loops = crate::open_loops::of(&forked, &workspace);
+                        forked.open_loops.ended_with(loops);
+                    }
                     forked.account = self.account_session(&project);
                     forked.spend_limit = self.spend_limit(&project);
                     forked
@@ -4678,10 +4684,19 @@ fn take_back_checkouts(open: &Open, record: &Record, settings: &Settings) {
         }
         workspace.restore_touched(&record.touched);
         state.kept = Some(workspace.kept_between_turns());
-        // The placed checkouts are open loops of the session's too (OPEN-6).
+        // The placed checkouts are open loops of the session's too, part of the set the resume
+        // took as the last turn's (OPEN-3, OPEN-6).
         let loops = crate::open_loops::of(&state, &workspace);
         state.open_loops.ended_with(loops);
     }
+}
+
+/// The line a turn ends with where the open loops changed since the last turn ended, or `None`
+/// where they are the same, so a loop the person left open is not said every turn (OPEN-3).
+fn say_open_loops(state: &mut State, workspace: &Workspace) -> Option<String> {
+    let loops = crate::open_loops::of(state, workspace);
+    let line = loops.to_the_person();
+    state.open_loops.ended_with(loops).then_some(line)
 }
 
 /// As a session is forked, place the names the parent's file tools reached as the child's, so the
@@ -5001,9 +5016,9 @@ fn work(work: Work) {
         // produced chooses it; the kernel compares it against the set this session resolved.
         .addressing(addressing)
         .addressing_standing(addressing_standing)
-        // The open loops that changed since the planner was last told (OPEN-4). Told without
-        // silencing TURN-4's line, because the desktop does not draw OPEN-3's line for the person.
-        .telling_open_loops(state.open_loops.for_the_planner());
+        // The open loops that changed since the planner was last told (OPEN-4). The turn ends
+        // with OPEN-3's line, sent on `turn.done`/`turn.error`, in place of TURN-4's narration.
+        .with_open_loops(state.open_loops.for_the_planner());
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }
@@ -5143,10 +5158,10 @@ fn work(work: Work) {
     if !reporter.task_list().is_empty() {
         state.todos.insert(turn, reporter.task_list().to_vec());
     }
-    // The loops this turn left open, whatever its ending, which the next turn tells the planner
-    // of where they changed (OPEN-4).
-    let loops = crate::open_loops::of(&state, &workspace);
-    state.open_loops.ended_with(loops);
+    // The loops this turn left open, whatever its ending, after its work and todos are the
+    // session's: said to the person where they changed (OPEN-3), and told to the planner on the
+    // next turn (OPEN-4).
+    let open_line = say_open_loops(&mut state, &workspace);
 
     let event = match outcome {
         Ok(outcome) => {
@@ -5224,6 +5239,8 @@ fn work(work: Work) {
                     "outputTokens": outcome.output_tokens,
                     "contextTokens": outcome.context_tokens,
                     "notices": notices,
+                    // The open loops, where they changed since the last turn ended (OPEN-3).
+                    "openLoops": open_line,
                     "trust": { "rules": rules },
                     // The session's durable name, which is real from here and was not before:
                     // `save` above is what wrote the record, and until a record exists there is
@@ -5282,6 +5299,8 @@ fn work(work: Work) {
                     // turn that answered. There is no outcome here to take them from, and a hook
                     // that could not be started is the person's own to hear about (HOOK-7).
                     "notices": notices,
+                    // As on `turn.done`: a failed turn's writes still count (GROUND-4).
+                    "openLoops": open_line,
                     // As on `turn.done`. A turn that failed still said what it was asked, so the
                     // prompt is in the conversation and is still a place a fork can be cut at.
                     "prompt": prompt_ordinal(&state.conversation, &prompt),
