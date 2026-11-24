@@ -8020,6 +8020,8 @@ mod tests {
     /// generic credential-location fallback does (`Remedy::Credential`), which says nothing of
     /// `run` still reaching the session records.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
     fn a_workspace_holding_home_cannot_reach_the_sessions_by_an_absolute_path_either() {
         let (home, _) = home_and_project("holding-home-rules-absolute");
         let state = home.join(".bravebot");
@@ -9508,6 +9510,7 @@ mod tests {
     /// directory the line's path is not written in, and the stores offered as a directory to open.
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_redirection_a_link_carries_out_or_into_the_stores_is_offered_nothing() {
         let (home, project) = home_and_project("redirect-remedy-nothing");
         let beside = home.parent().expect("base").join("beside");
