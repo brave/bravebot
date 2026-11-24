@@ -495,16 +495,7 @@ fn a_named_file_a_deny_rule_covers_is_left_out_of_the_turn() {
 #[test]
 fn a_project_file_a_relative_deny_rule_covers_is_left_out_when_named_absolutely() {
     let scratch = Scratch::new("absolute-denied");
-    let made = scratch.path.join("cafe\u{301}");
-    std::fs::create_dir_all(made.join("held/src")).unwrap();
-    std::fs::write(made.join("held/src/lib.rs"), "TOKEN=hunter2-the-secret").unwrap();
-    std::fs::write(made.join("main.rs"), "fn main() { todo!() }").unwrap();
-    std::fs::write(
-        made.join("shot.png"),
-        [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
-    )
-    .unwrap();
-    let workspace = Workspace::new(&made).unwrap();
+    let workspace = workspace_holding_a_covered_file(&scratch);
     let settings =
         bravebot_config::Settings::parse(r#"{"permissions": {"deny": ["Read(held/src/lib.rs)"]}}"#);
 
@@ -520,6 +511,7 @@ fn a_project_file_a_relative_deny_rule_covers_is_left_out_when_named_absolutely(
     let own = root.clone();
     for spelled in [root, other] {
         for gesture in ["dropped", "attached", "at"] {
+            let label = format!("{gesture} {spelled}");
             let denied = format!("{spelled}/held/src/lib.rs");
             let beside = format!(
                 "{spelled}/{}",
@@ -534,76 +526,114 @@ fn a_project_file_a_relative_deny_rule_covers_is_left_out_when_named_absolutely(
             let beside_exists = std::path::Path::new(&beside).exists();
             assert!(
                 beside_exists || spelled != own,
-                "{gesture} {spelled}: the file beside the covered one is gone"
+                "{label}: the file beside the covered one is gone"
             );
-            let (permissions, rejected) =
-                bravebot_agent::permissions::from_settings(&settings, None, workspace.root());
-            assert!(rejected.is_empty(), "the rule did not parse");
-            let task = Task::new("what do they say").with_permissions(permissions);
-            let task = match gesture {
-                "at" => task.with_file(denied.clone()),
-                "dropped" => {
-                    let task = task.with_dropped_text(denied.clone());
-                    if beside_exists {
-                        task.with_dropped_text(beside)
-                    } else {
-                        task
-                    }
-                }
-                _ => {
-                    let task = task.with_attachment(denied.clone(), "image/png");
-                    if beside_exists {
-                        task.with_attachment(beside, "image/png")
-                    } else {
-                        task
-                    }
-                }
-            };
-            let (endpoint, received) = serve(&reply_with("it is a stub"));
-            let config = config_for(&endpoint);
-            let egress = bravebot_net::Egress::new();
-            let mut sink = RecordingSink::new();
-            let outcome = turns::run_with_trust(
-                &config,
-                &egress,
-                &workspace,
-                &task,
-                &mut bravebot_agent::confirm::ApproveWrites,
-                &mut sink,
-                trusting_the_workspace(),
-            );
-            assert!(
-                outcome.is_ok(),
-                "{gesture} {spelled}: the turn failed: {:?}",
-                outcome.as_ref().err()
-            );
-            let outcome = outcome.unwrap();
-            let body = received.recv().unwrap();
-            assert!(
-                !body.contains("hunter2"),
-                "{gesture} {spelled}: a covered file reached the planner: {body}"
-            );
-            // The covered file is a text file named as a picture, so a leak adds a second picture.
-            let pictures = body.matches("data:image/png;base64,").count();
-            assert_eq!(
-                pictures,
-                usize::from(gesture == "attached" && beside_exists),
-                "{gesture} {spelled}: the covered attachment was sent, or the uncovered one was not: {body}"
-            );
-            assert!(
-                gesture != "dropped" || !beside_exists || body.contains("fn main()"),
-                "{gesture} {spelled}: the file no rule covers was left out: {body}"
-            );
-            assert!(
-                outcome
-                    .notices
-                    .iter()
-                    .any(|said| said.contains("held/src/lib.rs")),
-                "{gesture} {spelled}: the person was not told the file was left out: {:?}",
-                outcome.notices
-            );
+            let task = task_denying_by_settings(&settings, workspace.root());
+            let task = task_naming(task, gesture, denied, beside_exists.then_some(beside));
+            let (outcome, body) = run_turn_naming(&workspace, &task, &label);
+            assert_covered_file_left_out(&label, gesture, beside_exists, &outcome, &body);
         }
     }
+}
+
+/// A project whose root is spelled with a combining accent, holding a covered file, an uncovered
+/// text file and an uncovered picture.
+fn workspace_holding_a_covered_file(scratch: &Scratch) -> Workspace {
+    let made = scratch.path.join("cafe\u{301}");
+    std::fs::create_dir_all(made.join("held/src")).unwrap();
+    std::fs::write(made.join("held/src/lib.rs"), "TOKEN=hunter2-the-secret").unwrap();
+    std::fs::write(made.join("main.rs"), "fn main() { todo!() }").unwrap();
+    std::fs::write(
+        made.join("shot.png"),
+        [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+    )
+    .unwrap();
+    Workspace::new(&made).unwrap()
+}
+
+/// A task whose rules are built from `settings` as a session builds them.
+fn task_denying_by_settings(settings: &bravebot_config::Settings, root: &std::path::Path) -> Task {
+    let (permissions, rejected) = bravebot_agent::permissions::from_settings(settings, None, root);
+    assert!(rejected.is_empty(), "the rule did not parse");
+    Task::new("what do they say").with_permissions(permissions)
+}
+
+/// The task with the covered file named by `gesture`, and the file beside it when there is one.
+fn task_naming(task: Task, gesture: &str, denied: String, beside: Option<String>) -> Task {
+    match gesture {
+        "at" => task.with_file(denied),
+        "dropped" => {
+            let task = task.with_dropped_text(denied);
+            match beside {
+                Some(path) => task.with_dropped_text(path),
+                None => task,
+            }
+        }
+        _ => {
+            let task = task.with_attachment(denied, "image/png");
+            match beside {
+                Some(path) => task.with_attachment(path, "image/png"),
+                None => task,
+            }
+        }
+    }
+}
+
+/// Run the turn against a mock server, returning its outcome and the request body the planner got.
+fn run_turn_naming(workspace: &Workspace, task: &Task, label: &str) -> (turn::Outcome, String) {
+    let (endpoint, received) = serve(&reply_with("it is a stub"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let outcome = turns::run_with_trust(
+        &config,
+        &egress,
+        workspace,
+        task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    );
+    assert!(
+        outcome.is_ok(),
+        "{label}: the turn failed: {:?}",
+        outcome.as_ref().err()
+    );
+    (outcome.unwrap(), received.recv().unwrap())
+}
+
+/// The covered file did not reach the planner and the person was told, and the file beside it that
+/// no rule covers did.
+fn assert_covered_file_left_out(
+    label: &str,
+    gesture: &str,
+    beside_exists: bool,
+    outcome: &turn::Outcome,
+    body: &str,
+) {
+    assert!(
+        !body.contains("hunter2"),
+        "{label}: a covered file reached the planner: {body}"
+    );
+    // The covered file is a text file named as a picture, so a leak adds a second picture.
+    let pictures = body.matches("data:image/png;base64,").count();
+    assert_eq!(
+        pictures,
+        usize::from(gesture == "attached" && beside_exists),
+        "{label}: the covered attachment was sent, or the uncovered one was not: {body}"
+    );
+    assert!(
+        gesture != "dropped" || !beside_exists || body.contains("fn main()"),
+        "{label}: the file no rule covers was left out: {body}"
+    );
+    assert!(
+        outcome
+            .notices
+            .iter()
+            .any(|said| said.contains("held/src/lib.rs")),
+        "{label}: the person was not told the file was left out: {:?}",
+        outcome.notices
+    );
 }
 
 /// PERM-7: a text file dropped on the window is asked of the rules like a named one, under the name
