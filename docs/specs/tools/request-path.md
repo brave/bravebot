@@ -157,10 +157,13 @@ later is covered or fails it. The refusals are the ones that hold for a granted 
 where the path leads through links:
 
 - for a read, the paths [PATHREQ-3](#PATHREQ-3) refuses: a filesystem root, a drive root, the home
-  directory and the directories above it, `~/.ssh`, `~/.bravebot` (a read of its `sessions`
-  directory excepted) or the directory `BRAVEBOT_HOME` puts elsewhere (with the same exception),
-  credential locations and the directories that hold one, and a path with a control character or a
-  wildcard;
+  directory and the directories above it, `~/.ssh`, `~/.bravebot` or the directory `BRAVEBOT_HOME`
+  puts elsewhere, credential locations and the directories that hold one, and a path with a control
+  character or a wildcard. [PATHREQ-3](#PATHREQ-3) excepts a read of `~/.bravebot/sessions` from
+  its own refusal, for a request this tool grants to the programs a `run` starts; the file tools
+  get no such exception, and [RECALL-8](../recall.md#RECALL-8) refuses them
+  `~/.bravebot/sessions` whatever the mode. A program a `run` starts still reads it
+  ([SANDBOX-12](../sandboxing.md#SANDBOX-12));
 - for a write, the paths [SANDBOX-28](../sandboxing.md#SANDBOX-28) gives a bypass stage no write row
   for: the same, and persistence locations and the directories that hold one. A new entry is judged
   by the directory it lands in, so an entry already inside the home directory or a directory above
