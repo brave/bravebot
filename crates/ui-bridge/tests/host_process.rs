@@ -631,7 +631,13 @@ fn writes_on_request(
         requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let asked_to_write = request["messages"]
             .as_array()
-            .and_then(|messages| messages.iter().rev().find(|m| m["role"] == "user"))
+            .and_then(|messages| {
+                messages
+                    .iter()
+                    .rev()
+                    .filter(|m| m["role"] == "user")
+                    .find(|m| !m["content"].to_string().contains(support::SCRATCH_NOTE))
+            })
             .is_some_and(|message| message["content"].to_string().contains("write"));
         if asked_to_write {
             writes(request)

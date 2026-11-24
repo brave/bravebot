@@ -698,20 +698,19 @@ fn environment(workspace: &Workspace, github_cli: bool, jenkins_cli: bool) -> St
     out.push_str(&format!("- Shell: {}\n", crate::shell::shell()));
     out.push_str(&format!("- Today's date: {}\n", today()));
     let scratch = workspace.scratch();
-    if let Some(directory) = scratch {
-        out.push_str(&format!("- Scratch directory: {}\n", directory.display()));
-    }
     out.push_str(
         "\nA relative path means one under the working directory, and `run` compiles a line \
          there. You do not need to run `pwd`, `uname` or `date` to learn any of the above.\n",
     );
     if scratch.is_some() {
         out.push_str(
-            "\nThe scratch directory is this session's own: put a file there that the work needs \
-             on disk but nobody is asking to keep, such as output to grep or an archive to look \
-             inside, rather than in the project where somebody has to notice it and delete it. It \
-             is removed when this session ends, and a program a `run` starts reads the same path \
-             from BRAVEBOT_SCRATCH_DIR.\n",
+            "\nThis session has a scratch directory of its own, which the first message of the \
+             conversation names, since its name changes with every start and a name here would \
+             change the prefix every request is matched against. Put a file there that the work \
+             needs on disk but nobody is asking to keep, such as output to grep or an archive to \
+             look inside, rather than in the project where somebody has to notice it and delete \
+             it. It is removed when this session ends, and a program a `run` starts reads the same \
+             path from BRAVEBOT_SCRATCH_DIR.\n",
         );
     }
     out
@@ -900,6 +899,23 @@ fn version(major: u32, minor: u32, build: u32) -> String {
 #[cfg(not(any(unix, windows)))]
 fn os_release() -> Option<String> {
     None
+}
+
+/// The sentence that names the session's own directory, or `None` where it has none.
+///
+/// Said in the conversation and not in the system prompt. The name is made from the process id and
+/// the clock, so it differs on every start, and the system prompt is the front of every request:
+/// a cache of the prompt is matched from its first byte, so a path in it made every new process
+/// write the whole prompt again and read none of it. Said again in a resumed session, whose
+/// directory is a new one, and the sentence says it replaces any an earlier message named.
+pub fn scratch_note(workspace: &Workspace) -> Option<String> {
+    workspace.scratch().map(|directory| {
+        format!(
+            "The scratch directory of this session is {}. It replaces any path an earlier \
+             message gave for it.",
+            directory.display()
+        )
+    })
 }
 
 /// Today's date, UTC, as `YYYY-MM-DD`.

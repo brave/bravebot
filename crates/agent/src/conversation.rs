@@ -529,6 +529,13 @@ pub struct Conversation {
     /// session rather than once per turn, so a session with nothing to say about it at first
     /// still says it once a long description appears, and never repeats it after that.
     long_descriptions_said: bool,
+    /// Whether the planner has already been told, in this process, where the session's own
+    /// directory is.
+    ///
+    /// Not part of a [`Snapshot`], for the reason `skills_overview_said` is not, and for a stronger
+    /// one: the directory is made again for every process, so a resumed session has a new path
+    /// and must say it again after the old one in its record.
+    scratch_said: bool,
     /// Messages before this position are not sent in a turn's request: a retrieval sent excerpts
     /// of them instead ([RETRIEVE-2](../../../docs/specs/retrieval.md#RETRIEVE-2)).
     ///
@@ -646,6 +653,7 @@ impl Conversation {
             masked_before: 0,
             skills_overview_said: false,
             long_descriptions_said: false,
+            scratch_said: false,
             retrieval_cut: 0,
             left_out: 0,
             pinned: Vec::new(),
@@ -1093,6 +1101,17 @@ impl Conversation {
     /// Record that it has, so a later turn of the same session does not say it again.
     pub fn skill_overview_was_said(&mut self) {
         self.skills_overview_said = true;
+    }
+
+    /// Whether `scratch_said` is set.
+    pub fn scratch_said(&self) -> bool {
+        self.scratch_said
+    }
+
+    /// Record that the session's directory was named in this process, so a later turn does not
+    /// say it again.
+    pub fn scratch_was_said(&mut self) {
+        self.scratch_said = true;
     }
 
     /// See `long_descriptions_said`.
@@ -2222,6 +2241,7 @@ impl Conversation {
             masked_before: 0,
             skills_overview_said: false,
             long_descriptions_said: false,
+            scratch_said: false,
             retrieval_cut,
             left_out: snapshot.left_out,
             pinned,

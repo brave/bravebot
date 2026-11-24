@@ -73497,6 +73497,99 @@ fn a_program_a_turn_runs_is_told_where_the_sessions_directory_is() {
     );
 }
 
+/// INSTR-9: the session's own directory is named in the conversation, once per process, and not in
+/// the system prompt. Its name changes with every start, and the system prompt is the front of every
+/// request, so a path there made the first request of each new process write the whole prompt to
+/// the cache again and read none of it.
+///
+/// Pins three things. The first request names the directory exactly once and the system prompt
+/// never does. A second turn of the same session does not say it again, which would grow every
+/// request. A session restored in another process, whose directory is new, names that one.
+///
+/// Rejects an implementation that puts the path back in the system prompt, one that says it on every
+/// turn, and one that records it as said in the snapshot so a resumed session is left holding a
+/// path to a directory that no longer exists.
+#[test]
+fn the_sessions_directory_is_named_once_in_the_conversation_and_not_in_the_system_prompt() {
+    let scratch = Scratch::new("scratch-named-in-conversation");
+    let first_directory = Scratch::new("scratch-named-first");
+    let first = first_directory.path.canonicalize().expect("a directory");
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(first.clone()));
+
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("first answer"),
+        reply_with("second answer"),
+        reply_with("third answer"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    let say =
+        |conversation: &mut bravebot_agent::Conversation, workspace: &Workspace, prompt: &str| {
+            turn::resume(
+                &config,
+                &egress,
+                workspace,
+                &Task::new(prompt),
+                conversation,
+                &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+                &mut bravebot_agent::report::RecordingReporter::default(),
+                &mut RecordingSink::new(),
+                trusting_the_workspace(),
+                bravebot_core::programs::TrustedPrograms::new(),
+                None,
+                &bravebot_core::cancel::Cancel::new(),
+            )
+            .outcome
+            .expect("the turn finishes");
+        };
+    let named = first.display().to_string();
+
+    let in_conversation = |conversation: &bravebot_agent::Conversation, path: &str| {
+        conversation
+            .messages()
+            .iter()
+            .filter(|stored| {
+                stored.composed == Some(bravebot_agent::conversation::Composed::Notice)
+                    && stored.message.content.text().contains(path)
+            })
+            .count()
+    };
+
+    say(&mut conversation, &workspace, "one");
+    let request = received.recv().expect("first request");
+    assert_eq!(request.matches(&named).count(), 1, "{request}");
+    assert_eq!(
+        in_conversation(&conversation, &named),
+        1,
+        "the one mention is not a message of the conversation, so it is in the system prompt"
+    );
+
+    say(&mut conversation, &workspace, "two");
+    let request = received.recv().expect("second request");
+    assert_eq!(
+        request.matches(&named).count(),
+        1,
+        "the second turn either lost the sentence or said it again: {request}"
+    );
+
+    // A process that restores the session has made another directory, and says that one.
+    let second_directory = Scratch::new("scratch-named-second");
+    let second = second_directory.path.canonicalize().expect("a directory");
+    let mut restored = bravebot_agent::Conversation::restored(conversation.snapshot());
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(second.clone()));
+    say(&mut restored, &workspace, "three");
+    let request = received.recv().expect("third request");
+    assert_eq!(
+        request.matches(&second.display().to_string()).count(),
+        1,
+        "a restored session did not name its new directory: {request}"
+    );
+    assert_eq!(in_conversation(&restored, &second.display().to_string()), 1);
+}
+
 /// What a background job printed is quarantined exactly as a foreground run's output is. Vouching
 /// is what makes it readable, and nothing about being left running does.
 #[test]

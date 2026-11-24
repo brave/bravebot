@@ -872,6 +872,9 @@ fn a_window_plan_line_sets_plan_mode_and_its_turn_is_sent_only_the_task() {
                 .collect::<String>(),
             other => other.as_str().unwrap_or_default().to_string(),
         })
+        // The message naming the session's own directory follows the task (INSTR-9) and is not a
+        // line the person typed, so it is not what this asserts the model was sent.
+        .filter(|said| !said.starts_with("The scratch directory of this session is"))
         .collect();
     assert_eq!(said, [task], "the model was not sent the task alone");
     let told = tool_results(sent.last().expect("a round"));

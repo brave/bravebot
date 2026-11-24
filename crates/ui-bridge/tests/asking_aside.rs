@@ -189,11 +189,20 @@ fn answer(mut stream: std::net::TcpStream, stub: &Stub) {
     let _ = stream.flush();
 }
 
-/// The last message of a request body, as text.
+/// The words that open the message naming the session's own directory (INSTR-9), which follows the
+/// prompt in the conversation and is not part of what a stand-in reads the prompt from.
+const SCRATCH_NOTE: &str = "The scratch directory of this session is";
+
+/// The last message of a request body that is not the scratch note, as text.
 fn last_message(body: &Value) -> String {
     body["messages"]
         .as_array()
-        .and_then(|messages| messages.last())
+        .and_then(|messages| {
+            messages
+                .iter()
+                .rev()
+                .find(|message| !message.to_string().contains(SCRATCH_NOTE))
+        })
         .map(Value::to_string)
         .unwrap_or_default()
 }
