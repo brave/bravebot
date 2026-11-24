@@ -4,6 +4,7 @@
 //! specifies, so a contract holds the code to the meaning. docs/development/verification.md says
 //! how a contract is written and run.
 
+use crate::capability::Capability;
 use crate::command::{Asked, Expansion, Plan, Route, Step, Steps, ValuePart};
 use crate::label::{Confidentiality, Integrity, Label};
 use crate::permissions::{Decision, Ruling};
@@ -784,6 +785,23 @@ pub(crate) open spec fn search_reason_is_sound(
 /// Whether a byte is one of `0-9`, `a-f` or `A-F`.
 pub open spec fn is_hex_digit(byte: u8) -> bool {
     (b'0' <= byte <= b'9') || (b'a' <= byte <= b'f') || (b'A' <= byte <= b'F')
+}
+
+/// What a capability's output arrives labelled with. Every capability that observes anything
+/// labels it untrusted, since a file, a server, a page or a program's output may hold anything,
+/// and only a capability that observes nothing has no label. A file read, a git read, a language
+/// server, a server call, a connector and a command are private, as content of the person's or
+/// from their account, and only a fetch and a search are public.
+pub open spec fn output_label_is_untrusted(capability: Capability, label: Option<Label>) -> bool {
+    match capability {
+        Capability::FileWrite | Capability::GitWrite => label is None,
+        Capability::WebFetch | Capability::WebSearch => label == Some(
+            Label { integrity: Integrity::Untrusted, confidentiality: Confidentiality::Public },
+        ),
+        _ => label == Some(
+            Label { integrity: Integrity::Untrusted, confidentiality: Confidentiality::Private },
+        ),
+    }
 }
 
 } // verus!

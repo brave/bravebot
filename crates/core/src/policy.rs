@@ -1919,6 +1919,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// this is the one place the two could be confused. That is the difference from
     /// [`Policy::before_plan`], where vouching for a command does trust its output because a
     /// person can read one command and answer for both.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok ==> crate::spec::output_label_is_untrusted(Capability::WebFetch, Some(r->Ok_0)),
+    ))]
     pub fn before_fetch(&mut self, url: &str) -> Gated<Label> {
         self.before_capability(Capability::WebFetch)?;
         self.consume_grant("fetch_url", "url", url)?;
@@ -2051,6 +2055,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// Always `(U,pub)`, from [`Capability::WebSearch`] (WEBSEARCH-1). While the call is in flight the
     /// egress gate also holds every hop to the host of `url`.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok ==> crate::spec::output_label_is_untrusted(Capability::WebSearch, Some(r->Ok_0)),
+    ))]
     pub fn before_search(&mut self, url: &str) -> Gated<Label> {
         self.before_capability(Capability::WebSearch)?;
         self.consume_grant("web_search", "url", url)?;
@@ -2501,6 +2509,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     /// Record that a capability produced an observation, returning the label it must
     /// carry. The label comes from the capability, never from the data.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok ==> crate::spec::output_label_is_untrusted(capability, Some(r->Ok_0)),
+            r is Err ==> crate::spec::output_label_is_untrusted(capability, None),
+    ))]
     pub fn observe(&mut self, capability: Capability) -> Gated<Label> {
         let Some(label) = capability.output_label() else {
             return Err(no_observation(&capability));

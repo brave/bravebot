@@ -191,6 +191,10 @@ impl Capability {
     /// The label data produced by this capability arrives with.
     ///
     /// `None` for pure effects, which produce no observation to label.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            crate::spec::output_label_is_untrusted(*self, r),
+    ))]
     pub fn output_label(&self) -> Option<Label> {
         // Built with `Label::new` rather than `Label::untrusted_private()`, which Verus does not
         // read. Nothing a capability observes is trusted.
