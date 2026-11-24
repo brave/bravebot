@@ -66,10 +66,13 @@ impl Window {
     }
 
     fn dispatch(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
-        let line = json!({"id": 1, "method": method, "params": params}).to_string();
-        self.bridge.dispatch(&Request::parse(&line).unwrap())
+        let mut request = json!({"id": 1, "method": method});
+        request["params"] = params;
+        self.bridge
+            .dispatch(&Request::parse(&request.to_string()).unwrap())
     }
 
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
     fn call(&mut self, method: &str, params: Value) -> Value {
         self.dispatch(method, params)
             .unwrap_or_else(|failure| panic!("{method}: {failure:?}"))
