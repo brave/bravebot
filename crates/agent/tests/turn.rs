@@ -773,6 +773,94 @@ fn an_attachment_a_deny_rule_covers_is_left_out_of_the_message() {
     );
 }
 
+/// PERM-7/DROP-10: a text file dropped or a picture attached at the top of the project is left out
+/// by a relative `deny` rule (`Read(secret.md)`, `Read(secret.png)`) when it is named by its
+/// absolute path, `<root>/<name>`, as it is when it is named relatively, and the person is told.
+/// Rejects asking the rules about the absolute name alone: a rule written against `secret.md`
+/// does not match `<root>/secret.md`, a drop is read where it lands without being confined to the
+/// project, and so the file's bytes reached the planner with no notice. The file beside the covered
+/// one that no rule covers is named the same way and still reaches the planner, which rejects
+/// leaving out every absolute name while a rule is in force. The root is plain ASCII, so the case
+/// does not depend on a Unicode spelling of it.
+#[test]
+fn a_dropped_or_attached_file_a_relative_deny_rule_covers_is_left_out_under_its_absolute_name_too()
+{
+    let scratch = Scratch::new("absolute-ascii-denied");
+    let png = [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    std::fs::write(scratch.path.join("secret.md"), "TOKEN=hunter2-the-secret").unwrap();
+    std::fs::write(scratch.path.join("notes.md"), "the tail of the note").unwrap();
+    std::fs::write(scratch.path.join("secret.png"), png).unwrap();
+    std::fs::write(scratch.path.join("shot.png"), png).unwrap();
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let settings = bravebot_config::Settings::parse(
+        r#"{"permissions": {"deny": ["Read(secret.md)", "Read(secret.png)"]}}"#,
+    );
+    let root = workspace.root().to_string_lossy().to_string();
+    assert!(root.is_ascii(), "the root is not plain ASCII: {root}");
+
+    for prefix in [String::new(), format!("{root}/")] {
+        for (gesture, denied, beside) in [
+            ("dropped", "secret.md", "notes.md"),
+            ("attached", "secret.png", "shot.png"),
+        ] {
+            let label = format!("{gesture} {prefix}{denied}");
+            let task = task_denying_by_settings(&settings, workspace.root());
+            let task = task_naming(
+                task,
+                gesture,
+                format!("{prefix}{denied}"),
+                Some(format!("{prefix}{beside}")),
+            );
+            let (outcome, body) = run_turn_naming(&workspace, &task, &label);
+
+            assert!(
+                !body.contains("hunter2"),
+                "{label}: a covered file reached the planner: {body}"
+            );
+            assert!(
+                outcome.notices.iter().any(|said| said.contains(denied)),
+                "{label}: the person was not told the file was left out: {:?}",
+                outcome.notices
+            );
+            if gesture == "dropped" {
+                assert!(
+                    body.contains("the tail of the note"),
+                    "{label}: the file no rule covers was left out: {body}"
+                );
+                assert_eq!(
+                    body.matches("data:image/png;base64,").count(),
+                    0,
+                    "{label}: a picture was sent for a text drop: {body}"
+                );
+                continue;
+            }
+            let sent: serde_json::Value = serde_json::from_str(&body).unwrap();
+            let last = sent["messages"].as_array().unwrap().last().unwrap().clone();
+            let parts = last["content"].as_array().unwrap();
+            let pictures = parts
+                .iter()
+                .filter(|part| part["type"] == "image_url")
+                .count();
+            assert_eq!(
+                pictures, 1,
+                "{label}: only the uncovered attachment is sent: {parts:?}"
+            );
+            let named: Vec<&str> = parts
+                .iter()
+                .filter_map(|part| part["text"].as_str())
+                .collect();
+            assert!(
+                named.iter().any(|said| said.contains(beside)),
+                "{label}: the uncovered attachment was left out: {named:?}"
+            );
+            assert!(
+                named.iter().all(|said| !said.contains(denied)),
+                "{label}: the covered attachment was named to the planner: {named:?}"
+            );
+        }
+    }
+}
+
 /// A session named with `@session:<id>` reaches the planner inside the person's own message, and
 /// the trail records the id and the count and none of the words.
 #[test]
