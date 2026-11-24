@@ -1089,7 +1089,7 @@ fn run_text(data: &Value) -> Option<String> {
             ambient: &ambient_of(data)?,
             releases_private: data["releasesPrivate"].as_bool() == Some(true),
             offers_remember: data["canBeRemembered"].as_bool() == Some(true),
-            unconfined: false,
+            unconfined: data["unconfined"].as_bool() == Some(true),
         })
         .join("\n"),
     )
@@ -1575,7 +1575,7 @@ mod tests {
                 ambient: &ambient,
                 releases_private: run.releases_private(),
                 offers_remember: run.can_be_remembered(),
-                unconfined: false,
+                unconfined: run.unconfined,
             })
             .join("\n")
         };
@@ -1622,6 +1622,19 @@ mod tests {
         assert_eq!(
             run_text(&crate::wire::run_request(1, &run)).as_deref(),
             Some(confined.as_str())
+        );
+
+        // A line the planner asked to run with no sandbox reads to the editor with the sentences
+        // that say so, as it does in the terminal.
+        let mut unconfined = run.clone();
+        unconfined.confined = None;
+        unconfined.unconfined = true;
+        let read = run_text(&crate::wire::run_request(1, &unconfined)).expect("a run reads");
+        assert_eq!(read, as_the_terminal_draws(&unconfined));
+        assert!(
+            read.contains(&bravebot_approval::unconfined())
+                && read.contains(&bravebot_approval::unconfined_not_remembered()),
+            "the unconfined line does not say so: {read}"
         );
 
         // PROMPT-1: a reference the first program is fed is read to the editor as the terminal

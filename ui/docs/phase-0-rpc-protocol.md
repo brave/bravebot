@@ -1318,7 +1318,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `tokens` | `{ written }` | `Reporter::output_tokens`, **only when the figure changes** |
 | `audit` | `{ at, turn, event }` | the `Sink`, via `audit::as_json` |
 | `confirm.request` | see §8.1 | `Confirmer::confirm_write` |
-| `run.request` | `{ request, stages, directory, shownDirectory, line, plan, writes, shownWrites, releasesPrivate, confinement, vouches, summary }` | command approval |
+| `run.request` | `{ request, stages, directory, shownDirectory, line, plan, writes, shownWrites, releasesPrivate, confinement, unconfined, unconfinedNote, notRememberedNote, vouches, summary }` | command approval |
 | `output.request` | `{ request, command, reference, lines, hidden, hiddenNote, output, summary }` | admit command output |
 | `vouch.request` | preview and label fields from `wire::vouch_request` | trust a quarantined path |
 | `fetch.request` | `{ request, url, host, ambient, summary }` | fetch one URL; `host` is the agent's reading of `url` and is drawn as sent |
@@ -1836,6 +1836,11 @@ Still open:
   `canBeRemembered` is then false, and a client does not answer such a request for the person. `shownDirectory` spells
   `directory` the same way, and each stage's `shownBinary` spells `startedAs` and `resolved`, joined
   by ` -> ` where they differ.
+- `run.request` carries `unconfined`, true where the planner asked to run the line with no sandbox
+  (SANDBOX-29). `canBeRemembered` is then false. `unconfinedNote` is the sentence saying the line
+  runs with no sandbox and `notRememberedNote` the sentence saying neither the line nor the request
+  is remembered, both worded by the bridge in the person's language and both `null` unless
+  `unconfined` is true. A client draws them as sent.
 - `vet.request` carries `request`, `origin`, `summary`, `expects`, full `content`, `lines`, `hidden`, `hiddenNote`, `picture` and
   `vetting: { verdict, reason, detail }`. `picture` is `null` for text. For a picture or a PDF it
   is `{ path, media, bytes }`, a copy of the file for the person to open, deleted once the request

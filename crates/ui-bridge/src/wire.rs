@@ -757,6 +757,12 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
         })),
         // The sentence for that null, in the catalog's words and so in the person's language.
         "notSandboxed": request.confined.is_none().then(bravebot_approval::not_sandboxed),
+        // Whether the planner asked to run this line with no sandbox. Such a line has no standing
+        // answer, so `canBeRemembered` is false for it, and the two sentences below say so in the
+        // catalog's words. Both are null for every other line.
+        "unconfined": request.unconfined,
+        "unconfinedNote": request.unconfined.then(bravebot_approval::unconfined),
+        "notRememberedNote": request.unconfined.then(bravebot_approval::unconfined_not_remembered),
         "summary": request.summary(),
     })
 }
