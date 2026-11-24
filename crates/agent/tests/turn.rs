@@ -1392,6 +1392,17 @@ fn serve_sequence_answering(
 fn serve_rounds(
     checks: Vec<String>,
     lose_every_check: bool,
+    next: impl FnMut(&str) -> Option<Option<String>> + Send + 'static,
+) -> (String, MockRequests) {
+    serve_rounds_slowing_the_checks(checks, lose_every_check, std::time::Duration::ZERO, next)
+}
+
+/// [`serve_rounds`] where each check's reply is held back for `check_delay` before it is sent, so
+/// the time a call spent waiting on a check is a figure a test can read.
+fn serve_rounds_slowing_the_checks(
+    checks: Vec<String>,
+    lose_every_check: bool,
+    check_delay: std::time::Duration,
     mut next: impl FnMut(&str) -> Option<Option<String>> + Send + 'static,
 ) -> (String, MockRequests) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -1453,6 +1464,7 @@ fn serve_rounds(
             } else if resent.is_some() {
                 resent
             } else if is_a_side_request(&body) {
+                std::thread::sleep(check_delay);
                 let reply = checks.next().unwrap_or_else(a_check_finding_nothing);
                 answered = Some((body, reply.clone()));
                 Some(reply)
@@ -1530,10 +1542,24 @@ fn serve_until_job_1_finishes_answering_checks_after(
     checks: Vec<String>,
     first: Vec<String>,
 ) -> (String, MockRequests) {
+    serve_until_job_1_finishes_answering_checks_slowly_after(
+        std::time::Duration::ZERO,
+        checks,
+        first,
+    )
+}
+
+/// [`serve_until_job_1_finishes_answering_checks_after`] where each check's reply is held back for
+/// `check_delay`, as [`serve_rounds_slowing_the_checks`] does.
+fn serve_until_job_1_finishes_answering_checks_slowly_after(
+    check_delay: std::time::Duration,
+    checks: Vec<String>,
+    first: Vec<String>,
+) -> (String, MockRequests) {
     let mut first = first.into_iter();
     let mut waited = 0;
     let mut done = false;
-    serve_rounds(checks, false, move |body| {
+    serve_rounds_slowing_the_checks(checks, false, check_delay, move |body| {
         if let Some(call) = first.next() {
             return Some(Some(call));
         }
@@ -36338,6 +36364,11 @@ fn a_quarantined_run_says_what_would_make_it_visible() {
         advice.contains("read_file"),
         "the planner was not pointed at the tool that reads a file visibly: {advice}"
     );
+    assert!(
+        advice.contains("A delegate is quarantined exactly as you are"),
+        "the planner was not told that delegating the run does not make its output readable: \
+         {advice}"
+    );
 }
 
 /// Every mode a turn can run in, for the tests of what the planner is told where the same words
@@ -49443,6 +49474,335 @@ fn what_a_check_cost_reaches_the_row_the_call_drew() {
     );
 }
 
+/// VIEW-23, magnitude for a confined check: the figure on the row of a call that waited on a check is
+/// the time the check took, whichever call asked for it. The model holds each check's reply back for
+/// 300 ms, so the row's wait is at least that. `read_output` and `vet_content` are the two calls
+/// that run a check and draw it on their own row.
+///
+/// Rejects a wait taken before the request went out, a constant zero, and a call that measured the
+/// check and handed its row nothing, which leaves a slow check drawn like a slow program.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn the_wait_on_a_checks_row_is_the_time_the_check_took() {
+    let delay = std::time::Duration::from_millis(300);
+    for (tool, arguments) in [
+        ("read_output", r#"{"ref":"ref:1"}"#),
+        (
+            "vet_content",
+            r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+        ),
+    ] {
+        let scratch = Scratch::new(&format!("check-row-slow-{tool}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        std::fs::write(scratch.path.join("where.txt"), "one\ntwo\nthree\n").unwrap();
+        let mut replies = vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+            tool_request(tool, arguments),
+            reply_with("done"),
+        ]
+        .into_iter();
+        let (endpoint, _received) = serve_rounds_slowing_the_checks(
+            vec![reply_with(
+                r#"{"verdict": "safe", "reason": "three words and nothing else"}"#,
+            )],
+            false,
+            delay,
+            move |_| replies.next().map(Some),
+        );
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+        turn::resume(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("find out").with_auto_vetting(true),
+            &mut bravebot_agent::Conversation::new(),
+            &mut ReadsWhatItRan::new(false),
+            &mut reporter,
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+
+        let waited = reporter
+            .finished
+            .iter()
+            .find(|activity| activity.tool == tool)
+            .unwrap_or_else(|| panic!("no finished row for {tool}"))
+            .waited
+            .unwrap_or_else(|| panic!("the {tool} row says nothing of the check it waited on"));
+        assert!(
+            waited >= delay,
+            "the {tool} row says the call waited {waited:?} on a check that took {delay:?}"
+        );
+    }
+}
+
+/// VIEW-23, the sites that draw no row. A check made inside the result of a call (`run` with `read`)
+/// has no row of its own to draw on, so the time the turn waited on it reaches the turn's total
+/// inference time and no row says it. The model holds the check's reply back for 300 ms.
+///
+/// Rejects a wait taken before the request went out, and one that is measured and not handed on,
+/// either of which leaves a slow check counted as time spent working.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_time_a_check_in_a_runs_result_took_reaches_the_turns_inference_total() {
+    let delay = std::time::Duration::from_millis(300);
+    let scratch = Scratch::new("run-read-check-slow");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "one\ntwo\nthree\n").unwrap();
+    let mut replies = vec![
+        tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
+        reply_with("done"),
+    ]
+    .into_iter();
+    let (endpoint, _received) = serve_rounds_slowing_the_checks(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "three words and nothing else"}"#,
+        )],
+        false,
+        delay,
+        move |_| replies.next().map(Some),
+    );
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("find out").with_auto_vetting(true),
+        &mut bravebot_agent::Conversation::new(),
+        &mut ReadsWhatItRan::new(false),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert_eq!(
+        reporter.checks_finished, 1,
+        "the check this test is about was not made"
+    );
+    let inference = reporter
+        .spent
+        .last()
+        .expect("the turn reported what it spent")
+        .timing
+        .inference_ms;
+    assert!(
+        inference >= 300,
+        "the turn counted {inference} ms at a model, after a check that took {delay:?}"
+    );
+}
+
+/// VIEW-23, the check made by `read_file` before it offers to vouch for a file. The call draws the
+/// row, so the row's wait is the time the check took. The model holds the check's reply back for
+/// 300 ms.
+///
+/// Rejects a `read_file` row that measured the check and handed its row nothing, which leaves a
+/// slow check drawn like a slow read.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_wait_on_a_read_files_row_is_the_time_the_check_before_the_vouch_offer_took() {
+    let delay = std::time::Duration::from_millis(300);
+    let scratch = Scratch::new("read-file-check-slow");
+    std::fs::write(scratch.path.join("notes.md"), "a short changelog\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies = vec![
+        tool_request("read_file", r#"{"path":"notes.md"}"#),
+        reply_with("done"),
+    ]
+    .into_iter();
+    let (endpoint, _received) = serve_rounds_slowing_the_checks(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "nothing addressed to a reader"}"#,
+        )],
+        false,
+        delay,
+        move |_| replies.next().map(Some),
+    );
+    let mut confirmer = VouchesForFiles::new(false);
+    let offered = confirmer.offered.clone();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("summarise the notes"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert_eq!(
+        offered.lock().unwrap().len(),
+        1,
+        "the vouch offer this test is about was not made"
+    );
+    let waited = reporter
+        .finished
+        .iter()
+        .find(|activity| activity.tool == "read_file")
+        .expect("no finished row for read_file")
+        .waited
+        .expect("the read_file row says nothing of the check it waited on");
+    assert!(
+        waited >= delay,
+        "the read_file row says the call waited {waited:?} on a check that took {delay:?}"
+    );
+}
+
+/// VIEW-23, the check made inside the result of `fetch_url` with `read`. Like the one in a run's
+/// result it has no row of its own, so the time the turn waited on it reaches the turn's total
+/// inference time. The model holds the check's reply back for 300 ms.
+///
+/// Rejects a wait taken before the request went out, and one that is measured and not handed on.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_time_a_check_in_a_fetchs_result_took_reaches_the_turns_inference_total() {
+    let delay = std::time::Duration::from_millis(300);
+    let scratch = Scratch::new("fetch-read-check-slow");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (site, _count) = serve_raw(a_text_page("a plain page"));
+    let mut replies = vec![
+        tool_request_2(
+            "fetch_url",
+            &format!(r#"{{"url":"{site}/docs","read":true}}"#),
+        ),
+        reply_with("done"),
+    ]
+    .into_iter();
+    let (endpoint, _received) =
+        serve_rounds_slowing_the_checks(a_safe_check(), false, delay, move |_| {
+            replies.next().map(Some)
+        });
+    let mode = bravebot_agent::PermissionMode::Ask;
+    let mut inner = ApprovesFetchesAndWrites::default();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    {
+        let mut confirmer = bravebot_agent::Confining::new(&mut inner, mode, true);
+        turn::resume(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("read the page")
+                .with_permission_mode(mode)
+                .with_auto_vetting(true),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut reporter,
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+    }
+
+    assert_eq!(
+        reporter.checks_finished, 1,
+        "the check this test is about was not made"
+    );
+    let inference = reporter
+        .spent
+        .last()
+        .expect("the turn reported what it spent")
+        .timing
+        .inference_ms;
+    assert!(
+        inference >= 300,
+        "the turn counted {inference} ms at a model, after a check that took {delay:?}"
+    );
+}
+
+/// VIEW-23, the check made at the end of a round for a background job that ended after a look that
+/// asked to read. The account of the finish is released with a check, which has no row, so the time
+/// the turn waited on it reaches the turn's total inference time. The model holds the check's reply
+/// back for 300 ms.
+///
+/// Rejects a finish that measures the check and does not hand the wait on to the turn's clock.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_time_a_check_on_an_ended_jobs_account_took_reaches_the_turns_inference_total() {
+    let delay = std::time::Duration::from_millis(300);
+    let scratch = Scratch::new("job-finish-check-slow");
+    let script = scratch.path.join("noisy");
+    std::fs::write(&script, "#!/bin/sh\nsleep 1\necho three words here\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_until_job_1_finishes_answering_checks_slowly_after(
+        delay,
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "three words and nothing else"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"./noisy","background":true}"#),
+            tool_request("job_output", r#"{"job":"job:1","read":true}"#),
+        ],
+    );
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("start it").with_auto_vetting(true),
+        &mut bravebot_agent::Conversation::new(),
+        &mut ReadsWhatItRan::new(false),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    assert!(
+        sent.iter().any(|body| body.contains(JOB_1_FINISHED)),
+        "the turn was never told the job ended"
+    );
+    assert_eq!(
+        reporter.checks_finished, 1,
+        "the check this test is about was not made"
+    );
+    let inference = reporter
+        .spent
+        .last()
+        .expect("the turn reported what it spent")
+        .timing
+        .inference_ms;
+    assert!(
+        inference >= 300,
+        "the turn counted {inference} ms at a model, after a check that took {delay:?}"
+    );
+}
+
 /// The rows a turn drew when the planner ran a program whose output it may not read and handed the
 /// reference to a processor with `arguments`, and the processor answered with `answer`. The wait on
 /// the processor is measured around its request, so each branch of the tool has to hand it on.
@@ -50334,6 +50694,76 @@ fn with_auto_vetting_an_unsafe_verdict_still_asks_about_command_output() {
     assert!(
         !third.contains("SENTINEL-XYZZY"),
         "refused output reached the planner with auto-vetting on"
+    );
+}
+
+/// CHECK-10 for `read_output` under bypass with no screening asked for: no check is made, and the
+/// verdict filled in claims nothing. Every reader of a verdict branches on `safe`, so a `safe` put
+/// there would be a call that was never placed answering for output nobody looked at.
+///
+/// Read at the prompt, with the double standing where the mode's own confirmer stands, as
+/// `bypassing_fills_in_a_verdict_that_claims_nothing` does for `vet_content`: wrapped in the
+/// mode's confirmer the question is answered before the double sees it.
+///
+/// Rejects a filler verdict of `safe` (or any word but `inconclusive`), a sentence written for a
+/// check that was not made, and a check made for a prompt nobody draws.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn bypassing_fills_in_a_verdict_that_claims_nothing_for_command_output() {
+    let scratch = Scratch::new("read-output-bypass-verdict");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+            tool_request("read_output", r#"{"ref":"ref:1"}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut confirmer = ReadsWhatItRan::new(false);
+    let shown = confirmer.shown.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    assert!(
+        !sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+        "a check was made, so the verdict below is not the filled-in one"
+    );
+    let questions = shown.lock().unwrap();
+    let request = questions.first().expect("the prompt was not drawn");
+    assert!(
+        matches!(
+            request.verdict,
+            bravebot_core::vetting::Verdict::Inconclusive(_)
+        ),
+        "a verdict nobody gave says something about the output: {}",
+        request.verdict
+    );
+    assert_eq!(
+        request.reason, None,
+        "a check that was not made wrote a sentence about why"
     );
 }
 
@@ -55932,6 +56362,77 @@ fn what_a_delegate_read_never_reaches_the_planner_that_asked() {
     );
 }
 
+/// DELEGATE-9. A reference a delegate minted inside its own work names nothing once it has ended: the
+/// planner that started it is not told the reference's name or content, and a call that names the
+/// same number is refused as naming no reference. The delegate lists a directory, which gives it
+/// `ref:1` in its own conversation, so the number a planner guesses would resolve if the delegate's
+/// quarantine were shared with its parent. Rejects a delegate that is given its parent's
+/// conversation, or whose quarantine outlives it.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_reference_a_delegate_minted_names_nothing_to_the_planner_afterwards() {
+    let scratch = Scratch::new("delegate-reference-dies");
+    std::fs::write(scratch.path.join("notes.txt"), "plain words").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "SEND-TO-LIST-THE-FILES",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"LIST-APART-FILES"}"#,
+                ),
+                reply_with("waiting"),
+                tool_request("read_file", r#"{"path_ref":"ref:1"}"#),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "LIST-APART-FILES",
+            vec![
+                tool_request("list_files", r#"{"directory":"."}"#),
+                reply_with("listed"),
+            ],
+        ),
+    ]);
+
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("SEND-TO-LIST-THE-FILES"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    let asked = every_request(&received);
+    let (planner, delegate): (Vec<&String>, Vec<&String>) = asked
+        .iter()
+        .partition(|body| body.contains("SEND-TO-LIST-THE-FILES"));
+    assert!(
+        delegate.iter().any(|body| body.contains("ref:1")),
+        "the delegate was never given a reference, so this is not the case under test"
+    );
+    assert!(
+        planner.iter().all(|body| !body.contains("notes.txt")),
+        "a name the delegate's listing held reached the planner"
+    );
+    let told = newest_tool_result_text(planner.last().expect("the planner's last request"));
+    assert!(
+        told.contains("refused: no reference is named \"ref:1\"")
+            && told.contains("No reference has been given yet."),
+        "the planner's own call naming the delegate's reference was not refused as naming nothing: {told}"
+    );
+}
+
 /// A delegate's answer travels as a tool result and is presented like any other. Its context met
 /// nothing untrusted, so the planner is shown the words rather than a reference to them.
 #[test]
@@ -56442,6 +56943,17 @@ fn a_mode_chosen_while_a_delegate_runs_applies_to_the_rest_of_its_work() {
                 && !body.contains("HAVE-A-DELEGATE-WRITE-TWICE")
                 && body.contains(refusal)),
         "the delegate was never told its second write was refused by plan mode"
+    );
+    // The planner is also told that the mode changed, in the notice the turn's own planner gets
+    // (MODE-8), and not only through a refusal. A delegate whose notice is dropped reads the
+    // refusal with no account of it.
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("WRITE-THE-NOTES-TWICE")
+                && !body.contains("HAVE-A-DELEGATE-WRITE-TWICE")
+                && body.contains("The user changed the mode while this turn was running.")),
+        "the delegate's planner was not told the mode changed while it ran"
     );
 }
 
@@ -56977,6 +57489,119 @@ fn what_a_delegate_reported_reaches_the_person_watching() {
         )),
         "the words the delegate answered with never reached the interface"
     );
+}
+
+/// WATCH-13, DELEGATE-8 through a real turn. A delegate whose own context has met something
+/// untrusted answers from that context, so the turn that started it is handed a reference to the
+/// report and none of the words, and the person watching is drawn the words as a preview marked
+/// kept from the planner. The delegate's context is lowered by the constant the turn was given
+/// ([`Task::with_delegates_that_have_met`]), so no byte of anything a delegate read decides it.
+/// The control is the same run with a delegate that met nothing: its words reach the planner and
+/// are drawn as said.
+///
+/// Rejects a turn that tells the planner the words of a report its delegate's context had no
+/// right to give it, one that draws such a report as said (words on screen with no mark), one that
+/// draws it nowhere, one that draws a report the planner read as kept, and a delegate that
+/// answers from a trusted context whatever it was started with.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_delegate_whose_own_context_met_something_untrusted_reports_a_kept_result_through_a_turn() {
+    for (met, kept) in [
+        (bravebot_core::label::Integrity::Untrusted, true),
+        (bravebot_core::label::Integrity::Trusted, false),
+    ] {
+        let scratch = Scratch::new("delegate-report-kept");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                "DELEGATE-SOMETHING",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"SAY-SOMETHING-SHORT"}"#,
+                    ),
+                    reply_with("nothing to add while it works"),
+                    reply_with("relayed"),
+                ],
+            ),
+            (
+                "SAY-SOMETHING-SHORT",
+                vec![reply_with("THE-DELEGATES-OWN-WORDS")],
+            ),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+        turns::run_cancellable(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("DELEGATE-SOMETHING").with_delegates_that_have_met(met),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut reporter,
+            &mut sink,
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+
+        let asked = every_request(&received);
+        let told = asked
+            .iter()
+            .filter(|body| body.contains("DELEGATE-SOMETHING"))
+            .find(|body| body.contains("reader delegate d1 has finished"))
+            .expect("the planner was never told the delegate had finished");
+        let [(_, drawn)] = reporter.delegates_reported.as_slice() else {
+            panic!(
+                "one delegate was started and the reporter was told of {:?}",
+                reporter.delegates_reported
+            );
+        };
+        if kept {
+            assert!(
+                !told.contains("THE-DELEGATES-OWN-WORDS"),
+                "the planner was given the words of a report from a context that met something \
+                 untrusted: {told}"
+            );
+            assert!(
+                told.contains("ref:"),
+                "the planner was not given a reference to the report: {told}"
+            );
+            match drawn {
+                Some(bravebot_agent::report::Reported::Kept(shown)) => {
+                    assert_eq!(
+                        shown.reach,
+                        bravebot_agent::report::Reach::NotThePlanner,
+                        "kept from the wrong context"
+                    );
+                    assert_eq!(shown.origin, "a reader delegate");
+                    assert_eq!(shown.label, "(U,pub)");
+                    assert_eq!(
+                        shown.preview,
+                        vec!["THE-DELEGATES-OWN-WORDS"],
+                        "the person was not shown the words as a preview"
+                    );
+                }
+                other => panic!("the report the planner was kept from was drawn as {other:?}"),
+            }
+        } else {
+            assert!(
+                told.contains("It reported:") && told.contains("THE-DELEGATES-OWN-WORDS"),
+                "the planner was not given a clean report in words: {told}"
+            );
+            assert_eq!(
+                drawn,
+                &Some(bravebot_agent::report::Reported::Said(
+                    "THE-DELEGATES-OWN-WORDS".to_string()
+                )),
+                "a report the planner read was not drawn as said"
+            );
+        }
+    }
 }
 
 /// The whole wiring in one run: a definition on disk reaches the kernel, the kernel builds the
@@ -64415,16 +65040,21 @@ fn a_delegate_cannot_write_outside_the_files_its_definition_names() {
 /// affected. The regression it rejects is the mode's reach being given to the delegate in place of
 /// its restriction, so the limit holds only for the files the workspace holds.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_limited_delegate_of_a_bypass_turn_is_refused_a_sibling_directory_its_patterns_do_not_cover() {
     if cannot_confine_here() {
         return;
     }
     let places = PathPlaces::new("delegate-writes-bypass");
     let scratch = Scratch::new("delegate-writes-bypass");
-    let home = Scratch::new("delegate-writes-bypass-home");
-    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    // The definitions home is the places' own home, not a directory under the temporary one: under
+    // bypass a program's profile has a row for each entry on the way to the home, and a temporary
+    // directory that holds thousands of earlier fixtures makes a program the limit let through
+    // take minutes to start, so a broken limit would hang this test instead of failing it.
+    let home = &places.home;
+    std::fs::create_dir_all(home.join("agents")).expect("create the definitions directory");
     std::fs::write(
-        home.path.join("agents").join("scribe.md"),
+        home.join("agents").join("scribe.md"),
         "---\nname: scribe\ndescription: Writes the docs.\nkind: worker\nwrites: docs/**\n---\n\nWRITE-DOCS\n",
     )
     .expect("write the definition");
@@ -64482,7 +65112,7 @@ fn a_limited_delegate_of_a_bypass_turn_is_refused_a_sibling_directory_its_patter
         &egress,
         &workspace,
         &Task::new("HAVE-THE-SCRIBE-DO-IT")
-            .with_home(Some(home.path.clone()))
+            .with_home(Some(home.clone()))
             .with_profile(Some(places.home.clone()))
             .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
             .with_confined_runs(true),
@@ -65182,6 +65812,7 @@ fn a_checkout_is_kept_when_a_line_in_it_failed_after_a_stage_started() {
 /// CHECKOUT-1, CHECKOUT-7. A delegate asked to work in a checkout writes there, the working
 /// directory is left as it was, and the delegate is told which commit it holds.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory() {
     let scratch = Scratch::new("checkout-delegate-writes");
     let home = Scratch::new("checkout-delegate-writes-home");
@@ -65255,6 +65886,22 @@ fn a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory() {
             |body| body.contains("HAVE-A-DELEGATE-WRITE-APART") && body.contains("was kept at")
         ),
         "the planner was not told the checkout was kept"
+    );
+    // DELEGATE-9: the planner is told the checkout's id and the commit it holds, and the advice to
+    // apply the files of a kept one by that id.
+    let commit = std::fs::read_to_string(scratch.path.join(".git/refs/heads/main"))
+        .expect("the repository's main branch");
+    let commit = commit.trim();
+    assert_eq!(commit.len(), 40, "{commit}");
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("HAVE-A-DELEGATE-WRITE-APART")
+                && body.contains(&format!("Its checkout c1 of commit {commit} was kept at "))
+                && body.contains("since something was done in it.")
+                && body
+                    .contains("apply_checkout with checkout \\\"c1\\\" brings the files it names")),
+        "the planner was not told the kept checkout's id and the way to bring its files back"
     );
     assert!(
         asked
@@ -67217,6 +67864,82 @@ fn a_delegate_in_a_checkout_is_offered_no_lsp() {
     );
 }
 
+/// CHECKOUT-20. A delegate in a checkout is given no language servers, so an `lsp` call it makes
+/// anyway (the tool is not offered to it, and a call by name is still dispatched) is answered
+/// with the refusal for a run that holds no servers and starts none. The control is a delegate of
+/// the same kind in the working directory, which holds the session's servers and is answered by
+/// them. Rejects handing a checkout's delegate the session's servers, and building a set of its
+/// own for the delegate's tree: either one answers the question the way the control is answered.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_delegate_in_a_checkout_holds_no_language_servers_to_answer_an_lsp_call() {
+    let scratch = Scratch::new("checkout-delegate-no-servers");
+    let home = Scratch::new("checkout-delegate-no-servers-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let asks_lsp = || {
+        vec![
+            tool_request(
+                "lsp",
+                r#"{"operation":"workspaceSymbol","query":"Capability"}"#,
+            ),
+            reply_with("looked"),
+        ]
+    };
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "CALL-LSP-FROM-A-CHECKOUT-AND-FROM-THE-WORKING-DIRECTORY",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"ASK-LSP-IN-A-CHECKOUT","isolation":"checkout"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"ASK-LSP-IN-THE-WORKING-DIRECTORY"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+                reply_with("done"),
+            ],
+        ),
+        ("ASK-LSP-IN-A-CHECKOUT", asks_lsp()),
+        ("ASK-LSP-IN-THE-WORKING-DIRECTORY", asks_lsp()),
+    ]);
+    let (asked, _) = run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "CALL-LSP-FROM-A-CHECKOUT-AND-FROM-THE-WORKING-DIRECTORY",
+    );
+
+    let answered_to = |marker: &str| -> String {
+        asked
+            .iter()
+            .filter(|body| body.contains(marker) && !body.contains("CALL-LSP-FROM-A-CHECKOUT"))
+            .map(|body| tool_results(body))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let working_directory = answered_to("ASK-LSP-IN-THE-WORKING-DIRECTORY");
+    assert!(
+        working_directory.contains("no server is running yet"),
+        "the delegate in the working directory was not answered by the session's servers: \
+         {working_directory}"
+    );
+    let checkout = answered_to("ASK-LSP-IN-A-CHECKOUT");
+    assert!(
+        checkout.contains("no language server can be started here"),
+        "the delegate in a checkout was not answered as a run holding no servers is: {checkout}"
+    );
+    assert!(
+        !checkout.contains("no server is running yet"),
+        "the delegate in a checkout was answered by a language server set: {checkout}"
+    );
+}
+
 /// CHECKOUT-20. The answer to a spawn that gave delegates a checkout says they are not offered
 /// `lsp`, in each of the four sentences the answer has: one delegate or a fan-out, with the
 /// working directory's changes carried or not. The requests of each delegate offer no `lsp`
@@ -67397,7 +68120,7 @@ fn a_checkout_nothing_was_done_in_is_removed_when_its_delegate_ends() {
             .iter()
             .any(|body| body.contains("HAVE-A-DELEGATE-LOOK-APART")
                 && body.contains("saw it")
-                && body.contains("was removed")),
+                && body.contains("Its checkout c1 was removed, since nothing was done in it.")),
         "the delegate never read its checkout, or the planner was not told it was removed"
     );
     assert!(
@@ -90165,6 +90888,40 @@ fn a_credential_a_vouched_line_left_at_a_destination_the_map_distrusts_is_not_sc
     assert!(
         !control.path.join(".env.bak").exists(),
         "the same line under a map trusting the tree was not scanned, so the fixture does not reach the check: {said}"
+    );
+}
+
+/// CRED-11, CRED-16 and the Known cost "A path a program writes without the line naming it is not
+/// scanned at all". The scan of a line reads back the destinations a redirection names. `cp .env
+/// .env.bak` opens its destination itself, so the driver never learns the path and the backup
+/// stays in the tree holding the key, the line is not refused, and the person is told nothing. The
+/// line is vouched for in full, so a line the scan could reach is a line this one is not: the
+/// control in the test above shows the same copy through a redirection is taken back out.
+///
+/// This pins the limit. A turn-wide scan of the tree diff (which needs CRED-22's baseline) would
+/// make this fail, and the spec's Known cost changes in the same commit as the assertion.
+#[test]
+fn a_credential_a_program_copies_without_the_line_naming_the_path_is_not_scanned() {
+    let scratch = Scratch::new("credential-run-cp");
+    let env = format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
+    std::fs::write(scratch.path.join(".env"), &env).unwrap();
+    let programs = vouching_for("cp", &[".env", ".env.bak"], &scratch.path);
+
+    let (_home, reporter, answered) = a_run_turn_scanning(&scratch, "cp .env .env.bak", programs);
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env.bak")).ok(),
+        Some(env),
+        "what a program wrote at a path the line did not name was taken back out: {answered}"
+    );
+    assert!(
+        !answered.contains("refused"),
+        "a line was refused for a path it did not name: {answered}"
+    );
+    let told = what_the_person_was_told(&reporter);
+    assert!(
+        !told.contains("an AWS access key id"),
+        "a finding was made at a path the line did not name: {told}"
     );
 }
 

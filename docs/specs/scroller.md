@@ -213,6 +213,7 @@ that the Known costs below do not already admit.
 `verified-by: bravebot_tui::files_mode::the_wheel_over_the_edits_scrolls_them_by_the_rows_a_wheel_event_moves`
 `verified-by: bravebot_tui::files_mode::the_wheel_over_the_list_scrolls_its_rows_and_moves_nothing_else`
 `verified-by: bravebot_config::settings::a_settings_file_names_how_far_the_wheel_moves_the_view`
+`verified-by: bravebot_config::settings::a_checkouts_tui_block_does_not_replace_the_persons`
 `verified-by: bravebot_tui::app::tests::scroller::a_count_moves_the_view_that_many_times_as_far`
 `verified-by: bravebot_tui::app::tests::scroller::a_count_stops_at_the_ends_of_the_transcript`
 `verified-by: bravebot_tui::app::tests::scroller::a_count_on_the_prompt_keys_walks_that_many_prompts_and_stops_at_the_ends`

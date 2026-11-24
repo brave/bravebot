@@ -2219,7 +2219,9 @@ the lock. A link under such a name is judged as a link rather than as what it po
 server's home is removed on the same terms. On Windows nothing is removed.
 On Unix, [CHECKOUT-16](checkouts.md#CHECKOUT-16) sweeps delegates' checkouts under
 the state directory with a lock of the same kind, taken as each is created, removing one that no
-session record for its workspace lists and no running session holds.
+session record for its workspace lists and no running session holds. It takes only a directory
+named `c` and digits, not a link, owned by the account that owns `checkouts/<key>` and at the mode
+a claimed checkout is left at, and it leaves every other name and every one it cannot lock.
 
 A session waits a second at most for its own directory's lock. One that cannot have it by then, or
 on a file system that refuses a lock on a directory, keeps its directory at `1700`, which is as
@@ -2274,6 +2276,7 @@ large as whatever a turn unpacked there, and nothing in the opening session need
 `verified-by: bravebot_agent::scratch::a_file_system_that_refuses_the_lock_neither_fails_nor_stalls_the_session`
 `verified-by: bravebot_agent::scratch::a_directory_waiting_on_its_lock_is_not_yet_at_the_mode_a_sweep_takes`
 `verified-by: bravebot_agent::scratch::the_removal_of_leftovers_runs_beside_the_opening_session_and_not_ahead_of_it`
+`verified-by: bravebot_agent::scratch::on_windows_nothing_a_killed_session_left_is_removed`
 `verified-by: bravebot_agent::git::the_sweep_takes_only_an_unlisted_checkout_nobody_holds`
 `verified-by: bravebot_agent::workspace::a_sweep_leaves_the_checkouts_a_session_made_or_took_back`
 `verified-by: bravebot_tui::sessions::the_opening_sweep_leaves_a_checkout_a_record_lists_and_removes_the_other`

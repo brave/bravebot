@@ -1502,4 +1502,40 @@ mod tests {
         assert_eq!(mode_of(&path), 0o700, "mode was {:o}", mode_of(&path));
         drop(claim);
     }
+
+    /// TRUST-25: on Windows nothing is removed. A session opening there makes its directory in the
+    /// temporary directory itself and leaves a directory a killed session left, with what it wrote
+    /// in it, where it is. Windows has no lock this program takes on a directory, so a leftover
+    /// cannot be told from the directory of a session running beside this one.
+    ///
+    /// Rejects a Windows build that sweeps the temporary directory as Unix does, which would take a
+    /// running session's directory, and one that makes the account's directory there.
+    ///
+    /// Not run on a host that is not Windows: the test is compiled only where `unix` is not set.
+    #[test]
+    #[cfg(not(unix))]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn on_windows_nothing_a_killed_session_left_is_removed() {
+        let root = SessionScratch::create().expect("a directory to stand for the temporary one");
+        let left = reserved_name(root.path(), SESSION);
+        made_unclaimed(&left).expect("made");
+        std::fs::write(left.join("workings.txt"), "left").expect("written");
+
+        let opened = SessionScratch::made_in(root.path(), SESSION).expect("a scratch directory");
+        // The sweep elsewhere runs on a thread of its own, so a removal would not have happened
+        // yet at the moment the session returned.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        assert_eq!(
+            std::fs::read_to_string(left.join("workings.txt")).expect("still there"),
+            "left",
+            "{} was removed on Windows",
+            left.display()
+        );
+        assert_eq!(
+            opened.path().parent(),
+            Some(root.path()),
+            "the session's directory was not made in the temporary directory itself"
+        );
+    }
 }

@@ -630,10 +630,12 @@ Confidentiality goes both ways ([LABEL-8](labels.md#LABEL-8)). A delegate starts
 whatever private content its parent's context held, so what it writes is private from its first
 round. A parent shown a private report holds it from then on.
 
-Today no run hands the planner a reference to a delegate's report, because a delegate starts from a
-trusted conversation and nothing it does lowers that. Were a report quarantined, the planner would
-be told the reference and none of the words, and the person would be shown a preview marked as kept
-from the planner.
+Today no run a person starts hands the planner a reference to a delegate's report, because a
+delegate starts from a trusted conversation and nothing it does lowers that. A test can start the
+delegates of a turn from a context that has met something untrusted
+(`Task::with_delegates_that_have_met`, a constant the caller chose and never read from anything a
+delegate saw), and then the planner is told the reference and none of the words, and the person is
+shown a preview marked as kept from the planner.
 
 A delegate that starts out holding private content can start a processor as one that holds none
 can ([PROC-4](processors.md#PROC-4)). It is offered `spawn_processor` and told it may hand files to
@@ -650,6 +652,7 @@ processors where its list holds the tool, and what it writes is private, so the 
 `verified-by: bravebot_agent::turn::what_a_delegate_reported_reaches_the_person_watching`
 `verified-by: bravebot_agent::turn::a_report_the_planner_was_handed_a_reference_to_is_kept_from_it_and_drawn_marked`
 `verified-by: bravebot_agent::turn::what_collect_delegates_draws_for_the_person_follows_what_the_planner_was_given`
+`verified-by: bravebot_agent::turn::a_delegate_whose_own_context_met_something_untrusted_reports_a_kept_result_through_a_turn`
 
 <a id="DELEGATE-9"></a>
 ### DELEGATE-9: nothing but the report crosses back
@@ -687,7 +690,13 @@ its parent's context would have moved the log rather than absorbed it.
 `verified-by: bravebot_agent::turn::a_delegate_held_to_its_bound_says_so_to_the_planner_and_the_person`
 `verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_same_sentence_about_the_bound`
 `verified-by: bravebot_agent::turn::a_delegates_report_is_put_beside_how_many_commands_it_ran_and_writes_it_made`
-`verified-by: bravebot_agent::turn::a_request_no_marker_rule_can_answer_is_told_so_and_not_hung_up_on`
+`verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory`
+`verified-by: bravebot_agent::turn::a_checkout_nothing_was_done_in_is_removed_when_its_delegate_ends`
+`verified-by: bravebot_agent::turn::a_delegate_that_spent_its_token_budget_loses_its_tools_and_says_so`
+`verified-by: bravebot_agent::turn::a_delegate_that_spent_its_token_budget_and_failed_says_the_budget_was_spent`
+`verified-by: bravebot_agent::turn::a_kept_checkout_is_named_with_the_paths_written_in_it`
+`verified-by: bravebot_agent::turn::a_reference_a_delegate_minted_names_nothing_to_the_planner_afterwards`
+`verified-by: bravebot_agent::turn::a_file_a_delegate_changed_in_the_workspace_is_reported_by_the_turn_as_never_built`
 `verified-by: bravebot_agent::turn::a_delegate_that_ran_two_commands_is_reported_with_both_and_its_parent_adds_them_to_its_own`
 `verified-by: bravebot_agent::turn::a_delegate_that_wrote_three_files_is_reported_with_three_writes_and_its_parent_adds_them_to_its_own`
 

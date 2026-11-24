@@ -488,6 +488,14 @@ pub struct Task {
     /// and a settings key, and which of them won is the caller's business.
     /// `bravebot_core::vetting::auto` is the rule they resolve it with.
     pub auto_vetting: bool,
+    /// What the context of each delegate this turn starts has met before its first round.
+    ///
+    /// `Trusted`, since a delegate begins from an empty conversation and a run whose own context
+    /// has met something untrusted cannot delegate at all (DELEGATE-2). It is here so a test can
+    /// start a delegate whose context has met something untrusted and follow its report through
+    /// the real turn to the person's screen (WATCH-13). A caller can only lower it, and it is a
+    /// value the caller chose, never one read from anything a delegate saw.
+    pub delegates_have_met: bravebot_core::label::Integrity,
     /// What this turn is a delegate of, where it is one rather than a person's.
     ///
     /// `None` for every turn somebody typed the prompt for. Where it is set, four things come
@@ -670,6 +678,7 @@ impl Task {
             began_in: None,
             // Asking too: nobody has said a check's word may stand in for an answer.
             auto_vetting: false,
+            delegates_have_met: bravebot_core::label::Integrity::Trusted,
             // Nothing said about either destination, which is a caller that read no settings
             // file. Empty is a value the block can carry and this is not it.
             attribution: bravebot_config::Attribution::default(),
@@ -1169,6 +1178,20 @@ impl Task {
     /// reason nothing here reads `$HOME`.
     pub fn with_auto_vetting(mut self, auto: bool) -> Self {
         self.auto_vetting = auto;
+        self
+    }
+
+    /// Say what the context of each delegate this turn starts has met before its first round.
+    ///
+    /// Only a test has a reason to pass anything but [`Integrity::Trusted`]: no delegate a person's
+    /// turn starts has met anything (DELEGATE-8). A delegate started this way answers from a
+    /// context that has met something untrusted, so its report is quarantined from the turn that
+    /// started it and drawn for the person as kept from the planner (WATCH-13). The value is met
+    /// with what each delegate starts from, so it can only lower.
+    ///
+    /// [`Integrity::Trusted`]: bravebot_core::label::Integrity::Trusted
+    pub fn with_delegates_that_have_met(mut self, met: bravebot_core::label::Integrity) -> Self {
+        self.delegates_have_met = met;
         self
     }
 

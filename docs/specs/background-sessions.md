@@ -503,6 +503,11 @@ the session again.
 
 A loop or a watch does not survive its process, so a session holding one is not idle.
 
+The hour is a constant of the host process. A build with the `test-hosts` feature, which a release
+build refuses to compile (`crates/config/src/lib.rs`), reads `BRAVEBOT_TEST_BG_IDLE_MILLIS` for a
+shorter wait in milliseconds, so a test can run the real `__bg-host` process to its idle end. The
+value is a number a test chose and nothing that decides from a file, a reply or a page reads it.
+
 **Why.** A background session with nothing to do should not hold a model client, a language server
 and memory for as long as the machine is on. Stopping a session with a loop would silently end the
 loop.
@@ -522,6 +527,8 @@ loop.
 `verified-by: bravebot_cli::background::a_reply_answered_stopping_is_a_failure_and_only_ok_is_not`
 `verified-by: bravebot_cli::background::an_attach_answered_stopping_is_a_failure_and_only_ok_joins`
 `verified-by: bravebot_cli::running::a_reply_refused_as_stopping_starts_the_session_when_it_is_asked_again_once_stopped`
+`verified-by: bravebot_cli::running::an_attach_refused_as_stopping_says_to_attach_again_and_joins_nothing`
+`verified-by: bravebot_cli::running::a_host_process_idle_for_its_time_with_nobody_attached_ends_and_is_recorded_stopped`
 
 <a id="BG-14"></a>
 ### BG-14: a background session in a git repository works in a checkout of its own

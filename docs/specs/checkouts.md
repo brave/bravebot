@@ -398,6 +398,7 @@ Built, and a spawn is refused where a checkout is.
 
 `verified-by: bravebot_agent::workspace::a_checkout_is_made_only_of_a_repository_read_git_would_open`
 `verified-by: bravebot_agent::git::an_attribute_or_setting_git_converts_by_refuses_the_checkout`
+`verified-by: bravebot_agent::git::a_config_naming_an_attributes_file_elsewhere_refuses_the_checkout`
 `verified-by: bravebot_agent::git::an_attribute_git_writes_a_file_as_stored_by_is_accepted`
 `verified-by: bravebot_agent::git::an_attributes_file_a_deny_rule_covers_refuses_the_checkout`
 `verified-by: bravebot_agent::git::an_attributes_file_the_map_does_not_trust_refuses_the_checkout_unread`
@@ -412,6 +413,7 @@ Built, and a spawn is refused where a checkout is.
 `verified-by: bravebot_agent::git::the_settings_git_for_windows_applies_are_read_for_either_host_from_any_host`
 `verified-by: bravebot_agent::git::a_text_attribute_is_a_conversion_only_where_git_writes_text_with_crlf`
 `verified-by: bravebot_agent::git::the_hosts_text_conversion_reaches_both_places_attributes_are_read`
+`verified-by: bravebot_agent::git::a_name_windows_cannot_hold_in_the_tree_refuses_a_checkout_for_a_windows_host_alone`
 `verified-by: bravebot_agent::git::directories_count_against_the_file_bound`
 `verified-by: bravebot_agent::git::an_attributes_file_past_the_byte_bound_is_not_read`
 `verified-by: bravebot_agent::git::a_tree_past_a_bound_is_refused_for_it_before_an_attributes_file_is_read`
@@ -1182,6 +1184,7 @@ whatever its kind holds, and the answer to the spawn says so.
 
 `verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory`
 `verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_is_offered_no_lsp`
+`verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_holds_no_language_servers_to_answer_an_lsp_call`
 `verified-by: bravebot_agent::turn::the_answer_to_a_spawn_in_a_checkout_says_no_delegate_is_offered_lsp`
 `verified-by: bravebot_agent::turn::a_delegate_started_inside_a_checkout_is_offered_no_lsp_either`
 

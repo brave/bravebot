@@ -566,6 +566,7 @@ reason in [ADDRESS-11](#ADDRESS-11).
 `verified-by: bravebot_tui::app::the_agent_setting_does_not_replace_a_typed_or_recorded_name`
 `verified-by: bravebot_tui::app::an_agent_setting_naming_nothing_is_said_and_the_session_opens`
 `verified-by: bravebot_tui::app::the_agent_setting_is_survivable_where_a_typed_name_is_not`
+`verified-by: bravebot_cli::running::an_agent_setting_whose_definitions_model_is_refused_ends_the_run`
 
 ## Open questions
 

@@ -962,6 +962,7 @@ a time, and only where a check completed and found nothing.
 `verified-by: bravebot_cli::main::asking_to_vet_twice_is_asking_once`
 `verified-by: bravebot_cli::running::a_bypassing_one_shot_run_given_the_vet_flag_keeps_back_bytes_a_check_objects_to`
 `verified-by: bravebot_cli::running::a_session_in_lines_given_the_vet_flag_says_what_bypass_refuses`
+`verified-by: bravebot_cli::running::a_session_in_lines_given_the_vet_flag_keeps_back_the_output_a_check_objects_to`
 `verified-by: bravebot_cli::main::an_invocation_that_only_mentions_vetting_does_not_ask_for_it`
 `verified-by: bravebot_cli::main::vetting_composes_with_the_other_flags_that_lead`
 `verified-by: bravebot_core::vetting::asking_on_the_command_line_is_one_way_and_idempotent`

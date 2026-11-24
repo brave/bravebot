@@ -628,6 +628,11 @@ said.
 `verified-by: bravebot_agent::turn::a_worker_of_a_bypass_turn_reaches_a_sibling_directory_and_one_of_an_asking_turn_does_not`
 `verified-by: bravebot_agent::turn::a_limited_delegate_of_a_bypass_turn_is_refused_a_sibling_directory_its_patterns_do_not_cover`
 `verified-by: bravebot_agent::workspace::a_delegate_in_a_checkout_is_not_reached_into_the_working_directory_or_another_checkout`
+`verified-by: bravebot_agent::delegate_sandbox_lists::a_bypass_worker_is_refused_the_paths_the_persons_deny_lists_cover`
+`verified-by: bravebot_agent::delegate_sandbox_lists::a_bypass_worker_is_kept_inside_the_workspace_where_the_person_asked`
+`verified-by: bravebot_agent::delegate_sandbox_lists::a_delegate_whose_definition_leaves_out_write_file_cannot_call_it`
+`verified-by: bravebot_agent::turn::a_definition_names_the_delegate_a_turn_runs_and_says_what_it_is_for`
+`verified-by: bravebot_agent::turn::a_delegate_runs_its_programs_under_the_mode_of_the_turn_that_spawned_it`
 
 <a id="MODE-10"></a>
 ### MODE-10: a mode belongs to the sitting it was chosen in
