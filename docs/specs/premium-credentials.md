@@ -139,8 +139,8 @@ settle the tier either. A pane too narrow for the wordmark still reports both.
 
 Where the server reports using a model other than the one requested, both are shown: the choice that
 was made and the model that actually answered. Said once when it starts happening rather than every
-turn. `automatic-bravebot` resolving to a concrete model is not a substitution, since that is the
-server choosing per request, which is what the automatic entry means.
+turn. The default model is a concrete name like any other, so a different model answering it is
+reported too.
 
 **Why.** A configuration that holds a key would otherwise report itself as premium, which is a fact
 about the configuration and not about any request. A session reported "premium configured" while ten
@@ -155,13 +155,10 @@ likely to notice first when a request did not carry the key.
 `verified-by: bravebot_tui::logo::the_mark_names_the_agent_its_confinement_and_its_tier`
 `verified-by: bravebot_tui::logo::a_narrow_pane_still_reports_the_confinement_and_the_tier`
 `verified-by: bravebot_tui::status::a_substituted_model_is_reported_beside_the_one_asked_for`
-`verified-by: bravebot_tui::status::automatic_being_resolved_to_a_real_model_is_not_a_substitution`
 `verified-by: bravebot_tui::status::picking_a_model_after_a_turn_reports_the_turn_that_ran`
-`verified-by: bravebot_tui::state::picking_automatic_and_being_answered_by_a_model_is_not_a_substitution`
 `verified-by: bravebot_tui::status::the_opening_screen_draws_the_tier_the_configuration_settles`
 `verified-by: bravebot_tui::app::a_model_the_configuration_named_is_reported_as_substituted_too`
 `verified-by: bravebot_tui::app::a_substitution_that_carries_on_is_said_once`
-`verified-by: bravebot_tui::app::the_configured_automatic_entry_resolving_to_a_model_says_nothing`
 `verified-by: bravebot_tui::app::a_turn_on_a_definitions_model_records_its_tier_and_model`
 `verified-by: bravebot_tui::app::a_turn_on_a_skills_model_replaces_an_earlier_turns_tier`
 `verified-by: bravebot_agent::turn::a_turn_reports_premium_when_it_was_handed_a_key_to_present_and_not_otherwise`

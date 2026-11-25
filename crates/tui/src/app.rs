@@ -4745,7 +4745,7 @@ mod tests {
         let roster = combined(
             configured,
             Ok(vec![
-                bravebot_aichat::models::Model::automatic(),
+                listed(bravebot_config::DEFAULT_MODEL, None),
                 listed("claude-sonnet", Some(102_400)),
             ]),
         )
@@ -4828,20 +4828,6 @@ mod tests {
     #[test]
     fn an_unreachable_listing_with_no_tiers_configured_is_still_a_failure() {
         assert!(combined(vec![], Err("the endpoint is unreachable".into())).is_err());
-    }
-
-    /// `automatic` means "let the server choose", which Bedrock does not offer: a request names one
-    /// model and gets it or an error. It reaches the picker from the Brave half instead.
-    #[test]
-    fn the_bedrock_picker_does_not_offer_automatic() {
-        use bravebot_config::env_var;
-
-        let models = bedrock_models(&bedrock_configured(&[
-            (env_var::USE_BEDROCK, "1"),
-            (env_var::AWS_REGION, "us-west-2"),
-            (env_var::BEDROCK_OPUS_MODEL, "opus-arn"),
-        ]));
-        assert!(!models.iter().any(|model| model.is_automatic()));
     }
 
     /// Premium means the premium key. Reaching a model through somebody's own AWS account does
@@ -5280,7 +5266,7 @@ mod tests {
 
         let roster = combined(
             configured,
-            Ok(vec![bravebot_aichat::models::Model::automatic()]),
+            Ok(vec![listed(bravebot_config::DEFAULT_MODEL, None)]),
         )
         .expect("a roster");
         let keys: Vec<&str> = roster.iter().map(|m| m.key.as_str()).collect();
@@ -5540,10 +5526,7 @@ mod tests {
             assert_eq!(offered(&unsigned), ["opus-arn"], "{state}");
             assert!(!unsigned.serves_aichat(), "{state}");
         }
-        assert_eq!(
-            offered(&holding(true, true)),
-            ["opus-arn", bravebot_config::DEFAULT_MODEL, "brave-model"]
-        );
+        assert_eq!(offered(&holding(true, true)), ["opus-arn", "brave-model"]);
         assert_eq!(asked.try_iter().collect::<Vec<_>>(), ["/v1/models"]);
     }
 
@@ -5668,10 +5651,7 @@ mod tests {
         let rows = |chosen: Option<&str>| keys_of(list_models(&config, chosen).expect("a roster"));
         let requests = || (asked_brave.try_iter().count(), asked_one.try_iter().count());
 
-        assert_eq!(
-            rows(Some("brave-model")),
-            ["opus-arn", bravebot_config::DEFAULT_MODEL, "brave-model"]
-        );
+        assert_eq!(rows(Some("brave-model")), ["opus-arn", "brave-model"]);
         assert_eq!(requests(), (1, 0), "a Brave model asked a gateway");
         assert_eq!(rows(Some("one/llama3")), ["opus-arn", "one/llama3"]);
         assert_eq!(requests(), (0, 1), "a gateway's model asked Brave");
@@ -6090,8 +6070,7 @@ mod tests {
         );
     }
 
-    /// Nothing chosen is `automatic`, whose model is resolved per request, so no entry's window is
-    /// the one in force.
+    /// Nothing chosen names no entry, so no entry's window is the one in force.
     #[test]
     fn nothing_chosen_has_no_advertised_window() {
         let models = [listed("claude-opus", Some(102_400))];
@@ -6114,8 +6093,8 @@ mod tests {
     }
 
     /// VET-4: what the roster lists the model in force as taking is what a picture is refused
-    /// against, so it has to be that model's list. `automatic` and a model the listing leaves out
-    /// claim nothing, and a claim of nothing is what lets the picture go ahead.
+    /// against, so it has to be that model's list. A model the listing leaves out claims nothing,
+    /// and a claim of nothing is what lets the picture go ahead.
     #[test]
     fn the_inputs_adopted_are_the_chosen_models_own() {
         let mut texts = listed("text-only", None);
@@ -6780,7 +6759,7 @@ mod tests {
     /// BACKEND-11: the list `/model` opens marks the model in force, and picking a row puts that
     /// model in force. Run with the model set by settings and nothing picked, with a pick, and where
     /// a row is typed to and chosen. The regressions it rejects are the pick alone read as the model
-    /// in force, which marks Brave's `automatic` for a session on the settings model, a default that
+    /// in force, which marks Brave's default for a session on the settings model, a default that
     /// outranks a pick, and a row chosen that is not put in force.
     #[test]
     fn the_list_the_model_command_opens_marks_the_model_in_force_and_a_row_picked_is_put_in_force()
@@ -6789,7 +6768,7 @@ mod tests {
         let mut config = a_config_with_a_named_roster();
         config.default_model = "chatgpt/gpt-5.5".to_string();
         offer(vec![
-            bravebot_aichat::models::Model::automatic(),
+            listed(bravebot_config::DEFAULT_MODEL, None),
             listed("chatgpt/gpt-5.5", Some(65_536)),
         ]);
 
@@ -7043,19 +7022,19 @@ mod tests {
 
     /// CHATGPT-9, BACKEND-11: the picker marks the model in force, which is the pick where the
     /// session has one and otherwise the configured default, and that is the model a `model` key of
-    /// the settings file names. The roster has Brave's `automatic` row beside the account's, as the
+    /// the settings file names. The roster has Brave's default row beside the account's, as the
     /// roster of anybody has, and a session whose settings name an account model has not picked
-    /// `automatic`. Each case holds the mark and where the cursor opens, which are two things: a
+    /// the default. Each case holds the mark and where the cursor opens, which are two things: a
     /// cursor on a row that is not marked is a picker that opens on one model and says another is in
     /// use. The regressions it rejects are the pick alone read as the model in force, which marks
-    /// `automatic` for a session on the settings model, a default that outranks a pick, and
-    /// `automatic` left unmarked where nothing is configured and nothing is picked.
+    /// the default for a session on the settings model, a default that outranks a pick, and the
+    /// default left unmarked where nothing is configured and nothing is picked.
     #[test]
     fn the_picker_marks_the_model_in_force_which_is_the_default_where_nothing_is_picked() {
         use models::scripted_account::offer;
         let mut config = a_config_with_a_named_roster();
         offer(vec![
-            bravebot_aichat::models::Model::automatic(),
+            listed(bravebot_config::DEFAULT_MODEL, None),
             listed("chatgpt/gpt-5.5", Some(65_536)),
         ]);
         let in_force = |key: &str| (Some(key.to_string()), vec![key.to_string()]);
@@ -7078,13 +7057,13 @@ mod tests {
             "the default outranked the pick"
         );
 
-        // Nothing configured and nothing picked is `automatic` in use.
+        // Nothing configured and nothing picked is the default in use.
         config.default_model = bravebot_config::DEFAULT_MODEL.to_string();
         let mut session = Session::new("none");
         assert_eq!(
             picker_opened(&mut session, &config),
             in_force(bravebot_config::DEFAULT_MODEL),
-            "`automatic` was not marked where it is the default"
+            "the default was not marked where it is the default"
         );
     }
 
@@ -7519,12 +7498,11 @@ mod tests {
     #[test]
     fn a_schema_is_refused_only_where_the_roster_states_parameters_without_it() {
         let row = |key: &str, parameters: Option<&[&str]>| bravebot_aichat::models::Model {
-            key: key.to_string(),
             advertised: bravebot_aichat::models::Advertised {
                 parameters: parameters.map(|them| them.iter().map(|it| it.to_string()).collect()),
                 ..Default::default()
             },
-            ..bravebot_aichat::models::Model::automatic()
+            ..listed(key, None)
         };
         let models = [
             row("silent", None),
@@ -47593,30 +47571,6 @@ mod tests {
                 .count(),
             1,
             "said again on a later turn: {said:?}"
-        );
-    }
-
-    /// The automatic entry asks the server to choose per request, so a concrete name coming back
-    /// is that entry working. It is the shipped default, so a session that never touched `/model`
-    /// is the ordinary way to reach this, and a warning here would be one on almost every session.
-    #[test]
-    fn the_configured_automatic_entry_resolving_to_a_model_says_nothing() {
-        let mut session = Session::new("none");
-        record_the_model_that_answered(
-            &mut session,
-            Asked {
-                name: bravebot_config::DEFAULT_MODEL.to_string(),
-                comparable: true,
-                configured: "test-model".to_string(),
-            },
-            "claude-3-haiku",
-            true,
-        );
-
-        assert_eq!(session.substituted_model(), None);
-        assert!(
-            said_in_the_transcript(&session).is_empty(),
-            "the automatic entry doing its job was reported as a substitution"
         );
     }
 

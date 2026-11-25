@@ -56,7 +56,7 @@ configuration OK
   endpoint  https://ai-chat.bsg.brave.com/v1/chat/completions
   premium   https://ai-gateway-api.bsg.brave.com/v1/chat/completions, without a premium key, so requests go to the endpoint above
   key id    …
-  model     automatic-bravebot (default)
+  model     claude-3-haiku (default)
   key       … (never transmitted)
   settings  no settings.json
 
@@ -161,7 +161,7 @@ history somewhere with none of that behind it.
 :::note
 Nothing recalled from `~/.bravebot` is fed straight to a turn. A recalled prompt is placed in the
 input box, where you read it and press Enter. That keystroke is what makes it trusted, exactly as
-typing it would have. A model name the server does not recognise is reset to the automatic entry
+typing it would have. A model name the server does not recognise is refused or reset by it
 rather than obeyed.
 :::
 
@@ -452,7 +452,7 @@ uses is `BRAVEBOT_USE_BEDROCK`.
 file or a profile still setting it falls back to the Brave backend without an error. Rename it.
 
 `BRAVEBOT_DEFAULT_MODEL` was called `BRAVE_AI_CHAT_DEFAULT_MODEL`. The old name also reads as unset, so
-a run asks for the model the build was made with (or `automatic-bravebot`) until you rename it.
+a run asks for the model the build was made with (`claude-3-haiku`) until you rename it.
 :::
 
 **The environment wins over all three files.** A variable exported in your shell overrides the same
@@ -527,8 +527,8 @@ answers.
 written for another tool puts here. Each resolves to something reachable: the model your AWS account
 named for that tier, and otherwise that tier's name on the Brave roster. A tier word is never sent as
 written, because a service has never heard of it. Any other name is used exactly as you wrote it.
-Bedrock refuses a model it does not recognise, and the aichat endpoint silently resets one to
-`automatic-bravebot`, which is the key appearing to work while changing nothing.
+Bedrock refuses a model it does not recognise, and the aichat endpoint may refuse or silently reset one, which is the key appearing to work while
+changing nothing.
 
 ### `advisorModel`
 
@@ -1859,8 +1859,7 @@ a summary, in the request only.
 that figure is the budget for whichever model you chose. You do not normally set this at all.
 
 A budget you set by hand outranks the advertised one. The built-in default of 24,000 prompt tokens
-only stands in for two cases: the automatic entry, whose model is resolved per request so no single
-window describes it, and a model that advertises nothing.
+only stands in for a model that advertises nothing.
 
 An advertised figure is believed even where it is small, and never raised. A budget that makes no
 sense falls back to the default rather than disabling compaction, so a misconfiguration cannot

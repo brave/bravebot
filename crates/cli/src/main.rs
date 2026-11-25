@@ -5937,16 +5937,6 @@ mod tests {
         assert!(complaint.contains("a-free-one"), "{complaint}");
     }
 
-    /// The routing entry asks for whichever model the server picks, so a concrete name coming back
-    /// is that name working rather than a model standing in for another.
-    #[test]
-    fn a_routing_entry_answered_by_a_model_is_not_a_substitution() {
-        assert_eq!(
-            model_not_served(bravebot_config::DEFAULT_MODEL, true, "the-model-picked"),
-            None
-        );
-    }
-
     /// A backend asked by an opaque handle answers with a name that never matched what went in, so
     /// comparing them would fail every run ever made against one.
     #[test]

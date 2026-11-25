@@ -46,10 +46,9 @@ Rows are **grouped under the service that answers them**, one heading per servic
 the section you are scrolling through is held on the top line. Left folds the section the cursor is in
 down to its heading and Right opens it again, and PageDown and PageUp move a screenful at a time.
 
-`automatic-bravebot` lets the server triage per request, and is what an unrecognised name is reset
-to. It is always offered, so it is the one choice that cannot fail to work. The model requested is not
-necessarily the model used: some entries are weighted ensembles that resolve per request, and the
-automatic entry itself picks per request.
+The list is exactly what the endpoint returns, and nothing is added to it. With no choice made,
+requests name `claude-3-haiku`. The model requested is not necessarily the model used: some entries
+are weighted ensembles that resolve per request.
 
 **The roster is curated for Brave Bot.** Requests to Brave's endpoint carry a header naming this
 product, and the endpoint answers with the models chosen for it rather than the full Leo list. Leo's
@@ -57,11 +56,9 @@ roster is chosen for a chat assistant and a good fraction of it cannot call tool
 make an agent that can read and write nothing. A gateway is sent no such header, since what a
 third-party service gets is the shape it documents.
 
-If you wrote `automatic` anywhere, it still works. That is Leo's triage entry and names a different
-routing policy, so it is rewritten to `automatic-bravebot` before a request carries it, whether it
-came from a settings file, an exported variable or a choice recorded by an older version. The
-rewrite is one-way: `automatic` cannot be requested, and Leo's routing is not something the picker
-offers.
+If you wrote `automatic` or `automatic-bravebot` anywhere, it is rewritten to the default model
+before a request carries it, whether it came from a settings file, an exported variable or a choice
+recorded by an older version. The rewrite is one-way: those names cannot be requested.
 
 The list is drawn for a person, and the names in it never reach a model. What you picked becomes the
 `model` routing field of later requests.

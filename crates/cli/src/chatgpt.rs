@@ -505,6 +505,19 @@ mod tests {
         let _ = &mut shown;
     }
 
+    /// A row of the account's listing, which these tests only count and never read.
+    fn a_row() -> bravebot_agent::chatgpt::Model {
+        bravebot_agent::chatgpt::Model {
+            key: "chatgpt/gpt-a".to_string(),
+            display_name: "GPT A".to_string(),
+            premium: false,
+            provider: Some("ChatGPT".to_string()),
+            conversation_tokens: None,
+            reads_effort: true,
+            advertised: Default::default(),
+        }
+    }
+
     /// A sign-in as the flow reports it, with a path that names nothing real.
     fn signed_in() -> SignedIn {
         SignedIn {
@@ -523,12 +536,12 @@ mod tests {
     /// in it sends the person to run `bravebot` to choose one.
     #[test]
     fn each_answer_of_the_listing_has_its_own_sentence_and_only_models_send_the_person_to_choose() {
-        use bravebot_agent::chatgpt::{Model, Refusal};
+        use bravebot_agent::chatgpt::Refusal;
 
         let reaches_none = said_of_listing(&AccountModels::Offered(Vec::new()), true);
         let unreadable = said_of_listing(&AccountModels::Unreadable, true);
-        let compiled = said_of_listing(&AccountModels::Compiled(vec![Model::automatic()]), true);
-        let offered = said_of_listing(&AccountModels::Offered(vec![Model::automatic()]), true);
+        let compiled = said_of_listing(&AccountModels::Compiled(vec![a_row()]), true);
+        let offered = said_of_listing(&AccountModels::Offered(vec![a_row()]), true);
         assert_eq!(reaches_none, t!(chatgpt_reaches_no_model));
         assert_eq!(unreadable, t!(chatgpt_listing_unreadable));
         assert_eq!(compiled, t!(chatgpt_listing_compiled));
@@ -598,7 +611,6 @@ mod tests {
     /// sign-in ended with before a start asked which model to use.
     #[test]
     fn every_command_the_sign_in_ends_by_naming_is_one_that_works_as_typed() {
-        use bravebot_agent::chatgpt::Model;
         const WORKING: [&str; 2] = [
             r#"bravebot -i "<prompt>" --model chatgpt/<model>"#,
             r#"bravebot "<task>" --model chatgpt/<model>"#,
@@ -606,9 +618,9 @@ mod tests {
 
         for asks in [true, false] {
             for listing in [
-                AccountModels::Offered(vec![Model::automatic()]),
+                AccountModels::Offered(vec![a_row()]),
                 AccountModels::Unreadable,
-                AccountModels::Compiled(vec![Model::automatic()]),
+                AccountModels::Compiled(vec![a_row()]),
             ] {
                 let said = said_of_listing(&listing, asks);
                 let named: Vec<&str> = said.split('`').skip(1).step_by(2).collect();
@@ -633,8 +645,7 @@ mod tests {
     /// asked, whoever the person is. The regression it rejects is the promise made to everybody.
     #[test]
     fn the_sign_in_promises_the_question_only_where_a_start_would_ask_it() {
-        use bravebot_agent::chatgpt::Model;
-        let models = || vec![Model::automatic()];
+        let models = || vec![a_row()];
 
         let asked = said_of_listing(&AccountModels::Offered(models()), true);
         let not_asked = said_of_listing(&AccountModels::Offered(models()), false);

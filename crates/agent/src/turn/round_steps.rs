@@ -667,11 +667,10 @@ pub(super) fn after_a_reply<S: Sink, C: Confirmer, R: Reporter>(
 ///
 /// The endpoint substitutes rather than refuses a name it will not serve, so the answer's model
 /// is compared with the name as the backend sends it. A backend that does not report the model it
-/// was asked for, and the default model, are never counted as substituted.
+/// was asked for is never counted as substituted.
 pub(super) fn model_was_substituted(config: &Config, resolved: &str, answered: &str) -> bool {
     let asked = crate::backend::Backend::name_as_asked(config, resolved);
     crate::backend::Backend::reports_the_model_it_was_asked_for(config, resolved)
-        && asked != bravebot_config::DEFAULT_MODEL
         && asked != answered
 }
 

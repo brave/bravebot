@@ -849,7 +849,6 @@ pub fn run(
     if let Some((written, resolved)) = &definition_model {
         let asked = crate::backend::Backend::name_as_asked(config, resolved);
         if crate::backend::Backend::reports_the_model_it_was_asked_for(config, resolved)
-            && asked != bravebot_config::DEFAULT_MODEL
             && asked != outcome.model
         {
             let said = t!(

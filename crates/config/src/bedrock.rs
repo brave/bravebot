@@ -85,8 +85,7 @@ impl Tier {
     /// The cost is that the service owns these names and can rename one, and nothing here notices: a
     /// snapshot of the live roster does not belong in a public repository either. Checked by hand
     /// against `GET /v1/models`, where all three were present when this was written. A name the
-    /// endpoint has stopped serving is reset by it to `automatic`, which is where somebody with no
-    /// `model` key already starts.
+    /// endpoint has stopped serving is refused or reset by it.
     pub fn brave_model(self) -> &'static str {
         match self {
             Tier::Opus => "claude-opus",

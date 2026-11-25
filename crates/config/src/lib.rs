@@ -86,13 +86,12 @@ pub mod provider;
 
 include!(concat!(env!("OUT_DIR"), "/baked.rs"));
 
-/// The server treats an unrecognised model as [`DEFAULT_MODEL`], so that is also our default rather
-/// than pinning a name that may silently stop existing.
+/// The model a request names when nobody has picked one.
 ///
-/// Bravebot's own triage entry. Leo uses `automatic` for a different routing policy; requests from
-/// this product identify themselves with `Brave-Product: bravebot` so the listing and completions
-/// endpoints offer this name instead.
-pub const DEFAULT_MODEL: &str = "automatic-bravebot";
+/// A concrete model rather than a routing entry, so what answers is the model named. It is not
+/// looked up in the listing, which is asked for only by a picker and by the lookup of one model's
+/// row, and a configuration is built without touching the network.
+pub const DEFAULT_MODEL: &str = "claude-3-haiku";
 
 /// Where Brave's premium service is, for a build whose free endpoint is a development one.
 ///
@@ -118,13 +117,13 @@ fn compiled_in_premium_endpoint(free: &str) -> &'static str {
     }
 }
 
-/// The automatic routing name Leo uses. Remembered choices and configuration may still say it from
-/// before bravebot had its own entry; [`normalize_model`] rewrites those to [`DEFAULT_MODEL`].
-const LEGACY_AUTOMATIC: &str = "automatic";
+/// The routing names this product no longer sends. Remembered choices and configuration may still
+/// say one; [`normalize_model`] rewrites those to [`DEFAULT_MODEL`].
+const RETIRED_AUTOMATIC: [&str; 2] = ["automatic", "automatic-bravebot"];
 
 /// Rewrite a model name from an older choice or configuration to what this product sends now.
 pub fn normalize_model(name: &str) -> &str {
-    if name == LEGACY_AUTOMATIC {
+    if RETIRED_AUTOMATIC.contains(&name) {
         DEFAULT_MODEL
     } else {
         name
@@ -209,8 +208,8 @@ fn tier_account<'a>(
 /// is the feature not existing. See [`Config::context_budget`].
 ///
 /// Only a fallback now. Where the endpoint says what a model's window is, that is used instead:
-/// see [`budget_for_window`]. This stands in for [`DEFAULT_MODEL`], whose model is chosen per
-/// request so no one window describes it, and for an entry that reports nothing.
+/// see [`budget_for_window`]. This stands in for a model no listing describes, and for an entry
+/// that reports nothing.
 ///
 /// This was 100_000, which is not under any window the backend serves, so compaction could not
 /// fire: recorded sessions ended at 28,600, 34,751 and 34,800 prompt tokens having never once been
@@ -1180,8 +1179,7 @@ pub enum Gateways<'config> {
 pub struct RosterScope<'config> {
     pub accounts: RosterAccounts,
     pub gateways: Gateways<'config>,
-    /// Brave's own endpoint, which is also where an `automatic` row and every bare Brave name
-    /// come from.
+    /// Brave's own endpoint, which is where every bare Brave name comes from.
     pub brave: bool,
 }
 
@@ -1346,8 +1344,8 @@ pub struct Config {
     /// How many prompt tokens one request may reach before the conversation is compacted.
     ///
     /// A guess, and it has to be one. The server reports what a request cost but never what it
-    /// had room for, the default model is `automatic` and resolves per request, and there is no
-    /// tokeniser here to count with. So this is a number chosen to be comfortably under the
+    /// had room for, a listing may not describe the model in force, and there is no tokeniser here
+    /// to count with. So this is a number chosen to be comfortably under the
     /// smallest window worth using, and [`env_var::CONTEXT_BUDGET`] is the way out of it for
     /// anyone whose model is smaller or much larger.
     pub context_budget: u64,
@@ -2748,7 +2746,7 @@ mod tests {
     }
 
     #[test]
-    fn the_default_model_is_automatic() {
+    fn the_default_model_is_the_compiled_one() {
         let config = Config::from_lookup(complete_env).unwrap();
         assert_eq!(config.default_model, DEFAULT_MODEL);
     }
@@ -2833,7 +2831,7 @@ mod tests {
         assert_eq!(config.context_budget, DEFAULT_CONTEXT_BUDGET);
     }
 
-    /// `automatic` resolves per request, so nothing was advertised and the default has to stand.
+    /// Nothing was advertised for the model in force, so the default budget has to stand.
     #[test]
     fn nothing_advertised_leaves_the_default_alone() {
         let mut config = Config::from_lookup(complete_env).unwrap();
@@ -4743,8 +4741,8 @@ mod tests {
         assert!(config.chatgpt_models.is_empty());
     }
 
-    /// The exception: with no Brave credentials, `automatic` names a backend that cannot be reached at
-    /// all, so the strongest configured tier is the only thing that could answer.
+    /// The exception: with no Brave credentials, the default names a backend that cannot be reached
+    /// at all, so the strongest configured tier is the only thing that could answer.
     #[test]
     fn without_brave_credentials_the_default_is_the_strongest_bedrock_tier() {
         for (state, endpoint) in [
@@ -6520,15 +6518,17 @@ mod tests {
         }
     }
 
-    /// Leo's automatic routing name is rewritten to bravebot's own entry.
+    /// The automatic routing names this product no longer sends are rewritten to the default.
     #[test]
     fn the_legacy_automatic_name_becomes_the_brave_bot_default() {
-        let config = Config::from_lookup(|key| match key {
-            env_var::DEFAULT_MODEL => Some("automatic".into()),
-            other => complete_env(other),
-        })
-        .unwrap();
-        assert_eq!(config.default_model, DEFAULT_MODEL);
+        for retired in RETIRED_AUTOMATIC {
+            let config = Config::from_lookup(|key| match key {
+                env_var::DEFAULT_MODEL => Some(retired.into()),
+                other => complete_env(other),
+            })
+            .unwrap();
+            assert_eq!(config.default_model, DEFAULT_MODEL, "{retired}");
+        }
     }
 
     /// An ARN cannot be derived from a word, so a tier the AWS account left unset falls through to

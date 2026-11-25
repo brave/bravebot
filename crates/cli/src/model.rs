@@ -472,12 +472,10 @@ pub(crate) fn model_for_this_run(named: Option<&str>, config: &Config) -> String
 /// About the model in force whatever named it: the flag, a remembered choice and the settings key
 /// all pin a model somebody expects to be answered by.
 ///
-/// Nothing where the name asks for whichever model the server picks rather than for a particular
-/// one, because resolving to a model is what that name is for. Nothing where the backend does not
-/// report the name it was asked for either, where a reply that says something else is the
-/// indirection working rather than a different model answering.
+/// Nothing where the backend does not report the name it was asked for, where a reply that says
+/// something else is the indirection working rather than a different model answering.
 pub(crate) fn model_not_served(asked: &str, comparable: bool, served: &str) -> Option<String> {
-    if !comparable || asked == bravebot_config::DEFAULT_MODEL || asked == served {
+    if !comparable || asked == served {
         return None;
     }
     Some(t!(
@@ -524,11 +522,15 @@ mod tests {
 
     /// A row of the account as the picker shows it, with the fields the question reads.
     fn an_account_row(key: &str, name: &str) -> Model {
-        let mut row = Model::automatic();
-        row.key = key.to_string();
-        row.display_name = name.to_string();
-        row.provider = Some("ChatGPT".to_string());
-        row
+        Model {
+            key: key.to_string(),
+            display_name: name.to_string(),
+            premium: false,
+            provider: Some("ChatGPT".to_string()),
+            conversation_tokens: None,
+            reads_effort: true,
+            advertised: Default::default(),
+        }
     }
 
     /// What the question put and which row an answer typed picked.

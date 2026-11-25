@@ -196,7 +196,7 @@ configuration OK
   endpoint  https://ai-chat.bsg.brave.com/v1/chat/completions
   premium   https://ai-gateway-api.bsg.brave.com/v1/chat/completions, without a premium key, so requests go to the endpoint above
   key id    …
-  model     automatic-bravebot (default)
+  model     claude-3-haiku (default)
   key       … (never transmitted)
 
 state directory ~/.bravebot, from HOME
