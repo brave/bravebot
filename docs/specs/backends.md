@@ -1821,7 +1821,7 @@ request is made. Which requests those are is the caller's to say, and
 **The schemas have a breakpoint of their own.** The service caches tools, then system, then
 messages, and keeps an entry only where a breakpoint is. The schemas are the same bytes in every
 project, while the system prompt names the working directory, the date and the project's rules. With
-the breakpoint only on the prompt, a session in another directory missed at the prompt and wrote the
+the breakpoint only on the prompt, a session in another directory misses at the prompt and writes the
 schemas again with it, about 25,000 tokens charged above the fresh rate. With one after the schemas
 it reads them back. Three breakpoints are within the four the service allows.
 
