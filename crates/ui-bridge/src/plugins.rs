@@ -15,12 +15,12 @@ mod listing;
 use crate::emit::Emitter;
 use crate::protocol::{ErrorCode, Event, Failure, Request};
 use bravebot_agent::confirm::{FetchRequest, printable_spelled};
-use bravebot_agent::plugin_source::{NotASource, Requested, Source, classify};
+use bravebot_agent::plugin_said;
+use bravebot_agent::plugin_source::{Requested, Source, classify};
 use bravebot_agent::plugins::{
     self, Asker, Before, Installed, ManageRefusal, Refusal, Staged, Updated,
 };
 use bravebot_agent::skills::Catalogue;
-use bravebot_config::plugin as manifest;
 use bravebot_core::delegate::Definitions;
 use bravebot_i18n::t;
 use serde_json::{Value, json};
@@ -92,18 +92,10 @@ fn drawn(plugin: &Installed) -> Value {
 /// The sentence `/plugin remove`, `enable` and `disable` say a refusal in. The name is the one the
 /// window sent, drawn through [`printable_spelled`].
 fn refused(name: &str, refusal: &ManageRefusal) -> Failure {
-    let shown = printable_spelled(name);
+    let sentence = plugin_said::manage_refused(name, refusal, printable_spelled);
     match refusal {
-        ManageRefusal::BadName => {
-            Failure::bad_request(t!(plugin_not_a_name, name = shown).to_string())
-        }
-        ManageRefusal::NotInstalled(_) => {
-            Failure::bad_request(t!(plugin_not_installed, name = shown).to_string())
-        }
-        ManageRefusal::Io(_) => Failure::new(
-            ErrorCode::Internal,
-            t!(plugin_manage_failed, name = shown).to_string(),
-        ),
+        ManageRefusal::BadName | ManageRefusal::NotInstalled(_) => Failure::bad_request(sentence),
+        ManageRefusal::Io(_) => Failure::new(ErrorCode::Internal, sentence),
     }
 }
 
@@ -367,49 +359,23 @@ impl Asker for WindowAsker {
 
 /// An add, said as `/plugin add` says it.
 fn added<A: Asker + ?Sized>(source: &str, root: &Path, home: &Path, asker: &mut A) -> Ended {
-    let shown = printable_spelled(source);
-    match plugins::install_typed(source, root, home, asker) {
-        Ok(name) => (
-            "installed",
-            t!(plugin_added, name = printable_spelled(&name), path = shown).to_string(),
-        ),
-        Err(refusal) => (
-            ended_word(&refusal),
-            t!(plugin_add_refused, path = shown, why = why(&refusal)).to_string(),
-        ),
-    }
+    let result = plugins::install_typed(source, root, home, asker);
+    let word = match &result {
+        Ok(_) => "installed",
+        Err(refusal) => ended_word(refusal),
+    };
+    (word, plugin_said::added(source, &result, printable_spelled))
 }
 
 /// An update, said as `/plugin update` says it.
 fn updated<A: Asker + ?Sized>(name: &str, home: &Path, asker: &mut A) -> Ended {
-    let shown = printable_spelled(name);
-    match plugins::update_typed(name, home, asker) {
-        Ok(Updated::Replaced) => ("updated", t!(plugin_update_done, name = shown).to_string()),
-        Ok(Updated::Unchanged {
-            newer_commit: false,
-        }) => (
-            "unchanged",
-            t!(plugin_update_unchanged, name = shown).to_string(),
-        ),
-        Ok(Updated::Unchanged { newer_commit: true }) => (
-            "unchanged",
-            t!(plugin_update_unchanged_newer_commit, name = shown).to_string(),
-        ),
-        Err(refusal) => {
-            let sentence = match &refusal {
-                Refusal::Manage(ManageRefusal::BadName) => {
-                    t!(plugin_not_a_name, name = shown).to_string()
-                }
-                Refusal::Manage(ManageRefusal::NotInstalled(_)) => {
-                    t!(plugin_not_installed, name = shown).to_string()
-                }
-                Refusal::Declined => t!(plugin_update_declined, name = shown).to_string(),
-                Refusal::NobodyToAsk => t!(plugin_update_nobody_to_ask, name = shown).to_string(),
-                other => t!(plugin_update_refused, name = shown, why = why(other)).to_string(),
-            };
-            (ended_word(&refusal), sentence)
-        }
-    }
+    let result = plugins::update_typed(name, home, asker);
+    let word = match &result {
+        Ok(Updated::Replaced) => "updated",
+        Ok(Updated::Unchanged { .. }) => "unchanged",
+        Err(refusal) => ended_word(refusal),
+    };
+    (word, plugin_said::updated(name, &result, printable_spelled))
 }
 
 /// The word `plugins.ended` carries for a refusal: whether the person said no, nobody could be
@@ -419,70 +385,6 @@ fn ended_word(refusal: &Refusal) -> &'static str {
         Refusal::Declined => "declined",
         Refusal::NobodyToAsk => "nobody",
         _ => "refused",
-    }
-}
-
-/// The words a refusal is said in, as `refused` in `crates/tui/src/plugin_command.rs` says them.
-/// Only the shape of the refusal is read; a name from a manifest is drawn printable.
-fn why(refusal: &Refusal) -> String {
-    let printable = |text: &str| printable_spelled(text);
-    match refusal {
-        Refusal::Manifest(manifest::Refusal::NoManifest | manifest::Refusal::NoPluginToml(_)) => {
-            t!(plugin_refused_no_manifest).to_string()
-        }
-        Refusal::Manifest(other) => match other.named_key() {
-            Some(key) => t!(plugin_refused_manifest_key, key = printable(&key)).to_string(),
-            None => t!(plugin_refused_manifest).to_string(),
-        },
-        Refusal::PartMissing(part) => t!(
-            plugin_refused_part_missing,
-            key = manifest::Field::Part(*part).key()
-        )
-        .to_string(),
-        Refusal::NotASource(why) => match why {
-            NotASource::Archive => t!(plugin_refused_archive).to_string(),
-            NotASource::NpmPackage => t!(plugin_refused_npm_package).to_string(),
-            NotASource::PlainUrl => t!(plugin_refused_plain_url).to_string(),
-            NotASource::FileUrl => t!(plugin_refused_file_url).to_string(),
-            NotASource::UnsupportedScheme => t!(plugin_refused_unsupported_scheme).to_string(),
-            NotASource::BadUrl => t!(plugin_refused_bad_url).to_string(),
-            NotASource::BadRef => t!(plugin_refused_bad_ref).to_string(),
-        },
-        Refusal::GitNotInstalled => t!(plugin_refused_git_not_installed).to_string(),
-        Refusal::CloneFailed => t!(plugin_refused_clone_failed).to_string(),
-        Refusal::Source(_) | Refusal::SourceNotText | Refusal::Io(_) => {
-            t!(plugin_refused_unreadable).to_string()
-        }
-        Refusal::AlreadyInstalled { name, .. } => {
-            t!(plugin_refused_already_installed, name = printable(name)).to_string()
-        }
-        Refusal::SameSource { name, .. } => {
-            t!(plugin_refused_same_source, name = printable(name)).to_string()
-        }
-        Refusal::NameOffered {
-            offered,
-            new_plugin,
-            existing_plugin,
-        } => t!(
-            plugin_refused_name_offered,
-            offered = printable(offered),
-            new = printable(new_plugin),
-            existing = printable(existing_plugin)
-        )
-        .to_string(),
-        Refusal::Manage(ManageRefusal::NotInstalled(name)) => {
-            t!(plugin_not_installed, name = printable(name)).to_string()
-        }
-        Refusal::Manage(ManageRefusal::BadName | ManageRefusal::Io(_)) => {
-            t!(plugin_refused_unreadable).to_string()
-        }
-        Refusal::RecordUnreadable { .. } => t!(plugin_refused_record_unreadable).to_string(),
-        Refusal::NothingToUpdateTo { .. } => t!(plugin_refused_nothing_to_update_to).to_string(),
-        Refusal::UpdateRenamed { found, .. } => {
-            t!(plugin_refused_update_renamed, found = printable(found)).to_string()
-        }
-        Refusal::NobodyToAsk => t!(plugin_refused_nobody_to_ask).to_string(),
-        Refusal::Declined => t!(plugin_refused_declined).to_string(),
     }
 }
 

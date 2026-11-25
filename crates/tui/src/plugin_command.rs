@@ -9,10 +9,9 @@
 //! Nothing is installed unless [`confirm_install`] answers yes. It is the one place the install
 //! question is put, and no permission mode, allow rule or `skip_permissions` answers it.
 
-use bravebot_agent::plugin_source::NotASource;
-use bravebot_agent::plugins::{self, Asker, Installed, ManageRefusal, Refusal, Staged};
+use bravebot_agent::plugin_said;
+use bravebot_agent::plugins::{self, Asker, Installed, ManageRefusal, Staged};
 use bravebot_agent::skills::Catalogue;
-use bravebot_config::plugin as manifest;
 use bravebot_core::delegate::Definitions;
 use bravebot_i18n::t;
 use ratatui::Terminal;
@@ -177,107 +176,15 @@ fn add<A: Asker + ?Sized>(
     path: &str,
     asker: &mut A,
 ) {
-    let shown = printable(path);
-    match plugins::install_typed(path, root, home, asker) {
-        Ok(name) => session.note(t!(plugin_added, name = printable(&name), path = shown)),
-        Err(refusal) => session.note(t!(
-            plugin_add_refused,
-            path = shown,
-            why = refused(&refusal)
-        )),
-    }
+    let result = plugins::install_typed(path, root, home, asker);
+    session.note(plugin_said::added(path, &result, printable));
 }
 
 /// `/plugin update <name>` (PLUGIN-9): says what the update did. The refusal is said in words that
 /// carry no byte of the source: a name is drawn through [`printable`].
 fn update<A: Asker + ?Sized>(session: &mut Session, home: &Path, name: &str, asker: &mut A) {
-    let shown = printable(name);
-    session.note(match plugins::update_typed(name, home, asker) {
-        Ok(plugins::Updated::Replaced) => t!(plugin_update_done, name = shown).to_string(),
-        Ok(plugins::Updated::Unchanged {
-            newer_commit: false,
-        }) => t!(plugin_update_unchanged, name = shown).to_string(),
-        Ok(plugins::Updated::Unchanged { newer_commit: true }) => {
-            t!(plugin_update_unchanged_newer_commit, name = shown).to_string()
-        }
-        Err(Refusal::Manage(ManageRefusal::BadName)) => {
-            t!(plugin_not_a_name, name = shown).to_string()
-        }
-        Err(Refusal::Manage(ManageRefusal::NotInstalled(_))) => {
-            t!(plugin_not_installed, name = shown).to_string()
-        }
-        Err(Refusal::Declined) => t!(plugin_update_declined, name = shown).to_string(),
-        Err(Refusal::NobodyToAsk) => t!(plugin_update_nobody_to_ask, name = shown).to_string(),
-        Err(refusal) => {
-            t!(plugin_update_refused, name = shown, why = refused(&refusal)).to_string()
-        }
-    });
-}
-
-/// The words a refused install is said in. Only the shape of the refusal is read, never a plugin's
-/// own text; a name is drawn through [`printable`] since it is a manifest's.
-fn refused(refusal: &Refusal) -> String {
-    match refusal {
-        Refusal::Manifest(manifest::Refusal::NoManifest | manifest::Refusal::NoPluginToml(_)) => {
-            t!(plugin_refused_no_manifest).to_string()
-        }
-        Refusal::Manifest(other) => match other.named_key() {
-            Some(key) => t!(plugin_refused_manifest_key, key = printable(&key)).to_string(),
-            None => t!(plugin_refused_manifest).to_string(),
-        },
-        Refusal::PartMissing(part) => t!(
-            plugin_refused_part_missing,
-            key = manifest::Field::Part(*part).key()
-        )
-        .to_string(),
-        Refusal::NotASource(why) => match why {
-            NotASource::Archive => t!(plugin_refused_archive).to_string(),
-            NotASource::NpmPackage => t!(plugin_refused_npm_package).to_string(),
-            NotASource::PlainUrl => t!(plugin_refused_plain_url).to_string(),
-            NotASource::FileUrl => t!(plugin_refused_file_url).to_string(),
-            NotASource::UnsupportedScheme => t!(plugin_refused_unsupported_scheme).to_string(),
-            NotASource::BadUrl => t!(plugin_refused_bad_url).to_string(),
-            NotASource::BadRef => t!(plugin_refused_bad_ref).to_string(),
-        },
-        Refusal::GitNotInstalled => t!(plugin_refused_git_not_installed).to_string(),
-        Refusal::CloneFailed => t!(plugin_refused_clone_failed).to_string(),
-        Refusal::Source(_) | Refusal::SourceNotText | Refusal::Io(_) => {
-            t!(plugin_refused_unreadable).to_string()
-        }
-        Refusal::AlreadyInstalled { name, .. } => {
-            t!(plugin_refused_already_installed, name = printable(name)).to_string()
-        }
-        Refusal::SameSource { name, .. } => {
-            t!(plugin_refused_same_source, name = printable(name)).to_string()
-        }
-        Refusal::NameOffered {
-            offered,
-            new_plugin,
-            existing_plugin,
-        } => t!(
-            plugin_refused_name_offered,
-            offered = printable(offered),
-            new = printable(new_plugin),
-            existing = printable(existing_plugin)
-        )
-        .to_string(),
-        Refusal::Manage(ManageRefusal::NotInstalled(name)) => {
-            t!(plugin_not_installed, name = printable(name)).to_string()
-        }
-        // A bad name holds no text to name, and `update` says it itself with the name that was
-        // typed, so it is not reached from a typed command. An update reports a failed write as
-        // `Refusal::Io`, never as `ManageRefusal::Io`.
-        Refusal::Manage(ManageRefusal::BadName | ManageRefusal::Io(_)) => {
-            t!(plugin_refused_unreadable).to_string()
-        }
-        Refusal::RecordUnreadable { .. } => t!(plugin_refused_record_unreadable).to_string(),
-        Refusal::NothingToUpdateTo { .. } => t!(plugin_refused_nothing_to_update_to).to_string(),
-        Refusal::UpdateRenamed { found, .. } => {
-            t!(plugin_refused_update_renamed, found = printable(found)).to_string()
-        }
-        Refusal::NobodyToAsk => t!(plugin_refused_nobody_to_ask).to_string(),
-        Refusal::Declined => t!(plugin_refused_declined).to_string(),
-    }
+    let result = plugins::update_typed(name, home, asker);
+    session.note(plugin_said::updated(name, &result, printable));
 }
 
 fn list(session: &mut Session, home: &Path) {
@@ -327,12 +234,9 @@ fn managed(
     result: &Result<(), ManageRefusal>,
     done: impl FnOnce(String) -> String,
 ) {
-    let shown = printable(name);
     session.note(match result {
-        Ok(()) => done(shown),
-        Err(ManageRefusal::BadName) => t!(plugin_not_a_name, name = shown).to_string(),
-        Err(ManageRefusal::NotInstalled(_)) => t!(plugin_not_installed, name = shown).to_string(),
-        Err(ManageRefusal::Io(_)) => t!(plugin_manage_failed, name = shown).to_string(),
+        Ok(()) => done(printable(name)),
+        Err(refusal) => plugin_said::manage_refused(name, refusal, printable),
     });
 }
 
