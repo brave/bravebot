@@ -255,6 +255,23 @@ code.connector-summary { font: var(--type-code); overflow: hidden; text-overflow
 .connector-variable leo-input { flex: 1; }
 .connector-warnings { margin: 0 0 var(--leo-spacing-s); padding-left: var(--leo-spacing-xl); }
 
+/* ------------------------------------------------------------ plugins
+
+   The plugins page of the settings. Each installed plugin is a block of the card: its name, version
+   and controls on one line, then its record as the settings table. */
+
+.plugins-alerts { display: flex; flex-direction: column; gap: var(--leo-spacing-m); margin-bottom: var(--leo-spacing-xl); padding: 0 var(--leo-spacing-2xl); }
+.plugins-alerts .settings-error { margin-bottom: 0; }
+.plugin-rows { margin: 0; padding: 0; list-style: none; }
+.plugin-row { gap: var(--leo-spacing-l); }
+.plugin-head { display: flex; align-items: center; gap: var(--leo-spacing-m); min-width: 0; min-height: var(--hit); }
+.plugin-name { min-width: 0; font: var(--type-title); color: var(--ink-primary); overflow-wrap: anywhere; }
+.plugin-head > leo-label { flex: none; font-variant-numeric: tabular-nums; }
+.plugin-actions { display: flex; flex: none; align-items: center; gap: var(--leo-spacing-m); margin-left: auto; }
+.plugin-record code { font: var(--type-code); color: var(--ink-primary); }
+.plugins-empty, .plugins-foot { margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
+.plugins-foot { padding: var(--leo-spacing-xl) var(--leo-spacing-2xl) 0; }
+
 @media (max-width: 640px) {
   .settings-card dl, .settings-row { grid-template-columns: 1fr; }
   .settings-card dd { border-top: 0; padding-top: 0; padding-left: var(--leo-spacing-l); }

@@ -61,8 +61,8 @@ The structure is set in `styles/shell.css` and `columns.ts`. New surfaces fit in
   header, and the header stays where it is.
 - **Settings.** Settings take the whole window: a page list on the app ground where the sidebar
   is, and the page on a raised card. The chat view stays mounted underneath and is inert. The
-  pages are General, Providers, Connectors and Agent settings; Connectors is a page here and has no entry
-  in the sidebar. The header shows a back arrow only on a page inside a page (a connector's setup,
+  pages are General, Providers, Connectors, Plugins and Agent settings; Connectors is a page here and has
+  no entry in the sidebar. The header shows a back arrow only on a page inside a page (a connector's setup,
   the review before connecting), and it goes back one level; Esc does the same. A top-level page
   has no arrow, and "Back to BraveBot" in the page list leaves settings.
 - **Dividers in settings.** A divider separates two items of a group (rows of a table, a list, a

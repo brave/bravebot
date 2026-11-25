@@ -36,6 +36,7 @@
     "drive:exposure": "pnpm run bridge && electron-vite build && node scripts/drive-exposure.mjs",
     "drive:mcp": "pnpm run bridge && electron-vite build && node scripts/drive-mcp.mjs",
     "drive:connectors": "pnpm run bridge && electron-vite build && node scripts/drive-connectors.mjs",
+    "drive:plugins": "pnpm run bridge && electron-vite build && node scripts/drive-plugins.mjs",
     "drive:rules": "pnpm run bridge && electron-vite build && node scripts/drive-rules.mjs",
     "drive:rule-check": "pnpm run bridge && electron-vite build && node scripts/drive-rule-check.mjs",
     "drive:permission-mode": "pnpm run bridge && electron-vite build && node scripts/drive-permission-mode.mjs",

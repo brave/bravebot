@@ -6,9 +6,10 @@ import { AgentSettings } from './AgentSettings'
 import { Connectors } from './Connectors'
 import { GeneralSettings } from './GeneralSettings'
 import { IconButton } from './IconButton'
+import { Plugins } from './Plugins'
 import { ProvidersSettings } from './ProvidersSettings'
 
-export type SettingsPage = 'general' | 'providers' | 'connectors' | 'agent'
+export type SettingsPage = 'general' | 'providers' | 'connectors' | 'plugins' | 'agent'
 
 // `label` names the page in the list; `title` and `subtitle` head the page and are read in the
 // window's language where a page has been moved to the catalog.
@@ -16,6 +17,7 @@ const PAGES: readonly { id: SettingsPage; label: string; icon: IconName; title: 
   { id: 'general', label: 'General', icon: 'settings', title: () => t.uiSettingsGeneral(), subtitle: () => t.uiSettingsGeneralExplained() },
   { id: 'providers', label: 'Providers', icon: 'robot', title: () => 'Providers', subtitle: () => 'Models and providers' },
   { id: 'connectors', label: 'Connectors', icon: 'plug', title: () => 'Connectors', subtitle: () => 'MCP servers that give the model tools for your accounts and services' },
+  { id: 'plugins', label: 'Plugins', icon: 'browser-extensions', title: () => 'Plugins', subtitle: () => 'Skills, agent definitions, hooks and servers installed together from one source' },
   { id: 'agent', label: 'Agent settings', icon: 'product-brave-leo', title: () => 'Agent settings', subtitle: () => 'Configuration and automation for this app' },
 ]
 
@@ -114,6 +116,8 @@ export function SettingsView({ page, onPage, onBack, session, chosen, running, o
                 ? <ProvidersSettings session={session} onChanged={onChanged} />
                 : shown === 'connectors'
                   ? <Connectors onBack={onInner} />
+                : shown === 'plugins'
+                  ? <Plugins />
                 : <GeneralSettings chosen={chosen} running={running} onAppearance={onAppearance} />}
           </div>
         </div>

@@ -908,9 +908,13 @@ stay in English.
 ## Agent 0.9 controls
 
 **Settings** at the foot of the sidebar replaces the chat view with the settings: pages on the
-left (**General**, **Providers**, **Connectors** and **Agent settings**) and **Back to
+left (**General**, **Providers**, **Connectors**, **Plugins** and **Agent settings**) and **Back to
 BraveBot**, which `Esc` also does. The chat view stays as it was underneath. The setup button on
 the backend notice opens Providers.
+
+**Plugins** lists each installed plugin with its version, source, requested ref and commit for a git
+source, and digest, as its record says. A switch turns a plugin on or off and **Remove** deletes it
+after a confirmation. Each action redraws the list the bridge answers with.
 
 **Providers** shows **Accounts** first, then the model service, with the bundled agent build, the
 default model and each configured provider's credential, a **Fix** beside one that is missing which
