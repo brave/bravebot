@@ -46,3 +46,8 @@ survivor: Of two decisions of equal strength the other one is returned, and deci
 in: crates/core/src/trust.rs::weaker
 was: let b_grants_less = strength(b) < strength(a);
 now: let b_grants_less = strength(b) <= strength(a);
+
+survivor: Dividing delta down one round sooner still keeps the bias below 288 and nothing wraps, which is all the contract states. Which bias RFC 3492 gives is pinned by a_delta_of_exactly_455_is_not_divided_down and the known encodings.
+in: crates/core/src/punycode.rs::adapt
+was: while delta > ((BASE - T_MIN) * T_MAX) / 2 {
+now: while delta >= ((BASE - T_MIN) * T_MAX) / 2 {
