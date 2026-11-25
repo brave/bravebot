@@ -190,11 +190,19 @@ fn project(name: &str) -> PathBuf {
     std::fs::canonicalize(project).unwrap()
 }
 
+/// Whether the bridge can run a command here. It runs every command confined and refuses one the
+/// sandbox cannot confine, so a test that needs a command to have run and failed is left out
+/// elsewhere.
+fn commands_run_here() -> bool {
+    bravebot_sandbox::base::Prelude::current().is_some()
+        && bravebot_sandbox::confinement_works_here()
+}
+
 /// OPEN-6: a desktop turn that writes a file and then runs a command that fails saves what it did
 /// and the file it wrote in the session's record, as a terminal turn does.
 #[test]
 fn a_desktop_turn_saves_its_work_and_the_files_it_wrote() {
-    if !test_profile::in_isolated_profile() {
+    if !test_profile::in_isolated_profile() || !commands_run_here() {
         return;
     }
     let project = project("open-loops-desktop-saves-work");
@@ -244,7 +252,7 @@ fn a_desktop_turn_saves_its_work_and_the_files_it_wrote() {
 /// repository, so nothing is uncommitted.
 #[test]
 fn a_reopened_session_replies_with_what_it_left_open() {
-    if !test_profile::in_isolated_profile() {
+    if !test_profile::in_isolated_profile() || !commands_run_here() {
         return;
     }
     let project = project("open-loops-desktop-reopened");
@@ -329,7 +337,7 @@ fn a_reopened_session_that_left_nothing_open_replies_with_no_line() {
 /// did out of the record, so the session reopened afterwards reports nothing that turn left open.
 #[test]
 fn a_rewound_turn_leaves_nothing_open_on_reopen() {
-    if !test_profile::in_isolated_profile() {
+    if !test_profile::in_isolated_profile() || !commands_run_here() {
         return;
     }
     let project = project("open-loops-desktop-rewound");
@@ -375,7 +383,7 @@ fn a_rewound_turn_leaves_nothing_open_on_reopen() {
 #[test]
 fn the_first_turn_after_a_reopen_tells_the_planner_what_was_left_open() {
     const TOLD: &str = "Open from earlier in this session";
-    if !test_profile::in_isolated_profile() {
+    if !test_profile::in_isolated_profile() || !commands_run_here() {
         return;
     }
     let project = project("open-loops-desktop-told");
