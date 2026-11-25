@@ -403,6 +403,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "bravebot-qr"
+version = "0.24.0"
+
+[[package]]
 name = "bravebot-sandbox"
 version = "0.24.0"
 dependencies = [

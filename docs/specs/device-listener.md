@@ -4,6 +4,11 @@ title: The device listener
 status: normative
 governs:
   - crates/core/src/device.rs
+  - crates/qr/src/lib.rs
+  - crates/qr/src/galois.rs
+  - crates/qr/src/layout.rs
+  - crates/qr/src/render.rs
+  - crates/qr/src/tests.rs
   - crates/listener/src/lib.rs
   - crates/listener/src/der.rs
   - crates/listener/src/identity.rs
@@ -77,3 +82,20 @@ The check and the answer are made in one hold of the registry's lock. A change t
 `verified-by: bravebot_listener::registry::a_change_on_the_host_waits_for_the_request_being_answered`
 `verified-by: bravebot_listener::registry::a_device_is_added_under_a_name_nobody_else_has`
 `verified-by: bravebot_listener::registry::a_name_is_one_to_thirty_two_of_lower_case_digits_and_hyphens`
+
+<a id="LISTEN-4"></a>
+### LISTEN-4: a code the host shows is a QR code a phone's own reader reads
+
+The host draws an invitation as a QR code in the terminal, from a crate that does no I/O and has no dependency. The code is QR Model 2 in byte mode at error correction level M, in the smallest of versions 1 to 10 that holds the text, which is up to 213 bytes; a longer text is refused. Its lines set black on white themselves, with a quiet zone of four modules, and reset afterwards, because a scanner reads dark modules on a light ground whatever colours the terminal uses. Two rows of modules share one line of text.
+
+Each of these is held by a reader written from the standard's description of a square and not from the encoder's code: the error correction of the standard's own example, the format and version information the standard tabulates, every length from 0 to 213 bytes read back to the bytes it was made from with every block's error correction checking, and the fixed patterns where the standard puts them. Codes of each size were also read back by the operating system's own QR reader when their expected squares were recorded.
+
+`verified-by: bravebot_qr::tests::the_error_correction_of_the_standards_example_is_the_one_it_prints`
+`verified-by: bravebot_qr::tests::a_product_in_the_field_is_what_the_polynomial_arithmetic_gives`
+`verified-by: bravebot_qr::tests::every_length_up_to_the_limit_reads_back_as_it_was_made`
+`verified-by: bravebot_qr::tests::the_smallest_version_that_holds_the_text_is_used_and_more_than_the_limit_is_refused`
+`verified-by: bravebot_qr::tests::the_format_and_version_information_are_the_standards`
+`verified-by: bravebot_qr::tests::the_finders_the_timing_and_the_dark_module_are_where_the_standard_puts_them`
+`verified-by: bravebot_qr::tests::a_place_outside_the_code_is_light`
+`verified-by: bravebot_qr::tests::the_lines_draw_the_code_with_a_quiet_zone_in_black_on_white`
+`verified-by: bravebot_qr::tests::codes_the_system_reader_read_are_drawn_as_they_were`
