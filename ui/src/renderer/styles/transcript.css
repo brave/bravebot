@@ -338,6 +338,25 @@
 }
 .session-notice.divider strong { font-weight: 600; color: var(--ink-primary); }
 
+/* What a resumed session left open stays in view at the top of the scroll area while the chat
+   opens at its end. It covers the scroll area's top padding as well, on the panel's own surface
+   and above a hairline, so no row shows above or through it. */
+.session-notices.pinned {
+  position: sticky;
+  top: calc(-1 * var(--leo-spacing-2xl));
+  z-index: 1;
+  margin-block: calc(-1 * var(--leo-spacing-2xl)) 0;
+  padding-top: var(--leo-spacing-2xl);
+  border-bottom: 1px solid var(--border-hairline);
+  background: var(--surface-panel);
+}
+/* Its sentence can wrap, so the icon sits on the first line and the padding keeps one line
+   centred in the hit height as the other notices are. */
+.session-notice.open-loops {
+  align-items: flex-start;
+  padding-block: calc((var(--hit) - var(--icon-control)) / 2);
+}
+
 /* ---- messages */
 
 .bubble {

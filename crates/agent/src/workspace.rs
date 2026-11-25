@@ -6130,6 +6130,40 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    /// OPEN-1. The open loops count a kept checkout whose delegate ended and that was not
+    /// applied, and leave out one that was applied and one whose size is not known yet.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the scratch directory may not exist yet"
+    )]
+    #[test]
+    fn open_loops_keep_only_checkouts_that_ended_and_were_not_applied() {
+        let root = crate::testutil::scratch_dir("open-loops-kept-checkouts");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        for id in ["c1", "c2", "c3"] {
+            std::fs::create_dir(root.join(id)).unwrap();
+            keep_checkout(&workspace, id, root.join(id));
+        }
+        for made in locked(&workspace.kept.session_checkouts)
+            .iter()
+            .filter(|made| made.id != "c3")
+        {
+            *locked(&made.record.size) = Some(crate::git::checkout::Size {
+                bytes: 1,
+                whole: true,
+            });
+        }
+        workspace.checkout_applied("c2");
+        let kept: Vec<String> = crate::open_loops::kept_checkouts(&workspace)
+            .into_iter()
+            .map(|checkout| checkout.id)
+            .collect();
+        assert_eq!(kept, ["c1"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     /// CHECKOUT-15, CHECKOUT-21. Removing, reading and the status over a checkout name it by number,
     /// so the number has to match whole and the directory has to be there: `c1` is not `c10`, and
     /// one removed by hand is not one the session still keeps.

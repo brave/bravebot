@@ -20,6 +20,11 @@ governs:
   - ui/src/renderer/apply.ts
   - ui/src/renderer/transcript.ts
   - ui/src/renderer/components/Transcript.tsx
+  - ui/src/shared/protocol.ts
+  - ui/src/renderer/live.ts
+  - ui/src/renderer/App.tsx
+  - ui/scripts/drive-open-loops.mjs
+  - ui/scripts/drive-open-loops-turn-end.mjs
 documented-by:
   - docs/website/docs/reference/commands.md
 ---
@@ -74,13 +79,14 @@ A write into the session's own directory is not a written file for this rule. Wh
 `verified-by: bravebot_agent::open_loops::a_command_that_exited_non_zero_is_a_failed_command_until_another_runs`
 `verified-by: bravebot_agent::turn::a_turns_record_says_whether_its_last_command_failed`
 `verified-by: bravebot_agent::workspace::a_kept_checkout_is_open_until_applied_or_removed`
+`verified-by: bravebot_agent::workspace::open_loops_keep_only_checkouts_that_ended_and_were_not_applied`
 `verified-by: bravebot_agent::turn::a_typed_checkouts_apply_asks_about_each_recorded_file`
 `verified-by: bravebot_agent::turn::a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status`
 `verified-by: bravebot_agent::open_loops::a_file_written_and_committed_is_not_uncommitted`
 `verified-by: bravebot_agent::open_loops::a_name_that_is_not_utf8_is_told_apart_from_its_lossy_lookalike`
 `verified-by: bravebot_tui::goals::rounds_with_no_tool_call_in_a_row_stop_the_goal_without_clearing_it`
 `verified-by: bravebot_tui::state::open_loops::unfinished_lists_each_open_loop_with_what_closes_it`
-`verified-by: bravebot_ui_bridge::open_loops::undoing_a_turn_that_wrote_takes_its_write_out_of_the_open_loops`
+`verified-by: bravebot_ui_bridge::open_loops_turn_end::undoing_a_turn_that_wrote_takes_its_write_out_of_the_open_loops`
 
 <a id="OPEN-2"></a>
 ### OPEN-2: each loop is the planner's move, yours, or a wait
@@ -116,8 +122,8 @@ The line replaces the closing line of [TURN-4](turns.md#TURN-4) ("files changed 
 `verified-by: bravebot_agent::turn::a_caller_that_shows_open_loops_is_not_also_told_of_unbuilt_changes`
 `verified-by: bravebot_agent::open_loops::the_persons_line_groups_kinds_by_owner_and_names_no_path`
 `verified-by: bravebot_agent::open_loops::the_persons_line_with_nothing_open_is_open_nothing`
-`verified-by: bravebot_ui_bridge::open_loops::a_desktop_turn_ends_with_the_open_loops_when_they_changed`
-`verified-by: bravebot_ui_bridge::open_loops::a_cancelled_turn_carries_the_open_loops_on_its_error`
+`verified-by: bravebot_ui_bridge::open_loops_turn_end::a_desktop_turn_ends_with_the_open_loops_when_they_changed`
+`verified-by: bravebot_ui_bridge::open_loops_turn_end::a_cancelled_turn_carries_the_open_loops_on_its_error`
 
 <a id="OPEN-4"></a>
 ### OPEN-4: the planner is told at the start of the next turn
@@ -141,6 +147,7 @@ In the desktop app, undoing a turn tells the planner again: the next turn begins
 `verified-by: bravebot_agent::turn::telling_open_loops_reaches_the_planner_and_keeps_the_unbuilt_line`
 `verified-by: bravebot_ui_bridge::open_loops_tests::undoing_a_turn_tells_the_planner_of_the_loops_left_open`
 `verified-by: bravebot_ui_bridge::open_loops_tests::undoing_the_only_turn_leaves_nothing_open`
+`verified-by: bravebot_ui_bridge::open_loops::the_first_turn_after_a_reopen_tells_the_planner_what_was_left_open`
 
 <a id="OPEN-5"></a>
 ### OPEN-5: `/unfinished` shows every open loop in full
@@ -180,13 +187,29 @@ What a resume can know:
 
 A record with no work record or last-command status reads as nothing open.
 
+The desktop window shows the same counts as one sentence in a notice at the top of the chat, which stays in view while the chat opens at its end: `Left open from earlier: changes not built, the last command failed; 1 kept checkout, for you to act on.` The planner's loops come first with no owner named, then the person's. The notice goes when the next turn starts or a rewind undoes turns, since either changes what it described.
+
+Undoing a turn takes its writes and commands out of the record, so a resume afterwards reports nothing that turn left open.
+
 `verified-by: bravebot_session::sessions::the_record_keeps_the_work_record_and_the_last_commands_status`
 `verified-by: bravebot_session::sessions::a_record_from_before_open_loops_reads_as_nothing_open`
 `verified-by: bravebot_tui::state::open_loops::a_resumed_session_shows_what_it_left_open`
 `verified-by: bravebot_ui_bridge::open_loops_tests::a_resumed_session_tells_the_planner_on_its_first_turn_only`
 `verified-by: bravebot_ui_bridge::open_loops_tests::the_record_keeps_the_sessions_work_and_written_files`
-`verified-by: bravebot_ui_bridge::open_loops::a_desktop_turn_that_writes_a_file_saves_the_work_and_the_file`
+`verified-by: bravebot_ui_bridge::open_loops_turn_end::a_desktop_turn_that_writes_a_file_saves_the_work_and_the_file`
 `verified-by: bravebot_ui_bridge::running::a_resumed_session_carries_the_work_and_the_files_its_record_kept`
+`verified-by: bravebot_ui_bridge::open_loops::a_desktop_turn_saves_its_work_and_the_files_it_wrote`
+`verified-by: bravebot_ui_bridge::open_loops::a_reopened_session_replies_with_what_it_left_open`
+`verified-by: bravebot_ui_bridge::open_loops::a_reopened_session_that_left_nothing_open_replies_with_no_line`
+`verified-by: bravebot_ui_bridge::open_loops::a_rewound_turn_leaves_nothing_open_on_reopen`
+`verified-by: bravebot_ui_bridge::checkouts::a_reopened_session_counts_the_kept_checkout_it_did_not_apply`
+`verified-by: bravebot_ui_bridge::written_tests::a_delegates_write_is_not_kept_as_one_the_session_wrote`
+`verified-by: bravebot_agent::open_loops::the_sentence_a_resume_shows_names_the_same_counts`
+`verified-by: bravebot_ui_bridge::open_loops::a_record_with_failing_work_and_open_todos_reads_as_those_loops`
+`verified-by: bravebot_ui_bridge::open_loops::a_record_from_before_open_loops_reads_as_nothing_open`
+`verified-by: bravebot_ui_bridge::open_loops::a_written_file_that_differs_from_head_counts_as_uncommitted`
+`verified-by: bravebot_ui_bridge::open_loops::the_first_turn_after_a_reopen_tells_the_planner_what_was_left_open`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/drive-open-loops.mjs takes turns through the real bridge, reopens each chat in a real window and holds that the open-loops session notice shows the bridge's sentence and stays in view at the end of a chat longer than the window, that with every kind a resume knows open it names each one with the icon on the first line at the minimum window size, and that a reopened chat with nothing open and a new chat show no such notice)`
 
 <a id="OPEN-7"></a>
 ### OPEN-7: open loops never block, and every new sentence is fixed text
