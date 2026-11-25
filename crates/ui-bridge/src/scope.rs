@@ -47,32 +47,8 @@ pub(super) fn scope_of(
     managed: &Managed,
     home: &Home,
 ) -> Option<Scope> {
-    // The session writes and honours these under its resolved project, and under the project as
-    // given where that cannot be resolved, so both spellings are read.
-    let resolved = open
-        .project
-        .canonicalize()
-        .unwrap_or_else(|_| open.project.clone());
-    let standing_answers = home
-        .directory
-        .as_deref()
-        .map(|directory| {
-            let standing = bravebot_config::mcp::Standing::read(directory);
-            let mut answers = standing.in_project(&resolved);
-            answers.extend(standing.in_project(&open.project));
-            answers
-        })
-        .unwrap_or_default();
-    // What a first start reaches: what the settings request and, where they request any, the
-    // servers installed plugins carry. Used only while the session has not started its servers.
-    let first_start: Vec<String> = match bravebot_agent::servers::requested_by(settings).is_empty()
-    {
-        true => Vec::new(),
-        false => bravebot_agent::servers::requested_for_a_first_start(settings, home)
-            .into_iter()
-            .map(|(_, alias)| alias)
-            .collect(),
-    };
+    let standing_answers = standing_answers(&open.project, home);
+    let first_start = first_start(settings, home);
     let state = open.state.try_lock().ok()?;
     let mut trusted = Vec::new();
     let mut distrusted = Vec::new();
@@ -155,6 +131,37 @@ pub(super) fn scope_of(
         auto_vetting: open.auto_vetting,
         confined_lines: state.answers.trust.allows_confined_lines(),
     })
+}
+
+/// The tools no longer asked about in `project`, read from the tools file in `home`.
+///
+/// The session writes and honours these under its resolved project, and under the project as given
+/// where that cannot be resolved, so both spellings are read.
+fn standing_answers(project: &Path, home: &Home) -> Vec<String> {
+    let resolved = project
+        .canonicalize()
+        .unwrap_or_else(|_| project.to_path_buf());
+    home.directory
+        .as_deref()
+        .map(|directory| {
+            let standing = bravebot_config::mcp::Standing::read(directory);
+            let mut answers = standing.in_project(&resolved);
+            answers.extend(standing.in_project(project));
+            answers
+        })
+        .unwrap_or_default()
+}
+
+/// The aliases a session's first start reaches: what `settings` request and, where they request
+/// any, the servers the plugins installed under `home` carry.
+fn first_start(settings: &Settings, home: &Home) -> Vec<String> {
+    match bravebot_agent::servers::requested_by(settings).is_empty() {
+        true => Vec::new(),
+        false => bravebot_agent::servers::requested_for_a_first_start(settings, home)
+            .into_iter()
+            .map(|(_, alias)| alias)
+            .collect(),
+    }
 }
 
 /// The key of a path: the path as the operating system holds it, so two names that differ in bytes
