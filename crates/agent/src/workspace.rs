@@ -4895,6 +4895,15 @@ impl Workspace {
     /// guessing at which file it named. One that climbs out of the root is the absolute path it
     /// lands on by here, and is keyed as that.
     ///
+    /// A redirection in a `run` line reaches this function without that refusal, since the line
+    /// is confined by where the destination lands (`Workspace::confines_writing`), so a `..` that
+    /// lands inside the root is keyed as typed and is read under that key by no file tool. The
+    /// line therefore records the destination under that key and under each name
+    /// [`Workspace::names_reached`] gives, which for `d/../dd.txt` includes `dd.txt`, with one
+    /// reservation for all of them (TRUST-4). Those names are the spelling with each `..` taken
+    /// out, where no link is on the way, and the place the path lands, beside the file's other
+    /// names (`other_trust_keys`).
+    ///
     /// Whatever the reduction leaves is spelled from `/`, which is how a key arrives spelled
     /// (TRUST-18) on a host that separates with something else, a drive letter included: a name
     /// landing in no open directory keeps a root of its own rather than being read under the

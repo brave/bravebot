@@ -12861,7 +12861,8 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                         path: target,
                     });
                 }
-                let key = authority.key(&tools.workspace.trust_key(&path.to_string_lossy()));
+                let own = tools.workspace.trust_key(&path.to_string_lossy());
+                let key = authority.key(&own);
                 // The file's other names: where a link lands, its hard links and a second path to
                 // the tree. Looked up at every open, since a part run between two opens of one
                 // destination can have made it a link, and before the boundary is taken, since the
@@ -12869,20 +12870,37 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                 let others = tools
                     .workspace
                     .other_trust_keys(&tools.workspace.relative_display(path));
-                // The names no effect of this line holds yet. A name an earlier destination
-                // entered is held by that effect and would be refused as a second writer.
-                let mut every: Vec<String> = others
-                    .keys
+                // And each name a read of the file is asked under (`Workspace::names_reached`): the
+                // spelling with each `..` taken out, which the file tools refuse to read the file
+                // under as typed, and the place the path lands. Built from the redirection's own
+                // text and the file system, never from a byte of any file.
+                let mut named: Vec<String> = others.keys.clone();
+                named.extend(
+                    tools
+                        .workspace
+                        .names_reached(path)
+                        .iter()
+                        .map(|reached| tools.workspace.trust_key(reached)),
+                );
+                named.retain(|name| *name != own);
+                named.sort();
+                named.dedup();
+                // `every` is each other name the file has. `fresh`, below, is the subset of them
+                // this line has not entered yet: a name an earlier destination entered is held by
+                // that effect and would be refused as a second writer.
+                let mut every: Vec<String> = named
                     .iter()
                     .map(|other| authority.key(other))
                     .filter(|other| *other != key)
                     .collect();
                 every.sort();
                 every.dedup();
-                // A destination this line already entered gains only the names it was not entered
-                // under. A new one reserves every name, so a second path to a file the line holds
-                // is refused as a second writer to it, as another spelling of it is.
-                let fresh: Vec<String> = match entered.contains(&key) {
+                // A destination this line already entered under this spelling gains only the names
+                // it was not entered under. A new one reserves every name, so another spelling of
+                // a file the line holds, or a second path to it, is refused as a second writer
+                // (`> d/../dd.txt` then `> dd.txt`). Held by the effects and not by `entered`,
+                // which also holds the other names of an earlier destination.
+                let fresh: Vec<String> = match effects.contains_key(&key) {
                     true => every
                         .iter()
                         .filter(|other| !entered.contains(*other))
@@ -12896,8 +12914,8 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                     crate::memory::record_before_write(tools.workspace.memories(), name, folds)
                         .map_err(|e| crate::exec::ExecError::Io(e.to_string()))?;
                 }
-                if entered.contains(&key) {
-                    // A destination, or a name of one, this line entered. It gains a name only
+                if effects.contains_key(&key) {
+                    // A destination this line entered under this spelling. It gains a name only
                     // where a part of the line left a link at it since the first open, and that
                     // name is entered now and left untrusted: what the line writes through the link
                     // is not what the destination was approved for (TRUST-4).
@@ -12917,15 +12935,12 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                     });
                 }
                 policy.capture_files(|policy, capture| {
-                    let prior = if !policy.read_is_quarantined_under_names(
-                        &key,
-                        &others.keys,
-                        others.complete,
-                    ) {
-                        bravebot_core::label::Integrity::Trusted
-                    } else {
-                        bravebot_core::label::Integrity::Untrusted
-                    };
+                    let prior =
+                        if !policy.read_is_quarantined_under_names(&key, &named, others.complete) {
+                            bravebot_core::label::Integrity::Trusted
+                        } else {
+                            bravebot_core::label::Integrity::Untrusted
+                        };
                     let names: Vec<&str> = std::iter::once(key.as_str())
                         .chain(fresh.iter().map(String::as_str))
                         .collect();
