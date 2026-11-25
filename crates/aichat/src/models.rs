@@ -5,8 +5,7 @@
 //! field of a later request. That field is routing, and the endorsement for it is the choice.
 //!
 //! The endpoint answers with a bare array rather than an OpenAI-style `{"data": [...]}` envelope.
-//! [`automatic-bravebot`](bravebot_config::DEFAULT_MODEL) is added here when the listing omits it,
-//! so a picker always offers the product's default triage entry.
+//! The rows are what it lists and nothing is added to them.
 
 use bravebot_config::Config;
 use bravebot_core::event::Sink;
@@ -109,8 +108,7 @@ pub struct Model {
     pub provider: Option<String>,
     /// How large a request may get, in prompt tokens, as the endpoint advertises it.
     ///
-    /// `None` for an entry that did not say, and for `automatic`, where the server picks the model
-    /// per request and so no one figure describes it.
+    /// `None` for an entry that did not say.
     ///
     /// Tokens, despite arriving in a field called
     /// `long_conversation_warning_character_limit`. The name is wrong at the source: the endpoint
@@ -128,32 +126,6 @@ pub struct Model {
     pub reads_effort: bool,
     /// What the service said about this model beyond its name, for whoever draws the row.
     pub advertised: Advertised,
-}
-
-impl Model {
-    /// Let the server decide per request for this product.
-    ///
-    /// Always offered: the curated bravebot roster may omit it, and it is what an unrecognised
-    /// name is reset to anyway, so it is the one choice that cannot fail to work.
-    pub fn automatic() -> Self {
-        Self {
-            key: bravebot_config::DEFAULT_MODEL.to_string(),
-            display_name: "Automatic".to_string(),
-            premium: false,
-            // Brave's own endpoint resolves it per request, and that is the roster it belongs to.
-            provider: None,
-            // The server chooses per request, so there is no one model whose limit this could be.
-            conversation_tokens: None,
-            // Brave's endpoint resolves this per request, so no row describes what will answer.
-            reads_effort: true,
-            // There is no one model behind this name, so there is nothing to describe.
-            advertised: Advertised::default(),
-        }
-    }
-
-    pub fn is_automatic(&self) -> bool {
-        self.key == bravebot_config::DEFAULT_MODEL
-    }
 }
 
 /// One entry as the server reports it.
@@ -208,8 +180,8 @@ const EFFORT_PARAMETER: &str = "reasoning_effort";
 
 /// Ask the endpoint what it offers, newest answer each time.
 ///
-/// `automatic` comes first and is always present. The rest are whatever the server listed that can
-/// call tools, in the order it listed them, since that order is the backend's own preference.
+/// What the server listed that can call tools, in the order it listed them, since that order is the
+/// backend's own preference.
 pub fn list<S: Sink>(
     policy: &mut Policy<'_, S>,
     config: &Config,
@@ -1074,50 +1046,39 @@ fn offered_by_gateway(
         .collect()
 }
 
-/// The models worth offering, `automatic` first.
+/// The models worth offering, in the order the endpoint listed them.
 ///
 /// Separated from the request so the filtering is testable without a server. `service` is the
 /// endpoint that answered, which is what a refusal is remembered against.
 fn usable(service: &str, listed: Vec<Listed>) -> Vec<Model> {
-    // The row naming no model included: what this endpoint refused a request carrying that name is
-    // an answer about the name, whatever the server resolves it to per request.
-    let mut models = vec![Model {
-        reads_effort: crate::reads_effort(service, bravebot_config::DEFAULT_MODEL),
-        ..Model::automatic()
-    }];
-    models.extend(
-        listed
-            .into_iter()
-            .filter(|entry| entry.capabilities.iter().any(|c| c == TOOLS_CAPABILITY))
-            .filter_map(|entry| {
-                let key = entry.key?;
-                // This roster describes what a model can do and never which request fields it
-                // reads, so nothing here states the subject either way and the only answer there
-                // has ever been is the one this endpoint gave a request that carried a level
-                // (BACKEND-22).
-                let reads_effort = crate::reads_effort(service, &key);
-                Some(Model {
-                    key,
-                    display_name: entry.display_name,
-                    premium: entry.options.access == PREMIUM_ACCESS,
-                    provider: None,
-                    conversation_tokens: entry
-                        .options
-                        .long_conversation_warning_character_limit
-                        // The endpoint sends 1 where a model reports no window at all, and zero is
-                        // not a budget either: both mean "it did not say" rather than "no room".
-                        .filter(|limit| *limit > 1),
-                    reads_effort,
-                    // Its vocabulary is capabilities rather than modalities, and it names no
-                    // request field, so there is nothing here it could be read as saying.
-                    advertised: Advertised::default(),
-                })
+    listed
+        .into_iter()
+        .filter(|entry| entry.capabilities.iter().any(|c| c == TOOLS_CAPABILITY))
+        .filter_map(|entry| {
+            let key = entry.key?;
+            // This roster describes what a model can do and never which request fields it
+            // reads, so nothing here states the subject either way and the only answer there
+            // has ever been is the one this endpoint gave a request that carried a level
+            // (BACKEND-22).
+            let reads_effort = crate::reads_effort(service, &key);
+            Some(Model {
+                key,
+                display_name: entry.display_name,
+                premium: entry.options.access == PREMIUM_ACCESS,
+                provider: None,
+                conversation_tokens: entry
+                    .options
+                    .long_conversation_warning_character_limit
+                    // The endpoint sends 1 where a model reports no window at all, and zero is
+                    // not a budget either: both mean "it did not say" rather than "no room".
+                    .filter(|limit| *limit > 1),
+                reads_effort,
+                // Its vocabulary is capabilities rather than modalities, and it names no
+                // request field, so there is nothing here it could be read as saying.
+                advertised: Advertised::default(),
             })
-            // The endpoint has no reason to list one name twice, but the choice is a person's and
-            // two identical rows would leave them unable to tell which they picked.
-            .filter(|model| !model.is_automatic()),
-    );
-    models
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1143,10 +1104,10 @@ mod tests {
             r#"[{"key":"claude-3-sonnet","display_name":"Claude Sonnet",
                  "capabilities":["chat","tools","vision"],"options":{"access":"premium"}}]"#,
         );
-        assert_eq!(models.len(), 2, "{models:?}");
-        assert_eq!(models[1].key, "claude-3-sonnet");
-        assert_eq!(models[1].display_name, "Claude Sonnet");
-        assert!(models[1].premium);
+        assert_eq!(models.len(), 1, "{models:?}");
+        assert_eq!(models[0].key, "claude-3-sonnet");
+        assert_eq!(models[0].display_name, "Claude Sonnet");
+        assert!(models[0].premium);
     }
 
     #[test]
@@ -1155,7 +1116,7 @@ mod tests {
             r#"[{"key":"claude-3-haiku","display_name":"Claude Haiku",
                  "capabilities":["chat","tools"],"options":{"access":"basic_and_premium"}}]"#,
         );
-        assert!(!models[1].premium);
+        assert!(!models[0].premium);
     }
 
     /// The window is the one thing here worth having that a person does not choose, and it arrives
@@ -1167,7 +1128,7 @@ mod tests {
                  "options":{"access":"premium",
                             "long_conversation_warning_character_limit":102400}}]"#,
         );
-        assert_eq!(models[1].conversation_tokens, Some(102_400));
+        assert_eq!(models[0].conversation_tokens, Some(102_400));
     }
 
     /// An entry that says nothing about its window is not saying it has none. The caller falls back
@@ -1178,7 +1139,7 @@ mod tests {
             r#"[{"key":"mystery","display_name":"Mystery","capabilities":["chat","tools"],
                  "options":{"access":"premium"}}]"#,
         );
-        assert_eq!(models[1].conversation_tokens, None);
+        assert_eq!(models[0].conversation_tokens, None);
     }
 
     /// What the endpoint sends for a model whose window it does not know. Taken as "did not say"
@@ -1190,13 +1151,7 @@ mod tests {
                  "options":{"access":"premium",
                             "long_conversation_warning_character_limit":1}}]"#,
         );
-        assert_eq!(models[1].conversation_tokens, None);
-    }
-
-    /// The server picks the model per request, so no one window describes it.
-    #[test]
-    fn automatic_advertises_no_window() {
-        assert_eq!(Model::automatic().conversation_tokens, None);
+        assert_eq!(models[0].conversation_tokens, None);
     }
 
     /// Every turn here works by calling tools, so a chat-only model would be an agent that can read
@@ -1208,7 +1163,7 @@ mod tests {
             r#"[{"key":"llama-3-8b-instruct","display_name":"Llama 3 8B",
                  "capabilities":["chat","files"],"options":{"access":"basic_and_premium"}}]"#,
         );
-        assert_eq!(models, vec![Model::automatic()], "{models:?}");
+        assert_eq!(models, vec![], "{models:?}");
     }
 
     /// An entry claiming nothing is not claiming tools. Read as capable of nothing rather than
@@ -1218,16 +1173,13 @@ mod tests {
         let models = decoded(
             r#"[{"key":"mystery","display_name":"Mystery","options":{"access":"premium"}}]"#,
         );
-        assert_eq!(models, vec![Model::automatic()], "{models:?}");
+        assert_eq!(models, vec![], "{models:?}");
     }
 
-    /// The endpoint lists concrete models and never this one, so it has to be added or there would
-    /// be no way back to letting the server choose.
+    /// What the endpoint lists is the whole roster, so a listing of nothing offers nothing.
     #[test]
-    fn automatic_is_offered_first_even_when_the_server_lists_nothing() {
-        let models = decoded("[]");
-        assert_eq!(models, vec![Model::automatic()]);
-        assert!(models[0].is_automatic());
+    fn an_empty_listing_offers_nothing() {
+        assert_eq!(decoded("[]"), vec![]);
     }
 
     /// An entry with no key cannot be put in a request's `model` field, so it is not a choice.
@@ -1237,18 +1189,7 @@ mod tests {
             r#"[{"key":null,"display_name":"Nameless","capabilities":["chat","tools"],
                  "options":{"access":"premium"}}]"#,
         );
-        assert_eq!(models, vec![Model::automatic()], "{models:?}");
-    }
-
-    /// Added unconditionally, so a server that did list it must not produce two identical rows: a
-    /// person cannot tell which of them they chose.
-    #[test]
-    fn automatic_is_offered_once_even_if_the_server_lists_it_too() {
-        let models = decoded(
-            r#"[{"key":"automatic-bravebot","display_name":"Automatic","capabilities":["chat","tools"],
-                 "options":{"access":"basic_and_premium"}}]"#,
-        );
-        assert_eq!(models, vec![Model::automatic()], "{models:?}");
+        assert_eq!(models, vec![], "{models:?}");
     }
 
     /// A field this agent does not use must not make an entry undecodable. The endpoint grows
@@ -1261,7 +1202,7 @@ mod tests {
                  "options":{"access":"premium","description":"whatever","display_maker":"Anthropic",
                             "max_associated_content_length":16000}}]"#,
         );
-        assert_eq!(models.len(), 2, "{models:?}");
+        assert_eq!(models.len(), 1, "{models:?}");
     }
 
     /// The shape of a real reply, field for field, including the ones this ignores: the array is
@@ -1276,7 +1217,6 @@ mod tests {
     fn a_real_response_shape_decodes() {
         let models = decoded(include_str!("../tests/models_response.json"));
 
-        assert!(models[0].is_automatic(), "automatic was not offered first");
         let keys: Vec<&str> = models.iter().map(|m| m.key.as_str()).collect();
         assert!(keys.contains(&"claude-3-sonnet"), "{keys:?}");
         assert!(
@@ -1474,9 +1414,12 @@ mod tests {
     fn a_fetched_row_carries_the_gateway_that_serves_it() {
         let models = from_gateway(&gateway(), r#"{"data": [{"id": "z-ai/glm-4.6"}]}"#);
         assert_eq!(models[0].provider.as_deref(), Some("OpenRouter"));
+        let brave = decoded(
+            r#"[{"key":"claude-3-sonnet","display_name":"Claude Sonnet",
+                 "capabilities":["chat","tools"],"options":{"access":"premium"}}]"#,
+        );
         assert_eq!(
-            Model::automatic().provider,
-            None,
+            brave[0].provider, None,
             "the Brave roster names no service of its own"
         );
     }

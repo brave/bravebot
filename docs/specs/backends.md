@@ -382,8 +382,7 @@ pick. It still displaces the key a lower file named, so with nothing recorded th
 or the build answers. Above all of it are `--model` and a model picked in the session that is
 running. The `/model` picker, at rest and during a turn, opens on the model in force and marks it as
 current: the pick where the session has one, and otherwise the model this ranking settles on, so a session
-on the `model` key marks that model and Brave's `automatic` only where `automatic` is what the ranking
-settles on. The same model in force is the one the roster is read for the window, the inputs and whether a
+on the `model` key marks that model, and one with nothing chosen marks the default. The same model in force is the one the roster is read for the window, the inputs and whether a
 level is read, and the one the sign-in a session makes and the refusal of a level a turn learned are asked
 about, so none of them is read for the pick alone.
 
@@ -460,8 +459,7 @@ where a Brave name reaches a service it cannot sign for.
 configuration is built without touching the network, and a one-shot run never asks for that listing:
 only the interactive picker does. Resolving a word against it would put a round trip in front of every
 one-shot run to expand one word, and would fail with no network where it currently succeeds. The cost
-is that the service owns those names, and a renamed one is reset by the endpoint to
-`automatic-bravebot`, which is where somebody with no `model` key already starts.
+is that the service owns those names, and a renamed one is refused or reset by the endpoint.
 
 `verified-by: bravebot_config::lib::a_tier_alias_resolves_to_the_model_that_tier_names`
 `verified-by: bravebot_config::lib::a_tier_alias_without_bedrock_resolves_against_the_brave_roster`
@@ -1750,7 +1748,7 @@ with it.
 
 Every request to the aichat endpoint Brave runs carries `Brave-Product: bravebot`, both the one
 asking for a reply and the one asking what models exist. The endpoint answers a listing curated for
-this product, and resolves that product's own automatic entry. Nothing decides whether to send the
+this product. Nothing decides whether to send the
 header: it is a literal on the one path that builds a request to that endpoint.
 
 A gateway is sent no such header, and neither is a gateway's roster request. What a third-party
@@ -1771,25 +1769,22 @@ is the thing that knows.
 
 
 <a id="BACKEND-26"></a>
-### BACKEND-26: the automatic entry names this product, and Leo's name resolves to it
+### BACKEND-26: the default is a concrete model, and the retired routing names resolve to it
 
-The name requested when nobody has chosen a model is `automatic-bravebot`. Where a settings file,
-an exported variable or a choice recorded earlier says `automatic`, that name resolves to
-`automatic-bravebot` before it reaches a request. Every other name is used as written, under
-BACKEND-12.
+The name requested when nobody has chosen a model is a concrete model, `claude-3-haiku`, and the
+roster is exactly the models the endpoint lists. Where a settings file, an exported variable or a
+choice recorded earlier says `automatic` or `automatic-bravebot`, that name resolves to the default
+before it reaches a request. Every other name is used as written, under BACKEND-12.
 
-**Why.** `automatic` is Leo's triage entry and routes by a policy chosen for a chat assistant, so the
-two words name different behaviour rather than the same behaviour twice. A recorded choice outlives
-the version that made it and a settings file is copied between machines, so the older name is in
-circulation and reaching the endpoint. Left alone it is not refused: it selects the other product's
-routing, which is a working request that quietly is not what this agent asked for.
+**Why.** A recorded choice outlives the version that made it and a settings file is copied between
+machines, so the retired names are in circulation. Left alone they are refused or reset by the
+endpoint, which is a working request that quietly is not what the person chose.
 
-**Note.** The resolution is one-way, so `automatic` cannot be requested. Reaching Leo's routing
-deliberately is not something the picker offers, that entry not being on this product's roster.
+**Note.** The resolution is one-way, so those names cannot be requested.
 
 `verified-by: bravebot_config::lib::the_legacy_automatic_name_becomes_the_brave_bot_default`
 `verified-by: bravebot_session::store::the_legacy_automatic_name_is_rewritten_on_read`
-`verified-by: bravebot_aichat::models::automatic_is_offered_once_even_if_the_server_lists_it_too`
+`verified-by: bravebot_aichat::models::an_empty_listing_offers_nothing`
 `verified-by: bravebot_agent::turn::without_a_choice_the_configured_default_is_requested`
 
 <a id="BACKEND-27"></a>

@@ -61,8 +61,7 @@ credentials sign the request, and because Brave serves part of its own roster th
 Every configured tier is marked free: premium means Brave's premium service, and reaching a model through
 your own account does not involve it.
 
-There is no automatic entry among them. On the Brave roster it means "let the server choose", which
-Bedrock does not offer. A request names one model and gets it or an error.
+A request names one model and gets it or an error.
 
 If one service cannot say what it offers, the models known from your configuration alone are still
 offered; a choice is refused only when nothing is left to choose. That is the position somebody

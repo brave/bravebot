@@ -181,7 +181,7 @@ shell, type `!` yourself. See [`run`](reference/tools.md#run) and
 
 **The conversation was summarised unexpectedly.** It passed the context budget, which is the window
 your model advertises. Override it with `BRAVEBOT_CONTEXT_BUDGET`, which outranks the advertised
-figure. A model that advertises nothing, and the automatic entry, fall back to 24,000 prompt tokens.
+figure. A model that advertises nothing falls back to 24,000 prompt tokens.
 
 **A request the service refused as too large was sent again.** When a request comes back refused
 (status 400 or 422) and there is older conversation to give up, the turn summarises it once and sends

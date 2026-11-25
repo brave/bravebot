@@ -3447,20 +3447,6 @@ mod tests {
         assert!(shown.contains("served instead"), "{shown}");
     }
 
-    /// `automatic` is the server choosing per request, so a concrete name coming back is the feature
-    /// working rather than a substitution. Flagging it would put a warning on the default config.
-    #[test]
-    fn automatic_being_resolved_to_a_real_model_is_not_a_substitution() {
-        let config = config_for("https://ai-chat.bsg.brave.com", None);
-        let trust = trusting();
-        let session = after_a_turn(&config, None, "claude-3-haiku");
-        let mut automatic = facts(&config, &trust);
-        as_of(&mut automatic, &session);
-
-        let shown = rendered(&report(&automatic));
-        assert!(!shown.contains("served instead"), "{shown}");
-    }
-
     /// A chosen model and the configured default are different facts, and reporting one as the other
     /// would explain the wrong thing.
     #[test]

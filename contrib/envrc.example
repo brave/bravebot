@@ -93,23 +93,19 @@ esac
 # choice wins, so this is the fallback rather than the setting. It is the default
 # for every service, Bedrock and a provider block's gateways as well as this one.
 #
-# "automatic-bravebot" lets the server triage per request for this agent, and is what an
-# unrecognised name is reset to anyway. Leo uses "automatic" for a different routing policy.
-#
 # A default, so a "model" key in any settings file and a /model pick both outrank
 # it. It outranks the value baked in at build time, and a "model" key outranks
 # both.
 #
 # The model requested is not necessarily the model used: some entries are
-# weighted ensembles that resolve randomly, and "automatic-bravebot" itself picks per
-# request. Trust the model reported in the response, which `--trace`
+# weighted ensembles that resolve randomly. Trust the model reported in the response, which `--trace`
 # prints.
 #
 # Non-premium callers get a metered daily allowance of premium-tier automatic
 # selections; once spent, requesting a premium model returns 403 error 40301. Free
 # models such as llama-3-8b-instruct always work. GET /v1/models reports which is
 # which in an "access" field when called with Brave-Product: bravebot.
-#export BRAVEBOT_DEFAULT_MODEL="automatic-bravebot"
+#export BRAVEBOT_DEFAULT_MODEL="claude-3-haiku"
 
 # ---------------------------------------------------------------------------
 # Crash reports. The submission URL of the Backtrace project a release build

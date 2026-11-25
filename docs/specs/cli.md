@@ -603,14 +603,12 @@ and did not get it. The status is the part of a finished run a script is certain
 what makes it the thing that has to carry that, and the flag is what a script that cannot tolerate
 a substitution has.
 
-The two exclusions are the cases where a different name is not a substitution. A routing entry
-resolves to a model per request, which is what it is for. A backend asked by an opaque handle
-answers with a name that never matched what went in, so comparing them would fail every run made
-against one.
+The exclusion is the case where a different name is not a substitution: a backend asked by an
+opaque handle answers with a name that never matched what went in, so comparing them would fail
+every run made against one.
 
 `verified-by: bravebot_cli::main::a_model_asked_for_and_not_served_is_reported`
 `verified-by: bravebot_cli::main::a_model_that_answered_as_asked_is_no_complaint`
-`verified-by: bravebot_cli::main::a_routing_entry_answered_by_a_model_is_not_a_substitution`
 `verified-by: bravebot_cli::main::a_backend_that_does_not_report_what_it_was_asked_is_not_compared`
 `verified-by: bravebot_cli::main::a_substituted_model_is_reported_beside_the_reply_never_in_it`
 `verified-by: bravebot_cli::main::a_run_answered_by_a_model_other_than_the_one_it_named_does_not_succeed`

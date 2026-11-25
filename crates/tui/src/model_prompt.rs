@@ -531,11 +531,11 @@ impl Picker {
 
     /// Whether this row is the model already in use.
     ///
-    /// Nothing chosen is `automatic` in use, since that is what a request with no choice sends.
+    /// Nothing chosen is the default model in use, since that is what a request with no choice sends.
     pub(crate) fn is_current(&self, model: &Model) -> bool {
         match &self.current {
             Some(name) => model.key == *name,
-            None => model.is_automatic(),
+            None => model.key == bravebot_config::DEFAULT_MODEL,
         }
     }
 }
@@ -1205,9 +1205,18 @@ mod tests {
         }
     }
 
+    /// The row of the model a request names when nobody has picked one.
+    fn the_default() -> Model {
+        model(bravebot_config::DEFAULT_MODEL, "Claude Haiku", false)
+    }
+
+    fn is_the_default(model: &Model) -> bool {
+        model.key == bravebot_config::DEFAULT_MODEL
+    }
+
     fn offered() -> Vec<Model> {
         vec![
-            Model::automatic(),
+            the_default(),
             model("claude-3-sonnet", "Claude 4 Sonnet", true),
             model("llama-3-8b-instruct", "Llama 3 8B", false),
         ]
@@ -1223,7 +1232,7 @@ mod tests {
                 "openrouter/moonshot/kimi-k2",
                 "moonshot/kimi-k2",
             ),
-            Model::automatic(),
+            the_default(),
             model("claude-3-sonnet", "Claude 4 Sonnet", true),
         ]
     }
@@ -1244,7 +1253,7 @@ mod tests {
     /// held heading exists for: a cursor scrolled into this section has left the section's own
     /// heading far above the window.
     fn a_roster_longer_than_the_panel() -> Vec<Model> {
-        let mut roster = vec![Model::automatic()];
+        let mut roster = vec![the_default()];
         for index in 0..40 {
             roster.push(served_by(
                 "OpenRouter",
@@ -1307,18 +1316,18 @@ mod tests {
         assert_eq!(picker.chosen().expect("a model").key, "llama-3-8b-instruct");
     }
 
-    /// Nothing chosen means the request sends "automatic", so that is what is in use.
+    /// Nothing chosen means the request sends the default model, so that is what is in use.
     #[test]
-    fn with_no_choice_the_picker_opens_on_automatic() {
+    fn with_no_choice_the_picker_opens_on_the_default() {
         let picker = Picker::new(offered(), None);
-        assert!(picker.chosen().expect("a model").is_automatic());
+        assert!(is_the_default(picker.chosen().expect("a model")));
     }
 
     /// A model that has stopped being offered must not leave the cursor pointing past the end.
     #[test]
     fn a_current_model_no_longer_offered_opens_at_the_top() {
         let picker = Picker::new(offered(), Some("withdrawn-model"));
-        assert!(picker.chosen().expect("a model").is_automatic());
+        assert!(is_the_default(picker.chosen().expect("a model")));
     }
 
     #[test]
@@ -1326,7 +1335,7 @@ mod tests {
         let mut picker = Picker::new(offered(), None);
         handle_key(&mut picker, KeyCode::Up, KeyModifiers::NONE);
         assert!(
-            picker.chosen().expect("a model").is_automatic(),
+            is_the_default(picker.chosen().expect("a model")),
             "walked past the top"
         );
 
@@ -1909,7 +1918,7 @@ mod tests {
     #[test]
     fn the_list_shows_names_a_person_reads() {
         let output = rendered(&Picker::new(offered(), None));
-        assert!(output.contains("Automatic"), "{output}");
+        assert!(output.contains("Claude Haiku"), "{output}");
         assert!(output.contains("Llama 3 8B"), "{output}");
         assert!(!output.contains("llama-3-8b-instruct"), "{output}");
     }
@@ -2430,9 +2439,9 @@ mod tests {
             assert_eq!(outcome, Outcome::Continue, "{kind:?}");
             named(picker).map(str::to_string)
         };
-        // The models in the order drawn: two under OpenRouter, then automatic and Claude, with the
-        // cursor opening on automatic.
-        let automatic = Model::automatic().display_name;
+        // The models in the order drawn: two under OpenRouter, then the default and Claude, with the
+        // cursor opening on the default.
+        let default = the_default().display_name;
         assert_eq!(
             turn(&mut picker, MouseEventKind::ScrollUp, 9).as_deref(),
             Some("z-ai/glm-4.6"),
@@ -2440,7 +2449,7 @@ mod tests {
         );
         assert_eq!(
             turn(&mut picker, MouseEventKind::ScrollDown, 2).as_deref(),
-            Some(automatic.as_str()),
+            Some(default.as_str()),
             "the gap and the heading between the sections were counted as rows"
         );
         assert_eq!(
@@ -2454,7 +2463,7 @@ mod tests {
         );
         assert_eq!(
             turn(&mut picker, MouseEventKind::ScrollUp, 1).as_deref(),
-            Some(automatic.as_str())
+            Some(default.as_str())
         );
     }
 
@@ -2545,7 +2554,7 @@ mod tests {
     #[test]
     fn a_double_click_in_place_takes_the_model_pointed_at_on_every_row_of_a_list_scrolled_or_not() {
         let short = || {
-            let mut roster = vec![Model::automatic()];
+            let mut roster = vec![the_default()];
             for index in 0..3 {
                 roster.push(served_by(
                     "OpenRouter",
@@ -2692,7 +2701,7 @@ mod tests {
     }
 
     /// Three sections of two models, so a section can be folded with one either side of it, and
-    /// none of them is the automatic model the cursor would open on: it opens on `alpha-one`.
+    /// none of them is the default model the cursor would open on: it opens on `alpha-one`.
     fn three_services() -> Vec<Model> {
         vec![
             served_by("Alpha", "alpha/one", "alpha-one"),
@@ -3043,7 +3052,7 @@ mod tests {
 
     /// VIEW-41. Rejects: a page counted in models, which carries the cursor further than the list
     /// shows wherever a heading or a gap is in the way and leaves models that were never on the
-    /// screen. At 60 by 15 the list is six rows and a page is five: from the automatic model on
+    /// screen. At 60 by 15 the list is six rows and a page is five: from the default model on
     /// the second row, past the gap and OpenRouter's heading, to the third of its models. Counting
     /// five models lands two models further on, and counting six rows lands on the fourth.
     #[test]
@@ -3051,12 +3060,16 @@ mod tests {
         let mut picker = Picker::new(a_roster_longer_than_the_panel(), None);
         let (shown, _) = shown_in(&picker, 60, 15);
         assert_eq!(shown.list.height, 6, "the arithmetic below is for six rows");
-        assert_eq!(named(&picker), Some("Automatic"));
+        assert_eq!(named(&picker), Some("Claude Haiku"));
 
         pressed(&mut picker, &[KeyCode::PageDown]);
         assert_eq!(named(&picker), Some("model-2"));
         pressed(&mut picker, &[KeyCode::PageUp]);
-        assert_eq!(named(&picker), Some("Automatic"), "back to where it began");
+        assert_eq!(
+            named(&picker),
+            Some("Claude Haiku"),
+            "back to where it began"
+        );
     }
 
     /// VIEW-41. Rejects: pages that skip models, stop short of the end, move the cursor against the
@@ -3126,7 +3139,7 @@ mod tests {
             }
             assert_eq!(
                 named(&picker),
-                Some("Automatic"),
+                Some("Claude Haiku"),
                 "{height} rows: did not reach the top"
             );
             for model in &roster {
@@ -3141,7 +3154,7 @@ mod tests {
 
     /// VIEW-41. Rejects: a page counted over the models of a section folded away, which lands the
     /// cursor on a model that is not drawn. A page lands on the heading of the folded section where
-    /// that is the last row within reach: from the automatic model it reaches the first Ollama
+    /// that is the last row within reach: from the default model it reaches the first Ollama
     /// model, and back from the end it stops on OpenRouter's heading.
     #[test]
     fn paging_goes_over_a_folded_section() {
@@ -3150,7 +3163,7 @@ mod tests {
         pressed(&mut picker, &[KeyCode::Down, KeyCode::Left]);
         assert_eq!(on_heading(&picker).as_deref(), Some("OpenRouter"));
         pressed(&mut picker, &[KeyCode::Up]);
-        assert_eq!(named(&picker), Some("Automatic"));
+        assert_eq!(named(&picker), Some("Claude Haiku"));
 
         let (shown, _) = shown_in(&picker, 60, 15);
         assert_eq!(shown.list.height, 6);
@@ -3393,7 +3406,7 @@ mod tests {
                 tab + 1,
                 "the keys are not under the scope: {screen:#?}"
             );
-            for name in ["Automatic", "Claude 4 Sonnet", "Llama 3 8B"] {
+            for name in ["Claude Haiku", "Claude 4 Sonnet", "Llama 3 8B"] {
                 row_holding(&screen, name);
             }
         }
@@ -3420,7 +3433,7 @@ mod tests {
     fn the_second_footer_row_takes_no_row_from_a_list_that_fits() {
         let picker = Picker::new(offered(), None);
         let screen = screen_at(&picker, 80, 24);
-        for name in ["Automatic", "Claude 4 Sonnet", "Llama 3 8B"] {
+        for name in ["Claude Haiku", "Claude 4 Sonnet", "Llama 3 8B"] {
             row_holding(&screen, name);
         }
     }

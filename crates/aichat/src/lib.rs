@@ -191,8 +191,8 @@ pub struct Completion {
     /// an injected instruction put there.
     pub content: Labelled<String>,
     /// The model reported by the server, which may differ from the one requested:
-    /// unrecognised names are reset to [`bravebot_config::DEFAULT_MODEL`], and some entries resolve randomly
-    /// within a weighted ensemble.
+    /// unrecognised names may be reset by the server, and some entries resolve randomly within a
+    /// weighted ensemble.
     pub model: String,
     /// Tools the model asked to call. Empty when it answered directly.
     ///

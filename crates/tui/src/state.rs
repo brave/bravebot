@@ -7618,23 +7618,6 @@ mod tests {
         assert_eq!(session.substituted_model(), None);
     }
 
-    /// The automatic entry asks the server to choose per request, so a concrete name coming back is
-    /// that entry working. Called a substitution, it puts a warning about nothing on every session
-    /// that picked it from the picker, and says the opposite of what the panel says about the same
-    /// turn.
-    #[test]
-    fn picking_automatic_and_being_answered_by_a_model_is_not_a_substitution() {
-        let mut session = Session::new("none");
-        session.choose_model(bravebot_config::DEFAULT_MODEL.to_string(), &a_config());
-        session.served(
-            bravebot_config::DEFAULT_MODEL,
-            "claude-3-haiku",
-            false,
-            true,
-        );
-        assert_eq!(session.substituted_model(), None);
-    }
-
     /// The ordinary path: asked for and answered by the same model, so there is nothing to say.
     #[test]
     fn a_model_answered_by_itself_is_not_a_substitution() {

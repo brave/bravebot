@@ -1937,7 +1937,7 @@ mod tests {
         for other in [
             "arn:aws:bedrock:::some-other-model",
             "arn:aws:bedrock:::approved-opus-v2",
-            "automatic-bravebot",
+            "claude-3-sonnet",
             "",
         ] {
             assert_eq!(

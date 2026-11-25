@@ -97,9 +97,7 @@ The opening screen draws the tier beside the confinement, from the configuration
 
 Where the server reports using a model other than the one you asked for, **both are shown**: the
 choice you made and the model that actually answered. This is said once when it starts happening
-rather than every turn. The automatic entry (`automatic-bravebot`, shown as **Automatic**) resolving
-to a concrete model is not a substitution: that is the server choosing per request, which is what
-picking it means.
+rather than every turn.
 
 ## Limits
 

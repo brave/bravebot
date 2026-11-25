@@ -373,13 +373,9 @@ impl Session {
     /// of a model, and a handle standing for a different name is the indirection working rather than a
     /// substitution, so comparing them would put a warning on every turn. Whether they are comparable
     /// is recorded by whoever knew which backend answered, rather than guessed at from the spelling.
-    ///
-    /// `None` for the automatic entry as well. That name asks the server to choose a model per
-    /// request, so a concrete one coming back is the entry doing its job rather than something
-    /// served in place of what was asked for.
     pub fn substituted_model(&self) -> Option<&str> {
         let (requested, served) = self.served.as_ref()?;
-        if !self.served_names_are_comparable || requested == bravebot_config::DEFAULT_MODEL {
+        if !self.served_names_are_comparable {
             return None;
         }
         (requested != served).then_some(requested.as_str())

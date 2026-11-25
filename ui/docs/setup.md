@@ -38,7 +38,7 @@ requires backend configuration. For the Brave backend, supply these exported nam
 | `SERVICES_KEY_AICHAT` | Backend signing key |
 | `BRAVE_SERVICES_KEY_ID` | Key identifier |
 | `BRAVE_AI_CHAT_ENDPOINT` | Backend endpoint |
-| `BRAVEBOT_DEFAULT_MODEL` | Optional default model, for every backend; otherwise `automatic-bravebot` |
+| `BRAVEBOT_DEFAULT_MODEL` | Optional default model, for every backend; otherwise `claude-3-haiku` |
 | `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | Optional premium endpoint, in place of the one compiled in |
 | `BACKTRACE_SUBMIT_URL` | Optional crash report address, baked in at build time. Leave it unset for development builds, which would otherwise report their own panics. A build without it also says nothing about crash reports in the window, so `pnpm run drive:crash-reports` builds the bridge with one |
 

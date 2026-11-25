@@ -619,7 +619,6 @@ fn exchange<S: Sink>(
     let asked = crate::backend::Backend::name_as_asked(chat.config, model);
     let substituted = (named
         && crate::backend::Backend::reports_the_model_it_was_asked_for(chat.config, model)
-        && asked != bravebot_config::DEFAULT_MODEL
         && asked != completion.model)
         .then(|| chat.config.processor_model.clone())
         .flatten();

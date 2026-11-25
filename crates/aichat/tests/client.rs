@@ -2595,8 +2595,8 @@ fn the_model_listing_is_fetched_from_the_models_path() {
     let models =
         bravebot_aichat::models::list(&mut policy, &config, &egress).expect("the list arrives");
 
-    assert_eq!(models[0].key, DEFAULT_MODEL);
-    assert_eq!(models[1].key, "claude-3-sonnet");
+    assert_eq!(models.len(), 1, "{models:?}");
+    assert_eq!(models[0].key, "claude-3-sonnet");
 
     let captured = received.recv().expect("request captured");
     assert!(

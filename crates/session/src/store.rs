@@ -28,8 +28,7 @@
 //! The model file is a name, not an instruction, and it lands in a request's routing field. What
 //! makes that safe is not the file: it is that the whole directory is the user's own configuration
 //! surface, on the footing [`bravebot_core::policy::Policy::label_user_configuration`] describes, and
-//! that a name the server does not recognise is reset to [`bravebot_config::DEFAULT_MODEL`] rather
-//! than obeyed.
+//! that a name the server does not recognise is refused or reset by it rather than obeyed.
 
 /// Re-exported so a caller can hold what [`effort`] answered with.
 ///
@@ -459,7 +458,7 @@ pub fn parse_model(contents: &str) -> Option<String> {
     Some(normalize_saved_model(name))
 }
 
-/// Rewrite Leo's automatic routing name to bravebot's.
+/// Rewrite a retired automatic routing name to the default model.
 fn normalize_saved_model(name: &str) -> String {
     bravebot_config::normalize_model(name).to_string()
 }
@@ -1183,13 +1182,16 @@ and this?
         );
     }
 
-    /// Leo's automatic routing name is rewritten to bravebot's own entry.
+    /// A retired automatic routing name is rewritten to the default model.
     #[test]
     fn the_legacy_automatic_name_is_rewritten_on_read() {
-        assert_eq!(
-            parse_model("automatic\n").as_deref(),
-            Some(bravebot_config::DEFAULT_MODEL)
-        );
+        for retired in ["automatic\n", "automatic-bravebot\n"] {
+            assert_eq!(
+                parse_model(retired).as_deref(),
+                Some(bravebot_config::DEFAULT_MODEL),
+                "{retired:?}"
+            );
+        }
     }
 
     /// Nothing recorded means no choice, and the caller falls back to the configured default. An

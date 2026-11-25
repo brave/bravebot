@@ -10,7 +10,7 @@ use bravebot_config::{Gateways, RosterAccounts, RosterScope};
 /// What the picker marks as current, what the roster is ordered around, and what the budget, the
 /// level the roster says is read, the sign-in a session makes before a turn and the refusal of a level
 /// are asked about, so that a session opened on a configured model is not taken for one on Brave's
-/// `automatic`. The callers that hand a pick to `list_models`, `Config::adopt_window_of_model_in_force`
+/// default. The callers that hand a pick to `list_models`, `Config::adopt_window_of_model_in_force`
 /// and `Config::runs_on_chatgpt_account` leave the default to them, which read it themselves.
 pub(super) fn model_in_force<'a>(picked: Option<&'a str>, config: &'a Config) -> &'a str {
     picked.unwrap_or(&config.default_model)
@@ -432,10 +432,6 @@ pub(super) fn in_reading_order(
 /// this configuration cannot reach: an ARN cannot be derived from a model name, so an entry invented
 /// for it would be a choice that fails at the far end for a reason nothing here could explain.
 ///
-/// No `automatic` among them. There it means "let the server choose", which Bedrock does not offer: a
-/// request names one model and gets it or an error. The entry still reaches the picker, from the Brave
-/// half of the roster, where it is a choice that backend can honour.
-///
 /// Every entry is marked free. Premium here means the premium key, and reaching a model through
 /// somebody's own AWS account does not involve one.
 ///
@@ -597,7 +593,7 @@ pub(super) fn adopt_listing(
     models: &[bravebot_aichat::models::Model],
 ) {
     // The model in force, not the pick: with no pick the configured default is what a request names
-    // (BACKEND-14, COMPACT-9). `automatic` is a roster row that states no window, so it still leaves
+    // (BACKEND-14, COMPACT-9). A model the roster does not list or describes no window for leaves
     // the default in place. The window is taken without a note: it is the roster's own figure for a
     // model nobody chose in this session, and a start that opens with it reads as a report about
     // something the person did not do. The hint line carries the context used against it. A pick
@@ -820,8 +816,8 @@ pub(super) fn reads_effort(models: &[bravebot_aichat::models::Model], chosen: &s
 
 /// The window advertised for `chosen`, or `None` where the listing does not describe it.
 ///
-/// Split from the fetch so the matching is testable without a server. Nothing chosen means
-/// `automatic`, whose model is resolved per request, so no entry's window is the one in force.
+/// Split from the fetch so the matching is testable without a server. Nothing chosen means no
+/// entry's window is the one in force.
 pub(super) fn advertised_window(
     models: &[bravebot_aichat::models::Model],
     chosen: Option<&str>,
@@ -836,8 +832,8 @@ pub(super) fn advertised_window(
 /// What the listing says `chosen` takes, or nothing where it does not describe it.
 ///
 /// Split from the fetch for the reason [`advertised_window`] is, and empty for the same cases:
-/// neither `automatic` nor a model the listing leaves out is the roster saying it takes only text,
-/// so a picture put to one goes ahead (VET-4).
+/// a model the listing leaves out is not the roster saying it takes only text, so a picture put to
+/// one goes ahead (VET-4).
 pub(super) fn advertised_inputs<'a>(
     models: &'a [bravebot_aichat::models::Model],
     chosen: Option<&str>,
