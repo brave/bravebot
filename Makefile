@@ -602,6 +602,15 @@ check-verus-contracts-ledger:
 check-verus-contracts-selftest:
 	python3 contrib/check-verus-contracts.py --selftest
 
+# What a change weakens in the Verus ledger, the mutations and the survivors, against the merge base,
+# for a person to read. Reports and never fails; the proof-weakened workflow labels the pull request.
+.PHONY: check-verus-weakened check-verus-weakened-selftest
+check-verus-weakened:
+	python3 contrib/check-verus-weakened.py
+
+check-verus-weakened-selftest:
+	python3 contrib/check-verus-weakened.py --selftest
+
 # The minimum-toolchain job. Built in a container pinned to the declared MSRV, because
 # rustup is not a given here and a Homebrew or distro Rust cannot switch toolchains.
 # Catches a feature that only compiles on a newer toolchain than the release build has.
@@ -749,12 +758,12 @@ check-affected-containers:
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
 	check-maintenance-selftest check-profile-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
 	check-review-ready-selftest check-clean-branches-selftest check-verus-contracts-selftest \
-	check-verus-contracts-ledger
+	check-verus-contracts-ledger check-verus-weakened-selftest
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
 	check-maintenance-selftest check-profile-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
 	check-review-ready-selftest check-clean-branches-selftest check-verus-contracts-selftest \
-	check-verus-contracts-ledger
+	check-verus-contracts-ledger check-verus-weakened-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
