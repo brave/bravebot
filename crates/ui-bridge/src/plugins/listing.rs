@@ -382,7 +382,12 @@ mod tests {
 
         assert_eq!(listing["untrusted"]["name"], "demo");
         assert_eq!(listing["untrusted"]["version"], "2.3.4");
-        assert_eq!(listing["untrusted"]["source"], source.display().to_string());
+        // The staging records the source resolved, which on macOS is under `/private`.
+        let resolved = source.canonicalize().unwrap();
+        assert_eq!(
+            listing["untrusted"]["source"],
+            resolved.display().to_string()
+        );
         assert_eq!(listing["git"], false);
         assert!(listing["untrusted"]["commit"].is_null());
         assert_eq!(
