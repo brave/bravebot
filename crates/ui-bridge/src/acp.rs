@@ -1629,7 +1629,7 @@ mod tests {
         let mut unconfined = run.clone();
         unconfined.confined = None;
         unconfined.unconfined = true;
-        let read = run_text(&crate::wire::run_request(1, &unconfined)).expect("a run reads");
+        let read = run_text(&crate::wire::run_request(1, &unconfined)).unwrap_or_default();
         assert_eq!(read, as_the_terminal_draws(&unconfined));
         assert!(
             read.contains(&bravebot_approval::unconfined())

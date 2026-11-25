@@ -1390,7 +1390,7 @@ fn a_session_with_no_question_numbers_left_refuses_to_ask() {
 /// and whether any question was put to them at all.
 fn confirm_run_with_an_approving_window(
     request: RunRequest,
-    answer: RunDecision,
+    answer: &RunDecision,
 ) -> (RunDecision, bool) {
     let harness = harness();
     let running = harness.running;
@@ -1432,7 +1432,7 @@ fn an_unconfined_run() -> RunRequest {
 #[test]
 fn the_window_is_asked_about_an_unconfined_run_and_a_remembering_yes_remembers_nothing() {
     let (decision, asked) =
-        confirm_run_with_an_approving_window(a_run(), RunDecision::approve_always());
+        confirm_run_with_an_approving_window(a_run(), &RunDecision::approve_always());
     assert!(asked, "the control was not put to the window");
     assert!(decision.approved());
     assert!(decision.remember, "the control lost its standing answer");
@@ -1442,7 +1442,7 @@ fn the_window_is_asked_about_an_unconfined_run_and_a_remembering_yes_remembers_n
         RunDecision::approve_and_record(),
         RunDecision::approve_and_record_scope(),
     ] {
-        let (decision, asked) = confirm_run_with_an_approving_window(an_unconfined_run(), answer);
+        let (decision, asked) = confirm_run_with_an_approving_window(an_unconfined_run(), &answer);
         assert!(asked, "the unconfined line was not put to the window");
         assert_eq!(
             decision,
@@ -1452,7 +1452,7 @@ fn the_window_is_asked_about_an_unconfined_run_and_a_remembering_yes_remembers_n
     }
 
     let (decision, asked) =
-        confirm_run_with_an_approving_window(an_unconfined_run(), RunDecision::reject());
+        confirm_run_with_an_approving_window(an_unconfined_run(), &RunDecision::reject());
     assert!(asked);
     assert_eq!(decision, RunDecision::reject());
 }

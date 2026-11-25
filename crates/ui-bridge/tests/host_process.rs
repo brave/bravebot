@@ -655,6 +655,7 @@ fn writes_on_request(
 /// differs from the window is who can answer. The failure this rejects is a bridge that points every
 /// session's planner at the argument, so a host client's turn asks for a line it refuses unasked.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_host_client_answering_only_runs_is_not_pointed_at_the_unconfined_argument() {
     if bravebot_sandbox::base::Prelude::current().is_none()
         || !bravebot_sandbox::confinement_works_here()

@@ -654,6 +654,7 @@ fn an_actor_note_is_recorded_for_the_turn_and_not_for_the_delegate_recording() {
 /// so a line asked to run with no sandbox is refused with nothing shown and no question number
 /// used. The control is the same line confined, which is put to that client.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_host_client_answering_runs_is_not_asked_about_an_unconfined_run() {
     use bravebot_core::command::{Pipeline, Stage};
     let a_run = || {
@@ -676,7 +677,7 @@ fn a_host_client_answering_runs_is_not_asked_about_an_unconfined_run() {
             key_choice: None,
             ..a_run()
         });
-        let _ = done.send((confirmer, decision));
+        done.send((confirmer, decision)).ok();
     });
     let (confirmer, decision) = decided
         .recv_timeout(PATIENCE)

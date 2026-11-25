@@ -755,6 +755,7 @@ fn confinement_is_usable() -> bool {
 /// `host_process::a_host_client_answering_only_runs_is_not_pointed_at_the_unconfined_argument` is
 /// the same line for a host client, which is not pointed at it.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_failed_confined_line_in_a_window_names_the_unconfined_argument() {
     if !confinement_is_usable() {
         return;
