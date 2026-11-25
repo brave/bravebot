@@ -34,14 +34,45 @@ use std::path::Path;
 /// session's own (PERM-12).
 ///
 /// The caps, deadlines and effort the settings also set bound size, time and spend and are not in
-/// the scope. A server is keyed by its alias, so a change to what the person declared under that
-/// alias is their own edit on the host and is not compared.
+/// the scope. A server is keyed by its alias and the command under it is not compared. A declared
+/// server's command changes only by the person's edit on the host. A plugin's server changes with
+/// an update the person accepts on the host, and the updated server does not start until a person
+/// answers its first-use question again (PLUGIN-7, PLUGIN-9).
+///
+/// The files are read before the session's state is locked, so a turn waiting for the state does
+/// not wait on the disk.
 pub(super) fn scope_of(
     open: &Open,
     settings: &Settings,
     managed: &Managed,
     home: &Home,
 ) -> Option<Scope> {
+    // The session writes and honours these under its resolved project, and under the project as
+    // given where that cannot be resolved, so both spellings are read.
+    let resolved = open
+        .project
+        .canonicalize()
+        .unwrap_or_else(|_| open.project.clone());
+    let standing_answers = home
+        .directory
+        .as_deref()
+        .map(|directory| {
+            let standing = bravebot_config::mcp::Standing::read(directory);
+            let mut answers = standing.in_project(&resolved);
+            answers.extend(standing.in_project(&open.project));
+            answers
+        })
+        .unwrap_or_default();
+    // What a first start reaches: what the settings request and, where they request any, the
+    // servers installed plugins carry. Used only while the session has not started its servers.
+    let first_start: Vec<String> = match bravebot_agent::servers::requested_by(settings).is_empty()
+    {
+        true => Vec::new(),
+        false => bravebot_agent::servers::requested_for_a_first_start(settings, home)
+            .into_iter()
+            .map(|(_, alias)| alias)
+            .collect(),
+    };
     let state = open.state.try_lock().ok()?;
     let mut trusted = Vec::new();
     let mut distrusted = Vec::new();
@@ -88,34 +119,11 @@ pub(super) fn scope_of(
         None => Vec::new(),
     };
     // The servers a session can call are the ones it started, once, on its first turn or plan run.
-    // Until then the first one starts what the settings request and, where they request any, the
-    // servers installed plugins carry, so that is what the session will hold.
-    // The session writes and honours these under its resolved project, and under the project as
-    // given where that cannot be resolved, so both spellings are read.
-    let resolved = open
-        .project
-        .canonicalize()
-        .unwrap_or_else(|_| open.project.clone());
-    let standing_answers = home
-        .directory
-        .as_deref()
-        .map(|directory| {
-            let standing = bravebot_config::mcp::Standing::read(directory);
-            let mut answers = standing.in_project(&resolved);
-            answers.extend(standing.in_project(&open.project));
-            answers
-        })
-        .unwrap_or_default();
+    // Until then the first one starts `first_start`, so that is what the session will hold.
     let mcp_servers = match &state.mcp {
         Mcp::Started(Some(started)) => started.aliases(),
         Mcp::Started(None) => Vec::new(),
-        Mcp::Unstarted => match bravebot_agent::servers::requested_by(settings).is_empty() {
-            true => Vec::new(),
-            false => bravebot_agent::servers::requested_for_a_first_start(settings, home)
-                .into_iter()
-                .map(|(_, alias)| alias)
-                .collect(),
-        },
+        Mcp::Unstarted => first_start,
     };
     let references = settings
         .references()
