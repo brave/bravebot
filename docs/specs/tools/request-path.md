@@ -34,6 +34,7 @@ other. A call without a path is answered with an error and asks nobody.
 `verified-by: bravebot_agent::turn::a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing`
 `verified-by: bravebot_agent::turn::a_request_for_a_path_is_asked_about_with_no_reason_a_blank_one_or_a_given_one`
 `verified-by: bravebot_agent::turn::a_request_for_a_path_that_names_none_or_a_flag_that_is_no_boolean_asks_nobody`
+`verified-by: bravebot_agent::tools::tests::arguments::a_path_request_is_refused_unasked_once_the_context_has_met_something_untrusted`
 
 <a id="PATHREQ-2"></a>
 ### PATHREQ-2: only a yes grants, and a run with nobody to ask refuses
@@ -90,8 +91,10 @@ would be a person's word nobody said.
 
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_marks_nothing_trusted_and_is_recorded`
 `verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
+`verified-by: bravebot_agent::turn::a_single_yes_to_a_path_leaves_one_path_reach_record_whoever_gave_it`
 `verified-by: bravebot_tui::status::the_report_lists_the_paths_programs_were_let_reach`
 `verified-by: bravebot_tui::app::the_status_of_a_session_lists_the_paths_programs_were_let_reach`
+`verified-by: bravebot_tui::app::a_path_the_person_lets_a_turn_reach_is_the_one_status_lists_afterwards`
 
 <a id="PATHREQ-5"></a>
 ### PATHREQ-5: nothing is accepted under `off` or in an untrusted workspace, and no write under `read-only`
@@ -154,10 +157,13 @@ later is covered or fails it. The refusals are the ones that hold for a granted 
 where the path leads through links:
 
 - for a read, the paths [PATHREQ-3](#PATHREQ-3) refuses: a filesystem root, a drive root, the home
-  directory and the directories above it, `~/.ssh`, `~/.bravebot` (a read of its `sessions`
-  directory excepted) or the directory `BRAVEBOT_HOME` puts elsewhere (with the same exception),
-  credential locations and the directories that hold one, and a path with a control character or a
-  wildcard;
+  directory and the directories above it, `~/.ssh`, `~/.bravebot` or the directory `BRAVEBOT_HOME`
+  puts elsewhere, credential locations and the directories that hold one, and a path with a control
+  character or a wildcard. [PATHREQ-3](#PATHREQ-3) excepts a read of `~/.bravebot/sessions` from
+  its own refusal, for a request this tool grants to the programs a `run` starts; the file tools
+  get no such exception, and [RECALL-8](../recall.md#RECALL-8) refuses them
+  `~/.bravebot/sessions` whatever the mode. A program a `run` starts still reads it
+  ([SANDBOX-12](../sandboxing.md#SANDBOX-12));
 - for a write, the paths [SANDBOX-28](../sandboxing.md#SANDBOX-28) gives a bypass stage no write row
   for: the same, and persistence locations and the directories that hold one. A new entry is judged
   by the directory it lands in, so an entry already inside the home directory or a directory above

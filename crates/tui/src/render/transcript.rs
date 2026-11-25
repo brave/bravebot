@@ -2589,6 +2589,51 @@ mod tests {
             .unwrap_or_else(|| panic!("{needle} was not drawn"))
     }
 
+    /// PREM-9: the opening screen, as the transcript lays it out, draws the tier the session's
+    /// configuration settles, in the words `/status` uses before a turn. A key held and no key held
+    /// differ, so a screen that draws a constant or no tier fails one of the two.
+    ///
+    /// Rejects: a transcript that passes the logo a hard-coded tier, and one that passes none.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_opening_screen_the_transcript_draws_names_the_tier_the_session_was_given() {
+        let _held = crate::theme::exclusive();
+        let held = {
+            let mut config = bravebot_config::Config::from_lookup(|key| match key {
+                "SERVICES_KEY_AICHAT" => Some("a-signing-key".into()),
+                "BRAVE_SERVICES_KEY_ID" => Some("a-key-id".into()),
+                "BRAVE_AI_CHAT_ENDPOINT" => Some("https://ai-chat.bsg.brave.com".into()),
+                _ => None,
+            })
+            .expect("config");
+            config.premium_key = Some(bravebot_config::Secret::new("a-premium-key"));
+            config
+        };
+        let mut free = held.clone();
+        free.premium_key = None;
+        assert_ne!(
+            crate::status::configured_tier(&held),
+            crate::status::configured_tier(&free),
+            "both configurations say the same thing, so nothing here distinguishes them"
+        );
+        for config in [&held, &free] {
+            let session = Session::new("kernel-enforced").on_tier(config);
+            assert!(
+                opening_screen(&session),
+                "the session is not on its opening screen"
+            );
+            let rows: String = transcript_lines(&session, 90, 40)
+                .iter()
+                .map(text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                rows.contains(crate::status::configured_tier(config)),
+                "the opening screen does not say the tier its configuration settles: {rows}"
+            );
+        }
+    }
+
     /// Both are the session speaking. Drawn in different places or colours, the same words would
     /// read as coming from two sources depending on whether the person typed the command before
     /// the turn or during it.

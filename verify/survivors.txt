@@ -2,6 +2,16 @@
 # is acceptable. docs/development/verification.md says what the sweep changes and why a survivor is
 # listed rather than refused.
 
+survivor: An offset with exactly two bytes after it ends no code. Those two bytes are the `ESC [` itself, so nothing follows for the scan to read and it returns None too.
+in: crates/core/src/colour_codes.rs::code_end
+was: let too_short = start > bytes.len() || bytes.len() - start < 2;
+now: let too_short = start > bytes.len() || bytes.len() - start <= 2;
+
+survivor: An offset at the end of the bytes ends no code, which the test for fewer than two bytes after it already decides, so the result is the same.
+in: crates/core/src/colour_codes.rs::code_end
+was: let too_short = start > bytes.len() || bytes.len() - start < 2;
+now: let too_short = start >= bytes.len() || bytes.len() - start < 2;
+
 survivor: Every code with a parameter is left in the text and drawn byte by byte, which the contract allows: it states only that an offset it returns is an `m` inside the bytes.
 in: crates/core/src/colour_codes.rs::code_end
 was: if !matches!(byte, b'0'..=b'9' | b';' | b':') {

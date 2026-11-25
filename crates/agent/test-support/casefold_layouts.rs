@@ -72,17 +72,17 @@ fn set_flag(directory: &Path, on: bool) -> bool {
 /// The directory is made again each time, so a run does not depend on what an earlier one left.
 pub fn build(base: &Path, layout: &Layout) -> Option<PathBuf> {
     let top = base.join(layout.name);
-    let _ = std::fs::remove_dir_all(&top);
+    std::fs::remove_dir_all(&top).ok();
     let parent = top.join("Parent");
     std::fs::create_dir_all(&parent).unwrap();
     if !set_flag(&parent, layout.parent_folds) {
-        let _ = std::fs::remove_dir_all(&top);
+        std::fs::remove_dir_all(&top).ok();
         return None;
     }
     let workspace = parent.join("Workspace");
     std::fs::create_dir(&workspace).unwrap();
     if !set_flag(&workspace, layout.workspace_folds) {
-        let _ = std::fs::remove_dir_all(&top);
+        std::fs::remove_dir_all(&top).ok();
         return None;
     }
     let root = workspace.canonicalize().unwrap();

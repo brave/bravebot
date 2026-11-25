@@ -110,6 +110,105 @@ fn the_editor_a_prompt_is_written_in_is_started_on_a_terminal_that_is_out_of_raw
     );
 }
 
+/// What a terminal in cooked mode shows for Ctrl-A: the key as a caret and a letter. The interface that
+/// draws reads the key as the start of the line and draws nothing for it, so these two characters can
+/// only have come from the terminal echoing it.
+const ECHOED_CTRL_A: &str = "^A";
+
+/// The key itself.
+const CTRL_A: &str = "\x01";
+
+/// Typed after the key: one character the first frame does not contain, since the interface draws
+/// each typed character behind a cursor move of its own.
+const MARKER: &str = "Z";
+
+/// INPUT-33: once the interface has drawn its first frame the terminal is in raw mode, so a key it
+/// does not draw is not echoed by the terminal.
+///
+/// Nothing else runs `enable_raw_mode` for real: the unit tests in `app.rs` pass the take-over their
+/// own closures. Ctrl-A is typed at the session after its first frame, then a letter that the
+/// interface draws, so the letter being shown means the Ctrl-A was read before it. A terminal left
+/// in cooked mode echoes the Ctrl-A as `^A` ahead of the letter. The control is a session in lines
+/// in the same terminal, which is in cooked mode and does echo it, so the absence in the interface
+/// is not a terminal that never echoes.
+///
+/// The regression it rejects is `take_over_terminal` passing a closure that does nothing where it
+/// passes `enable_raw_mode`, which the interface survives while reading input a line at a time with
+/// every key echoed.
+#[test]
+fn the_interface_that_draws_has_the_terminal_in_raw_mode_so_a_key_is_not_echoed() {
+    // The control: a session in lines echoes the key.
+    let plain_home = Scratch::new("cli-terminal-modes-echo-control");
+    configure_a_model(&plain_home);
+    let stand_in = StandIn::new(vec![]);
+    let mut command = in_a_sized_terminal(&["--plain", "--dangerously-skip-permissions"]);
+    environment(&mut command, &plain_home, &stand_in);
+    let mut terminal = Terminal::start(command);
+    let opened = terminal.shows("in lines, held/m.", Duration::from_secs(60));
+    if opened {
+        terminal.press(CTRL_A);
+    }
+    let echoed = opened && terminal.shows(ECHOED_CTRL_A, Duration::from_secs(10));
+    terminal.end_input();
+    let ran = terminal.finish(Duration::from_secs(30));
+    assert!(
+        opened,
+        "the session in lines did not open (shown: {:?})",
+        ran.shown
+    );
+    assert!(
+        echoed,
+        "the control does not echo Ctrl-A, so the test below could not tell raw mode from cooked (shown: {:?})",
+        ran.shown
+    );
+
+    // The interface that draws.
+    let home = Scratch::new("cli-terminal-modes-raw");
+    configure_a_model(&home);
+    let stand_in = StandIn::new(vec![]);
+    let mut command = in_a_sized_terminal(&["--dangerously-skip-permissions"]);
+    environment(&mut command, &home, &stand_in);
+    let mut terminal = Terminal::start(command);
+    let drawn = terminal.shows(FIRST_FRAME, Duration::from_secs(60));
+    let mut after = false;
+    let mut from = 0;
+    if drawn {
+        from = terminal.shown.text().len();
+        terminal.press(CTRL_A);
+        terminal.press(MARKER);
+        // A terminal not in raw mode echoes the Ctrl-A ahead of the marker it echoes, and the interface
+        // draws the marker alone, so the marker turning up after the typing is the point by which
+        // either has happened.
+        let stop = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < stop && !since(&terminal.shown.text(), from).contains(MARKER) {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        after = since(&terminal.shown.text(), from).contains(MARKER);
+    }
+    let seen = terminal.shown.text();
+    let ran = terminal.finish(Duration::from_millis(100));
+    assert!(drawn, "the interface did not draw (shown: {:?})", ran.shown);
+    assert!(
+        after,
+        "the interface did not show the text typed after Ctrl-A (shown: {:?})",
+        ran.shown
+    );
+    let typed_at = since(&seen, from);
+    assert!(
+        !typed_at.contains(ECHOED_CTRL_A),
+        "the terminal echoed a key typed at the interface, so it was not in raw mode (shown: {typed_at:?})"
+    );
+}
+
+/// What `text` holds from byte `at` on, moved forward to the next character boundary, since the text
+/// is a lossy reading of bytes that were still arriving when `at` was taken.
+fn since(text: &str, mut at: usize) -> &str {
+    while at < text.len() && !text.is_char_boundary(at) {
+        at += 1;
+    }
+    text.get(at..).unwrap_or("")
+}
+
 /// The sequences that take the terminal for the interface that draws: the alternate screen, the
 /// three mouse tracking modes and the two forms of coordinates, bracketed paste, focus reporting and
 /// pushing the keyboard flags, and the query that asks whether the keyboard flags are understood.

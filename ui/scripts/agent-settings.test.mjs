@@ -360,3 +360,30 @@ test('an ending for a row no longer listed is named for its account, not its way
   assert.match(source, /\?\? \(keyed\.way === 'brave' \? 'Brave Premium' : keyed\.id \?\? keyed\.way\)/)
   assert.match(source, /\?\? SIGN_IN_NAMES\[ended\.way\]/)
 })
+
+// DIAG-11: the Log detail control in Settings → Diagnostics.
+test('Log detail shows the level the agent reported and asks only for a different level', async () => {
+  const { LogDetail } = await loadComponents('src/renderer/components/AgentSettings.tsx')
+  const chosen = []
+  const tree = LogDetail({ level: 'debug', busy: false, onChoose: (level) => chosen.push(level) })
+  const control = byTest(tree, 'settings-log-level')
+  assert.equal(control.props.value, 'debug')
+  assert.equal(control.props.size, 'small', 'the same height as the other Settings dropdowns')
+  assert.equal(control.props.disabled, false)
+  for (const value of ['info', 'debug', 'loud', undefined, 'error']) control.props.onChange({ value })
+  assert.deepEqual(chosen, ['info', 'error'], 'the same level and a word that is not a level ask for nothing')
+  assert.equal(byTest(LogDetail({ level: 'error', busy: true, onChoose: noop }), 'settings-log-level').props.disabled, true)
+  const html = renderToStaticMarkup(React.createElement(LogDetail, { level: 'error', busy: false, onChoose: noop }))
+  // The row's label names the field on screen, so the label slot is for assistive technology only.
+  assert.match(html, /<span slot="label" class="visually-hidden">Log detail<\/span>/)
+  assert.deepEqual([...html.matchAll(/<leo-option value="([^"]*)">([^<]*)<\/leo-option>/g)].map((m) => [m[1], m[2]]),
+    [['error', 'Errors only'], ['info', 'Errors and steps (info)'], ['debug', 'Everything (debug)']])
+  assert.match(html, /<p class="settings-log-note" data-test="settings-log-level-note">Applies until you quit the app\. To report a problem, choose a higher level, reproduce it, then choose Report a Bug… from the Help menu\. Higher levels record the hosts the agent contacts\.<\/p>/)
+})
+
+test('Log detail is a row of the Diagnostics table, shown only where a log is written, sets the level, then reads the report again', () => {
+  const source = readFileSync('src/renderer/components/AgentSettings.tsx', 'utf8')
+  assert.match(source, /<\/dd>\s*\{report\.logs\.writing && <><dt>Log detail<\/dt><dd className="settings-log"><LogDetail level=\{isLogLevel\(report\.logs\.level\) \? report\.logs\.level : 'error'\}[^\n]*<\/dd><\/>\}<\/dl>\}/)
+  assert.match(source, /try \{ await window\.bravebot\.setLogLevel\(level\) \}\s*catch \(error\) \{ setProblem\(String\(error\)\); setBusy\(false\); return \}[\s\S]{0,120}await load\(\)/)
+  assert.match(source, /report\.logs\.level === 'info' \|\| report\.logs\.level === 'debug'\s*\? 'Logs are written here as the agent works\.'/)
+})

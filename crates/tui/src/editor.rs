@@ -1298,6 +1298,36 @@ mod tests {
 
     /// A closure standing in for the editor runs before anything `show_through` does afterwards, so
     /// a read of the file added after it returns is invisible to
+    /// `a_transcript_opened_in_the_editor_is_never_read_back`. This test makes the file unreadable
+    /// from inside that closure: the editor leaves a directory where the transcript was, which
+    /// cannot be read as text by anyone, whatever account the test runs as. Showing the transcript
+    /// still succeeds, so nothing reads the file after the editor exits and a failure to read it
+    /// cannot become the call's result.
+    ///
+    /// Rejects: a `show` that reads the file back under any helper name, such as the read of
+    /// `through_a_file` left in place when the transcript is shown, which a source scan for the
+    /// names of the standard calls does not see once the read is behind another function.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn showing_a_transcript_succeeds_when_the_file_cannot_be_read_after_the_editor() {
+        let mut replaced = None;
+        let shown = show_through("what happened", |path| {
+            std::fs::remove_file(path).expect("the transcript is there");
+            std::fs::create_dir(path).expect("a directory takes the file's place");
+            replaced = Some(path.to_path_buf());
+            Ok(())
+        });
+        let replaced = replaced.expect("the editor was never handed a file");
+        // `show_through` removes a file, which a directory is not, so the test removes it.
+        std::fs::remove_dir(&replaced).expect("the directory the editor left");
+        assert!(
+            shown.is_ok(),
+            "a transcript the editor left unreadable made showing it fail: {shown:?}"
+        );
+    }
+
+    /// A closure standing in for the editor runs before anything `show_through` does afterwards, so
+    /// a read of the file added after it returns is invisible to
     /// `a_transcript_opened_in_the_editor_is_never_read_back`. The three functions between the key
     /// and the file are scanned instead: none of them reads a file or goes through the round trip
     /// that does, which is what would let an edited transcript reach the session.

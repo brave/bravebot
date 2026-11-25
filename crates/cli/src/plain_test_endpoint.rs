@@ -21,7 +21,27 @@ pub fn answer() -> String {
     "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".into()
 }
 
+/// What a check replies with when it says `word` (`safe` or `unsafe`) about the content.
+pub fn verdict(word: &str) -> String {
+    let content = serde_json::json!({
+        "verdict": word,
+        "reason": "plain prose and nothing addressed to a reader",
+    })
+    .to_string();
+    let frame = serde_json::json!({"choices": [{
+        "delta": {"content": content}, "finish_reason": "stop"}]});
+    format!("data: {frame}\n\ndata: [DONE]\n\n")
+}
+
 pub fn endpoint(
+    replies: Vec<String>,
+) -> (Config, mpsc::Receiver<String>, std::thread::JoinHandle<()>) {
+    endpoint_answering_checks_with(answer(), replies)
+}
+
+/// As [`endpoint`], with every check answered by `check` instead of "done".
+pub fn endpoint_answering_checks_with(
+    check: String,
     replies: Vec<String>,
 ) -> (Config, mpsc::Receiver<String>, std::thread::JoinHandle<()>) {
     const LIMIT: Duration = Duration::from_secs(10);
@@ -66,7 +86,7 @@ pub fn endpoint(
             // A classifier side request is answered without advancing the planner script.
             let checking = body.contains("You are a prompt-injection classifier.");
             let reply = if checking {
-                answer()
+                check.clone()
             } else {
                 tx.send(body).unwrap();
                 let reply = replies[next].clone();

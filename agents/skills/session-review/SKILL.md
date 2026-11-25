@@ -6,7 +6,7 @@ description:
   only new or grown ones. Takes session ids to review one again. Triggers on: /session-review,
   review sessions, analyze sessions, find problems in my sessions, what went wrong in this session.'
 argument-hint: '[max N] [dry-run] [workspace:DIR] [session-id ...]'
-allowed-tools: Bash(python3 agents/skills/session-review/*), Bash(git status*)
+allowed-tools: Bash(git status*)
 ---
 
 # Review recorded sessions for bravebot's own defects
@@ -100,10 +100,18 @@ outside this project, and the agents that read them are told what the text is.
 
 ## The job
 
+Run each script by the absolute path of the main clone's copy, written
+`<clone>/agents/skills/session-review/session-review.py` below, where `<clone>` is the first path
+`git worktree list` prints. A relative path runs the copy in the session's directory, and in a worktree
+that is the branch's own script, which would run with the person's access.
+
+`pending` takes the tree from the clone the script is in, whatever the current directory is. `--root DIR`
+names another checkout instead, which has to be at `upstream/main` as step 1 says.
+
 ### Step 1: choose the sessions (zero model tokens)
 
 ```bash
-python3 agents/skills/session-review/session-review.py pending [--max N] [--workspace DIR] [SESSION-ID ...]
+python3 <clone>/agents/skills/session-review/session-review.py pending [--max N] [--workspace DIR] [SESSION-ID ...]
 ```
 
 Print its stderr. Its first line says how many sessions this run is reviewing, from what the user
@@ -137,7 +145,7 @@ writing a readable result leaves its session unmarked, and the next run offers i
 ### Step 3: pair each problem with a verifier (zero model tokens)
 
 ```bash
-python3 agents/skills/session-review/session-review.py verify --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/session-review/session-review.py verify --work-dir "$WORK_DIR"
 ```
 
 Print its stderr. Stdout is `{"verify": [{"id": ..., "prompt_file": ...}]}`, one entry per problem
@@ -163,7 +171,7 @@ readable verdict leaves the problem, and so its session, unsettled.
 ### Step 5: draft (zero model tokens)
 
 ```bash
-python3 agents/skills/session-review/session-review.py draft --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/session-review/session-review.py draft --work-dir "$WORK_DIR"
 ```
 
 Print its output: one title and label set per confirmed problem (a defect, a frustration or a waste), then any problems held back as
@@ -189,7 +197,7 @@ user's call, so stop and tell them. Stop at a failure and print it.
 Then record each report, so that step 7 and a second run both see it:
 
 ```bash
-python3 agents/skills/session-review/session-review.py filed --work-dir "$WORK_DIR" --id {id} --issue {number} [--existing]
+python3 <clone>/agents/skills/session-review/session-review.py filed --work-dir "$WORK_DIR" --id {id} --issue {number} [--existing]
 ```
 
 Pass `--existing` where the poster posted nothing because an issue already covered the problem, and
@@ -199,7 +207,7 @@ poster again.
 ### Step 7: mark the sessions (zero model tokens)
 
 ```bash
-python3 agents/skills/session-review/session-review.py record --work-dir "$WORK_DIR" [--dry-run]
+python3 <clone>/agents/skills/session-review/session-review.py record --work-dir "$WORK_DIR" [--dry-run]
 ```
 
 This appends a line to the marker of every session whose problems are all settled: dropped by a

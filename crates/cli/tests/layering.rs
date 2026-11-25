@@ -1580,9 +1580,20 @@ fn reads_a_drop(text: &str) -> bool {
     text.contains("read_dropped_text") || text.contains("read_dropped_attachment")
 }
 
+/// Whether `text` brings the turn's `Attachment` type into scope with a `use` line, which is what
+/// lets a file write the literal `Attachment { .. }` without the path `turn::Attachment {` the list
+/// above reads. A `use` group written over several lines is not seen.
+fn imports_the_attachment_type(text: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("use ") && line.contains("turn::") && line.contains("Attachment")
+    })
+}
+
 /// Whether `text` puts a path on a turn's list of dropped files.
 fn supplies_a_drop(text: &str) -> bool {
     SUPPLIES_A_DROP.iter().any(|form| text.contains(form))
+        || (imports_the_attachment_type(text) && text.contains("Attachment {"))
 }
 
 /// DROP-1 says nothing but the terminal's drop handling and the bridge's `dropped` and `attachments`
@@ -1646,6 +1657,9 @@ fn the_scan_for_the_drop_grant_finds_each_way_to_name_it_and_not_a_comment_or_a_
         "Some(bravebot_agent::turn::Attachment { name, media })",
         "Task { dropped_text: paths, ..Task::new(prompt) }",
         "Task { attachments: found, ..Task::new(prompt) }",
+        // The literal written bare, after the type was imported, which names no `turn::` path.
+        "use bravebot_agent::turn::Attachment;\nlet one = Attachment { path, media };",
+        "use bravebot_agent::turn::{Attachment, Task};\nvec![Attachment { path, media }]",
     ] {
         let code = shipped::code_of(supplies).without_test_modules;
         assert!(supplies_a_drop(&code), "{supplies}");
@@ -1659,6 +1673,9 @@ fn the_scan_for_the_drop_grant_finds_each_way_to_name_it_and_not_a_comment_or_a_
         "let seen = task.dropped_text.len() + task.attachments.len();",
         "let same = task.attachments == other.attachments;",
         "use super::attachments::previews_restaged;\nsuper::attachments::lines_in(&text);",
+        // A type of the same name that is not the turn's, and an import that builds nothing.
+        "struct Attachment { stream: u8 }\nlet one = Attachment { stream: 1 };",
+        "use crate::turn::{Attachment, TurnError};\nfn read(carried: &[Attachment]) {}",
     ] {
         let code = shipped::code_of(quiet).without_test_modules;
         assert!(!supplies_a_drop(&code), "{quiet}");

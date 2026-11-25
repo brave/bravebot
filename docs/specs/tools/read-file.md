@@ -35,6 +35,7 @@ bytes at another.
 `verified-by: bravebot_core::policy::a_path_that_lost_its_trust_fills_the_slot_untrusted`
 `verified-by: bravebot_core::policy::a_read_from_an_unvouched_path_is_untrusted`
 `verified-by: bravebot_core::policy::a_read_from_a_trusted_path_is_trusted`
+`verified-by: bravebot_core::policy::a_reservation_takes_its_label_from_the_trust_map_when_it_is_made`
 `verified-by: bravebot_agent::turn::a_read_the_planner_may_not_see_still_says_when_no_file_is_there`
 `verified-by: bravebot_agent::turn::a_read_the_planner_may_not_see_still_says_when_the_file_is_binary`
 
@@ -404,6 +405,7 @@ the rounds after it, to tell the planner what it already had.
 `verified-by: bravebot_agent::turn::a_rewrite_of_the_same_bytes_is_answered_with_the_lines_again`
 `verified-by: bravebot_agent::turn::a_different_window_of_the_same_file_is_not_answered_with_a_notice`
 `verified-by: bravebot_agent::turn::a_repeat_read_spelled_differently_is_the_same_window`
+`verified-by: bravebot_agent::turn::a_repeat_read_through_another_spelling_of_a_symlinked_root_is_the_same_window`
 `verified-by: bravebot_agent::turn::a_window_that_differs_in_only_its_offset_or_only_its_limit_is_sent`
 `verified-by: bravebot_agent::turn::a_repeat_read_of_a_file_the_planner_may_not_see_is_not_a_notice`
 `verified-by: bravebot_agent::turn::a_window_that_was_quarantined_is_sent_once_the_file_is_vouched_for`
@@ -413,6 +415,7 @@ the rounds after it, to tell the planner what it already had.
 `verified-by: bravebot_agent::conversation::a_kept_read_follows_its_message_to_its_new_position`
 `verified-by: bravebot_agent::conversation::a_window_shown_again_is_recorded_under_its_latest_token`
 `verified-by: bravebot_agent::conversation::a_read_whose_result_was_dropped_is_forgotten`
+`verified-by: bravebot_agent::conversation::an_excerpt_stored_in_front_of_a_read_moves_the_read_with_its_message`
 `verified-by: bravebot_agent::turn::a_read_repeated_after_its_result_was_dropped_sends_the_lines_again`
 `verified-by: bravebot_agent::turn::a_read_of_a_file_shown_before_a_resume_sends_the_lines_again`
 `verified-by: bravebot_agent::workspace::requests_that_come_to_the_same_lines_are_one_window`

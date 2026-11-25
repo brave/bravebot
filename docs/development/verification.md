@@ -10,6 +10,8 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | Item | Contract |
 |---|---|
 | `Integrity::meet`, `Confidentiality::join` | Each returns the pessimistic answer |
+| `Capability::output_label`, `Policy::observe`, `Policy::before_fetch`, `Policy::before_search` | Whatever a capability observes is labelled untrusted: a fetch and a search public, every other read private, and a write has no label |
+| `CapabilitySet::contains`, `CapabilitySet::within`, `CapabilitySet::revoke_mcp_call`, `Policy::before_capability` | A capability is used exactly where the run holds it. A set narrowed by a parent holds only what both hold, so a delegate and a turn addressed to a definition hold nothing their parent lacks, and withdrawing a server's grant takes that grant and no other |
 | `Label::degrades_to` | It is the axis-by-axis order taint travels in, which `crates/core/src/spec.rs` proves a lattice with `(T,priv)` and `(U,pub)` incomparable, in which the taint of two labels is their least upper bound |
 | `Label::is_trusted`, `Label::is_public` | Each reads its axis |
 | `Labelled::label`, `Labelled::declassify` | Each returns the label or the value held |
@@ -31,7 +33,7 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | `Plan::can_be_remembered` | It allows a line exactly when everything that decides what each step does is in the entry `a` records, as `spec::plan_is_its_entries` states over every field of `Plan` and `Step`: no file written or read by name, no reference fed in, no assignment, and no route that opens a file. A route that opens none (a stream sent to `/dev/null`, or `2>&1`) is allowed because the entry holds it: `spec::command_is` compares routes, so the entry made for `sh check.sh > /dev/null` does not cover `sh check.sh` |
 | `Plan::can_be_remembered_as` | It allows a request exactly when its plan can be remembered and it asked for no scope, did not ask to run with no profile, and writes no protected path. `Plan::vouch` makes the only `Vouch`, and `Policy::remember_vouch` records only from one |
 | `policy::run_reason` | Private input, a requested scope, a write, an assignment, and a line outside the root that no entry names are always put to a person, and so is a line an `ask` or `deny` rule matches. A line goes unasked only on the answer that covers it, and a fed reference only on an `allow` rule or the audited table |
-| `policy::output_label` | Output is trusted only on a proof from the audited table or a vouch for every step, never for a line that asked for a scope or to run unconfined, and never on a vouch for a line carrying an assignment or fed untrusted content |
+| `policy::output_label` | Output is trusted only on a proof from the audited table or a vouch for every step, never for a line that asked for a scope or to run unconfined, and never on a vouch for a line carrying an assignment or fed untrusted content. The opaque label it is handed is read as untrusted whatever its integrity |
 | `policy::write_reason`, `WriteReason::asks` | A write to a destination nobody has read or to a protected path is always put to a person, whatever a rule says, and so is one an `ask` or `deny` rule matches. A write goes unasked only on an `allow` rule, or on the trust map where it answers: never into a path nobody has vouched for, and never with untrusted data into a trusted path |
 | `policy::fetch_reason`, `FetchReason::asks` | A fetch goes unasked exactly where an `allow` rule names its host |
 | `policy::mcp_reason`, `McpReason::asks` | A call to a server's tool is always put to a person where the server's declaration asks about every call or the arguments are private, whatever a rule or a standing answer says, and so is one an `ask` or `deny` rule matches. It goes unasked only on an `allow` rule or, where no rule matched, on an approved plan or the person having said to stop asking |
@@ -42,6 +44,10 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | `Remembered::covers`, `RememberedStep::matches`, `Shape::matches` | A remembered line covers a plan exactly where the lines are joined the same way and each step matches in name, file, start path, assignments, routes and arguments, with a number slot admitting only a number, and the step carries no expansion |
 | `permissions::ruling_of` | A matching `deny` decides over every other rule, an `ask` over an `allow`, and an `allow` only where nothing restricts |
 | `permissions::pipeline_decision` | A `deny` on any stage denies a pipeline, an `ask` on any stage asks, and a pipeline is allowed only where it has stages and every one is allowed |
+| `Policy::before_fetch_rules`, `Policy::before_search_rules`, `Policy::before_mcp_call_rules`, `Policy::before_read`, `Policy::refuse_denied_write` | Each refuses exactly where a `deny` rule covers the action: the host, the search, the call, the path read, and for a write the path edited or read. `Policy::rules_for_*` are assumed to return what `Permissions` says, which matches patterns Verus does not read |
+| `credentials::hex_value`, `credentials::sextet_of` | Each gives the value of a hexadecimal or base64 character exactly where the byte is one, and nothing for any other byte |
+| `credentials::escape_at`, `credentials::percent_bytes` | Every offset read is inside the text, a whole `%` escape is always decoded, including one that ends the text, and the output is never longer than the input and is shorter where an escape was decoded |
+| `credentials::base64_bytes` | Fewer than eight bits are held between characters and the bits held are below two to the power of how many are held, so no shift is by 32 or more, no mask underflows, and there is at most one byte out for each character in |
 
 `verify/mutations.txt` lists a defect for each, and `make check-verus` requires Verus to refuse
 every one.
@@ -97,7 +103,10 @@ pub fn meet(self, other: Self) -> Self {
 ```
 
 - `requires` states what the caller owes, `ensures` what the function returns, and a loop takes
-  `invariant` and `decreases` the same way, on the loop.
+  `invariant` and `decreases` the same way, on the loop. Verus checks a `requires` only at a
+  caller it verifies, so a function with a caller Verus does not verify checks its input and
+  states the result in `ensures` instead. The ledger lists each `requires` as an assumption, so a
+  new one shows in the diff with its callers for a reviewer to check.
 - A module that holds a contract imports `vstd::prelude::*` behind `cfg(verus_keep_ghost)`, and
   a crate with a contract on a loop enables `proc_macro_hygiene` behind the same cfg, as
   `crates/core/src/lib.rs` does.
@@ -131,7 +140,7 @@ Then:
   contract that is removed, added or weakened shows in the diff. It fails the same way when an
   assumption is added or removed in a file that holds Verus code: an `external_body`, `external`,
   `external_*_specification`, `assume_termination` or `assume_compatibility_with_trait_spec`
-  attribute, an `assume` or `admit`, or an `assume_specification`. Verus verifies a crate with
+  attribute, an `assume` or `admit`, an `assume_specification`, or a contract with a `requires`. Verus verifies a crate with
   any of these, so the ledger is what shows a reviewer each one. CI runs it in the Security job.
 - `make check-verus` runs Verus. Each crate in `CRATES` in `contrib/check-verus.py` has to verify,
   each mutation has to be refused, each change `contrib/check-verus-sweep.py` makes has to be

@@ -260,13 +260,39 @@ pub(super) fn manifest_animated(
         },
     )?;
 
+    let outcome_of_the_run = finish_manifest_run(
+        session, config, workspace, worker, trust, &cancel, &run, &asked,
+    );
+    Ok(outcome_of_the_run)
+}
+
+/// What a manifest run leaves in the session once its worker has ended: the decisions it made about
+/// the tree, the level and the cache breakpoints its requests learned the model refuses, its charge
+/// and record, and how it ended. The events its trail holds are what comes back.
+///
+/// Split out of [`manifest_animated`] so the ending can be reached without a terminal and a worker
+/// that asks questions.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the session, trust and configuration are the event loop's own borrows, and the worker, token, run and task are what the run itself holds"
+)]
+pub(super) fn finish_manifest_run(
+    session: &mut Session,
+    config: &Config,
+    workspace: &Workspace,
+    worker: thread::JoinHandle<crate::manifest_run::Worked>,
+    trust: &mut TrustStore,
+    cancel: &Cancel,
+    run: &crate::manifest_run::Run,
+    asked: &str,
+) -> Vec<Stamped> {
     // What the run decided about the tree is the session's, the way a turn's is. A file dropped on
     // the line was vouched for by the gesture that put it there, and `dropping.md` DROP-2 has that
     // rule hold for the rest of the session rather than for the run; the rules the run's own writes
     // recorded belong to the same tree the next turn reads.
     let (outcome, sink) = crate::manifest_run::join(worker, trust);
 
-    let stopped_by_the_person = was_stopped(&outcome, &cancel);
+    let stopped_by_the_person = was_stopped(&outcome, cancel);
 
     // The other place a level goes out, so the other place one can be refused. A run carries the
     // session's chosen level the way a turn does, and the session it comes back to is the one that
@@ -275,7 +301,7 @@ pub(super) fn manifest_animated(
     note_a_refused_level(session, refused);
     note_breakpoints_given_up(session, config);
 
-    let recorded = run.complete(session, workspace.root(), &asked, &outcome, &cancel);
+    let recorded = run.complete(session, workspace.root(), asked, &outcome, cancel);
 
     say_how_a_manifest_run_ended(session, &outcome, stopped_by_the_person);
     // Last, so it is the line under the reply or under what went wrong. The run's own record is
@@ -286,7 +312,7 @@ pub(super) fn manifest_animated(
         session.note(t!(manifest_recorded, id = &id));
     }
 
-    Ok(sink.events().to_vec())
+    sink.events().to_vec()
 }
 
 /// Whether a manifest run ended because the person stopped it.

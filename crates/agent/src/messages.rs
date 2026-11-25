@@ -7,6 +7,7 @@
 //! message, so a sender cannot choose how it is introduced.
 
 use crate::lsp::pictured;
+use bravebot_core::label::Label;
 use bravebot_i18n::t;
 use std::fmt;
 
@@ -162,7 +163,10 @@ pub trait Courier: Send + Sync + fmt::Debug {
 #[derive(Debug, Default)]
 pub struct Ledger {
     counts: std::collections::BTreeMap<String, usize>,
-    covered: std::collections::BTreeSet<String>,
+    /// The target id and the label a standing answer was given under. A message to the same
+    /// target sent under another label was never shown to the person under that label, so it is
+    /// not covered by this (MSG-4).
+    covered: std::collections::HashSet<(String, Label)>,
 }
 
 impl Ledger {
@@ -180,14 +184,19 @@ impl Ledger {
         *self.counts.entry(id.to_string()).or_insert(0) += 1;
     }
 
-    /// Whether a person said to send this turn's later messages to `id` without asking.
-    pub fn is_covered(&self, id: &str) -> bool {
-        self.covered.contains(id)
+    /// Whether a person said to send this turn's later messages to `id` under `label` without
+    /// asking.
+    ///
+    /// The key is the target and the label together: a standing answer given while a message to
+    /// `id` was shown at one label does not cover a later message to the same target whose label
+    /// has since risen, because the person was never shown that label (MSG-4).
+    pub fn is_covered(&self, id: &str, label: Label) -> bool {
+        self.covered.contains(&(id.to_string(), label))
     }
 
-    /// Cover the later messages this turn puts to `id`.
-    pub fn cover(&mut self, id: &str) {
-        self.covered.insert(id.to_string());
+    /// Cover the later messages this turn puts to `id` under `label`.
+    pub fn cover(&mut self, id: &str, label: Label) {
+        self.covered.insert((id.to_string(), label));
     }
 }
 

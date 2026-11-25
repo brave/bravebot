@@ -518,6 +518,10 @@ loop.
 `verified-by: bravebot_cli::running::a_reply_from_a_terminal_starts_a_stopped_session_with_it`
 `verified-by: bravebot_cli::running::an_attach_from_a_terminal_starts_a_stopped_session`
 `verified-by: bravebot_cli::host::a_hosted_session_waits_an_hour_before_it_ends`
+`verified-by: bravebot_cli::host::a_session_that_has_ended_its_wait_tells_a_reply_and_an_attach_it_is_stopping`
+`verified-by: bravebot_cli::background::a_reply_answered_stopping_is_a_failure_and_only_ok_is_not`
+`verified-by: bravebot_cli::background::an_attach_answered_stopping_is_a_failure_and_only_ok_joins`
+`verified-by: bravebot_cli::running::a_reply_refused_as_stopping_starts_the_session_when_it_is_asked_again_once_stopped`
 
 <a id="BG-14"></a>
 ### BG-14: a background session in a git repository works in a checkout of its own

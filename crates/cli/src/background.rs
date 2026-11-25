@@ -442,6 +442,18 @@ pub(crate) fn attach(args: &[String]) -> ExitCode {
     talk(&roster, &seen)
 }
 
+/// What the first line a session answers an attach with comes to: nothing to say where it took
+/// the terminal, and the failure to give for each word that says it did not (BG-13).
+#[cfg(unix)]
+fn attach_answered(answer: Option<&str>, name: &str) -> Result<(), String> {
+    match answer {
+        Some("ok") => Ok(()),
+        Some("attached") => Err(t!(attach_taken, name = name.to_string()).to_string()),
+        Some("stopping") => Err(t!(attach_stopping, name = name.to_string()).to_string()),
+        _ => Err(t!(attach_not_running, name = name.to_string()).to_string()),
+    }
+}
+
 #[cfg(unix)]
 fn talk(roster: &Roster, seen: &Seen) -> ExitCode {
     use std::io::{BufRead, BufReader, Read};
@@ -470,11 +482,8 @@ fn talk(roster: &Roster, seen: &Seen) -> ExitCode {
         return fail(Ending::Failed, t!(attach_not_running, name = name));
     };
     let mut from = BufReader::new(listening);
-    match crate::host::bounded_line(&mut from).as_deref() {
-        Some("ok") => {}
-        Some("attached") => return fail(Ending::Failed, t!(attach_taken, name = name)),
-        Some("stopping") => return fail(Ending::Failed, t!(attach_stopping, name = name)),
-        _ => return fail(Ending::Failed, t!(attach_not_running, name = name)),
+    if let Err(told) = attach_answered(crate::host::bounded_line(&mut from).as_deref(), &name) {
+        return fail(Ending::Failed, told);
     }
     eprintln!("{}", t!(attach_joined, name = name.clone()));
     eprintln!("{}", mode_line(seen.job.mode));
@@ -598,18 +607,28 @@ fn send(roster: &Roster, seen: &Seen, text: &str) -> ExitCode {
         return fail(Ending::Failed, t!(reply_not_sent, name = name));
     }
     let answer = crate::host::bounded_line(&mut BufReader::new(stream));
-    match answer.as_deref() {
-        Some("ok") => {
-            println!("{}", t!(reply_sent, name = name));
+    match reply_answered(answer.as_deref(), &name, &short_id(&seen.job.id)) {
+        Ok(said) => {
+            println!("{said}");
             ExitCode::SUCCESS
         }
-        Some("working") => fail(Ending::Failed, t!(reply_working, name = name)),
-        Some("stopping") => fail(Ending::Failed, t!(reply_stopping, name = name)),
-        Some("needs-input") => fail(
-            Ending::Failed,
-            t!(reply_needs_input, name = name, id = short_id(&seen.job.id)),
-        ),
-        _ => fail(Ending::Failed, t!(reply_not_sent, name = name)),
+        Err(told) => fail(Ending::Failed, told),
+    }
+}
+
+/// What the line a session answers a reply with comes to: the sentence to print where it took the
+/// prompt, and the failure to give for each word that says it did not (BG-13).
+#[cfg(unix)]
+fn reply_answered(answer: Option<&str>, name: &str, id: &str) -> Result<String, String> {
+    let name = name.to_string();
+    match answer {
+        Some("ok") => Ok(t!(reply_sent, name = name).to_string()),
+        Some("working") => Err(t!(reply_working, name = name).to_string()),
+        Some("stopping") => Err(t!(reply_stopping, name = name).to_string()),
+        Some("needs-input") => {
+            Err(t!(reply_needs_input, name = name, id = id.to_string()).to_string())
+        }
+        _ => Err(t!(reply_not_sent, name = name).to_string()),
     }
 }
 
@@ -751,6 +770,56 @@ mod tests {
 
     fn lines_of(seen: &[Seen]) -> Vec<String> {
         super::lines_of(&entry_tasks(seen))
+    }
+
+    /// BG-13: the word a session answers a reply with when it has run out its idle time is a
+    /// failure with the sentence that says to reply again, and the word for a prompt taken is the
+    /// only one that is not.
+    ///
+    /// It rejects a client that reads `stopping` as `ok` (a prompt reported as sent to a process that
+    /// will not read it) and one that gives the generic sentence.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_reply_answered_stopping_is_a_failure_and_only_ok_is_not() {
+        let stopping = reply_answered(Some("stopping"), "build", "3f2a9c1e")
+            .expect_err("a prompt a stopping session will not read was not sent");
+        assert_eq!(
+            stopping,
+            t!(reply_stopping, name = "build".to_string()).to_string()
+        );
+        assert!(stopping.contains("Reply again to start it"), "{stopping}");
+
+        assert_eq!(
+            reply_answered(Some("ok"), "build", "3f2a9c1e"),
+            Ok(t!(reply_sent, name = "build".to_string()).to_string())
+        );
+        for other in [Some("working"), Some("needs-input"), Some("unknown"), None] {
+            let told =
+                reply_answered(other, "build", "3f2a9c1e").expect_err("only ok is a prompt taken");
+            assert_ne!(told, stopping, "{other:?}");
+        }
+    }
+
+    /// BG-13: the same for an attach: `stopping` is a failure that says to attach again, not the
+    /// terminal joined and not the generic not-running sentence.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn an_attach_answered_stopping_is_a_failure_and_only_ok_joins() {
+        let stopping = attach_answered(Some("stopping"), "build")
+            .expect_err("a terminal is not joined to a stopping session");
+        assert_eq!(
+            stopping,
+            t!(attach_stopping, name = "build".to_string()).to_string()
+        );
+        assert!(stopping.contains("Attach again to start it"), "{stopping}");
+
+        assert_eq!(attach_answered(Some("ok"), "build"), Ok(()));
+        for other in [Some("attached"), Some("working"), None] {
+            let told = attach_answered(other, "build").expect_err("only ok joins");
+            assert_ne!(told, stopping, "{other:?}");
+        }
     }
 
     /// BG-9: `/detach` leaves, with space around it too, and nothing that only contains it does,

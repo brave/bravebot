@@ -28,6 +28,11 @@ use std::time::{Duration, Instant};
 /// How long a test waits for what it expects before it fails.
 pub const PATIENCE: Duration = Duration::from_secs(120);
 
+/// The words that open the message naming the session's own directory (INSTR-9). It follows the
+/// prompt in the conversation, so a stand-in model that reads "the last user message" as the prompt
+/// has to step over it.
+pub const SCRATCH_NOTE: &str = "The scratch directory of this session is";
+
 /// The variable that names the socket the relay connects to.
 const RELAY: &str = "BRAVEBOT_UI_BRIDGE_TEST_RELAY";
 

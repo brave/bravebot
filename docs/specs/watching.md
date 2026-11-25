@@ -260,6 +260,8 @@ at the last one and know that it is the last.
 `verified-by: bravebot_tui::render::a_delegates_view_does_not_open_on_the_mark`
 `verified-by: bravebot_tui::app::tests::watching::n_and_p_move_between_delegates`
 `verified-by: bravebot_tui::render::a_delegates_view_names_what_it_was_asked_above_its_lines_and_keeps_it_there`
+`verified-by: bravebot_tui::render::a_delegates_view_draws_its_call_then_the_sentence_the_turn_was_told_then_the_report`
+`verified-by: bravebot_tui::render::nothing_the_turn_is_writing_is_drawn_over_a_delegates_view`
 
 <a id="WATCH-9"></a>
 ### WATCH-9: the view takes every key, and the way out is read against the nearest level
@@ -446,6 +448,7 @@ would claim a confinement that is not there; drawing an unread one plain would h
 `verified-by: bravebot_tui::render::a_report_the_planner_may_not_read_is_marked_where_it_is_drawn`
 `verified-by: bravebot_agent::turn::what_a_delegate_reported_reaches_the_person_watching`
 `verified-by: bravebot_agent::turn::a_report_the_planner_was_handed_a_reference_to_is_kept_from_it_and_drawn_marked`
+`verified-by: bravebot_agent::turn::what_collect_delegates_draws_for_the_person_follows_what_the_planner_was_given`
 `verified-by: bravebot_tui::render::a_report_the_planner_read_is_drawn_plain`
 
 <a id="WATCH-14"></a>

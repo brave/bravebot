@@ -1865,4 +1865,128 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&scratch);
     }
+
+    /// PERM-7: a location a server spells in another Unicode form than the workspace root is the
+    /// same file, so a `deny` rule covers it. APFS opens `cafe` plus a combining accent and the
+    /// precomposed spelling as one directory, and a server may report either.
+    ///
+    /// Every rule is asked about both spellings of the root, in both directions, so a comparison
+    /// that reads the root's own form only (bytes) keeps the other form in the answer. The control
+    /// is a file no rule covers, which stays under the same spelling.
+    #[test]
+    fn a_location_spelled_in_another_unicode_form_than_the_root_is_left_out_by_a_deny_rule() {
+        let decomposed = "cafe\u{301}";
+        let composed = "caf\u{e9}";
+        for (made_as, tag) in [(decomposed, "nfd"), (composed, "nfc")] {
+            let scratch = crate::testutil::scratch_dir(&format!("lsp-denied-unicode-{tag}"));
+            std::fs::remove_dir_all(&scratch).ok();
+            let directory = scratch.join(made_as);
+            std::fs::create_dir_all(directory.join("held/src")).unwrap();
+            std::fs::create_dir_all(directory.join("src")).unwrap();
+            std::fs::write(directory.join("held/src/lib.rs"), "x").unwrap();
+            let workspace = crate::Workspace::new(&directory).unwrap();
+            let root = workspace.root().to_path_buf();
+            let parent = root.parent().unwrap().to_path_buf();
+
+            for rule in ["Read(held/src/lib.rs)", "Read(held/**)"] {
+                for spelled in [decomposed, composed] {
+                    let under = parent.join(spelled);
+                    let answer = Answer {
+                        locations: vec![
+                            location(&under.join("held/src/lib.rs").to_string_lossy(), 4),
+                            location(&under.join("src/b.rs").to_string_lossy(), 1),
+                        ],
+                        text: None,
+                        diagnostics: None,
+                        partial: false,
+                    };
+                    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+                        &[rule.to_string()],
+                        &[],
+                        &[],
+                        &bravebot_core::permissions::Anchors::none(),
+                    );
+                    assert!(rejected.is_empty(), "the rule did not parse");
+                    let mut sink = RecordingSink::new();
+                    let policy =
+                        Policy::begin(routing(), ReleasePlan::new(), capabilities(), &mut sink)
+                            .unwrap()
+                            .with_permissions(permissions);
+                    let kept = without_denied(answer, &root, &workspace, &policy);
+                    let names: Vec<_> = kept.locations.iter().map(|l| l.path.clone()).collect();
+                    assert_eq!(
+                        names,
+                        vec![under.join("src/b.rs").to_string_lossy().into_owned()],
+                        "{rule} with the root made as {tag} and the location spelled {spelled:?}"
+                    );
+                }
+            }
+            std::fs::remove_dir_all(&scratch).ok();
+        }
+    }
+
+    /// LSP-3: a location of a distrusted file that a server spells in another Unicode form than the
+    /// workspace root is untrusted, whichever way it is spelled. Both spellings of the directory are
+    /// made, so every reported name is backed by an entry on any volume and the label is not
+    /// untrusted merely because the name is no file. The location is a link to the distrusted file,
+    /// which only the lookup under the name below the root finds, so it is untrusted only where that
+    /// lookup is made. The control is a link to a vouched file spelled the root's own way and in the
+    /// other form, which stays trusted, so the rows are refused for the file they land on.
+    #[cfg(unix)]
+    #[test]
+    fn a_location_of_a_distrusted_file_in_another_unicode_form_is_still_untrusted() {
+        let decomposed = "cafe\u{301}";
+        let composed = "caf\u{e9}";
+        let scratch = crate::testutil::scratch_dir("lsp-unicode-distrusted");
+        std::fs::remove_dir_all(&scratch).ok();
+        for form in [decomposed, composed] {
+            let directory = scratch.join(form);
+            std::fs::create_dir_all(directory.join("src")).unwrap();
+            std::fs::create_dir_all(directory.join("vendor")).unwrap();
+            std::fs::write(directory.join("src/a.rs"), "x").unwrap();
+            std::fs::write(directory.join("vendor/b.rs"), "x").unwrap();
+            // On a volume that folds the two forms the second pass finds the links made by the
+            // first, which is the same directory.
+            for (link, target) in [
+                ("src/to-vendor.rs", "vendor/b.rs"),
+                ("src/to-src.rs", "src/a.rs"),
+            ] {
+                std::os::unix::fs::symlink(directory.join(target), directory.join(link)).ok();
+            }
+        }
+        let workspace = crate::Workspace::new(scratch.join(decomposed)).unwrap();
+        let root = workspace.root().to_path_buf();
+        let parent = root.parent().unwrap().to_path_buf();
+        let ws = root.to_str().unwrap().to_owned();
+
+        let label_of = |path: String| {
+            let mut sink = RecordingSink::new();
+            let mut store = bravebot_core::trust::TrustStore::new(&ws);
+            store.trust(".");
+            store.distrust("vendor");
+            let mut policy =
+                Policy::begin(routing(), ReleasePlan::new(), capabilities(), &mut sink)
+                    .unwrap()
+                    .with_trust(store);
+            let answer = Answer {
+                locations: vec![location(&path, 1)],
+                ..Answer::default()
+            };
+            label_for_locations(&mut policy, &workspace, &answer, None).unwrap()
+        };
+
+        let named =
+            |form: &str, file: &str| parent.join(form).join(file).to_string_lossy().into_owned();
+        for file in ["src/a.rs", "src/to-src.rs"] {
+            let path = named(decomposed, file);
+            assert!(label_of(path.clone()).is_trusted(), "control {path}");
+        }
+        for spelled in [decomposed, composed] {
+            for file in ["vendor/b.rs", "src/to-vendor.rs"] {
+                let path = named(spelled, file);
+                assert!(!label_of(path.clone()).is_trusted(), "{path} was trusted");
+            }
+        }
+        std::fs::remove_dir_all(&scratch).ok();
+    }
 }

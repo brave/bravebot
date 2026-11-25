@@ -1779,10 +1779,21 @@ command line or a language server names a file in it as `C:\proj\x`. `Path` read
 different prefixes, so a comparison by components finds nothing below the directory, and a lookup
 that is made under the relative name is made under an absolute one instead, which
 `Workspace::resolve` refuses inside the root. `bravebot_core::spelling::below` compares both as keys,
-with the drive letter in one case, and is what takes a name below the working directory for its
-relative spelling in the operands of a `run` line ([CMDLINE-8](tools/command-line.md#CMDLINE-8)) and
-in the locations a language server reports ([LSP-3](tools/lsp.md#LSP-3)). Where a slash is the only
-separator `C:\proj\x` is a file at the top of the project and is below nothing.
+with the drive letter in one case, and in the form every canonically equivalent spelling of a name
+shares ([TRUST-2](#TRUST-2)), component by component, so a name spelled `cafe\u{301}` is below a
+directory the platform resolved to `caf\u{e9}` and the reverse. What it returns is the part of the
+name after the directory as the name spelled it. It is what takes a name below the working
+directory for its relative spelling in the operands of a `run` line
+([CMDLINE-8](tools/command-line.md#CMDLINE-8)), including the key a line's reads are asked about
+the map under, and in the locations a language server reports ([LSP-3](tools/lsp.md#LSP-3)).
+Where a slash is the only separator `C:\proj\x` is a file at the top of the project and is below
+nothing.
+
+The Unicode comparison joins two different directories on a volume that keeps `cafe\u{301}` and
+`caf\u{e9}` apart: a name below one is read as below the other, so a rule written about the project
+is asked about both and the weaker answer decides. That lowers trust and adds refusals and never
+raises trust, and a directory that differs in a letter, or whose name only starts like the
+workspace's, is not joined ([PATH-007](../best-practices/paths.md#PATH-007)). Case is not folded.
 
 **Why.** Without the reduction a directory reached by a second spelling of its own name is covered
 by nothing, so a file the user vouched for is quarantined under half its names; on macOS that is
@@ -1799,11 +1810,18 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_agent::workspace::a_name_and_its_key_are_spelled_the_way_the_host_separates`
 `verified-by: bravebot_agent::workspace::a_directory_the_trust_map_cannot_key_is_refused`
 `verified-by: bravebot_agent::workspace::each_door_that_opens_a_directory_by_name_refuses_one_the_trust_map_cannot_key`
+`verified-by: bravebot_agent::workspace::the_public_doors_admit_an_ordinary_directory_where_a_backslash_separates`
 `verified-by: bravebot_agent::workspace::a_directory_on_a_drive_letter_is_opened_under_a_key_spelled_from_slash`
+`verified-by: bravebot_core::policy::an_operand_in_another_unicode_form_of_the_root_is_also_named_relative_to_the_project`
+`verified-by: bravebot_core::policy::a_line_reading_a_distrusted_file_spelled_in_another_unicode_form_of_the_root_is_untrusted`
 `verified-by: bravebot_agent::workspace::a_rule_keyed_on_a_drive_letter_decides_that_directory_and_nothing_else`
 `verified-by: bravebot_core::spelling::a_name_rooted_at_a_drive_letter_is_keyed_from_slash_where_a_backslash_separates`
 `verified-by: bravebot_core::spelling::a_name_with_no_slash_spelling_is_not_keyed_as_a_full_path`
 `verified-by: bravebot_core::spelling::a_name_shaped_like_a_drive_is_a_file_where_a_slash_is_the_only_separator`
+`verified-by: bravebot_core::spelling::a_name_is_below_a_root_spelled_in_another_unicode_form`
+`verified-by: bravebot_core::spelling::what_is_below_the_root_is_the_name_as_spelled_whichever_comparison_found_the_root`
+`verified-by: bravebot_core::policy::an_operand_that_holds_a_root_that_is_not_text_is_named_as_the_project`
+`verified-by: bravebot_agent::workspace::a_name_in_another_unicode_form_of_the_root_is_below_the_workspace_root`
 `verified-by: bravebot_core::policy::a_listing_of_a_distrusted_directory_on_a_drive_letter_is_untrusted`
 `verified-by: bravebot_core::policy::a_line_reading_a_distrusted_file_on_a_drive_letter_is_untrusted`
 `verified-by: bravebot_core::policy::an_operand_on_a_drive_letter_is_also_named_relative_to_the_project`
@@ -1815,6 +1833,10 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_agent::workspace::a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_rule`
 `verified-by: bravebot_agent::workspace::a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered_by_its_rule`
 `verified-by: bravebot_session::sessions::a_rule_recorded_under_a_drive_letter_is_replayed_under_the_key_spelled_from_slash`
+`verified-by: bravebot_session::sessions::a_relative_rule_recorded_with_backslashes_is_replayed_under_the_slash_spelling`
+`verified-by: bravebot_session::sessions::a_record_replays_its_rules_under_the_answer_of_the_host_it_runs_on`
+`verified-by: bravebot_session::sessions::a_record_on_windows_replays_a_drive_letter_rule_under_the_key_spelled_from_slash`
+`verified-by: bravebot_agent::workspace::the_doors_that_open_a_directory_by_name_admit_an_ordinary_directory_on_windows`
 `verified-by: bravebot_agent::turn::vouching_for_a_project_file_named_absolutely_records_its_relative_rule`
 `verified-by: bravebot_agent::workspace::a_file_vouched_under_a_link_spelling_outside_every_opened_directory_keeps_that_trust_in_a_search`
 `verified-by: bravebot_agent::workspace::files_vouched_under_a_link_spelling_outside_every_opened_directory_keep_that_trust_in_a_walk`
@@ -1825,7 +1847,7 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_core::spelling::a_name_is_below_a_verbatim_root_whichever_way_the_drive_path_is_spelled`
 `verified-by: bravebot_core::spelling::a_drive_spelling_is_not_below_a_root_where_a_slash_is_the_only_separator`
 `verified-by: bravebot_agent::workspace::a_name_typed_with_a_drive_letter_is_below_the_workspace_root_that_resolved_to_a_verbatim_path`
-`verified-by: by-construction (each door that opens or moves to a directory by name passes the host's answer about what separates to its inner function in one expression, BACKSLASH_SEPARATES, which is cfg!(windows): Workspace::resolve_directory to admit_resolved_directory and Workspace::move_root to move_root_to in crates/agent/src/workspace/reach.rs, and restored_rules in crates/session/src/sessions.rs for a saved rule. The tests above give that answer to the inner functions directly, so a wrapper that passed a literal false is not detected on a host where a backslash is not a separator, since a canonical name there is always rooted at a slash. The code that picks a trust key gets no test seam for it, as docs/development/verification.md requires, and no CI job runs these wrappers on a Windows host: the Windows jobs run named tests, and none of them calls these doors or restored_rules. The wrappers are held by their being one expression each and are not demonstrated by a test that fails)`
+`verified-by: by-construction (the host's answer about what separates reaches the two doors through Workspace, which holds BACKSLASH_SEPARATES, which is cfg!(windows), unless a test supplies another with with_door_host, and reaches the replay of a saved rule through restored_rules in crates/session/src/sessions.rs. The wrappers are driven with the Windows answer by the tests above. The other uses of BACKSLASH_SEPARATES in crates/agent/src (a search for the name lists them) have no test of their own that gives them the Windows answer)`
 
 ## What a rewind puts back
 
@@ -1845,6 +1867,7 @@ without blocking restoration of other files.
 `verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project`
 `verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_records_the_scratch_gap_and_no_other`
 `verified-by: bravebot_agent::workspace::a_write_in_a_directory_the_person_opened_is_kept_for_an_undo_and_leaves_no_scratch_gap`
+`verified-by: bravebot_agent::workspace::a_write_beside_the_sessions_directory_in_a_directory_that_holds_it_is_kept_for_an_undo`
 `verified-by: bravebot_agent::workspace::an_untrusted_file_in_the_sessions_own_directory_stays_untrusted_after_an_undo`
 `verified-by: bravebot_agent::workspace::an_explicit_distrust_on_either_side_survives_an_undo_and_the_snapshot_grants_nothing`
 `verified-by: bravebot_agent::workspace::keeping_the_lower_decision_for_a_scratch_file_does_not_stop_the_other_files_being_restored`
@@ -2239,6 +2262,7 @@ large as whatever a turn unpacked there, and nothing in the opening session need
 `verified-by: bravebot_agent::scratch::a_session_opening_removes_what_a_killed_one_left`
 `verified-by: bravebot_agent::scratch::the_temporary_directory_is_swept_once_and_then_only_the_accounts_own`
 `verified-by: bravebot_agent::scratch::a_directory_nothing_holds_is_taken_for_a_leftover`
+`verified-by: bravebot_agent::scratch::a_checkouts_directory_nothing_holds_is_taken_for_a_leftover`
 `verified-by: bravebot_agent::scratch::a_live_sessions_directory_is_left_alone`
 `verified-by: bravebot_agent::scratch::a_directory_still_being_made_is_left_alone`
 `verified-by: bravebot_agent::scratch::another_accounts_directory_is_left_alone`
@@ -2247,6 +2271,8 @@ large as whatever a turn unpacked there, and nothing in the opening session need
 `verified-by: bravebot_agent::scratch::a_program_a_session_starts_does_not_hold_its_directory`
 `verified-by: bravebot_agent::scratch::a_claim_held_for_a_moment_is_waited_out`
 `verified-by: bravebot_agent::scratch::a_claim_held_by_something_else_does_not_stall_the_session`
+`verified-by: bravebot_agent::scratch::a_file_system_that_refuses_the_lock_neither_fails_nor_stalls_the_session`
+`verified-by: bravebot_agent::scratch::a_directory_waiting_on_its_lock_is_not_yet_at_the_mode_a_sweep_takes`
 `verified-by: bravebot_agent::scratch::the_removal_of_leftovers_runs_beside_the_opening_session_and_not_ahead_of_it`
 `verified-by: bravebot_agent::git::the_sweep_takes_only_an_unlisted_checkout_nobody_holds`
 `verified-by: bravebot_agent::workspace::a_sweep_leaves_the_checkouts_a_session_made_or_took_back`

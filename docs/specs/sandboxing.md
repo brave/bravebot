@@ -1066,6 +1066,7 @@ The auto mode's classifier is kept from a line with a git stage for the same rea
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_the_other_protected_names_beneath_it`
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_change_rename_into_or_remove_an_entry_of_a_git_directory`
+`verified-by: bravebot_sandbox::macos::a_write_row_does_not_change_the_owner_or_the_access_list_of_a_git_directory_or_a_protected_name`
 `verified-by: bravebot_sandbox::macos::a_write_row_inside_a_protected_directory_is_writable_under_itself`
 `verified-by: bravebot_sandbox::macos::every_name_in_the_shared_list_is_in_the_profile`
 `verified-by: bravebot_agent::protected_names::the_sandbox_and_the_file_tools_hold_back_the_same_names`
@@ -2713,6 +2714,7 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::the_program_cargo_runs_for_a_target_is_removed_and_its_target_directory_is_not`
 `verified-by: bravebot_agent::usability::the_loader_variables_are_removed_from_the_stored_login_gh_whatever_they_hold`
 `verified-by: bravebot_agent::usability::the_token_variables_are_removed_from_the_stored_login_gh`
+`verified-by: bravebot_agent::usability::a_generic_name_that_selects_code_is_checked_on_the_stored_login_gh`
 `verified-by: bravebot_agent::usability::the_twelve_host_variables_that_move_a_read_row_or_hand_over_a_socket_are_removed`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_a_template_directory`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_configuration_that_names_a_hooks_directory`
@@ -3248,7 +3250,9 @@ toolchain its registry hosts (`crates.io`, `static.crates.io` and `index.crates.
 The proxy decides from the destination in the `CONNECT` request line and the addresses that name
 resolves to, and from nothing else: not a header, not a reply, not a byte the tunnel carries. TLS
 is not terminated, so an allowed tunnel is two byte streams copied into each other unread, and a
-request that is not a `CONNECT` is refused. A tunnel is opened only to port 443 or 80.
+request that is not a `CONNECT` is refused. A tunnel is opened only to port 443 or 80. A host
+holding a byte outside ASCII is refused as not listed before the lists are read, and is never
+resolved, so every name the proxy resolves is ASCII.
 
 A name the list allows is resolved once, and the tunnel is opened to an address that lookup gave
 and to no other, so an answer that differs the next time is never connected to. If any address in
@@ -3431,21 +3435,20 @@ A `64:ff9b::/96` spelling is compared as the IPv4 address it carries, and by tex
 leads depends on a NAT64 gateway on the network, so what a connection to it reaches is not verified
 ([#4041](https://github.com/brave/bravebot/issues/4041), row 33).
 
-A name outside ASCII is compared by the list as written, after ASCII lowercasing. An entry reads ASCII
-letters, digits, `-` and `_`, so an entry cannot spell such a name, and the proxy applies no IDNA
-conversion to a `CONNECT` request, as [PERM-1](permissions.md#PERM-1) applies none to a fetched host.
-A rule there on an international name covers both spellings, and this list does not. A `CONNECT` for
-`bücher.example` is not covered by a denied entry `xn--bcher-kva.example`, and an allowed
-`*.example` covers it, so it is allowed. The name is then resolved as written. The macOS system
-resolver gives the same addresses for `bücher.de` and `xn--bcher-kva.de`, and for `ｅxample.com`
-(U+FF45) as for `example.com`. A denied name is therefore reached by a spelling the resolver reads as
-it when two things hold: the stage is held to a list, and an allowed wildcard such as `*.com` covers
-the spelling while the denied entry names the name exactly. The tunnel is then opened to the
-addresses of the denied name. The resolved addresses are checked only against the denied entries that
-name an address, and an address that is not public is still refused. Whether another resolver
-converts such a name is not verified ([#4041](https://github.com/brave/bravebot/issues/4041), row 34).
-The missing conversion on a `CONNECT` host is a defect and is tracked in
-[#4394](https://github.com/brave/bravebot/issues/4394).
+A `CONNECT` host holding a byte outside ASCII is refused as not listed, and the refusal is
+recorded with no host, as a name that is not a host name. An entry reads ASCII letters, digits, `-`
+and `_`, so no entry can spell such a name, and the system resolver can read one as an ASCII name:
+the macOS resolver gives the same addresses for `bücher.de` and `xn--bcher-kva.de`, and for
+`ｅxample.com` (U+FF45) as for `example.com`. Compared as written, `ｅxample.com` is covered by an
+allowed `*.com` and not by a denied `example.com`, and `bücher.example` is covered by an allowed
+`*.example` and not by a denied `xn--bcher-kva.example`, so the tunnel would be opened to the
+addresses of the denied name. The check holds for every non-ASCII character, including U+3002 and
+U+FF0E, which a resolver may read as a full stop, and a non-ASCII space. A name written in ASCII,
+an `xn--` name included, is compared exactly as any other. [PERM-1](permissions.md#PERM-1) reads a
+`WebFetch` domain in the form written and in its `xn--` form, with each label outside ASCII
+converted by Punycode, so a rule on either spelling covers both. This proxy does no such
+conversion and refuses the spelling instead, so a conversion that differs from the resolver's
+cannot leave the same gap here.
 
 The tests that hold a stage to the proxy through the namespace need a kernel that lets an
 unprivileged user make one. They say so and do not run where it does not, so a green run there
@@ -3505,6 +3508,12 @@ says nothing about them.
 `verified-by: bravebot_sandbox::proxy::a_public_address_is_listed_by_an_exact_entry_and_not_by_a_wildcard`
 `verified-by: bravebot_sandbox::proxy::a_name_that_resolves_to_a_denied_address_is_refused_as_denied`
 `verified-by: bravebot_sandbox::hosts::a_wildcard_allows_no_address_a_narrower_list_names`
+`verified-by: bravebot_sandbox::hosts::a_host_holding_a_byte_outside_ascii_is_refused_as_not_listed`
+`verified-by: bravebot_sandbox::hosts::an_xn_name_is_decided_by_its_entries_like_any_other_ascii_name`
+`verified-by: bravebot_sandbox::proxy::a_connect_host_outside_ascii_is_refused_unresolved_and_recorded_as_no_name`
+`verified-by: bravebot_sandbox::proxy::a_connect_host_behind_a_non_ascii_space_is_refused_unresolved_and_recorded_as_no_name`
+`verified-by: bravebot_sandbox::hosts::only_a_host_name_or_an_address_may_be_recorded`
+`verified-by: bravebot_sandbox::proxy::a_fullwidth_spelling_of_a_denied_name_gets_the_refusal_and_is_recorded_as_no_name`
 `verified-by: bravebot_sandbox::hosts::an_ipv4_address_inside_a_nat64_one_is_decided_as_the_ipv4_address`
 `verified-by: bravebot_sandbox::address::the_ipv4_form_unwraps_a_mapped_and_a_nat64_address_and_nothing_else`
 `verified-by: bravebot_sandbox::proxy::the_trail_records_the_host_as_the_request_spelled_it`
@@ -3664,12 +3673,14 @@ Windows cannot subtract from a grant, so a stage that a `denyRead` would reach i
 none runs with the path held back; whether the folding of a glob holds on NTFS is not verified. On
 Linux an ext4 or f2fs directory can carry a per-directory `casefold` flag. A glob is expanded by
 listing each directory and compares every name in both cases. The test that expands a glob over
-names in several cases does not set the flag, and no test runs a stage over a directory with the
-flag set. An entry with no wildcard is resolved by the volume, as above, and that is not verified
-over a flagged directory either
-([#4041](https://github.com/brave/bravebot/issues/4041), row 36). The trust map has such a test on
-real directories ([#4279](https://github.com/brave/bravebot/issues/4279)); a stage over a flagged
-directory has none.
+names in several cases does not set the flag. A second test runs a confined stage over a new
+directory with the flag set, once with a glob entry and once with a plain entry, and asserts that a
+read of the file under another case is refused. It runs only where the flag can be set (Linux on
+ext4 or f2fs with casefold, with the privilege `chattr +F` takes) and otherwise prints why it
+skipped, so no CI host is assumed to run it
+([#4041](https://github.com/brave/bravebot/issues/4041), row 36). An entry with no wildcard is
+resolved by the volume, as above. The trust map has a test on real directories
+([#4279](https://github.com/brave/bravebot/issues/4279)).
 
 An entry that is refused is not in force. A refused allowance leaves reach where it was. A refused
 `denyRead` or `denyWrite` is a path the person meant to hold back, so a stage is not started while one
@@ -3806,6 +3817,7 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_tui::logo::filesystem_rules_are_named_on_the_opening_screen_and_none_is_not`
 `verified-by: bravebot_agent::confine::a_denied_read_is_refused_by_name_and_by_glob_and_its_neighbour_is_not`
 `verified-by: bravebot_agent::confine::a_denied_read_glob_refuses_a_confined_read_of_a_file_under_another_case`
+`verified-by: bravebot_agent::confine::a_denied_read_refuses_a_confined_read_of_a_file_under_another_case_in_a_casefold_directory`
 `verified-by: bravebot_agent::confine::a_denied_read_glob_refuses_a_confined_read_of_a_file_under_another_unicode_form`
 `verified-by: bravebot_agent::confine::a_denied_read_holds_back_a_directory_the_base_reads`
 `verified-by: bravebot_agent::confine::an_allowed_read_lifts_the_table_and_never_reaches_a_private_key`

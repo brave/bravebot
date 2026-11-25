@@ -1387,6 +1387,60 @@ mod tests {
         }
     }
 
+    /// VIEW-14: Tab and Shift-Tab move the scope and nothing else, from a picker that has a search
+    /// typed, a section folded and the cursor off the first row. The search text, the folded set,
+    /// the row under the cursor, the rows drawn and the model a following Enter would take are the
+    /// same after each key, so a person who looked for a model and folded the sections around it
+    /// does not lose either by changing the scope.
+    ///
+    /// Rejects: a Tab that changes the scope through the search (`searching`, which clears the
+    /// folded sections and may move the cursor), one that resets the cursor to the first row, one
+    /// that clears the typed text, and one that unfolds. The start of the sibling test above, an
+    /// empty search with nothing folded and the cursor on the first row, passes each of them.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn tab_leaves_the_search_the_folded_sections_and_the_cursor_where_they_were() {
+        let mut picker = Picker::new(three_services(), None);
+        typing(&mut picker, "one");
+        // Beta is folded from its only match, then the cursor moves to the row below its heading.
+        pressed(&mut picker, &[KeyCode::Down, KeyCode::Left, KeyCode::Down]);
+
+        assert_eq!(picker.search, "one");
+        assert_eq!(
+            picker.folded,
+            ["Beta"],
+            "the fixture folded another section"
+        );
+        assert_eq!(picker.selected, 2, "the cursor is not off the first row");
+        let chosen = picker.chosen().expect("a model").key.clone();
+        assert_eq!(chosen, "gamma/one");
+        let drawn = rendered(&picker);
+        let scope = picker.scope();
+
+        for (key, modifiers) in [
+            (KeyCode::Tab, KeyModifiers::NONE),
+            (KeyCode::Tab, KeyModifiers::NONE),
+            (KeyCode::BackTab, KeyModifiers::SHIFT),
+            (KeyCode::BackTab, KeyModifiers::SHIFT),
+        ] {
+            assert_eq!(handle_key(&mut picker, key, modifiers), Outcome::Continue);
+            assert_eq!(picker.search, "one", "{key:?} changed the search");
+            assert_eq!(picker.folded, ["Beta"], "{key:?} changed what is folded");
+            assert_eq!(picker.selected, 2, "{key:?} moved the cursor");
+            assert_eq!(
+                picker.chosen().expect("a model").key,
+                chosen,
+                "{key:?} changed the model Enter takes"
+            );
+        }
+        assert_eq!(picker.scope(), scope, "four presses are two round trips");
+        assert_eq!(
+            rendered(&picker),
+            drawn,
+            "the rows drawn changed with the scope"
+        );
+    }
+
     /// R1 and R5. A picker not told a scope is the every-session one `/model` has always opened, so
     /// the bare command is unchanged. A default of the other scope would record nothing for it.
     #[test]
@@ -2098,6 +2152,66 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(screen.contains("the session behind it"), "{screen}");
+    }
+
+    /// VIEW-14: the panel is bordered and sits in the middle of the frame: the same margin to its
+    /// left and its right, and the same above and below it (one cell more at the bottom or the
+    /// right where the difference is odd), at each size drawn, and the border is on the cells the
+    /// panel's area names. The expected width is the frame's less two cells either side up to the
+    /// widest the panel is, written here and not read from the function that places it.
+    ///
+    /// Rejects: a panel placed at the left edge or the top (`x` or `y` of 0), one that fills the
+    /// frame, and one placed by the frame's size and not by its own, which the row 0 text of
+    /// `the_picker_is_drawn_as_a_centred_panel` cannot tell from a centred one.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_picker_is_bordered_and_sits_in_the_middle_of_the_frame() {
+        for (width, height, expected_width) in [(60u16, 20u16, 56u16), (100, 30, 76), (80, 40, 76)]
+        {
+            let picker = Picker::new(offered(), None);
+            let frame = Rect::new(0, 0, width, height);
+            let area = placed(frame, &picker).area;
+
+            assert_eq!(area.width, expected_width, "{width}x{height}: width");
+            assert!(
+                area.height < height,
+                "{width}x{height}: the panel fills the frame"
+            );
+            let (left, right) = (area.x, width - area.right());
+            let (above, below) = (area.y, height - area.bottom());
+            assert!(
+                left > 0 && right.abs_diff(left) <= 1,
+                "{width}x{height}: margins {left} left, {right} right"
+            );
+            assert!(
+                above > 0 && below.abs_diff(above) <= 1,
+                "{width}x{height}: margins {above} above, {below} below"
+            );
+
+            let screen = screen_at(&picker, width, height);
+            let cell = |x: u16, y: u16| {
+                screen[usize::from(y)]
+                    .chars()
+                    .nth(usize::from(x))
+                    .expect("a cell")
+            };
+            assert_eq!(cell(area.x, area.y), '╭', "{width}x{height}: top left");
+            assert_eq!(
+                cell(area.right() - 1, area.y),
+                '╮',
+                "{width}x{height}: top right"
+            );
+            assert_eq!(
+                cell(area.x, area.bottom() - 1),
+                '╰',
+                "{width}x{height}: bottom left"
+            );
+            assert_eq!(
+                cell(area.right() - 1, area.bottom() - 1),
+                '╯',
+                "{width}x{height}: bottom right"
+            );
+        }
     }
 
     /// A panel that grew past the frame would draw nothing at all on a terminal somebody has

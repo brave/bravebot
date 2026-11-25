@@ -378,7 +378,10 @@ in is `inconclusive`, which claims nothing.
 `verified-by: bravebot_core::policy::a_check_before_a_tool_list_reads_the_list_it_is_about`
 `verified-by: bravebot_agent::mcp::screening_asked_for_makes_no_check_of_a_servers_list_under_bypass`
 `verified-by: bravebot_agent::mcp::a_servers_list_is_checked_whole_before_it_is_asked_about`
+`verified-by: bravebot_agent::mcp::a_list_asked_where_no_check_was_made_carries_an_inconclusive_word_and_no_sentence`
 `verified-by: bravebot_agent::turn::screening_asked_for_makes_no_check_before_a_vouch_under_bypass`
+`verified-by: bravebot_agent::turn::under_bypass_the_vouch_offer_carries_an_inconclusive_verdict_and_no_check_is_made`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/mcp-cards.test.mjs renders the real tools card through react-dom for each of the three verdicts and asserts that the verdict's own word and the checker's sentence are drawn above the first tool and that the other two words are not; make check-ui runs it)`
 
 <a id="CHECK-11"></a>
 ### CHECK-11: auto-vetting is off until somebody turns it on, and there are three ways in

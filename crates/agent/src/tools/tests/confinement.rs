@@ -249,6 +249,104 @@ fn a_hard_link_is_refused_when_the_walk_for_its_other_names_gives_up_under_a_wri
     assert!(ask(&["Edit(.env)"], "plain.txt").is_ok());
 }
 
+/// DELEGATE-28, PERM-7: a delegate limited to `docs/**` is judged on an absolute name by where it
+/// is below the root, and `Workspace::spelled_in_workspace` compares the root's bytes, so a name
+/// that spells the root in the other Unicode form has no workspace-relative spelling. It is then
+/// judged as the absolute name it is, which no limit covers, so the write is refused whichever
+/// directory it names (the limit only narrows, and a name it cannot place is outside it). The root's
+/// own spelling places the file, so a file inside the limit is accepted and one outside is
+/// refused.
+///
+/// Rejects a walk that leaves the name unjudged when it has no workspace-relative spelling, which
+/// lets a write to `src/main.rs` through under the other form of the root.
+#[test]
+fn a_write_limit_refuses_an_absolute_name_that_spells_the_root_in_the_other_unicode_form() {
+    use bravebot_core::delegate::{Definition, Definitions, Kind};
+
+    for (made_as, tag) in [("cafe\u{301}", "nfd"), ("caf\u{e9}", "nfc")] {
+        let scratch = Scratch::new(&format!("write-limit-unicode-root-{tag}"));
+        let directory = scratch.path.join(made_as);
+        std::fs::create_dir_all(directory.join("docs")).unwrap();
+        std::fs::create_dir_all(directory.join("src")).unwrap();
+        std::fs::write(directory.join("docs/a.md"), "x").unwrap();
+        std::fs::write(directory.join("src/main.rs"), "x").unwrap();
+        let workspace = Workspace::new(&directory).unwrap();
+        let own = workspace.root().to_str().unwrap().to_owned();
+        let other = if own.contains('\u{301}') {
+            own.replace("e\u{301}", "\u{e9}")
+        } else {
+            own.replace('\u{e9}', "e\u{301}")
+        };
+        assert_ne!(own, other, "the two spellings of the root are one");
+
+        let capabilities =
+            || CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]);
+        let routing = || {
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "write a file");
+            routing
+        };
+        let mut turn_sink = RecordingSink::new();
+        let mut turn = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            capabilities(),
+            &mut turn_sink,
+        )
+        .unwrap();
+        let mut definitions = Definitions::default();
+        definitions.insert(
+            Definition::from_file(
+                "scribe",
+                "writes the docs",
+                Kind::Worker,
+                None,
+                "",
+                ".bravebot/agents/scribe.md",
+            )
+            .with_writes(vec!["docs/**".to_string()]),
+        );
+        turn.install_delegates(definitions);
+        let spec = turn
+            .before_delegate(
+                &bravebot_core::Labelled::trusted("scribe".to_string()),
+                &bravebot_core::Labelled::trusted("write it up".to_string()),
+                None,
+            )
+            .unwrap();
+        let mut sink = RecordingSink::new();
+        let mut scribe = Policy::begin(routing(), ReleasePlan::new(), capabilities(), &mut sink)
+            .unwrap()
+            .within(&spec);
+
+        let mut asked = |name: &str| {
+            refuse_denied_path_as(&mut scribe, &workspace, Purpose::Effect, name, name)
+        };
+        let accepted = format!("{own}/docs/a.md");
+        assert_eq!(asked(&accepted), Ok(()), "root made as {tag}: {accepted}");
+        for (name, why) in [
+            (
+                format!("{own}/src/main.rs"),
+                "outside the limit, root's own spelling",
+            ),
+            (
+                format!("{other}/src/main.rs"),
+                "outside the limit, other form of the root",
+            ),
+            (
+                format!("{other}/docs/a.md"),
+                "inside the limit, other form of the root",
+            ),
+        ] {
+            assert_eq!(
+                asked(&name),
+                Err(outside_write_limit(&name)),
+                "root made as {tag}: {name} ({why}) was not refused by the limit"
+            );
+        }
+    }
+}
+
 /// PERM-7, PERM-9, MODE-2: where the walk for a file's other names gives up, a write to a
 /// file with several links asks and is protected, since a name the walk did not reach may be
 /// one a rule or the protected list is about. A file with one link has no other name to

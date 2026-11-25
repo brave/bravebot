@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn the_report_names_the_log_directory_when_there_is_no_log() {
         let settings = serde_json::to_string_pretty(&json!({
-            "logs": { "directory": "/h/.bravebot/logs", "writing": true }
+            "logs": { "directory": "/h/.bravebot/logs", "writing": true, "level": "info" }
         }))
         .unwrap();
         let report = text(Some("0.19.0"), "0.19.0", "linux-x86_64", &settings, None);
@@ -112,6 +112,7 @@ mod tests {
             report.contains("\"directory\": \"/h/.bravebot/logs\""),
             "{report}"
         );
+        assert!(report.contains("\"level\": \"info\""), "{report}");
         assert!(
             report.ends_with("== newest diagnostic log, to attach separately ==\nnone\n"),
             "{report}"

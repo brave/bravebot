@@ -700,16 +700,22 @@ impl Held<'_> {
         // Written now rather than at the end of the next turn, for the reason a
         // compaction is: the aside is the change, and a session that asked something
         // and then slept should resume with the answer still there.
-        //
-        // Nothing yet where no turn has been had, as everywhere else that writes
-        // outside a turn: a session opened and abandoned should leave no record, and
-        // a question asked before the first prompt was asked over an empty exchange.
+        self.record_the_aside(&events);
+        Ok(())
+    }
+
+    /// Write the record the aside changed, and the trail of the gates it passed, once the session
+    /// has had a turn.
+    ///
+    /// Nothing yet where no turn has been had, as everywhere else that writes outside a turn: a
+    /// session opened and abandoned should leave no record, and a question asked before the first
+    /// prompt was asked over an empty exchange.
+    pub(super) fn record_the_aside(&mut self, events: &[Stamped]) {
         if self.session.turns > 0 {
             let title = self.stored.title().to_string();
             self.save(&title);
-            self.stored.append_audit(self.session.turns, &events);
+            self.stored.append_audit(self.session.turns, events);
         }
-        Ok(())
     }
 
     pub(super) fn manifest(

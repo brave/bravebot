@@ -57,6 +57,34 @@ mutation: code_end returns the offset of a byte that is not the m ending the cod
 file: crates/core/src/colour_codes.rs
 replace: if byte == b'm' { => if true {
 
+mutation: escape_at reads the two digits after a percent sign without checking that they are in the text
+file: crates/core/src/credentials.rs
+replace: if bytes[at] != b'%' || bytes.len() - at < 3 { => if bytes[at] != b'%' {
+
+mutation: percent_bytes steps past the end of the text after an escape
+file: crates/core/src/credentials.rs
+replace: at += 3; => at += 4;
+
+mutation: hex_value names a value of sixteen or more for a hexadecimal digit
+file: crates/core/src/credentials.rs
+replace: Some(digit - b'a' + 10) => Some(digit - b'a' + 11)
+
+mutation: base64_bytes takes a byte out when fewer than eight bits are held, so the count of held bits underflows
+file: crates/core/src/credentials.rs
+replace: if held >= 8 { => if held >= 6 {
+
+mutation: base64_bytes keeps the bits it has just taken out, so the next shift can lose a set bit
+file: crates/core/src/credentials.rs
+replace: bits &= (1 << held) - 1; => bits &= 1 << held;
+
+mutation: sextet_of names a value of sixty-four or more for a base64 character
+file: crates/core/src/credentials.rs
+replace: Some(63) => Some(64)
+
+mutation: code_end reads past the end of the bytes for an offset at their end
+file: crates/core/src/colour_codes.rs
+replace: let too_short = start > bytes.len() || bytes.len() - start < 2; => let too_short = false;
+
 mutation: taint takes the first input's confidentiality, so a private second input comes out public
 file: crates/core/src/spec.rs
 replace: confidentiality: join(a.confidentiality, b.confidentiality), => confidentiality: a.confidentiality,
@@ -144,6 +172,10 @@ replace: if facts.vouched { => if true {
 mutation: RunReason::asks treats an ask rule as no prompt
 file: crates/core/src/policy.rs
 replace: let allowed = ruling == crate::permissions::Ruling::Allow; => let allowed = ruling != crate::permissions::Ruling::Deny;
+
+mutation: output_label keeps the integrity of the opaque label it is passed
+file: crates/core/src/policy.rs
+replace: let opaque = Label::new(Integrity::Untrusted, opaque.confidentiality); => let opaque = Label::new(opaque.integrity, opaque.confidentiality);
 
 mutation: output_label gives a trusted proof's label to a line that asked for a scope
 file: crates/core/src/policy.rs
@@ -561,3 +593,75 @@ replace: let search_allowed = ruling == crate::permissions::Ruling::Allow; => le
 mutation: SearchReason::asks lets a search after private content through
 file: crates/core/src/policy.rs
 replace: // The planner's context holds private content, or nothing answers for a search. => Self::Private => false,
+
+mutation: Capability::output_label labels what a capability observes trusted
+file: crates/core/src/capability.rs
+replace: let observed = Integrity::Untrusted; => let observed = Integrity::Trusted;
+
+mutation: Capability::output_label labels a command's output public
+file: crates/core/src/capability.rs
+replace: let printed = Confidentiality::Private; => let printed = Confidentiality::Public;
+
+mutation: Capability::output_label gives a write an observation to label
+file: crates/core/src/capability.rs
+replace: let effect: Option<Label> = None; => let effect: Option<Label> = Some(Label::new(observed, Confidentiality::Private));
+
+mutation: Policy::observe returns a trusted label for what a capability observed
+file: crates/core/src/policy.rs
+replace: self.record_observed(capability, label); => let label = Label::new(Integrity::Trusted, label.confidentiality);
+
+mutation: Policy::before_fetch returns a trusted label for a fetched body
+file: crates/core/src/policy.rs
+replace: self.allow_fetched_body(label); => let label = Label::new(Integrity::Trusted, label.confidentiality);
+
+mutation: Policy::before_search returns a trusted label for search results
+file: crates/core/src/policy.rs
+replace: self.allow_search_results(label); => let label = Label::new(Integrity::Trusted, label.confidentiality);
+
+mutation: refuse_if_denied lets through an action a deny rule covers
+file: crates/core/src/policy.rs
+replace: decision == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Deny); => decision == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Ask);
+
+mutation: before_fetch_rules asks the rules about another host
+file: crates/core/src/policy.rs
+replace: let decision = self.rules_for_host(host); => let decision = self.rules_for_host("example.com");
+
+mutation: before_search_rules lets a denied search through
+file: crates/core/src/policy.rs
+replace: self.refuse_if_denied("search", decision, "a web search") => Ok(())
+
+mutation: before_mcp_call_rules lets a denied call through
+file: crates/core/src/policy.rs
+replace: self.refuse_if_denied("mcp_call", decision, &call) => Ok(())
+
+mutation: before_read lets a denied read through
+file: crates/core/src/policy.rs
+replace: self.refuse_if_denied("read", decision, path) => Ok(())
+
+mutation: refuse_denied_write lets a write to a path nothing may read through
+file: crates/core/src/policy.rs
+replace: self.refuse_if_denied("write", read, path) => Ok(())
+
+mutation: refuse_denied_write lets a write a deny rule on edits covers through
+file: crates/core/src/policy.rs
+replace: self.refuse_if_denied("write", edited, path)?; => let _ = edited;
+
+mutation: CapabilitySet::contains answers that a set holds whatever it is asked about
+file: crates/core/src/capability.rs
+replace: if same_capability(&self.granted[at], capability) { => if true {
+
+mutation: CapabilitySet::within keeps a capability the parent does not hold
+file: crates/core/src/capability.rs
+replace: let parent_holds = parent.contains(&self.granted[at]); => let parent_holds = true;
+
+mutation: CapabilitySet::revoke_mcp_call keeps the grant it withdraws
+file: crates/core/src/capability.rs
+replace: let other = !same_capability(&self.granted[at], &withdrawn); => let other = true;
+
+mutation: Policy::before_capability lets through a capability the run was not granted
+file: crates/core/src/policy.rs
+replace: let granted = self.capabilities_held().contains(&capability); => let granted = true;
+
+mutation: CapabilitySet::revoke_mcp_call says it withdrew nothing when it withdrew a grant
+file: crates/core/src/capability.rs
+replace: found = true; => found = false;

@@ -7,7 +7,7 @@ description:
   belongs on, records how far it got, and builds the site cleanly. Triggers on:
   update docs, /update-docs, sync docs with specs, docs drift.'
 argument-hint: '[rev-range] [dry-run]'
-allowed-tools: Bash(make -C docs/website *), Bash(python3 agents/skills/update-docs/docs-ref.py *), Bash(git *), Bash(gh pr create *), Bash(gh pr view *), Bash(grep *), Bash(rg *), Read, Edit, Write
+allowed-tools: Bash(git *), Bash(gh pr create *), Bash(gh pr view *), Bash(grep *), Bash(rg *), Read, Edit, Write
 ---
 
 # Bring the Documentation Site Up to Date With Brave Bot
@@ -25,8 +25,15 @@ This skill documents user-facing behaviour changes across a span of commits or s
 
 `docs/docs-updated-to-sha` holds the commit the site has been brought up to, so a run reads forward from there instead of re-reading the whole history. `docs-ref.py` is the deterministic half of this skill: no model is involved, so it is cheap and its output is reproducible.
 
+Run it by the absolute path of the main clone's copy, written
+`<clone>/agents/skills/update-docs/docs-ref.py` below, where `<clone>` is the first path `git worktree list`
+prints. A relative path runs the copy in the session's directory, and in a worktree that is the branch's
+own script, which would run with the person's access. It reads and writes `docs/docs-updated-to-sha` and
+`docs/docs-deferred` in the clone it is in, whatever the current directory is, and has no option to name
+another checkout.
+
 ```sh
-python3 agents/skills/update-docs/docs-ref.py changes --full
+python3 <clone>/agents/skills/update-docs/docs-ref.py changes --full
 ```
 
 That prints the span oldest first, with bodies and file lists, and replays anything still deferred ahead of it. On `Up to date.` there is nothing to do and the run stops there.
@@ -35,10 +42,10 @@ A run is not finished until it records where it got to, because the next run rea
 
 ```sh
 # everything up to here is folded in
-python3 agents/skills/update-docs/docs-ref.py set <sha>
+python3 <clone>/agents/skills/update-docs/docs-ref.py set <sha>
 
 # reviewed, deliberately not documented yet, and why
-python3 agents/skills/update-docs/docs-ref.py defer <sha> <reason>
+python3 <clone>/agents/skills/update-docs/docs-ref.py defer <sha> <reason>
 ```
 
 Use `defer` rather than silently skipping. `set` claims everything behind a sha is done and the next span begins after it, so a commit passed over mid-span is invisible to every run that follows. A deferral stays on the list and keeps being offered until `resolve <sha>` drops it.

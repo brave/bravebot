@@ -4826,6 +4826,64 @@ mod tests {
             }
         }
 
+        /// CHECKOUT-4, the plumbing between the answer and the two places attributes are read. On
+        /// a Windows host a `text` attribute in a `.gitattributes` blob of HEAD or in
+        /// `info/attributes` refuses the checkout unless `core.eol` is `lf`, and on another host
+        /// it refuses neither. Rejects `make` or `plan` passing a constant to `conversion` (so a
+        /// `text` line is accepted on Windows or refused elsewhere), and an `lf` exemption applied
+        /// to one of the two places only.
+        #[test]
+        #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+        fn the_hosts_text_conversion_reaches_both_places_attributes_are_read() {
+            use crate::git::checkout::make_for;
+            let text = "*.txt text\n";
+            let off = "[core]\n\tautocrlf = false\n";
+            let off_lf = "[core]\n\tautocrlf = false\n\teol = lf\n";
+            // (where the attribute is, config, windows host, expected)
+            let cases = [
+                ("tree", off, true, Some(Conversion::Text)),
+                ("tree", off_lf, true, None),
+                ("tree", off, false, None),
+                ("info", off, true, Some(Conversion::Text)),
+                ("info", off_lf, true, None),
+                ("info", off, false, None),
+            ];
+            for (place, config, windows, expected) in cases {
+                let repo = Repo::new("checkout-host-text");
+                let readme = repo.blob("hello\n");
+                let mut entries = vec![("100644", "README", readme)];
+                if place == "tree" {
+                    entries.push(("100644", ".gitattributes", repo.blob(text)));
+                }
+                committed(&repo, &entries);
+                if place == "info" {
+                    repo.put("info/attributes", text);
+                }
+                repo.put("config", config);
+                survey(&repo.git, Query::Status, later()).expect("surveyed");
+                let result = make_for(
+                    &repo.git,
+                    &target(&repo),
+                    "c1",
+                    &|_| false,
+                    &|_| true,
+                    Bound::FIXED,
+                    windows,
+                );
+                let what = format!("{place} attribute, windows={windows}, config {config:?}");
+                match expected {
+                    Some(found) => {
+                        let refused = result.expect_err(&what);
+                        assert_eq!(refused, Refused::Converts(found), "{what}");
+                        nothing_written(&repo, &refused);
+                    }
+                    None => {
+                        result.expect(&what);
+                    }
+                }
+            }
+        }
+
         /// A tree that names one entry twice refuses the checkout, even where a deny rule covers
         /// the entry and so neither is written.
         #[test]

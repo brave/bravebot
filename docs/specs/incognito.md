@@ -72,6 +72,7 @@ made deliberately.
 `verified-by: bravebot_tui::incognito::the_startup_opens_an_incognito_session_on_the_recorded_theme`
 `verified-by: bravebot_tui::app::a_theme_chosen_in_an_incognito_session_takes_effect_and_is_not_recorded`
 `verified-by: bravebot_tui::incognito::a_language_chosen_is_not_saved_and_the_command_says_so`
+`verified-by: bravebot_cli::running::an_incognito_start_opens_in_the_language_the_person_recorded`
 
 <a id="INCOG-3"></a>
 ### INCOG-3: no record of the session, and none that it happened

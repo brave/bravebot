@@ -703,7 +703,7 @@ calls one, is drawn as a plain program.
 <a id="SERVERS-7"></a>
 ### SERVERS-7: every call to a server's tool is put to the person, with three answers
 
-A call is shown as `alias:tool`, then the arguments as the planner wrote them. An argument filled
+A call is shown as `alias:tool`, then its arguments, each with the value the planner wrote. An argument filled
 from a choice is drawn as the number and where it came from ([MCP-14](mcp.md#MCP-14)). The server's
 own description of the tool is shown as content, marked, cut to two rows with a way to expand it,
 per [SERVERS-8](#SERVERS-8).
@@ -783,7 +783,11 @@ said. The rules are
 [PERM-1](permissions.md#PERM-1)'s `Mcp` family. A call is refused as well, and sends nothing, where
 the context its arguments were written in has met untrusted content.
 
-The arguments are drawn as the planner wrote them, one per row as a JSON value. A string that holds
+The arguments are drawn one per row as a JSON value, each the value the planner wrote. The rows are
+in the order the agent holds the arguments, which is the keys of the planner's object in the order
+the JSON parser keeps them (sorted by key, since the workspace does not enable serde_json's
+`preserve_order`), and the terminal, the plain interface, the editor and the desktop draw that same
+order. A string that holds
 a line feed, another control character or a character a person could not tell from another or from
 nothing is drawn line by line instead: its row says how many lines it has, a sentence says how many
 characters were written out, and each line is a numbered row of its own with those characters written
@@ -857,6 +861,7 @@ the list from `also` on `mcp-call.request`.
 `verified-by: bravebot_agent::mcp::answer_two_is_not_offered_or_recorded_for_a_call_asked_for_private_arguments`
 `verified-by: bravebot_tui::confirm::mcp::a_call_asked_for_private_arguments_is_drawn_with_its_own_reason_for_offering_no_lasting_answer`
 `verified-by: bravebot_approval::lib::a_call_asked_for_private_arguments_says_so_and_a_declaration_wins`
+`verified-by: bravebot_cli::plain::a_call_draws_the_servers_description_behind_the_margin_with_its_escape_pictured`
 `verified-by: bravebot_ui_bridge::acp::a_call_asked_for_private_arguments_reads_to_the_editor_with_its_reason`
 `verified-by: bravebot_agent::mcp::a_refused_call_reaches_no_server`
 `verified-by: bravebot_agent::mcp::a_call_the_person_does_not_approve_is_recorded_as_a_refusal`
@@ -868,6 +873,8 @@ the list from `also` on `mcp-call.request`.
 `verified-by: bravebot_agent::mcp::a_session_with_no_state_directory_does_not_offer_or_record_answer_two`
 `verified-by: bravebot_agent::mcp::a_call_after_a_servers_answer_was_vetted_asks_though_a_rule_allows_it`
 `verified-by: bravebot_agent::mcp::the_private_arm_survives_a_resume_and_an_allow_ruled_call_still_asks`
+`verified-by: bravebot_tui::undo_tests::undoing_the_turn_that_let_private_content_out_makes_the_conversation_public_again`
+`verified-by: bravebot_ui_bridge::bridge::undoing_the_turn_that_let_private_content_out_makes_the_desktop_conversation_public_again`
 `verified-by: bravebot_agent::mcp::a_call_written_in_a_context_that_met_untrusted_content_reaches_no_server`
 `verified-by: bravebot_agent::mcp::one_yes_covers_the_later_calls_to_the_same_tool_listed_in_its_question`
 `verified-by: bravebot_agent::mcp::one_no_refuses_the_later_calls_listed_in_its_question`
@@ -935,6 +942,10 @@ the list from `also` on `mcp-call.request`.
 `verified-by: bravebot_tui::confirm::mcp::a_choice_is_drawn_as_the_number_and_where_it_came_from_at_every_width`
 `verified-by: bravebot_cli::plain::a_call_filled_from_a_choice_is_asked_with_the_number_and_where_it_came_from`
 `verified-by: bravebot_ui_bridge::refusal::an_mcp_question_takes_no_answer_of_another_kind`
+`verified-by: bravebot_agent::mcp::a_calls_arguments_reach_the_question_in_the_order_the_agent_holds_them`
+`verified-by: bravebot_tui::confirm::mcp::a_call_prompt_draws_its_arguments_in_the_order_the_request_holds_them`
+`verified-by: bravebot_ui_bridge::wire::a_calls_arguments_cross_the_wire_in_the_order_the_request_holds_them`
+`verified-by: bravebot_ui_bridge::wire::the_mcp_questions_carry_what_a_card_draws`
 
 <a id="SERVERS-8"></a>
 ### SERVERS-8: a server's own words are never an identifier
@@ -1067,6 +1078,9 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_agent::mcp::a_turn_spending_a_subscription_makes_the_checks_of_the_lists_one_after_another`
 `verified-by: bravebot_agent::mcp::the_time_taken_over_several_lists_made_together_is_charged_to_the_person_once`
 `verified-by: bravebot_agent::mcp::no_more_checks_are_made_at_once_than_the_reads_of_one_round`
+`verified-by: bravebot_agent::mcp::the_questions_are_drawn_in_server_order_though_a_later_servers_check_returns_first`
+`verified-by: bravebot_agent::mcp::every_list_is_checked_and_asked_whatever_it_holds_and_whatever_its_check_said`
+`verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_first_question_still_charges_the_checks_it_made_for_the_other_lists`
 `verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing`
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_started_in_a_fresh_session_puts_the_lists_to_the_person_before_it_plans`
 `verified-by: bravebot_tui::app::clearing_keeps_the_answer_to_an_mcp_servers_list_for_the_process`
@@ -1346,6 +1360,7 @@ the server is not started either, and the line says why.
 `verified-by: bravebot_agent::servers::describing_a_server_keeps_nothing_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::servers::a_server_directory_that_is_not_text_is_kept_out_as_it_is_and_not_as_its_lookalike`
 `verified-by: bravebot_agent::servers::a_server_whose_own_directory_cannot_be_made_is_not_started_and_the_note_says_where_and_why`
+`verified-by: bravebot_agent::confine::a_server_started_by_a_runner_is_held_to_its_registry_hosts_and_another_is_not`
 
 <a id="SERVERS-11"></a>
 ### SERVERS-11: a remote server is an egress destination, and its host is approved as one
@@ -1447,7 +1462,10 @@ list to the person again.
 A no rewrites nothing and sends nothing. A call's hop then says the server stays where it is
 declared, and a handshake's leaves the server unstarted with a line saying why. A one-shot run, a
 session with nobody at the terminal and the mode that skips prompts refuse it unasked
-([SERVERS-13](#SERVERS-13)).
+([SERVERS-13](#SERVERS-13)). So does a call to a server an installed plugin carries, whose
+declaration is the plugin's and not the person's: a yes would write the plugin's alias into
+`mcp.json`, where it would shadow the plugin's server, so a call's hop for one is refused with the
+same line a no gives.
 
 `verified-by: bravebot_mcp::http::mcp_traffic_passes_through_the_network_gate`
 `verified-by: bravebot_mcp::http::a_redirect_to_another_host_is_refused`
@@ -1478,6 +1496,8 @@ session with nobody at the terminal and the mode that skips prompts refuse it un
 `verified-by: bravebot_agent::mcp::a_move_is_recorded_over_the_declaration_asked_about_and_nothing_else`
 `verified-by: bravebot_agent::mcp::a_declaration_edited_while_a_move_is_asked_about_is_left_alone_and_the_server_is_not_moved`
 `verified-by: bravebot_agent::mcp::a_move_keeps_everything_but_the_address_of_the_declaration_it_replaces`
+`verified-by: bravebot_agent::mcp::a_plugins_server_whose_reply_points_elsewhere_is_not_moved_and_nobody_is_asked`
+`verified-by: bravebot_agent::mcp::two_declarations_that_differ_only_in_their_host_have_two_digests`
 `verified-by: bravebot_agent::mcp::a_server_that_moves_a_second_time_is_recorded_over_what_the_first_move_wrote`
 `verified-by: bravebot_agent::mcp::a_server_moved_during_a_turn_is_reached_with_the_headers_and_token_it_was_declared_with`
 `verified-by: bravebot_agent::mcp::a_server_moved_twice_is_reached_with_the_headers_and_token_at_each_destination`
@@ -1504,6 +1524,11 @@ session with nobody at the terminal and the mode that skips prompts refuse it un
 `verified-by: bravebot_tui::confirm::mcp::a_destination_longer_than_the_move_box_leaves_the_host_and_what_a_yes_does_on_screen`
 `verified-by: bravebot_tui::confirm::mcp::the_end_of_a_long_destination_can_be_scrolled_to_with_the_host_still_shown`
 `verified-by: bravebot_tui::confirm::mcp::a_move_question_takes_a_yes_only_from_a_draw_showing_the_host_and_the_keys`
+`verified-by: bravebot_agent::servers::a_redirected_handshake_of_a_plugins_server_is_left_unstarted_and_unmoved`
+`verified-by: bravebot_agent::servers::a_declaration_edited_while_its_move_was_asked_is_left_alone_and_not_started`
+`verified-by: bravebot_agent::servers::a_move_to_a_destination_that_fails_its_handshake_is_not_started_or_written`
+`verified-by: bravebot_agent::servers::the_next_session_after_a_recorded_handshake_move_starts_at_the_new_address_unasked`
+`verified-by: bravebot_agent::servers::a_move_that_cannot_be_written_is_used_for_the_session_and_says_so`
 `verified-by: bravebot_ui_bridge::wire::the_mcp_questions_carry_what_a_card_draws`
 `verified-by: bravebot_ui_bridge::refusal::refusing_an_mcp_question_is_a_no_in_its_own_shape`
 
@@ -1699,6 +1724,8 @@ not say beside each one whether it started unasked because of the mode.
 `verified-by: bravebot_agent::mcp::bypassing_does_not_answer_a_call_to_a_server_asked_every_call`
 `verified-by: bravebot_agent::mcp::a_list_offered_in_bypass_stays_offered_and_each_later_call_asks`
 `verified-by: bravebot_agent::mcp::bypassing_refuses_a_hop_and_asks_nobody`
+`verified-by: bravebot_agent::mcp::bypassing_does_not_reach_a_host_the_managed_layer_refuses`
+`verified-by: bravebot_agent::mcp::two_declarations_that_differ_only_in_their_host_have_two_digests`
 `verified-by: bravebot_agent::mcp::bypassing_does_not_call_a_server_the_run_holds_no_grant_for`
 `verified-by: bravebot_agent::mcp::a_deny_rule_refuses_a_call_to_a_server_under_bypass_before_anybody_is_asked`
 `verified-by: bravebot_agent::permission_mode::bypassing_refuses_to_move_a_server`
@@ -1709,6 +1736,7 @@ not say beside each one whether it started unasked because of the mode.
 `verified-by: bravebot_agent::servers::a_server_the_managed_layer_refuses_is_started_in_no_mode_and_nothing_is_asked_or_recorded`
 `verified-by: bravebot_agent::servers::plugin_tests::nothing_but_a_yes_to_that_server_approves_it`
 `verified-by: bravebot_agent::servers::a_server_started_in_bypass_gets_the_named_variables_and_the_stored_values_and_no_more`
+`verified-by: bravebot_tui::status::under_bypass_the_report_names_the_mode_and_lists_each_started_server_without_a_mark`
 
 <a id="SERVERS-14"></a>
 ### SERVERS-14: what is reachable is visible without running anything
@@ -1866,6 +1894,7 @@ content.
 `verified-by: bravebot_agent::servers::a_server_not_answering_tools_list_within_its_startup_bound_is_left_out_at_that_bound`
 `verified-by: bravebot_agent::servers::a_server_not_answering_prompts_list_within_its_startup_bound_is_left_out_at_that_bound`
 `verified-by: bravebot_agent::servers::a_handshake_is_given_up_on_after_three_times_its_startup_bound_and_five_seconds`
+`verified-by: bravebot_agent::servers::a_handshake_that_outlasts_its_time_though_each_request_answers_is_left_out_as_too_slow`
 `verified-by: bravebot_agent::servers::a_started_server_is_held_to_the_call_bound_its_declaration_gives`
 `verified-by: bravebot_agent::servers::a_declarations_own_timeouts_are_drawn_and_the_defaults_are_not`
 `verified-by: bravebot_agent::mcp::a_call_that_outlasts_its_bound_is_a_failure_the_planner_is_told_timed_out`
@@ -1875,6 +1904,7 @@ content.
 `verified-by: bravebot_ui_bridge::connectors::editing_a_connector_keeps_the_bounds_its_declaration_gave`
 `verified-by: bravebot_ui_bridge::manifest::a_server_that_never_answers_its_handshake_does_not_hold_up_a_plan_run`
 `verified-by: bravebot_cli::running::a_one_shot_run_says_why_a_server_that_never_answered_its_handshake_was_left_out`
+`verified-by: bravebot_cli::running::a_session_in_lines_with_a_server_that_never_answers_opens_within_the_bound_the_start_allows`
 
 <a id="SERVERS-16"></a>
 ### SERVERS-16: past a size the setting names, a vouched tool is offered by name until the planner loads it
@@ -2745,14 +2775,20 @@ A server in an OpenShell sandbox receives the stream it is given like any other
 **What the tests pin.** `--plain` and `-p` are pinned by running a server that writes escape
 sequences and reading the transcript. The OpenShell backend is pinned by a fake `openshell` that
 records whether its own stderr is the null device. The full-screen interface (the start in
-`crates/cli/src/main.rs` and `/mcp` in `crates/tui/src/mcp_command.rs`) and the desktop application
-(`crates/ui-bridge/src/bridge.rs`) also pass `Stream::Null`, and no test pins those three call
-sites, since each starts a confined server inside a front end that has no harness for reading what
-the server wrote. A change of one of them to `Stream::Inherited` is found by a reviewer.
+`crates/cli/src/main.rs`) is pinned in a terminal that shows nothing the server wrote, and `/mcp
+reconnect` (`crates/tui/src/mcp_command.rs`) by a child process that re-runs the test. The desktop
+application (`crates/ui-bridge/src/bridge.rs`) is pinned by starting `bravebot-rpc` with its own
+standard error in a file and reading that file, its standard output and every event, for a server
+that writes escape sequences and exits before its handshake. Each of those tests except the
+OpenShell one starts a server under confinement and runs on Unix only. Where confinement is
+unavailable each skips, and fails instead when the `CI` environment variable is set.
 
 `verified-by: bravebot_cli::running::a_session_in_lines_shows_nothing_a_servers_stderr_writes`
 `verified-by: bravebot_cli::running::a_one_shot_run_shows_nothing_a_servers_stderr_writes`
 `verified-by: bravebot_sandbox::openshell::a_discarded_stderr_is_the_null_device_for_the_program_in_the_sandbox`
+`verified-by: bravebot_cli::terminal_modes::the_interface_that_draws_shows_nothing_a_servers_stderr_writes`
+`verified-by: bravebot_tui::mcp_command::reconnect_draws_nothing_a_servers_stderr_writes_and_shows_a_failed_handshake`
+`verified-by: bravebot_ui_bridge::servers::the_desktop_bridge_shows_nothing_a_servers_stderr_writes`
 
 <a id="SERVERS-26"></a>
 ### SERVERS-26: a declaration may name what a row of an `apply` step may fill, and mark a tool plan-covered
@@ -2839,8 +2875,8 @@ accept a plugin's alias ([SERVERS-19](#SERVERS-19)), and a start puts the first-
 a session's start does.
 
 **Not built.** A server of a plugin is not moved ([SERVERS-11](#SERVERS-11)): a redirected handshake of
-one is left unstarted, because a move would write the plugin's alias into `mcp.json`, where the person's
-declaration would then shadow the plugin's.
+one is left unstarted and a call's redirect to another address is refused, because a move would write
+the plugin's alias into `mcp.json`, where the person's declaration would then shadow the plugin's.
 
 **Why.** An install is one yes to a list. Starting a program is a decision about that program, so the
 question stays, and the digest holds the plugin's directory because a server is usually an argv that
@@ -2891,4 +2927,4 @@ decide what runs under that name.
 `verified-by: bravebot_agent::servers::plugin_tests::a_plugins_local_server_is_unconfined_where_this_host_has_no_confinement_and_asked_about_where_it_has`
 `verified-by: bravebot_cli::mcp::a_joined_alias_at_the_longest_length_lists_as_usable_and_one_more_lists_as_too_long`
 `verified-by: bravebot_cli::mcp::a_plugins_server_no_session_here_starts_says_why_and_fails_nothing`
-`verified-by: by-construction (a session started with --safe reads no plugin server because the reader in crates/agent/src/plugin_servers.rs returns none while the safe flag is engaged, and a plugin server is moved by nothing because the move path in crates/agent/src/servers.rs declines a plugin's server)`
+`verified-by: by-construction (a session started with --safe reads no plugin server because the reader in crates/agent/src/plugin_servers.rs returns none while the safe flag is engaged, and a plugin server is moved by nothing because the move paths in crates/agent/src/servers.rs and crates/agent/src/mcp.rs decline a plugin's server)`

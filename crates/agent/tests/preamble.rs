@@ -1294,8 +1294,10 @@ fn moving_the_working_directory_restates_it() {
 /// The one fact in the block nothing else could tell a turn. The directory is made by this
 /// program rather than named by the user, so a planner never told of it puts what is not part of
 /// the project into the project, which is the file a build, a commit and a reviewer each have to
-/// deal with.
+/// deal with. The prompt says there is one and what it is for, and a sentence in the conversation
+/// names it, since its name changes with every start.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it() {
     let tree = Scratch::new("own-directory");
     let project = tree.directory("project");
@@ -1318,8 +1320,9 @@ fn the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it() {
     };
 
     assert!(
-        preamble.text.contains(&own.display().to_string()),
-        "the session's own directory is not in the preamble: {}",
+        !preamble.text.contains(&own.display().to_string()),
+        "the session's own directory is in the system prompt, which is the front of every request \
+         and differs on every start: {}",
         preamble.text
     );
     assert!(
@@ -1327,6 +1330,59 @@ fn the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it() {
         "the preamble does not say where a program the line starts reads the path: {}",
         preamble.text
     );
+    let said = preamble::scratch_note(&workspace).expect("a session with a directory names it");
+    assert!(
+        said.contains(&own.display().to_string()),
+        "the sentence that names the directory does not name it: {said}"
+    );
+}
+
+/// The prompt is the front of every request, and a prompt cache matches from its first byte, so two
+/// sessions that differ only in the directory each made for itself have to compose the same prompt.
+/// A process that starts with a new directory then reads what the last one wrote.
+///
+/// Rejects an implementation that writes the directory's path back into the prompt: the two texts
+/// differ by it, and the first request of every new process writes the whole prompt again.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn two_sessions_that_differ_only_in_their_own_directory_compose_one_prompt() {
+    let tree = Scratch::new("same-prompt");
+    let project = tree.directory("project");
+    let composed = |own: PathBuf| {
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(own));
+        let mut sink = RecordingSink::new();
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+        )
+    };
+    let first = composed(tree.directory("bravebot-session-1-111-0"));
+    let second = composed(tree.directory("bravebot-session-2-222-7"));
+
+    assert_eq!(first.text, second.text);
+    assert_eq!(first.for_a_person, second.for_a_person);
+    assert!(
+        first.text.contains("BRAVEBOT_SCRATCH_DIR"),
+        "the comparison would pass on a prompt that said nothing of the directory: {}",
+        first.text
+    );
+}
+
+/// A session with no directory of its own names none.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_session_with_no_directory_of_its_own_has_nothing_to_name() {
+    let tree = Scratch::new("no-note");
+    let workspace = Workspace::new(tree.directory("project")).expect("workspace");
+
+    assert!(preamble::scratch_note(&workspace).is_none());
 }
 
 /// A program that fails for something this machine lacks is otherwise handed back to the person as

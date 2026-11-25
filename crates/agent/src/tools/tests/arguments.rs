@@ -1650,7 +1650,7 @@ fn a_redirection_writing_into_the_stores_is_refused_when_it_is_opened() {
             });
             let said = told(&mut policy, &produced.text);
             assert!(
-                said.contains("refused") || said.contains("resolves outside"),
+                said.contains("refused") || said.contains("refusing to touch it"),
                 "{command} from {}: {said}",
                 root.display()
             );
@@ -2235,7 +2235,7 @@ fn a_foreground_line_whose_substitution_writes_through_a_link_into_the_stores_is
         );
 
         assert!(
-            said.contains("resolves outside the workspace"),
+            said.contains("refusing to touch it"),
             "{line}: the write through the link was not refused when it was opened: {said}"
         );
         assert_eq!(
@@ -2511,6 +2511,162 @@ fn a_query_off_the_list_names_run_only_where_the_turn_holds_one() {
         refused(Running::Withheld),
         "error: read_git answers log, show, diff, status, tags and search, not blame."
     );
+}
+
+/// PATHREQ-1. `path` decides what programs may reach, so a `request_path` call made after the
+/// context has met untrusted content is answered `refused:` before anything is asked: the
+/// confirmer is never put the question, nothing is held for programs, and the trail records no
+/// `path_reach`. The first case is the control: the same call from a context that has met nothing
+/// untrusted is asked once, approved and held, so a tool that refused every call would fail it.
+/// The regressions it rejects are `path` read with `argument()` and declassified instead of
+/// through `read_planner_argument`, and the gate placed after the question.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
+fn a_path_request_is_refused_unasked_once_the_context_has_met_something_untrusted() {
+    use crate::confirm::{
+        CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest,
+        ManifestRequest, McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision,
+        RunRequest, ServerRequest, ToolListRequest, Unattended, VetRequest, VouchRequest,
+        WriteDecision, WriteRequest,
+    };
+    use bravebot_core::ask::{Answer, Asking};
+
+    /// Says yes to a path and counts the questions; refuses the rest as nobody there would.
+    #[derive(Default)]
+    struct SaysYesToPaths {
+        asked: usize,
+    }
+
+    impl Confirmer for SaysYesToPaths {
+        fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+            self.asked += 1;
+            Decision::Approve
+        }
+        fn confirm_host(&mut self, request: &HostRequest) -> Decision {
+            Unattended.confirm_host(request)
+        }
+        fn confirm_message(
+            &mut self,
+            request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            Unattended.confirm_message(request)
+        }
+        fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
+            Unattended.confirm_server(request)
+        }
+        fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
+            Unattended.confirm_move(request)
+        }
+        fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+            Unattended.confirm_manifest(request)
+        }
+        fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+            Unattended.confirm_write(request)
+        }
+        fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+            Unattended.confirm_run(request)
+        }
+        fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
+            Unattended.confirm_read_output(request)
+        }
+        fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+            Unattended.confirm_vetted_read(request)
+        }
+        fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
+            Unattended.confirm_fetch(request)
+        }
+        fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
+            Unattended.confirm_vouch(request)
+        }
+        fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision {
+            Unattended.confirm_exposing_read(request)
+        }
+        fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
+            Unattended.confirm_tool_list(request)
+        }
+        fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
+            Unattended.confirm_mcp_call(request)
+        }
+        fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
+            Unattended.ask_user(asking)
+        }
+        fn interjection(&mut self) -> Option<String> {
+            Unattended.interjection()
+        }
+    }
+
+    let scratch = Scratch::new("request-path-fallen");
+    let home = scratch.path.join("home");
+    let beside = scratch.path.join("beside");
+    let project = scratch.path.join("project");
+    for directory in [&home, &beside, &project] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let home: &'static std::path::Path = Box::leak(home.canonicalize().unwrap().into_boxed_path());
+    let beside = beside.canonicalize().unwrap();
+    let call: ToolCall = serde_json::from_value(json!({
+        "id": "1",
+        "function": {
+            "name": "request_path",
+            "arguments": json!({
+                "path": beside.display().to_string(),
+                "why": "the build writes its output there",
+            })
+            .to_string(),
+        }
+    }))
+    .expect("a call");
+
+    for (context, asked, held, reached) in [
+        (Integrity::Trusted, 1, 1, true),
+        (Integrity::Untrusted, 0, 0, false),
+    ] {
+        let workspace = Workspace::new(&project).expect("workspace");
+        let mut trust = bravebot_core::trust::TrustStore::new("/work");
+        trust.trust(".");
+        let mut sink = RecordingSink::new();
+        let mut policy = policy(&mut sink).with_trust(trust).resuming(context);
+        let mut confirmer = SaysYesToPaths::default();
+
+        let output = with_tools(&workspace, |tools| {
+            tools.confine_runs = true;
+            tools.profile = Some(home);
+            dispatch(
+                &mut policy,
+                tools,
+                &mut confirmer,
+                &mut crate::report::IgnoreReports,
+                &call,
+            )
+        });
+        let said = told(&mut policy, &output.text);
+        drop(policy);
+
+        if reached {
+            assert!(said.starts_with("approved:"), "{context:?}: {said}");
+        } else {
+            assert!(said.starts_with("refused:"), "{context:?}: {said}");
+            assert!(
+                said.contains("request_path.path") && said.contains("must not decide anything"),
+                "the refusal does not say which argument or why: {said}"
+            );
+        }
+        assert_eq!(confirmer.asked, asked, "{context:?}: {said}");
+        assert_eq!(workspace.path_reach().len(), held, "{context:?}: {said}");
+        assert_eq!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed {
+                    gate: "path_reach",
+                    ..
+                }
+            )),
+            reached,
+            "{context:?}: the trail's path_reach record does not match the grant"
+        );
+    }
 }
 
 /// The property the gate exists for. A planner whose context has met untrusted content is

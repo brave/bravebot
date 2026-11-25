@@ -1233,6 +1233,16 @@ mod tests {
             cached, fresh,
             "a cached round reported exactly what an uncached one did"
         );
+        assert_eq!(
+            (cached.cached.read_tokens, cached.cached.written_tokens),
+            (900, 88),
+            "the tokens read from the cache and the tokens written to it were not carried apart"
+        );
+        assert_eq!(
+            (fresh.cached.read_tokens, fresh.cached.written_tokens),
+            (0, 0),
+            "an uncached round reported cache figures"
+        );
     }
 
     /// The prompt and the schemas are the same bytes every round, so the request says so.

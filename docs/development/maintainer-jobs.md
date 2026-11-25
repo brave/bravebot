@@ -51,6 +51,7 @@ The schedules are how often to run each job. Only the peer-advisories schedule i
 | [`/security-audit`](../../agents/skills/security-audit/SKILL.md) | Does the rule hold that untrusted content never enters the driver or the planner? | Monthly, and `/security-audit changed` before asking for review on a diff that touches a label, and `security-audit.py --before-pr BASE` before opening a pull request, which stops on a finding at error | none (it skips what the tracker holds) |
 | [`/check-spec`](../../agents/skills/check-spec/SKILL.md) | Does the code do what each spec clause says? | Monthly, and `/check-spec changed` before committing a change to code a spec governs | `docs/check-spec-reviewed` |
 | [`/maintenance`](../../agents/skills/maintenance/SKILL.md) | What code could be deleted, shared or split without changing what it does? | Monthly, and after a large run of feature pull requests | `docs/maintenance-reviewed` |
+| [`/profile`](../../agents/skills/profile/SKILL.md) | What is slow or large: a test, a start, a compile unit, a release binary or a script, and what grew since the last run? | Monthly, and before a release | `docs/profile-reviewed` |
 | [`/peer-features`](../../agents/skills/peer-features/SKILL.md) | What do other coding agents document that bravebot lacks, and where could bravebot be about 10% better than the best of them? | Monthly | `docs/peer-features-reviewed` |
 | [`/update-docs`](../../agents/skills/update-docs/SKILL.md) | What has changed in bravebot that the documentation site does not say yet? | Before each release, and after a batch of user-visible changes | `docs/docs-updated-to-sha` |
 
@@ -84,6 +85,16 @@ clippy lane. The skill reads each candidate and drafts issues only for the ones 
 has a reader check each draft's claim against `HEAD` (one reader for every four to six drafts) and
 marks a rejected draft with the reason. A
 cleanup that would move a decision about labelled content is rejected, whatever it saves.
+
+**profile.** `make check-profile` runs the measurement with no model: it builds in release mode, times
+the tests, the binaries' starts and the scripts, and prints what is over a threshold or over the value
+the ledger holds. It takes as long as a cold release build and a test run, so run it where nothing else
+is using the machine. The skill reads the code behind each candidate, drafts an issue for the ones worth
+fixing and has a reader check each claim, as `/maintenance` does, through the same code. It samples no
+CPU profile. An optimization that would move a decision about labelled content is rejected, whatever it
+saves. The ledger holds a value for every key measured, so commit it after a run and the next run, on any
+machine, reports growth against it. A measurement comes from one machine, so measure again before acting
+on a regression.
 
 **peer-features.** The default run reviews six units, specs first and then the least recently
 reviewed. A reviewed unit is offered again after 90 days. A gap that was declined is not reopened by

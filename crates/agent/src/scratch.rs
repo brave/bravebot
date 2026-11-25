@@ -432,9 +432,18 @@ fn made_unclaimed(path: &Path) -> std::io::Result<()> {
 /// going without one or waiting on whoever holds it.
 #[cfg(unix)]
 fn claimed(path: &Path) -> std::io::Result<std::fs::File> {
+    claimed_with(path, &try_lock)
+}
+
+/// [`claimed`] with the call that tries the lock given, so a test can have a file system refuse it.
+#[cfg(unix)]
+fn claimed_with(
+    path: &Path,
+    try_lock: &dyn Fn(&std::fs::File) -> rustix::io::Result<()>,
+) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::PermissionsExt;
     let directory = opened(path)?;
-    let mode = if locked(&directory) {
+    let mode = if locked(&directory, try_lock) {
         CLAIMED
     } else {
         UNCLAIMABLE
@@ -443,14 +452,25 @@ fn claimed(path: &Path) -> std::io::Result<std::fs::File> {
     Ok(directory)
 }
 
-/// Whether the lock on `directory` was taken within [`CLAIM_WAIT`].
+/// One attempt at the exclusive lock on `directory`, without waiting.
 #[cfg(unix)]
-fn locked(directory: &std::fs::File) -> bool {
-    use rustix::fs::{FlockOperation, flock};
+fn try_lock(directory: &std::fs::File) -> rustix::io::Result<()> {
+    rustix::fs::flock(
+        directory,
+        rustix::fs::FlockOperation::NonBlockingLockExclusive,
+    )
+}
+
+/// Whether the lock on `directory` was taken within [`CLAIM_WAIT`], trying it with `try_lock`.
+#[cfg(unix)]
+fn locked(
+    directory: &std::fs::File,
+    try_lock: &dyn Fn(&std::fs::File) -> rustix::io::Result<()>,
+) -> bool {
     use rustix::io::Errno;
     let deadline = std::time::Instant::now() + CLAIM_WAIT;
     loop {
-        match flock(directory, FlockOperation::NonBlockingLockExclusive) {
+        match try_lock(directory) {
             Ok(()) => return true,
             Err(Errno::INTR) => {}
             Err(Errno::WOULDBLOCK) if std::time::Instant::now() < deadline => {
@@ -1383,5 +1403,103 @@ mod tests {
         sweep(root.path(), owner_of(root.path()));
 
         assert!(path.is_dir(), "{} was taken for a leftover", path.display());
+    }
+
+    /// The sweep takes what a killed session left of every kind this build gives, the directory a
+    /// session's checkouts are made in included (TRUST-25). Rejects a `KINDS` list that leaves
+    /// `checkouts` out: its leftovers would stay on the disk of whoever ran the session.
+    #[test]
+    #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_checkouts_directory_nothing_holds_is_taken_for_a_leftover() {
+        let root = SessionScratch::create().expect("a directory to sweep");
+        let checkouts = reserved_name(root.path(), CHECKOUTS);
+        left_by_a_killed_session(&checkouts);
+
+        assert!(
+            swept_away(root.path(), owner_of(root.path()), &checkouts),
+            "{} was left",
+            checkouts.display()
+        );
+    }
+
+    /// A file system that refuses a lock on a directory for a reason other than the lock being
+    /// held neither fails the session nor makes it wait: the directory is its own at `1700`, the
+    /// mode the sweep leaves (TRUST-25). The refusal here is `EOPNOTSUPP`, as a network file system
+    /// gives. Rejects returning the error (the session would have no directory), treating it as a
+    /// held lock (the session would wait [`CLAIM_WAIT`] and settle for `1700` by the deadline
+    /// alone, which the time bound separates), and leaving the directory at `700` (a sweep would
+    /// take a live session's files).
+    #[test]
+    #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_file_system_that_refuses_the_lock_neither_fails_nor_stalls_the_session() {
+        let root = SessionScratch::create().expect("a directory to sweep");
+        let path = reserved_name(root.path(), SESSION);
+        made_unclaimed(&path).expect("made");
+        let attempts = std::cell::Cell::new(0);
+        let refuses = |_: &std::fs::File| {
+            attempts.set(attempts.get() + 1);
+            Err(rustix::io::Errno::OPNOTSUPP)
+        };
+        let started = std::time::Instant::now();
+
+        let claim = claimed_with(&path, &refuses).expect("a session goes on without the lock");
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "the session waited {:?} on a lock the file system refuses",
+            started.elapsed()
+        );
+        assert_eq!(attempts.get(), 1, "a refusal was tried again");
+        assert_eq!(mode_of(&path), 0o1700, "mode was {:o}", mode_of(&path));
+        drop(claim);
+        sweep(root.path(), owner_of(root.path()));
+        assert!(path.is_dir(), "{} was taken for a leftover", path.display());
+    }
+
+    /// The directory is at `700` only once its lock is held. While the claim waits on a lock
+    /// something else holds, a sweep reading the mode must still find `500`, so a free lock at
+    /// `700` is never seen on a directory a session is opening. Rejects a claim that opens the
+    /// directory to its owner first and locks it after.
+    #[test]
+    #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_directory_waiting_on_its_lock_is_not_yet_at_the_mode_a_sweep_takes() {
+        let root = SessionScratch::create().expect("a directory to sweep");
+        let path = reserved_name(root.path(), SESSION);
+        let holder = held_by_something_else(&path);
+        let (sent, answer) = std::sync::mpsc::channel();
+        let (waiting, is_waiting) = std::sync::mpsc::channel();
+        let claiming = path.clone();
+        std::thread::spawn(move || {
+            // The first attempt the holder refuses is the claim waiting on the lock.
+            let tries = |directory: &std::fs::File| {
+                let tried = try_lock(directory);
+                if tried.is_err() {
+                    waiting.send(()).ok();
+                }
+                tried
+            };
+            sent.send(claimed_with(&claiming, &tries)).ok();
+        });
+
+        is_waiting
+            .recv_timeout(SETTLE)
+            .expect("the claim never tried the lock the holder has");
+        let during = mode_of(&path);
+        assert!(
+            answer.try_recv().is_err(),
+            "the claim returned while the lock was held"
+        );
+        drop(holder);
+        let claim = answer
+            .recv_timeout(SETTLE)
+            .expect("the claim never returned")
+            .expect("its directory");
+
+        assert_eq!(during, 0o500, "mode while waiting was {during:o}");
+        assert_eq!(mode_of(&path), 0o700, "mode was {:o}", mode_of(&path));
+        drop(claim);
     }
 }

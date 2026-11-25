@@ -475,6 +475,13 @@ const api = {
   selectSettings(clear = false): Promise<import('../shared/agent-settings').AgentSettings | null> {
     return ipcRenderer.invoke('bravebot:settings:select', clear)
   },
+  /**
+   * Change the running agent's diagnostic log level until the app quits (DIAG-11). Rejects a word
+   * that is not a level, and when the agent does not answer.
+   */
+  setLogLevel(level: import('../shared/protocol').LogLevel): Promise<import('../shared/protocol').DiagnosticLogSet> {
+    return ipcRenderer.invoke('bravebot:diagnostic-log:set-level', level)
+  },
   /** Writes the file; reading it back is `hooks.inspect`, which the agent answers. */
   saveHooks(text: string, expected: string | null): Promise<void> { return ipcRenderer.invoke('bravebot:hooks:save', text, expected) },
   /** Ask the user for a project directory, natively. */

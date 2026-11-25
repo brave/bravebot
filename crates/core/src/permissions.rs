@@ -4210,6 +4210,95 @@ mod tests {
         }
     }
 
+    /// PERM-4: a pattern naming a file under a plain directory, `a/b.md`, floats like a directory
+    /// pattern does: in `deny` and in `ask` it covers the `a/b.md` under any directory, in `allow` it
+    /// grants the one at the top, and written from `./` it stays at the top in all three lists. An
+    /// implementation that floats a pattern only when its last segment is a glob leaves
+    /// `vendor/a/b.md` unruled by a deny or ask rule.
+    #[test]
+    fn a_relative_pattern_naming_a_file_floats_when_it_restricts_and_not_when_it_grants() {
+        for (list, ruling) in [("deny", Ruling::Deny), ("ask", Ruling::Ask)] {
+            let rule = "Edit(a/b.md)";
+            let restricting = match ruling {
+                Ruling::Deny => rules(&[rule], &[], &[]),
+                _ => rules(&[], &[rule], &[]),
+            };
+            for path in ["a/b.md", "vendor/a/b.md"] {
+                assert_eq!(
+                    restricting.for_path(Subject::Edit, path),
+                    Decision::Ruled(ruling),
+                    "list {list}: a/b.md did not rule {path}"
+                );
+            }
+            for path in ["b.md", "vendor/b/b.md"] {
+                assert_eq!(
+                    restricting.for_path(Subject::Edit, path),
+                    Decision::Unmatched,
+                    "list {list}: a/b.md ruled {path}, which is not an a/b.md"
+                );
+            }
+        }
+
+        let allowing = rules(&[], &[], &["Edit(a/b.md)"]);
+        assert_eq!(
+            allowing.for_path(Subject::Edit, "a/b.md"),
+            Decision::Ruled(Ruling::Allow),
+            "allow: a/b.md missed the workspace's own a/b.md"
+        );
+        assert_eq!(
+            allowing.for_path(Subject::Edit, "vendor/a/b.md"),
+            Decision::Unmatched,
+            "allow: a/b.md granted the nested copy"
+        );
+
+        for list in 0..3 {
+            let rule = "Edit(./a/b.md)";
+            let anchored = match list {
+                0 => rules(&[rule], &[], &[]),
+                1 => rules(&[], &[rule], &[]),
+                _ => rules(&[], &[], &[rule]),
+            };
+            assert!(
+                matches!(
+                    anchored.for_path(Subject::Edit, "a/b.md"),
+                    Decision::Ruled(_)
+                ),
+                "list {list}: ./a/b.md missed the workspace's own a/b.md"
+            );
+            assert_eq!(
+                anchored.for_path(Subject::Edit, "vendor/a/b.md"),
+                Decision::Unmatched,
+                "list {list}: ./a/b.md floated to a nested copy"
+            );
+        }
+    }
+
+    /// PERM-4: a pattern whose first segment holds a `*` does not float, whatever follows it, in
+    /// `deny` and in `ask` as in `allow`. `*/src/**` covers the `src` one directory down and not a
+    /// `src` under two. An implementation that floats any pattern with a directory part reaches
+    /// `a/b/src/x` as well.
+    #[test]
+    fn a_pattern_whose_first_segment_holds_a_star_does_not_float_in_any_list() {
+        for list in 0..3 {
+            let rule = "Edit(*/src/**)";
+            let (permissions, ruling) = match list {
+                0 => (rules(&[rule], &[], &[]), Ruling::Deny),
+                1 => (rules(&[], &[rule], &[]), Ruling::Ask),
+                _ => (rules(&[], &[], &[rule]), Ruling::Allow),
+            };
+            assert_eq!(
+                permissions.for_path(Subject::Edit, "a/src/x"),
+                Decision::Ruled(ruling),
+                "list {list}: */src/** missed the src one directory down"
+            );
+            assert_eq!(
+                permissions.for_path(Subject::Edit, "a/b/src/x"),
+                Decision::Unmatched,
+                "list {list}: */src/** floated to a src two directories down"
+            );
+        }
+    }
+
     /// An anchored pattern means the place it names, in every list, which is how somebody pins a
     /// rule to one directory when the floating kind would have caught more.
     #[test]

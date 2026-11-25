@@ -408,6 +408,7 @@ by hand, and the failure it most often has is a typo.
 `verified-by: bravebot_agent::hooks::a_session_hook_that_goes_wrong_is_said_naming_the_moment_and_program`
 `verified-by: bravebot_agent::hooks::a_file_changed_hook_that_could_not_start_is_said`
 `verified-by: bravebot_cli::running::a_session_hook_that_could_not_start_is_said_whether_the_run_answered_or_failed`
+`verified-by: bravebot_ui_bridge::session_hooks::a_turn_hook_that_cannot_run_is_said_whether_the_turn_answered_or_failed`
 
 <a id="HOOK-8"></a>
 ### HOOK-8: one reader decides what a hook is, and what it read is what is shown

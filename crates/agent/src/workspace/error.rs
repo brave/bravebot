@@ -137,6 +137,24 @@ impl WorkspaceError {
                 ..
             } => format!("'{named}' resolves outside the workspace; refusing to touch it"),
             Self::Escapes {
+                remedy: Remedy::StateDirectory,
+                ..
+            } => format!(
+                "'{named}' is in the state directory, which holds the person's own rules and \
+                 facts and is closed to the file tools; refusing to touch it. Do not retry, and \
+                 do not look for another way to the same file: work without it, or say in your \
+                 reply what you needed it for"
+            ),
+            Self::Escapes {
+                remedy: Remedy::StateDirectorySessions,
+                ..
+            } => format!(
+                "'{named}' is in the session records, which are closed to the file tools; \
+                 refusing to touch it. A program `run` starts can still read them, though not \
+                 write them. Do not retry, and do not look for another way to the same file: \
+                 work without it, or say in your reply what you needed it for"
+            ),
+            Self::Escapes {
                 remedy: Remedy::Inside,
                 ..
             } => format!(
@@ -348,12 +366,20 @@ pub enum Remedy {
     /// None is offered: the path climbs with `..` through a link, off the top of the file system
     /// or onto a name that is not UTF-8; it is written inside the root or an opened directory and a
     /// link carries it out, whatever the link leads to; it names a credential location, which
-    /// cannot be opened; it is in the stores; or what was refused is a rewind. A command's
-    /// redirection is given the remedy a file tool's write to the same path is given.
+    /// cannot be opened; or what was refused is a rewind. A command's redirection is given the
+    /// remedy a file tool's write to the same path is given.
     ///
     /// For a path a link carries out the remedy never follows where the link leads, since a link
     /// planted in a directory would then choose the sentence the planner reads.
     Nothing,
+    /// The path is in the person's facts or rules, or is the home rules file (RECALL-8). No route
+    /// reaches it: it is not in the workspace a person could open, and the planner's own tools for
+    /// this, `remember` and `propose_rule`, take text rather than a path.
+    StateDirectory,
+    /// [`Remedy::StateDirectory`] for a path in the session records specifically, where a program
+    /// a `run` starts still reads the directory (SANDBOX-12), though the file tools never do, in
+    /// bypass or any other mode.
+    StateDirectorySessions,
     /// The path lands inside the root and in no opened directory, where a directory cannot be
     /// opened, and is not written inside the root or an opened directory in a way a link carries
     /// it out of. It is named in some other way than relative to the root: from the top of the
@@ -419,9 +445,13 @@ impl Remedy {
             | Self::OpenItselfEndsCheckouts => Some(Self::Nothing),
             Self::CredentialDrop => Some(Self::Credential),
             Self::Drop => Some(Self::Kept),
-            Self::Nothing | Self::Inside | Self::InsideClimb | Self::Credential | Self::Kept => {
-                None
-            }
+            Self::Nothing
+            | Self::StateDirectory
+            | Self::StateDirectorySessions
+            | Self::Inside
+            | Self::InsideClimb
+            | Self::Credential
+            | Self::Kept => None,
         }
     }
 
@@ -429,6 +459,10 @@ impl Remedy {
     pub fn offered(self) -> &'static str {
         match self {
             Self::Nothing => "none",
+            Self::StateDirectory => "none, since it is in the person's own rules or facts",
+            Self::StateDirectorySessions => {
+                "none, since it is in the session records; a program run starts still reads them"
+            }
             Self::Inside => "name it relative to the workspace root",
             Self::InsideClimb => "name it relative to the workspace root, without the '..'",
             Self::Open => "open its directory",

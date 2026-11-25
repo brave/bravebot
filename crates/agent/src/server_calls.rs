@@ -632,13 +632,14 @@ impl Servers {
         slots: &mut SlotStore,
         index: usize,
         alias: &str,
+        tools: &str,
         step: &Step,
         covered: bool,
     ) -> Result<(String, bravebot_aichat::protocol::Usage), String> {
         let Some(offer) = &self.offer else {
             return Err(format!("{alias} is not offered to this run"));
         };
-        let mut shape = shape_of(step)?;
+        let mut shape = shape_with(step, tools)?;
         // The type the vouched list gives each argument, which the resolver sends each value as.
         let callable = offer.callable();
         for tool in &mut shape.tools {
@@ -943,13 +944,18 @@ fn read_from(plan: &Manifest, index: usize, list: &str) -> String {
 /// The shape an apply step's fields give: its tools in the order `tools` names them, and for each
 /// argument the kind its `arguments` object gives it. Read from the plan's own text.
 pub(crate) fn shape_of(step: &Step) -> Result<bravebot_core::apply::Shape, String> {
+    shape_with(step, step.text("tools"))
+}
+
+/// The shape of an apply step whose tools are `tools`. A run passes the value locked before the
+/// first step (MANIFEST-6, MANIFEST-16) and not the step's own text.
+fn shape_with(step: &Step, tools: &str) -> Result<bravebot_core::apply::Shape, String> {
     use bravebot_core::apply::{Shape, Tool};
     let lists: Vec<String> = step.reads().iter().map(ToString::to_string).collect();
     if lists.is_empty() {
         return Err("an APPLY step names at least one list".to_string());
     }
-    let names: Vec<&str> = step
-        .text("tools")
+    let names: Vec<&str> = tools
         .split(',')
         .map(str::trim)
         .filter(|name| !name.is_empty())
