@@ -610,7 +610,7 @@ AREAS = (
     "area/trust", "area/tools", "area/turns", "area/interface", "area/cli",
     "area/delegation", "area/backends", "area/skus", "area/i18n", "area/acp", "area/plugins",
     "area/mcp", "area/background", "area/remote", "area/sandbox", "area/browser", "area/desktop",
-    "area/release", "area/connectors",
+    "area/release", "area/connectors", "area/caching",
 )
 
 
