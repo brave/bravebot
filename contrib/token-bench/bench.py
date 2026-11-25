@@ -91,6 +91,8 @@ class Turn:
     check: object  # (workdir: Path, reply: str) -> bool
     # Delegates the turn has to start. Applied only where the tool reports how many it started.
     min_delegates: int = 0
+    # A skill the turn has to load with `load_skill`. Applied only where the tool reports its calls.
+    loads: str = ""
 
 
 @dataclass
@@ -101,6 +103,14 @@ class Scenario:
     setup: object  # (workdir: Path) -> None
     turns: list
     system_extra: str = ""
+    # (home: Path, workdir: Path) -> None. A scenario with one runs with `BRAVEBOT_HOME` set to a
+    # fresh directory it fills, so it loads skills and MCP servers a person would have configured.
+    home: object = None
+    # The tools the scenario can run on. Empty means every tool.
+    tools: tuple = ()
+    # Flags added to every bravebot command of the scenario, such as `--goal`. Other tools never run a
+    # scenario that has them, since `tools` limits it to bravebot.
+    bravebot_args: tuple = ()
 
 
 @dataclass
@@ -111,6 +121,13 @@ class TurnResult:
     cost_usd: float = 0.0
     # Delegates the turn started, or None where the tool does not say.
     delegates: object = None
+    # The skills the turn loaded with `load_skill` and was not refused, or None where the tool does
+    # not say.
+    loaded: object = None
+    # How many calls of each tool the turn made and was not refused, as a dict, and the targets of
+    # its `read_file` calls in order. None where the tool does not say.
+    by_tool: object = None
+    reads: object = None
 
 
 # ---------------------------------------------------------------------------------------------
@@ -217,6 +234,172 @@ def _style_guide(rules):
     )
 
 
+def _digest(label):
+    return hashlib.sha256(label.encode()).hexdigest()[:8]
+
+
+TYPICAL_SKILLS = (
+    ("commit-style", "How commit messages are written in this project. Use before writing one."),
+    ("review-checklist", "What a code review checks, in order. Use when asked to review a change."),
+    ("release-notes", "How release notes are drafted from merged changes. Use when preparing a release."),
+    ("migration-plan", "How a schema migration is planned and rolled back. Use before changing a table."),
+    ("incident-report", "The sections of an incident report. Use after an outage."),
+    ("api-design", "Naming and versioning rules for public interfaces. Use when adding an endpoint."),
+    ("test-triage", "How a failing test is classified as a bug, a flake or a stale fixture."),
+    ("changelog-entry", "The one-line format of a changelog entry. Use when a change ships."),
+)
+
+
+def _write_skill(home, name, description, body):
+    folder = home / "skills" / name
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {description}\n---\n\n{body}")
+
+
+def _filler_body(name, lines=40):
+    return "".join(
+        f"{i}. When working on {name}, state the area you are in and keep the wording plain.\n"
+        for i in range(1, lines + 1)
+    )
+
+
+STUB_MCP_SERVER = HERE / "fixtures" / "stub_mcp_server.py"
+# Seconds the selftest lets the stand-in server take for its whole exchange.
+STUB_DEADLINE = 30
+
+
+def _setup_configured_home(home):
+    """A state directory with eight skills and one stdio MCP server that offers eight tools.
+
+    The server is requested in the user settings, so a run without `--safe` starts it. The program
+    is the interpreter running bench.py, by its real path, and the script is a file the server may
+    read (mcp-servers.md SERVERS-10).
+    """
+    for name, description in TYPICAL_SKILLS:
+        _write_skill(home, name, description, _filler_body(name))
+    script = str(STUB_MCP_SERVER.resolve())
+    (home / "mcp.json").write_text(json.dumps({"servers": {"bench": {
+        "transport": "stdio", "argv": [os.path.realpath(sys.executable), script],
+        "reads": [script]}}}))
+    (home / "settings.json").write_text(json.dumps({"mcp": {"request": ["bench"]}}))
+
+
+def _check_configured(workdir, reply):
+    """The count the skills overview states, and the name of a tool only the stand-in server has."""
+    return (re.search(r"\b%d\b" % len(TYPICAL_SKILLS), reply) is not None
+            and "ledger_probe" in reply)
+
+
+SKILL_NAME = "ledger-rounding"
+SKILL_WORD = _digest("skill-word")
+SKILL_STEP = "R-" + _digest("skill-step")
+
+
+def _skill_body():
+    """About five thousand characters of rules, with the two values the turns ask for in them."""
+    lines = [f"{i}. Round amounts in the ledger as rule {i} says and note the rule number.\n"
+             for i in range(1, 61)]
+    lines.insert(30, f"Code word: {SKILL_WORD}\n")
+    lines.append(f"Step 2 of the rounding procedure: apply table {SKILL_STEP}.\n")
+    return "".join(lines)
+
+
+def _setup_skill_home(home):
+    """The target skill beside three that are not needed, so the overview names four."""
+    _write_skill(home, SKILL_NAME, "How amounts are rounded in the ledger. Use when asked about "
+                 "rounding.", _skill_body())
+    for name, description in TYPICAL_SKILLS[:3]:
+        _write_skill(home, name, description, _filler_body(name))
+
+
+SKILL_LOAD_TURNS = [
+    Turn(f"Load the skill named {SKILL_NAME}. Reply with its code word and nothing else.",
+         _says(SKILL_WORD), loads=SKILL_NAME),
+    Turn("What does step 2 of the rounding procedure say to apply? Reply with the table name "
+         "and nothing else.", _says(SKILL_STEP)),
+]
+SKILL_INLINE_TURNS = [
+    Turn(f"The code word for ledger rounding is {SKILL_WORD}. Reply with the code word and "
+         f"nothing else.", _says(SKILL_WORD)),
+    Turn(f"Step 2 of the rounding procedure says to apply table {SKILL_STEP}. Reply with the "
+         f"table name and nothing else.", _says(SKILL_STEP)),
+]
+
+
+COPY_SOURCE = "".join(f"line {i}: the quick brown fox {_digest(f'copy-{i}')}\n" for i in range(1, 61))
+COPY_PROMPT = ("Copy source.txt to copy.txt so that copy.txt has exactly the same content as "
+               "source.txt. Do not change source.txt. Reply with the word: done")
+COPY_GOAL = "copy.txt exists and holds exactly the content of source.txt"
+
+
+def _setup_copy(workdir):
+    (workdir / "source.txt").write_text(COPY_SOURCE)
+
+
+def _check_copy(workdir, reply):
+    """The copy is in the workspace and the source is as it was. The reply is not read."""
+    source, copy = workdir / "source.txt", workdir / "copy.txt"
+    return (source.is_file() and copy.is_file() and source.read_text() == COPY_SOURCE
+            and copy.read_text().rstrip() == COPY_SOURCE.rstrip())
+
+
+# What a goal run or a manifest run refuses beside the flag that makes it one: crates/cli/src/
+# invocation.rs, `manifest_conflict` (agent, advisor, output schema, goal, tools, system prompts,
+# resume) and `limit_not_with_a_goal` / `limit_not_with_a_manifest` (the two run limits). A
+# contestant that passes one of them cannot run those scenarios.
+REFUSED_BY_PLANNED_RUNS = ("--agent", "--advisor", "--output-schema", "--tools", "--system-prompt",
+                           "--append-system-prompt", "--resume", "--continue", "--max-rounds",
+                           "--max-tokens")
+
+
+REFACTOR_OLD, REFACTOR_NEW = "compute_total", "order_total"
+REFACTOR_FILES = {
+    "pricing.py": f"def {REFACTOR_OLD}(items):\n    return sum(i['price'] * i['qty'] for i in items)\n",
+    "cart.py": f"from pricing import {REFACTOR_OLD}\n\n\ndef cart_total(cart):\n"
+               f"    return {REFACTOR_OLD}(cart['items'])\n",
+    "invoice.py": f"import pricing\n\n\ndef invoice_line(order):\n"
+                  f"    return f\"{{order['id']}}: {{pricing.{REFACTOR_OLD}(order['items'])}}\"\n",
+    "report.py": f"from pricing import {REFACTOR_OLD}\n\n\ndef report(orders):\n"
+                 f"    return sum({REFACTOR_OLD}(o['items']) for o in orders)\n",
+    "NOTES.md": f"Price an order with `{REFACTOR_OLD}(items)`.\n",
+}
+REFACTOR_TEST = f"""from pricing import {REFACTOR_NEW}
+from cart import cart_total
+from invoice import invoice_line
+from report import report
+
+items = [{{'price': 3, 'qty': 2}}, {{'price': 5, 'qty': 1}}]
+assert {REFACTOR_NEW}(items) == 11
+assert cart_total({{'items': items}}) == 11
+assert invoice_line({{'id': 'A1', 'items': items}}) == 'A1: 11'
+assert report([{{'items': items}}, {{'items': items}}]) == 22
+print('OK')
+"""
+REFACTOR_PROMPT = (f"Rename {REFACTOR_OLD} to {REFACTOR_NEW} everywhere in this project: the "
+                   f"definition, every caller and the notes. test_shop.py already uses the new name "
+                   f"and must not be edited. Run it to confirm.")
+
+
+def _setup_refactor(workdir):
+    for name, text in REFACTOR_FILES.items():
+        (workdir / name).write_text(text)
+    (workdir / "test_shop.py").write_text(REFACTOR_TEST)
+
+
+def _check_refactor(workdir, reply):
+    """The project's own script passes, it was not edited, and every file that named the old
+    function now uses the new one, so an alias that keeps the old name does not pass."""
+    if (workdir / "test_shop.py").read_text() != REFACTOR_TEST:
+        return False
+    for name in REFACTOR_FILES:
+        text = (workdir / name).read_text()
+        if REFACTOR_OLD in text or REFACTOR_NEW not in text:
+            return False
+    done = subprocess.run([sys.executable, "-B", "test_shop.py"], cwd=workdir,
+                          capture_output=True, text=True, timeout=30)
+    return done.returncode == 0 and "OK" in done.stdout
+
+
 def scenarios():
     two_word_turns = [
         Turn("Reply with exactly the word: ok", _says("ok")),
@@ -290,6 +473,55 @@ def scenarios():
             [_delegate_one(1), _delegate_one(2), _delegate_one(3)],
         ),
         Scenario(
+            "configured_hello", "configured",
+            "One trivial turn with eight skills and eight MCP tool schemas loaded, without --safe. "
+            "The report gives the difference from the --safe baseline contestant's hello.",
+            lambda workdir: None,
+            [Turn("Skills and tools are listed in your context. How many skills of your own or "
+                  "the project's are not listed above, and what is the name of the tool that "
+                  "looks up one ledger entry? Reply with the number, a space and the tool name, "
+                  "and nothing else.", _check_configured)],
+            home=_setup_configured_home, tools=("bravebot",),
+        ),
+        Scenario(
+            "skill_load", "skills",
+            "Two turns. The first loads a skill of about five thousand characters, and the second "
+            "asks about its text. Shows what the load adds and whether the next request reads the "
+            "cached prefix.",
+            lambda workdir: None, SKILL_LOAD_TURNS, home=_setup_skill_home, tools=("bravebot",),
+        ),
+        Scenario(
+            "skill_inline", "skills",
+            "The turns of skill_load with the values given in the prompt and no skill loaded. The "
+            "difference from skill_load is what loading adds.",
+            lambda workdir: None, SKILL_INLINE_TURNS, home=_setup_skill_home, tools=("bravebot",),
+        ),
+        Scenario(
+            "plain_copy", "modes",
+            "Copy one file to another in a plain turn. The baseline for goal_copy and manifest_copy.",
+            _setup_copy, [Turn(COPY_PROMPT, _check_copy)],
+        ),
+        Scenario(
+            "goal_copy", "modes",
+            "The task of plain_copy as a bravebot --goal run, which checks the goal after each "
+            "round. Compared with plain_copy.",
+            _setup_copy, [Turn(COPY_PROMPT, _check_copy)], tools=("bravebot",),
+            bravebot_args=("--goal", COPY_GOAL),
+        ),
+        Scenario(
+            "manifest_copy", "modes",
+            "The task of plain_copy as a bravebot --mode manifest run, which plans the whole run "
+            "before reading anything. Compared with plain_copy.",
+            _setup_copy, [Turn(COPY_PROMPT, _check_copy)], tools=("bravebot",),
+            bravebot_args=("--mode", "manifest"),
+        ),
+        Scenario(
+            "refactor_rename", "edits",
+            "Rename a function across four modules and a notes file, then run the project's test "
+            "script. Shows how edits are sent and whether files already read are read again.",
+            _setup_refactor, [Turn(REFACTOR_PROMPT, _check_refactor)],
+        ),
+        Scenario(
             "sysprompt_short", "system_prompt",
             "Two turns with a ten-rule addition to the system prompt.",
             lambda workdir: None, two_word_turns, system_extra=_style_guide(10),
@@ -340,7 +572,12 @@ def parse_bravebot(stdout):
     """bravebot `--json`. `total` is prompt plus output, so the prompt is what is left of it.
 
     The totals already include what every delegate spent. `delegates` counts the `spawn_agent`
-    calls the turn made that were not refused.
+    calls the turn made that were not refused, `loaded` lists the `load_skill` targets of the
+    calls that were not refused, `by_tool` counts the calls that were not refused for each tool,
+    and `reads` lists the targets of the `read_file` calls in order. A goal run and a manifest run
+    write the same object (main.rs passes `reporter.calls()` into the report for both, and
+    progress.rs `tool_finished` is what records them, so finish.rs `what_ran` only receives them),
+    so the same fields are read. A manifest run names no session, so `session` is then None.
     """
     result = last_json_line(stdout)
     if not result.get("ok"):
@@ -356,7 +593,14 @@ def parse_bravebot(stdout):
     )
     calls = result.get("calls", [])
     delegates = sum(1 for c in calls if c.get("tool") == "spawn_agent" and not c.get("refused"))
-    return (TurnResult(usage, result.get("reply") or "", len(calls), delegates=delegates),
+    loaded = [c.get("target") for c in calls if c.get("tool") == "load_skill" and not c.get("refused")]
+    by_tool = {}
+    for c in calls:
+        if not c.get("refused"):
+            by_tool[c.get("tool")] = by_tool.get(c.get("tool"), 0) + 1
+    reads = [c.get("target") for c in calls if c.get("tool") == "read_file" and not c.get("refused")]
+    return (TurnResult(usage, result.get("reply") or "", len(calls), delegates=delegates,
+                       loaded=loaded, by_tool=by_tool, reads=reads),
             result.get("session"))
 
 
@@ -621,7 +865,7 @@ def execute(cmd, workdir, contestant):
     return done.stdout
 
 
-def run_turn(contestant, workdir, prompt, state, extra_system, single):
+def run_turn(contestant, workdir, prompt, state, extra_system, single, scenario_args=()):
     tool = contestant["tool"]
     model = model_of(contestant)
     extra = [expand(a) for a in contestant.get("args", [])]
@@ -665,7 +909,8 @@ def run_turn(contestant, workdir, prompt, state, extra_system, single):
             cmd += ["--model", model]
         if extra_system:
             cmd += ["--append-system-prompt", extra_system]
-        result, session = parse_bravebot(execute(cmd + extra, workdir, contestant))
+        result, session = parse_bravebot(execute(cmd + extra + list(scenario_args), workdir,
+                                                 contestant))
         state["session"] = session
         return result
     if tool == "claude":
@@ -713,14 +958,46 @@ def weights_of(contestant):
 
 
 def turn_ok(turn, result, workdir):
-    """Whether the reply is right and, where the tool reports its delegates, enough were started.
+    """Whether the reply is right and, where the tool reports its calls, the work was done.
 
     A turn that asks for delegates and does the work inline spends less, so a correct reply alone
-    would let it win the scenario.
+    would let it win the scenario. The same holds for a turn that has to load a skill, and for a
+    turn whose answer is in a skill the tool never loaded.
     """
     if result.delegates is not None and result.delegates < turn.min_delegates:
         return False
+    if turn.loads and result.loaded is not None and turn.loads not in result.loaded:
+        return False
     return bool(turn.check(workdir, result.reply))
+
+
+def applies(contestant, scenario):
+    """Whether a scenario can be run by a contestant.
+
+    A scenario with a fixture home runs only for a `configured` contestant, and a `configured`
+    contestant runs only those. Without `--safe` it would otherwise read the person's own state
+    directory, and a `--safe` contestant would not load the fixture. A scenario limited to some
+    tools is not run by the others, which have no skills or MCP servers of this kind to load. A
+    scenario with `bravebot_args` is a goal run or a manifest run, which refuse some flags
+    (`REFUSED_BY_PLANNED_RUNS`), so a contestant that passes one would fail every turn and is not
+    run on it.
+    """
+    if scenario.bravebot_args and any(a in REFUSED_BY_PLANNED_RUNS
+                                      for a in contestant.get("args", [])):
+        return False
+    if scenario.tools and contestant["tool"] not in scenario.tools:
+        return False
+    return bool(scenario.home) == bool(contestant.get("configured"))
+
+
+def home_path(scenario):
+    """The same path on every run, so a path that reaches the prompt does not change the prefix."""
+    return pathlib.Path(tempfile.gettempdir()) / "tokbench-home" / scenario.name
+
+
+def with_home(contestant, home):
+    """The contestant with `BRAVEBOT_HOME` set to `home`, so the person's own directory is not read."""
+    return dict(contestant, env=dict(contestant.get("env", {}), BRAVEBOT_HOME=str(home)))
 
 
 def run_scenario(contestant, scenario, rep, sink):
@@ -732,24 +1009,38 @@ def run_scenario(contestant, scenario, rep, sink):
     state = {}
     single = len(scenario.turns) == 1
     weights = weights_of(contestant)
+    home = None
+    if scenario.home:
+        # The fixture state directory replaces the person's own for every command of the run,
+        # the session purge below included.
+        home = home_path(scenario)
+        shutil.rmtree(home, ignore_errors=True)
+        home.mkdir(parents=True)
+        contestant = with_home(contestant, home)
     try:
+        if home:
+            scenario.home(home)
         scenario.setup(workdir)
         for index, turn in enumerate(scenario.turns):
             started = time.monotonic()
             record = {"contestant": contestant["name"], "scenario": scenario.name,
                       "category": scenario.category, "rep": rep, "turn": index}
+            if contestant.get("baseline"):
+                record["baseline"] = contestant["baseline"]
             try:
                 result = run_turn(contestant, workdir, turn.prompt, state,
-                                  scenario.system_extra, single)
+                                  scenario.system_extra, single, scenario.bravebot_args)
                 ok = turn_ok(turn, result, workdir)
                 record.update(ok=ok, reply=result.reply[:200], tool_calls=result.tool_calls,
-                              delegates=result.delegates,
+                              delegates=result.delegates, loaded=result.loaded,
+                              by_tool=result.by_tool, reads=result.reads,
                               fresh=result.usage.fresh, cache_read=result.usage.cache_read,
                               cache_write=result.usage.cache_write, output=result.usage.output,
                               requests=result.usage.requests,
                               cost=result.usage.cost(weights), cost_usd=result.cost_usd)
             except BenchError as error:
-                record.update(ok=False, error=str(error), tool_calls=0, delegates=None, fresh=0,
+                record.update(ok=False, error=str(error), tool_calls=0, delegates=None,
+                              loaded=None, by_tool=None, reads=None, fresh=0,
                               cache_read=0,
                               cache_write=0, output=0, requests=0, cost=0.0, cost_usd=0.0)
             record["wall_s"] = round(time.monotonic() - started, 2)
@@ -762,8 +1053,12 @@ def run_scenario(contestant, scenario, rep, sink):
                            cwd=workdir, capture_output=True, stdin=subprocess.DEVNULL)
         if contestant["tool"] == "bravebot" and not single:
             subprocess.run([contestant.get("bin", "bravebot"), "sessions", "purge", "-y"],
-                           cwd=workdir, capture_output=True, stdin=subprocess.DEVNULL)
+                           cwd=workdir, capture_output=True, stdin=subprocess.DEVNULL,
+                           env=dict(os.environ, **{k: expand(v) for k, v in
+                                                   contestant.get("env", {}).items()}))
         shutil.rmtree(workdir, ignore_errors=True)
+        if home:
+            shutil.rmtree(home, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -877,6 +1172,129 @@ def render_report(table):
     return "\n".join(lines)
 
 
+def render_extra(records):
+    """The comparisons the ranking cannot show, from the scenarios that have one.
+
+    `configured_hello` against the `--safe` contestant it names as `baseline`, and the two turns of
+    `skill_load` against the same turns with the values given in the prompt. Empty where the
+    records hold none of them.
+    """
+    lines = []
+    table = summarize(records)
+    baselines = {r["contestant"]: r["baseline"] for r in records if r.get("baseline")}
+    for name in sorted(c for c, s in table if s == "configured_hello"):
+        base = baselines.get(name)
+        mine = table[(name, "configured_hello")]
+        ref = table.get((base, "hello")) if base else None
+        if ref is None:
+            lines.append(f"  {name}: no hello run of its baseline {base or '(none named)'}")
+            continue
+        lines.append(f"  {name}: prompt {mine['prompt']:.0f} against {ref['prompt']:.0f} for "
+                     f"{base} hello, so skills and MCP tools add {mine['prompt'] - ref['prompt']:+.0f} "
+                     f"prompt tokens and {mine['cost'] - ref['cost']:+.0f} cost units "
+                     f"(solved {mine['success'] * 100:.0f}%)"
+                     + ("" if mine["prompt"] > ref["prompt"] else
+                        "; not larger than the --safe run, so the configuration was not loaded"))
+    if lines:
+        lines.insert(0, "configured overhead: configured_hello minus the --safe baseline's hello "
+                        "(includes the longer question)")
+
+    turns = {}
+    for r in records:
+        if r["scenario"] in ("skill_load", "skill_inline") and "error" not in r:
+            turns.setdefault((r["contestant"], r["scenario"], r["turn"]), []).append(r)
+    med = lambda rs, key: statistics.median(r[key] for r in rs)
+    skill_lines = []
+    for name in sorted({c for c, _, _ in turns}):
+        for scenario in ("skill_load", "skill_inline"):
+            for turn in (0, 1):
+                rs = turns.get((name, scenario, turn))
+                if not rs:
+                    continue
+                prompt = med(rs, "fresh") + med(rs, "cache_read") + med(rs, "cache_write")
+                skill_lines.append(
+                    f"  {name:<22} {scenario:<13} turn {turn + 1}  prompt {prompt:>7.0f}  "
+                    f"fresh {med(rs, 'fresh'):>7.0f}  read {med(rs, 'cache_read'):>7.0f}  "
+                    f"write {med(rs, 'cache_write'):>7.0f}  "
+                    f"hit {(med(rs, 'cache_read') / prompt * 100 if prompt else 0):>3.0f}%  "
+                    f"req {med(rs, 'requests'):>3.0f}")
+        a = turns.get((name, "skill_load", 0))
+        b = turns.get((name, "skill_inline", 0))
+        if a and b:
+            total = lambda rs: med(rs, "fresh") + med(rs, "cache_read") + med(rs, "cache_write")
+            skill_lines.append(f"  {name}: loading adds {total(a) - total(b):+.0f} prompt tokens to "
+                               f"turn 1 over giving the values inline, and "
+                               f"{med(a, 'requests') - med(b, 'requests'):+.0f} requests")
+    if skill_lines:
+        if lines:
+            lines.append("")
+        lines.append("skill loading, per turn (median): turn 2 read and write show whether the "
+                     "load left the cached prefix as it was")
+        lines += skill_lines
+    more = render_modes_and_edits(records)
+    if more:
+        if lines:
+            lines.append("")
+        lines.append(more)
+    return "\n".join(lines)
+
+
+def render_modes_and_edits(records):
+    """A goal run and a manifest run against the plain turn of the same task, and how the edits of
+    `refactor_rename` were sent.
+
+    `goal_copy` and `manifest_copy` set against `plain_copy` of the same contestant, which has the
+    same fixture and prompt. For `refactor_rename`, the calls of each tool and the files read more
+    than once, from the targets bravebot reports. A tool that does not report calls shows only its
+    count. Empty where the records hold none of these scenarios.
+    """
+    table = summarize(records)
+    lines = []
+    for name in sorted({c for c, s in table if s in ("goal_copy", "manifest_copy")}):
+        plain = table.get((name, "plain_copy"))
+        for scenario in ("goal_copy", "manifest_copy"):
+            mine = table.get((name, scenario))
+            if mine is None:
+                continue
+            if plain is None:
+                lines.append(f"  {name}: {scenario} has no plain_copy run to compare with")
+                continue
+            lines.append(
+                f"  {name}: {scenario} prompt {mine['prompt']:.0f} against {plain['prompt']:.0f}, "
+                f"cost {mine['cost']:.0f} against {plain['cost']:.0f} "
+                f"({mine['cost'] - plain['cost']:+.0f}), requests {mine['requests']:.0f} against "
+                f"{plain['requests']:.0f}, solved {mine['success'] * 100:.0f}% against "
+                f"{plain['success'] * 100:.0f}% for plain_copy")
+    if lines:
+        lines.insert(0, "goal and manifest runs against the same task as a plain turn (plain_copy)")
+
+    edits = {}
+    for r in records:
+        if r["scenario"] == "refactor_rename" and "error" not in r:
+            edits.setdefault(r["contestant"], []).append(r)
+    edit_lines = []
+    for name in sorted(edits):
+        rs = edits[name]
+        median = lambda values: statistics.median(values)
+        if any(r.get("by_tool") is None for r in rs):
+            edit_lines.append(f"  {name:<22} calls {median(r['tool_calls'] for r in rs):.0f}, "
+                              f"not reported per tool, so edits and re-reads are not shown")
+            continue
+        names = sorted({t for r in rs for t in r["by_tool"]})
+        counts = ", ".join(f"{t} {median(r['by_tool'].get(t, 0) for r in rs):.0f}" for t in names)
+        again = median(len(r["reads"]) - len(set(r["reads"])) for r in rs)
+        edit_lines.append(f"  {name:<22} {counts or 'no calls'}; reads of a file already read "
+                          f"{again:.0f}")
+    if edit_lines:
+        if lines:
+            lines.append("")
+        lines.append("refactor_rename: calls per tool (median over repeats), so edit_file against "
+                     "write_file shows how the edits were sent, and read_file targets seen more "
+                     "than once")
+        lines += edit_lines
+    return "\n".join(lines)
+
+
 def plot(records, table, out_dir):
     try:
         import matplotlib
@@ -961,6 +1379,11 @@ def load_config(path):
         if c["name"] in seen:
             sys.exit(f"contestant {c['name']} is listed twice")
         seen.add(c["name"])
+        if c.get("configured"):
+            if c["tool"] != "bravebot":
+                sys.exit(f"contestant {c['name']} is configured, which only bravebot can be")
+            if "--safe" in c.get("args", []):
+                sys.exit(f"contestant {c['name']} is configured and passes --safe")
     return config["contestants"]
 
 
@@ -991,23 +1414,33 @@ def cmd_run(args):
               f"{record.get('error', '')}", file=sys.stderr)
 
     if not args.no_warmup:
-        hello = scenarios()[0]
         for c in contestants:
-            run_scenario(c, hello, -1, lambda record: None)
+            first = next((s for s in scenarios() if applies(c, s)), None)
+            if first:
+                run_scenario(c, first, -1, lambda record: None)
     for rep in range(args.repeats):
         for scenario in chosen:
             for c in contestants:
-                run_scenario(c, scenario, rep, sink)
+                if applies(c, scenario):
+                    run_scenario(c, scenario, rep, sink)
     handle.close()
     print(f"wrote {out}", file=sys.stderr)
-    table = summarize(load_records(out))
-    print(render_report(table))
+    records = load_records(out)
+    print(render_report(summarize(records)))
+    extra = render_extra(records)
+    if extra:
+        print()
+        print(extra)
 
 
 def cmd_report(args):
     records = load_records(args.results)
     table = summarize(records)
     print(render_report(table))
+    extra = render_extra(records)
+    if extra:
+        print()
+        print(extra)
     if args.plot:
         for name in plot(records, table, args.plot):
             print(f"wrote {pathlib.Path(args.plot) / name}")
@@ -1022,8 +1455,12 @@ def cmd_list(args):
 
 
 # ---------------------------------------------------------------------------------------------
-# Selftest. The samples are output captured from the real tools, so a parser that reads the
-# wrong field fails on numbers that were checked by hand against each tool's own totals.
+# Selftest. CLAUDE_SAMPLE, BRAVEBOT_SAMPLE, BRAVEBOT_DELEGATE_SAMPLE and the Codex and opencode events
+# are output captured from the real tools, so a parser that reads the wrong field fails on numbers
+# that were checked by hand against each tool's own totals. The bravebot `--json` samples for skills,
+# refactor and manifest runs are written by hand to the shape of docs/specs/cli.md
+# CLI-12 (the manifest one is the refactor sample with no session), so they check that a parser reads
+# the fields that clause names.
 # ---------------------------------------------------------------------------------------------
 
 CLAUDE_SAMPLE = json.dumps({
@@ -1048,6 +1485,394 @@ BRAVEBOT_DELEGATE_SAMPLE = json.dumps({
               {"tool": "spawn_agent", "target": "reader", "refused": False},
               {"tool": "spawn_agent", "target": "worker", "refused": True},
               {"tool": "read_file", "target": "a.txt", "refused": False}]})
+
+
+BRAVEBOT_SKILL_SAMPLE = json.dumps({
+    "schema": 1, "ok": True, "status": 0, "reply": SKILL_WORD, "session": "b-3", "steps": 2,
+    "tokens": {"total": 52000, "output": 90, "context": 26000,
+               "cache_read": 25000, "cache_written": 26000},
+    "calls": [{"tool": "load_skill", "target": SKILL_NAME, "refused": False},
+              {"tool": "load_skill", "target": SKILL_NAME + "x", "refused": True},
+              {"tool": "search_skills", "target": "rounding", "refused": False}]})
+
+
+FAKE_BRAVEBOT = '''#!%(python)s
+import json, os, pathlib, sys
+args = sys.argv[1:]
+if args[:1] == ["sessions"]:
+    sys.exit(0)
+home = pathlib.Path(os.environ["BRAVEBOT_HOME"])
+prompt = args[args.index("-p") + 1]
+skills = sorted(p.name for p in (home / "skills").iterdir())
+loads = os.environ.get("FAKE_LOADS") == "1"
+body = (home / "skills" / %(skill)r / "SKILL.md").read_text()
+word = [l for l in body.splitlines() if l.startswith("Code word:")][0].split()[-1]
+step = [l for l in body.splitlines() if l.startswith("Step 2")][0].split()[-1].rstrip(".")
+reply = word if "code word" in prompt else step
+calls = [{"tool": "load_skill", "target": %(skill)r, "refused": False}] if (
+    loads and "Load the skill" in prompt) else []
+print(json.dumps({"schema": 1, "ok": True, "status": 0, "reply": reply, "session": "s",
+                  "steps": 1, "tokens": {"total": 1000, "output": 10, "context": 1,
+                  "cache_read": 500, "cache_written": 0}, "calls": calls,
+                  "seen": ["--safe" in args, skills]}))
+'''
+
+
+def selftest_configuration():
+    """The scenarios that load skills and MCP servers: their fixtures, checks and report."""
+    by_name = {s.name: s for s in scenarios()}
+    configured, load, inline = (by_name[n] for n in ("configured_hello", "skill_load", "skill_inline"))
+
+    # configured_hello: eight skills the overview counts and an MCP server that is requested,
+    # declared in the format of mcp.json (SERVERS-1) and holding eight tools. A skill needs a name
+    # and a description (SKILL-1).
+    home = pathlib.Path(tempfile.mkdtemp())
+    try:
+        configured.home(home)
+        names = sorted(p.name for p in (home / "skills").iterdir())
+        assert names == sorted(n for n, _ in TYPICAL_SKILLS) and len(names) == 8, names
+        for name, description in TYPICAL_SKILLS:
+            lines = (home / "skills" / name / "SKILL.md").read_text().splitlines()
+            assert lines[0] == "---" and lines[1] == f"name: {name}", lines[:2]
+            assert lines[2] == f"description: {description}" and lines[3] == "---", lines[:4]
+        declared = json.loads((home / "mcp.json").read_text())
+        assert list(declared) == ["servers"], declared
+        entry = declared["servers"]["bench"]
+        assert entry["transport"] == "stdio" and os.path.isabs(entry["argv"][0]), entry
+        assert pathlib.Path(entry["argv"][1]).is_file() and entry["reads"] == [entry["argv"][1]]
+        assert set(entry) == {"transport", "argv", "reads"}, entry
+        assert json.loads((home / "settings.json").read_text()) == {
+            "mcp": {"request": ["bench"]}}
+    finally:
+        shutil.rmtree(home)
+
+    # The stand-in server completes a handshake and lists tools with a name and an input schema.
+    server = subprocess.Popen([sys.executable, str(STUB_MCP_SERVER)], stdin=subprocess.PIPE,
+                              stdout=subprocess.PIPE, text=True)
+    # A server that stops answering ends the selftest: the timer kills it, `readline` then returns
+    # an empty line and the JSON read fails.
+    watchdog = threading.Timer(STUB_DEADLINE, server.kill)
+    watchdog.start()
+    try:
+        def ask(method, params=None):
+            message = {"jsonrpc": "2.0", "id": 1, "method": method}
+            if params is not None:
+                message["params"] = params
+            server.stdin.write(json.dumps(message) + "\n")
+            server.stdin.flush()
+            return json.loads(server.stdout.readline())
+
+        assert ask("initialize", {})["result"]["protocolVersion"]
+        server.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"})
+                           + "\n")
+        tools = ask("tools/list")["result"]["tools"]
+        assert len(tools) == 8 and tools[0]["name"] == "ledger_probe", tools
+        assert all(t["inputSchema"]["type"] == "object" and t["description"] for t in tools)
+        assert "result" in ask("tools/call", {"name": "ledger_probe", "arguments": {}})
+        assert "error" in ask("no/such")
+    finally:
+        watchdog.cancel()
+        server.kill()
+        server.wait()
+
+    # The check wants the skill count the overview states and a tool name only the server has. The
+    # wrong count and a missing tool name are the two near misses.
+    check = configured.turns[0].check
+    assert check(None, "8 ledger_probe") and check(None, "There are 8: ledger_probe")
+    assert not check(None, "4 ledger_probe") and not check(None, "8 ledger_search")
+    assert not check(None, "ok")
+
+    # skill_load: the values live only in the skill, so neither prompt gives them away, and the
+    # inline control states the same values in its prompts.
+    home = pathlib.Path(tempfile.mkdtemp())
+    try:
+        load.home(home)
+        names = sorted(p.name for p in (home / "skills").iterdir())
+        assert names == sorted([SKILL_NAME, *(n for n, _ in TYPICAL_SKILLS[:3])]), names
+        body = (home / "skills" / SKILL_NAME / "SKILL.md").read_text()
+        assert body.startswith(f"---\nname: {SKILL_NAME}\ndescription: ")
+        assert body.count(SKILL_WORD) == 1 and body.count(SKILL_STEP) == 1
+        assert 4000 < len(body) < 8000, len(body)
+    finally:
+        shutil.rmtree(home)
+    assert SKILL_WORD != SKILL_STEP and SKILL_STEP.startswith("R-")
+    for turn in load.turns:
+        assert SKILL_WORD not in turn.prompt and SKILL_STEP not in turn.prompt
+    for turn in inline.turns:
+        assert SKILL_WORD in turn.prompt or SKILL_STEP in turn.prompt
+    assert load.turns[0].loads == SKILL_NAME and not load.turns[1].loads
+    assert not any(t.loads for t in inline.turns)
+
+    # A turn that has to load a skill fails where the tool reports its calls and none was loaded,
+    # or the load was refused, or another skill was loaded. A tool that does not report calls is
+    # judged on the reply, which only the skill holds.
+    first = load.turns[0]
+    brave, _ = parse_bravebot(BRAVEBOT_SKILL_SAMPLE)
+    assert brave.loaded == [SKILL_NAME], brave
+    assert turn_ok(first, brave, None)
+    assert not turn_ok(first, TurnResult(Usage(), SKILL_WORD, 0, loaded=[]), None)
+    assert not turn_ok(first, TurnResult(Usage(), SKILL_WORD, 0, loaded=["commit-style"]), None)
+    assert turn_ok(first, TurnResult(Usage(), SKILL_WORD, 0, loaded=None), None)
+    assert not turn_ok(first, TurnResult(Usage(), "guess", 0, loaded=[SKILL_NAME]), None)
+    assert parse_claude(CLAUDE_SAMPLE)[0].loaded is None
+    assert parse_bravebot(BRAVEBOT_SAMPLE)[0].loaded == []
+    assert turn_ok(load.turns[1], TurnResult(Usage(), SKILL_STEP, 0, loaded=[]), None)
+    assert not turn_ok(load.turns[1], TurnResult(Usage(), "R-00000000", 0, loaded=[]), None)
+
+    # Which contestant runs which scenario. A configured contestant reads no home but the fixture's,
+    # so it runs the fixture scenarios and nothing else, and a `--safe` one never runs them.
+    safe = {"name": "s", "tool": "bravebot", "args": ["--safe"]}
+    real = {"name": "r", "tool": "bravebot", "configured": True, "baseline": "s"}
+    other = {"name": "c", "tool": "claude", "args": ["--bare"]}
+    assert [applies(real, s) for s in (configured, load, inline, by_name["hello"])] == [
+        True, True, True, False]
+    assert [applies(safe, s) for s in (configured, load, inline, by_name["hello"])] == [
+        False, False, False, True]
+    assert not applies(dict(other, configured=True), load) and not applies(other, load)
+    assert with_home(real, "/h")["env"] == {"BRAVEBOT_HOME": "/h"} and "env" not in real
+    assert expand("${BENCH_DIR}") == str(HERE)
+
+    # A configured contestant that passes --safe, or is not bravebot, is refused when the file is
+    # read, since a run of either would measure no configuration.
+    scratch = pathlib.Path(tempfile.mkdtemp())
+    try:
+        for bad in (dict(real, args=["--safe"]), dict(real, tool="claude")):
+            path = scratch / "c.json"
+            path.write_text(json.dumps({"contestants": [bad]}))
+            try:
+                load_config(path)
+                raise AssertionError("a configured contestant that cannot load configuration")
+            except SystemExit:
+                pass
+        path.write_text(json.dumps({"contestants": [safe, real]}))
+        assert [c["name"] for c in load_config(path)] == ["s", "r"]
+    finally:
+        shutil.rmtree(scratch)
+
+    # A whole scenario run against a stand-in bravebot: the fixture home is the process's
+    # BRAVEBOT_HOME for every turn, the skill is there to be loaded, the run records the load and
+    # the second turn resumes, and the fixture home is gone afterwards.
+    scratch = pathlib.Path(tempfile.mkdtemp())
+    try:
+        fake = scratch / "bravebot"
+        fake.write_text(FAKE_BRAVEBOT % {"python": sys.executable, "skill": SKILL_NAME})
+        fake.chmod(0o755)
+        for loads, passes in ("1", True), ("0", False):
+            contestant = dict(real, bin=str(fake), env={"FAKE_LOADS": loads})
+            records = []
+            run_scenario(contestant, load, 0, records.append)
+            assert [r["turn"] for r in records] == [0, 1], records
+            assert [r["ok"] for r in records] == [passes, True], records
+            assert records[0]["loaded"] == ([SKILL_NAME] if passes else []), records
+            assert records[0]["baseline"] == "s" and records[0]["cache_read"] == 500
+            assert not home_path(load).exists()
+    finally:
+        shutil.rmtree(scratch)
+
+    # The report gives the difference from the --safe hello, and says so when the configured run is
+    # not larger than it. The skill report separates what the load adds from the inline control and
+    # shows each turn's cache read and write.
+    def row(name, scenario, turn, fresh, read, write, **extra):
+        record = {"contestant": name, "scenario": scenario, "category": "x", "rep": 0, "turn": turn,
+                  "ok": True, "fresh": fresh, "cache_read": read, "cache_write": write,
+                  "output": 0, "requests": 2, "tool_calls": 0, "cost": float(fresh),
+                  "cost_usd": 0.0, "wall_s": 1.0}
+        return dict(record, **extra)
+
+    records = [row("s", "hello", 0, 100, 3000, 0),
+               row("r", "configured_hello", 0, 100, 5000, 0, baseline="s")]
+    text = render_extra(records)
+    assert "r: prompt 5100 against 3100 for s hello" in text and "+2000 prompt tokens" in text, text
+    assert "not larger" not in text
+    smaller = render_extra([row("s", "hello", 0, 100, 3000, 0),
+                            row("r", "configured_hello", 0, 50, 2000, 0, baseline="s")])
+    assert "was not loaded" in smaller, smaller
+    assert "no hello run of its baseline s" in render_extra(records[1:])
+    assert render_extra([row("s", "hello", 0, 100, 3000, 0)]) == ""
+    records = [row("r", "skill_load", 0, 50, 1000, 1500), row("r", "skill_load", 1, 20, 2500, 0),
+               row("r", "skill_inline", 0, 40, 1000, 0), row("r", "skill_inline", 1, 20, 1000, 0)]
+    text = render_extra(records)
+    assert "r: loading adds +1510 prompt tokens to turn 1" in text, text
+    assert "skill_load    turn 2" in text and "read    2500" in text, text
+
+
+FAKE_MODES_BRAVEBOT = '''#!%(python)s
+import json, os, pathlib, sys
+args = sys.argv[1:]
+pathlib.Path(os.environ["FAKE_ARGS_OUT"]).write_text(json.dumps(args))
+if os.environ.get("FAKE_WORK") == "1":
+    pathlib.Path("copy.txt").write_text(pathlib.Path("source.txt").read_text())
+print(json.dumps({"schema": 1, "ok": True, "status": 0, "reply": "done", "session": None,
+                  "steps": 1, "tokens": {"total": 1000, "output": 10, "context": 1,
+                  "cache_read": 500, "cache_written": 0}, "calls": []}))
+'''
+
+
+# A refactor run as `--json` reports it: one read of each file, a second read of one, an edit of
+# each file that named the function, and the test run. Refused calls are not counted.
+BRAVEBOT_REFACTOR_SAMPLE = json.dumps({
+    "schema": 1, "ok": True, "status": 0, "reply": "done", "session": "b-4", "steps": 3,
+    "tokens": {"total": 60000, "output": 700, "context": 20000,
+               "cache_read": 30000, "cache_written": 20000},
+    "calls": [{"tool": "read_file", "target": "pricing.py", "refused": False},
+              {"tool": "read_file", "target": "cart.py", "refused": False},
+              {"tool": "read_file", "target": "pricing.py", "refused": False},
+              {"tool": "read_file", "target": "invoice.py", "refused": True},
+              {"tool": "edit_file", "target": "pricing.py", "refused": False},
+              {"tool": "edit_file", "target": "cart.py", "refused": False},
+              {"tool": "write_file", "target": "NOTES.md", "refused": False},
+              {"tool": "run", "target": "python3 test_shop.py", "refused": False}]})
+
+
+def selftest_modes():
+    """The goal, manifest and refactor scenarios: fixtures, checks, flags and report."""
+    by_name = {s.name: s for s in scenarios()}
+    plain, goal, manifest, refactor = (by_name[n] for n in (
+        "plain_copy", "goal_copy", "manifest_copy", "refactor_rename"))
+
+    # The goal and manifest scenarios have the plain turn's fixture and prompt, so the three differ
+    # in the mode alone, and only bravebot runs the two that have a mode.
+    assert goal.turns[0].prompt == plain.turns[0].prompt == manifest.turns[0].prompt
+    assert goal.setup is plain.setup is manifest.setup
+    assert goal.bravebot_args == ("--goal", COPY_GOAL) and manifest.bravebot_args == (
+        "--mode", "manifest") and not plain.bravebot_args
+    assert goal.tools == manifest.tools == ("bravebot",) and not plain.tools
+    # Neither passes a flag the two modes refuse (invocation.rs manifest_conflict and the limits):
+    # `--incognito` is not one of them, so a one-turn scenario keeps it.
+    for scenario in (goal, manifest):
+        assert not set(scenario.bravebot_args) & set(REFUSED_BY_PLANNED_RUNS)
+
+    # A contestant that passes a flag the modes refuse is not run on them, and still runs the plain
+    # turn. Other tools run the plain turn and nothing of the modes.
+    safe = {"name": "s", "tool": "bravebot", "args": ["--safe"]}
+    capped = {"name": "c", "tool": "bravebot", "args": ["--safe", "--max-rounds", "3"]}
+    other = {"name": "o", "tool": "claude", "args": ["--bare"]}
+    assert [applies(safe, s) for s in (plain, goal, manifest, refactor)] == [True] * 4
+    assert [applies(capped, s) for s in (plain, goal, manifest, refactor)] == [
+        True, False, False, True]
+    assert [applies(other, s) for s in (plain, goal, manifest, refactor)] == [
+        True, False, False, True]
+
+    # copy: the check reads the workspace. Doing nothing, a reply that says done, a changed source
+    # and a near-miss copy all fail, whatever the reply says.
+    work = pathlib.Path(tempfile.mkdtemp())
+    try:
+        plain.setup(work)
+        check = plain.turns[0].check
+        assert not check(work, "done"), "no copy must not pass"
+        (work / "copy.txt").write_text(COPY_SOURCE[:-20])
+        assert not check(work, "done"), "a truncated copy must not pass"
+        (work / "copy.txt").write_text(COPY_SOURCE.replace("line 7:", "line 8:"))
+        assert not check(work, "done")
+        (work / "copy.txt").write_text(COPY_SOURCE)
+        assert check(work, "")
+        (work / "source.txt").write_text("")
+        assert not check(work, "done"), "a source that was changed must not pass"
+    finally:
+        shutil.rmtree(work)
+
+    # refactor: the fixture fails as it is, passes when every file is renamed, and fails for an
+    # edited test, an alias that keeps the old name, and a rename that missed a caller or the notes.
+    def refactored(work):
+        for name in REFACTOR_FILES:
+            path = work / name
+            path.write_text(path.read_text().replace(REFACTOR_OLD, REFACTOR_NEW))
+
+    check = refactor.turns[0].check
+    assert len(REFACTOR_FILES) >= 4 and len(refactor.turns) == 1
+    for name, text in REFACTOR_FILES.items():
+        assert REFACTOR_OLD in text and REFACTOR_NEW not in text, name
+    work = pathlib.Path(tempfile.mkdtemp())
+    try:
+        refactor.setup(work)
+        assert (work / "test_shop.py").read_text() == REFACTOR_TEST
+        assert not check(work, "done"), "the unedited tree must not pass"
+        refactored(work)
+        assert check(work, "")
+        for name in REFACTOR_FILES:
+            refactor.setup(work)
+            refactored(work)
+            (work / name).write_text(REFACTOR_FILES[name])
+            assert not check(work, "done"), f"{name} left unchanged must not pass"
+        refactor.setup(work)
+        refactored(work)
+        (work / "pricing.py").write_text(
+            (work / "pricing.py").read_text() + f"{REFACTOR_OLD} = {REFACTOR_NEW}\n")
+        assert not check(work, "done"), "an alias for the old name must not pass"
+        refactor.setup(work)
+        refactored(work)
+        (work / "pricing.py").write_text(
+            f"def {REFACTOR_NEW}(items):\n    return 0\n")
+        assert not check(work, "done"), "a rename that breaks the script must not pass"
+        refactor.setup(work)
+        refactored(work)
+        (work / "test_shop.py").write_text("print('OK')\n")
+        assert not check(work, "done"), "an edited test must not pass"
+    finally:
+        shutil.rmtree(work)
+
+    # The parser keeps what `--json` says per tool and the read targets in order. A refused call is
+    # in `tool_calls` and in neither. A tool that does not report calls has None for both.
+    brave, session = parse_bravebot(BRAVEBOT_REFACTOR_SAMPLE)
+    assert brave.by_tool == {"read_file": 3, "edit_file": 2, "write_file": 1, "run": 1}, brave
+    assert brave.reads == ["pricing.py", "cart.py", "pricing.py"] and brave.tool_calls == 8
+    claude = parse_claude(CLAUDE_SAMPLE)[0]
+    assert claude.by_tool is None and claude.reads is None
+    # A manifest run names no session and writes the same object, so it parses the same way.
+    manifest_run = json.loads(BRAVEBOT_REFACTOR_SAMPLE)
+    manifest_run.update(session=None, steps=1, calls=manifest_run["calls"][:2])
+    brave, session = parse_bravebot(json.dumps(manifest_run))
+    assert session is None and brave.by_tool == {"read_file": 2} and brave.usage.requests == 2
+
+    # The flags reach the command, in a run of the whole scenario against a stand-in bravebot: the
+    # goal run gets `--goal <condition>`, the manifest run `--mode manifest`, the plain turn neither,
+    # and each keeps `--incognito` and `--dangerously-skip-permissions`. A run that does not copy
+    # fails whatever the mode, which is what the check on the workspace is for.
+    scratch = pathlib.Path(tempfile.mkdtemp())
+    try:
+        fake = scratch / "bravebot"
+        fake.write_text(FAKE_MODES_BRAVEBOT % {"python": sys.executable})
+        fake.chmod(0o755)
+        seen = scratch / "args.json"
+        for scenario, flags in ((plain, []), (goal, ["--goal", COPY_GOAL]),
+                                (manifest, ["--mode", "manifest"])):
+            for works in "1", "0":
+                contestant = dict(safe, bin=str(fake), env={"FAKE_ARGS_OUT": str(seen),
+                                                              "FAKE_WORK": works})
+                records = []
+                run_scenario(contestant, scenario, 0, records.append)
+                args = json.loads(seen.read_text())
+                assert args[-len(flags):] == flags if flags else "--goal" not in args, args
+                assert "--mode" not in args or args[args.index("--mode") + 1] == "manifest"
+                assert "--incognito" in args and "--dangerously-skip-permissions" in args
+                assert [r["ok"] for r in records] == [works == "1"], (scenario.name, records)
+                assert records[0]["by_tool"] == {} and records[0]["reads"] == []
+    finally:
+        shutil.rmtree(scratch)
+
+    # The report sets each mode against the plain turn of the same contestant and says so when the
+    # plain turn is missing. Refactor lines show the per-tool counts and the re-reads, and a tool
+    # that does not report calls says so.
+    def row(name, scenario, fresh, ok=True, **extra):
+        record = {"contestant": name, "scenario": scenario, "category": "x", "rep": 0, "turn": 0,
+                  "ok": ok, "fresh": fresh, "cache_read": 0, "cache_write": 0, "output": 0,
+                  "requests": 2, "tool_calls": 3, "cost": float(fresh), "cost_usd": 0.0,
+                  "wall_s": 1.0}
+        return dict(record, **extra)
+
+    records = [row("r", "plain_copy", 100), row("r", "goal_copy", 250),
+               row("r", "manifest_copy", 60)]
+    text = render_extra(records)
+    assert "r: goal_copy prompt 250 against 100, cost 250 against 100 (+150)" in text, text
+    assert "r: manifest_copy prompt 60 against 100, cost 60 against 100 (-40)" in text, text
+    assert "r: goal_copy has no plain_copy run to compare with" in render_extra(records[1:2])
+    assert render_extra([row("r", "plain_copy", 100)]) == ""
+    records = [row("r", "refactor_rename", 100, by_tool={"read_file": 3, "edit_file": 2},
+                   reads=["a.py", "b.py", "a.py"]),
+               row("c", "refactor_rename", 100, by_tool=None, reads=None)]
+    text = render_extra(records)
+    assert "r                      edit_file 2, read_file 3; reads of a file already read 1" in text, text
+    assert "c                      calls 3, not reported per tool" in text, text
 
 
 def codex_events(thread, tool_items, input_tokens, cached, output):
@@ -1287,6 +2112,8 @@ def selftest():
     finally:
         server.shutdown()
         shutil.rmtree(work)
+    selftest_configuration()
+    selftest_modes()
     print("selftest ok")
 
 
