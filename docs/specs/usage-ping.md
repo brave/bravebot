@@ -223,14 +223,16 @@ at all.
 `ollama`, `lmstudio`, `llamacpp`, `other` or `none`. It is the kind that serves the model the
 terminal, `-p` or `--plain` session starts with, or the configured default model where the front end
 picks a session's model later, as the desktop and `bravebot acp` do. A gateway entry whose id is not
-one of the listed services is `other`, and no configured model is `none`. A desktop or ACP start whose
-configuration does not load sends nothing.
+one of the listed services is `other`, and no configured model is `none`. A desktop start whose
+configuration does not load reports `backend=none` and `premium=false`. A `bravebot acp` start
+requires a loadable configuration to send a ping.
 
 **Why.** A gateway's id is a name a person wrote, and could say who they are or where they work.
 
 `verified-by: bravebot_usage_ping::lib::a_gateway_id_not_known_is_other`
 `verified-by: bravebot_usage_ping::lib::every_open_field_word_is_short_and_alphanumeric`
 `verified-by: bravebot_cli::running::a_one_shot_run_sends_one_usage_ping_a_day_and_a_scheduled_firing_sends_none`
+`verified-by: bravebot_ui_bridge::usage_ping_notice::a_window_pings_with_no_backend_when_its_configuration_does_not_load`
 
 <a id="PING-9"></a>
 ### PING-9: the ping goes to one address through the one egress call
