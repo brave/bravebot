@@ -5752,6 +5752,7 @@ mod tests {
     /// Cleanup entered after cancellation must still charge requests that overlap its join.
     /// A controlled worker keeps the interval open independently of transport polling.
     #[test]
+    #[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
     fn cancelled_cleanup_retains_inflight_delegate_inference() {
         const LIMIT: Duration = Duration::from_secs(5);
         struct Joining;
