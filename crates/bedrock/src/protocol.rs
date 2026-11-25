@@ -1583,11 +1583,8 @@ mod tests {
             "read_file"
         );
         assert_eq!(
-            plain["toolConfig"]["tools"]
-                .as_array()
-                .expect("tools")
-                .len(),
-            1,
+            plain["toolConfig"]["tools"].as_array().map(Vec::len),
+            Some(1),
             "the tool list kept its cache point: {plain}"
         );
         assert_eq!(
@@ -1613,8 +1610,8 @@ mod tests {
             &[Message::system("be helpful"), Message::user("hello")],
             Some(&tools),
         ));
-        let listed = body["toolConfig"]["tools"].as_array().expect("tools");
-        assert_eq!(listed.len(), 3, "{body}");
+        let listed = &body["toolConfig"]["tools"];
+        assert_eq!(listed.as_array().map(Vec::len), Some(3), "{body}");
         assert_eq!(listed[1]["toolSpec"]["name"], "write_file");
         assert_eq!(listed[2], json!({"cachePoint": {"type": "default"}}));
 

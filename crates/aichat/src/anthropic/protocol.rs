@@ -1134,10 +1134,9 @@ mod tests {
         let without = with.clone().without_breakpoints();
 
         let mut expected = body_of(&with);
-        expected["tools"][0]
-            .as_object_mut()
-            .expect("a tool")
-            .remove("cache_control");
+        if let Some(tool) = expected["tools"][0].as_object_mut() {
+            tool.remove("cache_control");
+        }
         expected["system"][0]
             .as_object_mut()
             .expect("a block")
