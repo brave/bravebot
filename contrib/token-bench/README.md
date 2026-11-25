@@ -57,7 +57,7 @@ choose a profile or state its own numbers with `"weights": {"write": 1.25, "read
 For each scenario, the cheapest contestant that solved it in every repeat scores 100, and the others
 score `100 * best / cost`. A contestant that failed any repeat is scaled down by its success rate,
 so a cheap wrong answer cannot win. A contestant's score is the mean over scenarios, and each
-category (overhead, tools, cache, system_prompt) has its own mean. Costs are medians over repeats.
+category (overhead, tools, cache, delegates, system_prompt) has its own mean. Costs are medians over repeats.
 
 ## Scenarios
 
@@ -69,6 +69,21 @@ category (overhead, tools, cache, system_prompt) has its own mean. Costs are med
 | `find_symbol` | tools | searching forty files for one definition |
 | `multi_turn` | cache | five turns over one conversation, and how much of each is read from the cache |
 | `sysprompt_short`, `sysprompt_long` | system_prompt | the effect of 10 and 150 added rules |
+| `delegate_fanout` | delegates | four delegates started in one turn, each reading one file |
+| `delegate_serial` | delegates | three turns over one conversation, each starting one delegate |
+
+The `delegates` scenarios measure what a session spends when it starts sub-agents: the delegates'
+own prompts, how much of them is read from the cache, and what the parent's next request reads
+after a delegate returns. For bravebot the `--json` totals include every delegate's usage, so the
+figures are the whole session's. A delegate has its own conversation, so the `cache_write` and
+`cache_read` columns on `delegate_fanout` show whether four delegates started together read a
+prefix that is already cached or each write their own.
+
+bravebot reports the `spawn_agent` calls a turn made, and a turn that asks for delegates fails when
+fewer were started, so a contestant cannot win by doing the work inline. The other tools do not
+report their sub-agents in a form `bench.py` reads, so they are judged on the reply alone and
+their delegate count shows as 0. Their totals may or may not include sub-agent usage, so compare
+the `delegates` category across tools only after checking that.
 
 Every scenario has a check on the result, so a tool that spends nothing by not doing the work
 fails. Add a scenario by adding a `Scenario` to `scenarios()`.
