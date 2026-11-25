@@ -570,7 +570,7 @@ mod tests {
 
         // A window that never answers, and then goes.
         let (sender, replies) = mpsc::channel::<Reply>();
-        let (mut asker, _) = window(|_| {
+        let (mut asker, put) = window(|_| {
             Some(Reply {
                 question: 0,
                 yes: false,
@@ -579,9 +579,14 @@ mod tests {
         asker.replies = replies;
         let emitter = asker.emitter.clone();
         let waiting = std::thread::spawn(move || asker.ask("install", &json!({})));
-        std::thread::sleep(Duration::from_millis(300));
+        let until = std::time::Instant::now() + Duration::from_secs(5);
+        while put.lock().unwrap().len() != 1 {
+            assert!(std::time::Instant::now() < until, "the question was put");
+            std::thread::sleep(Duration::from_millis(10));
+        }
         emitter.go_quiet();
         assert!(!waiting.join().unwrap());
+        assert_eq!(put.lock().unwrap().len(), 1);
         drop(sender);
     }
 
