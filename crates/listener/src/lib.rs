@@ -10,6 +10,8 @@
 //! registry allows through a [`server::Service`]. This crate depends on nothing that opens a
 //! session, so what a device is answered is what the caller of [`server::Listener::start`] gives it.
 
+#![forbid(unsafe_code)]
+
 mod der;
 pub mod identity;
 pub mod invitation;

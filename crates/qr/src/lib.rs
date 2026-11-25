@@ -13,6 +13,8 @@
 //!
 //! This crate does no I/O and takes no input but the bytes it is given.
 
+#![forbid(unsafe_code)]
+
 mod galois;
 mod layout;
 mod render;

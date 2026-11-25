@@ -11,6 +11,8 @@
 //! is paired, each line you type is sent to the host as a request and the answers are written.
 //! `{"id":1,"method":"instance.info","params":{}}` is one to try.
 
+#![forbid(unsafe_code)]
+
 fn main() {
     let link = match bravebot_listener::phone::link_from_arguments(std::env::args_os().skip(1)) {
         Ok(link) => link,
