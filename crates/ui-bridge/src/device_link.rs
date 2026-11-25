@@ -195,29 +195,42 @@ impl Link {
         }
     }
 
-    fn workspace_named(&self, named: &str) -> Option<PathBuf> {
-        Path::new(named)
-            .canonicalize()
-            .ok()
-            .filter(|path| self.workspaces.contains(path))
+    /// The workspace a pairing covers: the one the person named, or the only one the host has when
+    /// they named none.
+    fn workspace_for(&self, named: Option<&str>) -> Result<PathBuf, String> {
+        let canonical = named.map(|named| Path::new(named).canonicalize().ok());
+        match (canonical, self.workspaces.as_slice()) {
+            (None, [only]) => Ok(only.clone()),
+            (None, _) => Err(format!(
+                "name a workspace: {}",
+                workspace_list(&self.workspaces)
+            )),
+            (Some(Some(path)), workspaces) if workspaces.contains(&path) => Ok(path),
+            (Some(_), workspaces) => Err(format!(
+                "{} is not one of the host's workspaces: {}",
+                named.unwrap_or_default(),
+                workspace_list(workspaces)
+            )),
+        }
     }
 
-    /// `pair NAME read|control WORKSPACE`: open the window and show the invitation.
+    /// `pair NAME read|control [WORKSPACE]`: open the window and show the invitation.
     fn pair(&self, arguments: &[&str]) -> Vec<Said> {
-        const USAGE: &str = "type `pair NAME read|control WORKSPACE`, where NAME is 1 to 32 of a-z, 0-9 and -, and WORKSPACE is one of the host's --workspace directories";
+        const USAGE: &str = "type `pair NAME read|control [WORKSPACE]`, where NAME is 1 to 32 of a-z, 0-9 and -, and WORKSPACE is one of the host's --workspace directories, which can be left out where the host has one";
         let line = |text: String| vec![Said::Line(text)];
-        let [name, grant, workspace] = arguments else {
-            return line(USAGE.to_string());
+        let (name, grant, workspace) = match arguments {
+            [name, grant] => (name, grant, None),
+            [name, grant, workspace] => (name, grant, Some(*workspace)),
+            _ => return line(USAGE.to_string()),
         };
         let grant = match *grant {
             "read" => Grant::Read,
             "control" => Grant::Control,
             _ => return line(USAGE.to_string()),
         };
-        let Some(workspace) = self.workspace_named(workspace) else {
-            return line(format!(
-                "{workspace} is not one of the host's workspaces; {USAGE}"
-            ));
+        let workspace = match self.workspace_for(workspace) {
+            Ok(workspace) => workspace,
+            Err(refusal) => return line(format!("{refusal}; {USAGE}")),
         };
         let opened = match self.invitations.open(Terms {
             name: (*name).to_string(),
@@ -290,6 +303,18 @@ impl Link {
                 )
             })
             .collect()
+    }
+}
+
+fn workspace_list(workspaces: &[PathBuf]) -> String {
+    let named: Vec<String> = workspaces
+        .iter()
+        .map(|workspace| workspace.display().to_string())
+        .collect();
+    if named.is_empty() {
+        "the host has none".to_string()
+    } else {
+        named.join(", ")
     }
 }
 
@@ -402,5 +427,74 @@ mod tests {
             })
             .starts_with("a phone is asking")
         );
+    }
+
+    fn link_over(workspaces: &[PathBuf]) -> Link {
+        Link::start(
+            "127.0.0.1:0".parse().unwrap(),
+            workspaces,
+            false,
+            Arc::new(|_| {}),
+        )
+        .unwrap()
+    }
+
+    fn said_lines(said: Vec<Said>) -> Vec<String> {
+        said.into_iter()
+            .filter_map(|said| match said {
+                Said::Line(line) => Some(line),
+                Said::Block(_) => None,
+            })
+            .collect()
+    }
+
+    /// A host with one workspace pairs a device on it without being told which, and a host with
+    /// several asks, and names them.
+    #[test]
+    fn the_workspace_can_be_left_out_only_where_the_host_has_one() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let first_path = first.path().canonicalize().unwrap();
+
+        let one = link_over(&[first.path().to_path_buf()]);
+        let said = said_lines(one.command("pair kitchen-phone read").unwrap());
+        assert!(
+            said[0].starts_with(&format!(
+                "pairing kitchen-phone with read on {}",
+                first_path.display()
+            )),
+            "{said:?}"
+        );
+        one.stop();
+
+        let two = link_over(&[first.path().to_path_buf(), second.path().to_path_buf()]);
+        let said = said_lines(two.command("pair kitchen-phone read").unwrap());
+        assert_eq!(said.len(), 1);
+        assert!(said[0].starts_with("name a workspace: "), "{said:?}");
+        assert!(said[0].contains(&first_path.display().to_string()));
+        assert!(said[0].contains(&second.path().canonicalize().unwrap().display().to_string()));
+        two.stop();
+    }
+
+    /// A directory that is not one of the host's is refused with the ones that are.
+    #[test]
+    fn a_workspace_the_host_was_not_given_is_refused_with_the_ones_it_has() {
+        let given = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let link = link_over(&[given.path().to_path_buf()]);
+        let said = said_lines(
+            link.command(&format!(
+                "pair kitchen-phone read {}",
+                other.path().display()
+            ))
+            .unwrap(),
+        );
+        assert_eq!(said.len(), 1);
+        assert!(
+            said[0].contains("is not one of the host's workspaces: "),
+            "{said:?}"
+        );
+        assert!(said[0].contains(&given.path().canonicalize().unwrap().display().to_string()));
+        link.stop();
     }
 }

@@ -984,6 +984,8 @@ mod tests {
         let (told, hear) = mpsc::channel();
         let invitations = Arc::clone(&fixture.invitations);
         std::thread::spawn(move || told.send(invitations.wait(&ticket)).unwrap());
+        // A thread blocked in `wait` gives no event to wait for. This is the time in which a `wait` that
+        // returned early would say so, and the `confirm` below shows the watch can end.
         assert!(hear.recv_timeout(Duration::from_millis(200)).is_err());
         fixture
             .invitations

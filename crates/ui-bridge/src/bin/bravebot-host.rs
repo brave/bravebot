@@ -534,14 +534,6 @@ fn current<'a>(clients: &'a mut [Named], option: &str) -> Option<&'a mut Named> 
 }
 
 #[cfg(unix)]
-fn is_a_name(name: &str) -> bool {
-    (1..=32).contains(&name.len())
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-}
-
-#[cfg(unix)]
 impl Start {
     /// Everything here is the person's own choice, made on the command line they typed. Nothing is
     /// read from a file a tool could write, and nothing a client sends changes it.
@@ -578,7 +570,7 @@ impl Start {
                 }
                 Some("--client") => {
                     let name = text(&mut arguments, "--client")?;
-                    if !is_a_name(&name) {
+                    if !bravebot_listener::registry::is_a_name(&name) {
                         return refuse(&format!(
                             "`{name}` is not a client name; use 1 to 32 of a-z, 0-9 and -"
                         ));
@@ -837,12 +829,6 @@ mod tests {
             arguments.extend(words(client));
             assert!(parsed(arguments).is_none(), "{client:?} was accepted");
         }
-    }
-
-    #[test]
-    fn a_name_of_thirty_two_allowed_characters_is_one() {
-        assert!(is_a_name("a-name-that-is-thirty-two-chars0"));
-        assert!(!is_a_name("a_name"));
     }
 }
 

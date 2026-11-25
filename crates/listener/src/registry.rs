@@ -57,7 +57,8 @@ impl std::fmt::Display for NoSuchDevice {
     }
 }
 
-/// Whether `name` is one a person may give a device: the same words a client is named with.
+/// Whether `name` is one a person may give a device or a client: 1 to 32 of `a-z`, `0-9` and `-`.
+/// The host's `--client NAME` uses this function too.
 pub fn is_a_name(name: &str) -> bool {
     (1..=32).contains(&name.len())
         && name
@@ -378,6 +379,8 @@ mod tests {
                 changed.send(()).unwrap();
             })
         };
+        // A thread blocked on the registry's lock gives no event to wait for. This is the time in which
+        // an `admit` that did not wait for the lock would finish.
         assert!(
             hear_changed
                 .recv_timeout(Duration::from_millis(300))

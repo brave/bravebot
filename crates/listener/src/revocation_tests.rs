@@ -189,6 +189,8 @@ fn revoking_waits_for_the_request_being_answered_and_then_removes_the_device() {
             revoked.send(()).unwrap();
         })
     };
+    // A thread blocked on the registry's lock gives no event to wait for. This is the time in which a
+    // `revoke` that ignored the request being answered would finish.
     assert!(
         hear_revoked
             .recv_timeout(Duration::from_millis(300))
