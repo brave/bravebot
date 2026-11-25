@@ -1108,8 +1108,7 @@ part-way starts the ones that fit and says how many did not start, and why.
 
 **`mcp_servers` takes servers away from a worker.** Without it a worker holds every server its
 parent may call, less any its [definition](../customize/agents.md) leaves off. With it the worker
-holds only those of them the list names, so a worker sent to fix a build can be started holding no
-mail server.
+holds only those of them the list names.
 A name is the server's part of its tools' names, as in `mcp__gmail__search`. A name the turn holds
 no grant for is refused and starts nothing, and the refusal lists the servers it holds. The list
 never adds a server.
@@ -1121,7 +1120,7 @@ budget its definition sets, and in a fan-out it applies to each delegate separat
 starts delegates of its own gives them at most what it has left, divided between the ones one call
 starts, and what a child spends counts against it. One with nothing left starts none. A request that
 has started finishes, so a delegate can pass its budget by one request. A check of unvouched content
-does not count, and neither does what a processor wrote. The figure is tokens only, never credits.
+and a processor's answer do not count. The figure is tokens only, never credits.
 
 **`isolation: checkout` keeps delegates out of your working tree.** Each delegate works in a new
 checkout of the last commit, so delegates writing at the same time do not edit or build in one tree.
