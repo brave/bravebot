@@ -20,7 +20,7 @@ use rustls::{
     SignatureScheme, StreamOwned,
 };
 use std::collections::HashMap;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -87,9 +87,40 @@ pub struct Phone {
     configs: Mutex<HashMap<(KeyHash, bool), Arc<ClientConfig>>>,
 }
 
+/// The socket of a connection, which writes whole buffers unless it was told to write a byte at a
+/// time with a pause after each, as a program that is trying to hold a connection open does.
+struct Wire {
+    tcp: TcpStream,
+    pause: Option<Duration>,
+}
+
+impl Read for Wire {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.tcp.read(buffer)
+    }
+}
+
+impl Write for Wire {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let Some(pause) = self.pause else {
+            return self.tcp.write(buffer);
+        };
+        for byte in buffer {
+            self.tcp.write_all(&[*byte])?;
+            self.tcp.flush()?;
+            std::thread::sleep(pause);
+        }
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.tcp.flush()
+    }
+}
+
 /// One connection of a phone, after its handshake.
 pub struct Connection {
-    stream: BufReader<StreamOwned<ClientConnection, TcpStream>>,
+    stream: BufReader<StreamOwned<ClientConnection, Wire>>,
     key: KeyHash,
 }
 
@@ -176,7 +207,7 @@ impl Phone {
             connection.complete_io(&mut tcp)?;
         }
         Ok(Connection {
-            stream: BufReader::new(StreamOwned::new(connection, tcp)),
+            stream: BufReader::new(StreamOwned::new(connection, Wire { tcp, pause: None })),
             key: self.identity.key_hash(),
         })
     }
@@ -210,6 +241,15 @@ impl Connection {
         }
         let line = serde_json::json!({"id": 1, "method": pairing::BEGIN, "params": params});
         self.send(&line.to_string())
+    }
+
+    /// Send one line a byte at a time with `pause` after each byte, so it takes the host longer to
+    /// read than it may be given, and returns when the line is sent or the host ended the connection.
+    pub fn send_slowly(&mut self, line: &str, pause: Duration) -> io::Result<()> {
+        self.stream.get_mut().sock.pause = Some(pause);
+        let sent = self.send(line);
+        self.stream.get_mut().sock.pause = None;
+        sent
     }
 
     /// Send these bytes as they are.
@@ -254,11 +294,13 @@ impl Connection {
         self.stream
             .get_ref()
             .sock
+            .tcp
             .set_read_timeout(Some(patience))?;
         let heard = self.receive();
         self.stream
             .get_ref()
             .sock
+            .tcp
             .set_read_timeout(Some(PATIENCE))?;
         heard
     }

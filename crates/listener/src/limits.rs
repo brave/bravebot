@@ -19,7 +19,8 @@ pub struct Limits {
     pub connections: usize,
     /// Connections that have not finished the handshake. One past this is closed as it arrives.
     pub handshakes: usize,
-    /// How long a handshake may take from the first byte of the connection.
+    /// How long a handshake may take from the moment the connection is accepted, and how long the
+    /// first line of a device that is not paired may take after it, taken together.
     pub handshake: Duration,
     /// The longest line read from a connection, newline excluded. A line that reaches it without
     /// ending ends the connection.

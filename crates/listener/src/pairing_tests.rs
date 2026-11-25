@@ -7,23 +7,23 @@
 //! types on the host, and each way it can fail.
 
 use crate::identity::Identity;
-use crate::invitation::{Announce, Announcement, ConfirmError, Invitations, Terms};
+use crate::invitation::{Announce, Announcement, Clock, ConfirmError, Invitations, Moment, Terms};
 use crate::limits::Limits;
 use crate::pairing;
 use crate::phone::{Connection, Phone};
 use crate::registry::{Device, Registry};
-use crate::server::{Listener, Service};
+use crate::server::{Listener, Prepared, Service};
 use bravebot_core::device::{Grant, Standing};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 struct Echo;
 
 impl Service for Echo {
-    fn answer(&self, device: &Device, line: &str) -> Vec<String> {
-        vec![format!("{}:{line}", device.name)]
+    fn prepare<'a>(&'a self, line: &'a str) -> Prepared<'a> {
+        Box::new(move |device| vec![format!("{}:{line}", device.name)])
     }
 }
 
@@ -380,6 +380,118 @@ fn a_first_line_that_never_ends_is_closed_when_the_time_is_up() {
     assert!(connection.ended());
     assert!(started.elapsed() < Duration::from_secs(4));
     assert!(rig.invitations.is_open());
+}
+
+/// A first line that is sent a byte at a time is closed when the time of the handshake is up, though
+/// its bytes keep coming and every one of them arrives sooner than the time allows: the host counts
+/// the time of the line and not the time between its bytes.
+#[test]
+fn a_first_line_that_trickles_is_closed_when_the_time_is_up() {
+    let rig = rig_with(Limits {
+        handshake: Duration::from_millis(600),
+        ..Limits::default()
+    });
+    rig.invitations.open(terms("one", Grant::Read)).unwrap();
+    let mut connection = rig.connect(&Phone::new().unwrap());
+    let started = Instant::now();
+    // A hundred bytes at 40 ms each is four seconds, and the host gives the line 600 ms.
+    // The send ends when the host closes the connection, so how long it took is how long the host
+    // kept the connection.
+    connection
+        .send_slowly(&"x".repeat(100), Duration::from_millis(40))
+        .ok();
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "the host kept a connection that trickled a line for {:?}",
+        started.elapsed()
+    );
+    assert!(connection.ended());
+    assert!(rig.invitations.is_open());
+}
+
+/// Stopping the listener ends a phone that connected and has not yet sent its first line.
+#[test]
+fn stopping_ends_a_phone_that_has_not_sent_its_first_line() {
+    let rig = rig();
+    rig.invitations.open(terms("one", Grant::Read)).unwrap();
+    let mut connection = rig.connect(&Phone::new().unwrap());
+    let started = Instant::now();
+    rig.listener.stop();
+    assert!(connection.ended());
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+/// A window that runs out is said to have ended by the host while it listens, and not only when
+/// something next asks the window about itself: the code is still on the person's screen.
+#[test]
+fn a_window_that_runs_out_is_announced_while_the_listener_runs() {
+    let identity = Identity::generate("bravebot-host").unwrap();
+    let registry = Arc::new(Registry::new());
+    let said = Arc::new(Mutex::new(Vec::new()));
+    let announce: Announce = {
+        let said = Arc::clone(&said);
+        Arc::new(move |announcement| said.lock().unwrap().push(announcement.clone()))
+    };
+    let (start, wall_start) = (Instant::now(), SystemTime::now());
+    let passed = Arc::new(Mutex::new(Duration::ZERO));
+    let clock: Clock = {
+        let passed = Arc::clone(&passed);
+        Arc::new(move || {
+            let passed = *passed.lock().unwrap();
+            Moment {
+                monotonic: start + passed,
+                wall: wall_start + passed,
+            }
+        })
+    };
+    let invitations = Arc::new(Invitations::new(
+        Arc::clone(&registry),
+        clock,
+        Arc::new(|| Some([7; 32])),
+        announce,
+    ));
+    let listener = Listener::start(
+        "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+        &identity,
+        Arc::clone(&registry),
+        Arc::clone(&invitations),
+        Arc::new(Echo),
+        Limits::default(),
+    )
+    .unwrap();
+    // A device is paired and no phone connects, so nothing reaches the listener but its own loop,
+    // which is the only thing that asks the window about itself, and a listener that asked only
+    // while no device was paired would say nothing here.
+    registry
+        .admit(
+            [1; 32],
+            Device {
+                name: "watch".into(),
+                grant: Grant::Read,
+                workspace: PathBuf::from("/work"),
+            },
+        )
+        .unwrap();
+    invitations.open(terms("one", Grant::Read)).unwrap();
+    *passed.lock().unwrap() += Duration::from_secs(121);
+    let until = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < until
+        && !said
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|said| matches!(said, Announcement::Ended { .. }))
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        said.lock()
+            .unwrap()
+            .iter()
+            .any(|said| matches!(said, Announcement::Ended { .. })),
+        "the window ran out and nothing said so"
+    );
+    drop(listener);
 }
 
 /// Stopping the listener closes a window that is open and releases a phone waiting for its code.

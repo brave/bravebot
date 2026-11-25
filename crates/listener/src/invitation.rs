@@ -21,13 +21,31 @@ use ring::rand::{SecureRandom, SystemRandom};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// How long a window stays open.
 pub const LIFETIME: Duration = Duration::from_secs(120);
 
+/// The time as both clocks of the machine give it. The monotonic one does not run while the machine
+/// sleeps and the wall clock does, so a window is over when either says so: a laptop that slept with
+/// a code on its screen does not wake to a window that is still open.
+#[derive(Debug, Clone, Copy)]
+pub struct Moment {
+    pub monotonic: Instant,
+    pub wall: SystemTime,
+}
+
+impl Moment {
+    pub fn now() -> Self {
+        Self {
+            monotonic: Instant::now(),
+            wall: SystemTime::now(),
+        }
+    }
+}
+
 /// Where the time comes from, which a test sets.
-pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
+pub type Clock = Arc<dyn Fn() -> Moment + Send + Sync>;
 
 /// Where the secret comes from, which a test sets. `None` where the system gave no random bytes.
 pub type Random = Arc<dyn Fn() -> Option<Secret> + Send + Sync>;
@@ -130,6 +148,7 @@ struct Window {
     secret: Secret,
     terms: Terms,
     ends: Instant,
+    ends_wall: SystemTime,
     phase: Phase,
     /// Which window this is, so a connection waiting on one is not woken by another.
     generation: u64,
@@ -171,7 +190,7 @@ impl Invitations {
     pub fn system(registry: Arc<Registry>, announce: Announce) -> Self {
         Self::new(
             registry,
-            Arc::new(Instant::now),
+            Arc::new(Moment::now),
             Arc::new(|| {
                 let mut secret = [0u8; 32];
                 SystemRandom::new().fill(&mut secret).ok().map(|()| secret)
@@ -186,17 +205,17 @@ impl Invitations {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn now(&self) -> Instant {
+    fn now(&self) -> Moment {
         (self.clock)()
     }
 
     /// End the window if its time is up, so every use below sees only a window that is open.
     fn expire(&self, state: &mut State) -> Option<String> {
         let now = self.now();
-        let over = state
-            .window
-            .as_ref()
-            .is_some_and(|window| window.ends <= now && !matches!(window.phase, Phase::Done(_)));
+        let over = state.window.as_ref().is_some_and(|window| {
+            (window.ends <= now.monotonic || window.ends_wall <= now.wall)
+                && !matches!(window.phase, Phase::Done(_))
+        });
         if over {
             return self.end(state);
         }
@@ -232,6 +251,7 @@ impl Invitations {
             return Err(OpenError::Name(Refused::NameTaken));
         }
         let secret = (self.random)().ok_or(OpenError::NoSecret)?;
+        let now = self.now();
         let ended = {
             let mut state = self.lock();
             let ended = self.end(&mut state);
@@ -240,7 +260,8 @@ impl Invitations {
             state.window = Some(Window {
                 secret,
                 terms,
-                ends: self.now() + LIFETIME,
+                ends: now.monotonic + LIFETIME,
+                ends_wall: now.wall + LIFETIME,
                 phase: Phase::Open,
                 generation,
             });
@@ -324,7 +345,10 @@ impl Invitations {
                 _ => Some(Outcome::Refused),
             };
             if let Some(name) = ended {
+                // Said with the lock let go, so a place that hears it may ask the window a question.
+                drop(state);
                 self.say(&Announcement::Ended { name });
+                state = self.lock();
             }
             if let Some(outcome) = outcome {
                 return outcome;
@@ -333,7 +357,13 @@ impl Invitations {
                 .window
                 .as_ref()
                 .map_or(Duration::ZERO, |window| {
-                    window.ends.saturating_duration_since(self.now())
+                    let now = self.now();
+                    window.ends.saturating_duration_since(now.monotonic).min(
+                        window
+                            .ends_wall
+                            .duration_since(now.wall)
+                            .unwrap_or(Duration::ZERO),
+                    )
                 })
                 .max(Duration::from_millis(1));
             state = self
@@ -466,19 +496,21 @@ pub fn parse_link(text: &str) -> Option<Invitation> {
     })
 }
 
-/// Text from a device, drawn so that it cannot change what a person reads around it: control
-/// characters, the marks that reorder or hide text, and a backslash are written as `\u{..}`.
+/// Text from a device, drawn so that it cannot change what a person reads around it. The characters
+/// of ASCII that print, and a space, are kept, except a quote, which could end the quotes the host
+/// puts the text in, and a backslash, which could begin an escape. Everything else is written as
+/// `\u{..}`: a control character, a mark that reorders, hides or combines, and any letter that is
+/// not ASCII. A phone is told apart by the code it shows and by the name the person typed, and not
+/// by how its label reads.
 pub fn escaped(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for character in text.chars() {
-        let hidden = character.is_control()
-            || character == '\\'
-            || matches!(character,
-                '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}');
-        if hidden {
-            out.push_str(&format!("\\u{{{:x}}}", u32::from(character)));
-        } else {
+        let kept = (character.is_ascii_graphic() && character != '"' && character != '\\')
+            || character == ' ';
+        if kept {
             out.push(character);
+        } else {
+            out.push_str(&format!("\\u{{{:x}}}", u32::from(character)));
         }
     }
     out
@@ -504,17 +536,26 @@ mod tests {
         registry: Arc<Registry>,
         invitations: Arc<Invitations>,
         offset: Arc<Mutex<Duration>>,
+        /// How far the wall clock is ahead of the monotonic one, as after the machine slept.
+        slept: Arc<Mutex<Duration>>,
         said: Arc<Mutex<Vec<Announcement>>>,
     }
 
     impl Fixture {
         fn new() -> Self {
             let registry = Arc::new(Registry::new());
-            let start = Instant::now();
+            let (start, wall_start) = (Instant::now(), SystemTime::now());
             let offset = Arc::new(Mutex::new(Duration::ZERO));
+            let slept = Arc::new(Mutex::new(Duration::ZERO));
             let clock: Clock = {
-                let offset = Arc::clone(&offset);
-                Arc::new(move || start + *offset.lock().unwrap())
+                let (offset, slept) = (Arc::clone(&offset), Arc::clone(&slept));
+                Arc::new(move || {
+                    let passed = *offset.lock().unwrap();
+                    Moment {
+                        monotonic: start + passed,
+                        wall: wall_start + passed + *slept.lock().unwrap(),
+                    }
+                })
             };
             // A different secret each time, and the first is [1; 32].
             let counter = Arc::new(AtomicU8::new(1));
@@ -534,6 +575,7 @@ mod tests {
                 )),
                 registry,
                 offset,
+                slept,
                 said,
             }
         }
@@ -790,6 +832,29 @@ mod tests {
         assert_eq!(fixture.said(), [Announcement::Ended { name: "one".into() }]);
     }
 
+    /// The monotonic clock stops while the machine sleeps and the wall clock does not, so a window
+    /// that the wall clock says is over is over, and a proof is not taken from it.
+    #[test]
+    fn a_window_ends_when_the_wall_clock_says_so_though_the_other_clock_stopped() {
+        let fixture = Fixture::new();
+        let opened = fixture.invitations.open(Fixture::terms("one")).unwrap();
+        assert!(fixture.invitations.is_open());
+        *fixture.slept.lock().unwrap() += Duration::from_secs(3600);
+        assert!(!fixture.invitations.is_open());
+        assert!(
+            fixture
+                .invitations
+                .prove(
+                    &proof_of(&opened, &EXPORTER, &DEVICE),
+                    &EXPORTER,
+                    &DEVICE,
+                    None
+                )
+                .is_none()
+        );
+        assert!(fixture.registry.devices().is_empty());
+    }
+
     /// The time is up while a phone waits for its code: the code is no longer taken.
     #[test]
     fn a_code_typed_after_the_time_is_up_pairs_nothing() {
@@ -890,7 +955,7 @@ mod tests {
         );
         let no_secret = Invitations::new(
             Arc::new(Registry::new()),
-            Arc::new(Instant::now),
+            Arc::new(Moment::now),
             Arc::new(|| None),
             Arc::new(|_| {}),
         );
@@ -1003,20 +1068,105 @@ mod tests {
         }
     }
 
-    /// Text from a device is drawn so that it cannot rewrite the line it is in.
+    /// Text from a device is drawn so that it cannot rewrite the line it is in. The characters of
+    /// ASCII that print, and a space, are kept, except a quote, which could end the quotes the host
+    /// puts the text in, and a backslash, which could begin an escape. Everything else is written as
+    /// its number: a control character, a mark that reorders, hides or combines, and any letter that
+    /// is not ASCII.
     #[test]
-    fn a_devices_text_is_drawn_without_control_characters_or_reordering_marks() {
+    fn a_devices_text_is_drawn_without_anything_that_could_rewrite_the_line() {
         assert_eq!(escaped("Pixel 10 Pro"), "Pixel 10 Pro");
-        assert_eq!(escaped("é日本語😀"), "é日本語😀");
+        assert_eq!(escaped("Chris's iPhone (2)"), "Chris's iPhone (2)");
         assert_eq!(escaped("a\nb"), "a\\u{a}b");
         assert_eq!(
             escaped("\u{1b}[31mred\u{1b}[0m"),
             "\\u{1b}[31mred\\u{1b}[0m"
         );
         assert_eq!(escaped("a\\b"), "a\\u{5c}b");
-        assert_eq!(escaped("\u{202e}txt.exe"), "\\u{202e}txt.exe");
-        assert_eq!(escaped("x\u{200b}y\u{feff}"), "x\\u{200b}y\\u{feff}");
-        assert_eq!(escaped("\r\t\u{7f}\u{9b}"), "\\u{d}\\u{9}\\u{7f}\\u{9b}");
+        assert_eq!(escaped("say \"hi\""), "say \\u{22}hi\\u{22}");
+        assert_eq!(
+            escaped("\u{e9}\u{65e5}\u{2019}"),
+            "\\u{e9}\\u{65e5}\\u{2019}"
+        );
+        for hidden in [
+            '\u{202e}',
+            '\u{200b}',
+            '\u{feff}',
+            '\u{061c}',
+            '\u{180e}',
+            '\u{00ad}',
+            '\u{2028}',
+            '\u{2066}',
+            '\u{e0041}',
+            '\u{e007f}',
+            '\u{fe0f}',
+            '\u{0301}',
+            '\u{0345}',
+            '\u{3164}',
+            '\u{115f}',
+            '\u{ffa0}',
+            '\u{e000}',
+            '\u{7f}',
+            '\u{9b}',
+            '\u{d}',
+            '\u{1f600}',
+            '\u{fff9}',
+        ] {
+            let drawn = escaped(&format!("a{hidden}b"));
+            assert_eq!(
+                drawn,
+                format!("a\\u{{{:x}}}b", u32::from(hidden)),
+                "{hidden:?}"
+            );
+        }
+    }
+
+    /// What the host says is said after the lock is let go, so a place that hears it may ask the
+    /// window a question. A host that said it under the lock would stop here, and the test would
+    /// fail at its timeout.
+    #[test]
+    fn what_is_said_when_a_window_ends_is_said_outside_the_lock() {
+        let registry = Arc::new(Registry::new());
+        let slot: Arc<Mutex<Option<Arc<Invitations>>>> = Arc::new(Mutex::new(None));
+        let offset = Arc::new(Mutex::new(Duration::ZERO));
+        let (start, wall_start) = (Instant::now(), SystemTime::now());
+        let clock: Clock = {
+            let offset = Arc::clone(&offset);
+            Arc::new(move || {
+                let passed = *offset.lock().unwrap();
+                Moment {
+                    monotonic: start + passed,
+                    wall: wall_start + passed,
+                }
+            })
+        };
+        let announce: Announce = {
+            let slot = Arc::clone(&slot);
+            Arc::new(move |_| {
+                let invitations = slot.lock().unwrap().clone();
+                if let Some(invitations) = invitations {
+                    invitations.is_open();
+                }
+            })
+        };
+        let invitations = Arc::new(Invitations::new(
+            Arc::clone(&registry),
+            clock,
+            Arc::new(|| Some([9; 32])),
+            announce,
+        ));
+        *slot.lock().unwrap() = Some(Arc::clone(&invitations));
+        let opened = invitations.open(Fixture::terms("one")).unwrap();
+        let ticket = invitations
+            .prove(
+                &proof_of(&opened, &EXPORTER, &DEVICE),
+                &EXPORTER,
+                &DEVICE,
+                None,
+            )
+            .unwrap();
+        *offset.lock().unwrap() += Duration::from_secs(121);
+        assert_eq!(told(&invitations, ticket), Outcome::Refused);
     }
 
     #[test]

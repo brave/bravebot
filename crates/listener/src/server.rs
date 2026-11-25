@@ -30,11 +30,22 @@ use std::time::{Duration, Instant};
 /// How often the accept loop looks at whether it was told to stop.
 const ACCEPT_POLL: Duration = Duration::from_millis(10);
 
+/// The longest a connection that has not said who it is waits on its socket before it looks at
+/// whether the listener was told to stop and whether its time is up.
+const STOP_POLL: Duration = Duration::from_millis(250);
+
+/// What answers one line, once the registry has said the device may ask it: the lines to send back
+/// for the device the line came from.
+pub type Prepared<'a> = Box<dyn FnOnce(&Device) -> Vec<String> + 'a>;
+
 /// What answers the lines of a device the registry allowed.
 pub trait Service: Send + Sync {
-    /// The lines to send back for one line from `device`. The line is a request the device's grant
-    /// covers. It is kept short: the registry's lock is held while it runs.
-    fn answer(&self, device: &Device, line: &str) -> Vec<String>;
+    /// Read `line`, taking as long as that takes, with no lock held. This runs for a line of a
+    /// device before the registry has said whether the device may ask it, and the device may have
+    /// been revoked by then, so it changes nothing and decides nothing. What it returns is run only
+    /// if the registry then finds the device may ask the line, and runs under the registry's lock,
+    /// which the host's own input waits on, so it only builds the lines to send.
+    fn prepare<'a>(&'a self, line: &'a str) -> Prepared<'a>;
 }
 
 /// A count that a holder of a [`Slot`] is part of.
@@ -65,6 +76,8 @@ struct Shared {
     limits: Limits,
     connections: Arc<AtomicUsize>,
     handshakes: Arc<AtomicUsize>,
+    /// Set when the listener is told to stop, so a connection that is not registered yet ends too.
+    stopping: Arc<AtomicBool>,
 }
 
 /// A listener that has bound its address and is accepting.
@@ -92,6 +105,7 @@ impl Listener {
         let socket = TcpListener::bind(address)?;
         socket.set_nonblocking(true)?;
         let address = socket.local_addr()?;
+        let stop = Arc::new(AtomicBool::new(false));
         let shared = Arc::new(Shared {
             config,
             registry: Arc::clone(&registry),
@@ -100,8 +114,8 @@ impl Listener {
             limits,
             connections: Arc::new(AtomicUsize::new(0)),
             handshakes: Arc::new(AtomicUsize::new(0)),
+            stopping: Arc::clone(&stop),
         });
-        let stop = Arc::new(AtomicBool::new(false));
         let accepting = {
             let stop = Arc::clone(&stop);
             std::thread::Builder::new()
@@ -153,6 +167,9 @@ impl Drop for Listener {
 
 fn accept(socket: &TcpListener, shared: &Arc<Shared>, stop: &AtomicBool) {
     while !stop.load(Ordering::SeqCst) {
+        // Asked each time round, so a window that has run out is noticed, and the host says so, within
+        // a moment of its end and not when something next asks about it.
+        let window_open = shared.invitations.is_open();
         match socket.accept() {
             Ok((tcp, _)) => {
                 // A socket accepted from a non-blocking one is non-blocking on some systems.
@@ -161,7 +178,7 @@ fn accept(socket: &TcpListener, shared: &Arc<Shared>, stop: &AtomicBool) {
                 }
                 // With no device paired and no window open, nobody can be let in, so nothing is
                 // accepted, which also keeps the work of a handshake from a program with no claim.
-                if shared.registry.is_empty() && !shared.invitations.is_open() {
+                if shared.registry.is_empty() && !window_open {
                     continue;
                 }
                 let Some(connection) = Slot::take(&shared.connections, shared.limits.connections)
@@ -189,6 +206,33 @@ fn accept(socket: &TcpListener, shared: &Arc<Shared>, stop: &AtomicBool) {
     }
 }
 
+/// One read of the socket into `connection`, waiting at most `step`. `None` where the connection
+/// ended or failed, `Some(true)` where bytes came in and were processed, and `Some(false)` where
+/// none came in during `step`.
+fn read_some(
+    connection: &mut ServerConnection,
+    socket: &mut TcpStream,
+    step: Duration,
+) -> Option<bool> {
+    socket.set_read_timeout(Some(step)).ok()?;
+    match connection.read_tls(socket) {
+        Ok(0) => None,
+        Ok(_) => {
+            connection.process_new_packets().ok()?;
+            Some(true)
+        }
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ) =>
+        {
+            Some(false)
+        }
+        Err(_) => None,
+    }
+}
+
 /// Finish the handshake within the limit and say which key the device showed.
 fn handshake(
     shared: &Shared,
@@ -197,16 +241,19 @@ fn handshake(
 ) -> Option<(ServerConnection, KeyHash)> {
     tcp.set_nodelay(true).ok()?;
     let mut connection = ServerConnection::new(Arc::clone(&shared.config)).ok()?;
-    // One read at a time, so the time is checked after each. `complete_io` reads until the handshake
-    // ends, and a socket's read timeout starts again with each byte, so a connection that sent a
-    // byte now and then would be given more time for each.
+    // One read at a time, a short wait each, so that the time and whether the listener was told to
+    // stop are looked at after each. `complete_io` reads until the handshake ends, and a socket's
+    // read timeout starts again with each byte, so a connection that sent a byte now and then would
+    // be given more time for each.
     while connection.is_handshaking() {
+        if shared.stopping.load(Ordering::SeqCst) {
+            return None;
+        }
         let left = shared
             .limits
             .handshake
             .checked_sub(started.elapsed())
             .filter(|left| !left.is_zero())?;
-        tcp.set_read_timeout(Some(left)).ok()?;
         tcp.set_write_timeout(Some(left)).ok()?;
         while connection.wants_write() {
             connection.write_tls(tcp).ok()?;
@@ -214,10 +261,10 @@ fn handshake(
         if !connection.is_handshaking() {
             break;
         }
-        if !connection.wants_read() || connection.read_tls(tcp).ok()? == 0 {
+        if !connection.wants_read() {
             return None;
         }
-        connection.process_new_packets().ok()?;
+        read_some(&mut connection, tcp, left.min(STOP_POLL))?;
     }
     let certificate = connection.peer_certificates()?.first()?;
     let key = crate::identity::public_key_hash(certificate.as_ref())?;
@@ -244,34 +291,49 @@ fn serve(shared: &Shared, mut tcp: TcpStream, handshaking: Slot, _connection: &S
     let Some(live) = shared.registry.connect(&key, ending) else {
         return;
     };
-    serve_lines(shared, &key, stream);
+    // The listener sets this before it ends the connections it holds, so a connection that was not
+    // held yet is ended here and one that was is ended there.
+    if !shared.stopping.load(Ordering::SeqCst) {
+        serve_lines(shared, &key, stream);
+    }
     shared.registry.disconnect(&key, &live);
 }
 
-/// The first line of a connection, read a byte at a time so the time and the length are checked
-/// as it arrives: a line that does not end in time, or is longer than `most`, is not read.
+/// The first line of a connection. What has been decrypted is taken a byte at a time, so nothing
+/// past the line is taken from the next lines, and when none is left one more read of the socket is
+/// made, so the time, the length and whether the listener was told to stop are looked at after each
+/// read and not after each record: a record that arrives a byte at a time is not waited for. A line
+/// that does not end in time, or is longer than the limit, is not read.
 fn first_line(
+    shared: &Shared,
     stream: &mut StreamOwned<ServerConnection, TcpStream>,
-    most: usize,
     deadline: Instant,
 ) -> Option<Vec<u8>> {
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
     loop {
+        match stream.conn.reader().read(&mut byte) {
+            Ok(0) => return None,
+            Ok(_) => {
+                if byte[0] == b'\n' {
+                    return Some(line);
+                }
+                if line.len() >= shared.limits.first_line {
+                    return None;
+                }
+                line.push(byte[0]);
+                continue;
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(_) => return None,
+        }
+        if shared.stopping.load(Ordering::SeqCst) {
+            return None;
+        }
         let left = deadline
             .checked_duration_since(Instant::now())
             .filter(|left| !left.is_zero())?;
-        stream.sock.set_read_timeout(Some(left)).ok()?;
-        if stream.read(&mut byte).ok()? == 0 {
-            return None;
-        }
-        if byte[0] == b'\n' {
-            return Some(line);
-        }
-        if line.len() >= most {
-            return None;
-        }
-        line.push(byte[0]);
+        read_some(&mut stream.conn, &mut stream.sock, left.min(STOP_POLL))?;
     }
 }
 
@@ -318,7 +380,7 @@ fn pair(
         return false;
     }
     let deadline = started + shared.limits.handshake;
-    let Some(line) = first_line(stream, shared.limits.first_line, deadline) else {
+    let Some(line) = first_line(shared, stream, deadline) else {
         return false;
     };
     let Some(begin) = begin_of(&line) else {
@@ -349,13 +411,27 @@ fn pair(
         .sock
         .set_write_timeout(Some(shared.limits.write))
         .is_ok()
-        && writeln!(
+        && send_line(
             stream,
-            "{}",
-            json!({"id": begin.id, "ok": {"paired": true}})
+            &json!({"id": begin.id, "ok": {"paired": true}}).to_string(),
         )
-        .and_then(|()| stream.flush())
         .is_ok()
+}
+
+/// Write `line` and a newline to the device, a write at a time with the socket's write timeout on
+/// each, so that a device that reads nothing ends the connection when a write makes no progress for
+/// that time. `StreamOwned`'s own write is not used: when a write times out it goes on to read the
+/// socket, which a device that has stopped talking never answers, and no limit is reached.
+fn send_line(stream: &mut StreamOwned<ServerConnection, TcpStream>, line: &str) -> io::Result<()> {
+    let bytes = format!("{line}\n").into_bytes();
+    let mut sent = 0;
+    while sent < bytes.len() {
+        sent += stream.conn.writer().write(&bytes[sent..])?;
+        while stream.conn.wants_write() {
+            stream.conn.write_tls(&mut stream.sock)?;
+        }
+    }
+    stream.sock.flush()
 }
 
 /// What reading a line found.
@@ -404,18 +480,14 @@ fn serve_lines(shared: &Shared, key: &KeyHash, stream: StreamOwned<ServerConnect
         if line.trim().is_empty() {
             continue;
         }
-        let answered = shared.registry.answer(key, Operation::Read, |device| {
-            shared.service.answer(device, &line)
-        });
+        let prepared = shared.service.prepare(&line);
+        let answered = shared.registry.answer(key, Operation::Read, prepared);
         let Ok(lines) = answered else {
             return;
         };
         let stream = reader.get_mut();
         for line in lines {
-            if writeln!(stream, "{line}")
-                .and_then(|()| stream.flush())
-                .is_err()
-            {
+            if send_line(stream, &line).is_err() {
                 return;
             }
         }

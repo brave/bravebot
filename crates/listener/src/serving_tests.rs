@@ -10,7 +10,7 @@ use crate::invitation::Invitations;
 use crate::limits::Limits;
 use crate::phone::Phone;
 use crate::registry::{Device, Registry};
-use crate::server::{Listener, Service};
+use crate::server::{Listener, Prepared, Service};
 use bravebot_core::device::Grant;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -26,12 +26,14 @@ struct Recorder {
 }
 
 impl Service for Recorder {
-    fn answer(&self, device: &Device, line: &str) -> Vec<String> {
-        self.heard
-            .lock()
-            .unwrap()
-            .push((device.name.clone(), line.to_string()));
-        vec![format!("heard:{line}"), "second".to_string()]
+    fn prepare<'a>(&'a self, line: &'a str) -> Prepared<'a> {
+        Box::new(move |device| {
+            self.heard
+                .lock()
+                .unwrap()
+                .push((device.name.clone(), line.to_string()));
+            vec![format!("heard:{line}"), "second".to_string()]
+        })
     }
 }
 
@@ -319,8 +321,8 @@ fn a_flood_of_silent_connections_is_closed_past_the_limit_and_does_not_keep_a_ph
     let held: Vec<TcpStream> = (0..2)
         .map(|_| TcpStream::connect(address).unwrap())
         .collect();
-    // Let the two be counted as handshakes in progress before more arrive.
-    std::thread::sleep(Duration::from_millis(200));
+    // The listener accepts in the order connections arrive, and takes a place for each as it
+    // accepts, so these two have the places before any connection below is looked at.
     for _ in 0..5 {
         let mut past = TcpStream::connect(address).unwrap();
         past.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
@@ -396,9 +398,9 @@ fn a_stalled_handshake_is_closed_when_its_time_is_up() {
     assert!(started.elapsed() < Duration::from_secs(4));
 }
 
-/// The time a handshake is given is counted from the first byte, so a connection that sends a byte
-/// now and then is closed when the time is up and does not hold a place for as long as it keeps
-/// sending.
+/// The time a handshake is given is counted from the moment the connection is accepted, so a
+/// connection that sends a byte now and then is closed when the time is up and does not hold a place
+/// for as long as it keeps sending.
 #[test]
 fn a_handshake_that_trickles_bytes_is_closed_when_its_time_is_up() {
     let host = host_with(Limits {
@@ -425,6 +427,88 @@ fn a_handshake_that_trickles_bytes_is_closed_when_its_time_is_up() {
     }
     assert!(closed, "a connection that trickled bytes was never closed");
     assert!(started.elapsed() < Duration::from_secs(3));
+}
+
+/// Stopping the listener ends a connection that has not finished its handshake, and does not leave
+/// it to run out its own time. The listener has one place for a handshake, and a second connection
+/// is closed as it arrives only while the first holds it, which is how the test knows the first is
+/// in its handshake before it stops the listener.
+#[test]
+fn stopping_ends_a_connection_still_in_its_handshake() {
+    let host = host_with(Limits {
+        handshake: Duration::from_secs(60),
+        handshakes: 1,
+        ..Limits::default()
+    });
+    let mut stalled = TcpStream::connect(host.listener.address()).unwrap();
+    stalled.write_all(&[0x16, 0x03]).unwrap();
+    stalled
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    eventually(
+        "the stalled connection holds the place for a handshake",
+        || {
+            let mut probe = TcpStream::connect(host.listener.address()).unwrap();
+            probe
+                .set_read_timeout(Some(Duration::from_millis(200)))
+                .unwrap();
+            closed_with_nothing_sent(&mut probe)
+        },
+    );
+    host.listener.stop();
+    assert!(
+        closed_with_nothing_sent(&mut stalled),
+        "a connection in its handshake outlived the listener"
+    );
+}
+
+/// A paired device that stops reading while it is sent more than the connection holds has its
+/// connection ended when a write makes no progress for the time the limit gives, and the thread that
+/// was writing to it is let go.
+#[test]
+fn a_device_that_stops_reading_has_its_connection_ended_when_a_write_makes_no_progress() {
+    struct Big;
+    impl Service for Big {
+        fn prepare<'a>(&'a self, _line: &'a str) -> Prepared<'a> {
+            Box::new(|_| vec!["x".repeat(48 << 20)])
+        }
+    }
+    let identity = Identity::generate("bravebot-host").unwrap();
+    let registry = Arc::new(Registry::new());
+    let listener = Listener::start(
+        loopback(),
+        &identity,
+        Arc::clone(&registry),
+        Arc::new(Invitations::system(Arc::clone(&registry), Arc::new(|_| {}))),
+        Arc::new(Big),
+        Limits {
+            write: Duration::from_millis(300),
+            ..Limits::default()
+        },
+    )
+    .unwrap();
+    let phone = Phone::new().unwrap();
+    registry
+        .admit(
+            phone.key_hash(),
+            Device {
+                name: "kitchen-phone".into(),
+                grant: Grant::Read,
+                workspace: PathBuf::from("/work"),
+            },
+        )
+        .unwrap();
+    let mut connection = phone
+        .connect(listener.address(), listener.key_hash())
+        .unwrap();
+    eventually("the host holds the connection", || {
+        registry.is_connected(&phone.key_hash())
+    });
+    connection.send("send it all").unwrap();
+    // The phone does not read. The host gives up on the write, which ends the connection.
+    eventually("the host gave up on a device that reads nothing", || {
+        !registry.is_connected(&phone.key_hash())
+    });
 }
 
 /// Stopping the listener ends the connections it holds and accepts no more.

@@ -11,7 +11,7 @@ use crate::invitation::{Invitations, Terms};
 use crate::limits::Limits;
 use crate::phone::Phone;
 use crate::registry::{Device, NoSuchDevice, Registry};
-use crate::server::{Listener, Service};
+use crate::server::{Listener, Prepared, Service};
 use bravebot_core::device::{Grant, Standing};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -27,18 +27,20 @@ struct Held {
 }
 
 impl Service for Held {
-    fn answer(&self, _device: &Device, line: &str) -> Vec<String> {
-        self.heard.lock().unwrap().push(line.to_string());
-        if line == "hold" {
-            self.entered.lock().unwrap().send(()).unwrap();
-            // Bounded, so a test that never releases fails and does not hang.
-            self.release
-                .lock()
-                .unwrap()
-                .recv_timeout(Duration::from_secs(5))
-                .unwrap();
-        }
-        vec![format!("heard:{line}")]
+    fn prepare<'a>(&'a self, line: &'a str) -> Prepared<'a> {
+        Box::new(move |_device| {
+            self.heard.lock().unwrap().push(line.to_string());
+            if line == "hold" {
+                self.entered.lock().unwrap().send(()).unwrap();
+                // Bounded, so a test that never releases fails and does not hang.
+                self.release
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap();
+            }
+            vec![format!("heard:{line}")]
+        })
     }
 }
 
@@ -165,11 +167,10 @@ fn a_revoked_device_is_refused_when_it_comes_back() {
     assert_eq!(rig.service.heard.lock().unwrap().as_slice(), ["hello"]);
 }
 
-/// A request of the device that the host has read but not yet run when the person revokes it does
-/// not run. The revocation waits for the request being answered, which finishes, and the next one
-/// is refused.
+/// Revoking waits for the request being answered, which finishes, and then removes the device and
+/// ends its connection: the person's command does not cut an answer in two.
 #[test]
-fn a_request_not_yet_run_when_the_device_is_revoked_does_not_run() {
+fn revoking_waits_for_the_request_being_answered_and_then_removes_the_device() {
     let rig = rig();
     let (phone, other) = (Phone::new().unwrap(), Phone::new().unwrap());
     pair(&rig, &phone, "kitchen-phone");
@@ -179,8 +180,7 @@ fn a_request_not_yet_run_when_the_device_is_revoked_does_not_run() {
         .unwrap();
     connection.send("hold").unwrap();
     rig.entered.recv_timeout(Duration::from_secs(5)).unwrap();
-    // The answer to the first request is being made. The person revokes the device, which waits for
-    // it, and the device has a second request waiting on the connection.
+    // The answer to the request is being made. The person revokes the device, which waits for it.
     let (revoked, hear_revoked) = mpsc::channel();
     let revoking = {
         let registry = Arc::clone(&rig.registry);
@@ -195,18 +195,13 @@ fn a_request_not_yet_run_when_the_device_is_revoked_does_not_run() {
             .is_err(),
         "the device was revoked while a request of it was being answered"
     );
-    connection.send("after").unwrap();
     rig.release.send(()).unwrap();
     hear_revoked.recv_timeout(Duration::from_secs(5)).unwrap();
     revoking.join().unwrap();
-    // The answer to the first request may reach the phone before the connection ends or not, and the
-    // second is never answered.
-    let mut answers = Vec::new();
-    while let Some(line) = connection.receive().unwrap() {
-        answers.push(line);
-    }
-    assert!(!answers.contains(&"heard:after".to_string()), "{answers:?}");
+    // The answer may reach the phone before the connection ends or not.
+    while connection.receive().unwrap().is_some() {}
     assert_eq!(rig.service.heard.lock().unwrap().as_slice(), ["hold"]);
+    assert_eq!(rig.registry.standing(&phone.key_hash()), Standing::Revoked);
 }
 
 /// A person can pair a device they revoked, with a new window, and its name is free again.
@@ -243,4 +238,105 @@ fn a_revoked_device_can_be_paired_again_by_the_person() {
         Standing::Paired(Grant::Read)
     );
     assert!(connection.receive().unwrap().is_some());
+}
+
+/// Reads each line it is given before the registry's lock is taken, and holds the reading of the
+/// line `slow` until it is told to go.
+struct Slow {
+    reading: Mutex<Sender<()>>,
+    go: Mutex<Receiver<()>>,
+    answered: Mutex<Vec<String>>,
+    decided: Mutex<Sender<()>>,
+}
+
+/// Says that what answers a line has been run or let go, which is when the host has decided about it.
+struct Decided(Sender<()>);
+
+impl Drop for Decided {
+    fn drop(&mut self) {
+        self.0.send(()).ok();
+    }
+}
+
+impl Service for Slow {
+    fn prepare<'a>(&'a self, line: &'a str) -> Prepared<'a> {
+        if line == "slow" {
+            self.reading.lock().unwrap().send(()).unwrap();
+            // Bounded, so a test that never lets it go fails and does not hang.
+            self.go
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+        }
+        let decided = Decided(self.decided.lock().unwrap().clone());
+        Box::new(move |_| {
+            let _decided = &decided;
+            self.answered.lock().unwrap().push(line.to_string());
+            vec![format!("heard:{line}")]
+        })
+    }
+}
+
+/// A line is read before the lock is taken, so a line that takes a long time to read does not make
+/// the person wait to revoke the device, and a device revoked while its line is read is not
+/// answered when the reading is done: the line was read and had not run when the device was revoked,
+/// and it does not run.
+#[test]
+fn a_line_is_read_before_the_lock_so_revoking_does_not_wait_for_it() {
+    let identity = Identity::generate("bravebot-host").unwrap();
+    let registry = Arc::new(Registry::new());
+    let (reading, hear_reading) = mpsc::channel();
+    let (go_sender, go) = mpsc::channel();
+    let (decided_sender, decided) = mpsc::channel();
+    let service = Arc::new(Slow {
+        reading: Mutex::new(reading),
+        go: Mutex::new(go),
+        answered: Mutex::new(Vec::new()),
+        decided: Mutex::new(decided_sender),
+    });
+    let listener = Listener::start(
+        "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+        &identity,
+        Arc::clone(&registry),
+        Arc::new(Invitations::system(Arc::clone(&registry), Arc::new(|_| {}))),
+        service.clone(),
+        Limits::default(),
+    )
+    .unwrap();
+    let (phone, other) = (Phone::new().unwrap(), Phone::new().unwrap());
+    for (phone, name) in [(&phone, "kitchen-phone"), (&other, "watch")] {
+        registry
+            .admit(
+                phone.key_hash(),
+                Device {
+                    name: name.into(),
+                    grant: Grant::Control,
+                    workspace: PathBuf::from("/work"),
+                },
+            )
+            .unwrap();
+    }
+    let mut connection = phone
+        .connect(listener.address(), listener.key_hash())
+        .unwrap();
+    connection.send("slow").unwrap();
+    hear_reading.recv_timeout(Duration::from_secs(5)).unwrap();
+    // The line is being read, with no lock held. Revoking does not wait for it.
+    let (revoked, hear_revoked) = mpsc::channel();
+    let revoking = {
+        let registry = Arc::clone(&registry);
+        std::thread::spawn(move || {
+            registry.revoke("kitchen-phone").unwrap();
+            revoked.send(()).unwrap();
+        })
+    };
+    // Revoking that waited for the line being read would not be done in two seconds, and fails here.
+    hear_revoked.recv_timeout(Duration::from_secs(2)).unwrap();
+    revoking.join().unwrap();
+    go_sender.send(()).unwrap();
+    // The host has decided about the line once what answers it is run or let go, and it was let go.
+    decided.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(connection.ended());
+    assert!(service.answered.lock().unwrap().is_empty());
 }

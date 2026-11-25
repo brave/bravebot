@@ -17,7 +17,7 @@ use bravebot_listener::identity::{Identity, KeyHash};
 use bravebot_listener::invitation::{self, Announcement, Invitations, Terms};
 use bravebot_listener::limits::Limits;
 use bravebot_listener::registry::{Device, Registry};
-use bravebot_listener::server::{Listener, Service};
+use bravebot_listener::server::{Listener, Prepared, Service};
 use serde_json::{Value, json};
 use std::io;
 use std::net::SocketAddr;
@@ -39,36 +39,42 @@ fn grant_word(grant: Grant) -> &'static str {
 }
 
 impl Service for Synthetic {
-    fn answer(&self, device: &Device, line: &str) -> Vec<String> {
+    /// The line is read here, with no lock held, and what is returned only builds the answer.
+    fn prepare<'a>(&'a self, line: &'a str) -> Prepared<'a> {
         let request = match Request::parse(line) {
             Ok(request) => request,
             Err(Unreadable::Answerable { id, failure }) => {
-                return vec![response(id, Err(failure)).to_string()];
+                return Box::new(move |_| vec![response(id, Err(failure)).to_string()]);
             }
-            Err(Unreadable::Unanswerable { .. }) => return Vec::new(),
+            Err(Unreadable::Unanswerable { .. }) => return Box::new(|_| Vec::new()),
         };
-        let outcome = match request.method.as_str() {
-            "instance.info" => Ok(json!({
-                "synthetic": true,
-                "device": {"name": device.name, "grant": grant_word(device.grant)},
-                "sessions": [{"handle": SESSION, "state": "open", "attached": false}],
-            })),
-            "session.attach"
-                if request.params.get("session").and_then(Value::as_str) == Some(SESSION) =>
-            {
-                Ok(json!({"version": 1, "sequence": 1, "omitted": 0}))
-            }
-            "session.attach" => Err(Failure::new(
-                ErrorCode::NoSuchSession,
-                "this connection serves one synthetic session",
-            )),
-            _ => Err(Failure::new(
-                ErrorCode::NotAllowed,
-                "this connection serves synthetic data only",
-            )),
-        };
-        vec![response(request.id, outcome).to_string()]
+        Box::new(move |device| answer(device, &request))
     }
+}
+
+/// The answer to a request from `device`.
+fn answer(device: &Device, request: &Request) -> Vec<String> {
+    let outcome = match request.method.as_str() {
+        "instance.info" => Ok(json!({
+            "synthetic": true,
+            "device": {"name": device.name, "grant": grant_word(device.grant)},
+            "sessions": [{"handle": SESSION, "state": "open", "attached": false}],
+        })),
+        "session.attach"
+            if request.params.get("session").and_then(Value::as_str) == Some(SESSION) =>
+        {
+            Ok(json!({"version": 1, "sequence": 1, "omitted": 0}))
+        }
+        "session.attach" => Err(Failure::new(
+            ErrorCode::NoSuchSession,
+            "this connection serves one synthetic session",
+        )),
+        _ => Err(Failure::new(
+            ErrorCode::NotAllowed,
+            "this connection serves synthetic data only",
+        )),
+    };
+    vec![response(request.id, outcome).to_string()]
 }
 
 /// Where the host's words about a pairing go.
@@ -315,9 +321,14 @@ mod tests {
         }
     }
 
+    /// What the service answers `line` from a device with `grant`, in the two steps it is run in.
+    fn answered(grant: Grant, line: &str) -> Vec<String> {
+        Synthetic.prepare(line)(&device(grant))
+    }
+
     fn asked(method: &str, params: &Value) -> Value {
-        let lines = Synthetic.answer(
-            &device(Grant::Read),
+        let lines = answered(
+            Grant::Read,
             &json!({"id": 7, "method": method, "params": params}).to_string(),
         );
         assert_eq!(lines.len(), 1);
@@ -328,10 +339,7 @@ mod tests {
     #[test]
     fn a_device_is_shown_one_synthetic_session_and_told_it_is_not_real() {
         for grant in [Grant::Read, Grant::Control] {
-            let lines = Synthetic.answer(
-                &device(grant),
-                r#"{"id":1,"method":"instance.info","params":{}}"#,
-            );
+            let lines = answered(grant, r#"{"id":1,"method":"instance.info","params":{}}"#);
             let info: Value = serde_json::from_str(&lines[0]).unwrap();
             assert_eq!(info["id"], 1);
             assert_eq!(info["ok"]["synthetic"], true);
@@ -368,17 +376,9 @@ mod tests {
 
     #[test]
     fn a_line_that_cannot_be_answered_gets_no_answer_and_one_that_can_gets_a_failure() {
-        assert!(
-            Synthetic
-                .answer(&device(Grant::Read), "not json")
-                .is_empty()
-        );
-        assert!(
-            Synthetic
-                .answer(&device(Grant::Read), r#"{"method":"instance.info"}"#)
-                .is_empty()
-        );
-        let lines = Synthetic.answer(&device(Grant::Read), r#"{"id":3}"#);
+        assert!(answered(Grant::Read, "not json").is_empty());
+        assert!(answered(Grant::Read, r#"{"method":"instance.info"}"#).is_empty());
+        let lines = answered(Grant::Read, r#"{"id":3}"#);
         let failure: Value = serde_json::from_str(&lines[0]).unwrap();
         assert_eq!(failure["error"]["code"], "bad_request");
     }
