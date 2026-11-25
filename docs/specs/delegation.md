@@ -1065,6 +1065,11 @@ tool its kind does not reach is a definition loaded without it, and the trail sa
 dropped. `spawn_agent` is one of the tools a list may leave out, and a delegate whose list leaves it
 out cannot delegate ([DELEGATE-7](#DELEGATE-7)).
 
+The line holds at dispatch as well as in the list the delegate is offered. A call to a tool the line
+leaves out is answered `error: no such tool '<name>'` and runs nothing, including a tool that shares
+a capability with one the line names (`list_files` beside `read_file`). A tool a server provides and
+`load_tool` are not names a line can hold, so the line does not refuse them.
+
 A name that is not a tool selects **nothing**, and is reported dropped like any other. `*` is such
 a name rather than a way to ask for all of them, and so is every name in another agent's
 vocabulary. A definition ported from one, whose whole list is names nothing here has, starts a
@@ -1118,6 +1123,7 @@ or write files.
 `verified-by: bravebot_cli::running::doctor_names_the_keys_a_definition_declares_that_nothing_reads`
 `verified-by: bravebot_core::delegate::a_definition_can_only_narrow_what_its_kind_holds`
 `verified-by: bravebot_core::delegate::naming_tools_drops_the_capabilities_no_named_tool_reaches`
+`verified-by: bravebot_agent::delegate_sandbox_lists::a_delegate_cannot_call_a_tool_its_tools_line_leaves_out_though_one_it_shares_a_capability_with_is_named`
 `verified-by: bravebot_core::delegate::a_definition_narrowed_to_one_tool_can_still_reach_the_endpoint`
 `verified-by: bravebot_core::delegate::a_definition_that_names_no_tools_holds_its_kinds_own_set`
 `verified-by: bravebot_core::delegate::a_name_that_is_not_a_tool_selects_no_capability`

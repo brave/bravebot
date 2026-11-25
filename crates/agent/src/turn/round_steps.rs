@@ -2117,7 +2117,7 @@ pub(super) fn tools_for_a_call<'a>(
             .as_ref()
             .map(|(owner, repo)| (owner.as_str(), repo.as_str())),
         found: Vec::new(),
-        confined_to: plan.addressed.as_ref().map(|addressed| addressed.tools()),
+        confined_to: task.confined_to(plan.addressed.as_ref()),
         offered: Some(&state.offered),
         servers: state.servers.as_deref_mut(),
         mcp: state.mcp.as_ref().map(|(offer, _)| offer),

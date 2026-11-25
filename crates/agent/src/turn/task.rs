@@ -925,6 +925,23 @@ impl Task {
         self
     }
 
+    /// The tool names a call is dispatched under, where the turn was confined to some: the
+    /// definition a person addressed, or the `tools:` line a delegate was started with. `None`
+    /// where neither narrowed the turn. A name outside it is answered as any unknown name is
+    /// (DELEGATE-19, MODE-9), so the offer is not all that holds a narrowing.
+    pub(crate) fn confined_to<'a>(
+        &'a self,
+        addressed: Option<&'a bravebot_core::delegate::Addressed>,
+    ) -> Option<&'a [String]> {
+        addressed
+            .map(bravebot_core::delegate::Addressed::tools)
+            .or_else(|| {
+                self.delegate
+                    .as_ref()
+                    .and_then(bravebot_core::delegate::DelegateSpec::tools)
+            })
+    }
+
     /// Say that the definition [`Task::addressing`] names is the one the session stands under,
     /// and not one named for this turn alone.
     pub fn addressing_standing(mut self, standing: bool) -> Self {
