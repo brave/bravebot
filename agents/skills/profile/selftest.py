@@ -10,6 +10,7 @@ import importlib.util
 import io
 import json
 import os
+import signal
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 import tempfile
@@ -492,6 +493,375 @@ class Pipeline(unittest.TestCase):
         self.assertTrue(tree_exists)
         self.assertEqual(prompts_written, [p.CHUNK, 1])
         self.assertEqual(len(data["rows"]), p.CHUNK + 1)
+
+
+def stacks(*groups):
+    """Samples from `(count, [function, ...])` pairs, the running function first."""
+    return [list(stack) for count, stack in groups for _ in range(count)]
+
+
+PERF_SCRIPT = (
+    "\t55d0 regex::compile+0x10 (/x/bravebot)\n"
+    "\t55d1 bravebot::load::h0123456789abcdef+0x4 (/x/bravebot)\n"
+    "\t55d2 main+0x1 (/x/bravebot)\n"
+    "\n"
+    "\t55d0 regex::compile+0x20 (/x/bravebot)\n"
+    "\t55d2 main+0x1 (/x/bravebot)\n"
+    "\n"
+    "\t7f00 [unknown] ([vdso])\n"
+    "\t55d2 main+0x1 (/x/bravebot)\n"
+)
+
+
+class Functions(unittest.TestCase):
+    def test_a_sample_is_the_stack_between_blank_lines_with_each_name_cleaned(self):
+        """An implementation keeping the offset, the object file or the hash gives one function a name
+        per call site, so its samples never add up. One reading the whole output as a single stack, or
+        ending a sample only at a header, merges every sample into one."""
+        self.assertEqual(
+            lanes.parse_perf_script(PERF_SCRIPT),
+            [["regex::compile", "bravebot::load", "main"], ["regex::compile", "main"], [lanes.UNKNOWN, "main"]],
+        )
+        self.assertEqual(lanes.parse_perf_script("header line\n\t1 a (/x)\nheader again\n\t2 b (/x)\n"), [["a"], ["b"]])
+        self.assertEqual(lanes.parse_perf_script(""), [])
+
+    def test_functions_are_ranked_by_the_samples_they_hold_themselves_and_not_by_the_stacks_they_are_on(self):
+        """An implementation ranking by inclusive time puts `main`, which is on every stack and runs
+        nothing itself, above the function the time went in."""
+        samples = stacks((60, ["hot", "mid", "main"]), (30, ["cold", "mid", "main"]), (10, ["main"]))
+        total, functions = lanes.rank_functions(samples)
+        self.assertEqual(total, 100)
+        self.assertEqual([(f["name"], f["self"], f["inclusive"]) for f in functions][:3],
+                         [("hot", 60, 60), ("cold", 30, 30), ("main", 10, 100)])
+        self.assertEqual({f["name"]: f["inclusive"] for f in functions}["mid"], 90)
+
+    def test_a_function_on_a_stack_many_times_is_counted_once_for_that_sample(self):
+        """An implementation counting every frame reports a recursive function on 3 of 1 samples, and a
+        share over 100%."""
+        total, functions = lanes.rank_functions([["f", "f", "f", "main"]])
+        self.assertEqual({f["name"]: (f["self"], f["inclusive"]) for f in functions}, {"f": (1, 1), "main": (0, 1)})
+
+    def test_a_frame_with_no_name_is_a_sample_and_never_a_function(self):
+        """An implementation leaving unnamed frames out of the total reports every named function's share
+        too high, and one listing them reports `[unknown]` as the hottest function."""
+        total, functions = lanes.rank_functions(stacks((3, [lanes.UNKNOWN, "main"]), (1, ["f", "main"])))
+        self.assertEqual(total, 4)
+        self.assertNotIn(lanes.UNKNOWN, [f["name"] for f in functions])
+
+    def command(self):
+        return lanes.judge(lanes.row("tests", "tests:b::t", "test t in b", 80.0, "seconds", 30.0, binary="b", test="t"), None)
+
+    def test_a_function_is_a_candidate_by_its_share_and_one_on_every_stack_is_not_listed_by_inclusive_time(self):
+        """An implementation with one threshold for self and inclusive time reports `mid` as slow as
+        `hot`, and one listing inclusive time with no exclusion reports `main`, which every command is
+        on, as the cause of every slow command."""
+        samples = stacks((60, ["hot", "mid", "main"]), (30, ["cold", "mid", "main"]), (10, ["main"]))
+        rows, total = lanes.function_rows(self.command(), samples)
+        found = {r["key"]: lanes.judge(r, None) for r in rows}
+        key = "functions:tests:b::t:"
+        self.assertEqual(total, 100)
+        self.assertIsNotNone(found[key + "self:hot"])
+        self.assertIsNotNone(found[key + "self:cold"])
+        self.assertIsNone(found[key + "self:main"])
+        self.assertIsNotNone(found[key + "inclusive:mid"])
+        self.assertIsNone(found[key + "inclusive:cold"])
+        self.assertNotIn(key + "inclusive:main", found)
+        self.assertAlmostEqual(found[key + "self:hot"]["value"], 0.6)
+        self.assertEqual(found[key + "self:hot"]["command"], "tests:b::t")
+
+    def test_too_few_samples_give_no_function_at_all(self):
+        """An implementation ranking whatever it was given reports a function that held 1 of 3 samples
+        as a third of the command."""
+        rows, total = lanes.function_rows(self.command(), stacks((3, ["f", "main"])))
+        self.assertEqual((rows, total), ([], 3))
+
+    def test_a_function_row_carries_the_location_that_was_looked_up_for_it(self):
+        """An implementation looking up places for every function, or for none, gives a reviewer a list
+        of names with no code to read, or spends a lookup on functions it dropped."""
+        asked = []
+        samples = stacks((25, ["hot", "main"]))
+        rows, _ = lanes.function_rows(self.command(), samples, lambda names: asked.append(names) or {"hot": "a.rs:3"})
+        self.assertEqual(asked, [["hot"]])
+        self.assertEqual({r["function"]: r["location"] for r in rows}, {"hot": "a.rs:3"})
+
+    def test_only_a_single_test_and_a_start_are_sampled_and_the_worst_are_first(self):
+        """An implementation sampling every candidate runs a test binary added up, a compile unit and a
+        size as commands, and one sorting by the raw value puts a bigger unit first."""
+        def candidate(lane, key, value, threshold, **more):
+            return lanes.judge(lanes.row(lane, key, key, value, "seconds", threshold, **more), None)
+        found = [
+            candidate("tests", "tests:b::slow", 40.0, 30.0, binary="b", test="slow"),
+            candidate("tests", "tests:b::slower", 90.0, 30.0, binary="b", test="slower"),
+            candidate("tests", "tests:b", 500.0, 120.0, binary="b"),
+            candidate("build", "build:x", 900.0, 60.0),
+            candidate("startup", "startup:terminal", 9.0, 3.0),
+        ]
+        self.assertEqual([c["key"] for c in lanes.sampled_commands(found)],
+                         ["startup:terminal", "tests:b::slower", "tests:b::slow"])
+
+    def test_the_arguments_of_a_test_run_name_that_test_exactly(self):
+        """An implementation passing the name as a filter also runs every test whose name contains it,
+        so the samples are of a different command than the one that was slow."""
+        self.assertEqual(lanes.test_command("/w/b", "a::t"), ["/w/b", "--exact", "a::t", "--nocapture", "--test-threads", "1"])
+
+    def test_test_binaries_are_named_as_the_tests_lane_names_them(self):
+        """An implementation naming every binary by its target finds none of nextest's `pkg::test` or
+        `pkg::bin/name`, so no slow test has a binary to run, and one taking a build of the library for
+        a test binary samples a program that runs no test."""
+        def artifact(package, kind, name, executable, test=True):
+            return json.dumps({"reason": "compiler-artifact", "package_id": f"path+file:///w/crates/{package}#{package}@0.1.0",
+                               "manifest_path": f"/w/crates/{package}/Cargo.toml", "target": {"kind": [kind], "name": name},
+                               "profile": {"test": test}, "executable": executable})
+        text = "\n".join([
+            artifact("core", "lib", "core", "/t/core-0123456789abcdef"),
+            artifact("agent", "test", "turn", "/t/turn-fedcba9876543210"),
+            artifact("cli", "bin", "bravebot", "/t/bravebot-00112233aabbccdd"),
+            artifact("core", "lib", "core", "/t/notest-0123456789abcdef", test=False),
+            "not json",
+            json.dumps({"reason": "build-finished"}),
+        ])
+        found = lanes.parse_test_executables(text)
+        self.assertEqual(found["core"], ("/t/core-0123456789abcdef", "/w/crates/core"))
+        self.assertEqual(found["agent::turn"][0], "/t/turn-fedcba9876543210")
+        self.assertEqual(found["cli::bin/bravebot"][0], "/t/bravebot-00112233aabbccdd")
+        self.assertEqual(found["turn"][0], "/t/turn-fedcba9876543210")
+        self.assertEqual([v[0] for v in found.values() if "core" in v[0]], ["/t/core-0123456789abcdef"])
+        self.assertNotIn("/t/notest-0123456789abcdef", [v[0] for v in found.values()])
+
+    def test_the_lowest_address_of_a_name_is_where_it_is_looked_up_and_other_names_are_left(self):
+        """An implementation taking the last address of a generic function looks up one copy of it that
+        may be inlined elsewhere, and one keeping every name builds a lookup the size of the binary."""
+        text = ("0000000000002000 t f<u8>\n0000000000001000 t f<u8>\n0000000000003000 T other\n"
+                "0000000000004000 b a_static\n0000000000005000 t g::h0123456789abcdef\n")
+        self.assertEqual(lanes.parse_nm(text, {"f<u8>", "g"}), {"f<u8>": 0x1000, "g": 0x5000})
+        self.assertEqual(sorted(lanes.parse_nm(text)), ["f<u8>", "g", "other"])
+
+    def test_addr2line_gives_a_place_for_each_address_and_none_where_it_found_nothing(self):
+        """An implementation reading the next line as the place of an address that has none attributes
+        `??:0` to the function, and one keeping the discriminator names a line that does not exist."""
+        text = "0x1000\n/w/src/a.rs:7 (discriminator 3)\n0x2000\n??:0\n0x3000\n/w/src/b.rs:9\n"
+        self.assertEqual(lanes.parse_addr2line(text), {0x1000: "/w/src/a.rs:7", 0x2000: None, 0x3000: "/w/src/b.rs:9"})
+
+    def test_a_location_is_written_from_the_checkout_and_the_standard_library_is_written_from_library(self):
+        """An implementation printing the full path puts the builder's directory in a draft, where a
+        reader of the checkout cannot open it."""
+        self.assertEqual(lanes.short_location("/w/crates/a/src/lib.rs:7", "/w"), "crates/a/src/lib.rs:7")
+        self.assertEqual(lanes.short_location("/b/s/rust-src/library/core/src/cmp.rs:9", "/w"), "library/core/src/cmp.rs:9")
+        self.assertIsNone(lanes.short_location(None, "/w"))
+
+    def test_a_function_that_grew_since_the_ledger_is_reported_and_its_key_reads_back(self):
+        """An implementation keying the ledger on the function's text unescaped loses a name with spaces
+        (`<A as B>::f`), so its growth is never reported."""
+        key = "functions:tests:b::t:self:<core::fmt::Arguments as core::fmt::Display>::fmt"
+        with tempfile.TemporaryDirectory() as temp:
+            entry = lanes.row("functions", key, "fmt", 0.234, "share", lanes.FUNCTION_SHARE)
+            p.record({"root": temp, "commit": "0123456789abcdef", "rows": [entry], "candidates": {}}, {}, "2026-11-25")
+            entries, problems = ledger.read(temp)
+        self.assertEqual((problems, entries[key]["value"]), ([], 0.234))
+        grown = lanes.judge(lanes.row("functions", key, "fmt", 0.30, "share", lanes.FUNCTION_SHARE), entries[key]["value"])
+        self.assertTrue(grown["regressed"])
+        self.assertIn("30.0% of the samples", grown["detail"])
+
+
+class Sampling(unittest.TestCase):
+    ARTIFACT = json.dumps({
+        "reason": "compiler-artifact", "package_id": "path+file:///w/crates/b#b@0.1.0", "manifest_path": "/w/crates/b/Cargo.toml",
+        "target": {"kind": ["lib"], "name": "b"}, "profile": {"test": True}, "executable": "/w/target/b-0123456789abcdef",
+    })
+
+    def candidate(self):
+        return lanes.judge(lanes.row("tests", "tests:b::t", "test t in b", 80.0, "seconds", 30.0, binary="b", test="t"), None)
+
+    def context(self, temp):
+        context = measure.Context("/w", Path(temp) / "scratch")
+        context.lanes = ("tests",)
+        context.candidates = [self.candidate()]
+        return context
+
+    def test_a_machine_perf_cannot_record_on_gets_a_note_and_nothing_is_built(self):
+        """An implementation that builds and runs before it asks whether perf works spends the build of
+        the whole workspace to learn that the kernel refuses it, and one that says nothing leaves an
+        empty lane to be read as a clean one."""
+        calls = []
+
+        def refused(args, cwd, env, timeout, merge_stderr=False):
+            calls.append([str(a) for a in args])
+            return 255, "", "Access to performance monitoring and observability operations is limited", 0.1
+
+        with tempfile.TemporaryDirectory() as temp:
+            with unittest.mock.patch.object(measure.shutil, "which", return_value="/usr/bin/perf"), \
+                    unittest.mock.patch.object(measure, "run", refused):
+                rows, note = measure.run_functions(self.context(temp))
+        self.assertEqual(rows, [])
+        self.assertIn("perf cannot record here", note)
+        self.assertIn("limited", note)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1], "record")
+
+    def test_a_missing_perf_and_nothing_to_sample_are_each_said(self):
+        """An implementation raising on a missing tool stops the run, and one that does not say why a
+        lane is empty reads as a lane that found nothing slow."""
+        with tempfile.TemporaryDirectory() as temp:
+            context = self.context(temp)
+            with unittest.mock.patch.object(measure.shutil, "which", return_value=None):
+                _, missing = measure.run_functions(context)
+            context.candidates = []
+            _, nothing = measure.run_functions(context)
+            context.lanes = ("functions",)
+            _, unmeasured = measure.run_functions(context)
+        self.assertIn("perf is not installed", missing)
+        self.assertIn("nothing to sample", nothing)
+        self.assertIn("neither ran", unmeasured)
+
+    def test_a_slow_test_is_run_alone_under_perf_with_a_scratch_home_and_its_functions_are_located(self):
+        """An implementation passing the person's environment lets the sampled test read and write
+        `~/.bravebot`, one running the test by filter samples other tests as well, and one that drops
+        the lookup gives the reviewer function names with no file."""
+        perf_text = "".join("\t1 hot+0x1 (/w/b)\n\t2 main+0x1 (/w/b)\n\n" for _ in range(30))
+        calls = []
+
+        def fake(args, cwd, env, timeout, merge_stderr=False):
+            args = [str(a) for a in args]
+            calls.append((args, str(cwd), env))
+            if args[0] == "cargo":
+                return 0, self.ARTIFACT + "\n", "", 1.0
+            if args[1:2] == ["record"]:
+                Path(args[args.index("-o") + 1]).write_bytes(b"data")
+                return 0, "", "", 1.0
+            if args[1:2] == ["script"]:
+                return 0, perf_text, "", 1.0
+            if "--defined-only" in args:
+                return 0, "0000000000001000 T hot\n", "", 1.0
+            if "-a" in args:
+                return 0, "0x1000\n/w/crates/b/src/lib.rs:7\n", "", 1.0
+            raise AssertionError(args)
+
+        with tempfile.TemporaryDirectory() as temp:
+            context = self.context(temp)
+            with unittest.mock.patch.dict(os.environ, {"BRAVEBOT_HOME": "/the/real/state", "HOME": "/the/real/home"}), \
+                    unittest.mock.patch.object(measure.shutil, "which", lambda name: f"/usr/bin/{name}"), \
+                    unittest.mock.patch.object(measure, "run", fake):
+                rows, note = measure.run_functions(context)
+            scratch_home = str(context.home)
+        self.assertIsNone(note)
+        self.assertEqual([(r["function"], r["time_kind"], r["location"]) for r in rows], [("hot", "self", "crates/b/src/lib.rs:7")])
+        recorded = [c for c in calls if c[0][1:2] == ["record"] and "-F" in c[0]]
+        self.assertEqual(len(recorded), 1)
+        argv, cwd, env = recorded[0]
+        self.assertEqual(argv[argv.index("--") + 1:],
+                         ["/w/target/b-0123456789abcdef", "--exact", "t", "--nocapture", "--test-threads", "1"])
+        self.assertEqual((cwd, env["CARGO_MANIFEST_DIR"], env["HOME"]), ("/w/crates/b", "/w/crates/b", scratch_home))
+        self.assertNotIn("BRAVEBOT_HOME", env)
+        self.assertEqual(context.hot["tests:b::t"][0]["name"], "hot")
+
+    def test_the_profiling_build_leaves_the_release_profile_and_the_release_target_alone(self):
+        """An implementation building into the release target directory replaces the binary the size lane
+        measures with one that carries line tables, and one that edits `[profile.release]` in the
+        manifest changes what every release build ships."""
+        calls = []
+
+        def fake(args, cwd, env, timeout, merge_stderr=False):
+            calls.append(([str(a) for a in args], env))
+            return 0, "", "", 1.0
+
+        with tempfile.TemporaryDirectory() as temp:
+            context = measure.Context(temp, Path(temp) / "scratch")
+            built = context.scratch / "profiling-target" / "release" / "bravebot"
+            built.parent.mkdir(parents=True)
+            built.write_text("x")
+            with unittest.mock.patch.object(measure, "run", fake):
+                binary, note = measure.profiling_build(context)
+                again = measure.profiling_build(context)
+        self.assertEqual((binary, note), (built, None))
+        self.assertEqual(again, (binary, note))
+        self.assertEqual(len(calls), 1)
+        args, env = calls[0]
+        self.assertIn(measure.PROFILING_CONFIG, args)
+        self.assertEqual(args[args.index("--config") - 1], "bravebot-cli")
+        self.assertTrue(env["CARGO_TARGET_DIR"].endswith("profiling-target"))
+        self.assertNotIn("release-target", env["CARGO_TARGET_DIR"])
+
+    @unittest.skipUnless(hasattr(os, "fork"), "needs a pty")
+    def test_a_sampler_started_under_a_terminal_is_stopped_with_sigint_so_it_writes_its_file(self):
+        """An implementation ending it with SIGKILL, as the start lane does, leaves perf with no file to
+        read."""
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "wrote"
+            script = ("import signal, sys, time\n"
+                      f"signal.signal(signal.SIGINT, lambda *a: (open({str(marker)!r}, 'w').close(), sys.exit(0)))\n"
+                      "print('screen', flush=True)\ntime.sleep(20)\n")
+            measure.terminal_start([sys.executable, "-c", script], dict(os.environ), ".", stop=signal.SIGINT)
+            self.assertTrue(marker.exists())
+
+    def test_a_start_is_sampled_under_a_terminal_and_stopped_with_sigint(self):
+        """An implementation that records the terminal client with the start lane's SIGKILL leaves perf
+        with no file, so the start has no functions, and one that runs it without a terminal samples
+        a client that exits at once because it has no screen."""
+        seen = {}
+
+        def started(argv, env, cwd, stop=signal.SIGKILL):
+            seen.update(argv=[str(a) for a in argv], stop=stop)
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"data")
+            return 1.0
+
+        with tempfile.TemporaryDirectory() as temp:
+            context = measure.Context(temp, Path(temp) / "scratch")
+            with unittest.mock.patch.object(measure.shutil, "which", lambda name: f"/usr/bin/{name}"), \
+                    unittest.mock.patch.object(measure, "terminal_start", started), \
+                    unittest.mock.patch.object(measure, "run", lambda *a, **k: (0, "", "", 0.1)):
+                samples, problem = measure.sample(context, ["/w/bravebot"], temp, 4999, True)
+        self.assertEqual((samples, problem), ([], None))
+        self.assertEqual(seen["stop"], signal.SIGINT)
+        self.assertEqual(seen["argv"][seen["argv"].index("--") + 1:], ["/w/bravebot"])
+
+
+class Scanning(unittest.TestCase):
+    def test_the_functions_lane_runs_after_the_lanes_it_samples_and_names_its_functions_beside_them(self):
+        """An implementation running it first has no candidates to sample, one running only the lanes
+        named leaves a scoped `functions` run with nothing, and one that does not carry the functions
+        to the candidate gives a reviewer a slow test with no function to read."""
+        seen = []
+
+        def functions(context):
+            seen.append(sorted(c["key"] for c in context.candidates))
+            context.hot["tests:b::t"] = [{"name": "f", "self": 0.5, "inclusive": 0.6, "location": "a.rs:1"}]
+            return [], None
+
+        runners = fake_runners({"tests": [test_row(80.0)]})
+        runners["functions"] = functions
+        with tempfile.TemporaryDirectory() as temp:
+            result, _ = p.scan(temp, ("functions",), Path(temp) / "s", runners)
+        self.assertEqual(seen, [["tests:b::t"]])
+        self.assertEqual(sorted(result), ["functions", "startup", "tests"])
+        candidate = result["tests"]["candidates"][0]
+        self.assertEqual(candidate["hot"][0]["name"], "f")
+        self.assertIn("hot: `f` at `a.rs:1`, self 50.0%, inclusive 60.0%", p.render_candidate(candidate))
+
+    def test_a_function_candidate_is_rendered_with_its_samples_and_place_and_numbered_from_f(self):
+        """An implementation numbering function candidates from the tests lane's `T` collides with a
+        test candidate in the results file a reviewer writes."""
+        entry = lanes.row("functions", "functions:tests:b::t:self:f", "f (self time) in test t in b", 0.5, "share",
+                          lanes.FUNCTION_SHARE, command="tests:b::t", function="f", time_kind="self", self_share=0.5,
+                          inclusive_share=0.6, samples=200, location="a.rs:1")
+        with tempfile.TemporaryDirectory() as temp:
+            result, _ = p.scan(temp, ("functions",), Path(temp) / "s", fake_runners({"functions": [entry]}))
+        candidate = result["functions"]["candidates"][0]
+        self.assertEqual(candidate["id"], "F1")
+        text = p.render_candidate(candidate)
+        self.assertIn("200 samples, self 50.0%, inclusive 60.0%", text)
+        self.assertIn("at `a.rs:1`", text)
+
+    def test_a_start_over_its_threshold_is_rendered_with_its_worst_run_and_no_function_shares(self):
+        """An implementation that renders the sample text for any row with a `samples` field reads
+        `self_share` from a startup candidate, whose `samples` is its run count, and raises KeyError
+        in the reviewer prompt and in the draft body."""
+        entry = lanes.startup_row("version", "bravebot --version", [0.9, 1.0, 1.1, 1.2, 5.0])
+        candidate = dict(lanes.judge(entry, None), id="S1")
+        text = p.render_candidate(candidate)
+        self.assertIn("(worst run 5.00s)", text)
+        self.assertNotIn("samples", text)
+        self.assertIn("S1", p.build_prompt("startup", [candidate], "/r.json", "reading", "/root"))
+        self.assertIn("(worst run 5.00s)", p.body_for({"lane": "startup", "candidates": ["S1"]}, {"candidates": {"S1": candidate}}))
 
 
 import unittest.mock  # noqa: E402

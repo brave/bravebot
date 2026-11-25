@@ -119,6 +119,15 @@ QUESTION = {
         "Each of these is a `make` target that the pre-commit hook or CI runs, timed alone. A slow "
         "one slows every commit or every pull request."
     ),
+    "functions": (
+        "Each of these is a function that holds a large share of the CPU samples `perf` took while a "
+        "command ran that another lane found slow: one test, or the start of a built binary. The share "
+        "it holds itself (self time) and the share of samples it is on the stack for (inclusive time, "
+        "which counts the functions it calls) are both given, with the file and line where the "
+        "function is defined where a debug-info lookup found one. A function with a high inclusive "
+        "share and a low self share is slow because of what it calls, so read its callees. A sample "
+        "is one stack at one instant, so a function with few samples is noise."
+    ),
 }
 
 LANE_NOTES = {
@@ -144,6 +153,15 @@ LANE_NOTES = {
     "scripts": (
         "A change is work a script does twice, a tool it installs on every run, or a check that "
         "reads the whole tree to answer about one file. Keep a check that has to read everything."
+    ),
+    "functions": (
+        "Read the function and the code that calls it before deciding. The usual change is work done "
+        "once per item that could be done once, a copy or an allocation inside a loop, a regex or a "
+        "table built on every call, or a wait. Keep a function that is hot because it does what a spec "
+        "requires, such as sandbox setup, and keep any function that reads, labels or declassifies "
+        "content, or decides what is approved, granted or refused, whatever share of the samples it holds. "
+        "A function in the standard library or a dependency is a reason to look at its caller in this "
+        "repository, which is where a change would be made."
     ),
 }
 

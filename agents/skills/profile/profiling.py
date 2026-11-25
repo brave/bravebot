@@ -4,9 +4,11 @@
     python3 agents/skills/profile/profiling.py [lane ...] [--measure-only]
     python3 agents/skills/profile/profiling.py status|collect|draft|verify|claims-prepare|claims-collect|record|clean --work-dir DIR
 
-The scan runs the real programs in five lanes (tests, startup, build, size, scripts), with `HOME`
-pointed at a scratch directory, and ranks each measurement by how far it is over a stated threshold
-or over the value `docs/profile-reviewed` recorded at an earlier commit. A candidate is a number, not
+The scan runs the real programs in six lanes (tests, startup, build, size, scripts, functions), with
+`HOME` pointed at a scratch directory, and ranks each measurement by how far it is over a stated
+threshold or over the value `docs/profile-reviewed` recorded at an earlier commit. The functions lane
+samples the tests and starts the other lanes found over their thresholds and ranks the functions in
+them. A candidate is a number, not
 a finding: reviewers read the code behind it, and only what a reviewer calls `optimize` becomes a
 draft. The steps after the scan are the ones the maintenance skill uses, in `agents/review_pipeline.py`.
 
@@ -45,8 +47,10 @@ import measure  # noqa: E402
 import prompts  # noqa: E402
 
 drafting = pipeline.drafting
-LANES = ("tests", "startup", "build", "size", "scripts")
-PREFIX = {"tests": "T", "startup": "S", "build": "B", "size": "Z", "scripts": "C"}
+LANES = ("tests", "startup", "build", "size", "scripts", "functions")
+PREFIX = {"tests": "T", "startup": "S", "build": "B", "size": "Z", "scripts": "C", "functions": "F"}
+# The lanes whose candidates the functions lane samples, so a run of it measures them first.
+SAMPLED_BY_FUNCTIONS = ("tests", "startup")
 CHANGE = "optimize"
 CHUNK = 8
 LIMIT = 15
@@ -63,11 +67,15 @@ def scan(root, lanes=LANES, scratch=None, runners=None, previous=None, fresh=Fal
 
     `previous` is the ledger. A row the ledger holds a verdict of `keep` or `optimize` for is carried,
     and left out before the cap, unless it has grown past the recorded value, so the cap reaches new
-    candidates. `runners` is what measures each lane, `measure.RUNNERS` unless a test supplies its own."""
+    candidates. `runners` is what measures each lane, `measure.RUNNERS` unless a test supplies its own.
+    The functions lane runs last, on the candidates of the tests and startup lanes, which it adds to
+    `lanes` where they were not asked for, and the functions it finds are named beside those."""
     runners = runners or measure.RUNNERS
     previous = {} if previous is None else previous
     scratch = Path(scratch or tempfile.mkdtemp(prefix="profile-scratch-"))
     context = measure.Context(root, scratch)
+    lanes = set(lanes) | (set(SAMPLED_BY_FUNCTIONS) if "functions" in lanes else set())
+    context.lanes = lanes
     result, every = {}, []
     for lane in LANES:
         if lane not in lanes:
@@ -85,12 +93,17 @@ def scan(root, lanes=LANES, scratch=None, runners=None, previous=None, fresh=Fal
                 continue
             candidates.append(judged)
         candidates.sort(key=lambda c: (-c["rank"], c["key"]))
+        context.candidates.extend(candidates)
         kept = candidates[: limit or LIMIT]
         for number, candidate in enumerate(kept, start=1):
             candidate["id"] = f"{PREFIX[lane]}{number}"
         result[lane] = {"candidates": kept, "left_out": len(candidates) - len(kept), "carried": carried}
         if note:
             result[lane]["note"] = note
+    for entry in result.values():
+        for candidate in entry["candidates"]:
+            if candidate["key"] in context.hot:
+                candidate["hot"] = context.hot[candidate["key"]]
     return result, every
 
 
@@ -120,6 +133,13 @@ def render_candidate(candidate):
         text += f" (worst run {lane_rules.fmt(candidate['worst'], candidate['unit'])})"
     if candidate.get("critical"):
         text += " (on the critical path)"
+    if candidate["lane"] == "functions":
+        text += f" ({candidate['samples']} samples, self {candidate['self_share'] * 100:.1f}%, inclusive {candidate['inclusive_share'] * 100:.1f}%)"
+    if candidate.get("location"):
+        text += f" at `{candidate['location']}`"
+    for hot in candidate.get("hot") or []:
+        place = f" at `{hot['location']}`" if hot.get("location") else ""
+        text += f"\n  - hot: `{hot['name']}`{place}, self {hot['self'] * 100:.1f}%, inclusive {hot['inclusive'] * 100:.1f}%"
     for name, size in candidate.get("crates") or []:
         text += f"\n  - crate `{name}`: {size / (1024 * 1024):.2f} MiB"
     return text

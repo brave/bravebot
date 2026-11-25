@@ -3,8 +3,9 @@ name: profile
 description:
   'Measure bravebot and find what is slow or large: the wall time of each test and test binary, the
   cold start of each built binary, the slowest compile units and the ones on the critical path, the
-  size of each release binary and the crates behind it, and the scripts the commit hook and CI run.
-  Each measurement is ranked by how far it is over a stated threshold or over the value recorded at
+  size of each release binary and the crates behind it, the scripts the commit hook and CI run, and
+  the functions that hold the CPU time of the slowest tests and starts. Each measurement is ranked by
+  how far it is over a stated threshold or over the value recorded at
   an earlier commit. Reviewers read the code behind each candidate and decide which are worth an
   issue, then one issue is drafted per finding for a person to confirm before any of them is posted,
   assigned to netzenbot. Fixes nothing. Triggers on: profile, /profile, make check-profile, slow
@@ -37,8 +38,8 @@ below.
 in a scratch directory, runs the tests, starts the binaries and times the scripts. A full run takes as
 long as a cold release build and a full test run together, and uses the machine while it does, so run it
 where nothing else is competing. A lane whose tool is missing says so in a note and has no candidates:
-`cargo-nextest` (the tests lane then runs `cargo test` with `--report-time`, one binary at a time) and
-`cargo-bloat` (the size lane then lists no crates).
+`cargo-nextest` (the tests lane then runs `cargo test` with `--report-time`, one binary at a time),
+`cargo-bloat` (the size lane then lists no crates) and `perf` (the functions lane then has nothing).
 
 **Nothing is written under `~/.bravebot`.** Every program the measurement starts has `HOME` set to a
 directory under the work directory and `BRAVEBOT_HOME` removed. The tests lane keeps its build output in
@@ -79,8 +80,10 @@ once and trusted afterwards can move a decision about labelled content to a plac
 Every reviewer prompt and every claim reader's prompt says so, and a reviewer calls such code `keep`
 whatever it would save ([AGENTS.md](../../AGENTS.md)).
 
-**It samples no CPU profile.** Reading a flame graph from perf, samply or macOS `sample` is a later
-lane. The lanes here find the slow commands that a sampled profile would then explain.
+**It samples only what the first lanes found.** The `functions` lane runs `perf` on the tests and
+starts the other lanes ranked as candidates, and on nothing else. It does not sample the whole test
+suite, a build or a script. It reads `perf` output only: macOS `sample` and samply are not read, so on
+a machine without a working `perf` the lane says so in a note and has no candidates.
 
 ---
 
@@ -93,6 +96,7 @@ lane. The lanes here find the slow commands that a sampled profile would then ex
 | `build` | a compile unit, or a unit on the critical path | 60 s, 30 s on the path | `cargo build --release --timings` into a new target directory |
 | `size` | a release binary | 100 MiB, and growth of 10% | the file's size, and `cargo bloat --crates` where installed |
 | `scripts` | a `make` target that `check-scripts` runs, or one of the other checks the hook and CI run | 20 s | `make <target>`, timed alone |
+| `functions` | a function that holds 20% of the samples taken of one slow command by itself (self time), or is on the stack for 50% of them without being on every stack (inclusive time) | 20% and 50% of the samples | `perf record --call-graph dwarf` of each slow test and start, read with `perf script`; the file and line from `nm` and `addr2line` |
 
 The thresholds are `lanes.py` constants. A value is ranked by how many times over its threshold it is,
 or by how many times the recorded value, whichever is larger, so the order does not depend on the unit.
@@ -103,3 +107,45 @@ reviewer says so where the code gives no reason for it.
 The terminal client's start is measured with its output as the signal: the time until the output has
 been still for half a second. The startup lane starts `bravebot` with no model configured, so what it
 times is the client reaching its first screen.
+
+### The functions lane
+
+The lane answers which function inside a slow command is slow. `profiling.py` runs the `tests` and
+`startup` lanes first, whichever lanes were named, and `functions` takes the candidates they found:
+the five that are furthest over their threshold, counting a single test and a start. A test binary
+added up, a compile unit and a size are not one command, so they are not sampled.
+
+- **What runs.** A test runs alone from the test binary `cargo test --no-run` built into
+  `target/profile-tests`, as `<binary> --exact <test> --nocapture --test-threads 1`, in its package's
+  directory. The terminal client's first screen runs under the same pty the `startup` lane uses, and
+  `--version` runs directly. Each is run as `perf record --all-user --call-graph dwarf` with `HOME`
+  pointed at the scratch directory and `BRAVEBOT_HOME` removed, like every other program here. A test
+  is sampled at 99 samples a second, a start at 4999, since a start lasts a second or less.
+- **The profiling build.** A start is sampled on a release build made with
+  `--config 'profile.release.debug="line-tables-only"'` into `profiling-target` in the scratch
+  directory. The release build the `size` lane measures is in `release-target`, so it never has the
+  line tables, and `[profile.release]` in `Cargo.toml` does not change. A `[profile.profiling]` table is
+  not used because the cargo-profile guard in the `bravebot-cli` tests refuses a profile that cargo does
+  not have of its own. Test binaries are built with the `dev` profile, which has debug information.
+- **What is ranked.** `perf script -F ip,sym` gives each sample's stack. A function's self samples are
+  the samples where it was running, and its inclusive samples are those where it was anywhere on the
+  stack, counted once for a recursive function. Each is a share of the samples taken. The ten functions
+  with the most self samples and the ten with the most inclusive samples are rows, and a function on
+  every stack is not listed by inclusive time, since every command is in its own `main`. A command with
+  fewer than 20 samples gives no rows.
+- **Where it is.** `nm -C` gives each function's address and `addr2line` the file and line, written
+  from the checkout (`crates/...`) or from `library/` for the standard library. A function that the two
+  tools spell differently, such as a closure, has no location.
+- **What a reviewer sees.** The three functions with the most self time are named under the test or
+  start candidate they came from, with their shares and locations, and each function row is a candidate
+  of its own, `F1`, `F2` and so on, that a reviewer calls `optimize`, `keep` or `unclear`. The prompt
+  repeats the rule above, so a function that reads, labels or declassifies content, or decides what is
+  approved, granted or refused, is `keep` whatever share of the samples it holds.
+- **The ledger.** Every function row measured is recorded as `functions:<command key>:<self|inclusive>:<function>`
+  with its share, so a later run reports a function whose share grew by 25% and is at least a quarter
+  of its threshold. A share is not a time: samples are a fraction, so a command that got faster can
+  raise the share of the function that did not.
+- **A missing tool.** `perf` not installed, `perf` refused by the kernel (`perf_event_paranoid` above 1
+  without a capability, and many containers) or no test or start over its threshold each give a note
+  and no candidates. Before the lane builds anything it asks `perf` to record a program that does nothing.
+  Without `nm` or `addr2line` the functions are listed with no location.

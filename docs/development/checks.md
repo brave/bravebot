@@ -394,12 +394,19 @@ installed), the median of a cold `bravebot --version` and of the terminal client
 slowest compile units of a cold `cargo build --release --timings` and the ones on its critical path, the
 size of each release binary and, where cargo-bloat is installed, the crates behind it, and the wall time
 of each script `check-scripts` and the commit hook run. A lane whose tool is missing says so and has no
-candidates. It builds the workspace in release mode, so it takes as long as that does and nothing runs it
+candidates. It then samples the tests and starts that came out over their threshold with `perf` (the
+`functions` lane), and ranks the functions in them by the samples they hold themselves and by the samples
+they are on the stack for, with the file and line of each. On a machine where `perf` is missing or the
+kernel refuses it (`perf_event_paranoid`), that lane says so and has no candidates. The terminal client
+is sampled on a build with line tables made into a directory of its own, so the release binary the size
+lane measures is unchanged. It builds the workspace in release mode, so it takes as long as that does and nothing runs it
 in CI. Its selftest, `make check-profile-selftest`, pins how each lane reads a tool's output and ranks it
-on fixture text, and `check-scripts` runs it. It is the measuring half of the
+on fixture text, including the parsing of `perf script`, `nm` and `addr2line` output and the ranking of
+functions, and `check-scripts` runs it. It is the measuring half of the
 [profile skill](../../agents/skills/profile/SKILL.md), whose reviewers read the code behind each
 candidate and draft an issue for the ones worth fixing. `docs/profile-reviewed` holds the value each key
-had, so a later run reports growth as well as slowness. `LANES="tests size"` limits the run.
+had, so a later run reports growth as well as slowness. `LANES="tests size"` limits the run, and
+`LANES=functions` runs the tests and startup lanes it samples from.
 
 Wherever this page says a check fails a pull request, what does the failing is not the job going
 red. A job reports. What holds a merge is branch protection's list of required contexts, which is
