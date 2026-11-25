@@ -1,15 +1,20 @@
 // That the Plugins page in the settings lists what the terminal's `/plugin add` installed, turns a
 // plugin off and on by rewriting only `enabled` in its record, and removes one
-// (docs/specs/plugins.md PLUGIN-10, PLUGIN-11).
+// (docs/specs/plugins.md PLUGIN-10, PLUGIN-11). Then that it installs and updates one: a git
+// source's host is asked about before any git starts (PLUGIN-3), the install and update sheets list
+// the plugin's parts inside the untrusted margin with every argv word whole, the yes is offered only
+// once every row is read, a no or Esc writes nothing, and a yes installs or updates (PLUGIN-4,
+// PLUGIN-9).
 //
 // The real app and the real bridge, against a home of this script's own. The plugins are laid out
 // as `/plugin add` leaves them: `<name>/` and `<name>.record` under `~/.bravebot/plugins`, the
-// record in the words `commit_install` writes. Nothing is fetched and nothing is paid for.
+// record in the words `commit_install` writes. The installed one is a folder this script writes.
+// Nothing is fetched and nothing is paid for.
 //
 // Needs `bravebot-rpc` built (`pnpm run bridge`) and the app built (`electron-vite build`), which
 // `pnpm run drive:plugins` does first.
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld } from './drive-world.mjs'
 import { SHOTS_DIR } from './drive-support.mjs'
@@ -86,8 +91,102 @@ try {
   await view.locator('[data-test="plugins-empty"]').waitFor()
   await shoot('empty')
 
+  // ---- a git source: the host is asked about before any git starts, and a no writes nothing ---------
+  const source = view.locator('[data-test="plugin-add-source"] input')
+  const status = view.locator('[data-test="plugins-status"]')
+  const yes = (name) => page.getByRole('button', { name, exact: true })
+  await source.fill('https://example.com/acme/greeter.git')
+  await view.locator('[data-test="plugin-add-submit"]').click()
+  const hostQuestion = page.locator('[data-test="plugin-host-question"]')
+  await hostQuestion.waitFor()
+  assert.equal(await hostQuestion.locator('[data-test="plugin-host"]').innerText(), 'example.com')
+  await shoot('host')
+  await page.getByRole('button', { name: 'Don’t fetch', exact: true }).click()
+  await hostQuestion.waitFor({ state: 'detached' })
+  await status.filter({ hasNotText: 'Reading' }).waitFor()
+  assert.deepEqual(readdirSync(plugins), [], 'a no to the host writes nothing')
+
+  // ---- a local fixture: the listing is drawn inside the untrusted margin ---------------------------
+  const fixture = join(root, 'src-greeter')
+  const description = `Greets the person at the start of a turn. ${'It says hello in the words the person chose, and nothing else. '.repeat(5)}The end of the description.`
+  const writeFixture = (version, skill) => {
+    mkdirSync(join(fixture, 'skills/greet'), { recursive: true })
+    mkdirSync(join(fixture, 'hooks'), { recursive: true })
+    writeFileSync(join(fixture, 'plugin.toml'), `name = "greeter"\nversion = "${version}"\ndescription = "d"\nskills = "skills"\nhooks = "hooks.json"\n`)
+    writeFileSync(join(fixture, 'skills/greet/SKILL.md'), `---\nname: greet\ndescription: ${skill}\n---\n\nSay hello.\n`)
+    writeFileSync(join(fixture, 'hooks.json'), JSON.stringify({ hooks: [{ on: 'turn-started', run: ['${PLUGIN_ROOT}/hooks/greet.sh', '--quiet', 'two words'] }] }))
+    writeFileSync(join(fixture, 'hooks/greet.sh'), '#!/bin/sh\necho hello\n')
+  }
+  writeFixture('2.3.4', description)
+  const sheet = page.locator('[data-test="plugin-sheet"]')
+  /** Bring every row on screen and open every cut description, as a person reading it would. */
+  const readAll = async (button) => {
+    for (const more of await sheet.locator('[data-test="plugin-show-more"]').all()) await more.click()
+    for (const row of await sheet.locator('[data-test="plugin-sheet-row"]').all()) await row.scrollIntoViewIfNeeded()
+    for (let tries = 0; tries < 50 && await yes(button).isDisabled(); tries++) await page.waitForTimeout(100)
+    assert.equal(await yes(button).isDisabled(), false, 'every row read, the yes is offered')
+  }
+
+  await source.fill(fixture)
+  await view.locator('[data-test="plugin-add-submit"]').click()
+  await sheet.waitFor()
+  assert.equal(await sheet.locator('[data-test="plugin-sheet-version"]').innerText(), '2.3.4')
+  assert.equal(await sheet.locator('[data-test="plugin-skill"]').innerText(), 'greet')
+  const argv = (await sheet.locator('[data-test="plugin-argv"] li').allInnerTexts()).map((word) => word.trim())
+  assert.deepEqual(argv, [join(plugins, 'greeter/hooks/greet.sh'), '--quiet', 'two words'], 'each argv word whole, ${PLUGIN_ROOT} expanded')
+  assert.ok((await sheet.locator('[data-test="plugin-sheet-description"]').innerText()).length < description.length, 'a long description is cut')
+  assert.equal(await yes('Yes, install').isDisabled(), true, 'no yes before the cut description is shown')
+  await page.waitForTimeout(300)
+  await shoot('install')
+  await page.keyboard.press('Escape')
+  await sheet.waitFor({ state: 'detached' })
+  await status.filter({ hasNotText: 'Reading' }).waitFor()
+  assert.deepEqual(readdirSync(plugins), [], 'Esc is a no, and a no writes nothing')
+
+  // ---- accepted, from the folder picker ----------------------------------------------------------
+  await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] }) }, fixture)
+  await view.locator('[data-test="plugin-choose-folder"]').click()
+  await sheet.waitFor()
+  await readAll('Yes, install')
+  assert.equal(await sheet.locator('[data-test="plugin-sheet-description"]').innerText(), description, 'Show more draws the whole description')
+  await yes('Yes, install').click()
+  const greeter = view.locator('[data-test="plugin-greeter"]')
+  await greeter.waitFor()
+  assert.equal((await greeter.locator('[data-test="plugin-version"]').innerText()).trim(), '2.3.4')
+  assert.ok(existsSync(join(plugins, 'greeter.record')) && existsSync(join(plugins, 'greeter/plugin.toml')), 'a yes writes the plugin and its record')
+  assert.equal(await status.innerText().then((text) => text.trim() !== ''), true, 'the job’s sentence is shown')
+  await shoot('installed')
+
+  // ---- updated after the fixture changes -----------------------------------------------------------
+  const before = record('greeter')
+  writeFixture('2.4.0', 'Greets the person, now in two languages.')
+  writeFileSync(join(fixture, 'skills/greet/fr.md'), 'Bonjour.\n')
+  await greeter.locator('[data-test="plugin-update"]').click()
+  await sheet.waitFor()
+  assert.equal((await sheet.locator('[data-test="plugin-sheet-versions"]').innerText()).replace(/\s+/g, ' ').trim(), '2.3.4 to 2.4.0')
+  const files = await sheet.locator('[data-test="plugin-file"]').allInnerTexts()
+  for (const file of ['plugin.toml', 'skills/greet/SKILL.md', 'skills/greet/fr.md']) assert.ok(files.includes(file), `${file} is listed as differing: ${files}`)
+  await page.waitForTimeout(300)
+  await shoot('update')
+  await page.getByRole('button', { name: 'Keep it as it is', exact: true }).click()
+  await sheet.waitFor({ state: 'detached' })
+  await status.filter({ hasNotText: 'Reading' }).waitFor()
+  assert.equal(record('greeter'), before, 'a no keeps the record as it was')
+  await greeter.locator('[data-test="plugin-update"]').click()
+  await sheet.waitFor()
+  await readAll('Yes, update')
+  await yes('Yes, update').click()
+  await greeter.locator('[data-test="plugin-version"]').filter({ hasText: '2.4.0' }).waitFor()
+  assert.match(record('greeter'), /version = 2\.4\.0/)
+  await shoot('updated')
+
+  // ---- removed -------------------------------------------------------------------------------------
+  await greeter.locator('[data-test="plugin-remove"]').click()
+  await view.locator('[data-test="plugins-empty"]').waitFor()
+  assert.deepEqual(readdirSync(plugins), [], 'Remove deletes the directory and the record')
+
   assert.deepEqual(errors, [])
-  console.log(`PASS: the Plugins page lists the installed plugins from their records, turns one off and on by rewriting only enabled, and removes them. Screenshots in ${output}/plugins-*.png`)
+  console.log(`PASS: the Plugins page lists, switches and removes plugins, asks about a git host first, lists a local plugin inside the untrusted margin, writes nothing on a no, installs and updates on a yes once every row is read, and removes it. Screenshots in ${output}/plugins-*.png`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'plugins-failure.png') }).catch(() => undefined)
   throw error
