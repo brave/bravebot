@@ -7657,6 +7657,20 @@ mod watch_tests {
 #[path = "folders.rs"]
 mod folders;
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "nothing reads a session's scope until a device is attached to one"
+    )
+)]
+#[path = "scope.rs"]
+mod scope;
+
+#[cfg(test)]
+#[path = "scope_tests.rs"]
+mod scope_tests;
+
 #[cfg(test)]
 #[path = "folders_tests.rs"]
 mod folders_tests;

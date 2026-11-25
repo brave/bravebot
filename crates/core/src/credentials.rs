@@ -868,6 +868,16 @@ impl Exposed {
     pub fn allows_creating(&self, file: &std::path::Path) -> bool {
         self.created.contains(file)
     }
+
+    /// Every file they agreed to have read despite the scan, as the names they were answered under.
+    pub fn agreed_reads(&self) -> impl Iterator<Item = &str> {
+        self.paths.iter().map(String::as_str)
+    }
+
+    /// Every file they agreed to have written with a credential in it.
+    pub fn agreed_creations(&self) -> impl Iterator<Item = &std::path::Path> {
+        self.created.iter().map(std::path::PathBuf::as_path)
+    }
 }
 
 /// Whether this text is one value and nothing else, which is what [`Scanned::only_the_value`]

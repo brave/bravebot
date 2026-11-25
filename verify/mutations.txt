@@ -665,3 +665,67 @@ replace: let granted = self.capabilities_held().contains(&capability); => let gr
 mutation: CapabilitySet::revoke_mcp_call says it withdrew nothing when it withdrew a grant
 file: crates/core/src/capability.rs
 replace: found = true; => found = false;
+
+mutation: Scope::covers compares the deny rules the wrong way round
+file: crates/core/src/scope.rs
+replace: deny: !holds_all(&current.deny, &self.deny), => deny: !holds_all(&self.deny, &current.deny),
+
+mutation: Scope::covers lets a permission mode further along the order through
+file: crates/core/src/scope.rs
+replace: approvals: current.approvals.rank() > self.approvals.rank(), => approvals: current.approvals.rank() < self.approvals.rank(),
+
+mutation: Scope::covers reports a session held to the project and now free of it only when it was never held
+file: crates/core/src/scope.rs
+replace: reads_stay_in_workspace: self.reads_stay_in_workspace => reads_stay_in_workspace: !self.reads_stay_in_workspace
+
+mutation: Scope::covers calls a scope that widened a field covered
+file: crates/core/src/scope.rs
+replace: if widened.is_empty() { => if !widened.is_empty() {
+
+mutation: flagged leaves out a field that went past the ceiling
+file: crates/core/src/scope.rs
+replace: if flags.auto_vetting { => if false {
+
+mutation: holds names a key that is not in the list
+file: crates/core/src/scope.rs
+replace: if same_text(&have[at], key) { => if !same_text(&have[at], key) {
+
+mutation: holds_all says every list holds every key
+file: crates/core/src/scope.rs
+replace: if !holds(have, &wanted[at]) { => if false {
+
+mutation: holds_all_between needs a key in both lists and not in one
+file: crates/core/src/scope.rs
+replace: if !(holds(first, &wanted[at]) || holds(second, &wanted[at])) { => if !(holds(first, &wanted[at]) && holds(second, &wanted[at])) {
+
+mutation: Confinement::is_no_looser_than asks for less than reading and writing no more
+file: crates/core/src/scope.rs
+replace: self.reads.rank() <= than.reads.rank() && self.writes.rank() <= than.writes.rank() => self.reads.rank() <= than.reads.rank() || self.writes.rank() <= than.writes.rank()
+
+mutation: Reads::rank ranks reading the machine as unconfined reading
+file: crates/core/src/scope.rs
+replace: } else if self == Self::Machine { => } else if self == Self::Unconfined {
+
+mutation: Approvals::rank ranks auto as bypassing
+file: crates/core/src/scope.rs
+replace: } else if self == Self::Auto { => } else if self == Self::Bypass {
+
+mutation: Scope::covers lets a confined run line start unasked after the ceiling asked
+file: crates/core/src/scope.rs
+replace: confined_lines: current.confined_lines && !self.confined_lines, => confined_lines: current.confined_lines || !self.confined_lines,
+
+mutation: Scope::covers lets a checkout the ceiling did not hold through
+file: crates/core/src/scope.rs
+replace: checkouts: !holds_all(&self.checkouts, &current.checkouts), => checkouts: !holds_all(&current.checkouts, &self.checkouts),
+
+mutation: Scope::covers lets automatic vetting be turned off where the ceiling had it on
+file: crates/core/src/scope.rs
+replace: auto_vetting: current.auto_vetting != self.auto_vetting, => auto_vetting: current.auto_vetting && !self.auto_vetting,
+
+mutation: Scope::covers lets a path the ceiling did not hold be undecided
+file: crates/core/src/scope.rs
+replace: || !holds_all(&self.undecided, &current.undecided), => ,
+
+mutation: Scope::covers lets a tool the ceiling still asked about go unasked
+file: crates/core/src/scope.rs
+replace: standing_answers: !holds_all(&self.standing_answers, &current.standing_answers), => standing_answers: !holds_all(&current.standing_answers, &self.standing_answers),

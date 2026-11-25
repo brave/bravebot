@@ -1170,6 +1170,16 @@ impl RuleSources {
     pub fn reason(&self, list: &str, anchored: &str) -> Option<&str> {
         reason_of(&self.0, list, anchored)
     }
+
+    /// Every file that wrote the rule `anchored` in `list`, in layer order. A rule in force
+    /// that no file wrote, such as a checkout's rule the person granted, has none.
+    pub fn files_for(&self, list: &str, anchored: &str) -> Vec<&Path> {
+        self.0
+            .iter()
+            .filter(|source| source.list == list && source.anchored == anchored)
+            .map(|source| source.file.as_path())
+            .collect()
+    }
 }
 
 /// The first entry of `sources` for the rule `anchored` in `list`, which is the weakest layer
