@@ -17,6 +17,7 @@ governs:
   - crates/listener/src/pairing.rs
   - crates/listener/src/pairing_tests.rs
   - crates/listener/src/phone.rs
+  - crates/listener/examples/phone.rs
   - crates/listener/src/registry.rs
   - crates/listener/src/revocation_tests.rs
   - crates/listener/src/server.rs
@@ -179,3 +180,14 @@ The person types `revoke NAME` on the host. The host removes the device, ends it
 `verified-by: bravebot_listener::revocation_tests::a_revoked_device_can_be_paired_again_by_the_person`
 `verified-by: bravebot_listener::registry::a_revoked_device_is_not_answered_until_the_person_pairs_it_again`
 `verified-by: bravebot_ui_bridge::device_listener::revoke_on_the_hosts_input_ends_the_phones_connection_and_removes_the_device`
+
+<a id="LISTEN-8"></a>
+### LISTEN-8: a command-line phone pairs with a host from its link, for trying the host by hand
+
+`cargo run -p bravebot-listener --example phone --features testing -- LINK` is a phone at a terminal, for a person who wants to try a host started with `--listen` and has no phone app. It takes the link the host shows after `pair` as its one argument and refuses anything else, a link that is not one a host writes, and a host whose key is not the one the link names, each with a reason and before it shows a code. It connects, proves the secret, and writes the code the person types on the host as `confirm CODE`. It waits for them to do so for as long as the host's window lasts. Once the host has paired it, each line it is given on its standard input is sent as a request and each line the host answers with is written after `host:`. It is a client like any other: the host applies every rule above to it, and it holds no credential and no setting.
+
+`verified-by: bravebot_listener::pairing_tests::a_command_line_phone_pairs_from_a_link_and_talks_to_the_host`
+`verified-by: bravebot_listener::pairing_tests::a_command_line_phone_refuses_a_link_that_is_not_the_hosts`
+`verified-by: bravebot_listener::pairing_tests::a_command_line_phone_says_when_the_host_ends_the_pairing`
+`verified-by: bravebot_listener::pairing_tests::a_command_line_phone_takes_one_argument_that_is_text`
+`verified-by: bravebot_ui_bridge::device_listener::a_command_line_phone_pairs_with_the_real_host_and_is_answered`

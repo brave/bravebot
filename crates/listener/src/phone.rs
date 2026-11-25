@@ -10,6 +10,7 @@
 //! the tests of this crate and of the host, behind the `testing` feature.
 
 use crate::identity::{Identity, KeyHash, hex, public_key_hash};
+use crate::invitation::parse_link;
 use crate::pairing::{self, Secret};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::client::{ClientSessionMemoryCache, Resumption};
@@ -329,4 +330,96 @@ impl Connection {
     pub fn protocol(&self) -> Option<ProtocolVersion> {
         self.stream.get_ref().conn.protocol_version()
     }
+}
+
+/// How long a command-line phone waits for the person to type its code on the host: a window lasts
+/// two minutes, and this is a little longer so that the host's own end of it is what ends the wait.
+const FOR_THE_CODE: Duration = Duration::from_secs(130);
+
+/// How long a command-line phone waits for more of an answer after the last line it was sent.
+const FOR_MORE_OF_AN_ANSWER: Duration = Duration::from_millis(500);
+
+/// The one argument a command-line phone takes: the invitation's link.
+pub fn link_from_arguments(
+    mut arguments: impl Iterator<Item = std::ffi::OsString>,
+) -> Result<String, String> {
+    const USAGE: &str = "usage: phone LINK, where LINK is the link the host shows after `pair`";
+    let (Some(link), None) = (arguments.next(), arguments.next()) else {
+        return Err(USAGE.to_string());
+    };
+    link.into_string()
+        .map_err(|_| "the link is not text".to_string())
+}
+
+/// A phone at a terminal: pairs with the invitation in `link`, writes the code it shows for the
+/// person to type on the host, and once the host has paired it sends each line of `input` and writes
+/// what comes back. It is for trying the host by hand and in tests, with a person's own hands where a
+/// phone's would be.
+pub fn pair_and_talk(
+    link: &str,
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+) -> io::Result<()> {
+    let invitation = parse_link(link).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "that is not a link a host writes",
+        )
+    })?;
+    let phone = Phone::new()?;
+    let mut failure = None;
+    let mut connected = None;
+    for address in &invitation.addresses {
+        match phone.connect(*address, invitation.host) {
+            Ok(connection) => {
+                connected = Some(connection);
+                break;
+            }
+            Err(error) => failure = Some(error),
+        }
+    }
+    let mut connection = connected
+        .ok_or_else(|| failure.unwrap_or_else(|| io::Error::from(io::ErrorKind::NotConnected)))?;
+    let code = connection.begin_pairing(&invitation.secret, Some("command-line phone"))?;
+    writeln!(
+        output,
+        "code: {code}  (when the host says a phone is asking, type `confirm {code}` on it)"
+    )?;
+    output.flush()?;
+    match connection.receive_within(FOR_THE_CODE)? {
+        Some(line) => writeln!(output, "paired: {line}")?,
+        None => {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "the host ended the pairing",
+            ));
+        }
+    }
+    for line in input.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        connection.send(&line)?;
+        loop {
+            match connection.receive_within(FOR_MORE_OF_AN_ANSWER) {
+                Ok(Some(answer)) => writeln!(output, "host: {answer}")?,
+                Ok(None) => {
+                    writeln!(output, "the host ended the connection")?;
+                    return Ok(());
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        output.flush()?;
+    }
+    Ok(())
 }

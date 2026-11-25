@@ -356,3 +356,61 @@ fn revoke_on_the_hosts_input_ends_the_phones_connection_and_removes_the_device()
     host.command("devices");
     host.says("no device is paired");
 }
+
+/// The command-line phone pairs with the real host from the link it shows, and the host's `devices`
+/// command lists it: the whole of pairing by hand, with a program in place of a phone.
+#[test]
+fn a_command_line_phone_pairs_with_the_real_host_and_is_answered() {
+    let scratch = Scratch::new();
+    let kept = Kept::default();
+    let mut host = listening_host(&scratch, &kept);
+    host.says("listening on");
+    host.command(&format!(
+        "pair by-hand control {}",
+        scratch.path("project").display()
+    ));
+    let said = host.says("or type this link on the phone: ");
+    let link = said
+        .split("or type this link on the phone: ")
+        .nth(1)
+        .unwrap()
+        .to_string();
+
+    let written = Kept::default();
+    let (finished, result) = std::sync::mpsc::channel();
+    {
+        let mut written = written.clone();
+        std::thread::spawn(move || {
+            let mut input = std::io::Cursor::new(
+                "{\"id\":1,\"method\":\"instance.info\",\"params\":{}}\n\
+                 {\"id\":2,\"method\":\"session.new\",\"params\":{}}\n",
+            );
+            let done = bravebot_listener::phone::pair_and_talk(&link, &mut input, &mut written);
+            finished.send(done).ok();
+        });
+    }
+    let until = Instant::now() + Duration::from_secs(10);
+    let code = loop {
+        let text = written.text();
+        if let Some((_, after)) = text.split_once("code: ") {
+            let digits: String = after.chars().take(6).collect();
+            if digits.len() == 6 {
+                break digits;
+            }
+        }
+        assert!(Instant::now() < until, "the phone showed no code: {text:?}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    host.says("is asking to pair as by-hand");
+    host.command(&format!("confirm {code}"));
+    host.says("paired by-hand");
+    result
+        .recv_timeout(Duration::from_secs(15))
+        .unwrap()
+        .unwrap();
+    let text = written.text();
+    assert!(text.contains("\"synthetic\":true"), "{text}");
+    assert!(text.contains("\"code\":\"not_allowed\""), "{text}");
+    host.command("devices");
+    host.says("by-hand control");
+}

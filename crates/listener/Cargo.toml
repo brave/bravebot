@@ -15,6 +15,11 @@ workspace = true
 # without the feature.
 testing = []
 
+# The command-line phone, which needs the test phone.
+[[example]]
+name = "phone"
+required-features = ["testing"]
+
 [dependencies]
 base64 = { workspace = true }
 # The one decision about whether a paired device may do what it asks.

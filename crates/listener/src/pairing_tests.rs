@@ -506,3 +506,160 @@ fn stopping_closes_the_window_and_releases_a_phone_waiting_for_its_code() {
     assert!(connection.ended());
     assert!(!rig.invitations.is_open());
 }
+
+/// Output that a test reads while a command-line phone is still writing it.
+#[derive(Clone, Default)]
+struct Kept(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Kept {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Kept {
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+    }
+
+    /// The six digits after `code: `, once the phone has written them.
+    fn code(&self) -> String {
+        let until = Instant::now() + Duration::from_secs(5);
+        loop {
+            let text = self.text();
+            if let Some((_, after)) = text.split_once("code: ") {
+                let digits: String = after.chars().take(6).collect();
+                if digits.len() == 6 {
+                    return digits;
+                }
+            }
+            assert!(Instant::now() < until, "the phone showed no code: {text:?}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+/// A command-line phone run on a thread, with the lines it will send and the text it wrote.
+fn command_line_phone(
+    link: String,
+    lines: &'static str,
+) -> (Kept, std::sync::mpsc::Receiver<std::io::Result<()>>) {
+    let kept = Kept::default();
+    let (finished, result) = std::sync::mpsc::channel();
+    let output = kept.clone();
+    std::thread::spawn(move || {
+        let mut output = output;
+        let done =
+            crate::phone::pair_and_talk(&link, &mut std::io::Cursor::new(lines), &mut output);
+        finished.send(done).ok();
+    });
+    (kept, result)
+}
+
+/// The command-line phone pairs from the link the host shows, writes the code for the person to
+/// type, and once they have, sends each line it is given and writes what the host answers.
+#[test]
+fn a_command_line_phone_pairs_from_a_link_and_talks_to_the_host() {
+    let rig = rig();
+    let opened = rig.invitations.open(terms("one", Grant::Read)).unwrap();
+    let link = crate::invitation::link(
+        &rig.listener.key_hash(),
+        &[rig.listener.address()],
+        &opened.secret,
+    );
+    let (output, finished) = command_line_phone(link, "hello\n\nworld\n");
+    let code = output.code();
+    // The phone shows the code as soon as it has sent its proof, and the host may not have read it.
+    rig.hears(|said| matches!(said, Announcement::Asking { .. }));
+    assert_eq!(rig.invitations.confirm(&code).unwrap(), "one");
+    finished
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
+    let text = output.text();
+    assert!(text.contains("paired"), "{text}");
+    assert!(text.contains("host: one:hello"), "{text}");
+    assert!(text.contains("host: one:world"), "{text}");
+    assert_eq!(text.matches("host: one:").count(), 2, "{text}");
+}
+
+/// A link that is not an invitation, and an invitation for another host, are refused with a reason
+/// and without connecting or showing a code.
+#[test]
+fn a_command_line_phone_refuses_a_link_that_is_not_the_hosts() {
+    let rig = rig();
+    let opened = rig.invitations.open(terms("one", Grant::Read)).unwrap();
+    let mut another_host = rig.listener.key_hash();
+    another_host[0] ^= 1;
+    for link in [
+        "not a link".to_string(),
+        "bravebot://pair?v=1".to_string(),
+        crate::invitation::link(&another_host, &[rig.listener.address()], &opened.secret),
+    ] {
+        let (output, finished) = command_line_phone(link.clone(), "");
+        let result = finished.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(result.is_err(), "{link}");
+        assert!(
+            !output.text().contains("code: "),
+            "{link}: {}",
+            output.text()
+        );
+    }
+    assert!(rig.invitations.is_open());
+}
+
+/// A host that refuses the code ends the phone's pairing, and the phone says so and stops.
+#[test]
+fn a_command_line_phone_says_when_the_host_ends_the_pairing() {
+    let rig = rig();
+    let opened = rig.invitations.open(terms("one", Grant::Read)).unwrap();
+    let link = crate::invitation::link(
+        &rig.listener.key_hash(),
+        &[rig.listener.address()],
+        &opened.secret,
+    );
+    let (output, finished) = command_line_phone(link, "hello\n");
+    let code = output.code();
+    rig.hears(|said| matches!(said, Announcement::Asking { .. }));
+    let wrong = if code == "000000" { "000001" } else { "000000" };
+    assert!(rig.invitations.confirm(wrong).is_err());
+    let result = finished.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(result.is_err());
+    assert!(!output.text().contains("host: one:"));
+}
+
+/// The command-line phone takes the link as its one argument, and says how to run it otherwise.
+#[test]
+fn a_command_line_phone_takes_one_argument_that_is_text() {
+    use std::ffi::OsString;
+    let one = |text: &str| vec![OsString::from(text)].into_iter();
+    assert_eq!(
+        crate::phone::link_from_arguments(one("bravebot://pair?v=1")),
+        Ok("bravebot://pair?v=1".to_string())
+    );
+    assert!(
+        crate::phone::link_from_arguments(Vec::new().into_iter())
+            .unwrap_err()
+            .contains("usage")
+    );
+    let two = vec![OsString::from("a"), OsString::from("b")];
+    assert!(
+        crate::phone::link_from_arguments(two.into_iter())
+            .unwrap_err()
+            .contains("usage")
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        let not_text = vec![OsString::from_vec(vec![0xff, 0xfe])];
+        assert!(
+            crate::phone::link_from_arguments(not_text.into_iter())
+                .unwrap_err()
+                .contains("text")
+        );
+    }
+}
