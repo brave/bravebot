@@ -4,6 +4,17 @@
 //! records alone, so listing hashes nothing (PLUGIN-9), and turning a plugin on or off or removing
 //! it asks nothing (PLUGIN-11). A refusal is said in the words `/plugin` says it in.
 
+// The install listing and the update difference the add and update job puts to the window. The job
+// comes in a later change; until then only the listing's tests use it.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the add and update job that puts the listing is not wired yet"
+    )
+)]
+mod listing;
+
 use crate::protocol::{ErrorCode, Failure, Request};
 use bravebot_agent::confirm::printable_spelled;
 use bravebot_agent::plugin_source::Source;
