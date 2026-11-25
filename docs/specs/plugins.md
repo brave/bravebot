@@ -15,13 +15,15 @@ governs:
   - crates/tui/src/plugin_command.rs
   - crates/tui/src/confirm/plugin.rs
   - crates/tui/src/confirm/hook.rs
+  - crates/ui-bridge/src/plugins.rs
+  - crates/ui-bridge/src/plugins/listing.rs
 documented-by:
   - docs/website/docs/customize/plugins.md
 ---
 
 ## Scope
 
-One person-run command that installs a bundle of skills, delegate definitions, hooks and MCP server
+One person-run action that installs a bundle of skills, delegate definitions, hooks and MCP server
 declarations from one source, what the person is shown before it does, where each part lands, what a
 plugin can never carry, and how an installed plugin is updated, turned off and removed.
 
@@ -29,14 +31,17 @@ What is built is the install of a plugin from a local path or from a git URL and
 `/plugin add`, and `/plugin update`, `/plugin list`, `/plugin remove`, `/plugin enable` and
 `/plugin disable`, for the skills, definitions, hooks and servers a plugin carries, with the hook
 question and the server question of [PLUGIN-7](#PLUGIN-7) and `${PLUGIN_ROOT}`
-([PLUGIN-13](#PLUGIN-13)). A clause only partly built has a **Not built** paragraph naming what is
+([PLUGIN-13](#PLUGIN-13)). The desktop interface offers the same six actions on its Plugins settings
+page, through the `plugins.*` methods of the UI bridge, which run the same shared install and update
+and put the same questions. A clause only partly built has a **Not built** paragraph naming what is
 missing. The specs this one changes are named in
 [What this changes elsewhere](#what-this-changes-elsewhere). The skills, definitions, instructions,
 trust-map, hooks and MCP servers specs were edited when the work they describe landed, and the
 programs and import specs are not edited until theirs does.
 
 A **plugin** is a directory with a `plugin.toml` at its root. A **source** is a git URL or a local path
-that holds one. The **install** is `/plugin add`, which a person types. There is no marketplace, no
+that holds one. The **install** is `/plugin add`, which a person types, or the install form of the
+desktop Plugins settings page, which a person fills in. There is no marketplace, no
 catalog and no index of plugins: a person names the source.
 
 Where a skill, a definition, a hook or a server is read from, and what each is trusted for, is
@@ -56,13 +61,19 @@ server. Each is trusted on its own terms. Nothing names a bundle, a version or a
 ## Clauses
 
 <a id="PLUGIN-1"></a>
-### PLUGIN-1: a plugin is installed only by a command a person types
+### PLUGIN-1: a plugin is installed only by a person's own action
 
-`/plugin add <source>` is the only way a plugin is installed. `/plugin update`, `/plugin remove`,
-`/plugin enable`, `/plugin disable` and `/plugin list` are the others. No tool the planner calls
-installs, updates, removes, enables or disables one, no checkout file requests one, and a line
-arriving through a quarantined source (a pasted block, a fetched page, a file in a workspace) is not
-the typed command even where it reads as one.
+`/plugin add <source>` typed at a terminal and the install form of the desktop Plugins settings page
+are the only ways a plugin is installed. `/plugin update`, `/plugin remove`, `/plugin enable`,
+`/plugin disable` and `/plugin list`, and the matching controls on that page, are the others. No tool
+the planner calls installs, updates, removes, enables or disables one, no checkout file requests one,
+and a line arriving through a quarantined source (a pasted block, a fetched page, a file in a
+workspace) is not the typed command even where it reads as one.
+
+The desktop page takes a source only from the field a person types into or from the folder picker
+the main process opens, and nothing in a transcript or a link calls it. The bridge refuses every
+`plugins.*` method to a client of the local host, so only the desktop window reaches them. A
+relative path has no workspace on the desktop and is refused.
 
 **Why.** An install puts programs and instructions into the directory every later session trusts by
 provenance. Whether that happens is a decision about where bytes land and what runs afterwards, and
@@ -74,6 +85,8 @@ only a person's own keystrokes are a source for it that no content can author.
 `verified-by: bravebot_cli::running::a_one_shot_task_opening_with_slash_plugin_add_installs_nothing`
 `verified-by: bravebot_cli::running::a_one_shot_task_opening_with_slash_plugin_update_changes_nothing`
 `verified-by: bravebot_tui::plugin_command::the_words_after_the_command_read_as_the_six_forms_and_nothing_else`
+`verified-by: bravebot_ui_bridge::host_allowlist::every_plugin_method_is_denied_to_a_client_of_the_host`
+`verified-by: bravebot_ui_bridge::plugins::a_relative_path_is_refused`
 
 <a id="PLUGIN-2"></a>
 ### PLUGIN-2: `plugin.toml` names its parts, and a part it does not name is not installed
@@ -209,6 +222,12 @@ a hook is not made to run and a server is not made reachable by it, which each r
 first-use question ([PLUGIN-7](#PLUGIN-7)). No mode answers this prompt and no allow rule does. Where
 nobody can be asked, such as a one-shot run, nothing is installed.
 
+The desktop Plugins page puts the same listing, built by the bridge from the same staged plugin, in a
+sheet with the plugin's text inside the untrusted margin. Only its explicit yes installs. Esc, closing
+the sheet, leaving the page, a reply to another question, a cancel and a window that has gone are
+each a no, and with no window attached there is nobody to ask. Yes is enabled only once every row has
+been on screen.
+
 The hook rows give the moment, the tool a `tool-finished` entry names, the file a `file-changed` entry
 watches, the timeout, and each word of the argv on a row of its own with `${PLUGIN_ROOT}` already
 replaced ([PLUGIN-13](#PLUGIN-13)). The server rows give the alias, the transport, each word of the
@@ -246,6 +265,20 @@ source, and a local path has none.
 `verified-by: bravebot_agent::plugins::where_nobody_can_be_asked_nothing_is_installed`
 `verified-by: bravebot_agent::plugins::only_a_yes_installs_and_the_question_is_put_once`
 `verified-by: bravebot_agent::plugin_sources::a_staged_plugin_is_marked_with_the_sources_that_shadow_its_names`
+`verified-by: bravebot_ui_bridge::plugins::listing::every_part_and_every_argv_word_is_listed_expanded`
+`verified-by: bravebot_ui_bridge::plugins::listing::a_joined_alias_that_is_too_long_reads_as_never_started`
+`verified-by: bravebot_ui_bridge::plugins::listing::an_unreadable_hooks_file_is_a_fault_and_not_empty`
+`verified-by: bravebot_ui_bridge::plugins::listing::a_shadowed_skill_carries_shadowed_by`
+`verified-by: bravebot_ui_bridge::plugins::a_local_add_asks_once_and_only_a_yes_installs`
+`verified-by: bravebot_ui_bridge::plugins::a_git_url_asks_about_the_host_first_and_a_no_fetches_nothing`
+`verified-by: bravebot_ui_bridge::plugins::an_archive_url_is_refused_without_a_question`
+`verified-by: bravebot_ui_bridge::plugins::a_cancel_or_a_closed_window_installs_nothing`
+`verified-by: bravebot_ui_bridge::plugins::only_a_yes_to_the_question_put_is_a_yes`
+`verified-by: bravebot_ui_bridge::plugins::a_reply_sent_before_the_question_is_not_its_answer`
+`verified-by: bravebot_ui_bridge::plugins::a_dropped_channel_is_a_no`
+`verified-by: bravebot_ui_bridge::plugins::a_quiet_window_is_nobody_and_a_question_open_when_it_goes_is_a_no`
+`verified-by: bravebot_ui_bridge::plugins::with_no_window_an_add_is_nobody_to_ask_and_writes_nothing`
+`verified-by: by-construction (ui/scripts/drive-plugins.mjs drives the desktop app against a scratch home: it installs a local plugin from the Plugins settings page, checks that the sheet shows the plugin's text inside the untrusted margin, declines and finds nothing written, then accepts, updates and removes it; it runs as pnpm run drive:plugins)`
 
 <a id="PLUGIN-5"></a>
 ### PLUGIN-5: a plugin installs at user scope, into one directory the person's own, and a workspace plugin is inert
@@ -413,6 +446,10 @@ plugin still installed. Installing the same files again is asked about again. `/
 installed plugin's name, version, source, resolved commit, recorded digest and whether it is enabled,
 reads nothing but that record and starts no program.
 
+The desktop Plugins page lists the same fields from the same records, and its Update and Remove
+buttons run the same update and remove. An update from the page puts the host question and the
+difference in the window, and the answers count as they do for the typed command.
+
 **Why.** An update that applied itself would be a fetch nobody asked for followed by changed programs
 nobody saw.
 
@@ -450,6 +487,12 @@ nobody saw.
 `verified-by: bravebot_tui::confirm::plugin::update::only_a_y_updates_and_not_before_every_row_has_been_drawn`
 `verified-by: bravebot_cli::running::starting_a_session_makes_no_request_for_an_installed_git_source_plugin`
 `verified-by: bravebot_cli::running::a_one_shot_task_opening_with_slash_plugin_update_changes_nothing`
+`verified-by: bravebot_ui_bridge::plugins::the_list_is_what_each_record_says_and_only_git_has_a_commit`
+`verified-by: bravebot_ui_bridge::plugins::nothing_installed_is_an_empty_list`
+`verified-by: bravebot_ui_bridge::plugins::removing_deletes_the_directory_and_the_record`
+`verified-by: bravebot_ui_bridge::plugins::a_bad_or_missing_name_is_refused_in_a_sentence`
+`verified-by: bravebot_ui_bridge::plugins::an_update_asks_only_when_the_source_changed_and_only_a_yes_replaces`
+`verified-by: bravebot_ui_bridge::plugins::listing::the_update_view_pairs_a_change_and_reports_an_unreadable_before`
 
 <a id="PLUGIN-10"></a>
 ### PLUGIN-10: a plugin's text reaches a turn only as the part it is
@@ -472,7 +515,8 @@ would be a second way for the plugin to speak that no prompt showed.
 skill, no definition, no hook and no server, and its directory, its record and every answer recorded
 for its hooks and servers stay as they were. `/plugin enable <name>` sets the state back and asks
 nothing new: a part whose digest equals the one answered for is as approved as before, and any other
-part asks as [PLUGIN-7](#PLUGIN-7) says. Both commands are typed ([PLUGIN-1](#PLUGIN-1)). A newly
+part asks as [PLUGIN-7](#PLUGIN-7) says. Each is a person's own action ([PLUGIN-1](#PLUGIN-1)): the
+typed command, or the switch on the desktop Plugins page, which asks nothing either. A newly
 installed plugin is enabled.
 
 **Why.** A person who wants a plugin out of the way for a while should not have to remove it and answer
@@ -486,6 +530,7 @@ every question again.
 `verified-by: bravebot_agent::plugins::a_disabled_plugin_is_listed_and_offers_nothing_until_enabled`
 `verified-by: bravebot_agent::plugin_sources::an_enabled_plugin_offers_its_skill_and_definition_and_a_disabled_one_offers_nothing`
 `verified-by: bravebot_tui::plugin_command::remove_enable_and_disable_act_without_a_question_and_miss_in_words`
+`verified-by: bravebot_ui_bridge::plugins::disabling_then_enabling_flips_only_enabled`
 
 <a id="PLUGIN-12"></a>
 ### PLUGIN-12: a plugin's skills and definitions rank last, and two plugins never offer the same name
@@ -579,6 +624,11 @@ work lands, in the same commit as the code.
 
 ## Known costs
 
+- The desktop Plugins page has no open session, so it checks shadowing against the home sources
+  alone. A project skill that would shadow a plugin skill is not marked there, and the sheet says so.
+- A plugin installed from the desktop keeps its hooks silent in desktop sessions, because the desktop
+  cannot approve a plugin hook ([HOOK-11](hooks.md#HOOK-11)). The sheet says so beside a plugin that
+  carries hooks.
 - A person installing a plugin sees a long listing. The listing is the protection, and a short one would
   be the plugin's own summary.
 - A plugin cannot ship a permission rule, so the readme of a plugin that wants a command allowed has to

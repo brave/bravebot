@@ -1,7 +1,7 @@
 ---
 sidebar_position: 9
 title: Plugins
-description: Install a bundle of skills, agent definitions, hooks and MCP servers from a folder on this machine or a git URL with /plugin add, see what it shows you first, the question a plugin hook and a plugin server each ask, what stops them when the plugin's folder changes, and what a plugin can never carry.
+description: Install a bundle of skills, agent definitions, hooks and MCP servers from a folder on this machine or a git URL with /plugin add or the desktop app's Plugins settings, see what it shows you first, the question a plugin hook and a plugin server each ask, what stops them when the plugin's folder changes, and what a plugin can never carry.
 ---
 
 # Plugins
@@ -10,7 +10,8 @@ A plugin is a folder with a `plugin.toml` at its root that bundles skills, agent
 and MCP servers under one name. `/plugin add <path>` installs one from a folder on this machine, and
 `/plugin add <git url>` or `/plugin add <git url>#<ref>` installs one from a git repository. You type
 the command, and you are shown every skill, definition, hook and server in the plugin before anything
-is copied.
+is copied. In the desktop app, the Plugins page in Settings does the same
+(see [In the desktop app](#in-the-desktop-app)).
 
 A plugin's hooks and servers are installed with it, and each
 asks its own question before it first runs or starts. `/plugin update <name>` fetches the source again
@@ -28,13 +29,44 @@ and puts what changed to you, and nothing updates on its own.
 | `/plugin disable <name>` | Keeps the plugin installed and stops it offering anything: no hook fires and no server starts |
 | `/plugin enable <name>` | Turns a disabled plugin back on, and asks nothing new for a folder that has not changed |
 
-These are commands you type and nothing else runs them. No tool the model is offered installs or
+These are commands you type, and the desktop Plugins page is the only other way to run them. No tool the model is offered installs or
 changes a plugin, and a `/plugin add` line that arrives inside pasted text is text in the box, not
 the command. A one-shot run has no `/plugin` command and installs nothing, since nobody can be
 asked there. See [`/plugin`](../reference/commands.md) for the forms.
 
 A relative `<path>` is read from the session's workspace folder. An installed plugin is yours and
 is offered in every project.
+
+## In the desktop app
+
+Open Settings and choose **Plugins**. The page lists each installed plugin with its name, version,
+source, ref and commit for a git source, digest, and a switch that turns it on and off. It reads
+only the records, as `/plugin list` does.
+
+- **Install** reads the source in the field above the button. Type an absolute folder path or a git
+  URL, or use **Choose folder…** to pick a folder. A relative path is refused, because the app has
+  no workspace folder to read it from.
+- The switch disables or enables the plugin, as `/plugin disable` and `/plugin enable` do, and asks
+  nothing.
+- **Update** runs `/plugin update` for that plugin, and **Remove** runs `/plugin remove`.
+
+Install and Update put the same questions as the commands, in the window:
+
+- For a git source you are first asked about the host, with the host on its own row. No connection is
+  made until you choose **Yes, fetch from this host**.
+- The install sheet and the update sheet list the same rows as the boxes described below, with the
+  plugin's own text inside the untrusted content margin. A long description is cut, with
+  **Show more** beside it, and no word of a hook's or server's program and arguments is cut.
+- **Yes, install** and **Yes, update** are enabled only once every row has been on screen. Only those
+  buttons install or update. **Don't install**, **Keep it as it is**, `Esc`, closing the sheet and
+  leaving the page each answer no.
+- The app has no open session for the page, so a skill or definition is marked as shadowed only by
+  one in your home directory, and the sheet says so.
+- The app cannot approve a plugin hook, so a plugin's hooks do not run in the app's conversations.
+  The sheet says so for a plugin that carries hooks.
+
+Only the app's own window can do any of this. A client of the local host cannot install, update,
+remove, enable or disable a plugin, and nothing in a conversation or a link can start an install.
 
 ## Installing from a git URL
 
