@@ -66111,6 +66111,98 @@ fn a_kept_checkouts_file_comes_back_through_a_question_the_table_would_not_ask()
     );
 }
 
+/// TOOL-6. `apply_checkout` is never offered to a delegate, so a delegate that collects another
+/// delegate's kept checkout must not be told to call it: the collecting turn's own tool list
+/// lacks it, not only the leaf delegate's. Where [`a_kept_checkouts_file_comes_back_through_a_question_the_table_would_not_ask`]
+/// pins the wording a turn with `apply_checkout` is given, this pins the wording one without it is
+/// given, through the same real call path (`collect_delegates` calling `checkout_account`), with a
+/// delegate standing in place of the top-level turn.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_delegate_collecting_a_nested_checkout_is_not_told_to_use_apply_checkout() {
+    let scratch = Scratch::new("delegate-checkout-nested");
+    let home = Scratch::new("delegate-checkout-nested-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "MANAGE-THE-WORK",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"RUN-A-CHECKOUT-WORKER"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "RUN-A-CHECKOUT-WORKER",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"WRITE-IN-THE-CHECKOUT","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "WRITE-IN-THE-CHECKOUT",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"out.txt","contents":"from the nested worker"}"#,
+                ),
+                reply_with("wrote it"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("MANAGE-THE-WORK").with_home(Some(home.path.clone())),
+        &mut RecordingConfirmer::approving(),
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    let asked = every_request(&received);
+    // The manager delegate's own requests: its task is replayed into the top-level turn's own
+    // conversation too, so the filter keeps only the ones that are its and not the top's.
+    let manager_asked: Vec<&String> = asked
+        .iter()
+        .filter(|body| body.contains("RUN-A-CHECKOUT-WORKER") && !body.contains("MANAGE-THE-WORK"))
+        .collect();
+    assert!(
+        !manager_asked.is_empty(),
+        "the manager delegate never asked anything"
+    );
+    assert!(
+        manager_asked
+            .iter()
+            .any(|body| body.contains("The files it holds stay at")
+                && body.contains("until the person brings them back another way")),
+        "a delegate collecting a nested checkout was not told the files stay put: {manager_asked:#?}"
+    );
+    assert!(
+        !manager_asked
+            .iter()
+            .any(|body| body.contains("apply_checkout with checkout")),
+        "a delegate collecting a nested checkout was told to use a tool it does not have: \
+         {manager_asked:#?}"
+    );
+}
+
 /// A worker given a checkout writes each of `files` (path and contents) there and the turn ends.
 /// Returns the workspace that keeps the checkout, the working directory, the home and the trust
 /// map the turn handed back, which holds the rules copied for the checkout.
