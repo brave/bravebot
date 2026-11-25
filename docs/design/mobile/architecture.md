@@ -177,7 +177,7 @@ A settings edit can widen a running session. [SANDBOX-22](../../specs/sandboxing
 
 ## Decisions before authenticated networking
 
-The decisions of 2026-11-24 for stage 6 are in the [decision record](decisions-and-tradeoffs.md#13-device-keys-and-the-pairing-list-live-in-host-memory), and the requirements follow. Nothing here is built. The tests still needed are in [stage 6](implementation-plan.md#6-enable-authenticated-networking), and the phone spike is [Q10](open-questions.md#q10-what-can-the-phone-pin-and-sign).
+The decisions of 2026-11-24 for stage 6 are in the [decision record](decisions-and-tradeoffs.md#13-device-keys-and-the-pairing-list-live-in-host-memory), and the requirements follow. Nothing here is built. The tests still needed are in [stage 6](implementation-plan.md#6-enable-authenticated-networking).
 
 - **Identity and pairing:** the host holds its key and the paired-device list in memory. A device pairs with a QR code on the host and a confirmation code typed on the host, over TLS 1.3 with pinned self-signed keys (decisions 13, 14, 20). A device's strings are escaped before the host prints them. Tailscale is reachability only, and the host binds one chosen address (decision 15).
 - **Grants:** `read` or `control`, no default, one workspace, one connection per device. Revocation ends the connection and removes the device's kinds, and a request not yet run does not run (decision 16).

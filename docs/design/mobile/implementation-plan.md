@@ -188,10 +188,10 @@ Status: built as a limited prototype mode, [the desktop as a client of the host]
 
 ### 6. Enable authenticated networking
 
-Status: decided on 2026-11-24 and not started. The decisions are [13–20](decisions-and-tradeoffs.md#13-device-keys-and-the-pairing-list-live-in-host-memory), and [Q10](open-questions.md#q10-what-can-the-phone-pin-and-sign) holds the spike that remains. The scope sources are pinned by tests of today's behavior, except references, search caps, the run output cap, the download cap, MCP requests and effort.
+Status: decided on 2026-11-24 and not started. The decisions are [13–20](decisions-and-tradeoffs.md#13-device-keys-and-the-pairing-list-live-in-host-memory), and decision 20 records what the Android and iPhone platforms support. The scope sources are pinned by tests of today's behavior, except references, search caps, the run output cap, the download cap, MCP requests and effort.
 
 Order, each step a pull request:
-1. A phone transport spike (Q10) and a scope API in the agent, with a Verus contract if the comparison is a gate. Neither enables network access.
+1. A scope API in the agent, with a Verus contract if the comparison is a gate. It enables no network access.
 2. The listener, pairing and revocation on synthetic data, with the HOST-13 amendment and the new clauses that describe them.
 3. Per-device grants and enforcement, with adversarial tests and readiness expiry.
 4. The destination policy for private display. Real sessions stay blocked until it and the scope check both exist.
@@ -205,7 +205,7 @@ Add encrypted transport, host identity verification, host-approved pairing, revo
 
 Enforce the operation and reply-field allowlist from the contract. Scope-expanding answers other than a `control` device's one-session trust yes remain unavailable on the phone. Determine effective scope from the agent's resolved rules, modes, trust, programs, directories, and exposure state. A device whose ceiling an earlier scope fits must not see or control a scope past that ceiling without explicit reauthorization ([decision 18](decisions-and-tradeoffs.md#18-a-devices-scope-is-a-ceiling-set-at-pairing)). Resolve private-display destination authorization against policy before transmitting content.
 
-Done when unauthorized, revoked, wrong-host, stale-target, and out-of-scope calls, and session creation, sends, answers, cancels and closes from a read-only grant, cause no protected disclosure or effect. Test direct bypass attempts, not only UI controls. Tailscale reachability binds the tailnet address directly, because Serve in HTTPS mode would, unverified, break key pinning ([decision 20](decisions-and-tradeoffs.md#20-the-phone-connects-over-tls-with-pinned-keys-after-a-spike)), and it is not the application authorization system.
+Done when unauthorized, revoked, wrong-host, stale-target, and out-of-scope calls, and session creation, sends, answers, cancels and closes from a read-only grant, cause no protected disclosure or effect. Test direct bypass attempts, not only UI controls. Tailscale reachability binds the tailnet address directly, because Serve in HTTPS mode would, unverified, break key pinning ([decision 20](decisions-and-tradeoffs.md#20-the-phone-connects-over-tls-with-pinned-keys)), and it is not the application authorization system.
 
 ### 7. Connect the React Native remote adapter
 
