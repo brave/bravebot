@@ -136,17 +136,30 @@ state directory moves with the profile variable, so the path is not one to be as
 `verified-by: bravebot_ui_bridge::no_state_directory::with_no_state_directory_there_is_no_bug_report_and_no_update_record`
 
 <a id="DIAG-6"></a>
-### DIAG-6: nothing in the program reads the log
+### DIAG-6: nothing in the program reads the log, and the `/log-review` skill is the one reader
 
-No code path opens a log file to decide, show or send anything. The log is written and left for a
-person. The one question asked of the directory is the name of the newest file, answered from the
-names alone ([DIAG-8](#DIAG-8)).
+No code path in the program opens a log file to decide, show or send anything. The log is written
+and left for a person. The one question the program asks of the directory is the name of the newest
+file, answered from the names alone ([DIAG-8](#DIAG-8)).
+
+The one reader is the `/log-review` skill (`agents/skills/log-review/`), which a maintainer runs to
+find defects in bravebot. It is development tooling and not part of the program. Its script opens a
+log file for two things only: to copy it into a work directory and to count what it holds. Every
+field of a line is a host, a number or a fixed word ([DIAG-1](#DIAG-1)), so the counts hold numbers
+and fixed words and a host appears in them only as a pseudonym that is written nowhere. A line that
+does not fit that shape is counted and never copied. No model output decides anything the script
+does. Nothing a line holds, a host included, is written into an issue: the draft step replaces every
+host found in the copied logs with `<host>` in every field a model wrote, and the skill's prompts
+forbid quoting a line.
 
 **Why.** The planner and the driver never receive untrusted content and the driver does not branch
-on it. A log that was read back would be a channel from a remote party's failure into the next
-decision, whatever the log was meant for.
+on it. A log that was read back by the program would be a channel from a remote party's failure into
+the next decision, whatever the log was meant for. The skill keeps that rule because DIAG-1 limits
+what a line can hold, the script reads the files to copy and count them and decides nothing from a
+line, and what a model reads is data it is told to follow no instruction in, which reaches no issue.
 
 `verified-by: by-construction (the crate exposes functions to write a line and to name the newest file, and none to read a file's content; the directory name is read by the CLI only to be passed to the writer, to be shown by doctor and to be handed to the naming function, and by the desktop bridge only to be handed to the naming function)`
+`verified-by: by-construction (the log-review skill's script reads a log only to copy it into its work directory and to count it, so no model output and no line decides what the program does; make check-scripts runs agents/skills/log-review/selftest.py, whose test_pending_prints_no_line_of_a_log_to_stdout_or_stderr_and_writes_no_host_outside_the_copies pins that no line or host reaches a stream or a file outside the copies, test_the_digest_holds_no_host_and_a_host_is_the_same_pseudonym_everywhere_in_a_run and test_a_line_that_does_not_parse_is_counted_and_never_copied pin the digest to numbers, fixed words and pseudonyms, test_a_draft_scrubs_every_host_of_the_logs_and_the_home_directory_from_every_field pins that no host reaches an issue, and test_a_security_concern_is_held_and_never_sent_to_a_verifier_or_drafted pins that a concern is held and never posted)`
 
 <a id="DIAG-7"></a>
 ### DIAG-7: a failed request, a retry and a server that did not start are recorded
