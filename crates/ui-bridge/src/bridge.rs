@@ -3212,13 +3212,6 @@ impl Bridge {
                 stored.discard_unwritten(&snapshot.title);
             }
         }
-        // Taken as shown, as a resume takes it, so the next turn says the set only if it changes
-        // from where the undo left it (OPEN-3).
-        let workspace = match &state.kept {
-            Some(kept) => workspace.with_kept_between_turns(kept),
-            None => workspace,
-        };
-        state.loops_shown = open_loops(state, &workspace);
         if discard {
             // The record is gone, so the next prompt names the session again, and nothing it did
             // is open any longer.
@@ -3228,7 +3221,9 @@ impl Bridge {
             state.open_loops = Default::default();
         } else {
             // The rewound conversation may no longer hold what the planner was told, so the loops
-            // the session now leaves open are told again on the next turn (OPEN-4).
+            // the session now leaves open are told again on the next turn (OPEN-4). They are taken
+            // as the last turn's, so the next turn says the line only if it changes from where the
+            // undo left it (OPEN-3).
             if let Some(kept) = &state.kept {
                 workspace = workspace.with_kept_between_turns(kept);
             }
