@@ -1795,11 +1795,12 @@ deliberately is not something the picker offers, that entry not being on this pr
 <a id="BACKEND-27"></a>
 ### BACKEND-27: a Bedrock request, and one to Anthropic, marks the prefix it will send again
 
-Two cache breakpoints go on a request to Bedrock: one at the end of the system prompt, which covers
-the tool schemas in front of it, and one on the last block of the conversation, which moves to the
-end as the conversation grows. The second comes off where the caller says no later request sends that
-conversation again, leaving such a request the system prompt's breakpoint alone. Neither changes what
-is sent, only what the service has to read again.
+Three cache breakpoints go on a request to Bedrock: one after the last tool schema, one at the end
+of the system prompt, and one on the last block of the conversation, which moves to the end as the
+conversation grows. The last comes off where the caller says no later request sends that
+conversation again, leaving such a request the breakpoints on the schemas and the prompt. None
+changes what is sent, only what the service has to read again. A request offering no tools has no
+tool list and so no breakpoint on one.
 
 **Why.** A turn re-sends its whole history every round. One session reached 104,633 tokens over
 twenty-seven rounds and paid for every token of every round at full price, in latency as much as in
@@ -1809,13 +1810,20 @@ front of the last one are identical to a round ago.
 
 **Rolling rather than fixed.** Each request writes the round before it into the cache and reads
 back everything older, which is what makes the second breakpoint worth a cache write. A conversation
-ending in an image or a tool call is left with the breakpoint on the system prompt alone, and costs
-a cache write and nothing else. A request whose conversation no later request sends is left the same
-way: the write on the end of that exchange is charged above the tokens it covers and buys a cache
-nothing reads back, while the prompt in front of it is the same bytes every time such a request is
-made. Which requests those are is the caller's to say, and
+ending in an image or a tool call is left with the breakpoints on the schemas and the system prompt,
+and costs a cache write and nothing else. A request whose conversation no later request sends is
+left the same way: the write on the end of that exchange is charged above the tokens it covers and
+buys a cache nothing reads back, while the prompt in front of it is the same bytes every time such a
+request is made. Which requests those are is the caller's to say, and
 [compaction.md](compaction.md), [goal.md](goal.md), [watching.md](watching.md) and
 [tools/spawn-processor.md](tools/spawn-processor.md) are where they say it.
+
+**The schemas have a breakpoint of their own.** The service caches tools, then system, then
+messages, and keeps an entry only where a breakpoint is. The schemas are the same bytes in every
+project, while the system prompt names the working directory, the date and the project's rules. With
+the breakpoint only on the prompt, a session in another directory misses at the prompt and writes the
+schemas again with it, about 25,000 tokens charged above the fresh rate. With one after the schemas
+it reads them back. Three breakpoints are within the four the service allows.
 
 **The reported prompt is what was sent, not what was read.** This API states `inputTokens` net of
 the cache and reports the cached tokens beside it, so the three are added back together on the way
@@ -1857,7 +1865,8 @@ last thing the user said, never a result. That is BACKEND-32, and it turns on th
 asking a service which refuses costs one round trip while not asking costs every request.
 
 **How long the service keeps it is a person's choice.** A `promptCacheTtl` of `5m` or `1h` in the
-settings puts a `ttl` of that word on each breakpoint, the prompt's and the conversation's alike.
+settings puts a `ttl` of that word on each breakpoint, the schemas', the prompt's and the
+conversation's alike.
 Absent, or any other word, nothing is added and the service keeps its own default, so a build nobody
 has configured sends breakpoints with no `ttl` field. The longer lifetime is charged at a higher write rate, which
 is why the default is no lifetime rather than the longest. The setting is read from the person's own
@@ -1896,6 +1905,7 @@ so nothing in [labels.md](labels.md) reads differently for a request that carrie
 for one that does not.
 
 `verified-by: bravebot_bedrock::protocol::the_system_prompt_carries_a_breakpoint`
+`verified-by: bravebot_bedrock::protocol::the_tool_list_ends_in_one_cache_point`
 `verified-by: bravebot_bedrock::protocol::a_chosen_lifetime_is_stated_on_every_breakpoint`
 `verified-by: bravebot_bedrock::protocol::no_lifetime_is_sent_where_none_was_chosen`
 `verified-by: bravebot_bedrock::lib::the_chosen_lifetime_is_sent_until_the_model_refuses_it`
@@ -1938,6 +1948,7 @@ for one that does not.
 `verified-by: bravebot_aichat::anthropic::protocol::a_conversation_ending_in_a_picture_or_a_document_is_marked_nowhere_but_the_prompt`
 `verified-by: bravebot_aichat::anthropic::protocol::a_request_giving_up_its_conversation_keeps_the_prompts_breakpoint_alone`
 `verified-by: bravebot_aichat::anthropic::protocol::a_chosen_lifetime_is_stated_on_every_breakpoint_and_none_is_added`
+`verified-by: bravebot_aichat::anthropic::protocol::the_last_tool_definition_carries_a_breakpoint_and_no_other_does`
 `verified-by: bravebot_aichat::anthropic::protocol::a_request_without_breakpoints_keeps_everything_that_was_asked_for`
 `verified-by: bravebot_aichat::client::an_anthropic_request_refused_on_its_contents_is_asked_again_without_what_nobody_asked_for`
 `verified-by: bravebot_aichat::client::an_anthropic_entry_that_refused_a_breakpoint_is_not_sent_one_again_per_service`
@@ -2245,14 +2256,15 @@ says which turn it speaks for, the counts beside it being the session's.
 <a id="BACKEND-32"></a>
 ### BACKEND-32: an aichat request marks the prefix it will send again, except at OpenAI's own API
 
-A request in the OpenAI-compatible wire format marks two prefixes: the system prompt, which the tool
-schemas travel in front of, and the last thing the user said. The second is left off where the caller
-says the conversation is given up once it has been answered, marking the prompt alone. The mark is a
-`cache_control` of `{"type": "ephemeral"}` on the content block the prefix ends at, which is the field
-the Anthropic API defines for this and the field a gateway fronting such a model reads. A marked
-message carries its words as a block rather than as a bare string, that being the only shape the
-field exists in. A request to `api.openai.com` is the exception: it carries no mark and no lifetime, as
-"OpenAI's own API is sent none" below says.
+A request in the OpenAI-compatible wire format marks three prefixes: the tool schemas, the system
+prompt, and the last thing the user said. The last is left off where the caller says the
+conversation is given up once it has been answered. The mark is a `cache_control` of
+`{"type": "ephemeral"}` on the last tool definition and on the content block a prefix ends at, which
+is the field the Anthropic API defines for this and the field a gateway fronting such a model reads.
+The schemas are marked for the reason BACKEND-27 gives: they are the same bytes in every project and
+the system prompt is not. A marked message carries its words as a block rather than as a bare
+string, that being the only shape the field exists in. A request to `api.openai.com` is the
+exception: it carries no mark and no lifetime, as "OpenAI's own API is sent none" below says.
 
 **Why.** The arithmetic is BACKEND-27's, and so is the measurement behind it: a turn re-sends its
 whole history every round, the system prompt and the schemas are identical on every round of every
@@ -2356,6 +2368,7 @@ and which bytes a service kept from an earlier request cannot put a byte into th
 sent.
 
 `verified-by: bravebot_aichat::protocol::the_system_prompt_and_the_last_thing_the_user_said_are_marked`
+`verified-by: bravebot_aichat::protocol::the_last_tool_definition_carries_a_breakpoint_with_the_lifetime_asked_for`
 `verified-by: bravebot_aichat::lib::a_chosen_lifetime_goes_to_a_gateway_and_to_nothing_else`
 `verified-by: bravebot_aichat::lib::a_request_to_openais_own_api_is_sent_no_breakpoints_and_one_to_a_proxy_is`
 `verified-by: bravebot_config::provider::openais_own_api_follows_the_host_a_request_goes_to_whatever_the_entry_is_called`
@@ -2366,7 +2379,7 @@ sent.
 `verified-by: bravebot_aichat::protocol::a_request_giving_up_its_conversation_marks_the_prompt_alone`
 `verified-by: bravebot_aichat::protocol::a_turn_ending_in_a_picture_is_left_unmarked`
 `verified-by: bravebot_aichat::protocol::the_words_after_a_picture_carry_the_mark`
-`verified-by: bravebot_aichat::protocol::a_marked_body_changes_nothing_but_the_messages`
+`verified-by: bravebot_aichat::protocol::a_marked_body_changes_nothing_but_the_messages_and_the_last_tools_mark`
 `verified-by: bravebot_aichat::protocol::a_marked_block_is_the_block_it_came_from_and_the_mark`
 `verified-by: bravebot_aichat::protocol::an_empty_turn_is_left_alone`
 `verified-by: bravebot_aichat::client::the_request_asks_the_service_to_cache_the_prefix_it_will_be_sent_again`

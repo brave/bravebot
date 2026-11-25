@@ -498,12 +498,30 @@ impl ChatRequest {
     /// breakpoint.
     ///
     /// A `Value` rather than a second request type. Every field is serialized from this struct and
-    /// only the marked messages' content is written over, so a field added to a request cannot be
-    /// forgotten here, which is the way a parallel wire struct goes wrong.
+    /// only the marked messages' content and the last tool definition are written over, so a field
+    /// added to a request cannot be forgotten here, which is the way a parallel wire struct goes
+    /// wrong.
+    ///
+    /// The last tool definition carries a breakpoint of its own: the schemas are the same bytes in
+    /// every project while the system prompt is not, so without it a session in another directory
+    /// writes the schemas again along with the prompt (BACKEND-32).
     ///
     /// `ttl` is the lifetime each breakpoint asks for, or `None` for the service's own default.
     pub fn marked_body(&self, ttl: Option<CacheTtl>) -> Result<Value, serde_json::Error> {
         let mut body = serde_json::to_value(self)?;
+        if let Some(last) = body
+            .get_mut("tools")
+            .and_then(Value::as_array_mut)
+            .and_then(|tools| tools.last_mut())
+            .and_then(Value::as_object_mut)
+        {
+            last.insert(
+                "cache_control".to_string(),
+                serde_json::to_value(CacheControl::Ephemeral {
+                    ttl: ttl.map(CacheTtl::wire),
+                })?,
+            );
+        }
         let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
             return Ok(body);
         };
@@ -2662,9 +2680,10 @@ mod tests {
 
         /// The marked body is this request and not a second one built beside it. A field added to a
         /// request must reach the service whether or not the prefix was marked, and the way that
-        /// goes wrong is a parallel wire struct nobody remembered to extend.
+        /// goes wrong is a parallel wire struct nobody remembered to extend. The tools are the one
+        /// other field marking writes to, and only by adding the breakpoint to the last of them.
         #[test]
-        fn a_marked_body_changes_nothing_but_the_messages() {
+        fn a_marked_body_changes_nothing_but_the_messages_and_the_last_tools_mark() {
             let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")])
                 .with_tools(vec![Tool::function("read", "reads", json!({}))])
                 .with_effort(Some(Effort::Xhigh))
@@ -2679,6 +2698,12 @@ mod tests {
                 if field == "messages" {
                     continue;
                 }
+                if field == "tools" {
+                    let mut expected = value.clone();
+                    expected[0]["cache_control"] = json!({"type": "ephemeral"});
+                    assert_eq!(marked.get(field), Some(&expected), "the tools");
+                    continue;
+                }
                 assert_eq!(marked.get(field), Some(value), "{field} did not survive");
             }
             assert_eq!(
@@ -2686,6 +2711,42 @@ mod tests {
                 plain.len(),
                 "a field appeared or went missing"
             );
+        }
+
+        /// The tool schemas are the same bytes in every project, and the system prompt is not: it
+        /// names the working directory, the date and the project's rules. With the breakpoint only
+        /// on the prompt, a session in another directory misses at the prompt and writes the
+        /// schemas again with it. One on the last tool lets that session read the schemas back. It
+        /// goes on the last tool only, carries the lifetime asked for, and a request with no tools
+        /// gains none.
+        ///
+        /// Rejects a request that marks no tool, one that marks every tool (each a breakpoint, past
+        /// the four a service allows), and one that drops the lifetime from the tool's mark.
+        #[test]
+        fn the_last_tool_definition_carries_a_breakpoint_with_the_lifetime_asked_for() {
+            let request =
+                ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]).with_tools(vec![
+                    Tool::function("read", "reads", json!({})),
+                    Tool::function("write", "writes", json!({})),
+                ]);
+
+            let body = request.marked_body(None).unwrap();
+            assert_eq!(body["tools"][0].get("cache_control"), None, "{body}");
+            assert_eq!(
+                body["tools"][1]["cache_control"],
+                json!({"type": "ephemeral"}),
+                "{body}"
+            );
+
+            let hour = request.marked_body(Some(CacheTtl::OneHour)).unwrap();
+            assert_eq!(
+                hour["tools"][1]["cache_control"],
+                json!({"type": "ephemeral", "ttl": "1h"})
+            );
+
+            let toolless = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+            let body = toolless.marked_body(None).unwrap();
+            assert_eq!(body.get("tools"), None, "{body}");
         }
 
         /// A marked message's blocks are the only thing built a second time, so they are where
