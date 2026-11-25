@@ -24,6 +24,8 @@ pub struct Emitter(Arc<Mutex<Output>>);
 struct Output {
     sink: Listener,
     views: std::collections::HashMap<String, crate::view::View>,
+    /// Whether [`Emitter::go_quiet`] has run, so nothing said reaches anybody.
+    quiet: bool,
 }
 
 impl Output {
@@ -51,6 +53,7 @@ impl Emitter {
         Self(Arc::new(Mutex::new(Output {
             sink,
             views: Default::default(),
+            quiet: false,
         })))
     }
 
@@ -75,7 +78,14 @@ impl Emitter {
     pub fn go_quiet(&self) {
         if let Ok(mut output) = self.0.lock() {
             output.sink = Box::new(|_| {});
+            output.quiet = true;
         }
+    }
+
+    /// Whether the window has gone, so nothing said reaches anybody. A poisoned lock reaches
+    /// nobody either, so it reads as quiet.
+    pub fn is_quiet(&self) -> bool {
+        self.0.lock().map_or(true, |output| output.quiet)
     }
 
     pub fn has_view(&self, session: &str) -> bool {

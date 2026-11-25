@@ -92,6 +92,10 @@ fn every_plugin_method_is_denied_to_a_client_of_the_host() {
         "plugins.enable",
         "plugins.disable",
         "plugins.remove",
+        "plugins.add",
+        "plugins.update",
+        "plugins.reply",
+        "plugins.cancel",
     ] {
         assert!(
             plugins.iter().any(|m| m == method),
