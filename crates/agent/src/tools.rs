@@ -12071,40 +12071,39 @@ fn failed_line_text(
             format!("error: `{said}` stopped at a program that was not started: {error}.")
         }
     };
+    // A program that could not be confined is worded and counted the same way whether it is the
+    // whole of the line or found inside a `$(...)` it read, since either way the sandbox is what
+    // refused it and the one request for no sandbox is earned the same way (SANDBOX-29).
+    if let Some((before, network_closed)) = not_confined_within(error) {
+        let ran = ran(before);
+        let head = head(before);
+        let until = match unconfined_offered {
+            true => "until the person makes one of the changes that follow.",
+            false => "until the session's settings or the platform change.",
+        };
+        let routes = match unconfined_offered {
+            true => {
+                " The person can let it start: run the same line with 'unconfined': true and \
+                 say in 'why' that the sandbox could not confine it, and the person is asked \
+                 to approve that one line, every time, to run with no sandbox; or the person \
+                 can choose the sandbox mode off with /sandbox off or --sandbox off, where the \
+                 administrator allows it."
+            }
+            false => "",
+        };
+        let open = match (unconfined_offered, network_closed) {
+            (true, true) => {
+                " Either way the line runs with the network open, since only the sandbox \
+                 holds it closed."
+            }
+            _ => "",
+        };
+        return format!(
+            "{head} {ran} Running the same line again is refused the same way \
+             {until}{routes}{open}"
+        );
+    }
     match error {
-        crate::exec::ExecError::NotConfined {
-            before,
-            network_closed,
-            ..
-        } => {
-            let ran = ran(before);
-            let head = head(before);
-            let until = match unconfined_offered {
-                true => "until the person makes one of the changes that follow.",
-                false => "until the session's settings or the platform change.",
-            };
-            let routes = match unconfined_offered {
-                true => {
-                    " The person can let it start: run the same line with 'unconfined': true and \
-                     say in 'why' that the sandbox could not confine it, and the person is asked \
-                     to approve that one line, every time, to run with no sandbox; or the person \
-                     can choose the sandbox mode off with /sandbox off or --sandbox off, where the \
-                     administrator allows it."
-                }
-                false => "",
-            };
-            let open = match (unconfined_offered, network_closed) {
-                (true, true) => {
-                    " Either way the line runs with the network open, since only the sandbox \
-                     holds it closed."
-                }
-                _ => "",
-            };
-            format!(
-                "{head} {ran} Running the same line again is refused the same way \
-                 {until}{routes}{open}"
-            )
-        }
         crate::exec::ExecError::NotStarted { before, .. } => {
             format!("{} {}", head(before), ran(before))
         }
@@ -12119,10 +12118,35 @@ fn failed_line_text(
              exists with the 'directory' argument. A command earlier in the line may already \
              have run"
         ),
+
         _ => format!(
             "error: `{said}` may have run in part: {error}; check what it did before running it \
              again"
         ),
+    }
+}
+
+/// The `before` and `network_closed` of a [`crate::exec::ExecError::NotConfined`], read through
+/// any [`crate::exec::SubstitutionFailure::Inside`] wrapping it. A program that could not be
+/// confined is refused the same way whether it is the whole of the line or one a `$(...)` it
+/// read ran, so this is the one place that decides whether an error is that refusal, and
+/// [`failed_line_text`] and [`noted_failure_text`] both ask it instead of matching `NotConfined`
+/// on their own (SANDBOX-29).
+fn not_confined_within(
+    error: &crate::exec::ExecError,
+) -> Option<(&crate::exec::StartedBefore, bool)> {
+    use crate::exec::{ExecError, SubstitutionFailure};
+    match error {
+        ExecError::NotConfined {
+            before,
+            network_closed,
+            ..
+        } => Some((before, *network_closed)),
+        ExecError::Substitution {
+            failure: SubstitutionFailure::Inside(inner),
+            ..
+        } => not_confined_within(inner),
+        _ => None,
     }
 }
 
@@ -12136,7 +12160,7 @@ fn noted_failure_text<S: Sink>(
     said: &str,
     error: &crate::exec::ExecError,
 ) -> String {
-    if matches!(error, crate::exec::ExecError::NotConfined { .. }) {
+    if not_confined_within(error).is_some() {
         tools.confined_failures.note();
     }
     failed_line_text(said, error, unconfined_is_offered(policy, tools))
@@ -12684,14 +12708,12 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                 .having_run_a_program()
             }
             // A program refused for want of confinement is told as a foreground one is and earns
-            // the same request (SANDBOX-17, SANDBOX-29). Read off the error's kind, which the
-            // driver chose.
+            // the same request (SANDBOX-17, SANDBOX-29), whether it is the whole of the line or
+            // one a `$(...)` it read ran.
             Err(error) => {
-                let text = match &error {
-                    crate::exec::ExecError::NotConfined { .. } => {
-                        noted_failure_text(policy, tools, &said, &error)
-                    }
-                    _ => format!("error: `{said}` did not start: {error}"),
+                let text = match not_confined_within(&error) {
+                    Some(_) => noted_failure_text(policy, tools, &said, &error),
+                    None => format!("error: `{said}` did not start: {error}"),
                 };
                 failed_line_result(text, &error).having_started_a_program()
             }
@@ -16890,6 +16912,111 @@ mod tests {
         );
         let unoffered = failed_line_text("python3 script.py", &closed, false);
         assert!(!unoffered.contains("network open"), "{unoffered}");
+    }
+
+    /// SANDBOX-29: a program that could not be confined inside a `$(...)` a line read is worded
+    /// and counted the same as one that is the whole of the line, since either way the sandbox
+    /// refused it. The regression it rejects is the old catch-all text ("may have run in part",
+    /// naming no route), which is what a `Substitution`-wrapped `NotConfined` fell into before
+    /// `failed_line_text` looked inside the wrapper.
+    #[test]
+    fn a_notconfined_inside_a_substitution_is_worded_the_same_as_one_outside_it() {
+        use crate::exec::{ExecError, StartedBefore, SubstitutionFailure};
+        let not_confined = |before| ExecError::NotConfined {
+            program: "python3".into(),
+            detail: "the network is closed for this session (run.network)".into(),
+            before,
+            network_closed: false,
+            entry: None,
+        };
+        let wrapped = |before| ExecError::Substitution {
+            source: "python3 -c pass".into(),
+            failure: SubstitutionFailure::Inside(Box::new(not_confined(before))),
+        };
+
+        let direct = failed_line_text(
+            "cat $(python3 -c pass)",
+            &not_confined(StartedBefore::Nothing),
+            true,
+        );
+        let inside = failed_line_text(
+            "cat $(python3 -c pass)",
+            &wrapped(StartedBefore::Nothing),
+            true,
+        );
+        // The error's own text differs, since the wrapped one correctly says it happened inside
+        // the substitution; everything `failed_line_text` adds around it is the same.
+        assert!(inside.contains("did not produce a value"), "{inside}");
+        assert!(!inside.contains("may have run in part"), "{inside}");
+        assert!(inside.contains("was not run"), "{inside}");
+        assert!(direct.contains("was not run"), "{direct}");
+        assert!(inside.contains("Nothing of the line started"), "{inside}");
+        assert!(inside.contains("'unconfined': true"), "{inside}");
+        assert!(
+            inside.contains(
+                "Running the same line again is refused the same way until the person makes \
+                 one of the changes that follow."
+            ),
+            "{inside}"
+        );
+        assert!(
+            direct.contains(
+                "Running the same line again is refused the same way until the person makes \
+                 one of the changes that follow."
+            ),
+            "{direct}"
+        );
+
+        // The outer line's own StartedBefore is what is said, not the substitution's: a part of
+        // the outer line before it had started even though the substitution's own pipeline
+        // started nothing of its own.
+        let joined = failed_line_text(
+            "make && cat $(python3 -c pass)",
+            &wrapped(StartedBefore::EarlierPart),
+            true,
+        );
+        assert!(
+            joined.contains("stopped at a program that was not started"),
+            "{joined}"
+        );
+        assert!(
+            joined.contains("No stage of its pipeline started"),
+            "{joined}"
+        );
+        assert!(!joined.contains("Nothing of the line started"), "{joined}");
+    }
+
+    /// SANDBOX-29: a `NotConfined` found inside a `$(...)` earns the one request for no sandbox
+    /// the same way one that is the whole of the line does. The regression it rejects is the
+    /// count left at zero for a wrapped refusal, which is what `matches!(error,
+    /// ExecError::NotConfined { .. })` gave before `noted_failure_text` asked `not_confined_within`
+    /// instead.
+    #[test]
+    fn not_confined_within_sees_through_a_substitution_to_the_notconfined_it_wraps() {
+        use crate::exec::{ExecError, StartedBefore, SubstitutionFailure};
+        let not_confined = ExecError::NotConfined {
+            program: "python3".into(),
+            detail: "could not be confined".into(),
+            before: StartedBefore::EarlierPart,
+            network_closed: true,
+            entry: None,
+        };
+        let wrapped = ExecError::Substitution {
+            source: "python3 -c pass".into(),
+            failure: SubstitutionFailure::Inside(Box::new(not_confined)),
+        };
+        let found = not_confined_within(&wrapped);
+        assert!(found.is_some(), "{wrapped:?}");
+        let (before, network_closed) = found.unwrap();
+        assert_eq!(*before, StartedBefore::EarlierPart);
+        assert!(network_closed);
+
+        assert!(not_confined_within(&ExecError::Cancelled).is_none());
+        let unrelated_inside = ExecError::Substitution {
+            source: "id".into(),
+            failure: SubstitutionFailure::Inside(Box::new(ExecError::Cancelled)),
+        };
+        assert!(not_confined_within(&unrelated_inside).is_none());
     }
 
     /// CMDLINE-17, PATH-001: a file a substitution could not open is told under the directory as

@@ -633,7 +633,10 @@ pub enum StartedBefore {
 }
 
 impl ExecError {
-    /// This error with `before` recorded, where it is one a program that did not start gives.
+    /// This error with `before` recorded, where it is one a program that did not start gives, or
+    /// where it is a [`SubstitutionFailure::Inside`] wrapping one. `before` is what the outer
+    /// line had started, not what the substitution's own pipeline had, since the outer line is
+    /// what reaches the planner (SANDBOX-29).
     fn started_before(self, before: StartedBefore) -> Self {
         match self {
             Self::NotStarted {
@@ -655,6 +658,13 @@ impl ExecError {
                 before,
                 network_closed,
                 entry,
+            },
+            Self::Substitution {
+                source,
+                failure: SubstitutionFailure::Inside(inner),
+            } => Self::Substitution {
+                source,
+                failure: SubstitutionFailure::Inside(Box::new(inner.started_before(before))),
             },
             other => other,
         }
@@ -1143,7 +1153,9 @@ impl<'a> Running<'a> {
         // variable that is unset or withheld, or a substitution that fails, refuses the pipeline
         // with nothing of it running. The values live in `expanded` and reach `command_for` and
         // nothing else.
-        let expanded = self.expand_all(steps)?;
+        let expanded = self
+            .expand_all(steps)
+            .map_err(|error| error.started_before(self.before_this_pipeline()))?;
 
         let mut children = ForegroundChildren(Vec::with_capacity(steps.len()));
         // Nothing is typed at a program bravebot started, so a step with nothing upstream reads an
@@ -2371,7 +2383,9 @@ pub fn start_steps_within(
     // cancellation and deadline.
     let mut resolving = Running::new(directory, cancel, limit, scratch, None);
     resolving.confinement = confinement;
-    let expanded = resolving.expand_all(steps)?;
+    let expanded = resolving
+        .expand_all(steps)
+        .map_err(|error| error.started_before(resolving.before_this_pipeline()))?;
     let mut children: Vec<Process> = Vec::with_capacity(steps.len());
     let mut upstream: Option<Handle> = None;
     let mut tail: Option<Drain> = None;
@@ -2434,4 +2448,80 @@ pub fn start_steps_within(
         started: Instant::now(),
         exited: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ExecError, StartedBefore, SubstitutionFailure};
+
+    /// The `before` of a `NotConfined` found through zero or more `Substitution`/`Inside`
+    /// wrappers, or `None` where the shape is not that at all.
+    fn before_of_the_notconfined_within(error: &ExecError) -> Option<StartedBefore> {
+        match error {
+            ExecError::NotConfined { before, .. } => Some(*before),
+            ExecError::Substitution {
+                failure: SubstitutionFailure::Inside(inner),
+                ..
+            } => before_of_the_notconfined_within(inner),
+            _ => None,
+        }
+    }
+
+    /// SANDBOX-29: `started_before` recurses through a `Substitution`'s `Inside` cause to set the
+    /// `before` of the `NotConfined` (or `NotStarted`) it wraps, rather than leaving the wrapper's
+    /// own `before` unset and the error inside untouched. The regression it rejects is `before`
+    /// applied to the outer `Substitution` value, which has no such field and so would be
+    /// silently dropped, or not applied at all, which leaves the inner error at whatever
+    /// `StartedBefore` it was given when it was made.
+    #[test]
+    fn started_before_recurses_through_a_substitution_to_the_notconfined_it_wraps() {
+        let not_confined = ExecError::NotConfined {
+            program: "python3".into(),
+            detail: "the network is closed for this session (run.network)".into(),
+            before: StartedBefore::Nothing,
+            network_closed: false,
+            entry: None,
+        };
+        let wrapped = ExecError::Substitution {
+            source: "python3 -c pass".into(),
+            failure: SubstitutionFailure::Inside(Box::new(not_confined)),
+        };
+
+        let after = wrapped.started_before(StartedBefore::EarlierPart);
+
+        assert_eq!(
+            before_of_the_notconfined_within(&after),
+            Some(StartedBefore::EarlierPart),
+            "{after:?}"
+        );
+    }
+
+    /// The same for a nested substitution, two `Inside` wrappers deep, so the recursion reaches a
+    /// `NotConfined` whatever its depth and not only one `Inside` down.
+    #[test]
+    fn started_before_recurses_through_a_substitution_nested_two_deep() {
+        let not_confined = ExecError::NotConfined {
+            program: "python3".into(),
+            detail: "could not be confined".into(),
+            before: StartedBefore::Nothing,
+            network_closed: false,
+            entry: None,
+        };
+        let inner_wrap = ExecError::Substitution {
+            source: "inner".into(),
+            failure: SubstitutionFailure::Inside(Box::new(not_confined)),
+        };
+        let outer_wrap = ExecError::Substitution {
+            source: "outer".into(),
+            failure: SubstitutionFailure::Inside(Box::new(inner_wrap)),
+        };
+
+        let after = outer_wrap.started_before(StartedBefore::EarlierStages);
+
+        assert_eq!(
+            before_of_the_notconfined_within(&after),
+            Some(StartedBefore::EarlierStages),
+            "{after:?}"
+        );
+    }
 }
