@@ -56,6 +56,7 @@ The certificate is written by this crate, a few dozen bytes of DER, so no certif
 `verified-by: bravebot_listener::identity::the_name_in_the_certificate_does_not_change_the_hash_of_its_key`
 `verified-by: bravebot_listener::identity::a_key_that_is_not_p256_is_not_named`
 `verified-by: bravebot_listener::identity::a_certificate_that_is_cut_or_changed_is_read_without_a_panic`
+`verified-by: bravebot_listener::identity::the_key_named_is_the_key_the_signature_is_checked_against`
 `verified-by: bravebot_listener::identity::the_debug_form_of_an_identity_names_the_key_and_holds_back_the_private_key`
 `verified-by: bravebot_listener::der::an_element_is_read_back_at_each_length_form`
 `verified-by: bravebot_listener::der::bytes_that_do_not_hold_an_element_are_not_read`

@@ -133,12 +133,12 @@ fn a_phone_pairs_through_the_hosts_input_and_is_shown_synthetic_data() {
         scratch.path("project").display()
     ));
     let said = host.says("or type this link on the phone: ");
-    let link = parse_link(
-        said.split("or type this link on the phone: ")
-            .nth(1)
-            .unwrap(),
-    )
-    .unwrap();
+    let link_text = said
+        .split("or type this link on the phone: ")
+        .nth(1)
+        .unwrap()
+        .to_string();
+    let link = parse_link(&link_text).unwrap();
     assert_eq!(link.addresses, [address]);
     assert_eq!(bravebot_listener::identity::hex(&link.host), key);
 
@@ -181,6 +181,16 @@ fn a_phone_pairs_through_the_hosts_input_and_is_shown_synthetic_data() {
     );
     let secret = bravebot_listener::identity::hex(&link.secret);
     assert!(!everything.contains(&secret));
+    // The link writes the secret in base64, so that is the form to look for: it is on the one line
+    // that shows the link and on no other.
+    let written = link_text.rsplit("&s=").next().unwrap();
+    assert_eq!(written.len(), 43);
+    let lines_with_it: Vec<&str> = everything
+        .lines()
+        .filter(|line| line.contains(written))
+        .collect();
+    assert_eq!(lines_with_it.len(), 1, "{lines_with_it:?}");
+    assert!(lines_with_it[0].ends_with(&link_text), "{lines_with_it:?}");
     // The host's standard error is a pipe here, so it draws no QR code, and nothing a phone wrote
     // reached it as an escape.
     assert!(!everything.contains('\u{1b}'));

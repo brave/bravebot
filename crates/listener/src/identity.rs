@@ -332,6 +332,42 @@ mod tests {
         }
     }
 
+    /// The key the host names and the key the TLS library checks the handshake signature against are
+    /// read by two parsers. For a certificate cut or changed at any byte that both read, the
+    /// signature of the real key verifies exactly where the host names the real key, so no
+    /// certificate is named as one key and signs as another.
+    #[test]
+    fn the_key_named_is_the_key_the_signature_is_checked_against() {
+        let identity = Identity::generate("a-device").unwrap();
+        let certificate = identity.certificate().to_vec();
+        let message = b"a message the key signs";
+        let signature = identity.sign(message).unwrap();
+        let mut both_read = 0;
+        for at in 0..certificate.len() {
+            for flipped in [0x00, 0xff, certificate[at] ^ 0x01, certificate[at] ^ 0x80] {
+                let mut changed = certificate.clone();
+                changed[at] = flipped;
+                let Some(named) = public_key_hash(&changed) else {
+                    continue;
+                };
+                let der = CertificateDer::from(changed.as_slice());
+                let Ok(read) = EndEntityCert::try_from(&der) else {
+                    continue;
+                };
+                both_read += 1;
+                let verifies = read
+                    .verify_signature(webpki::ring::ECDSA_P256_SHA256, message, &signature)
+                    .is_ok();
+                assert_eq!(
+                    verifies,
+                    named == identity.key_hash(),
+                    "byte {at} set to {flipped:#x}"
+                );
+            }
+        }
+        assert!(both_read > certificate.len(), "{both_read}");
+    }
+
     /// Only a P-256 key is named: another curve, another key type and a point that is not
     /// uncompressed are not, so a device cannot present a key the host could not check a signature of.
     #[test]
