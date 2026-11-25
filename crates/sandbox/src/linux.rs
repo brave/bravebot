@@ -2045,6 +2045,11 @@ mod tests {
     /// the platform (RUN-5, a plain line is not held on Linux) would then misstate.
     ///
     /// Not run on a macOS host: Landlock is Linux only. Type-checked for the Linux target.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "cleanup of a directory the test made, in a test that fails by panicking"
+    )]
     #[test]
     fn a_write_row_reaches_a_git_directory_and_the_other_protected_names_beneath_it() {
         let Some(sandbox) = sandbox_or_fail() else {
