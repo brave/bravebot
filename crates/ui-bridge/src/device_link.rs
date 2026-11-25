@@ -184,6 +184,7 @@ impl Link {
             "pair" => Some(self.pair(&rest)),
             "confirm" => Some(vec![Said::Line(self.confirm(&rest))]),
             "devices" => Some(self.devices().into_iter().map(Said::Line).collect()),
+            "revoke" => Some(vec![Said::Line(self.revoke(&rest))]),
             _ => None,
         }
     }
@@ -246,6 +247,17 @@ impl Link {
         match self.invitations.confirm(code) {
             Ok(name) => format!("paired {name}"),
             Err(error) => error.to_string(),
+        }
+    }
+
+    /// `revoke NAME`: remove a device and end its connection.
+    fn revoke(&self, arguments: &[&str]) -> String {
+        let [name] = arguments else {
+            return "type `revoke NAME`, with the name of a device".to_string();
+        };
+        match self.registry.revoke(name) {
+            Ok(_) => format!("revoked {name}; its connection is ended"),
+            Err(error) => format!("{error}: {name}"),
         }
     }
 

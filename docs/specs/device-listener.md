@@ -18,6 +18,7 @@ governs:
   - crates/listener/src/pairing_tests.rs
   - crates/listener/src/phone.rs
   - crates/listener/src/registry.rs
+  - crates/listener/src/revocation_tests.rs
   - crates/listener/src/server.rs
   - crates/listener/src/serving_tests.rs
   - crates/listener/src/tls.rs
@@ -30,7 +31,7 @@ documented-by: none (internal: the listener is started by a person from the host
 
 How the host accepts a connection from a phone: the keys each end names the other by, which connection is served and which is closed, what is decided before anything a device sent is read, and how a phone is paired and what it is answered. The listener is a library the host starts and gives a service to answer with. It depends on no crate that opens a session, so a device is answered only what that service says.
 
-Not here: how a device is revoked, which lines a device may send once a real session is shown to it, and what a session shows a device.
+Not here: which lines a device may send once a real session is shown to it, and what a session shows a device.
 
 ## Clauses
 
@@ -157,3 +158,16 @@ A device the person paired is answered by a service that holds no way to a sessi
 `verified-by: bravebot_ui_bridge::device_link::every_other_method_is_refused`
 `verified-by: bravebot_ui_bridge::device_link::a_line_that_cannot_be_answered_gets_no_answer_and_one_that_can_gets_a_failure`
 `verified-by: bravebot_ui_bridge::device_listener::a_phone_pairs_through_the_hosts_input_and_is_shown_synthetic_data`
+
+<a id="LISTEN-7"></a>
+### LISTEN-7: a device the person revokes is gone at once and is not let back
+
+The person types `revoke NAME` on the host. The host removes the device, ends its connection and says so. The removal and the end of the connection are made in one hold of the registry's lock, which a request being answered also holds, so a request of the device that is being answered finishes, and a request the host has read and not yet run, or has not yet read, is not run: the device is no longer held when it is asked. A device that connects again completes the handshake, since that is how the host learns who it is, and is closed with nothing sent. It is held as revoked and not as a device nobody paired, until the person pairs it again with a new window ([LISTEN-5](#LISTEN-5)), when it is a device again with the grant and workspace that window gave. A name no device has is refused and changes nothing. Pairing, and revoking, are the person's alone: nothing a device sends is read as either.
+
+`verified-by: bravebot_listener::revocation_tests::revoking_a_device_ends_its_connection_and_removes_it`
+`verified-by: bravebot_listener::revocation_tests::a_name_no_device_has_is_not_revoked`
+`verified-by: bravebot_listener::revocation_tests::a_revoked_device_is_refused_when_it_comes_back`
+`verified-by: bravebot_listener::revocation_tests::a_request_not_yet_run_when_the_device_is_revoked_does_not_run`
+`verified-by: bravebot_listener::revocation_tests::a_revoked_device_can_be_paired_again_by_the_person`
+`verified-by: bravebot_listener::registry::a_revoked_device_is_not_answered_until_the_person_pairs_it_again`
+`verified-by: bravebot_ui_bridge::device_listener::revoke_on_the_hosts_input_ends_the_phones_connection_and_removes_the_device`

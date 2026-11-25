@@ -20,6 +20,8 @@ mod pairing_tests;
 #[cfg(any(test, feature = "testing"))]
 pub mod phone;
 pub mod registry;
+#[cfg(test)]
+mod revocation_tests;
 pub mod server;
 #[cfg(test)]
 mod serving_tests;

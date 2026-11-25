@@ -14,7 +14,7 @@
 
 use crate::identity::KeyHash;
 use bravebot_core::device::{Grant, Operation, Standing, Verdict};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{Shutdown, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -47,6 +47,16 @@ impl std::fmt::Display for Refused {
     }
 }
 
+/// No device has the name.
+#[derive(Debug, PartialEq, Eq)]
+pub struct NoSuchDevice;
+
+impl std::fmt::Display for NoSuchDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("no device has that name")
+    }
+}
+
 /// Whether `name` is one a person may give a device: the same words a client is named with.
 pub fn is_a_name(name: &str) -> bool {
     (1..=32).contains(&name.len())
@@ -63,6 +73,8 @@ struct Live {
 #[derive(Default)]
 struct Inner {
     devices: HashMap<KeyHash, Device>,
+    /// Keys of devices the person removed, until the person pairs one of them again.
+    revoked: HashSet<KeyHash>,
     live: HashMap<KeyHash, Live>,
     connections: u64,
 }
@@ -94,10 +106,11 @@ impl Registry {
     }
 
     fn standing_in(inner: &Inner, key: &KeyHash) -> Standing {
-        inner
-            .devices
-            .get(key)
-            .map_or(Standing::Unknown, |device| Standing::Paired(device.grant))
+        match inner.devices.get(key) {
+            Some(device) => Standing::Paired(device.grant),
+            None if inner.revoked.contains(key) => Standing::Revoked,
+            None => Standing::Unknown,
+        }
     }
 
     /// Add a device the person has paired. A key already held is replaced.
@@ -113,8 +126,27 @@ impl Registry {
         {
             return Err(Refused::NameTaken);
         }
+        inner.revoked.remove(&key);
         inner.devices.insert(key, device);
         Ok(())
+    }
+
+    /// Remove the device named `name` and end its connection, in one hold of the lock, so a request
+    /// of the device that is being answered finishes first and no request of it runs after.
+    pub fn revoke(&self, name: &str) -> Result<Device, NoSuchDevice> {
+        let mut inner = self.lock();
+        let key = inner
+            .devices
+            .iter()
+            .find_map(|(key, device)| (device.name == name).then_some(*key))
+            .ok_or(NoSuchDevice)?;
+        let device = inner.devices.remove(&key).ok_or(NoSuchDevice)?;
+        inner.revoked.insert(key);
+        if let Some(live) = inner.live.remove(&key) {
+            // Ending a connection that already ended is not a failure.
+            live.stream.shutdown(Shutdown::Both).ok();
+        }
+        Ok(device)
     }
 
     /// The devices held, by name.
@@ -356,6 +388,30 @@ mod tests {
         hear_changed.recv_timeout(Duration::from_secs(5)).unwrap();
         answering.join().unwrap();
         changing.join().unwrap();
+        assert_eq!(registry.standing(&[1; 32]), Standing::Paired(Grant::Read));
+    }
+
+    /// A device that was revoked is held as revoked and not as unknown, is answered nothing, and
+    /// pairing it again makes it a device again.
+    #[test]
+    fn a_revoked_device_is_not_answered_until_the_person_pairs_it_again() {
+        let registry = Registry::new();
+        registry
+            .admit([1; 32], device("phone", Grant::Control))
+            .unwrap();
+        registry.revoke("phone").unwrap();
+        assert_eq!(registry.standing(&[1; 32]), Standing::Revoked);
+        assert_eq!(registry.standing(&[2; 32]), Standing::Unknown);
+        let mut ran = false;
+        let answered = registry.answer(&[1; 32], Operation::Read, |_| {
+            ran = true;
+        });
+        assert_eq!(answered, Err(Verdict::Revoked));
+        assert!(!ran);
+        assert!(registry.devices().is_empty());
+        registry
+            .admit([1; 32], device("phone", Grant::Read))
+            .unwrap();
         assert_eq!(registry.standing(&[1; 32]), Standing::Paired(Grant::Read));
     }
 }

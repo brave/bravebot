@@ -339,13 +339,13 @@ fn say_in_answer(link: Option<&bravebot_ui_bridge::device_link::Link>, line: &st
         }
         None if matches!(
             line.split_whitespace().next(),
-            Some("pair" | "confirm" | "devices")
+            Some("pair" | "confirm" | "devices" | "revoke")
         ) =>
         {
             eprintln!("bravebot-host: start the host with --listen ADDR:PORT to pair a device");
         }
         None => eprintln!(
-            "bravebot-host: type `launch NAME` or `quit`, or where it listens `pair`, `confirm` or `devices`"
+            "bravebot-host: type `launch NAME` or `quit`, or where it listens `pair`, `confirm`, `devices` or `revoke`"
         ),
     }
 }

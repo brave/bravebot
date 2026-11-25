@@ -316,3 +316,43 @@ fn quit_ends_a_phones_connection_and_stops_the_host() {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+/// `revoke NAME` on the host's input removes the device, ends its connection at once and says so, and
+/// the host holds no device afterwards. A name no device has, and no name, are answered and change
+/// nothing.
+#[test]
+fn revoke_on_the_hosts_input_ends_the_phones_connection_and_removes_the_device() {
+    let scratch = Scratch::new();
+    let kept = Kept::default();
+    let mut host = listening_host(&scratch, &kept);
+    let (address, _) = address_of(&host.says("listening on"));
+    host.command(&format!(
+        "pair one read {}",
+        scratch.path("project").display()
+    ));
+    let link = parse_link(
+        host.says("or type this link on the phone: ")
+            .split("or type this link on the phone: ")
+            .nth(1)
+            .unwrap(),
+    )
+    .unwrap();
+    let phone = Phone::new().unwrap();
+    let mut connection = phone.connect(address, link.host).unwrap();
+    let code = connection.begin_pairing(&link.secret, None).unwrap();
+    host.says("is asking to pair");
+    host.command(&format!("confirm {code}"));
+    connection.receive().unwrap();
+    let alive = say(&mut connection, "instance.info", &json!({}));
+    assert_eq!(alive["ok"]["synthetic"], true);
+
+    host.command("revoke nobody");
+    host.says("no device has that name: nobody");
+    host.command("revoke");
+    host.says("type `revoke NAME`");
+    host.command("revoke one");
+    host.says("revoked one");
+    assert!(connection.ended());
+    host.command("devices");
+    host.says("no device is paired");
+}
