@@ -232,6 +232,11 @@ impl Host {
     /// As [`Host::launch_unanswered`], with `others` as further workspaces after the one `start`
     /// names.
     pub fn launch_in(start: Start<'_>, others: &[&Path]) -> Self {
+        Self::launch_with(start, others, &[])
+    }
+
+    /// As [`Host::launch_in`], with `extra` as further arguments of the host, before its clients.
+    pub fn launch_with(start: Start<'_>, others: &[&Path], extra: &[&OsStr]) -> Self {
         let _ = std::fs::remove_file(start.relay);
         let relay = UnixListener::bind(start.relay).expect("a relay socket");
         relay.set_nonblocking(true).unwrap();
@@ -260,6 +265,7 @@ impl Host {
         if let Some(settings) = start.settings {
             command.arg("--settings").arg(settings);
         }
+        command.args(extra);
         for (name, answers) in start.clients {
             command
                 .args(["--client", name, "--answers", answers, "--program"])

@@ -170,14 +170,16 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
   that searches and is not on the list is not detected. Which models search on every request is taken
   from OpenAI's documentation and was not exercised against the service.
 
-## Ten deliberate exceptions
+## Eleven deliberate exceptions
 
-Brave Bot looks at untrusted bytes to decide something in ten places, three in the policy layer,
+Brave Bot looks at untrusted bytes to decide something in eleven places, three in the policy layer,
 four in the agent, the search, the diagnostics sentence, reading a repository's history and telling
 a text file from a binary one, one in the MCP client, the choice of which parts of a tool
-result are taken, one in the crate that reads a processor's answer for the number it chose, and one
+result are taken, one in the crate that reads a processor's answer for the number it chose, one
 in the listener `bravebot trigger serve` starts, which decides from a request's line and headers
-and never from its body, all written down rather than left to be found.
+and never from its body, and one in the listener a paired phone connects to, which decides from the
+key a connection shows, its first line, a proof and a code, and gives a phone no way to a session,
+all written down rather than left to be found.
 
 **Splitting a processor's answer.** A processor returns one piece of text holding two things: a remark
 for the person watching, and the document to be written. It marks where the document begins, and the

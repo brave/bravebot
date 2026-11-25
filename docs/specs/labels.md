@@ -865,14 +865,15 @@ arrives at all.
 
 ## Known costs
 
-- **Ten places do look at untrusted bytes in order to decide something.** Three are in the policy
+- **Eleven places do look at untrusted bytes in order to decide something.** Three are in the policy
   layer, the fourth is the search, which is in `bravebot-agent`, the fifth is the diagnostics
   sentence, the sixth is `read_git` and the seventh is the text-or-binary sniff and decoding of a
   read, which are in `bravebot-agent` too, the eighth is the choice of which parts of a tool
   result are taken, which is in `bravebot-mcp`, the ninth is the read of a processor's answer
   for one number or for an `apply` step's rows, and the numbering of the list those rows point
-  into, which are in `bravebot-choice`, and the tenth is the trigger listener's reading
-  of a request's framing and path, which is in `bravebot-cli`. The clauses above say
+  into, which are in `bravebot-choice`, the tenth is the trigger listener's reading
+  of a request's framing and path, which is in `bravebot-cli`, and the eleventh is the device
+  listener's reading of a connection before it is a device, which is in `bravebot-listener`. The clauses above say
   nothing may, so these are exceptions, and they are written down rather than left to be found.
 
   The first is splitting a processor's answer. A processor hands back a single piece of text that
@@ -1391,8 +1392,36 @@ arrives at all.
   by nothing here. A header, a path suffix or a byte of the body that selects a trigger, an event, a
   flag, a directory or a limit is a violation, and not one of these four.
 
+- **The eleventh is the device listener's reading of a connection that is not yet a device.** The
+  host started with `--listen` ([LISTEN](device-listener.md)) accepts a connection from a program
+  nobody vouched for and decides from what it sends whether to go on. The listener is in
+  `bravebot-listener`, which is not the driver, depends on no crate that opens a session, and holds
+  no `declassify`. Four of its decisions are taken from bytes the sender wrote.
+
+  - **The key.** `public_key_hash` in `crates/listener/src/identity.rs` reads the one position of
+    the certificate that holds the public key, and names no key for any shape but a P-256 key. The
+    hash it returns is looked up in the registry the person made, and the lookup decides whether the
+    connection goes on.
+  - **The first line.** A connection that is not a paired device may send one line, which
+    `first_line` and `begin_of` in `crates/listener/src/server.rs` read: at most 4,096 bytes within
+    the time of the handshake, as JSON with the method `pair.begin`, a `proof` of hexadecimal digits
+    and optionally a `label`. A line that is too long, late or of another shape ends the connection.
+    The label is carried to the person's screen escaped and is compared with nothing.
+  - **The proof and the code.** The proof is checked against a value the host computes from the
+    window's secret, the connection's TLS exporter value and the sender's key hash, and the code
+    typed on the host against one computed from the same inputs. Each check takes the same time
+    whatever the sender sent, and a mismatch closes the window.
+  - **The lines of a paired device.** A paired device is the person's own phone, and its lines are
+    read as a client's are, by method. The service the host gives a device holds no way to a
+    session, a bridge or a tool, and answers a method with a fixed answer or a fixed refusal.
+
+  Nothing a device sends reaches a turn, a prompt or a tool, and no byte of it reaches the planner.
+  A branch in the listener on any other byte of a connection, or a service that gives a device a way
+  to a session before the scope check and the destination policy of stage 6 exist, is a violation
+  and not one of these four.
+
 - **A bounded listing's counts of the files and the subdirectories left out of each directory it
-  cut are not one of the ten.** A listing with a depth takes at most 200 files and at most 200
+  cut are not one of the eleven.** A listing with a depth takes at most 200 files and at most 200
   subdirectories from any one directory ([LIST-5](tools/list-files.md#LIST-5)). The walk sorts a
   directory's files by name, drops each file the include pattern does not match or a permission
   rule covers, and keeps the first 200 of the rest, so which 200 are kept is decided by the name
@@ -1433,7 +1462,7 @@ arrives at all.
   word the sentence made from a name, is a violation and not covered here.
 
 - **The reason a checkout's refused filesystem entry is named is chosen from the entry's spelling,
-  and is not one of the ten.** A `run` is not started while an entry of `sandbox.filesystem.denyRead`
+  and is not one of the eleven.** A `run` is not started while an entry of `sandbox.filesystem.denyRead`
   or `denyWrite` cannot be applied ([SANDBOX-25](sandboxing.md#SANDBOX-25)). Where the project or
   local settings file of a checkout wrote that entry, the sentence the planner reads names the list,
   one reason and the file, and not the spelling. The reason is one of five sentences the driver
@@ -1448,7 +1477,7 @@ arrives at all.
   What the planner can learn is which of those five the first refused entry hit: one of five, about
   2.3 bits, and for the last one that the wildcard's directory held more entries than a pattern may
   visit. This is a branch on bytes a checkout wrote whose result reaches the planner, and it is
-  recorded here for that reason. It is not counted among the ten because the same function, reading
+  recorded here for that reason. It is not counted among the eleven because the same function, reading
   the same text, already decided that the entry is refused and the stage not started, which the
   planner was already told, and because the sentence chosen carries no byte of the entry. The file
   that holds the entry is a checkout's file the person did not trust, and its author wrote the entry
@@ -1460,7 +1489,7 @@ arrives at all.
   purpose is a violation and not covered here.
 
 - **Whether a `run` line is refused for standing for too many names, or for reading too many
-  directories, is not one of the ten, and is one bit per call about a directory nobody vouched
+  directories, is not one of the eleven, and is one bit per call about a directory nobody vouched
   for.** [CMDLINE-4](tools/command-line.md#CMDLINE-4) bounds a word at 100 arguments and a walk at
   4,096 directories. The compile compares the number of names the patterns matched with the first,
   and the number of directories it read with the second, and a line past either is refused. The
