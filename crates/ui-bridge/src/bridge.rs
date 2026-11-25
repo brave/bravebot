@@ -5105,18 +5105,6 @@ fn work(work: Work) {
     }
     keep_the_links_of(&mut state, &project, &mut completed);
     state.answers.adopt(completed.decisions);
-    // What the turn did and wrote, however it ended (GROUND-4), added to the session's and written
-    // with the record at the save below so a resume can say what was left open (OPEN-6).
-    state.work.then(completed.work);
-    for landed in reporter.written() {
-        if !state.written.contains(landed) {
-            state.written.push(landed.clone());
-        }
-    }
-    let (work, written) = (state.work, state.written.clone());
-    let handle = state.handle_or_begin(&project);
-    handle.set_work(work);
-    handle.set_written(&written);
     let outcome = completed.outcome;
 
     // The prompt joins the history the terminal also reads, so recall works across both
