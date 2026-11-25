@@ -4265,7 +4265,7 @@ where
                 let reads = reads_that_run_together(
                     &completion.calls[index..],
                     &state.repeats,
-                    addressed.as_ref().map(|addressed| addressed.tools()),
+                    task.confined_to(addressed.as_ref()),
                     Some(&state.offered),
                     hooks,
                     plugin_hooks,

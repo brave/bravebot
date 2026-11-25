@@ -1467,8 +1467,9 @@ else.
 before anything dispatches on it, so a session, a resumed session, a one-shot run and a session in
 lines are refused alike ([MODE-5](permission-modes.md#MODE-5)). In a session the same key is read when
 the session starts and again when it moves to another directory, and the mode is left off the ladder
-the key walks, so the flag and the key cannot disagree about whether the mode is available. A session
-already in the mode when a layer wrote the key is put back to asking.
+the key walks, so the flag and the key cannot disagree about whether the mode is available. The file
+an administrator pinned is read at both points with the settings layers, and the strictest value
+holds. A session already in the mode when a layer wrote the key is put back to asking.
 
 Refused rather than downgraded to asking. A run told to stop asking and carried on with a notice is a
 run whose author believes it is unattended, and the notice is on a stream nobody is reading.
@@ -1484,6 +1485,8 @@ exactly the machine somebody else may have a legitimate say in.
 `verified-by: bravebot_tui::app::reading_the_rules_of_a_checkout_that_forbids_bypassing_takes_bypass_away`
 `verified-by: bravebot_tui::app::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
 `verified-by: bravebot_tui::mode_trail_tests::bypass_made_unreachable_after_the_flag_is_an_opening_and_then_a_change`
+`verified-by: bravebot_tui::app::a_session_the_startup_builds_keeps_bypass_off_the_ladder_where_the_settings_say_it_is_unreachable`
+`verified-by: bravebot_tui::app::a_managed_file_that_makes_bypass_unreachable_keeps_it_off_the_ladder_of_a_new_session`
 
 <a id="PERM-18"></a>
 ### PERM-18: every layer may write either, and the strictest value any layer named holds
