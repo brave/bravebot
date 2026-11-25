@@ -158,8 +158,12 @@ A pull request that weakens what these hold is flagged for a person. After CI ru
 request, the `Proof weakened` workflow runs `contrib/check-verus-weakened.py` against the merge base
 and lists in its job summary every contract the change removes or changes, assumption it adds,
 mutation it removes and survivor it adds, counting a line the ledger already holds once more, and
-every edit to `spec.rs`, `verify/history.rs` or a script that runs the checks. Where it lists any,
-it labels the pull request `proof-weakened` and asks the owners of `verify/` to review. It runs from
+every edit to `spec.rs`, `verify/history.rs` or a script that runs the checks. The list is a
+`Proof weakened` entry in the pull request's checks, neutral where it lists anything and success
+where it does not, so it blocks nothing. A weakening labels the pull request `proof-weakened`. An
+edit to one of those files weakens nothing by itself, and is listed apart and labelled
+`proof-tooling-changed`. Either asks the owners of `verify/` to review, and a label whose list is
+empty comes off. It runs from
 the default branch with that branch's copy of the script, on the commit GitHub says CI ran on, so a
 pull request can change neither the script nor which pull request is labelled, and its code is
 read with `git show` and never run.
