@@ -115,6 +115,16 @@ pub struct State {
     /// the name it was given. `None` until a turn has reached a server.
     pub model: Option<String>,
     pub todos: BTreeMap<usize, Vec<Row>>,
+    /// What every turn of the session did, summed: the writes and commands an open loop is worked
+    /// out from (OPEN-1). Seeded from the record on resume and saved with it (OPEN-6).
+    pub work: bravebot_agent::Work,
+    /// The files the session's successful writes landed on, each once and in the order first
+    /// written. Seeded from the record on resume and saved with it (OPEN-6).
+    pub written: Vec<PathBuf>,
+    /// The open loops the last turn ended with and the ones the planner was last told of, so a
+    /// turn tells the planner only of a set that changed (OPEN-4). Not saved: a resumed session
+    /// works its loops out again from the record (OPEN-6).
+    pub open_loops: bravebot_agent::open_loops::Told,
     /// Preserve terminal side conversations when continuing a session in the UI.
     pub asides: Vec<bravebot_session::sessions::Aside>,
     /// Imported terminal checkpoints stay available with a desktop coverage warning after execution.
@@ -294,6 +304,9 @@ impl State {
             timing: BTreeMap::new(),
             model: None,
             todos: BTreeMap::new(),
+            work: Default::default(),
+            written: Vec::new(),
+            open_loops: Default::default(),
             asides: Vec::new(),
             rewind: Default::default(),
             first_prompt: None,
@@ -334,7 +347,7 @@ impl State {
         // The desktop addresses no definition, so the turns it writes are not the definition's and
         // the record must not go on saying they were.
         handle.set_agent(None);
-        Ok(Self {
+        let mut state = Self {
             // None where the record's sitting had bypass on: `Record::trust_map` took the rules
             // back, and a directory with no rule would be reachable and vouched for by nothing.
             directories: record
@@ -351,6 +364,12 @@ impl State {
             timing: record.timing.clone(),
             model: record.model.clone(),
             todos: record.todo_rows(),
+            work: record.work,
+            written: record
+                .written
+                .iter()
+                .filter_map(bravebot_session::sessions::StoredPath::to_path)
+                .collect(),
             asides: bravebot_session::sessions::recall(project, record).asides,
             rewind: bravebot_session::rewind::RewindStack::of(record.rewind_points(project)),
             first_prompt: Some(record.title.clone()),
@@ -358,7 +377,15 @@ impl State {
                 Conversation::restored(record.conversation.clone()),
                 Answers::opening(trust, record.trusted_programs(project), Default::default()),
             )
-        })
+        };
+        // What the record left open, so the first turn here tells the planner of it (OPEN-6). The
+        // checkouts the record lists are not placed yet: `take_back_checkouts` counts them again
+        // once they are.
+        if let Ok(workspace) = bravebot_agent::Workspace::new(project) {
+            let loops = crate::open_loops::of(&state, &workspace);
+            state.open_loops.ended_with(loops);
+        }
+        Ok(state)
     }
 
     /// The state a fork begins with: part of another session's conversation, and an id of its

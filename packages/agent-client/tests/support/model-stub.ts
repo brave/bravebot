@@ -5,6 +5,9 @@ import { within } from './wait.js'
 /** The words that open the message naming the session's own directory (INSTR-9). */
 const SCRATCH_NOTE = 'The scratch directory of this session is'
 
+/** The words that open the message telling the planner of the session's open loops (OPEN-4). */
+const OPEN_LOOPS_NOTE = 'Open from earlier in this session'
+
 /** What the planner does at one step: call a tool or answer, optionally after a test-controlled gate. */
 export interface PlannerStep {
   tool?: { name: string; arguments: Record<string, unknown> }
@@ -89,9 +92,12 @@ export class ModelStub {
     this.requests.push(body)
     const conversation = JSON.parse(body) as { messages: { role: string; content: unknown }[] }
     // The latest prompt picks the plan, and the tool results since it pick the step. The message
-    // naming the session's own directory (INSTR-9) follows the prompt and is not one.
-    const isPrompt = (message: { role: string; content: unknown }) =>
-      message.role === 'user' && !JSON.stringify(message.content).includes(SCRATCH_NOTE)
+    // naming the session's own directory (INSTR-9) follows the prompt and is not one, and neither
+    // is the one telling the planner of the loops earlier turns left open (OPEN-4).
+    const isPrompt = (message: { role: string; content: unknown }) => {
+      const text = JSON.stringify(message.content)
+      return message.role === 'user' && !text.includes(SCRATCH_NOTE) && !text.includes(OPEN_LOOPS_NOTE)
+    }
     const lastPrompt = conversation.messages.map(isPrompt).lastIndexOf(true)
     const prompt = JSON.stringify(conversation.messages[lastPrompt]?.content ?? '')
     const key = Object.keys(this.plans).find((candidate) => prompt.includes(candidate))

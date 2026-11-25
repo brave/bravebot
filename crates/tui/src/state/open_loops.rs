@@ -2,7 +2,7 @@
 //! ([OPEN](../../../../docs/specs/open-loops.md)).
 
 use super::Session;
-use bravebot_agent::open_loops::{Kind, Loops, Owner};
+use bravebot_agent::open_loops::{self, Kind, Loops, Owner};
 use bravebot_i18n::t;
 
 impl Session {
@@ -35,9 +35,9 @@ impl Session {
     pub fn open_loops(&self, workspace: &bravebot_agent::Workspace) -> Loops {
         let written = self.files_landed().0;
         Loops {
-            open_todos: self.plan().iter().filter(|row| !row.struck()).count(),
+            open_todos: open_loops::open_todos(self.plan()).len(),
             running_jobs: self.running_job_names(),
-            kept_checkouts: kept_checkouts(workspace).len(),
+            kept_checkouts: open_loops::kept_checkouts(workspace).len(),
             uncommitted_files: bravebot_agent::open_loops::uncommitted(workspace.root(), &written)
                 .len(),
             stopped_goal: self.goal_stopped(),
@@ -48,23 +48,17 @@ impl Session {
     /// Show the person one line where the open loops changed since the last turn ended (OPEN-3).
     pub fn say_open_loops(&mut self, workspace: &bravebot_agent::Workspace) {
         let loops = self.open_loops(workspace);
-        if loops == self.loops_shown {
-            return;
-        }
         let line = open_line(&loops);
-        self.loops_shown = loops;
-        self.note(line);
+        if self.open_loops.ended_with(loops) {
+            self.note(line);
+        }
     }
 
     /// What the planner is told at the start of the next turn, where the open loops changed since
     /// it was last told (OPEN-4). Read from the set the last turn ended with, so the turn does not
     /// ask git again.
     pub fn open_loops_for_the_planner(&mut self) -> Option<String> {
-        if self.loops_shown == self.loops_told {
-            return None;
-        }
-        self.loops_told = self.loops_shown.clone();
-        self.loops_told.to_the_planner()
+        self.open_loops.for_the_planner()
     }
 
     /// Carry out `/unfinished`: every open loop, with what to act on (OPEN-5). Starts no turn and
@@ -103,15 +97,13 @@ impl Session {
         }
         if loops.open_todos > 0 {
             said.push(t!(unfinished_todos, count = loops.open_todos));
-            let open: Vec<String> = self
-                .plan()
-                .iter()
-                .filter(|row| !row.struck())
+            let open: Vec<String> = open_loops::open_todos(self.plan())
+                .into_iter()
                 .map(|row| format!("  {}", row.content))
                 .collect();
             said.extend(open);
         }
-        for checkout in kept_checkouts(workspace) {
+        for checkout in open_loops::kept_checkouts(workspace) {
             said.push(t!(
                 unfinished_checkout,
                 id = &checkout.id,
@@ -180,18 +172,6 @@ impl Session {
         }
         (all, since)
     }
-}
-
-/// The checkouts kept and neither applied nor removed (OPEN-1). A removed one is no longer listed,
-/// and one whose delegate still runs has no size yet.
-fn kept_checkouts(
-    workspace: &bravebot_agent::Workspace,
-) -> Vec<bravebot_agent::workspace::SessionCheckout> {
-    workspace
-        .session_checkouts()
-        .into_iter()
-        .filter(|checkout| checkout.size.is_some() && !checkout.applied)
-        .collect()
 }
 
 /// The person's line: each open kind with its count, grouped by whose move it is (OPEN-3).

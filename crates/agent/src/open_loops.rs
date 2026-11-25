@@ -181,6 +181,56 @@ impl Loops {
     }
 }
 
+/// The open loops a session's last turn ended with, and the ones the planner was last told of
+/// (OPEN-3, OPEN-4).
+///
+/// Every front end decides "changed since the last turn" and "changed since the planner was last
+/// told" with this one rule.
+#[derive(Debug, Clone, Default)]
+pub struct Told {
+    ended: Loops,
+    told: Loops,
+}
+
+impl Told {
+    /// Record the set a turn ended with, and return whether it differs from the set the last turn
+    /// ended with, which is when the person is shown a line (OPEN-3).
+    pub fn ended_with(&mut self, loops: Loops) -> bool {
+        if loops == self.ended {
+            return false;
+        }
+        self.ended = loops;
+        true
+    }
+
+    /// What the planner is told at the start of the next turn, where the set the last turn ended
+    /// with differs from the set it was last told of (OPEN-4). `None` when nothing changed, and
+    /// when nothing is open.
+    pub fn for_the_planner(&mut self) -> Option<String> {
+        if self.ended == self.told {
+            return None;
+        }
+        self.told = self.ended.clone();
+        self.told.to_the_planner()
+    }
+}
+
+/// The rows of a task list still open: the ones not struck through (OPEN-1). A finished or a
+/// dropped task is struck, so what is left is the work still to come.
+pub fn open_todos(rows: &[bravebot_core::todo::Row]) -> Vec<&bravebot_core::todo::Row> {
+    rows.iter().filter(|row| !row.struck()).collect()
+}
+
+/// The checkouts `workspace` keeps for the session and has neither applied nor removed (OPEN-1).
+/// A removed one is no longer listed, and one whose delegate still runs has no size yet.
+pub fn kept_checkouts(workspace: &crate::Workspace) -> Vec<crate::workspace::SessionCheckout> {
+    workspace
+        .session_checkouts()
+        .into_iter()
+        .filter(|checkout| checkout.size.is_some() && !checkout.applied)
+        .collect()
+}
+
 /// Which of `written`, the files this session wrote, differ from `HEAD` in the repository holding
 /// `root`, read in-process without starting git (OPEN-1).
 ///
@@ -255,6 +305,64 @@ mod tests {
             ran_after_last_write: after,
             last_command_failed: failed,
         }
+    }
+
+    /// OPEN-4. A tracker no turn has ended into tells the planner nothing.
+    #[test]
+    fn a_tracker_with_nothing_ended_tells_nothing() {
+        assert_eq!(Told::default().for_the_planner(), None);
+    }
+
+    /// OPEN-4. The planner is told of a changed set once, and not again until the set changes.
+    #[test]
+    fn the_planner_is_told_once_per_changed_set() {
+        let mut told = Told::default();
+        let failed = Loops::from_work(work(0, 1, true, true));
+        told.ended_with(failed.clone());
+        // Nothing told reads as empty, which the first assertion rejects.
+        let said = told.for_the_planner().unwrap_or_default();
+        assert!(
+            said.starts_with("Open from earlier in this session"),
+            "{said}"
+        );
+        assert!(said.contains("the last command failed"), "{said}");
+        assert_eq!(told.for_the_planner(), None, "told twice");
+
+        told.ended_with(failed.clone());
+        assert_eq!(told.for_the_planner(), None, "the same set was told again");
+
+        let more = Loops {
+            open_todos: 2,
+            ..failed
+        };
+        told.ended_with(more);
+        let said = told.for_the_planner().unwrap_or_default();
+        assert!(said.contains("2 todos"), "{said}");
+        assert_eq!(told.for_the_planner(), None);
+    }
+
+    /// OPEN-3, OPEN-4. A set that closes every loop is a change, and it tells the planner
+    /// nothing, since nothing is open.
+    #[test]
+    fn a_set_that_empties_tells_nothing() {
+        let mut told = Told::default();
+        told.ended_with(Loops::from_work(work(0, 1, true, true)));
+        assert!(told.for_the_planner().is_some());
+        assert!(told.ended_with(Loops::default()));
+        assert_eq!(told.for_the_planner(), None);
+        told.ended_with(Loops::from_work(work(0, 1, true, true)));
+        assert!(told.for_the_planner().is_some(), "the loop reopened");
+    }
+
+    /// OPEN-3. `ended_with` says the set changed only when it differs from the last one ended.
+    #[test]
+    fn ending_with_a_set_says_whether_it_changed() {
+        let mut told = Told::default();
+        assert!(!told.ended_with(Loops::default()));
+        let failed = Loops::from_work(work(0, 1, true, true));
+        assert!(told.ended_with(failed.clone()));
+        assert!(!told.ended_with(failed));
+        assert!(told.ended_with(Loops::default()));
     }
 
     /// OPEN-1. A write after the last command leaves the change unbuilt, and a command after it

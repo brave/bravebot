@@ -3183,9 +3183,23 @@ impl Bridge {
             }
         }
         if discard {
-            // The record is gone, so the next prompt names the session again.
+            // The record is gone, so the next prompt names the session again, and nothing it did
+            // is open any longer.
             state.first_prompt = None;
-        } else if state.handle.is_some() {
+            state.work = Default::default();
+            state.written.clear();
+            state.open_loops = Default::default();
+        } else {
+            // The rewound conversation may no longer hold what the planner was told, so the loops
+            // the session now leaves open are told again on the next turn (OPEN-4).
+            if let Some(kept) = &state.kept {
+                workspace = workspace.with_kept_between_turns(kept);
+            }
+            state.open_loops = Default::default();
+            let loops = crate::open_loops::of(state, &workspace);
+            state.open_loops.ended_with(loops);
+        }
+        if !discard && state.handle.is_some() {
             save(
                 &project,
                 state,
@@ -4656,6 +4670,9 @@ fn take_back_checkouts(open: &Open, record: &Record, settings: &Settings) {
         }
         workspace.restore_touched(&record.touched);
         state.kept = Some(workspace.kept_between_turns());
+        // The placed checkouts are open loops of the session's too (OPEN-6).
+        let loops = crate::open_loops::of(&state, &workspace);
+        state.open_loops.ended_with(loops);
     }
 }
 
@@ -4975,7 +4992,10 @@ fn work(work: Work) {
         // it (MEMORY-10). The name is the session's, set from the bot's row, so nothing the turn
         // produced chooses it; the kernel compares it against the set this session resolved.
         .addressing(addressing)
-        .addressing_standing(addressing_standing);
+        .addressing_standing(addressing_standing)
+        // The open loops that changed since the planner was last told (OPEN-4). Told without
+        // silencing TURN-4's line, because the desktop does not draw OPEN-3's line for the person.
+        .telling_open_loops(state.open_loops.for_the_planner());
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }
@@ -5057,6 +5077,14 @@ fn work(work: Work) {
     state.answers.servers = Some(servers);
     // Kept whatever the outcome: a failed or cancelled turn may still have written.
     state.rewind.keep_backups(workspace.take_backups());
+    // Kept whatever the outcome (GROUND-4): a failed or cancelled turn may still have written or
+    // run something, and the session's open loops are worked out from all of it (OPEN-1).
+    state.work.then(completed.work);
+    for path in reporter.written() {
+        if !state.written.contains(path) {
+            state.written.push(path.clone());
+        }
+    }
 
     // Cleanup has finished on every return, including cancellation and request errors.
     // Whatever the turn's ending: what the planner was shown on a failed turn is not shown again.
@@ -5107,6 +5135,10 @@ fn work(work: Work) {
     if !reporter.task_list().is_empty() {
         state.todos.insert(turn, reporter.task_list().to_vec());
     }
+    // The loops this turn left open, whatever its ending, which the next turn tells the planner
+    // of where they changed (OPEN-4).
+    let loops = crate::open_loops::of(&state, &workspace);
+    state.open_loops.ended_with(loops);
 
     let event = match outcome {
         Ok(outcome) => {
@@ -5517,6 +5549,10 @@ pub(crate) fn save(
     let handle = state
         .handle
         .get_or_insert_with(|| crate::running::begin_named(named, handed_off_from, project));
+    // What every turn did and the files it wrote, so a resume in either front end can say what was
+    // left open (OPEN-6).
+    handle.set_work(state.work);
+    handle.set_written(&state.written);
 
     let checkouts = state
         .kept
@@ -7574,6 +7610,10 @@ mod folders_tests;
 #[cfg(test)]
 #[path = "completion_tests.rs"]
 mod completion_tests;
+
+#[cfg(test)]
+#[path = "open_loops_tests.rs"]
+mod open_loops_tests;
 
 // Beside the turn worker rather than the store, because one of them runs a turn.
 #[cfg(test)]
