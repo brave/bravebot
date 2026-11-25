@@ -2083,7 +2083,7 @@ function PlanEnded({ ended }: { ended: ManifestError }): React.JSX.Element {
 function AmbientNotice({ ambient, deciding = false }: { ambient?: Ambient[]; deciding?: boolean }): React.JSX.Element | null {
   if (!ambient?.length) return null
   const notice = (
-    <Alert type="warning" className="card-alert warn">
+    <Alert type="warning" size="small" className="card-alert warn">
       <Icon name="shield-alert" slot="icon" />
       This spends access that is yours elsewhere. Nobody is asked for it at the moment it
       is used, and nothing here takes it back afterwards.
@@ -2400,7 +2400,7 @@ function Card({
           )}
           {request.lineEndings && <p className="permission-scope" data-test="line-endings" data-deciding="all">{request.lineEndings}</p>}
           <HiddenCharacters note={request.hiddenNote} />
-          {request.credentials && request.credentials.length > 0 && <Alert type="warning" className="card-alert credential-finding">
+          {request.credentials && request.credentials.length > 0 && <Alert type="warning" size="small" className="card-alert credential-finding">
             <Icon name="shield-alert" slot="icon" />
             <span slot="title" data-deciding="all">This looks like it would put a secret in the tree</span>
             <ul data-deciding="all">{request.credentials.map((found) => <li key={found}>{found}</li>)}</ul>
@@ -2422,7 +2422,7 @@ function Card({
       const lent = request.requestedScopes ?? []
       return (
         <DecisionCard
-          className={`confirm run ${request.releasesPrivate ? 'releases' : ''}`}
+          className={`confirm run ${request.releasesPrivate ? 'releases' : ''} ${request.unconfined ? 'unconfined' : ''}`}
           answerable={answerable}
           subject={request.stages.map((stage) => stage.display).join(' | ')}
           decided={decision === null ? null : {
@@ -2475,6 +2475,18 @@ function Card({
               </li>
             ))}
           </ol>
+          {/* A line the planner asked to run with no sandbox (SANDBOX-29), said straight under the
+              command it is about. Both sentences are the bridge's, drawn as sent; the stylesheet
+              capitalises their first letter. No standing answer is offered for such a line, and the
+              Trust button stays gated on `canBeRemembered`, which the bridge sends false for it. */}
+          {request.unconfined && !!request.unconfinedNote && (
+            <div data-deciding="all" data-test="unconfined">
+              <Alert type="warning" size="small" className="card-alert warn">
+                <Icon name="shield-alert" slot="icon" />
+                <p>{request.unconfinedNote}</p>
+              </Alert>
+            </div>
+          )}
 
           {/* Said every time, as the terminal says it: what the programs are held to, or that they
               are held to nothing. Only `null` is "not sandboxed"; a bridge that sent no field says
@@ -2486,13 +2498,22 @@ function Card({
               {request.confinement.sentences.map((sentence, index) => <p key={index}>{sentence}</p>)}
             </div>
           )}
-          {request.confinement === null && !!request.notSandboxed && (
-            <p className="permission-scope" data-test="not-sandboxed" data-deciding="all">{request.notSandboxed}</p>
+          {/* The details under the warning, kept together: what the programs may reach, and why no
+              lasting answer is offered. */}
+          {((request.confinement === null && !!request.notSandboxed) || (request.unconfined && !!request.notRememberedNote)) && (
+            <div className="scope-notes">
+              {request.confinement === null && !!request.notSandboxed && (
+                <p className="permission-scope" data-test="not-sandboxed" data-deciding="all">{request.notSandboxed}</p>
+              )}
+              {request.unconfined && !!request.notRememberedNote && (
+                <p className="permission-scope" data-test="not-remembered" data-deciding="all">{request.notRememberedNote}</p>
+              )}
+            </div>
           )}
           <AmbientNotice ambient={request.ambient} deciding />
           {!!lent.length && (
             <div data-deciding="all">
-              <Alert type="warning" className="card-alert warn">
+              <Alert type="warning" size="small" className="card-alert warn">
                 <Icon name="shield-alert" slot="icon" />
                 The model asked for <strong>{lent.join(', ')}</strong> to be added to every
                 command in this line. Each lets a program use credentials or caches it would
@@ -2502,7 +2523,7 @@ function Card({
           )}
           {request.releasesPrivate && (
             <div data-deciding="all">
-              <Alert type="warning" className="card-alert warn">
+              <Alert type="warning" size="small" className="card-alert warn">
                 <Icon name="shield-alert" slot="icon" />
                 This hands your own data to the program. Whatever it does with those bytes
                 happens somewhere the agent stops governing them.

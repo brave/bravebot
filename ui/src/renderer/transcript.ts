@@ -756,7 +756,7 @@ export function searchableText(entry: Entry): string {
     case 'tool': return [entry.activity.verb, entry.activity.shownTarget, entry.activity.why, entry.activity.note, ...entry.activity.changes.map((change) => 'text' in change ? change.text : '')].join(' ')
     case 'quarantined': return [entry.shown.origin, entry.shown.label, ...entry.shown.preview].join(' ')
     case 'confirm': return [entry.request.path, entry.request.intent, ...entry.request.changes.map((change) => 'text' in change ? change.text : '')].join(' ')
-    case 'run': return [entry.request.summary, entry.request.directory, entry.request.line ?? '', ...entry.request.stages.map((stage) => stage.display)].join(' ')
+    case 'run': return [entry.request.summary, entry.request.directory, entry.request.line ?? '', entry.request.unconfinedNote ?? '', ...entry.request.stages.map((stage) => stage.display)].join(' ')
     case 'output': return [entry.request.command, entry.request.summary, entry.request.output].join(' ')
     case 'vet': return [entry.request.origin, entry.request.expects, entry.request.content].join(' ')
     case 'fetch': return [entry.request.url, entry.request.host].join(' ')

@@ -1209,6 +1209,21 @@ export interface RunRequest {
   /** The sentence for `confinement: null`, worded by the bridge in the person's language. */
   notSandboxed?: string | null
   /**
+   * Whether the planner asked to run this one line with no sandbox. Such a line has no standing
+   * answer, so `canBeRemembered` is false for it. Absent from a bridge built before the field.
+   */
+  unconfined?: boolean
+  /**
+   * The sentence saying the line runs with no sandbox, worded by the bridge in the person's
+   * language, or `null` unless `unconfined` is true. Draw it as sent.
+   */
+  unconfinedNote?: string | null
+  /**
+   * The sentence saying neither the line nor the request is remembered, worded by the bridge, or
+   * `null` unless `unconfined` is true.
+   */
+  notRememberedNote?: string | null
+  /**
    * Credential scopes and toolchain lists the planner asked this line to be lent, by name.
    *
    * Empty for nearly every command.

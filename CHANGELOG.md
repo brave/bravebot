@@ -22,6 +22,8 @@
 
  - Fixed the run question in the plain line interface, in background sessions and in the editor bridge not saying which reference a command is fed. It now says the command is fed the contents of the named reference, as the terminal client and the window already did. ([#4102](https://github.com/brave/bravebot/issues/4102))
 
+ - Fixed the desktop app refusing, without asking, a command line the model asked to run with no sandbox. The window now shows the run card with a warning that the line runs with no sandbox and a line saying no answer to it is remembered, and offers only Don't run and Run once. A yes runs that line once and remembers nothing. A client attached to a hosted session to answer commands, such as the mobile app, is still not asked, and the request is refused as before.
+
 ## [0.23.0](https://github.com/brave/bravebot/releases/tag/v0.23.0)
 
  - Added `/issues` and `/prs`, and Pull requests and Issues sections in the info panel, which list the issues and pull requests the session has met in text you typed, in the agent's own fetches and in trusted tool results. They cost no tokens and answer at once while a turn runs. ([#4223](https://github.com/brave/bravebot/issues/4223))

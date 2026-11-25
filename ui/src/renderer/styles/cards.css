@@ -65,18 +65,22 @@
 /* Reviewing a body nobody vouched for is a different act, and must not look alike: a warning
    border, a tinted strip for the head and the loud label in it. A run that would hand the
    reader's own data to a program is marked the same way, on confidentiality rather than
-   integrity, because the instruction to the reader is the same one. */
+   integrity, because the instruction to the reader is the same one. A line the planner asked to
+   run with no sandbox is marked the same way. */
 .confirm.untrusted,
-.confirm.run.releases { border-color: var(--status-warning); }
+.confirm.run.releases,
+.confirm.run.unconfined { border-color: var(--status-warning); }
 .confirm.untrusted > .confirm-head,
-.confirm.run.releases > .confirm-head {
+.confirm.run.releases > .confirm-head,
+.confirm.run.unconfined > .confirm-head {
   margin: calc(-1 * var(--leo-spacing-xl)) calc(-1 * var(--leo-spacing-xl)) 0;
   padding: var(--leo-spacing-l) var(--leo-spacing-xl);
   border-bottom: 1px solid var(--status-warning);
   background: var(--status-warning-bg);
 }
 .confirm.untrusted > .confirm-head .card-kind,
-.confirm.run.releases > .confirm-head .card-kind { --leo-icon-color: var(--status-warning); }
+.confirm.run.releases > .confirm-head .card-kind,
+.confirm.run.unconfined > .confirm-head .card-kind { --leo-icon-color: var(--status-warning); }
 
 /* A card whose whole body is bytes the planner has not read is edged in the confine colour,
    the same one the hatched container uses. */
@@ -164,12 +168,32 @@
 }
 .confirm p.warn leo-icon { flex: none; margin-top: var(--leo-spacing-xs); }
 
+/* Leo's alert draws its text in the 14px body font and its corners at --leo-radius-l. A card's
+   alert uses the card's meta type, and the padding and corners of the .stages box above it. */
 .card-alert {
-  --leo-alert-padding: var(--leo-spacing-l) var(--leo-spacing-xl);
+  --leo-alert-padding: var(--leo-spacing-m) var(--leo-spacing-l);
+  --leo-radius-l: var(--radius-control);
+  --leo-font-default-regular: var(--type-meta);
   --leo-font-heading-h4: var(--type-meta-strong);
   --leo-icon-size: var(--icon-control);
   --leo-icon-m: var(--icon-control);
   font: var(--type-meta);
+}
+/* The icon box is one text line tall, so the 16px icon sits centred on the first line. */
+.card-alert > leo-icon[slot='icon'] {
+  display: flex;
+  align-items: center;
+  height: 1lh;
+}
+.card-alert > p { margin: 0; }
+/* The bridge's sentences for a run are worded for the terminal, which starts them in lower case.
+   The window draws them verbatim and capitalises the first letter here. */
+.confirm.run .card-alert > p::first-letter,
+.scope-notes > p::first-letter { text-transform: uppercase; }
+.scope-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-s);
 }
 .card-alert ul { margin: var(--leo-spacing-s) 0; padding-left: var(--leo-spacing-xl); }
 .card-alert small { display: block; font: var(--type-caption); }

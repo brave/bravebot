@@ -377,9 +377,10 @@ pub struct Task {
     pub sandbox: crate::LiveSandbox,
     /// Whether the front end can put a line that starts with no sandbox to a person (SANDBOX-29).
     ///
-    /// Off unless the caller turns it on. The terminal interface and a session in lines draw the
-    /// question; a window refuses the request without asking, and a run with nobody to ask refuses
-    /// every question. A refusal names the `unconfined` argument only where this is on, so a planner
+    /// Off unless the caller turns it on. The terminal interface, a session in lines and the desktop
+    /// window draw the question and turn it on. A host client of the bridge refuses the request
+    /// without asking and a run with nobody to ask refuses every question, so both leave it off. A
+    /// refusal names the `unconfined` argument only where this is on, so a planner
     /// is not pointed at a request its front end would turn down. A delegate is never pointed at it.
     pub asks_about_unconfined: bool,
     /// Rules the user wrote in advance about which actions to ask them about.

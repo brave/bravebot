@@ -1197,15 +1197,30 @@ impl Confirmer for BridgeConfirmer {
     /// a single unanswered "no" costs one command, where a remembered one would vouch for
     /// a program on the strength of a question nobody saw. `RunDecision::reject()` is that
     /// pair, and it is what every failure here resolves to.
+    ///
+    /// A line asked to run with no sandbox (SANDBOX-29) is put only to a client that draws it as
+    /// unconfined, and refused unasked where the client may not. A yes to it is a yes to that line
+    /// once: an answer that names a standing one is not acted on.
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
-        // A window has no line that shows a program is unconfined, and reads the mode `off` as
-        // `workspace-write` for that reason (SANDBOX-22), so it draws no card for the request and refuses.
-        if request.unconfined {
+        if request.unconfined && !self.answerers.draws_unconfined_runs() {
             return RunDecision::reject();
         }
         match self.ask(Kind::Run, "run.request", |id| {
             wire::run_request(id, request)
         }) {
+            // Rebuilt from whether it approved, so no standing answer survives and a no stays a no.
+            // A note is kept where the answer could carry one.
+            Some(Reply::Run(decision)) if request.unconfined => {
+                let once = if decision.approved() {
+                    RunDecision::approve()
+                } else {
+                    RunDecision::reject()
+                };
+                match decision.note() {
+                    Some(note) => once.with_note(note),
+                    None => once,
+                }
+            }
             Some(Reply::Run(decision)) => decision,
             _ => RunDecision::reject(),
         }

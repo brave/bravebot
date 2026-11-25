@@ -1813,6 +1813,7 @@ fn program(request: &RunRequest) -> Vec<String> {
         ambient: &ambient,
         releases_private: request.releases_private(),
         offers_remember: false,
+        unconfined: request.unconfined,
     })
 }
 
@@ -4375,6 +4376,41 @@ mod tests {
         assert!(
             confined.contains("container daemon"),
             "the access the profile does not narrow was dropped: {confined}"
+        );
+    }
+
+    /// SANDBOX-29, PROMPT-2: the plain question about a line the planner asked to run with no
+    /// sandbox says so and says why no lasting answer is offered, and the question about an
+    /// ordinary line says neither. The regression it rejects is `program` dropping
+    /// `request.unconfined`, so the line is asked about as an ordinary unsandboxed run.
+    #[test]
+    fn a_run_asking_to_be_unconfined_is_asked_about_as_unconfined() {
+        let pipeline =
+            bravebot_core::command::Pipeline::new(vec![bravebot_core::command::Stage::new(
+                "make",
+                vec!["install".to_string()],
+            )]);
+        let mut request =
+            RunRequest::from_pipeline(&pipeline, &["/usr/bin/make".to_string()], "/work");
+        let ordinary = program(&request);
+        request.unconfined = true;
+        let asked = program(&request);
+
+        assert!(
+            asked.contains(&bravebot_approval::unconfined()),
+            "{asked:?}"
+        );
+        assert!(
+            asked.contains(&bravebot_approval::unconfined_not_remembered()),
+            "{asked:?}"
+        );
+        assert!(
+            !ordinary.contains(&bravebot_approval::unconfined()),
+            "{ordinary:?}"
+        );
+        assert!(
+            !ordinary.contains(&bravebot_approval::unconfined_not_remembered()),
+            "{ordinary:?}"
         );
     }
 

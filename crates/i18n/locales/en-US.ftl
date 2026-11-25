@@ -2784,9 +2784,9 @@ run-write-not-remembered =
     a line naming a file to write is asked about every time, so this one cannot be remembered
 run-stdin-not-remembered =
     a line fed a reference is asked about every time, so this one cannot be remembered
-run-unconfined = the planner asked for this one line to run with no sandbox: no profile holds it, and the next line is held to the session's mode again
+run-unconfined = the model asked for this one line to run with no sandbox: no profile holds it, and the next line is held to the session's mode again
 run-unconfined-not-remembered =
-    a line the planner asked to run with no sandbox is asked about every time, so neither the line nor the request is remembered
+    a line the model asked to run with no sandbox is asked about every time, so neither the line nor the request is remembered
 run-scopes-not-remembered =
     a line the planner asked to carry a credential scope, toolchain list or loopback is asked every time, so it cannot be remembered
 run-kept-scope-not-remembered =
