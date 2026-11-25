@@ -35557,6 +35557,199 @@ fn a_redirection_carrying_untrusted_output_distrusts_the_file_it_wrote() {
     );
 }
 
+/// A redirection through a symbolic link writes the file the link leads to, so that file is
+/// distrusted as well as the name the line spelled (TRUST-2 "Symbolic link" row, TRUST-4). Left
+/// trusted under its own name, the untrusted bytes read back as trusted through it. A file the line
+/// did not touch stays trusted, so a map that distrusts everything does not pass.
+#[cfg(unix)]
+#[test]
+fn a_redirection_through_a_symbolic_link_distrusts_the_file_the_link_leads_to() {
+    let scratch = Scratch::new("run-redirect-link-target");
+    std::fs::write(scratch.path.join("notes.html"), "from the web\n").unwrap();
+    std::fs::write(scratch.path.join("target.txt"), "ours\n").unwrap();
+    std::fs::write(scratch.path.join("control.txt"), "ours\n").unwrap();
+    std::os::unix::fs::symlink(
+        scratch.path.join("target.txt"),
+        scratch.path.join("link.txt"),
+    )
+    .unwrap();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    let outcome = a_run_turn(
+        &scratch,
+        r#"{"command":"cat notes.html > link.txt"}"#,
+        &mut confirmer,
+        bravebot_core::programs::TrustedPrograms::new(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("target.txt")).unwrap(),
+        "from the web\n",
+        "the redirection did not write through the link"
+    );
+    assert!(
+        !outcome.trust.is_trusted("link.txt"),
+        "the name the line spelled reads back trusted"
+    );
+    assert!(
+        !outcome.trust.is_trusted("target.txt"),
+        "the file the link leads to reads back trusted under its own name"
+    );
+    assert!(
+        outcome.trust.is_trusted("control.txt"),
+        "a file the line did not write was distrusted"
+    );
+}
+
+/// The same for a hard link, which is a second name of the file that no walk of the spelled name's
+/// directory finds: the file is distrusted under every name it has.
+#[cfg(unix)]
+#[test]
+fn a_redirection_through_a_hard_link_distrusts_the_other_name_of_the_file() {
+    let scratch = Scratch::new("run-redirect-hard-link");
+    std::fs::write(scratch.path.join("notes.html"), "from the web\n").unwrap();
+    std::fs::write(scratch.path.join("target.txt"), "ours\n").unwrap();
+    std::fs::write(scratch.path.join("control.txt"), "ours\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join("target.txt"),
+        scratch.path.join("linked.txt"),
+    )
+    .unwrap();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    let outcome = a_run_turn(
+        &scratch,
+        r#"{"command":"cat notes.html > linked.txt"}"#,
+        &mut confirmer,
+        bravebot_core::programs::TrustedPrograms::new(),
+    )
+    .unwrap();
+
+    for name in ["linked.txt", "target.txt"] {
+        assert!(
+            !outcome.trust.is_trusted(name),
+            "{name} holds what an unvouched program printed and reads back trusted"
+        );
+    }
+    assert!(
+        outcome.trust.is_trusted("control.txt"),
+        "a file the line did not write was distrusted"
+    );
+}
+
+/// A part of a line can leave a link at a destination the line already opened. The next open of
+/// that name reaches a file the first did not, and that file is entered then and left untrusted
+/// (TRUST-4, CMDLINE-5). Entered once, by the first open's names alone, `real.txt` stays trusted
+/// although the line wrote it.
+#[cfg(unix)]
+#[test]
+fn a_redirection_reopened_through_a_link_an_earlier_part_made_distrusts_the_file_it_reaches() {
+    let scratch = Scratch::new("run-redirect-relinked-trust");
+    std::fs::write(scratch.path.join("notes.html"), "from the web\n").unwrap();
+    std::fs::write(scratch.path.join("real.txt"), "ours\n").unwrap();
+    std::fs::write(scratch.path.join("control.txt"), "ours\n").unwrap();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    let outcome = a_run_turn(
+        &scratch,
+        r#"{"command":"echo first > out.txt && rm out.txt && ln -s real.txt out.txt && cat notes.html >> out.txt"}"#,
+        &mut confirmer,
+        bravebot_core::programs::TrustedPrograms::new(),
+    )
+    .unwrap();
+
+    assert!(
+        std::fs::read_to_string(scratch.path.join("real.txt"))
+            .unwrap()
+            .contains("from the web"),
+        "the second open did not land at the link's target"
+    );
+    assert!(
+        !outcome.trust.is_trusted("real.txt"),
+        "the file a later open of the destination reached reads back trusted"
+    );
+    assert!(
+        outcome.trust.is_trusted("control.txt"),
+        "a file the line did not write was distrusted"
+    );
+}
+
+/// `> target.txt 2> link.txt` names one file twice, the second time through a symbolic link. The
+/// reservation the line holds for the first name covers the second, so the line is refused as a
+/// second writer to that file, as it is for two case spellings (TRUST-4). Entered under the spelled
+/// name alone, the link is a second effect on a file the line already holds.
+#[cfg(unix)]
+#[test]
+fn a_line_naming_a_file_and_a_symbolic_link_to_it_is_refused_as_a_second_writer() {
+    let scratch = Scratch::new("run-redirect-link-second-writer");
+    std::fs::write(scratch.path.join("notes.html"), "from the web\n").unwrap();
+    std::fs::write(scratch.path.join("target.txt"), "ours\n").unwrap();
+    std::os::unix::fs::symlink(
+        scratch.path.join("target.txt"),
+        scratch.path.join("link.txt"),
+    )
+    .unwrap();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    let outcome = a_run_turn(
+        &scratch,
+        r#"{"command":"cat notes.html > target.txt 2> link.txt"}"#,
+        &mut confirmer,
+        bravebot_core::programs::TrustedPrograms::new(),
+    )
+    .unwrap();
+
+    assert!(
+        !std::fs::read_to_string(scratch.path.join("target.txt"))
+            .unwrap_or_default()
+            .contains("from the web"),
+        "a line naming one file under two names ran as two writers to it"
+    );
+    // The file stays distrusted under its own name. The link has no rule of its own in the map: a
+    // read through it asks under the name it lands on, which is this one (TRUST-2).
+    assert!(
+        !outcome.trust.is_trusted("target.txt"),
+        "target.txt was left trusted by a line that was refused after entering it"
+    );
+}
+
+/// MEMORY-5 for a redirection through a symbolic link to a definition's memory. The record that the
+/// next session reads is made under the name the memory has, and a line writing through the link
+/// names the link, so the record is made for every name of the file.
+#[cfg(unix)]
+#[test]
+fn a_redirection_through_a_link_to_a_memory_records_the_memory() {
+    let scratch = Scratch::new("memory-redirect-link");
+    let home = Scratch::new("memory-redirect-link-home");
+    std::fs::create_dir_all(scratch.path.join(".bravebot/memory")).unwrap();
+    let memory = scratch.path.join(".bravebot/memory/notes-keeper.md");
+    std::fs::write(&memory, "OUR-OWN-WORDS\n").unwrap();
+    std::fs::write(scratch.path.join("notes.html"), "from the web\n").unwrap();
+    std::os::unix::fs::symlink(&memory, scratch.path.join("link.md")).unwrap();
+    let workspace = Workspace::new(&scratch.path).unwrap();
+
+    let outcome = a_run_writing_a_memory(
+        &workspace,
+        Some(&home),
+        "cat notes.html > link.md",
+        bravebot_agent::RunDecision::approve(),
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(&memory).unwrap(),
+        "from the web\n",
+        "the redirection did not write the memory through the link"
+    );
+    assert!(!outcome.trust.is_trusted(".bravebot/memory/notes-keeper.md"));
+    assert_eq!(
+        memories_recorded(&home, &workspace),
+        vec![memory_key(&workspace, "notes-keeper")],
+        "a memory a line left untrusted through a link was not recorded for the next session"
+    );
+}
+
 /// Where the trust store folds case, `> summary.txt 2> SUMMARY.txt` names one file twice. The
 /// reservation the line holds for the first spelling covers the second, so the line is refused as
 /// a second writer to that file, and the file stays untrusted under either spelling. Taking the
