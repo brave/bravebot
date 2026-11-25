@@ -74,6 +74,39 @@ fn the_allowlist_classifies_every_method_the_bridge_answers() {
     );
 }
 
+/// PLUGIN-1, PLUGIN-11: only a person at the window installs, changes or removes a plugin, so
+/// every `plugins.*` method the bridge answers is denied to a client of the host and none is
+/// offered. The faults this rejects are a plugin method moved to the offered list and the methods
+/// dropped from the dispatch, which would leave the loop below with nothing to check.
+#[test]
+fn every_plugin_method_is_denied_to_a_client_of_the_host() {
+    let source =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bridge.rs"))
+            .expect("the bridge source");
+    let plugins: Vec<String> = dispatched(&source)
+        .into_iter()
+        .filter(|method| method.starts_with("plugins."))
+        .collect();
+    for method in [
+        "plugins.list",
+        "plugins.enable",
+        "plugins.disable",
+        "plugins.remove",
+    ] {
+        assert!(
+            plugins.iter().any(|m| m == method),
+            "{method} is not answered"
+        );
+    }
+    for method in &plugins {
+        assert!(DENIED.contains(&method.as_str()), "{method} is not denied");
+        assert!(
+            OFFERED.iter().all(|operation| operation.method != method),
+            "{method} is offered"
+        );
+    }
+}
+
 #[test]
 fn the_scan_reads_arms_with_several_names() {
     let source = "pub fn dispatch(&mut self) {\n    match m {\n        \"a.one\" | \"a.two\" => x,\n        \"b\" => self.go(\n            \"not.an.arm\",\n        ),\n        other => Err(Failure::bad_request(format!(\"unknown method `{other}`\"))),\n    }\n";

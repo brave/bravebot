@@ -590,6 +590,10 @@ impl Bridge {
             "connectors.disconnect" => crate::connectors::disconnect(request),
             "connectors.remove" => crate::connectors::remove(request),
             "hooks.inspect" => crate::hooks::inspect(),
+            "plugins.list" => crate::plugins::list(),
+            "plugins.enable" => crate::plugins::set_enabled(request, true),
+            "plugins.disable" => crate::plugins::set_enabled(request, false),
+            "plugins.remove" => crate::plugins::remove(request),
             "effort.get" => {
                 let directory = request.optional_string("directory").map(PathBuf::from);
                 let settings =

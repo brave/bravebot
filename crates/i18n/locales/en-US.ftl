@@ -2208,6 +2208,7 @@ plugin-disabled = Turned { $name } off
 plugin-not-a-name = { $name } is not the name of a plugin
 plugin-not-installed = No plugin named { $name } is installed
 plugin-manage-failed = { $name } could not be changed
+plugin-manage-not-writable = Plugins cannot be changed while nothing is being written
 plugin-install-title = Install plugin
 plugin-install-name = Name
 plugin-install-version = Version
