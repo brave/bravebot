@@ -201,7 +201,10 @@ A **bounded** listing names the directories it did not descend into alongside th
 comes back describes the shape of the tree. The pattern does not hide those directories: it says
 which files are wanted, and a directory is where the answer might be rather than an answer.
 
-A listing of a directory nobody vouched for is quarantined, because a filename is content. It returns
+A listing of a directory nobody vouched for is quarantined, because a filename is content. Where a
+mode or a check answers `vet_content` for you, the result says that repeating the call with `read: true`
+returns the listing in one call; where you answer `vet_content`, `read` changes nothing and the result
+says nothing of it. It returns
 **one reference per entry**, not one for the listing. That is what lets the planner read a file,
 process it and write it back without ever being told what it is called. The directories a bounded
 walk stopped at are entries too. The result says once what a reference to a file and a reference to a
@@ -308,7 +311,11 @@ read. Every result says how many links were not entered and that the files behin
 searched, as a number with no name, whether or not the search found matches. To search behind a
 link, name the directory it points to as `directory`.
 
-A result touching several files is trusted only if **every one of them** is. A truncated search tells
+A result touching several files is trusted only if **every one of them** is. Where files nobody vouched
+for make the result quarantined and a mode or a check answers `vet_content` for you, the result says that
+repeating the same search with `read: true` returns it in one call. It says nothing of this where you
+answer `vet_content`, where the call already asked, or where the result is empty or past the output cap.
+A truncated search tells
 the planner it is incomplete. A search that found nothing says which kind of nothing it is: no
 matching lines in the files it read, or an `include` that selected no files at all. Those are
 opposite facts, and drawn identically the planner reads one as the other. A glob leaning on syntax the
@@ -1114,7 +1121,7 @@ budget its definition sets, and in a fan-out it applies to each delegate separat
 starts delegates of its own gives them at most what it has left, divided between the ones one call
 starts, and what a child spends counts against it. One with nothing left starts none. A request that
 has started finishes, so a delegate can pass its budget by one request. A check of unvouched content
-does not count. The figure is tokens only, never credits.
+does not count, and neither does what a processor wrote. The figure is tokens only, never credits.
 
 **`isolation: checkout` keeps delegates out of your working tree.** Each delegate works in a new
 checkout of the last commit, so delegates writing at the same time do not edit or build in one tree.
@@ -1567,7 +1574,9 @@ You are asked before the first message to a session in a turn. The question show
 its state and its working directory as the list of background sessions holds them, the whole text, and
 the label it is sent under. A background session holds the question until you attach. You can answer
 `y` to send that one, or `t` to send that one and the later ones to the same session until the turn
-ends. Nothing else sends, and no permission mode answers the question for you.
+ends. A later message to that session sent under a different label, because your own context turned
+private since the first, is not covered and is asked about again. Nothing else sends, and no permission
+mode answers the question for you.
 
 The other session's planner is told the text is advice from another session, not your words. The text
 grants it no permission and answers nothing it is waiting on. A message starts no turn. It is read

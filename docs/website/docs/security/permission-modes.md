@@ -72,6 +72,7 @@ whether it names the path or reaches it through a symbolic or hard link, includi
 the same line made. No rule, trusted directory or remembered line answers it, auto mode's classifier is not
 asked, and your answer is not kept for later lines. A program that sends input lines, an editor and an unattended run are not offered it as a question to answer for good, and an
 unattended run refuses it. Under bypassing it is approved unasked.
+The file named with `--settings` is protected too, wherever it sits and even before it exists, because the next launch with the flag reads its `allow` rules, `sandbox.mode` and `run.network` as yours. On macOS a program a `run` starts cannot write it at all. On Linux and Windows nothing can hold one file back from a program that may write its directory, so a named file inside the working directory, or inside a directory opened with `--add-dir`, `/add-dir` or `--sandbox-allow-write`, is read as a checkout's file: it grants no `allow` rule, `sandbox.mode` or `run.network`, its `deny` and `ask` rules still apply, and `bravebot doctor` and the opening of the session say so. Keep the file outside those directories for it to grant.
 Putting old bytes back with `/undo`, `/rewind` or `/hunks` is such a write: it is asked the same way,
 and the desktop app, which has no question for it, refuses it.
 
