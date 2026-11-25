@@ -83,6 +83,11 @@ pub const NO_FILES_BESIDE_A_TURN: &str =
 pub const TEXT_FILE_IS_ITS_NAME: &str =
     "a text file dropped on a /btw line goes as its name; `dropped` is not taken";
 
+/// Why a manifest run naming a dropped text file by path is refused: on a `/manifest` line a text
+/// file is its name, put into the task by its marker (DROP-4), and never a file the planner reads.
+pub const TEXT_FILE_IS_ITS_NAME_ON_A_MANIFEST: &str =
+    "a text file dropped on a /manifest line goes as its name; `dropped` is not taken";
+
 /// Why a `/btw` asked while a turn runs is refused before the turn has sent its first request:
 /// there is no exchange of the turn's to ask it over yet (CMD-8).
 pub const NOTHING_SENT_YET: &str = "the turn has not sent anything to the model yet, so there is nothing to ask about; \

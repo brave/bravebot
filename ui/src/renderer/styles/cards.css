@@ -614,4 +614,6 @@
 .confirm.manifest .confirm-head .manifest-count { font-family: inherit; color: var(--ink-secondary); }
 .manifest-steps { list-style: none; margin: 0; padding: var(--leo-spacing-m) 12px; max-height: 320px; overflow: auto; border-top: 1px solid var(--border-hairline); }
 .manifest-steps li { padding: 2px 0; }
+/* The pictures and PDFs dropped onto the task, under the line that quotes it. */
+.manifest-dropped { display: flex; flex-wrap: wrap; gap: var(--leo-spacing-s); }
 .manifest-steps code { font: var(--type-code); white-space: pre-wrap; overflow-wrap: anywhere; }

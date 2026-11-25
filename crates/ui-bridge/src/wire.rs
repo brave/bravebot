@@ -1051,12 +1051,16 @@ pub fn mcp_move_request(id: u64, request: &MoveRequest) -> Value {
 /// does, and the routing it fixed. A front end draws every line and does not shorten the list,
 /// because the answer covers the whole plan (MANIFEST-10).
 ///
+/// `title` is the task as the run's record is titled: each dropped file's marker replaced by the
+/// file's name. A front end shows it where the task is named in a line, and need not work it out.
+///
 /// The task is the person's own words and the steps are the driver's rendering of a plan made
 /// from those words alone, so neither is untrusted content.
-pub fn manifest_request(id: u64, request: &ManifestRequest) -> Value {
+pub fn manifest_request(id: u64, request: &ManifestRequest, title: &str) -> Value {
     json!({
         "request": id,
         "task": request.task,
+        "title": title,
         "steps": request.steps,
     })
 }

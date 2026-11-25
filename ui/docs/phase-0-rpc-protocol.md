@@ -1323,7 +1323,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `vouch.request` | preview and label fields from `wire::vouch_request` | trust a quarantined path |
 | `fetch.request` | `{ request, url, host, ambient, summary }` | fetch one URL; `host` is the agent's reading of `url` and is drawn as sent |
 | `server.request` | `{ request, language, program, workspace, runsBuildTooling, summary }` | start a language server for the session |
-| `manifest.request` | `{ request, task, steps }` | run a frozen plan; one line per step |
+| `manifest.request` | `{ request, task, title, steps }` | run a frozen plan; one line per step |
 | `manifest.started` | `{ run, mode }` | a manifest run began; `run` counts runs in this open session |
 | `manifest.done` | `{ run, reply, model, steps, clean, tokens, outputTokens, notices, attempt, record, trust }` | a run finished |
 | `manifest.error` | `{ run, kind, message, category, attempts, status, account, accountMessage, accountCommand, stopped, declined, problem, attempt, record, notices }` | a run stopped |
@@ -1973,15 +1973,25 @@ Still open:
   put back after it, so a language approved on one message is not asked about on the next and
   its index is built once. They are never written to a record: a reopened or forked session
   starts with none and asks. Closing the session stops them, and so does the process ending.
-- `manifest.run` takes `session`, `task` and an optional `model`, and answers `{ run }` once the
-  run has begun. It is refused with `bad_request` for an empty task, for any `files`, `dropped`,
-  `attachments` or `images`, and before `trust.reply`. It is refused with `turn_in_flight` while a turn
-  or another run is in flight. `turn.cancel` stops a run.
+- `manifest.run` takes `session`, `task`, an optional `model`, and what was dropped on the line,
+  and answers `{ run }` once the run has begun. `attachments` holds absolute paths of pictures and
+  PDFs dropped, checked as `turn.send` checks them (DROP-10) and read before the planner's request
+  under a policy of their own (DROP-4), so each reaches the planner as `Dropped file: <path>` and
+  its bytes (DROP-11). `markers` holds the marker each of `attachments` stands for in the task, in
+  the same order, and the run is titled with each file's name in place of its own marker.
+  `files` holds `{ marker, name }` pairs that put a dropped text file back into the task as its
+  name. It is refused with `bad_request` for an empty task, for a `markers` that is not one string
+  for each of `attachments`, for a `files` entry that is a plain string, which names a project file
+  (MANIFEST-9), for any `dropped`, because on a `/manifest` line a text file is its name, for any
+  `images`, and before `trust.reply`. It is
+  refused with `turn_in_flight` while a turn or another run is in flight. `turn.cancel` stops a run.
 - A run is not a turn. The conversation is not sent to the planner and nothing is added to it,
   the session's turn count does not change, and the session's record is not written. The run
   is saved as its own record by `bravebot_session::sessions::record_manifest_run`, and
   `record` names it. A run the person stopped is not saved, and `record` is null.
-- `manifest.request` carries `request`, `task` and `steps`. `manifest.reply` carries the
+- `manifest.request` carries `request`, `task`, `title` and `steps`. `title` is the task the run's
+  record is titled by, each dropped picture's or PDF's marker replaced by its name, and is the task
+  where no file was dropped. `manifest.reply` carries the
   session, request and explicit decision. An approval covers that plan and does not approve its
   writes, which arrive as `confirm.request` when their steps are reached.
 - `manifest.error` reports the cause of the failure in `kind`, `category`, `account`, `accountMessage` and

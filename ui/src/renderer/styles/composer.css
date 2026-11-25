@@ -405,6 +405,12 @@
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
+/* A dropped file where it was sent (a plan card, a queued line): set as the staged chip is, with
+   no remove button, so the chip closes on padding. */
+.attachment-chip.shown { flex: none; padding-right: var(--leo-spacing-m); }
+/* On a plan card the name is a row the answer waits on, so its clipping box holds the whole glyph
+   box; the code face's own line height is shorter than that. */
+.attachment-chip.shown .attachment-label { line-height: normal; }
 .attachment-trust {
   display: inline-flex;
   align-items: center;
@@ -446,6 +452,9 @@
 .tray-row { display: flex; align-items: center; gap: var(--leo-spacing-m); min-height: var(--hit); }
 /* A queued `/manifest` line carries the plan mark its row in the transcript will carry. */
 .tray-row .tray-mark { flex: none; align-self: center; margin: 0; }
+/* A queued line's text, then the files dropped on it straight after, left of the remove button. */
+.tray-line { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--leo-spacing-s); }
+.tray-line > .tray-text { flex: 0 1 auto; }
 .tray-text {
   flex: 1;
   min-width: 0;

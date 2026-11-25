@@ -841,9 +841,197 @@ fn a_session_is_busy_until_its_run_ends() {
     assert_eq!(turn["event"], "turn.done", "{turn}");
 }
 
+/// DROP-4, DROP-11: a picture dropped onto the task goes to the planner with it, its path named in
+/// a text part before its bytes. The drop is the person's grant, so the rule it records is in the
+/// session's trust map when the run ends (DROP-2, MANIFEST-11).
+#[test]
+fn a_picture_dropped_onto_the_task_reaches_the_planner() {
+    let scratch = Scratch::new("bridge-manifest-dropped-picture");
+    // Outside the project, as a file dragged in from elsewhere is.
+    let shot = scratch.path.join("shot.png");
+    std::fs::write(&shot, [0x89u8, 0x50]).unwrap();
+    let shot = shot.display().to_string();
+    let (endpoint, rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    let started = front.call(
+        "manifest.run",
+        json!({"session": session, "task": "build [Image #1]", "attachments": [shot]}),
+    );
+    assert_eq!(started["run"], 1, "{started}");
+    let events = front.answering(
+        &session,
+        &[
+            ("manifest.request", "approve"),
+            ("confirm.request", "approve"),
+        ],
+    );
+    let ended = events.last().unwrap();
+    assert_eq!(ended["event"], "manifest.done", "{ended}");
+
+    let first: Value = serde_json::from_str(&rounds.recv().unwrap()).unwrap();
+    let parts: Vec<&Value> = first["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|message| message["content"].as_array())
+        .flatten()
+        .collect();
+    let named = parts
+        .iter()
+        .position(|part| part["text"] == format!("Dropped file: {shot}"));
+    assert!(
+        named.is_some(),
+        "the dropped file's path did not reach the planner: {first}"
+    );
+    assert!(
+        named
+            .and_then(|named| parts.get(named + 1))
+            .is_some_and(|part| part["image_url"]["url"]
+                .as_str()
+                .is_some_and(|url| url == "data:image/png;base64,iVA=")),
+        "the picture's bytes did not follow its path: {first}"
+    );
+    assert!(
+        first.to_string().contains("build [Image #1]"),
+        "the task was lost: {first}"
+    );
+
+    assert!(
+        ended["data"]["trust"]["rules"]
+            .as_array()
+            .is_some_and(|rules| rules.iter().any(|rule| rule["path"] == shot.as_str())),
+        "the drop's rule did not reach the session's trust map: {ended}"
+    );
+}
+
+/// A run with a picture dropped onto its task is titled with the file's name where its own marker
+/// stands, on the plan question and on the record, so the card and the list of chats name the file
+/// and not a number. A bracket that is no drop's marker stays as typed. The planner was shown the
+/// marker.
+#[test]
+fn a_run_with_a_dropped_picture_is_titled_by_the_files_name() {
+    let scratch = Scratch::new("bridge-manifest-dropped-picture-title");
+    let shot = scratch.path.join("sketch.png");
+    std::fs::write(&shot, [0x89u8, 0x50]).unwrap();
+    let shot = shot.display().to_string();
+    let (endpoint, _rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    front.call(
+        "manifest.run",
+        json!({
+            "session": session,
+            "task": "do [Step #1] from [Image #2]",
+            "attachments": [shot],
+            "markers": ["[Image #2]"],
+        }),
+    );
+    let events = front.answering(
+        &session,
+        &[
+            ("manifest.request", "approve"),
+            ("confirm.request", "approve"),
+        ],
+    );
+    let asked = events
+        .iter()
+        .find(|event| event["event"] == "manifest.request")
+        .unwrap();
+    assert_eq!(
+        asked["data"]["task"], "do [Step #1] from [Image #2]",
+        "{asked}"
+    );
+    assert_eq!(
+        asked["data"]["title"], "do [Step #1] from sketch.png",
+        "{asked}"
+    );
+    let ended = events.last().unwrap();
+    assert_eq!(ended["event"], "manifest.done", "{ended}");
+    let run = ended["data"]["record"].as_str().unwrap().to_string();
+
+    let read = front.record("manifest.read", &scratch, &run);
+    assert_eq!(
+        read["ok"]["record"]["title"], "do [Step #1] from sketch.png",
+        "{read}"
+    );
+}
+
+/// DROP-2, MANIFEST-11: the rule a picture dropped onto the task records stays in the session's
+/// trust map after the run, and the next turn still holds it.
+#[test]
+fn a_picture_dropped_onto_the_task_stays_trusted_for_the_next_turn() {
+    let scratch = Scratch::new("bridge-manifest-dropped-picture-kept");
+    let shot = scratch.path.join("shot.png");
+    std::fs::write(&shot, [0x89u8, 0x50]).unwrap();
+    let shot = shot.display().to_string();
+    let (endpoint, _rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    front.call(
+        "manifest.run",
+        json!({"session": session, "task": "build [Image #1]", "attachments": [shot]}),
+    );
+    let events = front.answering(
+        &session,
+        &[
+            ("manifest.request", "approve"),
+            ("confirm.request", "approve"),
+        ],
+    );
+    let ended = events.last().unwrap();
+    assert_eq!(ended["event"], "manifest.done", "{ended}");
+
+    front.send(
+        "turn.send",
+        message_ids::with_fresh(json!({"session":session,"prompt":"say done"})),
+    );
+    let turn = front.question_or_the_end();
+    assert_eq!(turn["event"], "turn.done", "{turn}");
+    assert!(
+        turn["data"]["trust"]["rules"]
+            .as_array()
+            .is_some_and(|rules| rules.iter().any(|rule| rule["path"] == shot.as_str())),
+        "the drop's rule is not in the session's trust map: {turn}"
+    );
+}
+
+/// DROP-4: a text file dropped onto the task goes as its name, put in the place of its marker.
+#[test]
+fn a_text_file_dropped_onto_the_task_is_its_name() {
+    let scratch = Scratch::new("bridge-manifest-dropped-text");
+    let (endpoint, rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    front.call(
+        "manifest.run",
+        json!({"session": session, "task": "tidy [File #1] please",
+            "files": [{"marker": "[File #1]", "name": "notes.md"}]}),
+    );
+    let question = front.question_or_the_end();
+    assert_eq!(question["event"], "manifest.request", "{question}");
+    assert_eq!(
+        question["data"]["task"], "tidy notes.md please",
+        "{question}"
+    );
+    let first = rounds.recv().unwrap();
+    assert!(
+        first.contains("tidy notes.md please") && !first.contains("[File #1]"),
+        "the planner was not sent the file's name: {first}"
+    );
+    front.reply("manifest.reply", &session, &question, "reject");
+    let ended = front.question_or_the_end();
+    assert_eq!(ended["event"], "manifest.error", "{ended}");
+}
+
 /// A run is refused before it starts where it could not be what was asked for: with no task,
-/// with a file or a picture to read first, or in a session nobody has answered the trust
-/// question for.
+/// with a project file, a text file's path or a pasted picture, with a dropped file that is not an
+/// absolute path to a file that is there, or in a session nobody has answered the trust question
+/// for.
 #[test]
 fn a_run_that_cannot_be_what_was_asked_for_is_refused() {
     let scratch = Scratch::new("bridge-manifest-refused");
@@ -851,16 +1039,62 @@ fn a_run_that_cannot_be_what_was_asked_for_is_refused() {
     let mut front = FrontEnd::start(&scratch, &endpoint);
     let session = front.session(&scratch, true);
 
-    for params in [
-        json!({"session": session, "task": "   "}),
-        json!({"session": session, "task": TASK, "files": ["notes.md"]}),
-        json!({"session": session, "task": TASK, "attachments": ["a1"]}),
-        json!({"session": session, "task": TASK, "images": [{"media": "image/png", "data": "iVBORw0KGgo="}]}),
+    let text = scratch.path.join("dropped.md");
+    std::fs::write(&text, "the dropped notes").unwrap();
+    let text = text.display().to_string();
+    let missing = scratch.path.join("gone.png").display().to_string();
+
+    for (params, says) in [
+        (json!({"session": session, "task": "   "}), "a task to plan"),
+        (
+            json!({"session": session, "task": "[File #1]",
+                "files": [{"marker": "[File #1]", "name": ""}]}),
+            "a task to plan",
+        ),
+        (
+            json!({"session": session, "task": TASK, "files": ["notes.md"]}),
+            "no project file",
+        ),
+        (
+            json!({"session": session, "task": TASK, "attachments": ["a1"]}),
+            "absolute path",
+        ),
+        (
+            json!({"session": session, "task": TASK, "attachments": ["rel.png"]}),
+            "absolute path",
+        ),
+        (
+            json!({"session": session, "task": TASK, "attachments": [missing]}),
+            "names no file",
+        ),
+        (
+            json!({"session": session, "task": TASK, "markers": ["[Image #1]"]}),
+            "one for each of `attachments`",
+        ),
+        (
+            json!({"session": session, "task": TASK, "markers": "[Image #1]"}),
+            "one for each of `attachments`",
+        ),
+        (
+            json!({"session": session, "task": TASK, "dropped": [text]}),
+            "a text file dropped on a /manifest line goes as its name",
+        ),
+        (
+            json!({"session": session, "task": TASK,
+                "images": [{"media": "image/png", "data": "iVBORw0KGgo="}]}),
+            "no `images`",
+        ),
     ] {
         let refused = front.answered("manifest.run", params.clone());
         assert_eq!(
             refused["error"]["code"], "bad_request",
             "{params} started a run: {refused}"
+        );
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(says)),
+            "{params} was refused for another reason: {refused}"
         );
     }
 

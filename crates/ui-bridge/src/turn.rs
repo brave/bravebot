@@ -850,6 +850,8 @@ pub struct BridgeConfirmer {
     answered: Arc<Mutex<AnswerMemo>>,
     /// A line for each question this turn did not put because the person had answered it already.
     reused: Vec<String>,
+    /// The words a plan question names its task by. See [`Self::titling_plans`].
+    plan_title: Option<String>,
 }
 
 impl BridgeConfirmer {
@@ -873,7 +875,16 @@ impl BridgeConfirmer {
             interjections: crate::running::Interjections::default(),
             answered: Arc::default(),
             reused: Vec::new(),
+            plan_title: None,
         }
+    }
+
+    /// Send `title` with each plan question as the task's `title`: the task with each dropped
+    /// file's marker replaced by its name, which the run's record is also titled by. Without it a
+    /// plan question's `title` is its task.
+    pub(crate) fn titling_plans(mut self, title: String) -> Self {
+        self.plan_title = Some(title);
+        self
     }
 
     /// Answer a question the person already answered in this session from `answered`, and keep
@@ -1136,8 +1147,12 @@ impl Confirmer for BridgeConfirmer {
     /// remembered. It does not approve the plan's writes: each write is still asked about when
     /// its step is reached.
     fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+        let title = self
+            .plan_title
+            .clone()
+            .unwrap_or_else(|| request.task.clone());
         let decision = self.yes_or_no(Kind::Manifest, "manifest.request", |id| {
-            wire::manifest_request(id, request)
+            wire::manifest_request(id, request, &title)
         });
         self.declined_a_plan = decision == Decision::Reject;
         decision

@@ -2257,11 +2257,12 @@ fn a_plan_prompt_carries_the_task_and_every_step() {
             task: "summarise every file".into(),
             steps: steps.clone(),
         },
+        "summarise every file",
     );
 
     assert_eq!(
         value,
-        json!({ "request": 8, "task": "summarise every file", "steps": steps })
+        json!({ "request": 8, "task": "summarise every file", "title": "summarise every file", "steps": steps })
     );
 }
 

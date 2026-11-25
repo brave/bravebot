@@ -39,7 +39,14 @@ import type {
   VetRequest,
 } from '../shared/protocol'
 import type { ExportTurn } from '../shared/export'
+import type { DroppedFile } from '../shared/drops'
 import type { AsideDone } from '../shared/aside'
+
+/** A picture or PDF dropped onto a `/manifest` task, and the marker that stands for it there. */
+export interface DroppedOnTask {
+  marker: string
+  file: DroppedFile
+}
 
 export type Entry = (
   | { kind: 'turn-start'; id: string; number: number }
@@ -163,6 +170,8 @@ export type Entry = (
        * plan is not held to.
        */
       unheld?: string[]
+      /** The pictures and PDFs dropped onto the task, shown beside it as the composer showed them. */
+      dropped?: DroppedOnTask[]
     }
   /**
    * A file holding a credential, awaiting a decision about whether the model may read it, or
@@ -384,7 +393,8 @@ export const askedOutput = (request: OutputRequest): Entry => ({
 export const askedVet = (request: VetRequest): Entry => ({ kind: 'vet', id: nextId(), request, decision: null })
 export const askedFetch = (request: FetchRequest): Entry => ({ kind: 'fetch', id: nextId(), request, decision: null })
 export const askedServer = (request: ServerRequest): Entry => ({ kind: 'server', id: nextId(), request, decision: null })
-export const askedManifest = (request: ManifestRequest, unheld: string[] = []): Entry => ({ kind: 'manifest', id: nextId(), request, decision: null, unheld })
+export const askedManifest = (request: ManifestRequest, unheld: string[] = [], dropped: DroppedOnTask[] = []): Entry =>
+  ({ kind: 'manifest', id: nextId(), request, decision: null, unheld, ...(dropped.length > 0 ? { dropped } : {}) })
 
 /**
  * The entries without the agent's narration of a plan's steps, once the plan's card lists them.

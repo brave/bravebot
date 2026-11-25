@@ -2903,6 +2903,11 @@ impl Bridge {
     /// turn: the session's conversation is neither sent nor changed, and the run is saved as its
     /// own record. The session is busy until the run ends, so a turn or a second run is refused.
     ///
+    /// Pictures and PDFs dropped onto the task arrive as `attachments` and go to the planner with
+    /// it, and `markers` names the marker each stands for in the task, which the run's title puts
+    /// the file's name in place of. A text file dropped onto it arrives in `files` as its marker
+    /// and name, and the name is put into the task in the marker's place (DROP-4).
+    ///
     /// `turn.cancel` stops a run, and the reply methods answer its questions, as for a turn.
     fn start_manifest(&mut self, request: &Request) -> Result<Value, Failure> {
         if self.emitter.has_view(&request.string("session")?) {
@@ -2911,25 +2916,72 @@ impl Bridge {
             ));
         }
         let handle = request.string("session")?;
-        let task = request.string("task")?;
-        if task.trim().is_empty() {
-            return Err(Failure::bad_request("a manifest run needs a task to plan"));
+        // A project file named for context is read by a turn before it decides. A run fixes its
+        // plan before anything the plan could look at is read (MANIFEST-9), so the file would be
+        // dropped. Refuse instead. `files` carries a dropped text file's marker and name, as on
+        // `session.btw`, so only a bare path is refused here.
+        let named_by_path = request
+            .params
+            .get("files")
+            .and_then(Value::as_array)
+            .is_some_and(|files| files.iter().any(Value::is_string));
+        if named_by_path {
+            return Err(Failure::bad_request(
+                "a manifest run takes no project file in `files`: its plan is fixed before \
+                 anything is read. Name the file in the task instead",
+            ));
         }
-        // A named file is context a turn reads before it decides. A run fixes its plan before
-        // anything is read (MANIFEST-9), so the file would be dropped. Refuse instead.
-        for named in ["files", "dropped", "attachments", "images"] {
-            let given = request
+        let given = |named: &str| {
+            request
                 .params
                 .get(named)
                 .and_then(Value::as_array)
-                .is_some_and(|entries| !entries.is_empty());
-            if given {
-                return Err(Failure::bad_request(format!(
-                    "a manifest run takes no `{named}`: its plan is fixed before anything is \
-                     read. Name the file in the task instead"
-                )));
-            }
+                .is_some_and(|entries| !entries.is_empty())
+        };
+        // Pasted pictures are not taken on a run from the window.
+        if given("images") {
+            return Err(Failure::bad_request(
+                "a manifest run takes no `images`: drop the picture onto the task instead",
+            ));
         }
+        // A text file dropped on the line is its name (DROP-4), put back by its marker below.
+        if given("dropped") {
+            return Err(Failure::bad_request(
+                crate::aside::TEXT_FILE_IS_ITS_NAME_ON_A_MANIFEST,
+            ));
+        }
+        let task = crate::attached::in_words(request, &request.string("task")?)?;
+        if task.trim().is_empty() {
+            return Err(Failure::bad_request("a manifest run needs a task to plan"));
+        }
+        // Dropped pictures and PDFs go with the task, checked as `turn.send` checks them
+        // (DROP-10). The agent's runner reads them before the planner's policy exists (DROP-4).
+        let attachments: Vec<bravebot_agent::turn::Attachment> = crate::attached::dropped(request)?
+            .into_iter()
+            .map(|(path, media)| bravebot_agent::turn::Attachment {
+                path,
+                media: media.to_string(),
+            })
+            .collect();
+        // The marker each of them stands for in the task, by position, so the run's title names
+        // each file where its own marker stands.
+        let markers: Vec<String> = match request.params.get("markers") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(given) => given
+                .as_array()
+                .filter(|markers| markers.len() == attachments.len())
+                .and_then(|markers| {
+                    markers
+                        .iter()
+                        .map(|marker| marker.as_str().map(str::to_string))
+                        .collect::<Option<Vec<_>>>()
+                })
+                .ok_or_else(|| {
+                    Failure::bad_request(
+                        "`markers` must be a list of strings, one for each of `attachments`",
+                    )
+                })?,
+        };
         let requested_model = crate::models::selection(request.params.get("model"))?;
 
         self.reap(&handle);
@@ -3023,6 +3075,8 @@ impl Bridge {
                 mcp_requested,
                 workspace,
                 task,
+                attachments,
+                markers,
                 run,
                 cancel,
                 pending,
