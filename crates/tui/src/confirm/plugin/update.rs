@@ -310,7 +310,7 @@ pub(super) fn draw_update(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bravebot_agent::plugin_listing::{HookRow, SkillRow, UpdateGit};
+    use bravebot_agent::plugin_listing::{HookRow, SkillRow, UpdateGit, deltas};
     use bravebot_config::hooks::Unkept;
     use bravebot_config::plugin::FileFault;
     use ratatui::backend::TestBackend;
@@ -571,7 +571,6 @@ mod tests {
             skill("edit", "new"),
             skill("fresh", "f"),
         ];
-        use bravebot_agent::plugin_listing::deltas;
         let found = deltas(
             &old,
             &new,

@@ -237,7 +237,8 @@ impl Jobs {
             && running.job == job
             && let Some(replies) = &running.replies
         {
-            let _ = replies.send(Reply { question, yes });
+            // A job that has already ended reads no more replies, so a failed send needs nothing.
+            replies.send(Reply { question, yes }).ok();
         }
         Ok(json!({}))
     }
@@ -280,7 +281,7 @@ struct WindowAsker {
 }
 
 impl WindowAsker {
-    fn ask(&mut self, kind: &str, listing: Value) -> bool {
+    fn ask(&mut self, kind: &str, listing: &Value) -> bool {
         if self.emitter.is_quiet() {
             return false;
         }
@@ -339,21 +340,21 @@ impl Asker for WindowAsker {
     }
 
     fn confirm_fetch_host(&mut self, request: &FetchRequest) -> bool {
-        self.ask("host", json!({ "host": request.host, "url": request.url }))
+        self.ask("host", &json!({ "host": request.host, "url": request.url }))
     }
 
     fn confirm_install(&mut self, staged: &Staged) -> bool {
         let (catalogue, definitions) = self.offered();
         let mut shown = listing::install(staged, &catalogue, &definitions);
         shown["homeSourcesOnly"] = json!(true);
-        self.ask("install", shown)
+        self.ask("install", &shown)
     }
 
     fn confirm_update(&mut self, staged: &Staged, installed: &Installed, before: &Before) -> bool {
         let (catalogue, definitions) = self.offered();
         let mut shown = listing::update(staged, installed, before, &catalogue, &definitions);
         shown["homeSourcesOnly"] = json!(true);
-        self.ask("update", shown)
+        self.ask("update", &shown)
     }
 }
 
@@ -402,6 +403,7 @@ fn writable_state() -> Result<PathBuf, Failure> {
 }
 
 #[cfg(test)]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 mod tests {
     use super::*;
 
@@ -512,14 +514,14 @@ mod tests {
     fn only_a_yes_to_the_question_put_is_a_yes() {
         let (mut asker, put) = window(yes);
         assert!(asker.anybody_there());
-        assert!(asker.ask("install", json!({"x": 1})));
+        assert!(asker.ask("install", &json!({"x": 1})));
         assert_eq!(
             put.lock().unwrap()[0],
             json!({"job": "7", "question": 1, "kind": "install", "listing": {"x": 1}})
         );
 
         let (mut asker, _) = window(|question| yes(question + 1));
-        assert!(!asker.ask("host", json!({})), "a yes to another number");
+        assert!(!asker.ask("host", &json!({})), "a yes to another number");
 
         let (mut asker, _) = window(|question| {
             Some(Reply {
@@ -527,7 +529,7 @@ mod tests {
                 yes: false,
             })
         });
-        assert!(!asker.ask("update", json!({})));
+        assert!(!asker.ask("update", &json!({})));
     }
 
     /// A yes the window sent before the question was put does not answer it.
@@ -537,7 +539,7 @@ mod tests {
         let (mut asker, put) = window(|_| None);
         asker.replies = replies;
         sender.send(yes(1).unwrap()).unwrap();
-        let waiting = std::thread::spawn(move || asker.ask("install", json!({})));
+        let waiting = std::thread::spawn(move || asker.ask("install", &json!({})));
         std::thread::sleep(Duration::from_millis(300));
         drop(sender);
         assert!(!waiting.join().unwrap());
@@ -548,7 +550,7 @@ mod tests {
     #[test]
     fn a_dropped_channel_is_a_no() {
         let (mut asker, put) = window(|_| None);
-        assert!(!asker.ask("install", json!({})));
+        assert!(!asker.ask("install", &json!({})));
         assert_eq!(put.lock().unwrap().len(), 1);
     }
 
@@ -563,7 +565,7 @@ mod tests {
         });
         asker.emitter.go_quiet();
         assert!(!asker.anybody_there());
-        assert!(!asker.ask("install", json!({})));
+        assert!(!asker.ask("install", &json!({})));
         assert!(put.lock().unwrap().is_empty());
 
         // A window that never answers, and then goes.
@@ -576,7 +578,7 @@ mod tests {
         });
         asker.replies = replies;
         let emitter = asker.emitter.clone();
-        let waiting = std::thread::spawn(move || asker.ask("install", json!({})));
+        let waiting = std::thread::spawn(move || asker.ask("install", &json!({})));
         std::thread::sleep(Duration::from_millis(300));
         emitter.go_quiet();
         assert!(!waiting.join().unwrap());

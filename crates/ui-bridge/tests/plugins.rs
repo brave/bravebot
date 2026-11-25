@@ -11,6 +11,19 @@
     clippy::unwrap_used,
     reason = "a test that unwraps fails at the line that did"
 )]
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "a test fails by panicking"
+)]
+#![allow(
+    clippy::needless_pass_by_value,
+    reason = "a request's params are built in the call that sends them"
+)]
+#![allow(
+    clippy::let_underscore_must_use,
+    reason = "a scratch directory or a child that is already gone needs no cleaning"
+)]
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};

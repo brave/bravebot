@@ -10,6 +10,8 @@
 //! default: it fails while the bridge has a method the allowlist does not mention, and while the
 //! allowlist mentions one the bridge no longer has.
 
+#![allow(clippy::expect_used, reason = "a test fails by panicking")]
+
 use bravebot_ui_bridge::allowlist::{BY_THE_HOST, DENIED, OFFERED};
 use std::collections::BTreeSet;
 use std::path::Path;

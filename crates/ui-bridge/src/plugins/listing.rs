@@ -96,7 +96,7 @@ pub fn update(
         "definitions": deltas_of(&request.definitions, definition_row),
         "hooks": request.hooks.as_ref().map_or(Value::Null, |part| {
             let passed = staged.hooks.as_ref().map(|_| passed_over(part.new_unkept));
-            part_deltas_of(part, hook_row, passed)
+            part_deltas_of(part, hook_row, passed.as_ref())
         }),
         "servers": request.servers.as_ref().map_or(Value::Null, |part| {
             // A row of the installed copy names the installed plugin, and a row of the staged tree
@@ -301,7 +301,7 @@ fn deltas_of<T>(deltas: &[Delta<T>], row: impl Fn(&T) -> Value) -> Vec<Value> {
 fn part_deltas_of<T>(
     part: &PartDeltas<T>,
     row: impl Fn(&T) -> Value,
-    passed_over: Option<Value>,
+    passed_over: Option<&Value>,
 ) -> Value {
     json!({
         "deltas": deltas_of(&part.deltas, row),
@@ -312,6 +312,11 @@ fn part_deltas_of<T>(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "a test fails by panicking"
+)]
 mod tests {
     use super::*;
     use bravebot_agent::confirm::FetchRequest;
