@@ -11,16 +11,19 @@
 //! request. What an answered line says is the [`Service`]'s, which this crate gives no way to reach
 //! a session: it is handed the line and a device's record and returns lines.
 
-use crate::identity::{Identity, KeyHash};
+use crate::identity::{Identity, KeyHash, unhex};
+use crate::invitation::{Invitations, Outcome};
 use crate::limits::Limits;
+use crate::pairing;
 use crate::registry::{Device, Registry};
 use crate::tls;
 use bravebot_core::device::{Operation, Standing};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
+use serde_json::{Value, json};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -57,6 +60,7 @@ impl Drop for Slot {
 struct Shared {
     config: Arc<ServerConfig>,
     registry: Arc<Registry>,
+    invitations: Arc<Invitations>,
     service: Arc<dyn Service>,
     limits: Limits,
     connections: Arc<AtomicUsize>,
@@ -68,8 +72,9 @@ pub struct Listener {
     address: SocketAddr,
     key_hash: KeyHash,
     registry: Arc<Registry>,
+    invitations: Arc<Invitations>,
     stop: Arc<AtomicBool>,
-    accepting: Option<JoinHandle<()>>,
+    accepting: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Listener {
@@ -79,6 +84,7 @@ impl Listener {
         address: SocketAddr,
         identity: &Identity,
         registry: Arc<Registry>,
+        invitations: Arc<Invitations>,
         service: Arc<dyn Service>,
         limits: Limits,
     ) -> io::Result<Self> {
@@ -89,6 +95,7 @@ impl Listener {
         let shared = Arc::new(Shared {
             config,
             registry: Arc::clone(&registry),
+            invitations: Arc::clone(&invitations),
             service,
             limits,
             connections: Arc::new(AtomicUsize::new(0)),
@@ -105,8 +112,9 @@ impl Listener {
             address,
             key_hash: identity.key_hash(),
             registry,
+            invitations,
             stop,
-            accepting: Some(accepting),
+            accepting: Mutex::new(Some(accepting)),
         })
     }
 
@@ -121,12 +129,18 @@ impl Listener {
     }
 
     /// Stop accepting and end every connection a device has open.
-    pub fn stop(&mut self) {
+    pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
-        if let Some(accepting) = self.accepting.take() {
+        let accepting = self
+            .accepting
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(accepting) = accepting {
             // A thread that panicked has stopped accepting, which is what this was for.
             accepting.join().ok();
         }
+        self.invitations.close();
         self.registry.end_every_connection();
     }
 }
@@ -143,6 +157,11 @@ fn accept(socket: &TcpListener, shared: &Arc<Shared>, stop: &AtomicBool) {
             Ok((tcp, _)) => {
                 // A socket accepted from a non-blocking one is non-blocking on some systems.
                 if tcp.set_nonblocking(false).is_err() {
+                    continue;
+                }
+                // With no device paired and no window open, nobody can be let in, so nothing is
+                // accepted, which also keeps the work of a handshake from a program with no claim.
+                if shared.registry.is_empty() && !shared.invitations.is_open() {
                     continue;
                 }
                 let Some(connection) = Slot::take(&shared.connections, shared.limits.connections)
@@ -171,8 +190,11 @@ fn accept(socket: &TcpListener, shared: &Arc<Shared>, stop: &AtomicBool) {
 }
 
 /// Finish the handshake within the limit and say which key the device showed.
-fn handshake(shared: &Shared, tcp: &mut TcpStream) -> Option<(ServerConnection, KeyHash)> {
-    let started = Instant::now();
+fn handshake(
+    shared: &Shared,
+    tcp: &mut TcpStream,
+    started: Instant,
+) -> Option<(ServerConnection, KeyHash)> {
     tcp.set_nodelay(true).ok()?;
     let mut connection = ServerConnection::new(Arc::clone(&shared.config)).ok()?;
     // One read at a time, so the time is checked after each. `complete_io` reads until the handshake
@@ -203,22 +225,137 @@ fn handshake(shared: &Shared, tcp: &mut TcpStream) -> Option<(ServerConnection, 
 }
 
 fn serve(shared: &Shared, mut tcp: TcpStream, handshaking: Slot, _connection: &Slot) {
-    let Some((connection, key)) = handshake(shared, &mut tcp) else {
+    let started = Instant::now();
+    let Some((connection, key)) = handshake(shared, &mut tcp, started) else {
         return;
     };
     drop(handshaking);
-    if !matches!(shared.registry.standing(&key), Standing::Paired(_)) {
+    let mut stream = StreamOwned::new(connection, tcp);
+    // A device the person has not paired may send one line, to pair, and only while a window is
+    // open. Anything else about it ends the connection with nothing said.
+    if !matches!(shared.registry.standing(&key), Standing::Paired(_))
+        && !pair(shared, &mut stream, &key, started)
+    {
         return;
     }
-    let Ok(ending) = tcp.try_clone() else {
+    let Ok(ending) = stream.sock.try_clone() else {
         return;
     };
     let Some(live) = shared.registry.connect(&key, ending) else {
         return;
     };
-    // A device that was refused or has gone is dropped without a word: `tcp` is closed on return.
-    serve_lines(shared, &key, StreamOwned::new(connection, tcp));
+    serve_lines(shared, &key, stream);
     shared.registry.disconnect(&key, &live);
+}
+
+/// The first line of a connection, read a byte at a time so the time and the length are checked
+/// as it arrives: a line that does not end in time, or is longer than `most`, is not read.
+fn first_line(
+    stream: &mut StreamOwned<ServerConnection, TcpStream>,
+    most: usize,
+    deadline: Instant,
+) -> Option<Vec<u8>> {
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        let left = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|left| !left.is_zero())?;
+        stream.sock.set_read_timeout(Some(left)).ok()?;
+        if stream.read(&mut byte).ok()? == 0 {
+            return None;
+        }
+        if byte[0] == b'\n' {
+            return Some(line);
+        }
+        if line.len() >= most {
+            return None;
+        }
+        line.push(byte[0]);
+    }
+}
+
+/// What the first line of a device that is not paired asked: the proof of the secret and what the
+/// phone calls itself, and the id to answer under.
+struct Begin {
+    id: u64,
+    proof: Vec<u8>,
+    label: Option<String>,
+}
+
+/// The longest label a phone may give itself, in bytes.
+const LABEL: usize = 64;
+
+fn begin_of(line: &[u8]) -> Option<Begin> {
+    let value: Value = serde_json::from_slice(line).ok()?;
+    let request = value.as_object()?;
+    if request.get("method")?.as_str()? != pairing::BEGIN {
+        return None;
+    }
+    // A request with no number to answer under has nobody to be answered.
+    let id = request.get("id")?.as_u64()?;
+    let params = request.get("params")?.as_object()?;
+    Some(Begin {
+        id,
+        proof: unhex(params.get("proof")?.as_str()?)?,
+        label: params
+            .get("label")
+            .and_then(Value::as_str)
+            .filter(|label| label.len() <= LABEL)
+            .map(str::to_string),
+    })
+}
+
+/// Pair the device on this connection if its person lets it, answering it once they have typed its
+/// code. `false` where the connection is not to go on.
+fn pair(
+    shared: &Shared,
+    stream: &mut StreamOwned<ServerConnection, TcpStream>,
+    key: &KeyHash,
+    started: Instant,
+) -> bool {
+    if !shared.invitations.is_open() {
+        return false;
+    }
+    let deadline = started + shared.limits.handshake;
+    let Some(line) = first_line(stream, shared.limits.first_line, deadline) else {
+        return false;
+    };
+    let Some(begin) = begin_of(&line) else {
+        return false;
+    };
+    let mut exporter = [0u8; 32];
+    if stream
+        .conn
+        .export_keying_material(
+            &mut exporter,
+            pairing::EXPORTER_LABEL,
+            Some(pairing::EXPORTER_CONTEXT),
+        )
+        .is_err()
+    {
+        return false;
+    }
+    let Some(ticket) = shared
+        .invitations
+        .prove(&begin.proof, &exporter, key, begin.label)
+    else {
+        return false;
+    };
+    if shared.invitations.wait(&ticket) != Outcome::Paired {
+        return false;
+    }
+    stream
+        .sock
+        .set_write_timeout(Some(shared.limits.write))
+        .is_ok()
+        && writeln!(
+            stream,
+            "{}",
+            json!({"id": begin.id, "ok": {"paired": true}})
+        )
+        .and_then(|()| stream.flush())
+        .is_ok()
 }
 
 /// What reading a line found.

@@ -129,6 +129,11 @@ impl Registry {
         devices
     }
 
+    /// Whether no device is held.
+    pub fn is_empty(&self) -> bool {
+        self.lock().devices.is_empty()
+    }
+
     /// Whether the device with this key has a connection open.
     pub fn is_connected(&self, key: &KeyHash) -> bool {
         self.lock().live.contains_key(key)

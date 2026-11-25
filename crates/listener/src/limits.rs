@@ -24,6 +24,9 @@ pub struct Limits {
     /// The longest line read from a connection, newline excluded. A line that reaches it without
     /// ending ends the connection.
     pub line: usize,
+    /// The longest first line a device that is not paired may send, newline excluded. It is read
+    /// within the time of the handshake.
+    pub first_line: usize,
     /// The longest a write to a device may wait before the connection is given up.
     pub write: Duration,
 }
@@ -35,6 +38,7 @@ impl Default for Limits {
             handshakes: 4,
             handshake: Duration::from_secs(10),
             line: 8 * 1024 * 1024,
+            first_line: 4096,
             write: Duration::from_secs(5),
         }
     }

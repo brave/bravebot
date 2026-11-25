@@ -201,6 +201,24 @@ pub fn public_key_hash(certificate: &[u8]) -> Option<KeyHash> {
     Some(hash)
 }
 
+/// The bytes a string of hexadecimal digits holds, or `None` where it is not one.
+pub fn unhex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let digit = |byte: u8| {
+        char::from(byte)
+            .to_digit(16)
+            .and_then(|digit| u8::try_from(digit).ok())
+    };
+    text.as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|[high, low]| Some(digit(*high)? << 4 | digit(*low)?))
+        .collect()
+}
+
 /// A hash as the lower-case hexadecimal a person or a log reads.
 pub fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
@@ -343,6 +361,16 @@ mod tests {
             - 1;
         compressed[point] = 0x02;
         assert_eq!(public_key_hash(&compressed), None);
+    }
+
+    #[test]
+    fn hexadecimal_is_read_back_and_anything_else_is_not() {
+        assert_eq!(unhex("000fa0ff"), Some(vec![0x00, 0x0f, 0xa0, 0xff]));
+        assert_eq!(unhex("000FA0FF"), Some(vec![0x00, 0x0f, 0xa0, 0xff]));
+        assert_eq!(unhex(""), Some(Vec::new()));
+        for bad in ["0", "abc", "zz", "+1", "0x", "é1", "a b "] {
+            assert_eq!(unhex(bad), None, "{bad:?}");
+        }
     }
 
     #[test]

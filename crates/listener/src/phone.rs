@@ -9,7 +9,8 @@
 //! to, and speaks lines over TLS 1.3. Nothing in the host's own code uses it: it is built only for
 //! the tests of this crate and of the host, behind the `testing` feature.
 
-use crate::identity::{Identity, KeyHash, public_key_hash};
+use crate::identity::{Identity, KeyHash, hex, public_key_hash};
+use crate::pairing::{self, Secret};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::client::{ClientSessionMemoryCache, Resumption};
 use rustls::crypto::{WebPkiSupportedAlgorithms, ring as provider};
@@ -89,6 +90,7 @@ pub struct Phone {
 /// One connection of a phone, after its handshake.
 pub struct Connection {
     stream: BufReader<StreamOwned<ClientConnection, TcpStream>>,
+    key: KeyHash,
 }
 
 impl Phone {
@@ -175,6 +177,7 @@ impl Phone {
         }
         Ok(Connection {
             stream: BufReader::new(StreamOwned::new(connection, tcp)),
+            key: self.identity.key_hash(),
         })
     }
 }
@@ -185,6 +188,28 @@ impl Connection {
         let stream = self.stream.get_mut();
         writeln!(stream, "{line}")?;
         stream.flush()
+    }
+
+    /// Ask to pair with the secret of an invitation, as a phone does after it scans one: send the
+    /// proof for this connection and this phone's key, and say what the phone calls itself. Returns
+    /// the code the phone shows for the person to type on the host. The host answers on this
+    /// connection once the person has typed it.
+    pub fn begin_pairing(&mut self, secret: &Secret, label: Option<&str>) -> io::Result<String> {
+        let exporter = self.exporter(pairing::EXPORTER_LABEL, Some(pairing::EXPORTER_CONTEXT))?;
+        let proof = pairing::proof(secret, &exporter, &self.key);
+        self.send_proof(&proof, label)?;
+        Ok(pairing::confirmation_code(secret, &exporter, &self.key))
+    }
+
+    /// Send `proof` as the proof of the secret, whatever it is made of, for a test of one that is
+    /// not this connection's.
+    pub fn send_proof(&mut self, proof: &[u8], label: Option<&str>) -> io::Result<()> {
+        let mut params = serde_json::json!({"proof": hex(proof)});
+        if let Some(label) = label {
+            params["label"] = serde_json::Value::String(label.to_string());
+        }
+        let line = serde_json::json!({"id": 1, "method": pairing::BEGIN, "params": params});
+        self.send(&line.to_string())
     }
 
     /// Send these bytes as they are.
@@ -222,6 +247,20 @@ impl Connection {
             }
             Err(error) => Err(error),
         }
+    }
+
+    /// As [`Connection::receive`], waiting `patience` and not the usual time.
+    pub fn receive_within(&mut self, patience: Duration) -> io::Result<Option<String>> {
+        self.stream
+            .get_ref()
+            .sock
+            .set_read_timeout(Some(patience))?;
+        let heard = self.receive();
+        self.stream
+            .get_ref()
+            .sock
+            .set_read_timeout(Some(PATIENCE))?;
+        heard
     }
 
     /// Whether the host has ended this connection, found by reading what it would send.

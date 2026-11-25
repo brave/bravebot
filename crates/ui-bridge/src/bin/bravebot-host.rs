@@ -45,6 +45,7 @@ fn main() {
         sessions_root,
         workspaces,
         settings,
+        listen,
         clients,
     } = start
     else {
@@ -61,6 +62,88 @@ fn main() {
     // under incognito mode, so nothing would start if this process ever engaged it.
     bravebot_backtrace::start(bravebot_backtrace::Process::Host);
 
+    let inspection = prepare(outcome, &workspaces, sessions_root, settings.as_deref());
+
+    // Before any client starts, the person is asked here about each workspace no yes was kept
+    // about, as a session in lines asks (TRUST-23). The answers are read before `launch` and `quit`
+    // are, from the same input.
+    let asked = bravebot_ui_bridge::host_trust::ask_about_each(
+        &workspaces,
+        bravebot_agent::home::directory().as_deref(),
+        bravebot_agent::home::profile().as_deref(),
+        &mut std::io::stdin().lock(),
+        &mut std::io::stderr(),
+    );
+    if asked == bravebot_ui_bridge::host_trust::Asked::Stop {
+        return;
+    }
+
+    // The listener is the host's one network address. A host asked to listen where it cannot stops,
+    // since a person who named an address expects to be reachable there. It starts before any
+    // client does.
+    let link = listen.map(|address| start_link(address, &workspaces));
+    let host = bravebot_ui_bridge::host::Host::new(bravebot_ui_bridge::host::Setup {
+        workspaces,
+        settings,
+        inspection,
+    });
+    eprintln!("bravebot-host: instance {}", host.instance());
+
+    let clients = std::sync::Arc::new(clients);
+    let current = std::sync::Arc::new(Served {
+        channels: std::sync::Mutex::new(std::collections::HashMap::new()),
+        quitting: std::sync::atomic::AtomicBool::new(false),
+        // Every client starts once, in the order the command line gives.
+        connected: std::sync::Mutex::new((0..clients.len()).collect()),
+    });
+    let names = clients.iter().map(|client| client.name.clone()).collect();
+    let (commands, received) = std::sync::mpsc::channel();
+    listen_for_commands(
+        commands,
+        std::sync::Arc::clone(&current),
+        names,
+        link.clone(),
+    );
+    let mut running: Vec<_> = (0..clients.len())
+        .map(|client| start_client(&host, &clients, client, &current))
+        .collect();
+    loop {
+        match received.recv() {
+            // `quit` wins over a client still to start.
+            Ok(Command::Launch(_))
+                if current.quitting.load(std::sync::atomic::Ordering::SeqCst) => {}
+            Ok(Command::Launch(client)) => {
+                running.push(start_client(&host, &clients, client, &current));
+            }
+            Ok(Command::Quit) | Err(_) => break,
+        }
+    }
+    // Every device's connection ends, and no new one is accepted.
+    if let Some(link) = &link {
+        link.stop();
+    }
+    // Every channel has been shut, so each client's connection ends and its thread returns.
+    for client in running {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a client's thread that panicked has already lost its connection, and the host stops either way"
+        )]
+        let _ = client.join();
+    }
+    stop(&host);
+}
+
+/// What the host checks and sets before it asks about a workspace or starts anything: that no
+/// process of the same user can copy its descriptors, that each workspace is a directory, the
+/// sessions root, and the settings it reads. Says why and stops the host where one fails. Returns
+/// the word `agent.info` reports for inspection.
+#[cfg(unix)]
+fn prepare(
+    outcome: bravebot_sandbox::inspection::Inspection,
+    workspaces: &[std::path::PathBuf],
+    sessions_root: std::path::PathBuf,
+    settings: Option<&std::path::Path>,
+) -> &'static str {
     // The host serves real sessions, so it does not run where a process of the same user may be
     // able to copy the descriptors of its channel.
     let inspection = match bravebot_ui_bridge::host::inspection_report(outcome) {
@@ -93,64 +176,10 @@ fn main() {
     }
     // The host works in several workspaces and is started from wherever its person was, so the
     // directory it was started in contributes no settings of its own.
-    let process = bravebot_ui_bridge::settings::layers(None, settings.as_deref());
+    let process = bravebot_ui_bridge::settings::layers(None, settings);
     bravebot_ui_bridge::settings::settle_for_process(&process);
     bravebot_ui_bridge::settings::start_the_sweep_for_process(&process);
-
-    // Before any client starts, the person is asked here about each workspace no yes was kept
-    // about, as a session in lines asks (TRUST-23). The answers are read before `launch` and `quit`
-    // are, from the same input.
-    let asked = bravebot_ui_bridge::host_trust::ask_about_each(
-        &workspaces,
-        bravebot_agent::home::directory().as_deref(),
-        bravebot_agent::home::profile().as_deref(),
-        &mut std::io::stdin().lock(),
-        &mut std::io::stderr(),
-    );
-    if asked == bravebot_ui_bridge::host_trust::Asked::Stop {
-        return;
-    }
-
-    let host = bravebot_ui_bridge::host::Host::new(bravebot_ui_bridge::host::Setup {
-        workspaces,
-        settings,
-        inspection,
-    });
-    eprintln!("bravebot-host: instance {}", host.instance());
-
-    let clients = std::sync::Arc::new(clients);
-    let current = std::sync::Arc::new(Served {
-        channels: std::sync::Mutex::new(std::collections::HashMap::new()),
-        quitting: std::sync::atomic::AtomicBool::new(false),
-        // Every client starts once, in the order the command line gives.
-        connected: std::sync::Mutex::new((0..clients.len()).collect()),
-    });
-    let names = clients.iter().map(|client| client.name.clone()).collect();
-    let (commands, received) = std::sync::mpsc::channel();
-    listen_for_commands(commands, std::sync::Arc::clone(&current), names);
-    let mut running: Vec<_> = (0..clients.len())
-        .map(|client| start_client(&host, &clients, client, &current))
-        .collect();
-    loop {
-        match received.recv() {
-            // `quit` wins over a client still to start.
-            Ok(Command::Launch(_))
-                if current.quitting.load(std::sync::atomic::Ordering::SeqCst) => {}
-            Ok(Command::Launch(client)) => {
-                running.push(start_client(&host, &clients, client, &current));
-            }
-            Ok(Command::Quit) | Err(_) => break,
-        }
-    }
-    // Every channel has been shut, so each client's connection ends and its thread returns.
-    for client in running {
-        #[expect(
-            clippy::let_underscore_must_use,
-            reason = "a client's thread that panicked has already lost its connection, and the host stops either way"
-        )]
-        let _ = client.join();
-    }
-    stop(&host);
+    inspection
 }
 
 /// What the person typed on the host's input.
@@ -229,6 +258,7 @@ fn listen_for_commands(
     commands: std::sync::mpsc::Sender<Command>,
     current: Current,
     names: Vec<String>,
+    link: Option<std::sync::Arc<bravebot_ui_bridge::device_link::Link>>,
 ) {
     std::thread::spawn(move || {
         let quit = |commands: &std::sync::mpsc::Sender<Command>| {
@@ -251,7 +281,7 @@ fn listen_for_commands(
                     launch(line.strip_prefix("launch ").map(str::trim))
                 }
                 Ok("quit") => return quit(&commands),
-                Ok(_) => eprintln!("bravebot-host: type `launch NAME` or `quit`"),
+                Ok(line) => say_in_answer(link.as_deref(), line),
                 // A line that is not text is not the end of the input.
                 Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
                     eprintln!("bravebot-host: that line is not text; type `launch NAME` or `quit`");
@@ -265,6 +295,59 @@ fn listen_for_commands(
         eprintln!("bravebot-host: its input ended; stopping");
         quit(&commands);
     });
+}
+
+/// Start the listener, or say why not and stop the host.
+#[cfg(unix)]
+fn start_link(
+    address: std::net::SocketAddr,
+    workspaces: &[std::path::PathBuf],
+) -> std::sync::Arc<bravebot_ui_bridge::device_link::Link> {
+    use std::io::IsTerminal;
+    let say: bravebot_ui_bridge::device_link::Say =
+        std::sync::Arc::new(|line| eprintln!("bravebot-host: {line}"));
+    match bravebot_ui_bridge::device_link::Link::start(
+        address,
+        workspaces,
+        std::io::stderr().is_terminal(),
+        say,
+    ) {
+        Ok(link) => {
+            eprintln!("bravebot-host: {}", link.listening());
+            std::sync::Arc::new(link)
+        }
+        Err(error) => {
+            eprintln!("bravebot-host: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Say what a line on the host's input that is not `launch` or `quit` asks for: a command about
+/// devices where the host is listening, and otherwise what the host does take.
+#[cfg(unix)]
+fn say_in_answer(link: Option<&bravebot_ui_bridge::device_link::Link>, line: &str) {
+    use bravebot_ui_bridge::device_link::Said;
+    match link.and_then(|link| link.command(line)) {
+        Some(said) => {
+            for said in said {
+                match said {
+                    Said::Line(line) => eprintln!("bravebot-host: {line}"),
+                    Said::Block(block) => eprintln!("{block}"),
+                }
+            }
+        }
+        None if matches!(
+            line.split_whitespace().next(),
+            Some("pair" | "confirm" | "devices")
+        ) =>
+        {
+            eprintln!("bravebot-host: start the host with --listen ADDR:PORT to pair a device");
+        }
+        None => eprintln!(
+            "bravebot-host: type `launch NAME` or `quit`, or where it listens `pair`, `confirm` or `devices`"
+        ),
+    }
 }
 
 /// Make the sessions root, or accept one that is already private.
@@ -399,13 +482,15 @@ enum Start {
         sessions_root: std::path::PathBuf,
         workspaces: Vec<std::path::PathBuf>,
         settings: Option<std::path::PathBuf>,
+        /// The one address the host listens on for paired devices, where it was given.
+        listen: Option<std::net::SocketAddr>,
         clients: Vec<Client>,
     },
 }
 
 #[cfg(unix)]
 const USAGE: &str = "usage: bravebot-host --sessions-root DIR --workspace DIR [--workspace DIR]... \
-[--settings FILE] CLIENT...\n       bravebot-host --version\n\
+[--settings FILE] [--listen ADDR:PORT] CLIENT...\n       bravebot-host --version\n\
 CLIENT is --client NAME --answers KINDS --program PATH [--arg VALUE]...\n\
 NAME is up to 32 of a-z, 0-9 and -, and names one client. KINDS is the answers the client may \
 give, some of confirm, run, fetch, ask and trust separated by commas, or none. PATH is the \
@@ -463,7 +548,8 @@ impl Start {
     // nosemgrep: rust.lang.security.args.args
     fn from_arguments(arguments: impl Iterator<Item = std::ffi::OsString>) -> Option<Self> {
         let mut arguments = arguments;
-        let (mut root, mut workspaces, mut settings) = (None, Vec::new(), None);
+        let (mut root, mut workspaces, mut settings, mut listen) =
+            (None, Vec::new(), None, None::<std::net::SocketAddr>);
         let mut clients: Vec<Named> = Vec::new();
         while let Some(argument) = arguments.next() {
             match argument.to_str() {
@@ -475,6 +561,21 @@ impl Start {
                     workspaces.push(value(&mut arguments, "--workspace")?.into())
                 }
                 Some("--settings") => settings = Some(value(&mut arguments, "--settings")?.into()),
+                Some("--listen") => {
+                    let address = text(&mut arguments, "--listen")?;
+                    if listen.is_some() {
+                        return refuse("--listen is given once: the host listens on one address");
+                    }
+                    let Ok(address) = address.parse::<std::net::SocketAddr>() else {
+                        return refuse(&format!("`{address}` is not ADDR:PORT"));
+                    };
+                    if address.ip().is_unspecified() {
+                        return refuse(
+                            "--listen names one address and not every interface; give the address of the interface devices reach",
+                        );
+                    }
+                    listen = Some(address);
+                }
                 Some("--client") => {
                     let name = text(&mut arguments, "--client")?;
                     if !is_a_name(&name) {
@@ -527,13 +628,14 @@ impl Start {
                 }
             }
         }
-        Self::checked(root, workspaces, settings, clients)
+        Self::checked(root, workspaces, settings, listen, clients)
     }
 
     fn checked(
         sessions_root: Option<std::path::PathBuf>,
         workspaces: Vec<std::path::PathBuf>,
         settings: Option<std::path::PathBuf>,
+        listen: Option<std::net::SocketAddr>,
         named: Vec<Named>,
     ) -> Option<Self> {
         let Some(sessions_root) = sessions_root.filter(|root| root.is_absolute()) else {
@@ -572,6 +674,7 @@ impl Start {
             sessions_root,
             workspaces,
             settings,
+            listen,
             clients,
         })
     }

@@ -349,10 +349,12 @@ version = "0.24.0"
 name = "bravebot-listener"
 version = "0.24.0"
 dependencies = [
+ "base64 0.22.1",
  "bravebot-core",
  "ring",
  "rustls",
  "rustls-webpki",
+ "serde_json",
 ]
 
 [[package]]
@@ -521,9 +523,11 @@ dependencies = [
  "bravebot-diag",
  "bravebot-filetype",
  "bravebot-i18n",
+ "bravebot-listener",
  "bravebot-mcp",
  "bravebot-mentions",
  "bravebot-net",
+ "bravebot-qr",
  "bravebot-sandbox",
  "bravebot-schedule",
  "bravebot-session",

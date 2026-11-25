@@ -12,20 +12,25 @@ governs:
   - crates/listener/src/lib.rs
   - crates/listener/src/der.rs
   - crates/listener/src/identity.rs
+  - crates/listener/src/invitation.rs
   - crates/listener/src/limits.rs
+  - crates/listener/src/pairing.rs
+  - crates/listener/src/pairing_tests.rs
   - crates/listener/src/phone.rs
   - crates/listener/src/registry.rs
   - crates/listener/src/server.rs
   - crates/listener/src/serving_tests.rs
   - crates/listener/src/tls.rs
+  - crates/ui-bridge/src/device_link.rs
+  - crates/ui-bridge/tests/device_listener.rs
 documented-by: none (internal: the listener is started by a person from the host's command line and no page says how a phone reaches it yet)
 ---
 
 ## Scope
 
-How the host accepts a connection from a phone: the keys each end names the other by, which connection is served and which is closed, and what is decided before anything a device sent is read. The listener is a library the host starts and gives a service to answer with. It depends on no crate that opens a session, so a device is answered only what that service says.
+How the host accepts a connection from a phone: the keys each end names the other by, which connection is served and which is closed, what is decided before anything a device sent is read, and how a phone is paired and what it is answered. The listener is a library the host starts and gives a service to answer with. It depends on no crate that opens a session, so a device is answered only what that service says.
 
-Not here: how a device is paired and how it is revoked, which lines a device may send, and what a session shows a device.
+Not here: how a device is revoked, which lines a device may send once a real session is shown to it, and what a session shows a device.
 
 ## Clauses
 
@@ -99,3 +104,56 @@ Each of these is held by a reader written from the standard's description of a s
 `verified-by: bravebot_qr::tests::a_place_outside_the_code_is_light`
 `verified-by: bravebot_qr::tests::the_lines_draw_the_code_with_a_quiet_zone_in_black_on_white`
 `verified-by: bravebot_qr::tests::codes_the_system_reader_read_are_drawn_as_they_were`
+
+<a id="LISTEN-5"></a>
+### LISTEN-5: a device pairs with an invitation the person opens and a code the person types on the host
+
+The person types `pair NAME read|control WORKSPACE` on the host. NAME is 1 to 32 of `a-z`, `0-9` and `-` and no device has it. The grant has no default. WORKSPACE is one of the directories the host was given with `--workspace`, named by a path that resolves to it. The host opens one window, which lasts two minutes, with a new 32-byte secret, and shows it as the link `bravebot://pair?v=1&h=<hash of the host's key>&a=<address>&s=<secret>` and, where its standard error is a terminal, as a QR code of that link. The secret is in memory, and in that link and nowhere else the host says. Opening another window ends the one open. A listener with no device paired and no window open accepts nobody.
+
+A phone that has read the link connects, pins the host's key to the hash in it, and sends one line, `pair.begin`, with a `proof` and optionally a `label` of up to 64 bytes that it calls itself. The proof is an HMAC-SHA256 under the secret of the TLS exporter value for the connection and the hash of the phone's own key, and the host checks it without learning how much of it was right. The value is different for every connection, so a proof made on one is no proof on another, and it names the phone's key, so it is no proof for another key. The phone then shows a six-digit code made from the same inputs under another label, and the host does not show it. The host says that a phone is asking to pair as NAME, with the phone's label drawn with every control character, reordering mark and backslash written as `\u{..}`, and the person types `confirm CODE` with the code the phone shows. A code that matches adds the device with the grant and workspace the person chose, and the phone's connection is answered `{"id":N,"ok":{"paired":true}}` and served as that device from then on.
+
+The window ends when its device is paired, after two minutes, when another is opened, when the host stops listening, and at the first failed attempt: a proof that does not check, a second phone while one waits, or a code that does not match. A connection that fails ends with nothing sent, so a phone that fails does not learn which input was wrong. A first line that is not a request to pair, is longer than 4,096 bytes or does not arrive in the time of the handshake ends its connection and leaves the window open. A window pairs one device. Anyone who can reach the address can close a window by failing an attempt, so pairing can be denied and cannot be completed by a program that does not hold the secret and the phone's code.
+
+`verified-by: bravebot_listener::invitation::a_phone_that_proves_the_secret_and_whose_code_is_typed_is_paired`
+`verified-by: bravebot_listener::invitation::a_window_pairs_one_device`
+`verified-by: bravebot_listener::invitation::a_proof_that_does_not_check_closes_the_window_whichever_input_was_wrong`
+`verified-by: bravebot_listener::invitation::a_wrong_code_closes_the_window_and_pairs_nothing`
+`verified-by: bravebot_listener::invitation::a_second_device_closes_the_window_of_the_first`
+`verified-by: bravebot_listener::invitation::a_window_ends_when_its_time_is_up`
+`verified-by: bravebot_listener::invitation::a_code_typed_after_the_time_is_up_pairs_nothing`
+`verified-by: bravebot_listener::invitation::a_new_window_ends_the_old_one`
+`verified-by: bravebot_listener::invitation::closing_ends_the_window`
+`verified-by: bravebot_listener::invitation::a_window_is_not_opened_for_a_bad_or_taken_name_or_without_a_secret`
+`verified-by: bravebot_listener::invitation::a_waiting_connection_is_told_when_the_code_is_typed`
+`verified-by: bravebot_listener::invitation::the_secret_is_in_no_debug_form_and_no_announcement`
+`verified-by: bravebot_listener::invitation::a_link_is_read_back_as_it_was_written`
+`verified-by: bravebot_listener::invitation::text_that_is_not_a_link_is_not_read`
+`verified-by: bravebot_listener::invitation::a_devices_text_is_drawn_without_control_characters_or_reordering_marks`
+`verified-by: bravebot_listener::pairing::the_proof_and_the_code_follow_each_of_their_inputs`
+`verified-by: bravebot_listener::pairing::a_proof_is_right_only_when_every_input_is_and_every_byte_is`
+`verified-by: bravebot_listener::pairing::the_code_is_not_made_from_the_start_of_the_proof`
+`verified-by: bravebot_listener::pairing::a_code_is_six_digits`
+`verified-by: bravebot_listener::pairing_tests::a_listener_with_no_device_and_no_window_accepts_nobody`
+`verified-by: bravebot_listener::pairing_tests::a_phone_pairs_with_the_secret_and_the_code_typed_on_the_host`
+`verified-by: bravebot_listener::pairing_tests::the_host_does_not_say_the_code_or_the_secret`
+`verified-by: bravebot_listener::pairing_tests::a_label_is_carried_as_written_and_left_out_where_it_is_too_long`
+`verified-by: bravebot_listener::pairing_tests::a_phone_without_the_secret_is_closed_and_the_window_closes`
+`verified-by: bravebot_listener::pairing_tests::a_proof_made_on_another_connection_is_refused`
+`verified-by: bravebot_listener::pairing_tests::a_second_phone_closes_the_pairing_of_the_first`
+`verified-by: bravebot_listener::pairing_tests::a_wrong_code_pairs_nothing_and_ends_the_connection`
+`verified-by: bravebot_listener::pairing_tests::a_first_line_that_is_not_a_pairing_request_ends_the_connection_and_leaves_the_window_open`
+`verified-by: bravebot_listener::pairing_tests::a_first_line_over_the_limit_is_refused_though_it_would_pair_the_phone`
+`verified-by: bravebot_listener::pairing_tests::a_first_line_that_never_ends_is_closed_when_the_time_is_up`
+`verified-by: bravebot_listener::pairing_tests::stopping_closes_the_window_and_releases_a_phone_waiting_for_its_code`
+`verified-by: bravebot_ui_bridge::device_link::what_the_host_says_of_a_phone_is_drawn_escaped`
+`verified-by: bravebot_ui_bridge::device_listener::a_phone_pairs_through_the_hosts_input_and_is_shown_synthetic_data`
+
+<a id="LISTEN-6"></a>
+### LISTEN-6: a paired device is answered with a session that is not real
+
+A device the person paired is answered by a service that holds no way to a session, a bridge or a tool. `instance.info` reports one session, `synthetic-1`, and says that the connection serves synthetic data, with the device's name and grant. `session.attach` of that session answers an empty view, and any other session is refused with `no_such_session`. Every other method, including every method the host offers a client it started and `pair.begin`, is refused with `not_allowed`, whatever grant the device holds. A device is therefore shown nothing of what the host's sessions hold, and can start nothing. A line a device sends is never read as something the person typed on the host.
+
+`verified-by: bravebot_ui_bridge::device_link::a_device_is_shown_one_synthetic_session_and_told_it_is_not_real`
+`verified-by: bravebot_ui_bridge::device_link::every_other_method_is_refused`
+`verified-by: bravebot_ui_bridge::device_link::a_line_that_cannot_be_answered_gets_no_answer_and_one_that_can_gets_a_failure`
+`verified-by: bravebot_ui_bridge::device_listener::a_phone_pairs_through_the_hosts_input_and_is_shown_synthetic_data`

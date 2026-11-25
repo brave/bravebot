@@ -16,11 +16,14 @@ workspace = true
 testing = []
 
 [dependencies]
+base64 = { workspace = true }
 # The one decision about whether a paired device may do what it asks.
 bravebot-core = { path = "../core" }
 # The host's and a device's P-256 keys, their signatures, and the digests a key is named by.
 ring = { workspace = true }
 rustls = { workspace = true }
+# The first line of a device that is not paired is read as JSON, and the lines of its service are.
+serde_json = { workspace = true }
 
 [dev-dependencies]
 # The certificate the listener reads is parsed again here by the library a connection's own

@@ -6,6 +6,7 @@
 //! A listener with a phone connecting to it over a real socket on loopback.
 
 use crate::identity::Identity;
+use crate::invitation::Invitations;
 use crate::limits::Limits;
 use crate::phone::Phone;
 use crate::registry::{Device, Registry};
@@ -50,14 +51,17 @@ fn loopback() -> SocketAddr {
     "127.0.0.1:0".parse().unwrap()
 }
 
-fn host_with(limits: Limits) -> Host {
+/// A listener with no device paired and no window open, which accepts nobody.
+fn empty_host_with(limits: Limits) -> Host {
     let identity = Identity::generate("bravebot-host").unwrap();
     let registry = Arc::new(Registry::new());
+    let invitations = Arc::new(Invitations::system(Arc::clone(&registry), Arc::new(|_| {})));
     let service = Arc::new(Recorder::default());
     let listener = Listener::start(
         loopback(),
         &identity,
         Arc::clone(&registry),
+        Arc::clone(&invitations),
         service.clone(),
         limits,
     )
@@ -67,6 +71,14 @@ fn host_with(limits: Limits) -> Host {
         registry,
         service,
     }
+}
+
+/// A listener with one device paired, which is not one of the phones a test connects, so what a
+/// test shows is what happens to a connection once the listener is accepting.
+fn host_with(limits: Limits) -> Host {
+    let host = empty_host_with(limits);
+    pair(&host, &Phone::new().unwrap(), "placeholder", Grant::Read);
+    host
 }
 
 fn host() -> Host {
@@ -277,10 +289,12 @@ fn a_line_that_is_not_text_ends_the_connection_and_a_blank_one_is_skipped() {
 fn an_address_already_in_use_is_reported() {
     let taken = host();
     let identity = Identity::generate("bravebot-host").unwrap();
+    let registry = Arc::new(Registry::new());
     let error = Listener::start(
         taken.listener.address(),
         &identity,
-        Arc::new(Registry::new()),
+        Arc::clone(&registry),
+        Arc::new(Invitations::system(registry, Arc::new(|_| {}))),
         Arc::new(Recorder::default()),
         Limits::default(),
     )
@@ -416,7 +430,7 @@ fn a_handshake_that_trickles_bytes_is_closed_when_its_time_is_up() {
 /// Stopping the listener ends the connections it holds and accepts no more.
 #[test]
 fn stopping_ends_every_connection_and_accepts_no_more() {
-    let mut host = host();
+    let host = host();
     let phone = Phone::new().unwrap();
     pair(&host, &phone, "kitchen-phone", Grant::Read);
     let address = host.listener.address();

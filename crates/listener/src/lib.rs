@@ -12,7 +12,11 @@
 
 mod der;
 pub mod identity;
+pub mod invitation;
 pub mod limits;
+pub mod pairing;
+#[cfg(test)]
+mod pairing_tests;
 #[cfg(any(test, feature = "testing"))]
 pub mod phone;
 pub mod registry;
