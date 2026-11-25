@@ -15,7 +15,8 @@ nothing to install or turn on.
 - **What the session is doing.** The pane shows `working` while a turn or command runs, `blocked`
   while an approval, a question or a confirmation waits for you, and `idle` at the prompt. The note herdr shows beside a blocked
   pane is a fixed sentence and says nothing about what is being asked.
-- **How to reopen the session.** Once the session's record is written, herdr is given
+- **How to reopen the session.** The record is written when the first prompt is sent, so a first
+  turn that runs for hours already has an id. Once it is written, herdr is given
   `bravebot --resume <id>`. After a herdr server restart, herdr runs that command in the pane's
   directory and you are back in the same session. herdr finds `bravebot` on the `PATH` its server
   was started with, so start herdr from a shell where `bravebot` runs. A session that becomes another, as `/clear` and

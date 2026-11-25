@@ -927,6 +927,10 @@ the hint line under the box, as they do where the panel is not drawn. `/sidebar`
 panel, so with the panel closed a change shows the next time it is opened. Nothing typed after the
 word is used: `/sidebar` followed by words is sent as a prompt.
 
+## `/redraw`
+
+Repairs a terminal that was cleared or reset from outside bravebot, for example by a shortcut of the terminal emulator. Such a terminal can stay blank where nothing has changed, because bravebot redraws only what changed and nothing tells it the screen was lost. `/redraw` gives the terminal's modes back (the alternate screen, mouse, pasting, focus and keyboard reporting), asks for them again, and draws the whole screen. It sends nothing to the model, spends no tokens and starts no turn. It takes no argument: `/redraw` followed by words is a prompt. Typed while a turn runs, it is carried out at once.
+
 ## `/diff`
 
 Draws the info panel in its files state, opening the panel if it is closed: a list of every file the
@@ -1375,8 +1379,7 @@ what the session met in the order it was first met. A session that has met none 
 
 A session meets an item when you type a full GitHub address in a line you send, when you
 open it with `--issue` or `--pr`, when the model's own `run`, `fetch_url` or `download_url` call names
-it (`gh pr view 12 --repo owner/repo`, an address, `Closes https://github.com/owner/repo/issues/12` in a commit message), and
-when a file you vouched for names it. Nothing a program printed, a web page said or the model wrote in
+it (`gh pr view 12 --repo owner/repo`, an address, `Closes https://github.com/owner/repo/issues/12` in a commit message). Nothing a program printed, a web page said, a file the model read (including one you vouched for) or the model wrote in
 a reply is read, so an address in the output of `gh pr view` is not listed, and an issue the model
 creates with `gh issue create` is listed once a later line or call names its number. An address is listed as the issue or pull request itself, with anything after its number dropped, and the word `owner/repo#12` is not read. A bare `#12` names
 no repository and is read only after `gh pr`, `gh issue` or a word such as `Closes`, in the repository of
@@ -1552,6 +1555,15 @@ still writing is not in the file, and neither is a prompt waiting behind the tur
 is working on is marked `**Outcome:** still running when exported`. Without a path the file takes the
 session's default name, which an export after the turn then finds taken, so give that one a path of
 its own.
+
+The file holds what the model was given, and nothing that was shown on the screen alone. Later turns
+can read the file like any other file in the directory, so words the model never saw are left out of
+it. A call is written with its target as the model named it (a quarantined file stays a reference and
+its name is not written), a patch hunk is written by its number and no file name, and a task list is
+written as the model wrote it. What a `!!` command printed, the rows of a command you stopped, and
+the answer a `/manifest` run showed you are each replaced by one sentence saying it was shown on the
+screen and how many lines it had. A file you previewed is written as a preview with no name and no
+lines. The lines you typed are written as you typed them.
 
 ## `/copy [n | block [n] | text [n]]`
 

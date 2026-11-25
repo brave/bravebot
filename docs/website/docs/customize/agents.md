@@ -117,6 +117,13 @@ Keys other than these are ignored rather than refused, so a definition written f
 loads here too. That includes another agent's bound, `maxTurns` or `steps`: a definition ported
 with one runs at its kind's own limit until you add a `rounds` line.
 
+Ignored is not silent. `bravebot doctor` names, one line per definition, each key a definition declares
+that bravebot does not read. A definition that declares `disallowedTools` or `permissionMode` (in any
+spelling that differs only in case, hyphens and underscores) is also named in the session, because
+another agent reads those as restrictions and bravebot does not: its delegate is not restricted by
+them. The notice names the key and never its value. Use a `tools` line to name the tools the delegate
+may call, and its `kind` decides whether it may run programs or write files.
+
 **`model` chooses what the delegate runs on.** A tier alias (`haiku`, `sonnet`, `opus`) or an
 explicit model identifier resolves through configuration the way any named model does. This lets a
 high-volume delegate like a build checker run on a cheap model rather than spending the turn's model

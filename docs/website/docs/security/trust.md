@@ -88,8 +88,11 @@ trusting one decides: untrusted over undecided over trusted, whichever sorts fir
 does not undo a distrust recorded for `Docs`. A decision about one spelling replaces only that
 spelling's rule, since some volumes can hold `claß.md` and `class.md` apart. A trust under `claß.md`
 therefore leaves `class.md` undecided, while a refusal of either name is read for the other. Where the working
-directory's volume keeps the spellings apart, or cannot be asked, a rule about `Docs` decides nothing
-about `docs`.
+directory's volume keeps the spellings apart, a rule about `Docs` decides nothing about `docs`.
+Where the volume cannot be asked, it is read as one that might fold, for what withholds trust: a
+distrust, an undecided boundary and the reservation that refuses a second writer all reach both
+spellings, so a file untrusted as `.env` is untrusted as `.ENV` and a second write under `.ENV` is
+refused. A trust still compares bytes there, so trusting `Docs` decides nothing about `docs`.
 
 **A refusal reaches every spelling Unicode makes one name.** An accented name can be written as a
 letter followed by a combining accent mark or as one precomposed letter. Unicode treats the two as

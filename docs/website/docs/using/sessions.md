@@ -471,6 +471,15 @@ added to the panel's Pull requests and Issues sections and to
 printed is never read, so an issue created with `gh issue create` is listed once a later line or call
 names its number.
 
+A session with no link of a kind can also get one from its own commands. After the planner runs
+`gh pr create`, `gh issue create` or `pr-fix.py open` and the command exits with status 0, the first
+later call that names a pull request or an issue (the first of the kind created) becomes the session's
+link of that kind. It fills an empty slot only and never replaces a link you gave with `/pr` or
+`/issue` or one the planner recorded for an address you typed. It reads the commands the planner
+wrote and the exit status, never what a program printed, so the item named may be another one than
+the item just created. Check the link in the info panel, and set it with `/pr` or `/issue` if it is
+not the one you want.
+
 ## Sessions in the background
 
 `bravebot --bg "<prompt>"` starts a session whose process keeps running after the terminal closes,
