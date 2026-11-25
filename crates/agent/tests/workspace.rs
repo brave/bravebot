@@ -12218,6 +12218,7 @@ fn a_checkout_is_made_only_of_a_repository_read_git_would_open() {
 /// checkout's sentence, rather than always `read_git`: the turn asking for the checkout is not
 /// always the turn that would have called `read_git`, and may not be offered it.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_checkout_refusal_names_the_reader_its_caller_gives() {
     let scratch = Scratch::new("checkout-reader-name");
     repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
