@@ -824,6 +824,12 @@ export interface TurnDone {
   archived: number
   /** As on `OpenedSession`. */
   rewind?: RewindPoint[]
+  /**
+   * The bridge's one line naming what the session leaves open (OPEN-3), such as
+   * `open: changes not built (planner)` or `open: nothing`, and `null` where the set is the one
+   * already shown. Drawn as sent, as text.
+   */
+  openLoops?: string | null
 }
 
 /**
@@ -867,6 +873,8 @@ export interface TurnError {
   id?: string | null
   /** What the turn said as it ran. A turn that failed has no reply to carry them on. */
   notices?: string[]
+  /** As on `TurnDone`. A turn that failed after a write still leaves that write open. */
+  openLoops?: string | null
   turn: number
   kind: 'cancelled' | 'precommit' | 'workspace' | 'chat'
   message: string

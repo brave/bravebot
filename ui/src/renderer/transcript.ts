@@ -66,6 +66,8 @@ export type Entry = (
    */
   | { kind: 'user'; id: string; text: string; prompt?: number; summoned?: string; interjected?: true }
   | { kind: 'assistant'; id: string; text: string }
+  /** The bridge's line naming what a turn left open (OPEN-3), drawn as sent under that turn. */
+  | { kind: 'open-loops'; id: string; text: string; turn: number }
   /** `command` is the words of `text` that are a command to run, where a notice names one. */
   | { kind: 'narration'; id: string; text: string; command?: string | null; refused?: true }
   /**
@@ -470,6 +472,12 @@ export const askedQuestions = (request: AskRequest): Entry => ({
   answers: null,
 })
 export const replied = (text: string, turn?: number): Entry => ({ kind: 'assistant', id: nextId(), text, turn })
+export const openLoops = (text: string, turn: number): Entry => ({ kind: 'open-loops', id: nextId(), text, turn })
+/** The last entry that is not an open-loops line, so a turn that failed reads as failed with its line after the error. */
+export function lastTurnEntry(entries: Entry[]): Entry | undefined {
+  for (let at = entries.length - 1; at >= 0; at--) if (entries[at]!.kind !== 'open-loops') return entries[at]
+  return undefined
+}
 export const turnStarted = (number: number): Entry => ({ kind: 'turn-start', id: nextId(), number })
 
 /**
@@ -683,6 +691,7 @@ export function plainText(entry: Entry): string | null {
     case 'replayed-tool':
     case 'plan-task':
     case 'plan-reply':
+    case 'open-loops':
       return entry.text
     case 'quarantined':
       // The preview, which is all the interface ever had: the kernel trimmed it before it

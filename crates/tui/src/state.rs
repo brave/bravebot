@@ -12758,6 +12758,8 @@ mod tests {
             transcript_len: turns,
             title: "a session".to_string(),
             was_wrote: true,
+            work: None,
+            written: None,
         }
     }
 

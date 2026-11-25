@@ -17,6 +17,9 @@ governs:
   - crates/ui-bridge/src/bridge.rs
   - crates/ui-bridge/src/running.rs
   - crates/ui-bridge/src/turn.rs
+  - ui/src/renderer/apply.ts
+  - ui/src/renderer/transcript.ts
+  - ui/src/renderer/components/Transcript.tsx
 documented-by:
   - docs/website/docs/reference/commands.md
 ---
@@ -77,6 +80,7 @@ A write into the session's own directory is not a written file for this rule. Wh
 `verified-by: bravebot_agent::open_loops::a_name_that_is_not_utf8_is_told_apart_from_its_lossy_lookalike`
 `verified-by: bravebot_tui::goals::rounds_with_no_tool_call_in_a_row_stop_the_goal_without_clearing_it`
 `verified-by: bravebot_tui::state::open_loops::unfinished_lists_each_open_loop_with_what_closes_it`
+`verified-by: bravebot_ui_bridge::open_loops::undoing_a_turn_that_wrote_takes_its_write_out_of_the_open_loops`
 
 <a id="OPEN-2"></a>
 ### OPEN-2: each loop is the planner's move, yours, or a wait
@@ -110,6 +114,10 @@ The line replaces the closing line of [TURN-4](turns.md#TURN-4) ("files changed 
 
 `verified-by: bravebot_tui::state::open_loops::a_turn_that_leaves_loops_open_ends_with_one_line_naming_them`
 `verified-by: bravebot_agent::turn::a_caller_that_shows_open_loops_is_not_also_told_of_unbuilt_changes`
+`verified-by: bravebot_agent::open_loops::the_persons_line_groups_kinds_by_owner_and_names_no_path`
+`verified-by: bravebot_agent::open_loops::the_persons_line_with_nothing_open_is_open_nothing`
+`verified-by: bravebot_ui_bridge::open_loops::a_desktop_turn_ends_with_the_open_loops_when_they_changed`
+`verified-by: bravebot_ui_bridge::open_loops::a_cancelled_turn_carries_the_open_loops_on_its_error`
 
 <a id="OPEN-4"></a>
 ### OPEN-4: the planner is told at the start of the next turn
@@ -177,6 +185,8 @@ A record with no work record or last-command status reads as nothing open.
 `verified-by: bravebot_tui::state::open_loops::a_resumed_session_shows_what_it_left_open`
 `verified-by: bravebot_ui_bridge::open_loops_tests::a_resumed_session_tells_the_planner_on_its_first_turn_only`
 `verified-by: bravebot_ui_bridge::open_loops_tests::the_record_keeps_the_sessions_work_and_written_files`
+`verified-by: bravebot_ui_bridge::open_loops::a_desktop_turn_that_writes_a_file_saves_the_work_and_the_file`
+`verified-by: bravebot_ui_bridge::running::a_resumed_session_carries_the_work_and_the_files_its_record_kept`
 
 <a id="OPEN-7"></a>
 ### OPEN-7: open loops never block, and every new sentence is fixed text

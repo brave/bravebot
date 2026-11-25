@@ -2,7 +2,7 @@
 //! ([OPEN](../../../../docs/specs/open-loops.md)).
 
 use super::Session;
-use bravebot_agent::open_loops::{self, Kind, Loops, Owner};
+use bravebot_agent::open_loops::{self, Loops};
 use bravebot_i18n::t;
 
 impl Session {
@@ -48,7 +48,7 @@ impl Session {
     /// Show the person one line where the open loops changed since the last turn ended (OPEN-3).
     pub fn say_open_loops(&mut self, workspace: &bravebot_agent::Workspace) {
         let loops = self.open_loops(workspace);
-        let line = open_line(&loops);
+        let line = loops.to_the_person();
         if self.open_loops.ended_with(loops) {
             self.note(line);
         }
@@ -172,45 +172,6 @@ impl Session {
         }
         (all, since)
     }
-}
-
-/// The person's line: each open kind with its count, grouped by whose move it is (OPEN-3).
-fn open_line(loops: &Loops) -> String {
-    if loops.is_empty() {
-        return t!(open_loops_nothing).to_string();
-    }
-    let named = |kinds: Vec<Kind>| -> String {
-        kinds
-            .into_iter()
-            .map(|kind| {
-                let count = loops.count(kind);
-                match kind {
-                    Kind::UnbuiltChanges => t!(open_loops_unbuilt).to_string(),
-                    Kind::FailedCommand => t!(open_loops_failed).to_string(),
-                    Kind::OpenTodos => t!(open_loops_todos, count = count),
-                    Kind::KeptCheckouts => t!(open_loops_checkouts, count = count),
-                    Kind::UncommittedFiles => t!(open_loops_uncommitted, count = count),
-                    Kind::StoppedGoal => t!(open_loops_goal).to_string(),
-                    Kind::RunningJobs => t!(open_loops_jobs, count = count),
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let mut groups = Vec::new();
-    let planner = loops.of(Owner::Planner);
-    if !planner.is_empty() {
-        groups.push(t!(open_loops_planner, items = named(planner)));
-    }
-    let person = loops.of(Owner::Person);
-    if !person.is_empty() {
-        groups.push(t!(open_loops_person, items = named(person)));
-    }
-    let waiting = loops.of(Owner::Wait);
-    if !waiting.is_empty() {
-        groups.push(named(waiting));
-    }
-    t!(open_loops_line, groups = groups.join("; "))
 }
 
 #[cfg(test)]

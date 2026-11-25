@@ -1291,11 +1291,24 @@ const EntryList = memo(function EntryList({
   const undoing = useMemo(() => undoRow(entries, rewind), [entries, rewind])
   const undo = useMemo(() => rewind[0] && { running, onUndo: () => onRewind(rewind[0]!.steps) }, [rewind, running, onRewind])
   const answeredBy = useMemo(() => t.summonedReplies(entries), [entries])
+  // The open-loops line a reply or error card ended its turn with, by that card's id. Drawn
+  // between the card and its footer so the footer stays the turn's last row (OPEN-3).
+  const loopsAfter = useMemo(() => {
+    const after = new Map<string, t.Entry & { kind: 'open-loops' }>()
+    entries.forEach((entry, at) => {
+      const before = entries[at - 1]
+      if (entry.kind === 'open-loops' && (before?.kind === 'assistant' || before?.kind === 'error')) after.set(before.id, entry)
+    })
+    return after
+  }, [entries])
+  const drawnUnder = useMemo(() => new Set([...loopsAfter.values()].map((entry) => entry.id)), [loopsAfter])
   return <>
     {grouped.map((run) => {
       const id = run.kind === 'run' ? run.id : run.entry.id
       const placed = cards?.before.get(id)
       const summoner = run.kind === 'one' ? answeredBy.get(run.entry.id) : undefined
+      if (drawnUnder.has(id)) return null
+      const loops = run.kind === 'one' ? loopsAfter.get(run.entry.id) : undefined
       return <Fragment key={id}>
       {placed?.map((summon) => <RepliedCard key={`${summon.session.id}#${summon.prompt}`} summon={summon} faces={faces} onOpen={onOpenSummon} />)}
       {run.kind === 'run' ? (
@@ -1333,6 +1346,17 @@ const EntryList = memo(function EntryList({
             face={run.entry.kind === 'user' && run.entry.summoned !== undefined ? faces.get(run.entry.summoned) : undefined}
             revealed={run.entry.id === focused || run.entry.id === matched}
           />}
+          {loops &&
+            // Its own entry for search, focus and the context menu, inside the card's wrapper so
+            // it sits between the card and the footer.
+            <div
+              data-entry-id={loops.id}
+              className={`entry-hit${loops.id === focused || loops.id === matched ? ' focused' : ''}`}
+              ref={loops.id === focused ? marked : undefined}
+              onContextMenu={(event) => { event.stopPropagation(); contextMenu('entry', loops.id)(event) }}
+            >
+              <OpenLoopsLine text={loops.text} />
+            </div>}
           {(run.entry.kind === 'assistant' || (run.entry.kind === 'error' && run.entry.turn !== undefined)) &&
             <TurnFooter details={run.entry.turn === undefined ? undefined : turns[run.entry.turn]} onAudit={onAudit}
               copy={run.entry.kind === 'assistant' ? run.entry.text : undefined}
@@ -2114,6 +2138,11 @@ type RowProps = {
  * are shown inside a container of their own is decided here rather than in the components below,
  * so `scripts/marking.test.mjs` renders this to assert it.
  */
+/** The bridge's open-loops line (OPEN-3) as a narration row, drawn as sent: nothing here reads its words. */
+function OpenLoopsLine({ text }: { text: string }): React.JSX.Element {
+  return <div className="open-loops" data-test="open-loops"><Icon name="list-checks" /><span>{text}</span></div>
+}
+
 export const Row = memo(function Row({
   entry,
   onRecover,
@@ -2197,6 +2226,9 @@ function Card({
           <Markdown text={entry.text} />
         </div>
       )
+
+    case 'open-loops':
+      return <OpenLoopsLine text={entry.text} />
 
     case 'narration':
       return <div className={entry.refused ? 'narration refused' : 'narration'}><Icon name="file-text" /><span><FailureSentence text={entry.text} command={entry.command} /></span></div>
