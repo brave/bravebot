@@ -23836,8 +23836,10 @@ done"#;
 /// and it opened under the 8 seconds the bound allows, with 32 seconds for the process to start.
 /// Rejects a start that waits for the handshake with no bound or with the default of 60 seconds, and
 /// a start that opens at once and starts the server's handshake in the background with no note.
-/// It also rejects a start that draws something while it waits: the note follows the opening line
-/// directly, and the prompt comes after the note.
+/// It also rejects a start that draws something while it waits: between the opening line and the
+/// note there is no line but the note that a server was started without paths that are not on this
+/// host (a host without the certificate paths draws it, one with them does not), and the prompt
+/// comes after the note.
 #[cfg(unix)]
 #[test]
 #[expect(clippy::expect_used, reason = "a test fails by panicking")]
@@ -23914,7 +23916,9 @@ fn a_session_in_lines_with_a_server_that_never_answers_opens_within_the_bound_th
     // Nothing is drawn while the start waits (SERVERS-15, Known costs): the opening line is said
     // before the wait, and the next thing on the terminal is the note about the server left out,
     // then the prompt. A start that draws a progress line, a spinner or the prompt meanwhile puts a
-    // line between the two or the prompt ahead of the note.
+    // line between the two or the prompt ahead of the note. The one line allowed between them is
+    // the note about paths the server was started without, which the start says before it waits and
+    // only on a host that lacks a certificate path, so the count of lines between is not asserted.
     let lines: Vec<&str> = transcript.split("\r\n").collect();
     let opening = lines
         .iter()
@@ -23924,10 +23928,17 @@ fn a_session_in_lines_with_a_server_that_never_answers_opens_within_the_bound_th
         .iter()
         .position(|line| line.contains("weather") && line.contains("handshake"))
         .expect("the note was found above");
-    assert_eq!(
-        note,
-        opening + 1,
-        "something was drawn while the start waited on the handshake: {lines:?}"
+    assert!(
+        opening < note,
+        "the note came before the opening line: {lines:?}"
+    );
+    let drawn: Vec<&&str> = lines[opening + 1..note]
+        .iter()
+        .filter(|line| !line.contains("weather was started without paths"))
+        .collect();
+    assert!(
+        drawn.is_empty(),
+        "something was drawn while the start waited on the handshake: {drawn:?} in {lines:?}"
     );
     let prompt = lines
         .iter()
