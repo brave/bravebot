@@ -57,7 +57,7 @@ help:
 	@echo "  make check-spec            Check docs/specs against the implementation"
 	@echo "  make check-security        The security audit's deterministic half"
 	@echo "  make check-maintenance     Dead, repeated, deeply nested, coupled or untested code, as candidates for the maintenance skill"
-	@echo "  make check-profile         Time and size the tests, starts, build, binaries and scripts, as candidates for the profile skill [LANES=\"tests size\"]"
+	@echo "  make check-profile         Time and size the tests, starts, build, binaries and scripts, and sample the slow tests and starts, as candidates for the profile skill [LANES=\"tests size functions\"]"
 	@echo "  make check-locales         Hold the catalogs to contrib/untranslated-messages.txt"
 	@echo "  make check-versions        Whether every file stating the version states the same one"
 	@echo "  make check-code-selectors  Whether each start states CodeSelectors and each variable that chooses code has its tests"
@@ -300,8 +300,8 @@ check-maintenance: check-maintenance-selftest
 
 # The measurement half of the profile skill. It runs the real programs in a scratch home directory:
 # the tests, a cold start of each built binary, a cold release build with cargo's timings, the size
-# of each release binary, and the scripts the commit hook and CI run. It builds the workspace in
-# release mode, so it takes as long as that does, and nothing runs it in CI. A candidate is a
+# of each release binary, the scripts the commit hook and CI run, and a perf sample of the slow tests
+# and starts, which ranks the functions in them. It builds the workspace in release mode, so it takes as long as that does, and nothing runs it in CI. A candidate is a
 # measurement over a stated threshold or well over docs/profile-reviewed, which holds the value of
 # an earlier run; it prints them and exits zero. A lane whose tool is missing says so and has no
 # candidates. Deciding which candidates are worth an issue needs a reading of the code: run the

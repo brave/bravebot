@@ -12,6 +12,7 @@ Standard library only, like the other checks.
 import html
 import json
 import re
+from pathlib import Path
 
 # The thresholds, each a statement that a person can disagree with. A measurement is ranked by how
 # many times over its threshold it is, so the order does not depend on the unit.
@@ -22,6 +23,8 @@ UNIT_SECONDS = 60.0  # one compile unit
 CRITICAL_SECONDS = UNIT_SECONDS / 2  # a compile unit on the critical path
 BINARY_BYTES = 100 * 1024 * 1024  # one release binary
 SCRIPT_SECONDS = 20.0  # one script the commit hook or CI runs
+FUNCTION_SHARE = 0.20  # the samples one function holds itself, of those taken from one command
+INCLUSIVE_SHARE = 0.50  # the samples a function is on the stack for, callees included
 
 # A value this many times the one in the ledger is a regression, if it is also at least FLOOR of
 # its threshold, so a test that went from 1 ms to 2 ms is not one. Sizes move less than times do,
@@ -34,6 +37,10 @@ SLOWEST_TESTS = 25
 SLOWEST_BINARIES = 10
 SLOWEST_UNITS = 15
 CRATES_SHOWN = 15
+FUNCTIONS_PER_COMMAND = 10  # functions kept for each sampled command, by the samples they hold themselves
+SAMPLED_COMMANDS = 5  # commands the functions lane samples, the ones ranked furthest over their threshold
+MIN_SAMPLES = 20  # fewer samples than this say nothing about how a command's time divides
+HOT_SHOWN = 3  # functions named beside the command's own candidate
 
 ATTRIBUTE = re.compile(r'([\w:.-]+)="([^"]*)"')
 TESTCASE = re.compile(r"<testcase\b([^>]*?)/?>")
@@ -41,6 +48,14 @@ REPORT_LINE = re.compile(r"^test (\S+) \.\.\. (?:ok|FAILED|ignored)(?:, [^<]*)? 
 RUNNING = re.compile(r"^\s*Running .*\(([^)]*)\)\s*$")
 DOC_TESTS = re.compile(r"^\s*Doc-tests (\S+)")
 UNIT_DATA = re.compile(r"UNIT_DATA\s*=\s*(\[.*?\]);\s*$", re.DOTALL | re.MULTILINE)
+FRAME = re.compile(r"^\s+([0-9a-fA-F]+)(?:\s+(.*?))?\s*$")
+SYMBOL_OFFSET = re.compile(r"\+0x[0-9a-fA-F]+$")
+OBJECT_FILE = re.compile(r"\s+\((?:/|\[)[^()]*\)$")
+SYMBOL_HASH = re.compile(r"::h[0-9a-f]{16}$")
+NM_LINE = re.compile(r"^([0-9a-fA-F]+) [TtWw] (.+)$")
+DISCRIMINATOR = re.compile(r"\s+\(discriminator \d+\)$")
+UNKNOWN = "[unknown]"
+ADDRESS_LINE = re.compile(r"^0x[0-9a-fA-F]+$")
 
 
 def row(lane, key, name, value, unit, threshold, **more):
@@ -52,6 +67,8 @@ def row(lane, key, name, value, unit, threshold, **more):
 def fmt(value, unit):
     if unit == "bytes":
         return f"{value / (1024 * 1024):.1f} MiB"
+    if unit == "share":
+        return f"{value * 100:.1f}% of the samples"
     return f"{value:.2f}s"
 
 
@@ -115,7 +132,7 @@ def test_rows(cases):
         totals[binary] = totals.get(binary, 0.0) + seconds
     slowest = sorted(cases, key=lambda c: (-c[2], c[0], c[1]))[:SLOWEST_TESTS]
     rows = [row("tests", f"tests:{binary}::{name}", f"test {name} in {binary}", seconds, "seconds",
-                TEST_SECONDS, binary=binary) for binary, name, seconds in slowest]
+                TEST_SECONDS, binary=binary, test=name) for binary, name, seconds in slowest]
     ranked = sorted(totals.items(), key=lambda item: (-item[1], item[0]))[:SLOWEST_BINARIES]
     rows += [row("tests", f"tests:{binary}", f"the tests of {binary}, added up", seconds, "seconds",
                  BINARY_SECONDS, binary=binary) for binary, seconds in ranked]
@@ -219,3 +236,162 @@ def script_rows(timed):
     """`timed` is `(make target, seconds)` for each script the commit hook or CI runs."""
     return [row("scripts", f"scripts:{target}", f"make {target}", seconds, "seconds", SCRIPT_SECONDS)
             for target, seconds in sorted(timed)]
+
+
+def sampled_commands(candidates):
+    """The candidates of the other lanes that the functions lane samples: a single test, and a start.
+    The ones furthest over their threshold come first, since `rank` does not depend on the unit. A
+    test binary added up and a compile unit are not one command to run, and a size is not a time."""
+    found = [c for c in candidates if (c["lane"] == "tests" and c.get("test")) or c["lane"] == "startup"]
+    return sorted(found, key=lambda c: (-c["rank"], c["key"]))[:SAMPLED_COMMANDS]
+
+
+def clean_symbol(text):
+    """The function a frame names, from the text after its address in `perf script -F ip,sym`: without
+    the offset into the function, the object file and the hash a legacy Rust symbol ends in, so every
+    sample inside one function is one name."""
+    name = SYMBOL_HASH.sub("", SYMBOL_OFFSET.sub("", OBJECT_FILE.sub("", (text or "").strip())))
+    return name or UNKNOWN
+
+
+def parse_perf_script(text):
+    """The samples in `perf script -F ip,sym` output, each a list of function names with the one that was
+    running first. A blank line ends a sample, and so does a line that is not a frame, such as the header
+    a perf that prints one writes before each stack."""
+    samples, stack = [], []
+    for line in text.splitlines():
+        frame = FRAME.match(line) if line.strip() else None
+        if frame:
+            stack.append(clean_symbol(frame.group(2)))
+        elif stack:
+            samples.append(stack)
+            stack = []
+    if stack:
+        samples.append(stack)
+    return samples
+
+
+def rank_functions(samples):
+    """`(samples taken, functions)`, most self samples first. A function's self samples are those where it
+    was the one running, and its inclusive samples are those where it was anywhere on the stack, counted
+    once however often recursion put it there. Frames with no name are in the total and not listed."""
+    own, inclusive = {}, {}
+    for stack in samples:
+        own[stack[0]] = own.get(stack[0], 0) + 1
+        for name in set(stack):
+            inclusive[name] = inclusive.get(name, 0) + 1
+    functions = [{"name": name, "self": own.get(name, 0), "inclusive": count}
+                 for name, count in inclusive.items() if name != UNKNOWN]
+    functions.sort(key=lambda f: (-f["self"], -f["inclusive"], f["name"]))
+    return len(samples), functions
+
+
+def function_rows(command, samples, locate=None):
+    """`(rows, samples taken)` for the functions in the samples of one command, which is a row of another
+    lane. A function is a row by the share of the samples it holds itself, and by the share it is on the
+    stack for unless it is on every stack, which says nothing of where the time went. `locate` takes the
+    names of the functions kept and returns `{name: file:line}`."""
+    total, functions = rank_functions(samples)
+    if total < MIN_SAMPLES:
+        return [], total
+    own = [f for f in functions if f["self"]][:FUNCTIONS_PER_COMMAND]
+    below = sorted((f for f in functions if f["inclusive"] < total), key=lambda f: (-f["inclusive"], -f["self"], f["name"]))
+    chosen = {"self": (own, FUNCTION_SHARE), "inclusive": (below[:FUNCTIONS_PER_COMMAND], INCLUSIVE_SHARE)}
+    places = (locate or (lambda names: {}))(sorted({f["name"] for kept, _ in chosen.values() for f in kept}))
+    rows = []
+    for kind, (kept, threshold) in chosen.items():
+        for f in kept:
+            rows.append(row(
+                "functions", f"functions:{command['key']}:{kind}:{f['name']}", f"{f['name']} ({kind} time) in {command['name']}",
+                f[kind] / total, "share", threshold, command=command["key"], function=f["name"], time_kind=kind,
+                self_share=f["self"] / total, inclusive_share=f["inclusive"] / total, samples=total,
+                location=places.get(f["name"])))
+    return rows, total
+
+
+def test_command(executable, name):
+    """The arguments that run one test of a test binary, and no other whose name contains it."""
+    return [str(executable), "--exact", name, "--nocapture", "--test-threads", "1"]
+
+
+def package_name(package_id):
+    """The package in a cargo package id, in the `path+file:///dir#name@version` form and the older
+    `name version (source)` one."""
+    if "#" in package_id:
+        place, _, tail = package_id.rpartition("#")
+        name = tail.split("@")[0]
+        return name if name and not name[0].isdigit() else place.rstrip("/").rsplit("/", 1)[-1]
+    return (package_id.split() or [""])[0]
+
+
+def parse_test_executables(text):
+    """`{binary: (executable, directory)}` from `cargo test --no-run --message-format json`. A binary is
+    named as nextest names it (`pkg` for a library, `pkg::test` for an integration test, `pkg::bin/name`)
+    and as `cargo test` prints it (the file name without its hash). The directory is the package's, where
+    cargo runs the binary. An artifact that is not a test build is not a test binary."""
+    found = {}
+    for line in text.splitlines():
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(message, dict) or message.get("reason") != "compiler-artifact":
+            continue
+        executable = message.get("executable")
+        target = message.get("target") or {}
+        if not executable or not (message.get("profile") or {}).get("test"):
+            continue
+        package, name = package_name(str(message.get("package_id", ""))), target.get("name", "")
+        kinds = target.get("kind") or [""]
+        if kinds[0] in ("lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"):
+            named = package
+        elif kinds[0] == "test":
+            named = f"{package}::{name}"
+        else:
+            named = f"{package}::{kinds[0]}/{name}"
+        entry = (executable, str(Path(message.get("manifest_path", "")).parent))
+        found[named] = entry
+        found.setdefault(re.sub(r"-[0-9a-f]{8,}$", "", Path(executable).name), entry)
+    return found
+
+
+def parse_nm(text, wanted=None):
+    """`{function: address}` from `nm -C --defined-only`, the lowest address where one name has several
+    (a generic function, a clone), for the names in `wanted` or for all of them."""
+    found = {}
+    for line in text.splitlines():
+        symbol = NM_LINE.match(line)
+        if not symbol:
+            continue
+        name, address = SYMBOL_HASH.sub("", symbol.group(2).strip()), int(symbol.group(1), 16)
+        if (wanted is None or name in wanted) and address < found.get(name, address + 1):
+            found[name] = address
+    return found
+
+
+def parse_addr2line(text):
+    """`{address: file:line}` from `addr2line -a`, which prints an address and then its place. A place
+    it could not find (`??:0`) is None, and a discriminator is not part of the line."""
+    found, address = {}, None
+    for line in text.splitlines():
+        line = line.strip()
+        if ADDRESS_LINE.match(line):
+            address = int(line, 16)
+        elif address is not None:
+            place = DISCRIMINATOR.sub("", line)
+            found[address] = None if place.startswith("?") else place
+            address = None
+    return found
+
+
+def short_location(place, root):
+    """`file:line` as a reader of the checkout would write it: relative to `root` where the file is in
+    it, and from `library/` for the standard library, whose path is the builder's."""
+    if not place:
+        return None
+    prefix = str(root).rstrip("/") + "/"
+    if place.startswith(prefix):
+        return place[len(prefix):]
+    if "/library/" in place:
+        return "library/" + place.split("/library/", 1)[1]
+    return place

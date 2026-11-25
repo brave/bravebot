@@ -12,6 +12,7 @@ import os
 import shutil
 import signal
 import subprocess  # nosemgrep: gitlab.bandit.B404
+import sys
 import time
 from pathlib import Path
 
@@ -25,6 +26,22 @@ TERMINAL_RUNS = 3
 # The terminal client has started once its output has been still this long.
 STILL_SECONDS = 0.5
 TERMINAL_LIMIT = 20.0
+# How long a program gets to end after the signal that stops it.
+STOP_SECONDS = 30.0
+# Samples a second. A call graph from DWARF copies part of the stack at every sample, so a test that
+# runs for a minute is sampled less often than a start that lasts a second.
+TEST_SAMPLE_RATE = 99
+START_SAMPLE_RATE = 4999
+SAMPLE_SECONDS = 1800
+PERF_SCRIPT_SECONDS = 600
+TOOL_SECONDS = 300
+# The release build of the terminal client that the functions lane samples keeps the line tables the
+# release profile leaves out. `--config` changes the one build and leaves `[profile.release]` as it is,
+# and the build goes into a target directory of its own, so the binary the size lane measures is the
+# release binary.
+PROFILING_CONFIG = 'profile.release.debug="line-tables-only"'
+# What each startup candidate runs, after the binary.
+START_ARGUMENTS = {"startup:version": ["--version"], "startup:terminal": []}
 SCRIPT_TARGETS_EXTRA = ("check-spec", "check-security", "check-locales", "check-versions", "check-code-selectors")
 
 
@@ -55,6 +72,12 @@ class Context:
         self.home = self.scratch / "home"
         self.home.mkdir(parents=True, exist_ok=True)
         self.built = None
+        self.profiling = None
+        self.lanes = ()
+        # The candidates of the other lanes in this run, which the functions lane samples, and the
+        # functions it found in each of them by the command's key.
+        self.candidates = []
+        self.hot = {}
 
     def env(self, **more):
         env = dict(os.environ)
@@ -120,9 +143,23 @@ def run_tests(ctx):
     return (lanes.test_rows(cases), note) if cases else ([], note + ", and it printed no test times")
 
 
-def terminal_start(argv, env, cwd):
+def wait_for(child, seconds):
+    """Wait up to `seconds` for `child` to end, then kill it, so a program that ignores the signal sent
+    to it does not hold the measurement."""
+    until = time.monotonic() + seconds
+    while time.monotonic() < until:
+        done, _ = os.waitpid(child, os.WNOHANG)
+        if done:
+            return
+        time.sleep(0.05)
+    os.kill(child, signal.SIGKILL)
+    os.waitpid(child, 0)
+
+
+def terminal_start(argv, env, cwd, stop=signal.SIGKILL):
     """Seconds from starting `argv` under a terminal until its output has been still for
-    STILL_SECONDS, or None where it printed nothing. This is the time to a drawn first screen."""
+    STILL_SECONDS, or None where it printed nothing. This is the time to a drawn first screen. The
+    program is ended with `stop`, which is `SIGINT` for a profiler, so that it writes its file."""
     import fcntl
     import pty
     import select
@@ -151,7 +188,7 @@ def terminal_start(argv, env, cwd):
             got, last = True, time.monotonic()
         elif got and time.monotonic() - last >= STILL_SECONDS:
             break
-    for step in (lambda: os.kill(child, signal.SIGKILL), lambda: os.waitpid(child, 0), lambda: os.close(terminal)):
+    for step in (lambda: os.kill(child, stop), lambda: wait_for(child, STOP_SECONDS), lambda: os.close(terminal)):
         try:
             step()
         except OSError:
@@ -238,4 +275,151 @@ def run_scripts(ctx):
     return lanes.script_rows(timed), (f"left out because they failed: {', '.join(failed)}" if failed else None)
 
 
-RUNNERS = {"tests": run_tests, "startup": run_startup, "build": run_build, "size": run_size, "scripts": run_scripts}
+def tail(text, words=30):
+    return " ".join(text.split()[-words:])
+
+
+def perf_problem(ctx):
+    """Why `perf` cannot record a call graph on this machine, or None where it can. A kernel setting
+    (`perf_event_paranoid`), a container or a virtual machine without counters stops it, and it is
+    found by recording a program that does nothing, before anything is built to be sampled."""
+    data = ctx.scratch / "perf-check.data"
+    data.unlink(missing_ok=True)
+    code, _, err, _ = run(
+        [shutil.which("perf"), "record", "--all-user", "-N", "--call-graph", "dwarf", "-o", data, "--", sys.executable, "-c", "pass"],
+        ctx.scratch, ctx.env(), TOOL_SECONDS)
+    data.unlink(missing_ok=True)
+    return None if code == 0 else f"perf cannot record here: {tail(err)}"
+
+
+def test_executables(ctx):
+    """`{binary: (executable, directory)}` for the test binaries of the tests lane, which `cargo test
+    --no-run` finds in the target directory the lane built them into."""
+    code, out, _, _ = run(
+        ["cargo", "test", "--workspace", "--locked", "--no-run", "--message-format", "json"],
+        ctx.root, ctx.env(CARGO_TARGET_DIR=str(ctx.root / "target" / "profile-tests")), BUILD_SECONDS)
+    return lanes.parse_test_executables(out) if code == 0 else {}
+
+
+def profiling_build(ctx):
+    """`(binary, note)` for the terminal client built with line tables, in a target directory the
+    release build for the size lane does not use. The binary is None where the build failed."""
+    if ctx.profiling is not None:
+        return ctx.profiling
+    target = ctx.scratch / "profiling-target"
+    code, _, err, _ = run(
+        ["cargo", "build", "--release", "--locked", "-p", "bravebot-cli", "--config", PROFILING_CONFIG],
+        ctx.root, ctx.env(CARGO_TARGET_DIR=str(target)), BUILD_SECONDS)
+    binary = target / "release" / "bravebot"
+    ctx.profiling = (binary, None) if code == 0 and binary.exists() else (None, f"the build with line tables failed: {tail(err)}")
+    return ctx.profiling
+
+
+def find_places(ctx, executable, names):
+    """`{function: file:line}` for the functions in `names` that `nm` finds in `executable` and
+    `addr2line` finds a line for. A function either cannot find is left out, which is the case for a
+    name the two tools spell differently, such as a closure."""
+    nm, addr2line = shutil.which("nm"), shutil.which("addr2line")
+    if not nm or not addr2line:
+        return {}
+    keys = set(names)
+    code, out, _, _ = run([nm, "-C", "--defined-only", executable], ctx.root, ctx.env(), TOOL_SECONDS)
+    addresses = lanes.parse_nm(out, keys) if code == 0 else {}
+    if not addresses:
+        return {}
+    code, out, _, _ = run([addr2line, "-e", executable, "-a", *[hex(a) for a in sorted(set(addresses.values()))]],
+                          ctx.root, ctx.env(), TOOL_SECONDS)
+    places = lanes.parse_addr2line(out) if code == 0 else {}
+    found = {}
+    for name in names:
+        place = places.get(addresses.get(name))
+        if place:
+            found[name] = lanes.short_location(place, ctx.root)
+    return found
+
+
+def sample(ctx, argv, cwd, rate, terminal=False, **more):
+    """`(samples, problem)`: the stacks `perf` took of `argv` while it ran, each with the running
+    function first. Under a terminal the program is ended with SIGINT once its output is still."""
+    data = ctx.scratch / "perf.data"
+    data.unlink(missing_ok=True)
+    env = ctx.env(**more)
+    record = [shutil.which("perf"), "record", "--all-user", "-N", "-F", str(rate), "--call-graph", "dwarf", "-o", data, "--", *argv]
+    if terminal:
+        terminal_start([str(a) for a in record], env, cwd, stop=signal.SIGINT)
+    else:
+        code, _, err, _ = run(record, cwd, env, SAMPLE_SECONDS)
+        if code is None:
+            return [], f"perf did not start or finish: {tail(err)}"
+    if not data.exists() or data.stat().st_size == 0:
+        return [], "perf wrote no samples"
+    code, out, err, _ = run([shutil.which("perf"), "script", "-i", data, "-F", "ip,sym"], cwd, env, PERF_SCRIPT_SECONDS)
+    data.unlink(missing_ok=True)
+    if code != 0:
+        return [], f"perf script failed: {tail(err)}"
+    return lanes.parse_perf_script(out), None
+
+
+def command_for(ctx, command, executables):
+    """`(argv, directory, rate, terminal, executable, problem)` for a candidate of another lane. A test
+    runs in its package's directory, where cargo runs it."""
+    key = command["key"]
+    if command["lane"] == "tests":
+        found = executables().get(command.get("binary", ""))
+        if not found:
+            return None, None, None, False, None, "no test binary of that name was built"
+        executable, directory = found
+        return lanes.test_command(executable, command["test"]), directory, TEST_SAMPLE_RATE, False, executable, None
+    binary, note = profiling_build(ctx)
+    if binary is None:
+        return None, None, None, False, None, note
+    work = ctx.scratch / "start-work"
+    work.mkdir(exist_ok=True)
+    return [binary, *START_ARGUMENTS[key]], work, START_SAMPLE_RATE, key == "startup:terminal", binary, None
+
+
+def run_functions(ctx):
+    """Sample the commands the other lanes found over their thresholds and rank the functions in them."""
+    commands = lanes.sampled_commands(ctx.candidates)
+    if not commands:
+        if "tests" in ctx.lanes or "startup" in ctx.lanes:
+            return [], "no test or start was over its threshold, so there was nothing to sample"
+        return [], "the functions lane samples the commands the tests and startup lanes find, and neither ran"
+    if shutil.which("perf") is None:
+        return [], "perf is not installed, so the functions lane sampled nothing (macOS sample and samply output are not read)"
+    problem = perf_problem(ctx)
+    if problem:
+        return [], problem
+    cache = []
+
+    def executables():
+        if not cache:
+            cache.append(test_executables(ctx))
+        return cache[0]
+
+    rows, notes = [], []
+    if not (shutil.which("nm") and shutil.which("addr2line")):
+        notes.append("nm or addr2line is not installed, so the functions have no source location")
+    for command in commands:
+        argv, directory, rate, terminal, executable, why = command_for(ctx, command, executables)
+        if argv is None:
+            notes.append(f"{command['name']} was not sampled: {why}")
+            continue
+        extra = {"CARGO_MANIFEST_DIR": str(directory)} if command["lane"] == "tests" else {}
+        samples, why = sample(ctx, argv, directory, rate, terminal, **extra)
+        if why:
+            notes.append(f"{command['name']} was not sampled: {why}")
+            continue
+        found, total = lanes.function_rows(command, samples, lambda names, exe=executable: find_places(ctx, exe, names))
+        if not found:
+            notes.append(f"{command['name']} gave {total} samples, too few to say where its time goes")
+            continue
+        rows.extend(found)
+        ctx.hot[command["key"]] = [
+            {"name": r["function"], "self": r["self_share"], "inclusive": r["inclusive_share"], "location": r["location"]}
+            for r in found if r["time_kind"] == "self"][: lanes.HOT_SHOWN]
+    return rows, "; ".join(notes) or None
+
+
+RUNNERS = {"tests": run_tests, "startup": run_startup, "build": run_build, "size": run_size, "scripts": run_scripts,
+           "functions": run_functions}
