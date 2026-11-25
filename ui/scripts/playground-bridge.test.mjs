@@ -156,7 +156,11 @@ test('the plugin stubs answer as the bridge does, in shapes the shared parsers r
   const events = []
   const stop = window.bravebot.onEvent((event) => events.push(event))
   const next = async (name) => {
-    while (!events.some((event) => event.event === name)) await new Promise((resolve) => setTimeout(resolve, 20))
+    const until = Date.now() + 5000
+    while (!events.some((event) => event.event === name)) {
+      if (Date.now() > until) throw new Error(`no ${name} event`)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
     return events.splice(events.findIndex((event) => event.event === name), 1)[0].data
   }
   try {

@@ -357,9 +357,22 @@ fn a_git_url_asks_about_the_host_first_and_a_no_fetches_nothing() {
     front.reply(&question, false);
     let ended = front.ended();
     assert_eq!(ended["outcome"], "declined", "{ended}");
+    // A connection made before `plugins.ended` is counted only when the accept loop next looks,
+    // every 20 ms, and nothing signals that it has looked, so this waits several of its turns.
+    // The connection below then shows that the counter counts.
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(host.count.load(Ordering::SeqCst), 0, "a no fetched");
     assert!(!scratch.plugins().exists());
+
+    let _probe = std::net::TcpStream::connect(("127.0.0.1", host.port)).unwrap();
+    let until = std::time::Instant::now() + Duration::from_secs(10);
+    while host.count.load(Ordering::SeqCst) == 0 {
+        assert!(
+            std::time::Instant::now() < until,
+            "the host never counted a connection"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// PLUGIN-3: an archive URL is not a source, so it is refused with no question put.
