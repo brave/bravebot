@@ -1425,6 +1425,14 @@ export interface EventMap {
   'goal.judged': import('./goal').GoalJudged
   /** The driver's sentence that starts the next turn under the goal (GOAL-7), sent before that turn's `turn.started`. Drawn as the driver's, never as the person's. */
   'goal.carried': { prompt: string }
+  /**
+   * A question a `plugins.add` or `plugins.update` job puts: the host of a git source, the install
+   * listing or the update difference (PLUGIN-3, PLUGIN-4, PLUGIN-9). Sent with no `session`. Read
+   * through `parsePluginQuestion`, which refuses a payload it cannot draw whole.
+   */
+  'plugins.question': import('./plugins').PluginQuestion
+  /** The end of a plugin job and what is installed after it. Read through `parsePluginsEnded`. */
+  'plugins.ended': import('./plugins').PluginsEnded
   /** `retry` is set only on `reconnecting`, while the request waits, and `null` once its attempt is out. */
   phase: { phase: Phase; retry?: RetryEvent | null }
   composing: { call: string | null }

@@ -77,6 +77,7 @@ const NO_GATE = {
   'manifest.read': 'reads a store record and opens nothing',
   'connectors.preview': 'a stdio connector\'s own working folder, typed into the form',
   'connectors.connect': 'a stdio connector\'s own working folder, typed into the form',
+  'plugins.add': 'a plugin source the person typed or picked, which the agent stages and lists before it installs anything, and opens no session',
   'session.folders.close': 'names a folder only to take it away from the session, which the agent refuses unless it is open there',
   'session.stats': 'reads records and opens no session; a directory it names is held to mayOpenSessionIn by a check of its own, since it may name none',
 }
@@ -96,6 +97,8 @@ const TAKES_NO_DIRECTORY = [
   'usage_ping.notice_due', 'usage_ping.mark_notice_shown', 'crash_reports.get', 'crash_reports.set',
   'crash_reports.notice_due', 'crash_reports.mark_notice_shown', 'connectors.list', 'connectors.disconnect',
   'connectors.remove',
+  // Name an installed plugin, or the job and question an answer is for.
+  'plugins.list', 'plugins.enable', 'plugins.disable', 'plugins.remove', 'plugins.update', 'plugins.reply', 'plugins.cancel',
   'settings.inspect', 'watches.list', 'watches.add', 'watches.stop', 'update.status',
   'accounts.list', 'accounts.signOut', 'effort.set',
   // Reads the roster of every project and opens nothing; the bridge takes no parameter for it.

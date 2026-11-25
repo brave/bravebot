@@ -744,6 +744,19 @@ const ALLOWED = new Set([
   'connectors.connect',
   'connectors.disconnect',
   'connectors.remove',
+  // Plugins, from the settings page a person works (PLUGIN-1, PLUGIN-11). `plugins.add` takes the
+  // source the person typed; a folder is picked through `bravebot:plugins:choose-folder` below.
+  // Each question an add or an update puts arrives as the `plugins.question` event and is answered
+  // with `plugins.reply`, and the end of the job arrives as `plugins.ended`. The bridge refuses all
+  // of them to a host client.
+  'plugins.list',
+  'plugins.enable',
+  'plugins.disable',
+  'plugins.remove',
+  'plugins.add',
+  'plugins.update',
+  'plugins.reply',
+  'plugins.cancel',
   'settings.inspect',
   'watches.list',
   'watches.add',
@@ -1344,6 +1357,28 @@ if (primary) app.whenReady().then(() => {
         if (!bridge) throw new BridgeError('no_bridge', 'the agent is not running')
         return bridge.request('session.folders.add', { session, path })
       })
+    } catch (error) {
+      if (error instanceof BridgeError) return { error: { code: error.code, message: error.message } }
+      return { error: { code: 'internal', message: String(error) } }
+    }
+  })
+  // Install a plugin from a folder on this machine (PLUGIN-1). The folder is the one the native
+  // picker returned, so it is an absolute path the window did not name. The agent stages it and
+  // puts the install question as `plugins.question`. Null when the person picked nothing;
+  // otherwise the agent's answer to `plugins.add` (the job) or its refusal. Only the app window's
+  // own top frame is answered.
+  ipcMain.handle('bravebot:plugins:choose-folder', async (event) => {
+    if (!window || event.senderFrame !== window.webContents.mainFrame) return { error: { code: 'bad_request', message: 'The window is not open.' } }
+    const selected = await dialog.showOpenDialog(window, {
+      title: 'Choose a plugin folder to install',
+      message: 'Everything the plugin offers is shown to you before anything is installed.',
+      properties: ['openDirectory'],
+    })
+    const path = selected.canceled ? undefined : selected.filePaths[0]
+    if (!path) return null
+    try {
+      if (!bridge) throw new BridgeError('no_bridge', 'the agent is not running')
+      return { ok: await bridge.request('plugins.add', { source: path }) }
     } catch (error) {
       if (error instanceof BridgeError) return { error: { code: error.code, message: error.message } }
       return { error: { code: 'internal', message: String(error) } }
