@@ -22,7 +22,9 @@ import { SHOTS_DIR } from './drive-support.mjs'
 const { root, home, profile, env } = makeWorld('bravebot-plugins-', { baseURL: 'http://127.0.0.1:9/v1', project: false })
 const plugins = join(home, '.bravebot/plugins')
 const COMMIT = '4f1c2a9e0b7d3c5a6e8f9d0b1a2c3e4f5a6b7c8d'
-const DIGEST = 'sha256:9b74c9897bac770ffc029102a200c5de2f1d1a6b0f5c7e3a9e6d4b2c1a0f9e8d'
+// 64 hex digits, as `commit_install` records a digest.
+const DIGEST = '9b74c9897bac770ffc029102a200c5de2f1d1a6b0f5c7e3a9e6d4b2c1a0f9e8d'
+const LOCAL_DIGEST = '0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9'
 const installed = (name, record) => {
   mkdirSync(join(plugins, name, 'skills/review'), { recursive: true })
   writeFileSync(join(plugins, name, 'plugin.toml'), `name = "${name}"\nversion = "2.3.4"\n`)
@@ -30,7 +32,7 @@ const installed = (name, record) => {
   writeFileSync(join(plugins, `${name}.record`), record)
 }
 const gitRecord = `source = https://example.com/acme/reviewer.git\nrequested-ref = v2.3.4\ncommit = ${COMMIT}\nversion = 2.3.4\nenabled = true\ndigest = ${DIGEST}\n`
-const localRecord = `source = ${join(root, 'src/notes')}\nversion = 0.1.0\nenabled = true\ndigest = sha256:0a1b\n`
+const localRecord = `source = ${join(root, 'src/notes')}\nversion = 0.1.0\nenabled = true\ndigest = ${LOCAL_DIGEST}\n`
 installed('reviewer', gitRecord)
 installed('notes', localRecord)
 const record = (name) => readFileSync(join(plugins, `${name}.record`), 'utf8')
@@ -89,6 +91,8 @@ try {
   assert.equal(record('reviewer'), gitRecord, 'the other plugin stays')
   await reviewer.locator('[data-test="plugin-remove"]').click()
   await view.locator('[data-test="plugins-empty"]').waitFor()
+  assert.equal(await view.locator('[data-test="plugins-empty"]').innerText(), 'No plugins are installed. Add one below.')
+  assert.equal(await view.locator('[data-test="plugin-add"]').isVisible(), true, 'the install form stays with no plugin installed')
   await shoot('empty')
 
   // ---- a git source: the host is asked about before any git starts, and a no writes nothing ---------
@@ -137,6 +141,10 @@ try {
   assert.ok((await sheet.locator('[data-test="plugin-sheet-description"]').innerText()).length < description.length, 'a long description is cut')
   assert.equal(await yes('Yes, install').isDisabled(), true, 'no yes before the cut description is shown')
   await page.waitForTimeout(300)
+  const hint = await page.locator('[data-test="plugin-reading"]').innerText()
+  assert.match(hint, /^\d+ of \d+ rows read\. 1 description is cut short\. Choose Show more/, `the hint names the cut description: ${hint}`)
+  const cutText = (await sheet.locator('[data-test="plugin-sheet-description"]').innerText()).replace(/…$/, '')
+  assert.ok(description.startsWith(cutText) && /\s/.test(description[cutText.length]), `a cut description ends at a word: ${cutText}`)
   await shoot('install')
   await page.keyboard.press('Escape')
   await sheet.waitFor({ state: 'detached' })
@@ -154,7 +162,7 @@ try {
   await greeter.waitFor()
   assert.equal((await greeter.locator('[data-test="plugin-version"]').innerText()).trim(), '2.3.4')
   assert.ok(existsSync(join(plugins, 'greeter.record')) && existsSync(join(plugins, 'greeter/plugin.toml')), 'a yes writes the plugin and its record')
-  assert.equal(await status.innerText().then((text) => text.trim() !== ''), true, 'the job’s sentence is shown')
+  assert.match((await status.innerText()).trim(), /^Installed greeter from .+\.$/, 'the job’s sentence is shown, ended with a stop')
   await shoot('installed')
 
   // ---- updated after the fixture changes -----------------------------------------------------------
@@ -167,6 +175,14 @@ try {
   const files = await sheet.locator('[data-test="plugin-file"]').allInnerTexts()
   for (const file of ['plugin.toml', 'skills/greet/SKILL.md', 'skills/greet/fr.md']) assert.ok(files.includes(file), `${file} is listed as differing: ${files}`)
   await page.waitForTimeout(300)
+  // The sheet keeps a margin from the window's edges, and only its body scrolls.
+  const frame = await page.evaluate(() => {
+    const box = document.querySelector('.plugin-question')?.shadowRoot?.querySelector('dialog')?.getBoundingClientRect()
+    const body = document.querySelector('[data-test="plugin-sheet-scroll"]')
+    return box && body && { top: box.top, bottom: box.bottom, height: innerHeight, bodyMax: getComputedStyle(body).maxHeight, overflow: getComputedStyle(body).overflowY }
+  })
+  assert.ok(frame && frame.top >= 24 && frame.bottom <= frame.height - 24, `the sheet stays inside the window: ${JSON.stringify(frame)}`)
+  assert.equal(frame.overflow, 'auto')
   await shoot('update')
   await page.getByRole('button', { name: 'Keep it as it is', exact: true }).click()
   await sheet.waitFor({ state: 'detached' })

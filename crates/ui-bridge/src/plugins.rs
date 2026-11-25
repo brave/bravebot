@@ -217,7 +217,8 @@ impl Jobs {
                 json!({
                     "job": asker.job,
                     "outcome": outcome,
-                    "sentence": sentence,
+                    // The terminal prints these without a stop; the window shows them as sentences.
+                    "sentence": format!("{sentence}."),
                     "plugins": listed(&home, true)["plugins"],
                 }),
             ));

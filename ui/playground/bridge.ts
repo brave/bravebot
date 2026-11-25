@@ -93,9 +93,11 @@ let created = 0
 // puts its question as `plugins.question` and ends with `plugins.ended` when it is answered.
 const PLUGIN_STATE = '/Users/example/.bravebot'
 const PLUGIN_COMMIT = '4f1c2a9e0b7d3c5a6e8f9d0b1a2c3e4f5a6b7c8d'
+// A digest is 64 hex digits, as `/plugin add` records it.
+const pluginDigest = (seed: string): string => seed.repeat(Math.ceil(64 / seed.length)).slice(0, 64)
 let plugins: PluginRow[] = [
-  { name: 'review-kit', version: '1.2.0', source: 'https://github.com/example/review-kit.git', requestedRef: 'v1.2.0', commit: PLUGIN_COMMIT, digest: '9a8b7c6d5e4f', enabled: true },
-  { name: 'notes', version: '0.3.1', source: '/Users/example/plugins/notes', requestedRef: null, commit: null, digest: '1b2c3d4e5f6a', enabled: false },
+  { name: 'review-kit', version: '1.2.0', source: 'https://github.com/example/review-kit.git', requestedRef: 'v1.2.0', commit: PLUGIN_COMMIT, digest: pluginDigest('9a8b7c6d5e4f'), enabled: true },
+  { name: 'notes', version: '0.3.1', source: '/Users/example/plugins/notes', requestedRef: null, commit: null, digest: pluginDigest('1b2c3d4e5f6a'), enabled: false },
 ]
 let pluginJob: { job: string; question: number; kind: 'install' | 'update'; name: string; source: string } | null = null
 let pluginJobs = 0
@@ -131,7 +133,7 @@ function updateListing(plugin: PluginRow): UpdateListing {
     git: plugin.commit !== null,
     enabled: plugin.enabled,
     installedDigest: plugin.digest,
-    newDigest: 'f0e1d2c3b4a5',
+    newDigest: pluginDigest('f0e1d2c3b4a5'),
     untrusted: {
       name: plugin.name, installedVersion: plugin.version, newVersion: '2.4.0', source: plugin.source, installedSource: plugin.source,
       requestedRef: plugin.requestedRef, installedCommit: plugin.commit, newCommit: plugin.commit === null ? null : '7d6c5b4a39281706f5e4d3c2b1a0f9e8d7c6b5a4', skipped: [],
@@ -529,11 +531,11 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
       const yes = method === 'plugins.reply' && params.question === running.question && params.yes === true
       if (running.kind === 'install') {
         if (!yes) { endPlugins(running.job, 'declined', `Did not install ${running.name}.`); return ok({}) }
-        plugins = [...plugins, { name: running.name, version: '2.3.4', source: running.source, requestedRef: null, commit: null, digest: 'c0ffee123456', enabled: true }]
+        plugins = [...plugins, { name: running.name, version: '2.3.4', source: running.source, requestedRef: null, commit: null, digest: pluginDigest('c0ffee123456'), enabled: true }]
         endPlugins(running.job, 'installed', `Installed ${running.name} from ${running.source}.`)
       } else {
         if (!yes) { endPlugins(running.job, 'declined', `Kept ${running.name} as it was.`); return ok({}) }
-        plugins = plugins.map((plugin) => (plugin.name === running.name ? { ...plugin, version: '2.4.0', digest: 'f0e1d2c3b4a5' } : plugin))
+        plugins = plugins.map((plugin) => (plugin.name === running.name ? { ...plugin, version: '2.4.0', digest: pluginDigest('f0e1d2c3b4a5') } : plugin))
         endPlugins(running.job, 'updated', `Updated ${running.name}.`)
       }
       return ok({})

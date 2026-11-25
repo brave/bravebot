@@ -239,7 +239,7 @@ fn a_local_add_asks_once_and_only_a_yes_installs() {
     front.reply(&question, true);
     let ended = front.ended();
     assert_eq!(ended["outcome"], "installed", "{ended}");
-    assert_eq!(ended["sentence"], format!("Installed demo from {typed}"));
+    assert_eq!(ended["sentence"], format!("Installed demo from {typed}."));
     assert_eq!(ended["plugins"][0]["name"], "demo");
     assert_eq!(ended["plugins"][0]["enabled"], true);
     assert!(scratch.plugins().join("demo").is_dir());

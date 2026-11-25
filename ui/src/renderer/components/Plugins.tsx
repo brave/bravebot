@@ -160,7 +160,7 @@ export function Plugins(): React.JSX.Element {
         <SettingsGroup title="Installed">
           {list.plugins.length === 0 ? (
             <div className="settings-block">
-              <p className="plugins-empty" data-test="plugins-empty">No plugins are installed.</p>
+              <p className="plugins-empty" data-test="plugins-empty">No plugins are installed. Add one below.</p>
             </div>
           ) : (
             <ul className="plugin-rows" data-test="plugins-list">
@@ -173,7 +173,7 @@ export function Plugins(): React.JSX.Element {
                       <Toggle size="small" checked={plugin.enabled} disabled={working || locked}
                         aria-label={`Use ${plugin.name}`} data-test="plugin-enabled"
                         onChange={({ checked }) => { if (checked !== plugin.enabled) void toggle(plugin, checked) }} />
-                      <Button size="small" kind="plain-faint" isDisabled={working || locked} onClick={() => update(plugin)} data-test="plugin-update">Update</Button>
+                      <Button size="small" kind="outline" isDisabled={working || locked} onClick={() => update(plugin)} data-test="plugin-update">Update</Button>
                       <Button size="small" kind="plain-faint" isDisabled={working || locked} onClick={() => remove(plugin)} data-test="plugin-remove">Remove</Button>
                     </span>
                   </div>
