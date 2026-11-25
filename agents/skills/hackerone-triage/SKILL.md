@@ -354,9 +354,12 @@ The body, written in the repository's own words rather than the reporter's:
   is left out of the body. The [issue-poster](../../agents/issue-poster.md) definition reads the body
   for these statements again before posting, and has nothing to file where each one has its
   number.
-- Do not include the HackerOne report number, reporter identity, private PoC, or other
-  non-public report material unless an authorized person explicitly approves disclosure. An
-  issue is public; independently written code observations can also reveal an undisclosed bug.
+- The HackerOne line, in the report's own issue only: `HackerOne: #<report number>` as the last line
+  of the body. Take the number from the report as pasted, which is the ID in its heading or in its
+  URL, and ask the user for it where the paste has none. The line holds the number and nothing else
+  from the report: no reporter identity, no private proof of concept and no other non-public report
+  material, unless an authorized person explicitly approves disclosing it. A sibling issue and the
+  tracking issue have no such line.
 
 ### Ask before posting
 
