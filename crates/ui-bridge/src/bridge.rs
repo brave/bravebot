@@ -4780,9 +4780,8 @@ fn say_open_loops(state: &mut State, workspace: &Workspace) -> Option<String> {
     state.open_loops.ended_with(loops).then_some(line)
 }
 
-/// The open loops the session `open` resumed with, worked out again from its record and from disk,
-/// and kept as the set the person was shown (OPEN-6). `None` where the session's workspace cannot
-/// be made.
+/// The open loops the session `open` resumed with, worked out again from its record and from disk
+/// (OPEN-6). `None` where the session's workspace cannot be made.
 fn resumed_loops(
     open: &Open,
     directory: &Path,
@@ -4790,10 +4789,8 @@ fn resumed_loops(
 ) -> Option<bravebot_agent::open_loops::Loops> {
     let settings = crate::settings::layers(Some(directory), settings);
     let workspace = with_session_checkouts(open, session_workspace(open, &settings).ok()?);
-    let mut state = open.state.lock().ok()?;
-    let loops = crate::open_loops::resumed(&state, &workspace);
-    state.loops_shown = loops.clone();
-    Some(loops)
+    let state = open.state.lock().ok()?;
+    Some(crate::open_loops::of(&state, &workspace))
 }
 
 /// As a session is forked, place the names the parent's file tools reached as the child's, so the
