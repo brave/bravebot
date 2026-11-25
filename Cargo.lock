@@ -346,6 +346,16 @@ name = "bravebot-i18n"
 version = "0.24.0"
 
 [[package]]
+name = "bravebot-listener"
+version = "0.24.0"
+dependencies = [
+ "bravebot-core",
+ "ring",
+ "rustls",
+ "rustls-webpki",
+]
+
+[[package]]
 name = "bravebot-lsp"
 version = "0.24.0"
 dependencies = [

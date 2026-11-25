@@ -1,0 +1,28 @@
+[package]
+name = "bravebot-listener"
+description = "The host's authenticated network listener: its identity, the devices it has paired, and the connections it serves them over"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# The phone's side of a connection, which the host's tests use. This crate's own tests have it
+# without the feature.
+testing = []
+
+[dependencies]
+# The one decision about whether a paired device may do what it asks.
+bravebot-core = { path = "../core" }
+# The host's and a device's P-256 keys, their signatures, and the digests a key is named by.
+ring = { workspace = true }
+rustls = { workspace = true }
+
+[dev-dependencies]
+# The certificate the listener reads is parsed again here by the library a connection's own
+# signature check uses, so a test can say the hand-written encoding is the one that library reads.
+rustls-webpki = { version = "0.103", default-features = false, features = ["ring", "std"] }
