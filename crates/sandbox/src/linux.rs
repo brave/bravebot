@@ -2031,6 +2031,100 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temporary_directory);
     }
 
+    /// SANDBOX-14, Linux leg: a write row reaches a `.git` and every other protected name beneath
+    /// it, as the clause says it does here, because Landlock grants a directory with everything
+    /// beneath it and cannot hold one subdirectory back. A stage appends to an existing `.git`
+    /// config, hook, `.husky` script, `.gitmodules`, `.pre-commit-config.yaml` and
+    /// `.bravebot/settings.json`, and makes a new hook, under a row that is the directory holding
+    /// them, whether or not the policy asks for git's writes. The same appends to a file beside
+    /// them succeed, so a refusal of every write does not pass for a different reason.
+    ///
+    /// The regression it rejects: the macOS hold-back carried over to this backend by a refusal of
+    /// the names under the row (a `deny_write` on each, or a refusal of any policy that writes and
+    /// has not lifted it), which the spec's "does not hold there" and the planner's description of
+    /// the platform (RUN-5, a plain line is not held on Linux) would then misstate.
+    ///
+    /// Not run on a macOS host: Landlock is Linux only. Type-checked for the Linux target.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "cleanup of a directory the test made, in a test that fails by panicking"
+    )]
+    #[test]
+    fn a_write_row_reaches_a_git_directory_and_the_other_protected_names_beneath_it() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let temporary_directory = a_temporary_directory("bravebot-landlock-git-directory-tmp");
+        let work = crate::testutil::scratch_dir("bravebot-landlock-git-directory");
+        let names = [
+            ".git/config",
+            ".git/hooks/pre-commit",
+            ".husky/pre-commit",
+            ".gitmodules",
+            ".pre-commit-config.yaml",
+            ".bravebot/settings.json",
+            "below/.git/config",
+            "beside",
+        ];
+        for lifted in [false, true] {
+            let _ = std::fs::remove_dir_all(&work);
+            for name in names {
+                let file = work.join(name);
+                std::fs::create_dir_all(file.parent().expect("a name has a parent"))
+                    .expect("the scratch directory is creatable");
+                std::fs::write(&file, CONTENTS).expect("the file is writable");
+            }
+            let mut policy =
+                crate::base::run_base(Prelude::Linux, &temporary_directory, None, None)
+                    .allow_write(&work);
+            if lifted {
+                policy = policy.allow_git_directory_writes();
+            }
+            let policy = policy.nameable_under(&sandbox.capabilities()).policy;
+            let run = |line: &str, path: &Path| {
+                let mut child = sandbox
+                    .spawn(
+                        OsStr::new("/bin/sh"),
+                        &[
+                            OsString::from("-c"),
+                            OsString::from(line),
+                            path.as_os_str().to_owned(),
+                        ],
+                        &policy,
+                        nothing_attached(),
+                        Environment::Inherited,
+                    )
+                    .expect("should spawn");
+                child.wait().expect("should wait").code()
+            };
+
+            for name in names {
+                let path = work.join(name);
+                assert_eq!(
+                    run("echo more >> \"$0\"", &path),
+                    Some(0),
+                    "{name} was refused a write under a write row (lifted: {lifted})"
+                );
+                let kept = std::fs::read(&path).expect("the file is still there");
+                assert!(
+                    kept.len() > CONTENTS.len(),
+                    "{name} was not written (lifted: {lifted})"
+                );
+            }
+            let made = work.join(".git/hooks/post-commit");
+            assert_eq!(
+                run("echo made > \"$0\"", &made),
+                Some(0),
+                "a hook was refused creation under a write row (lifted: {lifted})"
+            );
+            assert!(made.exists(), "the hook was not made (lifted: {lifted})");
+        }
+
+        let _ = std::fs::remove_dir_all(&work);
+        let _ = std::fs::remove_dir_all(&temporary_directory);
+    }
+
     /// The regression it rejects: a refusal of writes that Landlock cannot express and the
     /// backend therefore drops, which leaves a file the person kept read-only writable inside a
     /// directory the session may write. The file is still read, and its neighbours are still

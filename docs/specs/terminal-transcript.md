@@ -769,6 +769,11 @@ a model was slow exactly as it draws a slow program.
 `verified-by: bravebot_ui_bridge::reporting::what_a_call_spent_at_a_model_reaches_a_front_end`
 `verified-by: bravebot_ui_bridge::reporting::a_wait_under_a_second_crosses_as_zero_seconds`
 `verified-by: bravebot_agent::turn::what_a_check_cost_reaches_the_row_the_call_drew`
+`verified-by: bravebot_agent::turn::the_wait_on_a_checks_row_is_the_time_the_check_took`
+`verified-by: bravebot_agent::turn::the_time_a_check_in_a_runs_result_took_reaches_the_turns_inference_total`
+`verified-by: bravebot_agent::turn::the_wait_on_a_read_files_row_is_the_time_the_check_before_the_vouch_offer_took`
+`verified-by: bravebot_agent::turn::the_time_a_check_in_a_fetchs_result_took_reaches_the_turns_inference_total`
+`verified-by: bravebot_agent::turn::the_time_a_check_on_an_ended_jobs_account_took_reaches_the_turns_inference_total`
 `verified-by: bravebot_agent::turn::what_a_processor_cost_reaches_the_row_the_call_drew`
 `verified-by: bravebot_agent::turn::the_wait_on_a_processor_row_is_the_time_the_model_took`
 `verified-by: bravebot_agent::turn::what_a_processor_that_chose_cost_reaches_the_row_the_call_drew`
@@ -1004,10 +1009,10 @@ drawn under a call the planner read, and to the quarantined block a one-shot run
 The same removal is made on the text of a result that the planner may read
 ([RUN-21](tools/run.md#RUN-21)). The code that does it is in `bravebot-core`, so both read the same
 definition of a colour code. The function that finds where a code ends, `code_end` in
-`crates/core/src/colour_codes.rs`, has a Verus contract in `verify/contracts.txt`: for every input
-it reads only offsets inside the text, and any offset it returns is an `m` at or after the two bytes
-of `ESC [` and no further than 64 parameters from them, so the text is cut only on a character
-boundary.
+`crates/core/src/colour_codes.rs`, has a Verus contract in `verify/contracts.txt`: for every input,
+including an offset with fewer than two bytes after it, it reads only offsets inside the text, and
+any offset it returns is an `m` at or after the two bytes of `ESC [` and no further than 64
+parameters from them, so the text is cut only on a character boundary.
 Everything else draws every byte. That includes a block's heading, where the origin can be a
 filename, a path or a name wherever one is drawn, the hunks of a write, and every prompt that asks a
 person to approve text: a write, a command's output, a read, a message, a server and its tools. A

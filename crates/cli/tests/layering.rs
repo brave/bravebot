@@ -1600,8 +1600,9 @@ fn supplies_a_drop(text: &str) -> bool {
 /// lists mint a drop's trust grant. A drop is a path on `Task::dropped_text` or `Task::attachments`
 /// that the turn reads with `read_dropped_text` or `read_dropped_attachment` and records a rule for,
 /// and nothing about the path says a person dropped it. So the files that put a path on either list
-/// are the task's own builders, the terminal's turn and side request, and the bridge, and the files
-/// that name the reads are the turn, the attached-file reader and the workspace that defines them. A
+/// are the task's own builders, the terminal's turn and side request, and the bridge: its turns,
+/// and the `/manifest` run, whose task takes the drops `manifest.run` checked as `turn.send` checks
+/// them (DROP-10). The files that name the reads are the turn, the attached-file reader and the workspace that defines them. A
 /// third file that built a task with a path of its own, a hook, a prompt from a server or a command
 /// line path, would give a model-proposed path the grant. A file a test module declares is a test,
 /// and is not read.
@@ -1621,7 +1622,8 @@ fn a_dropped_file_reaches_a_turn_from_the_terminal_and_the_bridge_and_nothing_el
             "crates/agent/src/turn/task.rs",
             "crates/tui/src/app/side_requests.rs",
             "crates/tui/src/app/turns.rs",
-            "crates/ui-bridge/src/bridge.rs"
+            "crates/ui-bridge/src/bridge.rs",
+            "crates/ui-bridge/src/manifest.rs"
         ]
         .map(String::from)
         .into(),

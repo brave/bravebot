@@ -68,6 +68,23 @@ export const CASES = {
     tokens: ['zqr01', 'zqr30', 'zqr31', 'zqr32', 'zqr33', 'zqr34', 'zqr35', 'zqr36', 'zqr37', 'zqr38'],
     standing: ['zqr99'],
   },
+  // A line the planner asked to run with no sandbox (SANDBOX-29): the warning and the sentence that
+  // nothing is remembered are rows the approval waits on, and no standing answer is offered.
+  unconfinedRun: {
+    kind: 'run',
+    event: 'run.request',
+    request: {
+      request: 117,
+      stages: range(30).map((n) => ({ program: 'make', resolved: '/usr/bin/make', shownBinary: '/usr/bin/make', args: [`zqn${pad(n + 1)}`], display: `make zqn${pad(n + 1)}` })),
+      directory: '/work/zqn31', shownDirectory: '/work/zqn31', releasesPrivate: false, canBeRemembered: false, ambient: [],
+      confinement: null, notSandboxed: 'zqn32 this is not sandboxed', unconfined: true,
+      unconfinedNote: 'zqn33 the planner asked for this one line to run with no sandbox',
+      notRememberedNote: 'zqn34 neither the line nor the request is remembered',
+      vouches: [], summary: 'build with no sandbox',
+    },
+    tokens: ['zqn01', 'zqn30', 'zqn31', 'zqn32', 'zqn33', 'zqn34'],
+    standing: [],
+  },
   output: {
     kind: 'output',
     event: 'output.request',

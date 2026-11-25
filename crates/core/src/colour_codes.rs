@@ -68,15 +68,20 @@ pub fn without(text: &str) -> (String, usize) {
 /// The bytes after the `ESC [` are scanned until the first one that is not `0-9`, `;` or `:`, and
 /// that one has to be `m`. At most `most + 1` bytes are looked at, so a run of more than `most`
 /// parameters is not a code. Every offset it reads is inside `bytes`, and the one it returns is
-/// the ASCII `m`, so the offset after it is a char boundary of the text the bytes came from.
+/// the ASCII `m`, so the offset after it is a char boundary of the text the bytes came from. A
+/// `start` with fewer than two bytes after it is `None`.
 #[cfg_attr(verus_keep_ghost, verus_spec(r =>
-    requires
-        start + 2 <= bytes.len(),
     ensures
         r is Some ==> start + 2 <= r->Some_0 < bytes.len() && bytes@[r->Some_0 as int] == b'm',
         r is Some ==> r->Some_0 <= start + 2 + most,
 ))]
 fn code_end(bytes: &[u8], start: usize, most: usize) -> Option<usize> {
+    // [`without`] passes the offset of an `ESC [` it found, but Verus does not read `without`, so
+    // this checks the offset rather than requiring it of the caller.
+    let too_short = start > bytes.len() || bytes.len() - start < 2;
+    if too_short {
+        return None;
+    }
     let parameters = start + 2;
     let room = bytes.len() - parameters;
     let mut taken = 0;
@@ -115,6 +120,19 @@ pub fn planner_note(dropped: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `code_end` checks the offset it is given rather than trusting [`without`] to pass one with
+    /// `ESC [` after it, so an offset at or past the end of the bytes is no code and reads nothing
+    /// out of bounds.
+    #[test]
+    fn an_offset_without_two_bytes_after_it_ends_no_code() {
+        let bytes = b"ab\x1b[";
+
+        assert_eq!(code_end(bytes, 2, MOST_PARAMETERS), None);
+        assert_eq!(code_end(bytes, 3, MOST_PARAMETERS), None);
+        assert_eq!(code_end(bytes, 4, MOST_PARAMETERS), None);
+        assert_eq!(code_end(bytes, 9, MOST_PARAMETERS), None);
+    }
 
     /// The line from a CI log that colours the glyph of a tree and nothing around it.
     #[test]

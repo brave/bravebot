@@ -3,7 +3,7 @@ name: add-best-practice
 description: 'Add a rule to docs/best-practices/. Checks that the rule belongs there and is not already covered, chooses the document, assigns the next id, and keeps the index current. Triggers on: add best practice, new best practice, add bp, new bp, /add-best-practice.'
 argument-hint: '<rule, or a pull request review comment URL>'
 disable-model-invocation: true
-allowed-tools: Bash(git *), Bash(gh *), Bash(grep *), Bash(rg *), Bash(ls *), Bash(make check-narration*), Read, Edit, Write, Grep, Glob, Agent
+allowed-tools: Bash(git *), Bash(gh *), Bash(grep *), Bash(rg *), Bash(ls *), Read, Edit, Write, Grep, Glob, Agent
 ---
 
 # Add a best practice

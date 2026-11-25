@@ -238,12 +238,27 @@ pub struct Run<'a> {
     /// where the line could not be remembered anyway, in which case nothing here has to repeat
     /// the reasons `RunRequest::can_be_remembered` already lists.
     pub offers_remember: bool,
+    /// The planner asked for this one line to run with no sandbox (SANDBOX-29), so `run_lines`
+    /// says so and says why no lasting answer is offered for it.
+    pub unconfined: bool,
 }
 
 /// The sentence for a run the turn does not confine, in the catalog's words, so a front end that
 /// draws it carries no copy of its own (SHARE-001).
 pub fn not_sandboxed() -> String {
     t!(run_not_sandboxed).to_string()
+}
+
+/// The sentence for a line the planner asked to run with no sandbox (SANDBOX-29), in the catalog's
+/// words, so a front end that draws it carries no copy of its own (SHARE-001).
+pub fn unconfined() -> String {
+    t!(run_unconfined).to_string()
+}
+
+/// Why a line the planner asked to run with no sandbox is offered no lasting answer, in the
+/// catalog's words (SHARE-001).
+pub fn unconfined_not_remembered() -> String {
+    t!(run_unconfined_not_remembered).to_string()
 }
 
 /// The lines a run is read before approving: every step as the line wrote it, the binary each name
@@ -280,6 +295,11 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
         }
         None => lines.push(not_sandboxed()),
     }
+    // The planner's request, which the answer is to: the line is about to be given what the
+    // sandbox was holding back.
+    if run.unconfined {
+        lines.push(unconfined());
+    }
     // Which access in particular a yes hands over, where the line reaches one nothing here holds.
     // The line above says what confinement there is and is said every time; this says what is
     // being granted, and is said only where there is something to name.
@@ -291,6 +311,9 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
     }
     if run.releases_private {
         lines.push(t!(run_releases_private).to_string());
+    }
+    if run.unconfined {
+        lines.push(unconfined_not_remembered());
     }
     if run.offers_remember {
         lines.push(t!(run_allow_and_remember_explained).to_string());
@@ -1167,6 +1190,7 @@ mod tests {
             ambient: &["it reaches the container daemon".to_string()],
             releases_private: false,
             offers_remember: false,
+            unconfined: false,
         })
         .join("\n");
         for part in [
@@ -1204,6 +1228,7 @@ mod tests {
                 ambient: &[],
                 releases_private: false,
                 offers_remember: false,
+                unconfined: false,
             })
         };
         let fed = drawn(Some("ref:7"));
@@ -1241,6 +1266,7 @@ mod tests {
                 ambient: &[],
                 releases_private: false,
                 offers_remember,
+                unconfined: false,
             })
             .join("\n")
         };
@@ -1253,6 +1279,46 @@ mod tests {
         assert!(
             !not_offered.contains("Allow and remember"),
             "a front end with no such answer should get no sentence about it: {not_offered}"
+        );
+    }
+
+    /// SANDBOX-29, PROMPT-2, SHARE-001: a line the planner asked to run with no sandbox says so
+    /// and says why no lasting answer is offered, in the catalog's words, and a line it did not
+    /// ask that of says neither. The regression it rejects is a lines prompt that asks about an
+    /// unconfined line as if it were an ordinary unsandboxed run.
+    #[test]
+    fn a_run_asking_to_be_unconfined_says_so_and_why_it_is_not_remembered_only_then() {
+        let steps = [RunStep {
+            written: "make install".to_string(),
+            binary: "/usr/bin/make".to_string(),
+        }];
+        let drawn = |unconfined: bool| {
+            run_lines(&Run {
+                summary: "install it",
+                steps: &steps,
+                writes: &[],
+                stdin: None,
+                confinement: None,
+                ambient: &[],
+                releases_private: false,
+                offers_remember: false,
+                unconfined,
+            })
+        };
+        assert_eq!(unconfined(), t!(run_unconfined).to_string());
+        assert_eq!(
+            unconfined_not_remembered(),
+            t!(run_unconfined_not_remembered).to_string()
+        );
+        let asked = drawn(true);
+        assert!(asked.contains(&unconfined()), "{asked:?}");
+        assert!(asked.contains(&unconfined_not_remembered()), "{asked:?}");
+        assert!(asked.contains(&not_sandboxed()), "{asked:?}");
+        let ordinary = drawn(false);
+        assert!(!ordinary.contains(&unconfined()), "{ordinary:?}");
+        assert!(
+            !ordinary.contains(&unconfined_not_remembered()),
+            "{ordinary:?}"
         );
     }
 
@@ -1446,6 +1512,7 @@ mod tests {
                 ambient: &[],
                 releases_private: false,
                 offers_remember: false,
+                unconfined: false,
             })
         };
         let plain = drawn("note.md", "/work");

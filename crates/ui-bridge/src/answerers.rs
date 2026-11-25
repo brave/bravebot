@@ -46,6 +46,15 @@ impl Answerers {
         }
     }
 
+    /// Whether the client asked can draw a run with no sandbox, with the sentences that say it is
+    /// unconfined and that no answer to it is remembered (SANDBOX-29). True only for the stdio
+    /// transports, whose one client is the window or an ACP editor. A host client named to answer
+    /// runs may be one whose card does not draw those sentences, so it is not asked. A lock another
+    /// thread panicked holding answers no.
+    pub fn draws_unconfined_runs(&self) -> bool {
+        matches!(self.0.lock().as_deref(), Ok(Who::Anyone))
+    }
+
     /// From now on only these kinds can be answered. Questions already waiting are not touched.
     /// Fails where the set cannot be written, so a caller does not report a client ready to
     /// answer when it is not.
@@ -86,6 +95,15 @@ mod tests {
         answerers.nobody().unwrap();
         assert!(!answerers.can_answer(Kind::Write));
         assert!(!answerers.can_answer(Kind::Ask));
+    }
+
+    #[test]
+    fn only_the_default_set_draws_unconfined_runs() {
+        let answerers = Answerers::default();
+        assert!(answerers.draws_unconfined_runs());
+        answerers.only(&[Kind::Run]).unwrap();
+        assert!(!answerers.draws_unconfined_runs());
+        assert!(!Answerers::none().draws_unconfined_runs());
     }
 
     #[test]

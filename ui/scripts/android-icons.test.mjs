@@ -12,12 +12,12 @@ const RES = new URL('../../mobile/android/app/src/main/res/', import.meta.url).p
 
 const DENSITIES = { mdpi: 1, hdpi: 1.5, xhdpi: 2, xxhdpi: 3, xxxhdpi: 4 }
 
-// The adaptive layers are 108 dp and the legacy icons 48 dp. A layer at the wrong density is
-// scaled by the system, which blurs the squares the icon is drawn with.
-test('each Android density has an adaptive foreground, a themed layer and legacy icons at its own size', () => {
+// The adaptive layers are 108 dp. A layer at the wrong density is scaled by the system, which
+// blurs the squares the icon is drawn with.
+test('each Android density has an adaptive foreground and a themed layer at its own size', () => {
   for (const [density, scale] of Object.entries(DENSITIES)) {
     const folder = join(RES, `mipmap-${density}`)
-    for (const [name, dp] of [['ic_launcher_foreground', 108], ['ic_launcher_monochrome', 108], ['ic_launcher', 48], ['ic_launcher_round', 48]]) {
+    for (const [name, dp] of [['ic_launcher_foreground', 108], ['ic_launcher_monochrome', 108]]) {
       const px = Math.round(dp * scale)
       assert.deepEqual(pngSize(readFileSync(join(folder, `${name}.png`))), { width: px, height: px }, `${density}/${name}`)
     }

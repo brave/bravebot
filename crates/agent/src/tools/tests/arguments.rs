@@ -1650,7 +1650,7 @@ fn a_redirection_writing_into_the_stores_is_refused_when_it_is_opened() {
             });
             let said = told(&mut policy, &produced.text);
             assert!(
-                said.contains("refused") || said.contains("resolves outside"),
+                said.contains("refused") || said.contains("refusing to touch it"),
                 "{command} from {}: {said}",
                 root.display()
             );
@@ -2235,7 +2235,7 @@ fn a_foreground_line_whose_substitution_writes_through_a_link_into_the_stores_is
         );
 
         assert!(
-            said.contains("resolves outside the workspace"),
+            said.contains("refusing to touch it"),
             "{line}: the write through the link was not refused when it was opened: {said}"
         );
         assert_eq!(

@@ -56,6 +56,7 @@ pub mod pure;
 pub mod reference;
 pub mod remembered;
 pub mod safe;
+pub mod scope;
 pub mod selector;
 #[path = "../../ui-files/src/short_name.rs"]
 mod short_name;

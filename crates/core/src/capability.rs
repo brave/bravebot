@@ -9,15 +9,27 @@
 //! [`Capability::WebFetch`] for the one general-purpose fetch primitive, and
 //! [`Capability::Connector`] for the one that reaches an account through an authority.
 
-use crate::label::Label;
+use crate::label::{Confidentiality, Integrity, Label};
 use std::fmt;
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
 
 /// The local name a person gave one declared MCP server.
 ///
 /// A name a person typed, and never one a server reported about itself: what a server calls
 /// itself is display text, so it cannot become an identifier a grant is written against.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(verus_keep_ghost, verus_verify, verifier::external_body)]
 pub struct ServerAlias(String);
+
+// Written out rather than derived, because Verus refuses a derived `Clone` on a type whose fields
+// it does not read.
+impl Clone for ServerAlias {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 impl ServerAlias {
     pub fn new(alias: impl Into<String>) -> Self {
@@ -39,8 +51,18 @@ impl fmt::Display for ServerAlias {
 ///
 /// The file name the person installed it under, and never a name the authority or the service
 /// reported: a grant is written against it, so it has to be something a person chose.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(verus_keep_ghost, verus_verify, verifier::external_body)]
 pub struct ConnectorName(String);
+
+// Written out rather than derived, because Verus refuses a derived `Clone` on a type whose fields
+// it does not read.
+impl Clone for ConnectorName {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 impl ConnectorName {
     pub fn new(name: impl Into<String>) -> Self {
@@ -58,7 +80,8 @@ impl fmt::Display for ConnectorName {
 /// [`CapabilitySet::contains`], which the policy layer's capability gate asks.
 ///
 /// Not `Copy`, because one variant names the server it is about.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub enum Capability {
     /// Read a file from the workspace.
     ///
@@ -119,6 +142,26 @@ pub enum Capability {
     Connector(ConnectorName),
 }
 
+// Written out rather than derived, because Verus gives no specification to a derived `Clone` of an
+// enum one of whose variants holds a type it does not read.
+impl Clone for Capability {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn clone(&self) -> Self {
+        match self {
+            Self::FileRead => Self::FileRead,
+            Self::FileWrite => Self::FileWrite,
+            Self::ShellExec => Self::ShellExec,
+            Self::GitRead => Self::GitRead,
+            Self::GitWrite => Self::GitWrite,
+            Self::WebFetch => Self::WebFetch,
+            Self::WebSearch => Self::WebSearch,
+            Self::McpCall(alias) => Self::McpCall(alias.clone()),
+            Self::LanguageServer => Self::LanguageServer,
+            Self::Connector(name) => Self::Connector(name.clone()),
+        }
+    }
+}
+
 impl Capability {
     /// Every variant, in declaration order.
     ///
@@ -148,25 +191,40 @@ impl Capability {
     /// The label data produced by this capability arrives with.
     ///
     /// `None` for pure effects, which produce no observation to label.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            crate::spec::output_label_is_untrusted(*self, r),
+    ))]
     pub fn output_label(&self) -> Option<Label> {
+        // Built with `Label::new` rather than `Label::untrusted_private()`, which Verus does not
+        // read. Nothing a capability observes is trusted.
+        let observed = Integrity::Untrusted;
         match self {
             // Workspace content is ours (private) and may contain anything (untrusted). A
             // language server's answer was computed from that same content, so it arrives on
             // the same footing.
             Self::FileRead | Self::GitRead | Self::LanguageServer => {
-                Some(Label::untrusted_private())
+                Some(Label::new(observed, Confidentiality::Private))
             }
             // Remote content is attacker-influenceable but not confidential to us.
-            Self::WebFetch | Self::WebSearch => Some(Label::untrusted_public()),
+            Self::WebFetch | Self::WebSearch => Some(Label::new(observed, Confidentiality::Public)),
             // A server may hold the person's own data, a mailbox or a calendar, and this client
             // cannot tell what a given call read from it.
-            Self::McpCall(_) => Some(Label::untrusted_private()),
+            Self::McpCall(_) => Some(Label::new(observed, Confidentiality::Private)),
             // Other people's words, from the person's own account.
-            Self::Connector(_) => Some(Label::untrusted_private()),
+            Self::Connector(_) => Some(Label::new(observed, Confidentiality::Private)),
             // Effects produce no labelled observation.
-            Self::FileWrite | Self::GitWrite => None,
+            Self::FileWrite | Self::GitWrite => {
+                // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+                let effect: Option<Label> = None;
+                effect
+            }
             // Command output can contain anything the workspace contains.
-            Self::ShellExec => Some(Label::untrusted_private()),
+            Self::ShellExec => {
+                // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+                let printed = Confidentiality::Private;
+                Some(Label::new(observed, printed))
+            }
         }
     }
 
@@ -207,25 +265,134 @@ impl fmt::Display for Capability {
 ///
 /// Deliberately immutable once built: a run cannot acquire new capabilities partway
 /// through, which is what stops a compromised step from escalating.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub struct CapabilitySet {
     granted: Vec<Capability>,
 }
 
+// Written out rather than derived, because Verus gives no specification to a derived `Clone` of a
+// struct holding a `Vec` of a type it does not clone.
+impl Clone for CapabilitySet {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn clone(&self) -> Self {
+        Self {
+            granted: self.granted.clone(),
+        }
+    }
+}
+
+// What a contract may say about a set: whether it holds a capability.
+#[cfg(verus_keep_ghost)]
+verus! {
+impl CapabilitySet {
+    pub closed spec fn spec_holds(self, capability: Capability) -> bool {
+        exists|at: int| 0 <= at < self.granted@.len() && #[trigger] self.granted@[at] == capability
+    }
+}
+}
+
+/// Whether two capabilities are the same, server and connector names included.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == (*a == *b),
+))]
+fn same_capability(a: &Capability, b: &Capability) -> bool {
+    a == b
+}
+
+/// A copy of `alias`, equal to it.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == *alias,
+))]
+fn copy_of_alias(alias: &ServerAlias) -> ServerAlias {
+    alias.clone()
+}
+
+/// A copy of `capability`, equal to it.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == *capability,
+))]
+fn copy_of(capability: &Capability) -> Capability {
+    capability.clone()
+}
+
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 impl CapabilitySet {
     /// An empty set. Grants nothing, which is the right default for untrusted work.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            forall|capability: Capability| !r.spec_holds(capability),
+    ))]
     pub fn none() -> Self {
-        Self::default()
+        Self {
+            granted: Vec::new(),
+        }
     }
 
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == self.spec_holds(*capability),
+    ))]
     pub fn contains(&self, capability: &Capability) -> bool {
-        self.granted.contains(capability)
+        let mut at = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant
+                at <= self.granted.len(),
+                forall|before: int| 0 <= before < at ==> #[trigger] self.granted@[before]
+                    != *capability,
+            decreases self.granted.len() - at,
+        ))]
+        while at < self.granted.len() {
+            if same_capability(&self.granted[at], capability) {
+                return true;
+            }
+            at += 1;
+        }
+        false
+    }
+
+    /// The part of this set that `parent` holds too.
+    ///
+    /// What a run is carved out of its parent with: everything it holds is held by both, so
+    /// narrowing by a parent never adds a capability the parent lacks.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            forall|capability: Capability| #[trigger] r.spec_holds(capability) ==> self.spec_holds(
+                capability,
+            ) && parent.spec_holds(capability),
+    ))]
+    pub fn within(&self, parent: &CapabilitySet) -> CapabilitySet {
+        let mut kept: Vec<Capability> = Vec::new();
+        let mut at = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant
+                at <= self.granted.len(),
+                forall|k: int| #![trigger kept@[k]] 0 <= k < kept@.len() ==> (exists|i: int| 0 <= i
+                    < at && #[trigger] self.granted@[i] == kept@[k]) && parent.spec_holds(kept@[k]),
+            decreases self.granted.len() - at,
+        ))]
+        while at < self.granted.len() {
+            // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+            let parent_holds = parent.contains(&self.granted[at]);
+            if parent_holds {
+                kept.push(copy_of(&self.granted[at]));
+            }
+            at += 1;
+        }
+        CapabilitySet { granted: kept }
     }
 
     pub fn is_empty(&self) -> bool {
         self.granted.is_empty()
     }
 
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
     pub fn iter(&self) -> impl Iterator<Item = Capability> + '_ {
         self.granted.iter().cloned()
     }
@@ -237,17 +404,46 @@ impl CapabilitySet {
     /// is what makes a grant the thing a call asks about rather than a property the session
     /// recorded. A grant withdrawn stops answering at the next call rather than at the next
     /// session.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            forall|capability: Capability| #[trigger] final(self).spec_holds(capability)
+                ==> old(self).spec_holds(capability),
+            !final(self).spec_holds(Capability::McpCall(*alias)),
+            r == old(self).spec_holds(Capability::McpCall(*alias)),
+    ))]
     pub fn revoke_mcp_call(&mut self, alias: &ServerAlias) -> bool {
-        let withdrawn = Capability::McpCall(alias.clone());
-        let before = self.granted.len();
+        let withdrawn = Capability::McpCall(copy_of_alias(alias));
+        let mut kept: Vec<Capability> = Vec::new();
+        let mut found = false;
+        let mut at = 0;
         // Only the grant naming this server: the others are separate capabilities that this
         // one says nothing about.
-        self.granted.retain(|granted| granted != &withdrawn);
-        self.granted.len() != before
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant
+                at <= self.granted.len(),
+                withdrawn == Capability::McpCall(*alias),
+                forall|k: int| #![trigger kept@[k]] 0 <= k < kept@.len() ==> (exists|i: int| 0 <= i
+                    < at && #[trigger] self.granted@[i] == kept@[k]) && kept@[k] != withdrawn,
+                found <==> exists|i: int| 0 <= i < at && #[trigger] self.granted@[i] == withdrawn,
+            decreases self.granted.len() - at,
+        ))]
+        while at < self.granted.len() {
+            // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+            let other = !same_capability(&self.granted[at], &withdrawn);
+            if other {
+                kept.push(copy_of(&self.granted[at]));
+            } else {
+                found = true;
+            }
+            at += 1;
+        }
+        self.granted = kept;
+        found
     }
 }
 
 impl FromIterator<Capability> for CapabilitySet {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
     fn from_iter<I: IntoIterator<Item = Capability>>(capabilities: I) -> Self {
         let mut granted: Vec<_> = capabilities.into_iter().collect();
         granted.sort();
@@ -353,6 +549,46 @@ mod tests {
         let granted = CapabilitySet::from_iter([github.clone()]);
         assert!(granted.contains(&github));
         assert!(!granted.contains(&Capability::Connector(ConnectorName::new("gmail"))));
+    }
+
+    /// `within` keeps what both sets hold and nothing else, so narrowing by a parent never adds a
+    /// capability the parent lacks, however much the narrowed set asked for.
+    #[test]
+    fn a_set_within_a_parent_holds_only_what_both_hold() {
+        let asked = CapabilitySet::from_iter([
+            Capability::FileRead,
+            Capability::FileWrite,
+            Capability::McpCall(ServerAlias::new("mail")),
+        ]);
+        let parent = CapabilitySet::from_iter([
+            Capability::FileRead,
+            Capability::ShellExec,
+            Capability::McpCall(ServerAlias::new("calendar")),
+        ]);
+
+        let held: Vec<Capability> = asked.within(&parent).iter().collect();
+        assert_eq!(held, [Capability::FileRead]);
+    }
+
+    /// Revoking a server's grant takes that one grant and says so, leaves every other, and says
+    /// nothing was withdrawn where the set held no grant for it.
+    #[test]
+    fn revoking_a_server_takes_its_grant_alone_and_says_whether_it_was_held() {
+        let mail = ServerAlias::new("mail");
+        let mut set = CapabilitySet::from_iter([
+            Capability::FileRead,
+            Capability::McpCall(mail.clone()),
+            Capability::McpCall(ServerAlias::new("calendar")),
+        ]);
+
+        assert!(set.revoke_mcp_call(&mail));
+        assert!(!set.contains(&Capability::McpCall(mail.clone())));
+        assert!(set.contains(&Capability::McpCall(ServerAlias::new("calendar"))));
+        assert!(set.contains(&Capability::FileRead));
+        assert!(
+            !set.revoke_mcp_call(&mail),
+            "the grant was already withdrawn"
+        );
     }
 
     #[test]

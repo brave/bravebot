@@ -90,6 +90,9 @@ pub struct ToolSpec {
     /// that does not parse is the turn loop's to answer as a failed call.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub eager_input_streaming: Option<bool>,
+    /// A breakpoint on the tool list, carried by the last tool only (BACKEND-27).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
 }
 
 /// Serialised only: `role` is a fixed string this crate chooses, never one it reads back.
@@ -247,6 +250,9 @@ impl MessagesRequest {
     /// refuses the whole request rather than reading past the breakpoints. They are also the one
     /// part of a request nobody asked for, so they are what a refusal is worth trying without.
     pub fn without_breakpoints(mut self) -> Self {
+        for tool in self.tools.iter_mut().flatten() {
+            tool.cache_control = None;
+        }
         for block in self.system.iter_mut().flatten() {
             set_breakpoint(block, None);
         }
@@ -270,6 +276,11 @@ impl MessagesRequest {
         let point = Some(CacheControl::Ephemeral {
             ttl: Some(ttl.wire()),
         });
+        for tool in self.tools.iter_mut().flatten() {
+            if tool.cache_control.is_some() {
+                tool.cache_control = point;
+            }
+        }
         for block in self.system.iter_mut().flatten() {
             if breakpoint(block).is_some() {
                 set_breakpoint(block, point);
@@ -340,11 +351,13 @@ pub fn request_from(model: &str, messages: &[Message], tools: Option<&[Tool]>) -
         })
         .collect();
 
-    // Two breakpoints, which is what this conversation is shaped like: the prompt, which the tool
-    // schemas in front of it travel with, and the last block of the conversation. A turn re-sends
-    // its whole history each round, so without these the service reads all of it again every time.
-    // The prefix runs tools, then system, then messages, so the breakpoint on the system prompt
-    // covers the schemas too and the one on the last message covers everything.
+    // Three breakpoints, which is what this request is shaped like: the tool schemas, the prompt,
+    // and the last block of the conversation. A turn re-sends its whole history each round, so
+    // without these the service reads all of it again every time. The prefix runs tools, then
+    // system, then messages. The schemas get their own breakpoint because they are the same bytes
+    // in every project, while the prompt names the working directory, the date and the project's
+    // rules: a session in another directory misses at the prompt and, without a breakpoint behind
+    // the schemas, writes them again too (BACKEND-27).
     let point = Some(CacheControl::Ephemeral { ttl: None });
     let system = walked
         .system
@@ -356,13 +369,17 @@ pub fn request_from(model: &str, messages: &[Message], tools: Option<&[Tool]>) -
             }]
         });
     mark_the_end(&mut turns, point);
+    let mut tools: Option<Vec<ToolSpec>> = tools.map(|tools| tools.iter().map(tool_from).collect());
+    if let Some(last) = tools.iter_mut().flatten().last() {
+        last.cache_control = point;
+    }
 
     MessagesRequest {
         model: model.to_string(),
         max_tokens: bravebot_config::bedrock::OUTPUT_LIMIT,
         system,
         messages: turns,
-        tools: tools.map(|tools| tools.iter().map(tool_from).collect()),
+        tools,
         output_config: None,
         stream: None,
     }
@@ -388,6 +405,7 @@ fn tool_from(tool: &Tool) -> ToolSpec {
         description: tool.function.description.clone(),
         input_schema: tool.function.parameters.clone(),
         eager_input_streaming: None,
+        cache_control: None,
     }
 }
 
@@ -1063,6 +1081,44 @@ mod tests {
         assert!(!body["messages"].to_string().contains("cache_control"));
     }
 
+    /// A request with no tools sends no `tools` field, and one with tools marks the last of them
+    /// and no other. The schemas are the same bytes in every project while the system prompt names
+    /// the working directory and the project's rules, so without a breakpoint of their own a
+    /// session in another directory writes the schemas again with the prompt (BACKEND-27).
+    ///
+    /// Rejects a request that marks no tool, and one that marks every tool, which would spend a
+    /// breakpoint per tool past the four the service allows.
+    #[test]
+    fn the_last_tool_definition_carries_a_breakpoint_and_no_other_does() {
+        let tools = vec![
+            Tool::function("read_file", "Read a file", json!({})),
+            Tool::function("write_file", "Write a file", json!({})),
+        ];
+        let body = body_of(&request_from(
+            "claude-test",
+            &[Message::system("be brief"), Message::user("one")],
+            Some(&tools),
+        ));
+        assert_eq!(body["tools"][0].get("cache_control"), None, "{body}");
+        assert_eq!(
+            body["tools"][1]["cache_control"],
+            json!({"type": "ephemeral"}),
+            "{body}"
+        );
+        assert_eq!(
+            body.to_string().matches("cache_control").count(),
+            3,
+            "tools, prompt and end of conversation: {body}"
+        );
+
+        let toolless = body_of(&request_from(
+            "claude-test",
+            &[Message::system("be brief"), Message::user("one")],
+            None,
+        ));
+        assert_eq!(toolless.get("tools"), None, "{toolless}");
+    }
+
     /// Without breakpoints a request keeps everything else it was asked to carry.
     #[test]
     fn a_request_without_breakpoints_keeps_everything_that_was_asked_for() {
@@ -1078,6 +1134,9 @@ mod tests {
         let without = with.clone().without_breakpoints();
 
         let mut expected = body_of(&with);
+        if let Some(tool) = expected["tools"][0].as_object_mut() {
+            tool.remove("cache_control");
+        }
         expected["system"][0]
             .as_object_mut()
             .expect("a block")
@@ -1098,6 +1157,7 @@ mod tests {
 
         let chosen = body_of(&base.clone().with_cache_ttl(Some(CacheTtl::OneHour)));
         let hour = json!({"type": "ephemeral", "ttl": "1h"});
+        assert_eq!(chosen["tools"][0]["cache_control"], hour);
         assert_eq!(chosen["system"][0]["cache_control"], hour);
         assert_eq!(chosen["messages"][0]["content"][0]["cache_control"], hour);
 

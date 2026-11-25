@@ -210,6 +210,7 @@ const CARDS = {
   user: { entry: () => t.userSaid(FORGED_CHROME), marks: null, why: 'what the person typed themselves' },
   assistant: { entry: () => t.replied(FORGED_CHROME, 1), marks: null, why: 'the planner’s own words, which is what the one formatted surface means' },
   narration: { entry: () => t.narrated(FORGED_CHROME), marks: null, why: 'the agent’s account of what it did' },
+  'open-loops': { entry: () => t.openLoops(FORGED_CHROME, 1), marks: null, why: 'the bridge’s own line naming the kinds of work a turn left open, with no path or content in it' },
   attached: { entry: () => ({ kind: 'attached', id: 'a1', path: FORGED_CHROME }), marks: null, why: 'the path somebody named, never the file’s bytes' },
   watch: { entry: () => t.watchFired(1, FORGED_CHROME), marks: null, why: 'the watch’s own line: a number and a path' },
   error: { entry: () => t.errored(FORGED_CHROME), marks: null, why: 'a diagnostic from the service the agent spoke to' },

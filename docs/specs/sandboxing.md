@@ -1067,6 +1067,8 @@ The auto mode's classifier is kept from a line with a git stage for the same rea
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_the_other_protected_names_beneath_it`
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_change_rename_into_or_remove_an_entry_of_a_git_directory`
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_change_the_owner_or_the_access_list_of_a_git_directory_or_a_protected_name`
+`verified-by: bravebot_sandbox::linux::a_write_row_reaches_a_git_directory_and_the_other_protected_names_beneath_it`
+`verified-by: bravebot_sandbox::windows::a_write_row_is_applied_whole_and_withholds_no_protected_name`
 `verified-by: bravebot_sandbox::macos::a_write_row_inside_a_protected_directory_is_writable_under_itself`
 `verified-by: bravebot_sandbox::macos::every_name_in_the_shared_list_is_in_the_profile`
 `verified-by: bravebot_agent::protected_names::the_sandbox_and_the_file_tools_hold_back_the_same_names`
@@ -2892,7 +2894,7 @@ says and sign in.
 The desktop and the bridge have no flag, and read the mode from the settings and the pin at the start
 of every turn, so a settings edit made while a session is open applies from its next turn, unless a
 window has chosen a mode for the session with `session.sandbox`, which replaces the settings mode
-from the next turn. `off` is read there as `workspace-write`, because a window has no line that shows its programs are unconfined. A
+from the next turn. `off` is read there as `workspace-write`, because a window says a program is unconfined only on the card for one line asked to run with no sandbox ([SANDBOX-29](#SANDBOX-29)), and nothing it draws says that every program of a session is. A
 subagent's programs run under the mode of the session that started it, and the mode is not in the
 session record, so a resumed session takes the mode its start-up chose and not the one it was
 saved under. `/sandbox` alone says the mode in force and the flag or file that chose it, in the words `doctor`
@@ -3250,7 +3252,9 @@ toolchain its registry hosts (`crates.io`, `static.crates.io` and `index.crates.
 The proxy decides from the destination in the `CONNECT` request line and the addresses that name
 resolves to, and from nothing else: not a header, not a reply, not a byte the tunnel carries. TLS
 is not terminated, so an allowed tunnel is two byte streams copied into each other unread, and a
-request that is not a `CONNECT` is refused. A tunnel is opened only to port 443 or 80.
+request that is not a `CONNECT` is refused. A tunnel is opened only to port 443 or 80. A host
+holding a byte outside ASCII is refused as not listed before the lists are read, and is never
+resolved, so every name the proxy resolves is ASCII.
 
 A name the list allows is resolved once, and the tunnel is opened to an address that lookup gave
 and to no other, so an answer that differs the next time is never connected to. If any address in
@@ -3433,21 +3437,20 @@ A `64:ff9b::/96` spelling is compared as the IPv4 address it carries, and by tex
 leads depends on a NAT64 gateway on the network, so what a connection to it reaches is not verified
 ([#4041](https://github.com/brave/bravebot/issues/4041), row 33).
 
-A name outside ASCII is compared by the list as written, after ASCII lowercasing. An entry reads ASCII
-letters, digits, `-` and `_`, so an entry cannot spell such a name, and the proxy applies no IDNA
-conversion to a `CONNECT` request, as [PERM-1](permissions.md#PERM-1) applies none to a fetched host.
-A rule there on an international name covers both spellings, and this list does not. A `CONNECT` for
-`bücher.example` is not covered by a denied entry `xn--bcher-kva.example`, and an allowed
-`*.example` covers it, so it is allowed. The name is then resolved as written. The macOS system
-resolver gives the same addresses for `bücher.de` and `xn--bcher-kva.de`, and for `ｅxample.com`
-(U+FF45) as for `example.com`. A denied name is therefore reached by a spelling the resolver reads as
-it when two things hold: the stage is held to a list, and an allowed wildcard such as `*.com` covers
-the spelling while the denied entry names the name exactly. The tunnel is then opened to the
-addresses of the denied name. The resolved addresses are checked only against the denied entries that
-name an address, and an address that is not public is still refused. Whether another resolver
-converts such a name is not verified ([#4041](https://github.com/brave/bravebot/issues/4041), row 34).
-The missing conversion on a `CONNECT` host is a defect and is tracked in
-[#4394](https://github.com/brave/bravebot/issues/4394).
+A `CONNECT` host holding a byte outside ASCII is refused as not listed, and the refusal is
+recorded with no host, as a name that is not a host name. An entry reads ASCII letters, digits, `-`
+and `_`, so no entry can spell such a name, and the system resolver can read one as an ASCII name:
+the macOS resolver gives the same addresses for `bücher.de` and `xn--bcher-kva.de`, and for
+`ｅxample.com` (U+FF45) as for `example.com`. Compared as written, `ｅxample.com` is covered by an
+allowed `*.com` and not by a denied `example.com`, and `bücher.example` is covered by an allowed
+`*.example` and not by a denied `xn--bcher-kva.example`, so the tunnel would be opened to the
+addresses of the denied name. The check holds for every non-ASCII character, including U+3002 and
+U+FF0E, which a resolver may read as a full stop, and a non-ASCII space. A name written in ASCII,
+an `xn--` name included, is compared exactly as any other. [PERM-1](permissions.md#PERM-1) reads a
+`WebFetch` domain in the form written and in its `xn--` form, with each label outside ASCII
+converted by Punycode, so a rule on either spelling covers both. This proxy does no such
+conversion and refuses the spelling instead, so a conversion that differs from the resolver's
+cannot leave the same gap here.
 
 The tests that hold a stage to the proxy through the namespace need a kernel that lets an
 unprivileged user make one. They say so and do not run where it does not, so a green run there
@@ -3507,6 +3510,12 @@ says nothing about them.
 `verified-by: bravebot_sandbox::proxy::a_public_address_is_listed_by_an_exact_entry_and_not_by_a_wildcard`
 `verified-by: bravebot_sandbox::proxy::a_name_that_resolves_to_a_denied_address_is_refused_as_denied`
 `verified-by: bravebot_sandbox::hosts::a_wildcard_allows_no_address_a_narrower_list_names`
+`verified-by: bravebot_sandbox::hosts::a_host_holding_a_byte_outside_ascii_is_refused_as_not_listed`
+`verified-by: bravebot_sandbox::hosts::an_xn_name_is_decided_by_its_entries_like_any_other_ascii_name`
+`verified-by: bravebot_sandbox::proxy::a_connect_host_outside_ascii_is_refused_unresolved_and_recorded_as_no_name`
+`verified-by: bravebot_sandbox::proxy::a_connect_host_behind_a_non_ascii_space_is_refused_unresolved_and_recorded_as_no_name`
+`verified-by: bravebot_sandbox::hosts::only_a_host_name_or_an_address_may_be_recorded`
+`verified-by: bravebot_sandbox::proxy::a_fullwidth_spelling_of_a_denied_name_gets_the_refusal_and_is_recorded_as_no_name`
 `verified-by: bravebot_sandbox::hosts::an_ipv4_address_inside_a_nat64_one_is_decided_as_the_ipv4_address`
 `verified-by: bravebot_sandbox::address::the_ipv4_form_unwraps_a_mapped_and_a_nat64_address_and_nothing_else`
 `verified-by: bravebot_sandbox::proxy::the_trail_records_the_host_as_the_request_spelled_it`
@@ -3666,12 +3675,14 @@ Windows cannot subtract from a grant, so a stage that a `denyRead` would reach i
 none runs with the path held back; whether the folding of a glob holds on NTFS is not verified. On
 Linux an ext4 or f2fs directory can carry a per-directory `casefold` flag. A glob is expanded by
 listing each directory and compares every name in both cases. The test that expands a glob over
-names in several cases does not set the flag, and no test runs a stage over a directory with the
-flag set. An entry with no wildcard is resolved by the volume, as above, and that is not verified
-over a flagged directory either
-([#4041](https://github.com/brave/bravebot/issues/4041), row 36). The trust map has such a test on
-real directories ([#4279](https://github.com/brave/bravebot/issues/4279)); a stage over a flagged
-directory has none.
+names in several cases does not set the flag. A second test runs a confined stage over a new
+directory with the flag set, once with a glob entry and once with a plain entry, and asserts that a
+read of the file under another case is refused. It runs only where the flag can be set (Linux on
+ext4 or f2fs with casefold, with the privilege `chattr +F` takes) and otherwise prints why it
+skipped, so no CI host is assumed to run it
+([#4041](https://github.com/brave/bravebot/issues/4041), row 36). An entry with no wildcard is
+resolved by the volume, as above. The trust map has a test on real directories
+([#4279](https://github.com/brave/bravebot/issues/4279)).
 
 An entry that is refused is not in force. A refused allowance leaves reach where it was. A refused
 `denyRead` or `denyWrite` is a path the person meant to hold back, so a stage is not started while one
@@ -3808,6 +3819,7 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_tui::logo::filesystem_rules_are_named_on_the_opening_screen_and_none_is_not`
 `verified-by: bravebot_agent::confine::a_denied_read_is_refused_by_name_and_by_glob_and_its_neighbour_is_not`
 `verified-by: bravebot_agent::confine::a_denied_read_glob_refuses_a_confined_read_of_a_file_under_another_case`
+`verified-by: bravebot_agent::confine::a_denied_read_refuses_a_confined_read_of_a_file_under_another_case_in_a_casefold_directory`
 `verified-by: bravebot_agent::confine::a_denied_read_glob_refuses_a_confined_read_of_a_file_under_another_unicode_form`
 `verified-by: bravebot_agent::confine::a_denied_read_holds_back_a_directory_the_base_reads`
 `verified-by: bravebot_agent::confine::an_allowed_read_lifts_the_table_and_never_reaches_a_private_key`
@@ -4268,9 +4280,9 @@ none to add to.
   redirection names it after whatever remedy it is given, `/add-dir` or none, a credential
   location's included ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). They name
   it only where the request would be accepted and the front end can ask about it, which the
-  terminal interface and a session in lines can, and the desktop and a run with nobody to ask
-  cannot. So a mode that keeps the profile, or a window that refuses the line, is never pointed at
-  an argument it would turn down. A `request_path` refusal also says why the path cannot be lent.
+  terminal interface, a session in lines and the desktop window can, and a host client of the
+  desktop bridge and a run with nobody to ask cannot. So a mode that keeps the profile, or a front
+  end that refuses the line, is never pointed at an argument it would turn down. A `request_path` refusal also says why the path cannot be lent.
   The `run` description of the argument makes it a second attempt: every line starts without it, and
   the planner asks for it only after the same line failed because the sandbox refused it access, not
   after a failure of another kind, saying in `why` what was refused. It also says that the person is
@@ -4306,8 +4318,10 @@ none to add to.
   run can fail at it.
 - **Recorded.** The `sandbox` gate's detail names `unconfined` for that run, where it names the
   session's mode for every other ([TRACE-1](trace.md#TRACE-1)).
-- The desktop draws no card for it and refuses, since a window reads `off` as `workspace-write` and has
-  no line showing that a program is unconfined ([SANDBOX-22](#SANDBOX-22)).
+- The desktop window draws a card for it that says the line runs with no sandbox and that no answer
+  to it is remembered, and offers only no and yes to this line once. A yes the window sends with a
+  standing answer is taken as a yes to the line once. A host client named to answer runs may draw no
+  such sentence, so the bridge refuses the request unasked where its answerers are host clients.
 
 **Why.** Without it the only way to run `docker login` or `aws sso login` from a session is to start
 it with `--sandbox off`, which removes the profile from every program for the whole session. The
@@ -4354,7 +4368,15 @@ refuse the path.
 `verified-by: bravebot_agent::turn::an_unconfined_line_is_refused_where_the_session_does_not_accept_it`
 `verified-by: bravebot_agent::turn::an_unconfined_value_that_is_not_a_boolean_is_an_error`
 `verified-by: bravebot_tui::confirm::run::a_run_asking_to_be_unconfined_says_so_and_binds_no_lasting_key`
-`verified-by: bravebot_ui_bridge::refusal::the_window_refuses_an_unconfined_run_without_asking`
+`verified-by: bravebot_ui_bridge::refusal::the_window_is_asked_about_an_unconfined_run_and_a_remembering_yes_remembers_nothing`
+`verified-by: bravebot_ui_bridge::answering_tests::a_host_client_answering_runs_is_not_asked_about_an_unconfined_run`
+`verified-by: bravebot_ui_bridge::answerers::only_the_default_set_draws_unconfined_runs`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_failed_confined_line_in_a_window_names_the_unconfined_argument`
+`verified-by: bravebot_ui_bridge::host_process::a_host_client_answering_only_runs_is_not_pointed_at_the_unconfined_argument`
+`verified-by: bravebot_approval::lib::a_run_asking_to_be_unconfined_says_so_and_why_it_is_not_remembered_only_then`
+`verified-by: bravebot_cli::plain::a_run_asking_to_be_unconfined_is_asked_about_as_unconfined`
+`verified-by: bravebot_ui_bridge::wire::a_run_request_says_when_the_line_was_asked_to_run_with_no_sandbox`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/unconfined-run.test.mjs renders a run card for a line asked to run with no sandbox and holds that it draws the bridge's unconfinedNote verbatim in a warning the approval waits on, draws the not-sandboxed and not-remembered sentences, and offers no Trust command and output button, and that a card without the flag draws none of these; make check-ui runs it)`
 
 <a id="SANDBOX-32"></a>
 ### SANDBOX-32: a person may remember a reviewed prefix for an unconfined line, for programs on a hand-written list only
@@ -4395,7 +4417,7 @@ condition below holds, and in no other case it is asked about as [SANDBOX-29](#S
 - **Every condition [SANDBOX-29](#SANDBOX-29) puts on accepting `unconfined` still holds.** The mode
   is not `strict`, `read-only` or `off`, the workspace is trusted, a managed `run.network` is not
   `closed`, and the caller is not a delegate. A rule that says ask, or deny, decides first
-  ([PERM-14](permissions.md#PERM-14)). A front end that cannot ask refuses the request, so a prefix on file is never read by a run with nobody to ask or by the desktop. The mode that
+  ([PERM-14](permissions.md#PERM-14)). A front end that cannot ask refuses the request, so a prefix on file is never read by a run with nobody to ask or by a host client of the desktop bridge. The mode that
   asks nothing does not accept the request either.
 - **The answer is for one tree.** A prefix remembered for the session is forgotten by `/cd`, `/clear`
   and `/branch`. A prefix remembered past the session is written to the record of that directory, in a

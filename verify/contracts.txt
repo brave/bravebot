@@ -6,7 +6,18 @@
 # `python3 contrib/check-verus-contracts.py --write` and say in the pull request why it changed.
 # docs/development/verification.md says how a contract is written and run.
 
-crates/core/src/colour_codes.rs::code_end: r => requires start + 2 <= bytes.len(), ensures r is Some ==> start + 2 <= r->Some_0 < bytes.len() && bytes@[r->Some_0 as int] == b'm', r is Some ==> r->Some_0 <= start + 2 + most,
+crates/core/src/capability.rs::output_label: r => ensures crate::spec::output_label_is_untrusted(*self, r),
+crates/core/src/capability.rs::same_capability: r => ensures r == (*a == *b),
+crates/core/src/capability.rs::copy_of_alias: r => ensures r == *alias,
+crates/core/src/capability.rs::copy_of: r => ensures r == *capability,
+crates/core/src/capability.rs::none: r => ensures forall|capability: Capability| !r.spec_holds(capability),
+crates/core/src/capability.rs::contains: r => ensures r == self.spec_holds(*capability),
+crates/core/src/capability.rs::contains/loop: invariant at <= self.granted.len(), forall|before: int| 0 <= before < at ==> #[trigger] self.granted@[before] != *capability, decreases self.granted.len() - at,
+crates/core/src/capability.rs::within: r => ensures forall|capability: Capability| #[trigger] r.spec_holds(capability) ==> self.spec_holds( capability, ) && parent.spec_holds(capability),
+crates/core/src/capability.rs::within/loop: invariant at <= self.granted.len(), forall|k: int| #![trigger kept@[k]] 0 <= k < kept@.len() ==> (exists|i: int| 0 <= i < at && #[trigger] self.granted@[i] == kept@[k]) && parent.spec_holds(kept@[k]), decreases self.granted.len() - at,
+crates/core/src/capability.rs::revoke_mcp_call: r => ensures forall|capability: Capability| #[trigger] final(self).spec_holds(capability) ==> old(self).spec_holds(capability), !final(self).spec_holds(Capability::McpCall(*alias)), r == old(self).spec_holds(Capability::McpCall(*alias)),
+crates/core/src/capability.rs::revoke_mcp_call/loop: invariant at <= self.granted.len(), withdrawn == Capability::McpCall(*alias), forall|k: int| #![trigger kept@[k]] 0 <= k < kept@.len() ==> (exists|i: int| 0 <= i < at && #[trigger] self.granted@[i] == kept@[k]) && kept@[k] != withdrawn, found <==> exists|i: int| 0 <= i < at && #[trigger] self.granted@[i] == withdrawn, decreases self.granted.len() - at,
+crates/core/src/colour_codes.rs::code_end: r => ensures r is Some ==> start + 2 <= r->Some_0 < bytes.len() && bytes@[r->Some_0 as int] == b'm', r is Some ==> r->Some_0 <= start + 2 + most,
 crates/core/src/colour_codes.rs::code_end/loop: invariant parameters == start + 2, room == bytes.len() - parameters, taken <= room, decreases room - taken,
 crates/core/src/command.rs::?: r => ensures r == crate::spec::null_device(*path),
 crates/core/src/command.rs::opens_no_file: r => ensures r == crate::spec::opens_no_file(*self),
@@ -64,13 +75,29 @@ crates/core/src/policy.rs::asks: r => ensures r == crate::spec::write_reason_ask
 crates/core/src/policy.rs::write_reason: r => ensures crate::spec::write_reason_is_sound(facts, r),
 crates/core/src/policy.rs::asks: r => ensures r == crate::spec::reason_asks(self),
 crates/core/src/policy.rs::run_reason: r => ensures crate::spec::run_reason_is_sound(facts, r),
-crates/core/src/policy.rs::output_label: r => requires opaque.integrity == Integrity::Untrusted, ensures crate::spec::output_label_is_sound(facts, opaque, r.0),
+crates/core/src/policy.rs::output_label: r => ensures crate::spec::output_label_is_sound(facts, crate::spec::untrusted(opaque), r.0),
 crates/core/src/policy.rs::precommitted: r => ensures r == spec_precommitted(*self, *slot),
 crates/core/src/policy.rs::precommitted_into: r => ensures r == spec_precommitted_into(*self, *slot, destination@),
 crates/core/src/policy.rs::deny: r => ensures spec_context(*final(self)) == spec_context(*old(self)),
 crates/core/src/policy.rs::allow: ensures spec_context(*final(self)) == spec_context(*old(self)),
+crates/core/src/policy.rs::before_capability: r => ensures r is Ok <==> spec_capabilities(*old(self)).spec_holds(capability),
+crates/core/src/policy.rs::capabilities_held: r => ensures *r == spec_capabilities(*self),
+crates/core/src/policy.rs::refuse_a_denied_host: r => ensures r is Err <==> spec_rules_for_host(*old(self), host@) == crate::permissions::Decision::Ruled( crate::permissions::Ruling::Deny, ),
+crates/core/src/policy.rs::rules_for_host: r => ensures r == spec_rules_for_host(*self, host@),
+crates/core/src/policy.rs::before_fetch: r => ensures r is Ok ==> crate::spec::output_label_is_untrusted(Capability::WebFetch, Some(r->Ok_0)),
+crates/core/src/policy.rs::before_search_rules: r => ensures r is Err <==> spec_rules_for_search(*old(self)) == crate::permissions::Decision::Ruled( crate::permissions::Ruling::Deny, ),
+crates/core/src/policy.rs::rules_for_search: r => ensures r == spec_rules_for_search(*self),
+crates/core/src/policy.rs::before_search: r => ensures r is Ok ==> crate::spec::output_label_is_untrusted(Capability::WebSearch, Some(r->Ok_0)),
 crates/core/src/policy.rs::promote_a_server_move: r => ensures r is Ok <==> spec_granted(*old(self), "mcp_move"@, "alias"@, alias@), r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
+crates/core/src/policy.rs::before_mcp_call_rules: r => ensures r is Err <==> spec_rules_for_mcp(*old(self), alias@, tool@) == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Deny),
+crates/core/src/policy.rs::rules_for_mcp: r => ensures r == spec_rules_for_mcp(*self, alias@, tool@),
 crates/core/src/policy.rs::promote_a_tool_list: r => ensures r is Ok <==> spec_granted(*old(self), "mcp_tools"@, "alias"@, alias@), r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
+crates/core/src/policy.rs::observe: r => ensures r is Ok ==> crate::spec::output_label_is_untrusted(capability, Some(r->Ok_0)), r is Err ==> crate::spec::output_label_is_untrusted(capability, None),
+crates/core/src/policy.rs::refuse_if_denied: r => ensures r is Err <==> decision == crate::permissions::Decision::Ruled( crate::permissions::Ruling::Deny, ),
+crates/core/src/policy.rs::before_read: r => ensures r is Err <==> spec_rules_for_read(*old(self), path@) == crate::permissions::Decision::Ruled( crate::permissions::Ruling::Deny, ),
+crates/core/src/policy.rs::rules_for_read: r => ensures r == spec_rules_for_read(*self, path@),
+crates/core/src/policy.rs::rules_for_edit: r => ensures r == spec_rules_for_edit(*self, path@),
+crates/core/src/policy.rs::refuse_denied_write: r => ensures r is Err <==> spec_rules_for_edit(*old(self), path@) == crate::permissions::Decision::Ruled( crate::permissions::Ruling::Deny, ) || spec_rules_for_read(*old(self), path@) == crate::permissions::Decision::Ruled( crate::permissions::Ruling::Deny, ),
 crates/core/src/policy.rs::context_integrity: r => ensures r == spec_context(*self),
 crates/core/src/policy.rs::absorb: ensures spec_context(*final(self)) == crate::spec::meet(spec_context(*old(self)), observed),
 crates/core/src/policy.rs::record_answers: r => ensures r is Ok <==> crate::value::spec_label_of(series).integrity == Integrity::Trusted, r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::value::spec_label_of( series, ), spec_context(*final(self)) == spec_context(*old(self)),
@@ -120,6 +147,18 @@ crates/core/src/remembered.rs::some_scope_covers: r => ensures r == (exists|i: i
 crates/core/src/remembered.rs::some_scope_covers/loop: invariant at <= scopes.len(), forall|i: int| 0 <= i < at ==> !crate::spec::some_line_covers( #[trigger] scopes@[i].scope.lines@, *plan, ), decreases scopes.len() - at,
 crates/core/src/remembered.rs::covers: r => ensures r == crate::spec::some_line_covers(self.lines@, *plan),
 crates/core/src/remembered.rs::covers: r => ensures r == crate::spec::remembered_covers(*self, *plan),
+crates/core/src/scope.rs::rank: r => ensures r as int == crate::spec::reads_rank(self),
+crates/core/src/scope.rs::rank: r => ensures r as int == crate::spec::writes_rank(self),
+crates/core/src/scope.rs::rank: r => ensures r as int == crate::spec::approvals_rank(self),
+crates/core/src/scope.rs::is_no_looser_than: r => ensures r == crate::spec::confinement_within(self, than),
+crates/core/src/scope.rs::holds: r => ensures r == crate::spec::holds(have@, key@),
+crates/core/src/scope.rs::holds/loop: invariant at <= have.len(), forall|i: int| 0 <= i < at ==> (#[trigger] have@[i])@ != key@, decreases have.len() - at,
+crates/core/src/scope.rs::holds_all: r => ensures r == crate::spec::holds_all(have@, wanted@),
+crates/core/src/scope.rs::holds_all/loop: invariant at <= wanted.len(), forall|j: int| 0 <= j < at ==> crate::spec::holds(have@, (#[trigger] wanted@[j])@), decreases wanted.len() - at,
+crates/core/src/scope.rs::holds_all_between: r => ensures r == crate::spec::holds_all_between(first@, second@, wanted@),
+crates/core/src/scope.rs::holds_all_between/loop: invariant at <= wanted.len(), forall|j: int| 0 <= j < at ==> crate::spec::holds(first@, (#[trigger] wanted@[j])@) || crate::spec::holds(second@, wanted@[j]@), decreases wanted.len() - at,
+crates/core/src/scope.rs::flagged: r => ensures (r@.len() == 0) == (!flags.project && !flags.directories && !flags.trusted && !flags.distrusted && !flags.undecided && !flags.programs && !flags.exposed && !flags.mcp_servers && !flags.references && !flags.skill_directories && !flags.checkouts && !flags.language_servers && !flags.standing_answers && !flags.allow && !flags.ask && !flags.deny && !flags.confinement && !flags.approvals && !flags.reads_stay_in_workspace && !flags.auto_vetting && !flags.confined_lines),
+crates/core/src/scope.rs::covers: r => ensures (r is Covered) == crate::spec::scope_covered(*self, *current),
 crates/core/src/slot.rs::as_str: r => ensures r@ == crate::policy::spec_slot_name(*self),
 crates/core/src/trust.rs::weakest_decision: r => ensures r is None <==> matching@.len() == 0, r is Some ==> exists|i: int| 0 <= i < matching@.len() && #[trigger] matching@[i] == r->Some_0, r is Some ==> forall|i: int| 0 <= i < matching@.len() ==> crate::spec::grants_no_more(r->Some_0, #[trigger] matching@[i]),
 crates/core/src/trust.rs::weakest_decision/loop: invariant 1 <= at <= matching.len(), exists|i: int| 0 <= i < at && #[trigger] matching@[i] == weakest, forall|i: int| 0 <= i < at ==> crate::spec::grants_no_more(weakest, #[trigger] matching@[i]), decreases matching.len() - at,
@@ -139,21 +178,50 @@ crates/core/src/ask.rs::Series: assumes external_body
 crates/core/src/ask.rs::clone: assumes external
 crates/core/src/ask.rs::Answer: assumes external_body
 crates/core/src/ask.rs::clone: assumes external
+crates/core/src/capability.rs::ServerAlias: assumes external_body
+crates/core/src/capability.rs::clone: assumes external
+crates/core/src/capability.rs::ConnectorName: assumes external_body
+crates/core/src/capability.rs::clone: assumes external
+crates/core/src/capability.rs::clone: assumes external
+crates/core/src/capability.rs::clone: assumes external
+crates/core/src/capability.rs::same_capability: assumes external_body
+crates/core/src/capability.rs::copy_of_alias: assumes external_body
+crates/core/src/capability.rs::copy_of: assumes external_body
+crates/core/src/capability.rs::iter: assumes external
+crates/core/src/capability.rs::from_iter: assumes external
 crates/core/src/command.rs::discards: assumes external_body
 crates/core/src/command.rs::clone: assumes external
 crates/core/src/compare.rs::same_path_buf: assumes external_body
 crates/core/src/compare.rs::is_number: assumes external_body
+crates/core/src/credentials.rs::escape_at: assumes requires
 crates/core/src/policy.rs::Declassification: assumes external_body
 crates/core/src/policy.rs::authorise: assumes external_body
 crates/core/src/policy.rs::ExSink: assumes external_trait_specification
 crates/core/src/policy.rs::ExDenial: assumes external_type_specification
 crates/core/src/policy.rs::ExDenial: assumes external_body
+crates/core/src/policy.rs::no_observation: assumes external_body
+crates/core/src/policy.rs::no_label: assumes external_body
+crates/core/src/policy.rs::server_call: assumes external_body
 crates/core/src/policy.rs::describe_the_answers: assumes external_body
 crates/core/src/policy.rs::Policy: assumes external_body
 crates/core/src/policy.rs::precommitted: assumes external_body
 crates/core/src/policy.rs::precommitted_into: assumes external_body
 crates/core/src/policy.rs::deny: assumes external_body
 crates/core/src/policy.rs::allow: assumes external_body
+crates/core/src/policy.rs::capabilities_held: assumes external_body
+crates/core/src/policy.rs::refuse_ungranted: assumes external_body
+crates/core/src/policy.rs::allow_granted: assumes external_body
+crates/core/src/policy.rs::rules_for_host: assumes external_body
+crates/core/src/policy.rs::hold_to_the_host_of: assumes external_body
+crates/core/src/policy.rs::allow_fetched_body: assumes external_body
+crates/core/src/policy.rs::rules_for_search: assumes external_body
+crates/core/src/policy.rs::hold_search_to_the_host_of: assumes external_body
+crates/core/src/policy.rs::allow_search_results: assumes external_body
+crates/core/src/policy.rs::rules_for_mcp: assumes external_body
+crates/core/src/policy.rs::record_observed: assumes external_body
+crates/core/src/policy.rs::refuse_a_deny_rule: assumes external_body
+crates/core/src/policy.rs::rules_for_read: assumes external_body
+crates/core/src/policy.rs::rules_for_edit: assumes external_body
 crates/core/src/policy.rs::context_integrity: assumes external_body
 crates/core/src/policy.rs::absorb: assumes external_body
 crates/core/src/policy.rs::refuse_wrong_kind: assumes external_body

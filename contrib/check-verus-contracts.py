@@ -11,7 +11,9 @@ and needs no toolchain.
 It reads the assumptions the same way. `external_body` and `assume_specification` make Verus accept
 a contract without reading the body, `assume` and `admit` make it accept a fact without proof, and
 `external` makes it skip an item. Verus verifies a crate that has any of them, so each one is also a
-line in the ledger.
+line in the ledger. So is a `requires` in the contract of a function outside `verus!`: Verus checks
+it only at a caller it verifies, and a caller it does not read, in the crate or outside it, can
+break it while the crate verifies.
 
 The ledger holds one line per contract, `path::function: clauses`, where `clauses` is the contract
 with its whitespace collapsed, and one line per assumption, `path::item: assumes <what>`. `--write`
@@ -233,18 +235,29 @@ def assumptions(text):
     return [(item, what) for _, item, what in sorted(found)]
 
 
+REQUIRES = re.compile(r"^(?:\w+\s*=>\s*)?requires\b")
+
+
+def unchecked(found):
+    """The functions of `found` whose contract holds a `requires`, which only a verified caller
+    is checked against."""
+    return [function for function, clauses in found if REQUIRES.match(clauses)]
+
+
 def tree(root):
     """Every contract under `crates/`, then every assumption, as ledger lines."""
     lines, assumed = [], []
     for path in sorted((root / "crates").rglob("*.rs")):
         text = path.read_text(encoding="utf-8")
         relative = path.relative_to(root).as_posix()
-        if OPENING in text:
-            for function, clauses in contracts(relative, text):
-                lines.append(f"{relative}::{function}: {clauses}")
+        found = contracts(relative, text) if OPENING in text else []
+        for function, clauses in found:
+            lines.append(f"{relative}::{function}: {clauses}")
         if any(marker in text for marker in VERUS_MARKERS):
             for item, what in assumptions(text):
                 assumed.append(f"{relative}::{item}: assumes {what}")
+            for function in unchecked(found):
+                assumed.append(f"{relative}::{function}: assumes requires")
     return lines, assumed
 
 
@@ -347,6 +360,15 @@ def selftest():
     ]
     if got != want:
         failures.append(f"assumptions read {got!r}, not {want!r}")
+    required = [
+        ("owed", "r => requires a > 0, ensures r,"),
+        ("bare", "requires a > 0,"),
+        ("same", "r => ensures r == (a == b),"),
+        ("same/loop", "invariant i <= n,"),
+        ("named", "r => ensures r.requires_nothing,"),
+    ]
+    if unchecked(required) != ["owed", "bare"]:
+        failures.append(f"read {unchecked(required)!r} as the contracts holding a requires")
     once = ["x.rs::taken: assumes assume"]
     if len(list(problems(once * 2, once))) != 1:
         failures.append("a second assumption in the same function was not reported")

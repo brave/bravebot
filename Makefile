@@ -57,6 +57,7 @@ help:
 	@echo "  make check-spec            Check docs/specs against the implementation"
 	@echo "  make check-security        The security audit's deterministic half"
 	@echo "  make check-maintenance     Dead, repeated, deeply nested, coupled or untested code, as candidates for the maintenance skill"
+	@echo "  make check-profile         Time and size the tests, starts, build, binaries and scripts, and sample the slow tests and starts, as candidates for the profile skill [LANES=\"tests size functions\"]"
 	@echo "  make check-locales         Hold the catalogs to contrib/untranslated-messages.txt"
 	@echo "  make check-versions        Whether every file stating the version states the same one"
 	@echo "  make check-code-selectors  Whether each start states CodeSelectors and each variable that chooses code has its tests"
@@ -296,6 +297,18 @@ check-security:
 .PHONY: check-maintenance
 check-maintenance: check-maintenance-selftest
 	python3 agents/skills/maintenance/maintenance.py --mechanical-only --no-clippy
+
+# The measurement half of the profile skill. It runs the real programs in a scratch home directory:
+# the tests, a cold start of each built binary, a cold release build with cargo's timings, the size
+# of each release binary, the scripts the commit hook and CI run, and a perf sample of the slow tests
+# and starts, which ranks the functions in them. It builds the workspace in release mode, so it takes as long as that does, and nothing runs it in CI. A candidate is a
+# measurement over a stated threshold or well over docs/profile-reviewed, which holds the value of
+# an earlier run; it prints them and exits zero. A lane whose tool is missing says so and has no
+# candidates. Deciding which candidates are worth an issue needs a reading of the code: run the
+# profile skill for that half. LANES limits the run, as in `make check-profile LANES="tests size"`.
+.PHONY: check-profile
+check-profile: check-profile-selftest
+	python3 agents/skills/profile/profiling.py --measure-only $(LANES)
 
 # agents/unverified-clauses.txt, written from the specs. It is the list of clauses nothing pins, and
 # check-spec fails while it and the specs disagree, so this is what to run after giving a clause
@@ -589,6 +602,15 @@ check-verus-contracts-ledger:
 check-verus-contracts-selftest:
 	python3 contrib/check-verus-contracts.py --selftest
 
+# What a change weakens in the Verus ledger, the mutations and the survivors, against the merge base,
+# for a person to read. Reports and never fails; the proof-weakened workflow labels the pull request.
+.PHONY: check-verus-weakened check-verus-weakened-selftest
+check-verus-weakened:
+	python3 contrib/check-verus-weakened.py
+
+check-verus-weakened-selftest:
+	python3 contrib/check-verus-weakened.py --selftest
+
 # The minimum-toolchain job. Built in a container pinned to the declared MSRV, because
 # rustup is not a given here and a Homebrew or distro Rust cannot switch toolchains.
 # Catches a feature that only compiles on a newer toolchain than the release build has.
@@ -734,14 +756,14 @@ check-affected-containers:
 
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
-	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
+	check-maintenance-selftest check-profile-selftest check-session-review-selftest check-log-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
 	check-review-ready-selftest check-clean-branches-selftest check-verus-contracts-selftest \
-	check-verus-contracts-ledger
+	check-verus-contracts-ledger check-verus-weakened-selftest
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
-	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
+	check-maintenance-selftest check-profile-selftest check-session-review-selftest check-log-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
 	check-review-ready-selftest check-clean-branches-selftest check-verus-contracts-selftest \
-	check-verus-contracts-ledger
+	check-verus-contracts-ledger check-verus-weakened-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
@@ -773,8 +795,14 @@ check-pr-worktree-selftest:
 check-maintenance-selftest:
 	python3 agents/skills/maintenance/selftest.py
 
+check-profile-selftest:
+	python3 agents/skills/profile/selftest.py
+
 check-session-review-selftest:
 	python3 agents/skills/session-review/selftest.py
+
+check-log-review-selftest:
+	python3 agents/skills/log-review/selftest.py
 
 check-lint-increase-selftest:
 	python3 contrib/check-lint-increase.py --selftest

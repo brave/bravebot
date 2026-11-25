@@ -499,7 +499,7 @@ export function App(): React.JSX.Element {
    * mirrors it. While a turn runs: `asking` while it waits on an answer, `thinking` while the model
    * writes in a round with no tool being written, run or checked, and otherwise `working`. After
    * one: `failed` if the last thing the transcript got was an error, which is what a `turn.error`
-   * leaves at the end of it; otherwise looking at the reader. The turn's completion is not a state
+   * leaves at the end of it before any open-loops line; otherwise looking at the reader. The turn's completion is not a state
    * of its own: the face nods, or cheers, on leaving a running state. Only the shape of the turn is
    * read here, never what anything in it says.
    */
@@ -509,7 +509,7 @@ export function App(): React.JSX.Element {
       : thinking(live)
         ? 'thinking'
         : 'working'
-    : live?.entries.at(-1)?.kind === 'error'
+    : live && t.lastTurnEntry(live.entries)?.kind === 'error'
       ? 'failed'
       : 'open'
 

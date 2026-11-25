@@ -12,7 +12,7 @@ description:
   Triggers on: /implement-issues <issues or query>, work through this label, one pull request for
   these issues, implement all of these.'
 argument-hint: '<issue numbers, links or search queries, separated by commas, or the batch branch of an unfinished run, or the number of a pull request this skill opened>, then optionally a line that starts with Notes:'
-allowed-tools: Bash(git *), Bash(GIT_SEQUENCE_EDITOR=true git rebase *), Bash(gh api -X GET search/issues *), Bash(gh issue view *), Bash(gh pr view *), Bash(gh pr diff *), Bash(gh pr edit *), Bash(make *), Bash(cargo *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo *), Bash(python3 contrib/*), Bash(python3 -I */scripts/check-untranslated.py *), Bash(python3 -I */scripts/check-pr-body.py *), Bash(echo *), Read, Edit, Write
+allowed-tools: Bash(git *), Bash(GIT_SEQUENCE_EDITOR=true git rebase *), Bash(gh api -X GET search/issues *), Bash(gh issue view *), Bash(gh pr view *), Bash(gh pr diff *), Bash(gh pr edit *), Bash(echo *), Read, Edit, Write
 ---
 
 # Implement a list of issues in one pull request
@@ -440,7 +440,7 @@ while the work waits.
 
    Docker gates run only when an item is about another platform: the issue names Linux, Windows or
    an architecture, or the diff changes code gated to one (`cfg(windows)`, the Linux backend, the
-   sandbox). Run the ones `python3 contrib/affected-checks.py --containers` names, together, after
+   sandbox). Run the ones `python3 <clone>/contrib/affected-checks.py --containers` names, together, after
    the host gates and never beside them, since each copies the worktree into its container.
    Otherwise write `Docker gates skipped: host-only` in the test plan.
 7. While they run, review the whole diff. Hand it to read-only subagents, one per group plus one
@@ -472,8 +472,8 @@ while the work waits.
     says. Say in the test plan that the gates ran on `<sha>`, that the branch was then rebased onto
     `<sha>` and pushed without them, and that CI is the check of the rebased tree.
 11. For a change under `crates/tui/`, capture the screen it produces: drive the client with
-    `python3 contrib/drive_tui.py --raw` and replay the capture with
-    `python3 contrib/terminal-screenshot.py --strict` at the same `--cols` and `--rows`. Paste
+    `python3 <clone>/contrib/drive_tui.py --raw` and replay the capture with
+    `python3 <clone>/contrib/terminal-screenshot.py --strict` at the same `--cols` and `--rows`. Paste
     screens for `ui/` changes too. Never write a screen from the code.
 12. Run every item's reproduction from the ledger on this tree and compare it with what should
     happen. An item that still fails goes back to step 4, and the gates its fix reaches run again.

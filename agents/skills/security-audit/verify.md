@@ -127,7 +127,7 @@ Write JSON to `{results_file}` and nothing else. Do not edit any file in the tre
     "failure": "input or state, the path through the code, the outcome, as a walk somebody can follow",
     "gain": "what this buys an attacker who owns the bytes",
     "fix": "what should happen instead",
-    "area": "trust | sandbox | tools | mcp | browser | connectors | turns | background | delegation | plugins | backends | interface | desktop | acp | remote | cli | release",
+    "area": "trust | sandbox | tools | mcp | browser | connectors | turns | background | delegation | plugins | backends | interface | desktop | acp | remote | cli | release | caching",
     "clause": "the clause id where one is involved, else omit"
   }},
   "existing_issue": "the number, where question 5 found one, else omit",

@@ -233,6 +233,13 @@ pub struct TurnSnapshot {
     pub title: String,
     /// Whether the session had already been written to disk before this turn.
     pub was_wrote: bool,
+    /// What the session had done before this turn (GROUND-1), so undoing the turn takes its writes
+    /// and commands out of the open loops (OPEN-1). `None` for a point read back from a record
+    /// written before points kept it, which a rewind leaves as the session has it.
+    pub work: Option<bravebot_agent::Work>,
+    /// The files the session had written before this turn, each once, in the order first written.
+    /// `None` as for [`TurnSnapshot::work`].
+    pub written: Option<Vec<PathBuf>>,
 }
 
 /// How many turns back a rewind may reach.
@@ -1157,6 +1164,13 @@ pub struct StoredRewind {
     /// What the files the turn wrote to held before it wrote to them.
     #[serde(default)]
     pub wrote_over: Vec<StoredBackup>,
+    /// What the session had done before the turn. `None` in a record written before points kept
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work: Option<bravebot_agent::Work>,
+    /// The files the session had written before the turn, written the way [`Record::written`] is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub written: Option<Vec<StoredPath>>,
 }
 
 /// Required restorations, recorded independently of the backup payloads.
@@ -1309,6 +1323,11 @@ impl StoredRewind {
             programs: stored_programs(&snapshot.programs, project),
             title: snapshot.title.clone(),
             wrote: snapshot.was_wrote,
+            work: snapshot.work,
+            written: snapshot
+                .written
+                .as_ref()
+                .map(|written| written.iter().map(|path| StoredPath::of(path)).collect()),
             prompt: point.prompt.clone(),
             wrote_over: point
                 .backups
@@ -1425,6 +1444,10 @@ impl StoredRewind {
                 transcript_len: 0,
                 title: self.title,
                 was_wrote: self.wrote,
+                work: self.work,
+                written: self
+                    .written
+                    .map(|written| written.iter().filter_map(StoredPath::to_path).collect()),
             },
             backups: wrote_over
                 .into_iter()
@@ -8202,6 +8225,8 @@ mod tests {
             wrote: true,
             prompt: "write the notes".to_string(),
             wrote_over,
+            work: None,
+            written: None,
         }
     }
 

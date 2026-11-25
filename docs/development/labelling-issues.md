@@ -164,7 +164,8 @@ that holds it, so a plugin issue is `area/plugins` and not `area/interface`, and
 | `area/background` | background sessions: attach, deny-instead-of-prompting, jobs, per-session checkouts, scheduled runs |
 | `area/delegation` | processors, delegates, skills, hooks, `/loop` and `/goal` |
 | `area/plugins` | plugins and marketplaces: install, update, enable, and what a plugin bundles |
-| `area/backends` | routing, the roster, bedrock, aichat, effort, prompt caching, request signing |
+| `area/backends` | routing, the roster, bedrock, aichat, effort, request signing |
+| `area/caching` | work that involves caching: prompt caching, and any other cache of a response, a result or a file |
 | `area/skus` | premium credentials and the store |
 | `area/interface` | terminal input, vi mode, the scroller, the theme, the transcript, commands |
 | `area/desktop` | the desktop application and the mobile app |
@@ -175,6 +176,11 @@ that holds it, so a plugin issue is `area/plugins` and not `area/interface`, and
 | `area/i18n` | locales, plural rules, the message catalogue |
 
 `area/backends/chatgpt` is a narrower label for the ChatGPT sign-in and goes with `area/backends`.
+
+`area/caching` goes with the area the cache lives in where there is one: an issue about the prompt cache of a
+provider carries `area/caching` and `area/backends`. An issue about the build cache under
+`docs/development/build-cache.md` is `infrastructure`, not `area/caching`, because that cache is part of
+the build and not of the product.
 
 `infrastructure` is the one that is not an `area`, because the build and the tracker
 are not part of the product and an issue about a workflow belongs to whoever owns the pipeline.
@@ -374,6 +380,13 @@ gh label create session-analysis --repo brave/bravebot --color 8cad49 \
   --description "Found by reading a recorded bravebot session"
 ```
 
+The [log-review skill](../../agents/skills/log-review/SKILL.md), which files the defects in bravebot
+that recur across its diagnostic log files or show in the retry or start behaviour itself, applies
+`bug` or `enhancement`, an `area` where one is clear, and no axis. It applies no `session-analysis`
+label, because the finding comes from a log and not from a session, and it uses no new label. It
+never files a problem that touches the guarantee, and an issue it files names no host and quotes no
+line of a log.
+
 Issues labelled `BraveBot-Researcher` are filed from the BraveBot researcher, a tool kept outside
 this repository that reads papers, release notes and other tools' documentation for capabilities
 bravebot lacks. Before it files, it checks each finding against main the way the
@@ -405,3 +418,9 @@ duplication, files or functions past a length, and the other smells its lanes li
 where a reviewer found a defect, an `area` or `infrastructure` where one is clear, and no axis.
 It assigns every issue to netzenbot. If a required label is missing, the poster refuses and prints
 a creation command for a person. Do not create or use a `maintenance` label for these findings.
+
+The [profile skill](../../agents/skills/profile/SKILL.md), which files what a measurement shows to be
+slow or large (a test, a start, a compile unit, a release binary, a script), applies `enhancement`, or
+`bug` where the measurement shows a defect such as a test that waits out a timeout on every run, an
+`area` or `infrastructure` where one is clear (`infrastructure` for a slow script), and no axis. It
+assigns every issue to netzenbot. Do not create or use a `performance` label for these findings.

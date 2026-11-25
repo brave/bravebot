@@ -515,6 +515,9 @@ what that is worth and where it stops.
 `verified-by: bravebot_core::credentials::a_percent_escape_in_lower_or_upper_case_hex_is_read_as_the_byte_it_names`
 `verified-by: bravebot_core::credentials::a_decoding_that_is_not_text_or_holds_a_control_byte_is_dropped`
 `verified-by: bravebot_core::credentials::a_run_or_an_escape_cut_short_is_read_as_far_as_it_goes_and_never_past_the_text`
+`verified-by: bravebot_core::credentials::a_key_written_as_hex_twice_encoded_or_split_is_not_found`
+`verified-by: bravebot_agent::turn::a_credential_a_program_copies_without_the_line_naming_the_path_is_not_scanned`
+`verified-by: bravebot_agent::commit_message::a_staged_diff_holding_a_credential_is_not_sent`
 `verified-by: bravebot_agent::turn::a_commit_message_carrying_a_credential_stops_the_line_and_commits_nothing`
 `verified-by: bravebot_agent::shell::a_line_the_person_typed_is_run_though_it_writes_what_looks_like_a_credential`
 `verified-by: bravebot_agent::workspace::a_destination_that_is_not_there_has_no_text_to_scan`
@@ -805,9 +808,13 @@ owns the tree and is the one who can say which it is.
 <a id="CRED-16"></a>
 ### CRED-16: what a turn writes to the tree is scanned before the change is recorded as complete
 
-The tree diff a turn produces is scanned with the same layers and the same finding shape as the
-read scan, under CRED-18 and CRED-19. A finding in that diff is attributed to the turn, is a
-violation of CRED-11 or CRED-13, and the value does not remain in the tree.
+What a turn writes is scanned with the same layers and the same finding shape as the read scan,
+under CRED-18 and CRED-19. The scan runs at three places: the body a write tool is about to write,
+the command line of a `run` before it runs, and what a line's redirections left at each destination
+after it ran. A finding there is attributed to the turn, is a violation of CRED-11 or CRED-13, and
+the value does not remain in the tree. The diff `/commit-message` reads is scanned too, and a
+finding stops the draft. A scan of the whole tree diff a turn produced is not built; Known costs
+says what it needs.
 
 **Why.** CRED-15 scans what leaves the tree for a model, so without this the one thing this system
 causes is the only thing never checked. The two are the two directions a credential travels: that
@@ -881,6 +888,9 @@ requires of a finding however it is answered.
 `verified-by: bravebot_core::credentials::the_bare_sk_form_ends_at_a_hyphen_or_an_underscore`
 `verified-by: bravebot_core::credentials::a_short_sk_word_and_an_unmarked_run_are_not_an_openai_key`
 `verified-by: bravebot_core::credentials::one_key_in_a_json_field_is_one_finding`
+`verified-by: bravebot_agent::commit_message::a_staged_diff_holding_a_credential_is_not_sent`
+`verified-by: bravebot_agent::commit_message::a_diff_holding_a_credential_is_not_sent`
+`verified-by: bravebot_agent::turn::a_credential_a_program_copies_without_the_line_naming_the_path_is_not_scanned`
 `verified-by: bravebot_core::credentials::a_provider_key_standing_alone_is_one_finding_and_not_two`
 `verified-by: bravebot_core::credentials::a_rare_token_with_a_document_around_it_is_not_a_whole_file`
 `verified-by: bravebot_core::credentials::a_value_standing_as_a_whole_file_is_a_question_and_not_a_rule`
@@ -1325,7 +1335,7 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   beyond the working tree is off by default, and a credential nobody has a pattern for is a
   credential the scan does not find. A clean result means nothing was matched.
 
-- **The diff scan inherits those blind spots.** CRED-16 catches what a pattern matches. A credential
+- **The write scan inherits those blind spots.** CRED-16 catches what a pattern matches. A credential
   no layer recognises is written, not found, and recorded as complete. It fails toward silence in
   the one place this system is accountable for.
 
@@ -1403,13 +1413,22 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   it. What would close this is a scan of the whole tree diff a turn produced, which needs a record
   of what the tree held before it, which is CRED-22's baseline.
 
+  What is scanned of a tree diff today is the diff `/commit-message` reads, as a range or as what
+  is staged, which stops the draft on a finding. A test pins both, and a test pins that `cp .env
+  .env.bak` leaves the copy in the tree unscanned. A scan of every path a turn changed makes that
+  last test fail, and the entry changes in the same commit.
+
 - **Only two derived forms of a credential are read.** The scan decodes a line once, as percent
   escapes and as each run of base64 characters of at least 20 that decodes to text, and reads the
   result with the provider-shape and connection-string layers. A Basic header over a key and a
   percent-escaped key are found. An encoding of an encoding, hex, a hash, a key split across lines
   or one the program builds when it runs is not, and neither is a decoded value only the
   assignment or whole-file layers would recognise. CRED-11's words "anything derived from one that
-  would authenticate in its place" are met for those two forms and no others.
+  would authenticate in its place" are met for those two forms and no others. A test pins the
+  limit: a key written as hex, as base64 of base64, as a percent escape of a percent escape, or
+  split across two lines is not found, and a change that finds one fails it. Decoding further was
+  not built: each pass multiplies what the scan reads and the false findings with it, and hex and
+  split forms have no marker that says a run is an encoding of a key.
 
 - **A destination past the scan's budget is passed over.** What a line left is read back for the
   scan, and what it held beforehand is kept so a refused destination can be put back; both are

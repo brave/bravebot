@@ -764,7 +764,12 @@ mod socket {
         };
         let _ = std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600));
 
-        let shared = Shared::new(roster, job, first);
+        // The hour, unless a test build with the `test-hosts` seam names a shorter wait so a test
+        // can run this process to its idle end (BG-13). Nothing else changes the wait.
+        let shared = match bravebot_config::background_idle::shortened_for_a_test() {
+            Some(idle_after) => Shared::ending_when_idle_for(roster, job, first, idle_after),
+            None => Shared::new(roster, job, first),
+        };
         let serving = Arc::clone(&shared);
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {

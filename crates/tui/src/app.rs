@@ -19727,8 +19727,58 @@ mod tests {
             "no key held, whatever the turn reported"
         );
 
-        // What `fold_outcome` hands on for a turn whose requests carried the key.
-        record_what_the_turn_ran_on(&mut session, asked(), "test-model", true, true);
+        // A second turn, folded in as the terminal folds one, whose requests carried the key. What
+        // the agent sets in `premium` is pinned by the agent's own test; this pins what the
+        // terminal does with it, so a fold that records a key as never sent is caught here.
+        let (mut config_two, _requests_two, server_two) =
+            undo_tests::endpoint::endpoint(vec![undo_tests::endpoint::answer()], None);
+        config_two.premium_key = config.premium_key.clone();
+        config_two.premium_endpoint = config.premium_endpoint.clone();
+        session.paste("look it up again");
+        session.submit().unwrap();
+        let mut sink_two = Trail::new();
+        let completed_two = turn::resume(
+            &config_two,
+            &Egress::new(),
+            &workspace,
+            &Task::new("look it up again"),
+            &mut Conversation::new(),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink_two,
+            TrustStore::new(&root),
+            TrustedPrograms::new(),
+            None,
+            &Cancel::new(),
+        );
+        server_two.join().expect("the model finished");
+        let mut outcome_two = completed_two.outcome;
+        if let Ok(done) = outcome_two.as_mut() {
+            done.premium = true;
+        }
+        fold_outcome(
+            &mut session,
+            outcome_two,
+            sink_two,
+            Carried {
+                trust: TrustStore::new(&root),
+                programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
+            },
+            Occupied {
+                budget: 100_000,
+                guessed: false,
+                last_request_tokens: 0,
+            },
+            asked(),
+            Line {
+                text: "look it up again",
+                addressed: None,
+                offered_a_later_look: false,
+            },
+            &workspace,
+        );
         assert_eq!(
             tier(&session, &config),
             said(t!(status_premium_in_use)),
@@ -43563,7 +43613,23 @@ mod tests {
         let run_settings = RunSettings::from_settings(&settings);
         let mut servers = crate::state::Servers::default();
 
-        for typed in ["ghost-7f3c91e2", "ghost-\u{1b}[31m7f3c91e2"] {
+        // The id of the session being run is refused too, in its own words and without being
+        // repeated, whichever of the two refusals it is.
+        let typed_ids = [
+            (
+                "ghost-7f3c91e2".to_string(),
+                "no session with that id in this directory",
+            ),
+            (
+                "ghost-\u{1b}[31m7f3c91e2".to_string(),
+                "no session with that id in this directory",
+            ),
+            (current_id.clone(), "that is the session already open"),
+        ];
+        for (typed, expected) in typed_ids
+            .iter()
+            .map(|(typed, said)| (typed.as_str(), *said))
+        {
             let mut switch = None;
             let said_before = session.transcript.len();
 
@@ -43588,16 +43654,11 @@ mod tests {
             );
             let said = &session.transcript.last().expect("a note").text;
             assert_eq!(
-                said,
-                &crate::resume::Refusal::NoSuchSession.note(),
-                "the refusal for a directory with no other session said something else"
-            );
-            assert_eq!(
-                said, "no session with that id in this directory",
-                "the refusal is not the one line CMD-14 words"
+                said, expected,
+                "the refusal for {typed:?} is not the line CMD-14 words"
             );
             assert!(
-                !said.contains("7f3c91e2") && !said.contains('\u{1b}'),
+                !said.contains(typed) && !said.contains('\u{1b}'),
                 "the refusal repeated the id typed: {said:?}"
             );
         }
@@ -43784,7 +43845,10 @@ mod tests {
     /// made with `/style` in the session before is not stored, so it does not come back.
     ///
     /// Rejects: a resume that skips the style the settings name, one that restores the earlier
-    /// session's pick over it, and one that stores the pick in the record.
+    /// session's pick over it, and one that stores the pick in the record. The switch the next
+    /// session begins from is the one `Held::resume` leaves, from a session that holds a pick, so a
+    /// resume that carries the pick across in what it hands on is caught as well as a start that
+    /// reads it from the record.
     #[test]
     #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_resumed_session_starts_in_the_style_the_settings_name_and_not_the_earlier_pick() {
@@ -43793,15 +43857,35 @@ mod tests {
         }
         let root = crate::test_profile::project("bravebot-app-resume-style");
         std::fs::create_dir_all(&root).expect("create");
-        let (workspace, mut session, stored, _conversation, _answers) = a_session_to_branch(&root);
+        let (_, _, earlier, _, _) = a_session_to_branch(&root);
+        let earlier_id = earlier.id().to_string();
+        drop(earlier);
+        let (mut workspace, mut session, mut stored, mut conversation, mut answers) =
+            a_session_to_branch(&root);
         set_style(&mut session, &workspace, "concise");
         assert_eq!(
             session.style().map(|style| style.name.as_ref()),
             Some("concise"),
-            "the earlier session did not pick the style"
+            "the session left did not pick the style"
         );
-        let id = stored.id().to_string();
-        drop(stored);
+        let mut scratch = None;
+        let settings = bravebot_config::Settings::default();
+        let run_settings = RunSettings::from_settings(&settings);
+        let mut servers = crate::state::Servers::default();
+        let mut switch = None;
+        let ended = Held {
+            session: &mut session,
+            conversation: &mut conversation,
+            stored: &mut stored,
+            answers: &mut answers,
+            workspace: &mut workspace,
+            scratch: &mut scratch,
+            settings: &settings,
+            run_settings: &run_settings,
+        }
+        .resume(&mut servers, &mut switch, &earlier_id);
+        assert!(matches!(ended, Some(Ended::Left(Some(_)))), "{ended:?}");
+        let switch = switch.expect("no record was left for the next session");
         let file = bravebot_agent::home::directory()
             .expect("a state directory")
             .join("settings.json");
@@ -43816,11 +43900,10 @@ mod tests {
                     std::fs::remove_file(&file).ok();
                 }
             }
-            let record = bravebot_session::sessions::load(&root, &id).expect("the record");
             let begun = begun_from_a_switch(Switch {
-                record: Box::new(record),
-                workspace: workspace.clone(),
-                sandbox: crate::sandbox_command::Sandboxed::at_start(),
+                record: switch.record.clone(),
+                workspace: switch.workspace.clone(),
+                sandbox: switch.sandbox.clone(),
             });
 
             assert_eq!(
@@ -46104,6 +46187,8 @@ mod tests {
             transcript_len: turns,
             title: "a session".to_string(),
             was_wrote: true,
+            work: None,
+            written: None,
         }
     }
 

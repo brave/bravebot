@@ -42,7 +42,7 @@
     "drive:sandbox-mode": "pnpm run bridge && electron-vite build && node scripts/drive-sandbox-mode.mjs",
     "drive:spend-limit": "pnpm run bridge && electron-vite build && node scripts/drive-spend-limit.mjs",
     "drive:variant-picker": "pnpm run bridge && electron-vite build && node scripts/drive-variant-picker.mjs",
-    "drive:remembered-trust":"pnpm run bridge && electron-vite build && node scripts/drive-remembered-trust.mjs",
+    "drive:remembered-trust": "pnpm run bridge && electron-vite build && node scripts/drive-remembered-trust.mjs",
     "drive:run": "pnpm run bridge && electron-vite build && node scripts/drive-run.mjs",
     "drive:ask": "pnpm run bridge && electron-vite build && node scripts/drive-ask.mjs",
     "drive:manifest": "pnpm run bridge && electron-vite build && node scripts/drive-manifest.mjs",

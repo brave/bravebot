@@ -1,0 +1,13 @@
+# Measurements the profile skill has taken, one per line, sorted by key:
+#
+#   <key> <value> <date> <commit> <verdict> <reason>
+#
+# <value> is seconds, or bytes for a size. A run compares what it measures with this value and
+# reports a regression where the new one is higher by more than the skill's stated margin.
+# measured   nobody read it; the value is the baseline for the next run
+# keep       a reviewer read it and the code should stay as it is
+# optimize   a reviewer read it and a draft was written, which a person posted or declined
+#
+# A measurement comes from one machine, so a regression is a reason to measure again before it is
+# a reason to change code. In <key>, `%`, whitespace are written as `%XX`.
+# The profile skill writes this file: agents/skills/profile/SKILL.md.

@@ -1059,6 +1059,48 @@ mod tests {
     /// what is at a path, as against the ones every grant carries.
     const CHANGES_WHAT_IS_THERE: u32 = 0x0000_0002 | 0x0000_0004 | 0x0000_0010;
 
+    /// SANDBOX-14, Windows leg: this backend withholds nothing beneath a write row. A policy that
+    /// writes is applied as the policy that writes and lifts the `.git` hold-back is, with the same
+    /// grants (one entry for each row and nothing for a protected name beneath it) and the same
+    /// absence of a refusal, so a `.git`, `.husky`, `.bravebot` or `.gitmodules` beneath a row is
+    /// written as any other name, which is what the clause says of this backend. It decides what
+    /// the backend writes and refuses before a process exists, so it runs on every platform.
+    ///
+    /// The regression it rejects: the hold-back carried over to this backend as an entry that
+    /// refuses a protected name beneath a row, or as a refusal of a policy that writes and has not
+    /// lifted it. Either makes the clause's "withholds nothing of the kind" and the planner's
+    /// description of the platform untrue, and a hook installer fails here as it does on macOS.
+    #[test]
+    fn a_write_row_is_applied_whole_and_withholds_no_protected_name() {
+        let row = PathBuf::from(if cfg!(windows) {
+            r"C:\work-row"
+        } else {
+            "/work-row"
+        });
+        let writes = a_policy_this_backend_applies().allow_write(&row);
+        let lifted = writes.clone().allow_git_directory_writes();
+        assert!(lifted.git_directories_writable && !writes.git_directories_writable);
+
+        assert!(
+            refusal_for(&writes).is_none(),
+            "a policy that writes and has not lifted the hold-back was refused"
+        );
+        assert!(refusal_for(&lifted).is_none());
+        assert_eq!(
+            grants_for(&writes),
+            grants_for(&lifted),
+            "the grants depend on whether the hold-back is lifted"
+        );
+        assert_eq!(
+            grants_for(&writes),
+            [
+                (row, grant_for_writing()),
+                (PathBuf::from("/workspace"), grant_for_reading())
+            ],
+            "a grant was written for anything but the paths the policy names"
+        );
+    }
+
     /// A read grant is what a policy said it was. An entry carrying the write rights
     /// would let a program the policy meant to read a directory rewrite it, and nothing
     /// about the policy would say so.

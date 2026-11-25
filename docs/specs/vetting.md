@@ -372,6 +372,7 @@ in is `inconclusive`, which claims nothing.
 `verified-by: bravebot_agent::turn::content_a_person_reads_after_a_check_reaches_the_planner`
 `verified-by: bravebot_agent::turn::bypassing_makes_no_check_before_promoting_content`
 `verified-by: bravebot_agent::turn::bypassing_fills_in_a_verdict_that_claims_nothing`
+`verified-by: bravebot_agent::turn::bypassing_fills_in_a_verdict_that_claims_nothing_for_command_output`
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_content_a_check_objected_to`
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_a_check_objected_to`
 `verified-by: bravebot_core::policy::a_check_before_a_vouch_carries_the_file_and_claims_no_expectation`

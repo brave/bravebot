@@ -691,13 +691,15 @@ impl Definition {
     /// this run cannot hold either, whatever its definition named.
     pub fn held_out_of(&self, parent: &CapabilitySet) -> CapabilitySet {
         let wanted = self.capabilities();
-        parent
+        let asked: CapabilitySet = parent
             .iter()
             .filter(|capability| match capability {
                 Capability::McpCall(alias) => self.holds_server(alias),
                 other => wanted.contains(other),
             })
-            .collect()
+            .collect();
+        // Whatever the definition asked for, what it holds is what the parent holds as well.
+        asked.within(parent)
     }
 
     /// The servers it named where its kind calls none, for the trail to say what was dropped.

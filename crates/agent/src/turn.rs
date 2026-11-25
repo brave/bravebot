@@ -6264,9 +6264,11 @@ mod tests {
         );
     }
 
-    /// WATCH-13 and DELEGATE-8 for a report the planner was handed a reference to. No turn reaches
-    /// this arm today: a delegate starts from a trusted conversation and nothing it does lowers
-    /// that, so the arm is given a `Presentation::Quarantined` directly. The planner is told the
+    /// WATCH-13 and DELEGATE-8 for a report the planner was handed a reference to, at the function
+    /// `collect_delegates` calls. The whole turn reaches this arm through a delegate started from a
+    /// context that has met something untrusted (the integration test
+    /// `a_delegate_whose_own_context_met_something_untrusted_reports_a_kept_result_through_a_turn`),
+    /// so the arm is given a `Presentation::Quarantined` directly here. The planner is told the
     /// reference and none of the words. The person is given the words as a preview, kept from the
     /// planner, with the label the reference carries and the delegate it came from. A report the
     /// planner was given in words is the control: said, unmarked, and told in full.

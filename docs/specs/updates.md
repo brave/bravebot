@@ -8,6 +8,7 @@ governs:
   - crates/tui/src/app/opening.rs
   - crates/config/src/install.rs
   - npm/bin/bravebot.js
+  - npm/tests/launcher.test.mjs
   - install.sh
   - install.ps1
   - crates/ui-bridge/src/update_status.rs
@@ -87,7 +88,7 @@ never a response, and what they decide is which of two literals is named, or nei
 `verified-by: bravebot_config::install::a_binary_elsewhere_is_not_the_package_on_a_machine_that_has_the_package`
 `verified-by: bravebot_config::install::a_dpkg_listing_decides_before_the_rpm_database`
 `verified-by: bravebot_config::install::a_system_package_wins_over_a_script_record_naming_the_same_path`
-`verified-by: by-construction (npm/tests/launcher.test.mjs runs the launcher and checks that it tells the binary npm started it)`
+`verified-by: by-construction (the npm launcher sets BRAVEBOT_INSTALLED_VIA=npm for the binary it starts, and npm/tests/launcher.test.mjs runs that launcher against a stand-in binary and fails when the binary is not told npm started it; make check-npm runs it, and CI runs make check-npm whenever a path under npm/ changes)`
 
 <a id="UPDATE-3"></a>
 ### UPDATE-3: the command offered updates the copy that is running

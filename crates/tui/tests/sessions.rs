@@ -2793,6 +2793,8 @@ fn a_point_before_turn_two(
         transcript_len: 2,
         title: "add a line to notes.md".to_string(),
         was_wrote: true,
+        work: None,
+        written: None,
     }
 }
 
@@ -3233,6 +3235,8 @@ mod preserved_history {
                 transcript_len: session.transcript.len(),
                 title: "history".into(),
                 was_wrote: true,
+                work: None,
+                written: None,
             };
             submit(&mut session, prompt);
             session.rewind.open(snapshot, prompt.into());
@@ -4006,6 +4010,8 @@ mod preserved_history {
             transcript_len: session.transcript.len(),
             title: "history".into(),
             was_wrote: true,
+            work: None,
+            written: None,
         };
         submit(&mut session, "worker failed");
         session.rewind.open(point, "worker failed".into());
@@ -4031,6 +4037,8 @@ mod preserved_history {
             transcript_len: session.transcript.len(),
             title: "history".into(),
             was_wrote: true,
+            work: None,
+            written: None,
         };
         submit(&mut session, "after reset");
         session.rewind.open(point, "after reset".into());

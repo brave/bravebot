@@ -4,8 +4,8 @@ description:
   'Review a HackerOne report against the code and the tracker, decide whether it should be
   awarded, and when it is a valid problem nobody knew about, sweep the tree for the same class of
   defect and draft an issue for the report and for every other site that fails, assigned to the
-  configured git author, filing them once the user agrees. Known, fixed, already-posted, and
-  unreleased problems are not awarded. Triggers on:
+  configured git author, filing them once the user agrees. Technical validity, bounty
+  eligibility, and engineering disposition are separate outcomes. Triggers on:
   /hackerone-triage <paste>, HackerOne report, H1 report, bug bounty report, should this be
   awarded, review this bounty submission.'
 argument-hint: '<paste>'
@@ -22,12 +22,12 @@ $ARGUMENTS
 `<paste>` is this skill's argument: the report as the user pasted it. Where the harness does not
 substitute `$ARGUMENTS`, it is the report text the user gave with the request.
 
-Review it to determine whether it should be awarded. **A problem that is already known about,
-already fixed, already posted on GitHub, or in no release is not awarded.** A valid problem that
-needs fixing and is none of those gets an issue, assigned to the configured git author, and is
-awarded. A valid problem that only the unreleased `main` holds gets the same issues and is not
-awarded. The issue is drafted and shown to the user, and nothing is posted to GitHub until they
-agree. Either way, tell the user the verdict.
+Review it on three separate axes: **technical validity**, **bounty eligibility**, and
+**engineering disposition**. A technically valid report may be already known, fixed, duplicated,
+or confined to unreleased code. None of those facts makes the vulnerability a false positive.
+Use the rules below to recommend an award, but leave the bounty decision to the human analyst
+and applicable program policy. A confirmed, actionable defect gets draft issues as described
+below; nothing is posted to GitHub until the user explicitly approves the exact publication.
 
 ---
 
@@ -108,8 +108,11 @@ changed it and check it is on the branch:
 git merge-base --is-ancestor <sha> <remote>/main
 ```
 
-A fix that landed before the report was submitted means the report is against old code. Not
-awarded.
+Record whether the fix landed before or after the report was submitted, and whether an
+affected released build existed at submission time. A fix before submission may make the report
+ineligible under the program rules. A fix after submission does not invalidate the original
+finding or by itself decide its bounty eligibility. For fixed findings, inspect the
+pre-fix code or release before assigning the technical verdict.
 
 ## Step 4: is it already known?
 
@@ -141,15 +144,33 @@ Read the code path the report names on `<remote>/main` and confirm, with a file 
 - The consequence is the one claimed. A crash is not a trust-boundary break, and a trust-boundary
   break is not a crash.
 
+Give one independent **technical validity** verdict, using the same vocabulary as Hai triage:
+
+- `CONFIRMED_VALID`: direct reproduction or decisive code evidence demonstrates the security
+  boundary violation in the assessed path. State whether the confirmation is static or executed.
+- `LIKELY_VALID`: a credible vulnerability with supporting evidence, but a material premise or
+  code path remains unverified.
+- `INCONCLUSIVE`: available evidence cannot establish or refute the vulnerability.
+- `LIKELY_FALSE_POSITIVE`: specific counter-evidence undermines the claim, but does not settle it.
+- `CONFIRMED_FALSE_POSITIVE`: affirmative evidence refutes the claimed security violation in the
+  assessed context, with the relevant file, line, test or spec clause.
+
+A PoC that was not run or did not reproduce is not automatically a false positive. Distinguish
+lack of evidence from evidence of absence. State the scope of the verdict and any material gaps.
+
 Size the finding with the `severity` table in
 [labelling-issues.md](../../../docs/development/labelling-issues.md): `high` where the rule does not
 hold on this path, `medium` where a precondition the attacker does not control is needed, `low`
-where nothing fails today.
+where nothing fails today. Base severity on demonstrated impact and necessary attacker
+preconditions, not on the researcher's proposed score. Explain any difference from a supplied
+Hai assessment without assuming either assessment is authoritative or required.
 
 ## Step 6: is it in a released build?
 
-An award needs the reported code to be in a release. Code that only `<remote>/main` holds has
-reached nobody who runs bravebot, and is fixed before it does. A release is a `v<version>` tag that
+Check whether the reported code has shipped in a published release. Record the affected
+release (or its absence) as one input to bounty eligibility in step 7; unreleased code does
+not, by itself, determine whether an award is recommended. 
+A release is a `v<version>` tag that
 `make github-release` pushes and GitHub lists as a published release
 ([releasing.md](../../../docs/development/releasing.md)). What the report says about the affected
 version is a claim to check, like the rest of it.
@@ -171,19 +192,28 @@ and the commit that came after it.
 A tag whose binaries and npm package are not published yet is a release the process has named and
 not shipped. Say which it is and leave the award to the user.
 
-## Step 7: the verdict
+## Step 7: engineering disposition and bounty recommendation
 
-| Verdict | When | Awarded | Action |
-|---|---|---|---|
-| **DUPLICATE** | Already posted on GitHub before the report | No | Cite the issue or pull request |
-| **FIXED** | Does not happen on `<remote>/main` | No | Cite the commit |
-| **KNOWN** | Written down as a known cost or a deliberate behaviour | No | Cite the document and section |
-| **INVALID** | Does not reproduce, misreads the rule, or needs a precondition that is the attacker's goal already | No | Say which claim fails, with a file and line |
-| **UNRELEASED** | Would be VALID, and no release holds the code (step 6) | No | Cite the commit and the newest release, then sweep, draft and file as for VALID, since the defect is fixed before the next release |
-| **VALID** | Reproduces on `<remote>/main`, is in a release, needs fixing, and none of the above | Yes | Sweep the class, draft the issues, ask, then file them (step 8) |
+Report **three separate outputs**: the technical verdict from step 5, an engineering disposition
+from this table, and an award recommendation (`yes`, `no`, or `your call`). The engineering status
+must not overwrite the technical verdict. Check the program policy and HackerOne history when
+accessible; a GitHub issue alone cannot establish whether HackerOne considers the report a
+duplicate. When unavailable, say so and leave the award to the human analyst.
 
-UNRELEASED applies only to a report that would otherwise be VALID. A report that is a duplicate,
-fixed, known or invalid is that, whether or not a release holds the code.
+| Engineering disposition | When | Action |
+|---|---|---|
+| **DUPLICATE** | Same defect and path already tracked on GitHub | Cite issue/PR and dates; separately assess HackerOne duplication |
+| **FIXED** | No longer present on `<remote>/main` | Cite fix and compare fix date with report date and affected releases |
+| **KNOWN** | Documented accepted cost or deliberate behaviour | Cite clause; still assess whether the report shows a security violation |
+| **INVALID** | Technical verdict is `CONFIRMED_FALSE_POSITIVE` | Cite affirmative counter-evidence; do not create an issue |
+| **NEEDS_VERIFICATION** | Technical verdict is `LIKELY_VALID`, `INCONCLUSIVE`, or `LIKELY_FALSE_POSITIVE` | Identify the minimum evidence needed; do not file an issue yet |
+| **UNRELEASED** | Technically confirmed and actionable on `main`, but absent from released builds | Cite the release comparison; sweep and draft issues as below |
+| **VALID** | Technically confirmed, actionable, on `main` and in a release, with no existing coverage | Sweep and draft issues as below |
+
+Recommend `no` award for a confirmed false positive; otherwise determine eligibility separately
+using report date, affected released versions, prior knowledge, HackerOne duplicates, and program
+policy. Existing GitHub coverage, `FIXED`, `KNOWN`, or `UNRELEASED` may affect eligibility, but do
+not alone prove a false positive or justify an automatic bounty decision.
 
 Where the evidence is split, for instance valid but only partly overlapping an existing issue,
 say so and leave the award to the user rather than rounding either way. Where the report is valid
@@ -324,8 +354,9 @@ The body, written in the repository's own words rather than the reporter's:
   is left out of the body. The [issue-poster](../../agents/issue-poster.md) definition reads the body
   for these statements again before posting, and has nothing to file where each one has its
   number.
-- `Reported through HackerOne` and the report number if it has one. Not the reporter's name,
-  handle, or contact details, and not their text pasted verbatim: the issue is public.
+- Do not include the HackerOne report number, reporter identity, private PoC, or other
+  non-public report material unless an authorized person explicitly approves disclosure. An
+  issue is public; independently written code observations can also reveal an undisclosed bug.
 
 ### Ask before posting
 
@@ -333,16 +364,18 @@ Write the body to a file. Then explain the finding to the user in plain words be
 they can decide without reading the body first:
 
 - what the report claims, and what you checked and reproduced;
-- whether a release holds the code, and so whether it is awarded (step 6);
+- whether a release holds the code, and how that bears on the award recommendation (step 7);
 - who has to do what for it to matter, and what it buys an attacker;
 - why the severity is what you chose, and what else you considered;
 - whether it is a defect to fix or a behaviour that could be documented instead.
 
 Then show the title, the labels, the assignee and the body, and the same for each sibling issue
 and the tracking issue, as a list that gives every row of the sweep with its state. Ask once
-whether to file the whole batch. Stop there. Whether a report is awarded, how severe it is, and
-whether it is a defect to fix or a behaviour to document are the user's to decide, and a public
-issue is hard to take back.
+whether to publish the exact batch, including any comment to an existing issue, and confirm
+that public disclosure is authorized. If either approval is missing, stop with drafts only and
+do not delegate to `issue-poster`. Whether a report is awarded, how severe it is, and whether
+it is a defect to fix or a behaviour to document are the user's to decide, and a public issue
+is hard to take back.
 
 File only after they agree. Apply any change they ask for to the draft first, and ask again if
 they want more than the change they named. If they decide against filing, or to document the
@@ -375,16 +408,15 @@ conversation.
 
 In this conversation, not on GitHub:
 
-1. **Award: yes, no, or your call**, on the first line.
-2. The verdict from the table and the one-sentence reason.
-3. The evidence: the issue number, the commit, the document section, or the file and line. For
+1. **Award recommendation: yes, no, or your call**, with policy reasoning separate from validity.
+2. **Technical verdict**, with its evidence and assessed scope.
+3. **Engineering disposition**, with the one-sentence reason and any disagreement with Hai, if supplied.
+4. The evidence: the issue number, the commit, the document section, or the file and line. For
    UNRELEASED, the commit that added the code and the newest release that predates it.
-4. For VALID and UNRELEASED: the explanation of the finding, the draft issues and the question whether to file
-   them (see "Ask before posting"). After they agree and they are filed, the URL of the issue,
-   its labels, and who it is assigned to, and the severity with its reason, and the same for each
-   sibling issue and the tracking issue filed with it.
-5. The sweep: the class in a sentence, how many rows it listed and how many are FAILS, HANDLED,
-   OUT OF SCOPE and NOT CHECKED, each row's issue number, the change from step 4 where there is
-   one, and whether each result was run or read.
-6. Anything not checked: a proof of concept not run, a platform not tried, a claim resting on
+5. For VALID and UNRELEASED: the explanation of the finding, the draft issues and the question
+   whether publication is authorized (see "Ask before posting"). After approval and filing, give
+   each issue URL, labels, assignee and justified severity, including sibling and tracking issues.
+6. The sweep: the class, the counts of FAILS, HANDLED, OUT OF SCOPE and NOT CHECKED, each row's
+   issue number, any shared fix, and whether each result was run or read.
+7. Anything not checked: a proof of concept not run, a platform not tried, or a claim resting on
    reading rather than reproduction.

@@ -906,6 +906,7 @@ the list from `also` on `mcp-call.request`.
 `verified-by: bravebot_agent::mcp::a_standing_answer_for_a_servers_tool_decides_a_workers_call_unasked`
 `verified-by: bravebot_agent::mcp::a_rule_decides_a_workers_call_to_a_servers_tool_as_the_turns_own`
 `verified-by: bravebot_agent::mcp::an_approval_given_to_a_turn_or_a_worker_decides_no_other_call`
+`verified-by: bravebot_agent::mcp::a_servers_tool_taking_a_shell_string_is_asked_about_and_sent_it_as_written`
 `verified-by: bravebot_core::policy::an_mcp_call_needs_the_endorsement_for_its_own_tool`
 `verified-by: bravebot_core::policy::arguments_from_a_fallen_context_do_not_reach_a_server`
 `verified-by: bravebot_core::permissions::an_mcp_rule_covers_the_server_or_the_tool_it_names`
@@ -1904,6 +1905,7 @@ content.
 `verified-by: bravebot_ui_bridge::connectors::editing_a_connector_keeps_the_bounds_its_declaration_gave`
 `verified-by: bravebot_ui_bridge::manifest::a_server_that_never_answers_its_handshake_does_not_hold_up_a_plan_run`
 `verified-by: bravebot_cli::running::a_one_shot_run_says_why_a_server_that_never_answered_its_handshake_was_left_out`
+`verified-by: bravebot_cli::running::a_one_shot_run_says_a_server_whose_handshake_never_ends_was_given_up_on_as_too_slow`
 `verified-by: bravebot_cli::running::a_session_in_lines_with_a_server_that_never_answers_opens_within_the_bound_the_start_allows`
 
 <a id="SERVERS-16"></a>
@@ -2198,6 +2200,18 @@ This spec cannot land without these. Each is named by what the clause says rathe
   better. For the distribution form nearly every server uses, the digest binds the argv and the argv
   names a package whose contents change. The only real fix is pinning with an integrity hash, which
   the package ecosystems support and this declaration format does not yet express.
+- **A server's tool that takes a shell string is not scanned or refused.** A tool that runs a
+  command line its argument holds is called as every other tool of the server is
+  ([SERVERS-7](#SERVERS-7)). Nothing reads the argument's name or its text, because that would be
+  the driver branching on what the planner assembled from content it read. The call is put to the
+  person as `alias:tool` with the whole string in a row of its own, and a person who approves it
+  has read every character of the string. The routing field is the alias and the tool, so
+  [ROUTE-7](routing.md#ROUTE-7) is met for the call, and what the string does is the server's: it
+  is a program the person approved ([SERVERS-6](#SERVERS-6)) running under the confinement
+  [MCP-3](mcp.md#MCP-3) requires. A person who does not want such a tool called says so with a
+  `deny` rule naming it. The alternative, refusing a tool whose schema names a command-like
+  argument, would read a schema the server wrote to decide a gate, and a server that names the
+  argument otherwise would pass it.
 - **A runner's options are listed, not discovered.** [SERVERS-6](#SERVERS-6) skips the options a
   runner takes before its sub-command from a list kept here for each program. The `npm` list is
   taken from npm's own option definitions and the `pnpm` list from its help text. The `uv` and

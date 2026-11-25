@@ -13,6 +13,13 @@ governs:
   - crates/tui/src/state/open_loops.rs
   - crates/tui/src/goals.rs
   - crates/tui/src/app/turns.rs
+  - crates/ui-bridge/src/open_loops.rs
+  - crates/ui-bridge/src/bridge.rs
+  - crates/ui-bridge/src/running.rs
+  - crates/ui-bridge/src/turn.rs
+  - ui/src/renderer/apply.ts
+  - ui/src/renderer/transcript.ts
+  - ui/src/renderer/components/Transcript.tsx
 documented-by:
   - docs/website/docs/reference/commands.md
 ---
@@ -73,6 +80,7 @@ A write into the session's own directory is not a written file for this rule. Wh
 `verified-by: bravebot_agent::open_loops::a_name_that_is_not_utf8_is_told_apart_from_its_lossy_lookalike`
 `verified-by: bravebot_tui::goals::rounds_with_no_tool_call_in_a_row_stop_the_goal_without_clearing_it`
 `verified-by: bravebot_tui::state::open_loops::unfinished_lists_each_open_loop_with_what_closes_it`
+`verified-by: bravebot_ui_bridge::open_loops::undoing_a_turn_that_wrote_takes_its_write_out_of_the_open_loops`
 
 <a id="OPEN-2"></a>
 ### OPEN-2: each loop is the planner's move, yours, or a wait
@@ -106,6 +114,10 @@ The line replaces the closing line of [TURN-4](turns.md#TURN-4) ("files changed 
 
 `verified-by: bravebot_tui::state::open_loops::a_turn_that_leaves_loops_open_ends_with_one_line_naming_them`
 `verified-by: bravebot_agent::turn::a_caller_that_shows_open_loops_is_not_also_told_of_unbuilt_changes`
+`verified-by: bravebot_agent::open_loops::the_persons_line_groups_kinds_by_owner_and_names_no_path`
+`verified-by: bravebot_agent::open_loops::the_persons_line_with_nothing_open_is_open_nothing`
+`verified-by: bravebot_ui_bridge::open_loops::a_desktop_turn_ends_with_the_open_loops_when_they_changed`
+`verified-by: bravebot_ui_bridge::open_loops::a_cancelled_turn_carries_the_open_loops_on_its_error`
 
 <a id="OPEN-4"></a>
 ### OPEN-4: the planner is told at the start of the next turn
@@ -116,6 +128,8 @@ When the set of open loops has changed since the planner was last told, the next
 
 It is fixed text with counts and the job names bravebot minted ([RUN-15](tools/run.md#RUN-15)). It holds no path, no command and no todo text. It asks nothing and requires nothing: the planner may decide a loop no longer matters.
 
+In the desktop app, undoing a turn tells the planner again: the next turn begins with the loops the session now leaves open, whether or not they changed, because the rewound conversation may no longer hold the message it was last told. Undoing the only turn leaves nothing open, so nothing is told.
+
 **Why at the start, not the end.** At the end of a turn the planner has stopped. At the start of the next one it is deciding what to do, and the message survives compaction because it is sent fresh.
 
 **Why the planner's loops only as work.** The person's loops are named so the planner does not try to commit or apply a checkout on its own. Telling it about them as its work would invite exactly that.
@@ -123,6 +137,10 @@ It is fixed text with counts and the job names bravebot minted ([RUN-15](tools/r
 `verified-by: bravebot_agent::turn::the_next_turn_begins_with_the_open_loops_that_changed`
 `verified-by: bravebot_tui::state::open_loops::loops_the_planner_was_already_told_about_are_not_repeated`
 `verified-by: bravebot_agent::open_loops::the_planners_message_is_fixed_text_and_counts`
+`verified-by: bravebot_ui_bridge::open_loops_tests::a_desktop_turn_tells_the_planner_of_open_loops_once_per_changed_set`
+`verified-by: bravebot_agent::turn::telling_open_loops_reaches_the_planner_and_keeps_the_unbuilt_line`
+`verified-by: bravebot_ui_bridge::open_loops_tests::undoing_a_turn_tells_the_planner_of_the_loops_left_open`
+`verified-by: bravebot_ui_bridge::open_loops_tests::undoing_the_only_turn_leaves_nothing_open`
 
 <a id="OPEN-5"></a>
 ### OPEN-5: `/unfinished` shows every open loop in full
@@ -165,6 +183,10 @@ A record with no work record or last-command status reads as nothing open.
 `verified-by: bravebot_session::sessions::the_record_keeps_the_work_record_and_the_last_commands_status`
 `verified-by: bravebot_session::sessions::a_record_from_before_open_loops_reads_as_nothing_open`
 `verified-by: bravebot_tui::state::open_loops::a_resumed_session_shows_what_it_left_open`
+`verified-by: bravebot_ui_bridge::open_loops_tests::a_resumed_session_tells_the_planner_on_its_first_turn_only`
+`verified-by: bravebot_ui_bridge::open_loops_tests::the_record_keeps_the_sessions_work_and_written_files`
+`verified-by: bravebot_ui_bridge::open_loops::a_desktop_turn_that_writes_a_file_saves_the_work_and_the_file`
+`verified-by: bravebot_ui_bridge::running::a_resumed_session_carries_the_work_and_the_files_its_record_kept`
 
 <a id="OPEN-7"></a>
 ### OPEN-7: open loops never block, and every new sentence is fixed text

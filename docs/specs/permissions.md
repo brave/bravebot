@@ -760,6 +760,7 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_core::policy::a_denied_step_refuses_the_whole_line`
 `verified-by: bravebot_agent::turn::a_named_file_a_deny_rule_covers_is_left_out_of_the_turn`
 `verified-by: bravebot_agent::turn::a_project_file_a_relative_deny_rule_covers_is_left_out_when_named_absolutely`
+`verified-by: bravebot_agent::turn::a_dropped_or_attached_file_a_relative_deny_rule_covers_is_left_out_under_its_absolute_name_too`
 `verified-by: bravebot_agent::workspace::a_relative_name_is_not_resolved_against_the_process_directory_when_asked_about_a_rule`
 `verified-by: bravebot_agent::workspace::a_link_outside_the_root_to_a_covered_file_inside_it_is_covered`
 `verified-by: bravebot_agent::workspace::a_dropped_file_whose_landing_is_not_utf8_is_covered_while_a_deny_rule_is_in_force`

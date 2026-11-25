@@ -309,6 +309,8 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
                     transcript_len: 0,
                     title: "Before haddock".into(),
                     was_wrote: false,
+                    work: None,
+                    written: None,
                 },
                 backups: Vec::new(),
                 prompt: "remember the word haddock".into(),

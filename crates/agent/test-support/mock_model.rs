@@ -23,7 +23,7 @@ use std::thread;
 pub mod answers;
 
 #[path = "../../sandbox/test-support/scratch_root.rs"]
-mod scratch_root;
+pub mod scratch_root;
 
 /// A scratch directory under the scratch root, removed with the test.
 pub struct Scratch {

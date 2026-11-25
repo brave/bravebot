@@ -868,6 +868,16 @@ impl Exposed {
     pub fn allows_creating(&self, file: &std::path::Path) -> bool {
         self.created.contains(file)
     }
+
+    /// Every file they agreed to have read despite the scan, as the names they were answered under.
+    pub fn agreed_reads(&self) -> impl Iterator<Item = &str> {
+        self.paths.iter().map(String::as_str)
+    }
+
+    /// Every file they agreed to have written with a credential in it.
+    pub fn agreed_creations(&self) -> impl Iterator<Item = &std::path::Path> {
+        self.created.iter().map(std::path::PathBuf::as_path)
+    }
 }
 
 /// Whether this text is one value and nothing else, which is what [`Scanned::only_the_value`]
@@ -1869,6 +1879,71 @@ mod tests {
         assert_eq!(percent_decoded("a%41%").as_deref(), Some("aA%"));
         assert_eq!(percent_decoded("a%41%4").as_deref(), Some("aA%4"));
         assert_eq!(percent_decoded("%%41").as_deref(), Some("%A"));
+    }
+
+    /// `bytes` as standard base64 with its padding.
+    fn base64_of(bytes: &[u8]) -> String {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in bytes.chunks(3) {
+            let word = chunk.iter().enumerate().fold(0u32, |word, (at, byte)| {
+                word | (u32::from(*byte) << (16 - 8 * at))
+            });
+            for at in 0..4 {
+                match at <= chunk.len() {
+                    true => out.push(char::from(
+                        ALPHABET[((word >> (18 - 6 * at)) & 63) as usize],
+                    )),
+                    false => out.push('='),
+                }
+            }
+        }
+        out
+    }
+
+    /// CRED-11, and the Known cost "Only two derived forms of a credential are read": the limit is
+    /// pinned so a change to it is noticed. A line is decoded once, as percent escapes and as base64
+    /// runs. The same key written as hex, as base64 of base64, as a percent escape of a percent
+    /// escape, or split across two lines is not found. Each control writes the key one level deep
+    /// in a form that is read, so the fixtures are ones the scan reaches and the misses are of the
+    /// form and not of the key.
+    ///
+    /// If one of these starts to be found, the Known cost entry and the clause's words about two
+    /// forms change with it, and this test is amended in the same commit.
+    #[test]
+    fn a_key_written_as_hex_twice_encoded_or_split_is_not_found() {
+        let key = glued(&["AKIA", "IOSFODNN7", "EXAMPLE"]);
+        let found = |text: String| scan("t.txt", &text, 7).len();
+
+        // Controls: one level of base64 and of percent escapes is read.
+        let once = base64_of(key.as_bytes());
+        assert_eq!(found(format!("Authorization: Basic {once}\n")), 1);
+        let escaped_once: String = key.bytes().map(|byte| format!("%{byte:02X}")).collect();
+        assert_eq!(found(format!("https://h/?k={escaped_once}\n")), 1);
+
+        // Hex.
+        let hex: String = key.bytes().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(found(format!("the digest is {hex}\n")), 0, "hex");
+        // An encoding of an encoding.
+        let twice = base64_of(once.as_bytes());
+        assert_eq!(
+            found(format!("Authorization: Basic {twice}\n")),
+            0,
+            "base64 of base64"
+        );
+        let escaped_twice: String = escaped_once
+            .bytes()
+            .map(|byte| format!("%{byte:02X}"))
+            .collect();
+        assert_eq!(
+            found(format!("https://h/?k={escaped_twice}\n")),
+            0,
+            "percent of percent"
+        );
+        // A key cut across two lines, which are read one at a time.
+        let (head, tail) = key.split_at(11);
+        assert_eq!(found(format!("first {head}\nsecond {tail}\n")), 0, "split");
     }
 
     /// CRED-18: the classifier reaches nothing outside the process. Asking a hosted model whether

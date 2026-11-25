@@ -43,6 +43,8 @@ fn a_point_before(turns: usize) -> bravebot_session::sessions::TurnSnapshot {
         transcript_len: turns,
         title: "a session".to_string(),
         was_wrote: true,
+        work: None,
+        written: None,
     }
 }
 

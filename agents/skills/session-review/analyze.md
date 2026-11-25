@@ -266,7 +266,7 @@ Write this JSON, and nothing else, to `{{results_file}}`:
       "title": "what is wrong and what it costs, in one complete sentence of at most 110 characters, because the draft step cuts a longer title off at a word; a person searching the tracker should match it",
       "key": "the one distinctive word or symbol in the title",
       "kind": "bug | enhancement (frustration and waste are usually enhancement)",
-      "area": "trust | sandbox | tools | mcp | browser | connectors | turns | background | delegation | plugins | backends | skus | interface | desktop | acp | remote | cli | release | i18n | (empty)",
+      "area": "trust | sandbox | tools | mcp | browser | connectors | turns | background | delegation | plugins | backends | skus | interface | desktop | acp | remote | cli | release | i18n | caching | (empty)",
       "security": false,
       "turn": 7,
       "what_happens": "what the person sees and what they expected, in your words; for frustration, the sign and its trigger; for waste, the measure and how often",

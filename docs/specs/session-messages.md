@@ -138,20 +138,31 @@ who reads it is the only check on it that does not rest on the sender's model.
 `verified-by: bravebot_cli::background::a_session_holding_a_message_to_send_is_listed_with_that_kind`
 
 <a id="MSG-4"></a>
-### MSG-4: a second answer covers later messages to the same session for the rest of the turn, and no longer
+### MSG-4: a second answer covers later messages to the same session under the same label, for the rest of the turn, and no longer
 
 The prompt offers two answers: send this message, and send this one and the later ones to this session
 until the turn ends. The second has a key of its own and Enter does not reach it, as with any standing
-answer. It covers the one target, is not offered for another, is not written anywhere, and ends with
-the turn. A resume does not restore it.
+answer. It covers the one target under the label this message was shown under, is not offered for
+another target, is not written anywhere, and ends with the turn. A resume does not restore it.
 
-A message sent under it is still drawn in the sender's transcript as it is sent ([MSG-11](#MSG-11)).
+The label is part of what the second answer covers, not only the target's id. The sender's own context
+can turn private between two calls to the same target in one turn ([MSG-2](#MSG-2)): a report from a
+delegate, or a quarantined slot let through, turns it private, and `Policy::before_message` reads the
+message's label from the context at the moment of the call. A later message to a target the standing
+answer already covers, sent at a label that rose since, is a message the person was never shown, so it
+is put to them again, this time with the label it is sent under.
+
+A message sent under a standing answer is still drawn in the sender's transcript as it is sent
+([MSG-11](#MSG-11)).
 
 **Why.** A planner that needs several exchanges with one session in a turn would otherwise stop a
 person on each. A grant that lasts past the turn would let the next turn, whose first prompt the
-person typed for another purpose, send without asking.
+person typed for another purpose, send without asking. A grant that covered every label would let an
+answer given for a public message also cover one sent private afterwards, which is a label the person
+never saw and never approved.
 
 `verified-by: bravebot_agent::tools::tests::session_messages::a_standing_answer_covers_the_later_messages_to_that_session_and_no_other`
+`verified-by: bravebot_agent::tools::tests::session_messages::a_standing_answer_does_not_cover_the_same_target_under_a_label_it_was_not_shown`
 `verified-by: bravebot_agent::turn::a_standing_answer_ends_with_the_turn_that_gave_it`
 `verified-by: bravebot_cli::plain::a_message_is_asked_in_lines_with_two_answers_and_anything_else_sends_nothing`
 `verified-by: bravebot_cli::progress::a_message_that_was_sent_is_drawn_under_its_receiver_with_the_words_quoted`

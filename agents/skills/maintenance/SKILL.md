@@ -13,7 +13,6 @@ description:
   code, unused code, duplicate code, code that should be shared, files that are
   too big, refactoring candidates, code smells, tech debt.'
 argument-hint: '[lane ...] [path ...]'
-allowed-tools: Bash(python3 agents/skills/maintenance/*), Bash(make check-maintenance*)
 ---
 
 # Find code to clean up
@@ -88,10 +87,19 @@ one of those is a file path passed between the steps.
 
 ## The job
 
+Run each script by the absolute path of the main clone's copy, written
+`<clone>/agents/skills/maintenance/maintenance.py` below, where `<clone>` is the first path `git worktree list`
+prints. A relative path runs the copy in the session's directory, and in a worktree that is the branch's
+own script, which would run with the person's access.
+
+`prepare` analyses the clone the script is in, whatever the current directory is. `--root DIR` names another
+checkout to analyse instead, such as `--root "$PWD"` for the session's worktree. The later commands use the
+root `prepare` recorded in the work directory.
+
 ### Step 1: prepare (zero model tokens)
 
 ```bash
-python3 agents/skills/maintenance/maintenance.py [lane ...] [path ...]
+python3 <clone>/agents/skills/maintenance/maintenance.py [lane ...] [path ...]
 ```
 
 Stdout is `{"work_dir": ..., "manifest": ...}`. The candidate list goes to stderr; print it.
@@ -149,7 +157,7 @@ message sent to a finished reviewer starts a new turn it has no context for. Eac
 reports, run:
 
 ```bash
-python3 agents/skills/maintenance/maintenance.py status --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/maintenance/maintenance.py status --work-dir "$WORK_DIR"
 ```
 
 It says how many reviewers have written a result that parses and gives a verdict for every
@@ -164,7 +172,7 @@ is missing or unreadable, the collector says so.
 ### Step 4: collect (zero model tokens)
 
 ```bash
-python3 agents/skills/maintenance/maintenance.py collect --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/maintenance/maintenance.py collect --work-dir "$WORK_DIR"
 ```
 
 Print its output. Exit code 1 means some candidate has no verdict, or was called `cleanup` with
@@ -173,7 +181,7 @@ no finding saying what the change is.
 ### Step 5: draft an issue per finding (zero model tokens)
 
 ```bash
-python3 agents/skills/maintenance/maintenance.py draft --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/maintenance/maintenance.py draft --work-dir "$WORK_DIR"
 ```
 
 Print its output. One body per finding is now on disk: what is wrong, the code at the first place
@@ -185,7 +193,7 @@ that commit. `main` can move between the reading and the posting, so compare the
 `HEAD`:
 
 ```bash
-python3 agents/skills/maintenance/maintenance.py verify --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/maintenance/maintenance.py verify --work-dir "$WORK_DIR"
 ```
 
 For each draft it lists the places it cites that moved, with where each is now, that are in code
@@ -207,7 +215,7 @@ or hide code that reads, labels or declassifies content. The reviewers wrote the
 session reads none of them, so a wrong claim would otherwise reach the poster.
 
 ```bash
-python3 agents/skills/maintenance/maintenance.py claims-prepare --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/maintenance/maintenance.py claims-prepare --work-dir "$WORK_DIR"
 ```
 
 It checks `HEAD` out at `{work_dir}/head`, splits the drafts into groups of at most five in the order
@@ -224,7 +232,7 @@ and `gh issue view` to read issues, and each call asks first. The same rules as 
 reader's result is the file it writes, and you write no verdict yourself.
 
 ```bash
-python3 agents/skills/maintenance/maintenance.py claims-collect --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/maintenance/maintenance.py claims-collect --work-dir "$WORK_DIR"
 ```
 
 It prints the table of step 5 again, with `REJECTED by the claim check` and the reason under every
@@ -287,13 +295,12 @@ Use the existing `refactor` label for cleanup. If a required label is missing, t
 and prints a creation command for a person; pass it on rather than creating a label or posting
 under a different one. Do not create or use a `maintenance` label.
 
-`gh` is deliberately not in this skill's `allowed-tools`, so every call the poster makes asks
-first. Do not work around it.
+Every `gh` call the poster makes asks the person first. Do not work around it.
 
 ### Step 8: record what was read
 
 ```bash
-python3 agents/skills/maintenance/maintenance.py record --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/maintenance/maintenance.py record --work-dir "$WORK_DIR"
 ```
 
 This writes every `keep` and `cleanup` verdict to `docs/maintenance-reviewed`, so the next run
@@ -305,7 +312,7 @@ line to have a candidate read again. The file is left uncommitted.
 Then remove the checkouts the reviewers and the claim readers read:
 
 ```bash
-python3 agents/skills/maintenance/maintenance.py clean --work-dir "$WORK_DIR"
+python3 <clone>/agents/skills/maintenance/maintenance.py clean --work-dir "$WORK_DIR"
 ```
 
 ### Step 9: say what happened

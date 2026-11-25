@@ -80,6 +80,7 @@ SEVERITIES = ("high", "medium", "low")
 AREAS = (
     "trust", "sandbox", "tools", "mcp", "browser", "connectors", "turns", "background", "delegation",
     "plugins", "backends", "skus", "interface", "desktop", "acp", "remote", "cli", "release", "i18n",
+    "caching",
 )
 ISSUE_TEXT = ("title", "what_happens", "code_path", "reproduce", "fix")
 TITLE_LIMIT = 120
