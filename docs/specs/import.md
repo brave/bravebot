@@ -602,6 +602,8 @@ that answers yes on their behalf.
 `verified-by: bravebot_cli::running::a_one_shot_first_run_with_a_server_running_names_the_import_command`
 `verified-by: bravebot_cli::import::the_command_line_names_every_source_that_holds_something`
 `verified-by: bravebot_cli::running::import_providers_is_refused_where_its_input_is_not_a_terminal`
+`verified-by: bravebot_cli::running::import_providers_is_refused_where_only_its_stdin_is_not_a_terminal`
+`verified-by: bravebot_cli::running::a_file_too_full_for_one_source_names_the_file_and_not_the_command_for_another`
 `verified-by: bravebot_cli::running::import_providers_is_refused_while_incognito`
 `verified-by: bravebot_cli::running::nothing_is_asked_where_stderr_is_not_a_terminal`
 `verified-by: bravebot_cli::running::a_settings_file_the_import_cannot_write_is_named_in_place_of_the_command`

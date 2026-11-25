@@ -6619,6 +6619,86 @@ mod coverage_tests {
         state.handle.as_mut().unwrap().discard_unwritten("");
     }
 
+    /// SESSION-34, R84b: a chat a handoff opens starts with an empty quarantine. The source chat's
+    /// planner held a reference to content it may not read and had met something untrusted; the new
+    /// chat, made by `session.new` with `handedOffFrom`, has no slot under that reference, a
+    /// reference counter at its start, and a context that has met nothing. The quarantine has no
+    /// surface on the wire, so this reads the new chat's state in this crate.
+    ///
+    /// Rejects a `session.new` that begins the new chat on the source chat's conversation or
+    /// quarantine, which would let the new chat's planner name content its person never saw there.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_chat_opened_from_a_handoff_starts_with_an_empty_quarantine() {
+        use bravebot_core::label::{Confidentiality, Integrity, Label};
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("handoff-quarantine");
+        std::fs::create_dir_all(&directory).unwrap();
+        let root = directory.as_path();
+        let record: Record = serde_json::from_value(json!({
+            "id": "handoff-source", "directory": root, "title": "work",
+            "started": 1, "updated": 1,
+            "conversation": bravebot_agent::Conversation::new().snapshot()
+        }))
+        .unwrap();
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let source = bridge.mint(Open::opened(
+            root.to_path_buf(),
+            State::resumed(root, &record, TrustStore::new(root)).expect("the record is free"),
+            true,
+            None,
+            false,
+        ));
+        let slot = {
+            let open = bridge.open.get(&source).unwrap();
+            let mut state = open.state.lock().unwrap();
+            let slot = state.conversation.next_reference();
+            state
+                .conversation
+                .quarantine()
+                .writer_for(slot.clone(), Label::untrusted_private())
+                .expect("a writer")
+                .write("what nobody may read")
+                .expect("written");
+            state.conversation.observed(Label::untrusted_private());
+            assert!(
+                state
+                    .conversation
+                    .quarantine()
+                    .take_for_effect(&slot)
+                    .is_ok(),
+                "setup: the source's slot is not held"
+            );
+            slot
+        };
+
+        let line = json!({"id": 1, "method": "session.new", "params": {
+            "directory": root, "handedOffFrom": source
+        }})
+        .to_string();
+        let made = bridge.dispatch(&Request::parse(&line).unwrap()).unwrap();
+        let next = bridge.open.get(made["session"].as_str().unwrap()).unwrap();
+        let mut state = next.state.lock().unwrap();
+
+        assert!(
+            state
+                .conversation
+                .quarantine()
+                .take_for_effect(&slot)
+                .is_err(),
+            "the new chat holds the content the source chat's reference named"
+        );
+        assert_eq!(
+            state.conversation.next_reference(),
+            slot,
+            "the new chat did not start its references over"
+        );
+        assert_eq!(state.conversation.context(), Integrity::Trusted);
+        assert_eq!(state.conversation.holds(), Confidentiality::Public);
+    }
+
     /// Switching front ends must not drop the warning once undo has consumed every checkpoint.
     #[test]
     fn a_resumed_server_warning_survives_a_desktop_save_without_checkpoints() {

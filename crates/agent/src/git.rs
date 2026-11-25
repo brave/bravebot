@@ -4884,6 +4884,45 @@ mod tests {
             }
         }
 
+        /// CHECKOUT-4, the plumbing between the host and the walk of HEAD's tree. A tree entry whose
+        /// name Windows cannot hold (a device name, a reserved character, a trailing dot) refuses the
+        /// checkout for a Windows host with the Windows name refusal and writes nothing, and the same
+        /// tree is made for another host, whichever host the test runs on. Rejects a walk that asks
+        /// the host it runs on and not the one it was told (`check_name(name, cfg!(windows))`), which
+        /// accepts the entry for a Windows host on this one, and one that always asks for Windows.
+        #[test]
+        #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+        fn a_name_windows_cannot_hold_in_the_tree_refuses_a_checkout_for_a_windows_host_alone() {
+            use crate::git::checkout::make_for;
+            for name in ["CON", "a:b", "foo.", "a?b", "nul.txt"] {
+                for windows in [true, false] {
+                    let repo = Repo::new("checkout-host-names");
+                    let blob = repo.blob("hello\n");
+                    committed(&repo, &[("100644", "README", blob), ("100644", name, blob)]);
+                    // A Windows host takes `core.autocrlf` to be set where the config is silent.
+                    repo.put("config", "[core]\n\tautocrlf = false\n");
+                    survey(&repo.git, Query::Status, later()).expect("surveyed");
+                    let result = make_for(
+                        &repo.git,
+                        &target(&repo),
+                        "c1",
+                        &|_| false,
+                        &|_| true,
+                        Bound::FIXED,
+                        windows,
+                    );
+                    let what = format!("{name:?} for windows={windows}");
+                    if windows {
+                        let refused = result.expect_err(&what);
+                        assert_eq!(refused, Refused::Name(Name::Windows), "{what}");
+                        nothing_written(&repo, &refused);
+                    } else {
+                        result.expect(&what);
+                    }
+                }
+            }
+        }
+
         /// A tree that names one entry twice refuses the checkout, even where a deny rule covers
         /// the entry and so neither is written.
         #[test]
@@ -5904,6 +5943,7 @@ mod tests {
         /// not, and neither is anything where `.git` is a link.
         #[cfg(unix)]
         #[test]
+        #[expect(clippy::expect_used, reason = "a test fails by panicking")]
         fn the_sweep_takes_only_an_unlisted_checkout_nobody_holds() {
             use crate::git::checkout::sweep;
             let repo = Repo::new("checkout-swept");
@@ -5916,6 +5956,18 @@ mod tests {
             drop((leftover, listed));
             std::fs::create_dir_all(at.join("scratch")).expect("other");
             std::fs::create_dir_all(at.join("c4")).expect("not made by a session");
+            // Names that are not `c` and digits, at the mode a claimed checkout is left at, so
+            // that only the name keeps the sweep from taking them.
+            let names = ["notes", "c", "cx", "c1x", "c-3"];
+            for name in names {
+                let other = at.join(name);
+                std::fs::create_dir_all(&other).expect("other name");
+                std::fs::set_permissions(
+                    &other,
+                    std::os::unix::fs::PermissionsExt::from_mode(0o700),
+                )
+                .expect("mode");
+            }
             let outside = repo.root.join("outside");
             std::fs::create_dir_all(&outside).expect("outside");
             std::os::unix::fs::symlink(&outside, at.join("c5")).expect("link");
@@ -5929,6 +5981,12 @@ mod tests {
             assert!(at.join("c3/README").exists(), "a held checkout was taken");
             assert!(repo.git.join("worktrees/c3").exists());
             assert!(at.join("scratch").exists());
+            for name in names {
+                assert!(
+                    at.join(name).exists(),
+                    "a directory named {name}, which is not a checkout's name, was taken"
+                );
+            }
             assert!(
                 at.join("c4").exists(),
                 "a directory at another mode was taken"

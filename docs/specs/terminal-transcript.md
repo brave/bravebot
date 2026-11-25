@@ -769,6 +769,11 @@ a model was slow exactly as it draws a slow program.
 `verified-by: bravebot_ui_bridge::reporting::what_a_call_spent_at_a_model_reaches_a_front_end`
 `verified-by: bravebot_ui_bridge::reporting::a_wait_under_a_second_crosses_as_zero_seconds`
 `verified-by: bravebot_agent::turn::what_a_check_cost_reaches_the_row_the_call_drew`
+`verified-by: bravebot_agent::turn::the_wait_on_a_checks_row_is_the_time_the_check_took`
+`verified-by: bravebot_agent::turn::the_time_a_check_in_a_runs_result_took_reaches_the_turns_inference_total`
+`verified-by: bravebot_agent::turn::the_wait_on_a_read_files_row_is_the_time_the_check_before_the_vouch_offer_took`
+`verified-by: bravebot_agent::turn::the_time_a_check_in_a_fetchs_result_took_reaches_the_turns_inference_total`
+`verified-by: bravebot_agent::turn::the_time_a_check_on_an_ended_jobs_account_took_reaches_the_turns_inference_total`
 `verified-by: bravebot_agent::turn::what_a_processor_cost_reaches_the_row_the_call_drew`
 `verified-by: bravebot_agent::turn::the_wait_on_a_processor_row_is_the_time_the_model_took`
 `verified-by: bravebot_agent::turn::what_a_processor_that_chose_cost_reaches_the_row_the_call_drew`

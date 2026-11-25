@@ -1213,7 +1213,10 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
         return;
     };
     let batch = super::Batch::of_call(lead, size, wake_after);
-    for (id, seeded) in started {
+    for (id, mut seeded) in started {
+        // What the turn that started it says its context has met, met with what it starts from:
+        // a constant the caller chose, so nothing here reads a byte of anything a delegate saw.
+        seeded.context = seeded.context.meet(task.delegates_have_met);
         let vouched = seeded.vouched.clone();
         let checkout = seeded
             .workspace

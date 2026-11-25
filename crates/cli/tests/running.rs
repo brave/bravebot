@@ -10498,6 +10498,47 @@ fn a_one_shot_first_run_names_the_import_command_and_asks_nothing() {
     );
 }
 
+/// IMPORT-8: `import-providers` refuses where stdin alone is not a terminal. The question goes to
+/// stderr and is answered on stdin, so a stderr that is a terminal does not make it askable. Run
+/// under `script` so stderr is a terminal, through a shell that gives the command `/dev/null` as
+/// its input. A check that asked only about stderr would run the questions and end on the empty
+/// input instead of refusing.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn import_providers_is_refused_where_only_its_stdin_is_not_a_terminal() {
+    let scratch = Scratch::new("cli-running-import-stdin-only")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK);
+    let program = env!("CARGO_BIN_EXE_bravebot");
+    let command = format!("'{program}' import-providers </dev/null");
+    let mut terminal = Command::new("script");
+    terminal
+        .env_clear()
+        .env("HOME", &scratch.path)
+        .env("TMPDIR", a_temporary_directory_beside(&scratch.path))
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .env("OLLAMA_HOST", NO_OLLAMA)
+        .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
+        .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
+        .envs(NOTHING_CONFIGURED.iter().copied());
+    if cfg!(target_os = "linux") {
+        terminal.args(["-qec", &command, "/dev/null"]);
+    } else {
+        terminal.args(["-q", "/dev/null", "sh", "-c", &command]);
+    }
+
+    let output = terminal
+        .stdin(Stdio::null())
+        .output()
+        .expect("script runs the built binary in a terminal");
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{transcript}");
+    assert!(transcript.contains("terminal"), "{transcript}");
+    assert!(!transcript.contains("Import this"), "{transcript}");
+    assert!(!scratch.settings().exists(), "a refused run wrote settings");
+}
+
 /// IMPORT-8: the command asks before it writes, and a pipe has nobody behind it to answer.
 #[test]
 fn import_providers_is_refused_where_its_input_is_not_a_terminal() {
@@ -10552,6 +10593,43 @@ fn a_settings_file_the_import_would_take_too_large_is_named_in_place_of_the_comm
         .with_settings(&padded);
 
     let output = bravebot(&scratch.path, NOTHING_CONFIGURED, &["-p", "say something"]);
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("is past what bravebot reads"), "{stderr}");
+    assert!(!stderr.contains("auth login import"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(scratch.settings()).expect("read"),
+        padded
+    );
+}
+
+/// The padding that leaves the settings file readable, with room for what an exported key adds and
+/// not for what a Claude Code setup on Bedrock adds.
+const PADDING_FOR_ONE_SOURCE_ONLY: usize = 65_380;
+
+/// IMPORT-8: where one source's addition fits in the settings file and another's would take it
+/// past what bravebot reads, the command would refuse on that file, so the file is named and the
+/// source that fits is not offered either. A refusal that named the file and kept the command for
+/// the source that fits would send the person to the refusal the file line explains.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_file_too_full_for_one_source_names_the_file_and_not_the_command_for_another() {
+    let environment = [
+        NOTHING_CONFIGURED,
+        &[("OPENAI_API_KEY", "sk-proj-exported-nobody-may-see")],
+    ]
+    .concat();
+    let padded = format!(
+        r#"{{"note": "{}"}}"#,
+        "x".repeat(PADDING_FOR_ONE_SOURCE_ONLY)
+    );
+    assert!(padded.len() < 65_536, "the file must be readable as it is");
+    let scratch = Scratch::new("cli-running-import-one-source-fits")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK)
+        .with_settings(&padded);
+
+    let output = bravebot(&scratch.path, &environment, &["-p", "say something"]);
 
     let (_, stderr) = said(&output);
     assert_eq!(output.status.code(), Some(3), "{stderr}");
@@ -10822,6 +10900,78 @@ fn a_session_in_lines_given_the_vet_flag_says_what_bypass_refuses() {
     assert!(
         !plain.contains(vetting_line),
         "a session without auto-vetting said what auto-vetting refuses: {plain}"
+    );
+}
+
+/// CLI-15: the hand-off of the resolved auto-vetting into a session in lines, read through a real
+/// process. The planner runs a command that prints words and asks to read them back, under bypass,
+/// with a check that objects. Given `--vet` the output is kept back from the planner. Without it the
+/// prompt is answered yes unshown, so the same script returns the words, which shows the script
+/// reaches the release. Rejects the running session being built with auto-vetting off whatever the
+/// flag said (plain.rs `Running { auto_vetting: .. }`), which the notice (computed from the same
+/// value on its own) and the in-process tests that set `session.auto_vetting` directly do not see.
+///
+/// Linux only: the `unscreened` leg fails on the macOS CI runner (the words do not reach the
+/// planner and the run takes 80 seconds), and the cause is open.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_in_lines_given_the_vet_flag_keeps_back_the_output_a_check_objects_to() {
+    const WORDS: &str = "OUTPUT-WORDS-IN-LINES-55192";
+    if bravebot_sandbox::base::Prelude::current().is_some()
+        && !bravebot_sandbox::confinement_works_here()
+    {
+        return skipped("confinement is unavailable, so the run is refused");
+    }
+    let bodies_with = |name: &str, extra: &[&str]| -> Vec<String> {
+        let rounds = Arc::new(AtomicUsize::new(0));
+        let counted = rounds.clone();
+        let gateway = a_gateway(r#"["tools"]"#, move |body| {
+            if body.contains("prompt-injection classifier") {
+                return a_reply_from(
+                    "reasons-only",
+                    r#"{"verdict": "unsafe", "reason": "addressed to a reader"}"#,
+                );
+            }
+            match counted.fetch_add(1, Ordering::SeqCst) {
+                0 => a_tool_call_from(
+                    "reasons-only",
+                    "run",
+                    r#"{"command":"printf 'OUTPUT-WORDS-IN-LINES-%s' 55192","read":true}"#,
+                ),
+                _ => a_reply_from("reasons-only", "all done"),
+            }
+        });
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let mut arguments = vec!["--plain", "--dangerously-skip-permissions"];
+        arguments.extend_from_slice(extra);
+        in_a_terminal_conversing(
+            &scratch.path,
+            &environment,
+            &arguments,
+            &[("> ", "print the words\n")],
+        );
+        gateway
+            .asked
+            .try_iter()
+            .filter(|body| !body.contains("prompt-injection classifier"))
+            .collect()
+    };
+
+    let screened = bodies_with("cli-running-plain-vet-objected", &["--vet"]);
+    assert!(
+        screened.len() >= 2,
+        "the script did not reach the round after the run: {screened:?}"
+    );
+    assert!(
+        screened.iter().all(|body| !body.contains(WORDS)),
+        "output a check objected to reached the planner under --vet in a session in lines: {screened:?}"
+    );
+    let unscreened = bodies_with("cli-running-plain-vet-absent", &[]);
+    assert!(
+        unscreened.last().is_some_and(|body| body.contains(WORDS)),
+        "without --vet the output did not reach the planner, so the script proves nothing: {unscreened:?}"
     );
 }
 
@@ -15449,6 +15599,47 @@ fn doctor_says_a_checkouts_agent_is_not_obeyed() {
     );
 }
 
+/// ADDRESS-13: a setting naming a definition that exists but whose model needs a sign-in this
+/// machine has not made ends the run with the status for an argument, as the flag does, and does not
+/// go on as the planner's: going on would substitute the planner's model for the one the definition
+/// asked for. The same setting naming nothing is survived (see
+/// `an_agent_setting_naming_nothing_is_said_and_the_run_goes_on`), so only the refusal ends it.
+///
+/// Rejects a run that treats a refused model of the setting's definition as it treats a missing one:
+/// said and gone on from, which would send the turn to a model the person did not choose.
+#[cfg(unix)]
+#[test]
+fn an_agent_setting_whose_definitions_model_is_refused_ends_the_run() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("done"));
+    let scratch = Scratch::new("cli-running-agent-setting-model-refused")
+        .with_settings(&settings_naming_an_agent(&gateway, "scribe"))
+        .with_state(
+            "agents/scribe.md",
+            &a_definition("scribe", "kind: reader\nmodel: haiku\n"),
+        );
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.extend([
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-west-2"),
+        ("ANTHROPIC_DEFAULT_SONNET_MODEL", "sonnet-arn"),
+        ("ANTHROPIC_DEFAULT_HAIKU_MODEL", "haiku-arn"),
+        ("AWS_PROFILE", "a-profile-no-machine-has"),
+    ]);
+
+    let output = bravebot(&scratch.path, &environment, &["-p", "hello"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stdout}\n{stderr}");
+    assert!(
+        stderr.contains("scribe"),
+        "the refusal did not name the definition: {stderr}"
+    );
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a request was sent although the run was refused: {stdout}\n{stderr}"
+    );
+}
+
 /// CLI-17 with the check for a configured service. A run under a definition asks for the
 /// definition's model, so that is the model the check is made for. Brave's own endpoint with
 /// nothing imported serves nothing, and the definition names a gateway's model, so the run goes to
@@ -18150,6 +18341,94 @@ fn a_reply_refused_as_stopping_starts_the_session_when_it_is_asked_again_once_st
     assert!(second.contains("fix the build"), "{second}");
 }
 
+/// BG-13: an attach that a session refused as stopping joins nothing. The terminal says to attach
+/// again and does not say it is attached, and the same command once the session is `stopped` starts
+/// it.
+///
+/// The first attach meets a process that says `stopping` (a socket the test answers on, with the
+/// session's lock held). It rejects a terminal that does not read the first line the session
+/// answers with (it would say it is attached to a session that will not read), one that reads
+/// `stopping` as `ok`, and one that gives the generic not-running sentence.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_attach_refused_as_stopping_says_to_attach_again_and_joins_nothing() {
+    use std::os::unix::net::UnixListener;
+
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    a_stopped_session_with_one_turn(&home, &gateway);
+
+    let roster = bravebot_session::jobs::Roster::at(home.0.join(".bravebot/jobs"));
+    let lease = roster
+        .claim(SESSION_ID)
+        .expect("claim the entry")
+        .expect("the host that stopped has let it go");
+    let token = roster.issue_attach_token(SESSION_ID).expect("a secret");
+    let socket = roster.socket_of(SESSION_ID).expect("a socket path");
+    std::fs::remove_file(&socket).ok();
+    let listener = UnixListener::bind(&socket).expect("a socket the stopping session answers on");
+    let (heard, asked) = mpsc::channel();
+    std::thread::spawn(move || {
+        listener.set_nonblocking(true).expect("poll for the attach");
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => return,
+            }
+        };
+        stream.set_nonblocking(false).expect("blocking reads");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(60)))
+            .expect("timeout");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+        let mut lines = Vec::new();
+        for _ in 0..2 {
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("a line");
+            lines.push(line.trim().to_string());
+        }
+        writeln!(stream, "stopping").expect("the answer");
+        heard.send(lines).ok();
+    });
+
+    let refused = in_a_terminal(&home.0, AT_A_GATEWAY, &["attach", "3f2a9c1e"]);
+    let heard_lines = asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the attach reached the stopping session");
+    let (out, err) = said(&refused);
+    let shown = format!("{out}{err}");
+    assert!(
+        shown.contains("is stopping after an hour idle. Attach again to start it."),
+        "{shown}"
+    );
+    assert!(
+        !shown.contains("Attached to"),
+        "an attach to a stopping session was reported as joined: {shown}"
+    );
+    assert_eq!(heard_lines, [token, "attach".to_string()]);
+
+    // The session has ended: nothing holds its lock and nothing listens.
+    drop(lease);
+    std::fs::remove_file(&socket).ok();
+    roster.withdraw_attach_token(SESSION_ID);
+
+    let output = in_a_terminal(&home.0, AT_A_GATEWAY, &["attach", "3f2a9c1e"]);
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{out}{err}");
+    assert!(
+        !format!("{out}{err}").contains("is stopping after an hour idle"),
+        "{out}{err}"
+    );
+}
+
 /// BG-10, BG-12: `reply` from a terminal starts an interrupted session, after saying that the turn it
 /// was in is not repeated. The earlier conversation and the reply are in the request, with the
 /// driver's note that the last turn never finished, and that note is not written to the record.
@@ -18636,6 +18915,82 @@ fn an_idle_session(home: &ShortHome, gateway: &Gateway) -> std::process::Child {
     host
 }
 
+/// BG-13, end to end: the real `__bg-host` process, with its wait shortened through the test seam
+/// (`BRAVEBOT_TEST_BG_IDLE_MILLIS`, the `test-hosts` feature), is not ended by the wait while a
+/// terminal is attached to it, and ends once the wait has passed since the last terminal left. It
+/// leaves its entry `stopped`. Rejects a process that keeps waiting past the time (the wait is not
+/// the one the variable names), one that ends while a terminal is attached, one whose wait counts
+/// from the prompt and not from the terminal leaving, and one that ends without recording `stopped`.
+#[cfg(unix)]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "cleanup of a host already being stopped, in a test that fails by panicking"
+)]
+#[test]
+fn a_host_process_idle_for_its_time_with_nobody_attached_ends_and_is_recorded_stopped() {
+    use std::os::unix::net::UnixStream;
+
+    const IDLE: Duration = Duration::from_millis(2500);
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let (mut host, socket) = a_started_host_with(
+        &home,
+        &gateway,
+        "{}",
+        &[("BRAVEBOT_TEST_BG_IDLE_MILLIS", "2500")],
+    );
+    let mut terminal = UnixStream::connect(&socket).expect("attach");
+    terminal
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .expect("timeout");
+    writeln!(terminal, "{}\nattach", a_token(&socket)).expect("attach");
+    let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
+    shown_until(&mut seen, "trust this directory?");
+    // The question is drawn a moment before the session reads an answer to it, and a line sent in
+    // that moment is refused, so it is sent again.
+    loop {
+        writeln!(terminal, "n").expect("answer the question");
+        if shown_until_any(&mut seen, &["all done", "Not sent"]).contains("all done") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    until_the_session(&home, "never idle", |session| session["state"] == "idle");
+
+    // Twice the wait with a terminal attached: the process is still there and still idle.
+    std::thread::sleep(IDLE * 2);
+    assert!(
+        host.try_wait().expect("the host is polled").is_none(),
+        "the host ended while a terminal was attached"
+    );
+    assert_eq!(the_session(&home)["state"], "idle");
+
+    drop(seen);
+    drop(terminal);
+    let left = std::time::Instant::now();
+    let until = left + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = host.try_wait().expect("the host is polled") {
+            break status;
+        }
+        if std::time::Instant::now() >= until {
+            let _ = host.kill();
+            let _ = host.wait();
+            panic!("the host was still running 30 seconds after its terminal left");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(status.success(), "{status:?}");
+    assert!(
+        left.elapsed() >= IDLE,
+        "the host ended {:?} after its terminal left, before its wait of {IDLE:?} was up",
+        left.elapsed()
+    );
+    assert_eq!(the_session(&home)["state"], "stopped");
+}
+
 /// BG-12, end to end: a process killed while it waits for a prompt is started again by the
 /// supervisor, idle, from the record it left. It starts no turn of its own, and the next reply
 /// carries the conversation from before the kill.
@@ -18898,6 +19253,18 @@ fn a_started_host(
     gateway: &Gateway,
     extra: &str,
 ) -> (std::process::Child, PathBuf) {
+    a_started_host_with(home, gateway, extra, &[])
+}
+
+/// [`a_started_host`] with `environment` added to the process's own, which is where a test sets the
+/// variable of a test seam.
+#[cfg(unix)]
+fn a_started_host_with(
+    home: &ShortHome,
+    gateway: &Gateway,
+    extra: &str,
+    environment: &[(&str, &str)],
+) -> (std::process::Child, PathBuf) {
     let state = home.0.join(".bravebot");
     let job = state.join(format!("jobs/{SESSION_ID}"));
     std::fs::create_dir_all(&job).expect("the entry's directory");
@@ -18919,6 +19286,7 @@ fn a_started_host(
         .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
         .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
         .envs(AT_A_GATEWAY.iter().copied())
+        .envs(environment.iter().copied())
         .args(["__bg-host", SESSION_ID])
         .current_dir(&work)
         .stdin(Stdio::null())
@@ -21763,7 +22131,30 @@ fn a_bash_session(scratch: &Scratch, commands: &[&str]) -> String {
 /// As [`a_bash_session`], with `before` run ahead of the hook: what a person's own startup file
 /// would already have set when the hook is sourced.
 #[cfg(unix)]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_bash_session_after(scratch: &Scratch, before: &str, commands: &[&str]) -> String {
+    a_shell_session(
+        "bash",
+        &["--norc", "--noprofile", "-i"],
+        scratch,
+        before,
+        commands,
+    )
+    .expect("bash starts")
+}
+
+/// What an interactive `shell`, started with `arguments`, made of `commands`, as
+/// [`a_bash_session`] describes it for bash. None where no such shell is installed.
+#[cfg(unix)]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_shell_session(
+    shell: &str,
+    arguments: &[&str],
+    scratch: &Scratch,
+    before: &str,
+    commands: &[&str],
+) -> Option<String> {
     use std::os::unix::fs::PermissionsExt;
 
     let bin = scratch.path.join("bin");
@@ -21776,11 +22167,11 @@ fn a_bash_session_after(scratch: &Scratch, before: &str, commands: &[&str]) -> S
     .expect("write the stand-in");
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     let init = scratch.path.join("init.sh");
-    std::fs::write(&init, a_shell_init_script(&scratch.path, "bash")).expect("write the hook");
+    std::fs::write(&init, a_shell_init_script(&scratch.path, shell)).expect("write the hook");
 
     let path = format!("{}:/usr/bin:/bin", bin.display());
-    let mut session = Command::new("bash")
-        .args(["--norc", "--noprofile", "-i"])
+    let mut session = match Command::new(shell)
+        .args(arguments)
         .env_clear()
         .env("HOME", &scratch.path)
         .env("PATH", path)
@@ -21788,7 +22179,11 @@ fn a_bash_session_after(scratch: &Scratch, before: &str, commands: &[&str]) -> S
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .expect("bash starts");
+    {
+        Ok(session) => session,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => panic!("{shell} did not start: {error}"),
+    };
     let mut script = String::from("umask 022\n");
     if !before.is_empty() {
         script.push_str(before);
@@ -21806,8 +22201,8 @@ fn a_bash_session_after(scratch: &Scratch, before: &str, commands: &[&str]) -> S
         .expect("stdin")
         .write_all(script.as_bytes())
         .expect("send the commands");
-    let output = session.wait_with_output().expect("bash finishes");
-    String::from_utf8_lossy(&output.stdout).into_owned()
+    let output = session.wait_with_output().expect("the shell finishes");
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// What stood between the `n`th pair of markers in a session's output.
@@ -22003,6 +22398,81 @@ fn the_zsh_and_fish_hooks_skip_a_question_line_before_they_record() {
             "{shell} writes the line before it skips a question: {body:?}"
         );
     }
+}
+
+/// SHELLINT-2, SHELLINT-4. The zsh hook run in a real `zsh`, where one is installed: a question is
+/// not recorded whether it is typed at the margin, after white space, or with no words after the
+/// name, the lines before and after it are, the directory and the file are the person's alone under
+/// a permissive umask, and ending the shell removes the file. The test skips where `zsh` is not
+/// installed, which is the check the text test above stands in for, and the fish hook is read as
+/// text only because no fish was available to run it.
+///
+/// The regressions this rejects are a zsh hook that judges the line before it takes the white
+/// space off (an indented question would head the next question's lines), one that records a bare
+/// `@bravebot`, one that records nothing, one that leaves the file at the umask's mode, and one that
+/// does not remove the file as the shell ends. The text test cannot see any of these where the
+/// lines read the same and the shell treats them differently.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::string_slice, reason = "ls mode strings are ASCII")]
+fn the_zsh_hook_run_in_a_real_zsh_skips_a_question_and_keeps_the_record_private() {
+    let scratch = Scratch::new("cli-running-shell-init-zsh");
+    let Some(output) = a_shell_session(
+        "zsh",
+        &["-f", "-i"],
+        &scratch,
+        "",
+        &[
+            "echo first-command",
+            "  @bravebot \"what did I run?\"",
+            "echo second-command",
+            "   @bravebot",
+            "echo third-command",
+            "@bravebot \"and now?\"",
+            "ls -ld \"$HOME/.bravebot\" \"$HOME/.bravebot/shell\" \"$__bravebot_file\"",
+        ],
+    ) else {
+        eprintln!("skipped: zsh is not installed, so its hook is read as text only");
+        return;
+    };
+
+    let (arguments, given) = what_a_question_was_given(&output, 0);
+    assert_eq!(arguments, "-p what did I run?", "{output}");
+    assert_eq!(
+        given,
+        ["echo first-command"],
+        "the first question's lines: {output}"
+    );
+    let (arguments, given) = what_a_question_was_given(&output, 1);
+    assert_eq!(arguments, "-p", "{output}");
+    assert_eq!(
+        given,
+        ["echo second-command"],
+        "the indented question was recorded: {output}"
+    );
+    let (arguments, given) = what_a_question_was_given(&output, 2);
+    assert_eq!(arguments, "-p and now?", "{output}");
+    assert_eq!(
+        given,
+        ["echo third-command"],
+        "the indented bare question was recorded: {output}"
+    );
+    let modes: Vec<&str> = output
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|word| matches!(word.len(), 10 | 11) && word.starts_with(['d', '-']))
+        .map(|word| &word[..10])
+        .collect();
+    assert_eq!(
+        modes,
+        ["drwx------", "drwx------", "-rw-------"],
+        "the state directory, the shell directory and the file: {output}"
+    );
+    let left: Vec<_> = std::fs::read_dir(scratch.path.join(".bravebot/shell"))
+        .expect("the directory outlives the shell")
+        .collect();
+    assert!(left.is_empty(), "the shell ended and left {left:?}");
 }
 
 /// SHELLINT-2, SHELLINT-4. The directory and the file are the person's alone however the shell's
@@ -23266,6 +23736,98 @@ fn a_one_shot_run_says_why_a_server_that_never_answered_its_handshake_was_left_o
     );
 }
 
+/// SERVERS-15: a server whose every handshake request is answered inside the bound but whose
+/// `tools/list` never ends is given up on when the handshake's own time is up, three times the
+/// bound and five seconds, and a one-shot run says so on stderr and goes on without it. This is the
+/// end-to-end half of `a_handshake_that_outlasts_its_time_though_each_request_answers_is_left_out_as_too_slow`
+/// in `bravebot-agent`: the note is built there and written by the one-shot start.
+///
+/// The server answers `initialize` at once and each `tools/list` page after 1.6 seconds, every
+/// page naming a next one, so no request outlasts the declared bound of 2 seconds and the eight
+/// pages the client reads take longer than the handshake is given. The run is given up on after 11
+/// seconds. The controls are the model's request, made without the server's tool, so the run went
+/// on, and the run's length, which is far under what a start that never gives up would take. The
+/// exact give-up time (the factor and the five seconds) is pinned by the two `bravebot-agent` tests
+/// named above and in SERVERS-15. This test's lower bound of 10 seconds does not catch a slack of
+/// zero, which still gave a run of 11 seconds here, because the run also spends about 5 seconds
+/// outside the handshake; it is not tightened, since that part varies by machine.
+///
+/// The wrong implementations this rejects are a start that never gives up on a handshake that keeps
+/// paging, one that leaves the server out and says nothing, and one that says it with the
+/// request-timeout sentence, which names a request that did not time out.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_one_shot_run_says_a_server_whose_handshake_never_ends_was_given_up_on_as_too_slow() {
+    if !bravebot_sandbox::confinement_works_here() {
+        return skipped("confinement is unavailable, so the server cannot be started");
+    }
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let settings = settings_for(&gateway).replacen('{', r#"{"mcp": {"request": ["weather"]},"#, 1);
+    let script = r#"while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"fake","version":"1"}}}\n' "$id" ;;
+    *'"tools/list"'*) sleep 1.6; printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[],"nextCursor":"more"}}\n' "$id" ;;
+  esac
+done"#;
+    let argv = vec!["/bin/sh".to_string(), "-c".to_string(), script.to_string()];
+    let declared = serde_json::json!({"servers": {"weather": {
+        "transport": "stdio", "argv": argv, "variables": ["PATH"],
+        "startup_timeout_secs": 2}}})
+    .to_string();
+    let declaration = bravebot_config::mcp::Declarations::parse(&declared)
+        .expect("the declarations read")
+        .get("weather")
+        .expect("an entry for weather")
+        .declaration
+        .expect("a declaration");
+    let scratch = Scratch::new("cli-running-oneshot-too-slow-handshake")
+        .with_settings(&settings)
+        .with_state("mcp.json", &declared)
+        .with_state("mcp-approved", &format!("{}\n", declaration.digest()));
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("PATH", "/usr/bin:/bin"));
+
+    let started = std::time::Instant::now();
+    let output = bravebot(
+        &scratch.path,
+        &environment,
+        &["--dangerously-skip-permissions", "-p", "say something"],
+    );
+    let took = started.elapsed();
+    let offered = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run went on to the gateway without the server");
+    let (_, stderr) = said(&output);
+
+    assert!(
+        !offered.contains("mcp__weather__forecast"),
+        "a server whose handshake never ended was kept: {offered}"
+    );
+    let about_it: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.contains("weather") && line.contains("handshake"))
+        .collect();
+    let [note] = about_it.as_slice() else {
+        panic!("the run did not say once why weather was left out: {stderr:?}");
+    };
+    assert!(
+        note.contains(&t!(servers_too_slow, alias = "weather", seconds = 2).to_string()),
+        "the note is not the one for a handshake given up on, naming the bound: {note:?}"
+    );
+    assert!(
+        took >= Duration::from_secs(10),
+        "the start gave up on the handshake before its time was up: {took:?}\n{stderr}"
+    );
+    assert!(
+        took < Duration::from_secs(40),
+        "the run waited on a handshake that never ended: {took:?}\n{stderr}"
+    );
+}
+
 /// SERVERS-15, Known costs: a session in lines in a terminal, with a server that never answers its
 /// handshake, opens once the bound has passed and not before, and it opens: the wait ends at three
 /// times the bound and 5 seconds at the latest. The run is bounded here, so a start that waits on
@@ -23277,6 +23839,10 @@ fn a_one_shot_run_says_why_a_server_that_never_answered_its_handshake_was_left_o
 /// and it opened under the 8 seconds the bound allows, with 32 seconds for the process to start.
 /// Rejects a start that waits for the handshake with no bound or with the default of 60 seconds, and
 /// a start that opens at once and starts the server's handshake in the background with no note.
+/// It also rejects a start that draws something while it waits: between the opening line and the
+/// note there is no line but the note that a server was started without paths that are not on this
+/// host (a host without the certificate paths draws it, one with them does not), and the prompt
+/// comes after the note.
 #[cfg(unix)]
 #[test]
 #[expect(clippy::expect_used, reason = "a test fails by panicking")]
@@ -23349,6 +23915,41 @@ fn a_session_in_lines_with_a_server_that_never_answers_opens_within_the_bound_th
     assert!(
         took < Duration::from_secs(40),
         "the session opened after waiting on a handshake past its bound: {took:?}\n{transcript}"
+    );
+    // Nothing is drawn while the start waits (SERVERS-15, Known costs): the opening line is said
+    // before the wait, and the next thing on the terminal is the note about the server left out,
+    // then the prompt. A start that draws a progress line, a spinner or the prompt meanwhile puts a
+    // line between the two or the prompt ahead of the note. The one line allowed between them is
+    // the note about paths the server was started without, which the start says before it waits and
+    // only on a host that lacks a certificate path, so the count of lines between is not asserted.
+    let lines: Vec<&str> = transcript.split("\r\n").collect();
+    let opening = lines
+        .iter()
+        .position(|line| line.contains("in lines"))
+        .expect("the opening line was found above");
+    let note = lines
+        .iter()
+        .position(|line| line.contains("weather") && line.contains("handshake"))
+        .expect("the note was found above");
+    assert!(
+        opening < note,
+        "the note came before the opening line: {lines:?}"
+    );
+    let drawn: Vec<&&str> = lines[opening + 1..note]
+        .iter()
+        .filter(|line| !line.contains("weather was started without paths"))
+        .collect();
+    assert!(
+        drawn.is_empty(),
+        "something was drawn while the start waited on the handshake: {drawn:?} in {lines:?}"
+    );
+    let prompt = lines
+        .iter()
+        .position(|line| line.trim_end() == ">")
+        .expect("the session never drew its prompt");
+    assert!(
+        prompt > note,
+        "the prompt was drawn before the wait ended: {lines:?}"
     );
 }
 

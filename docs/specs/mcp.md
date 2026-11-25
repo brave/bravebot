@@ -238,6 +238,7 @@ call, such as a handshake or a listing.
 `verified-by: bravebot_cli::running::a_one_shot_run_shows_nothing_a_servers_stderr_writes`
 `verified-by: bravebot_cli::terminal_modes::the_interface_that_draws_shows_nothing_a_servers_stderr_writes`
 `verified-by: bravebot_tui::mcp_command::reconnect_draws_nothing_a_servers_stderr_writes_and_shows_a_failed_handshake`
+`verified-by: bravebot_ui_bridge::servers::the_desktop_bridge_shows_nothing_a_servers_stderr_writes`
 `verified-by: bravebot_sandbox::openshell::a_discarded_stderr_is_the_null_device_for_the_program_in_the_sandbox`
 
 <a id="MCP-9"></a>
