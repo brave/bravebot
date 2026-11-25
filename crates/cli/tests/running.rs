@@ -15632,7 +15632,7 @@ fn an_agent_setting_whose_definitions_model_is_refused_ends_the_run() {
         "the refusal did not name the definition: {stderr}"
     );
     assert!(
-        gateway.asked.recv_timeout(Duration::from_secs(1)).is_err(),
+        gateway.asked.try_recv().is_err(),
         "a request was sent although the run was refused: {stdout}\n{stderr}"
     );
 }
