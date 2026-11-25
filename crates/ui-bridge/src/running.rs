@@ -771,6 +771,9 @@ mod tests {
                 unbuilt_changes: true,
                 ..Default::default()
             });
-        assert!(!changed, "the resume did not take the record's set as shown");
+        assert!(
+            !changed,
+            "the resume did not take the record's set as shown"
+        );
     }
 }
