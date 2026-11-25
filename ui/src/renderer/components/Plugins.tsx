@@ -36,6 +36,9 @@ export function Plugins(): React.JSX.Element {
   // What leaving the page answers, read at unmount.
   const open = useRef<{ job: string | null; question: Question | null }>({ job: null, question: null })
   open.current = { job, question }
+  // The jobs that have ended. The bridge starts a job before it answers the call that started it,
+  // so `plugins.ended` can arrive before that answer, and `started` must not wait on it then.
+  const ended = useRef(new Set<string>())
 
   /** Run one bridge call and draw the list it answers with. */
   const run = async (method: string, params: Record<string, unknown>, done?: string) => {
@@ -72,13 +75,14 @@ export function Plugins(): React.JSX.Element {
         }
         setProblem('This agent asked a plugin question this window cannot read, so it was answered no. Rebuild or reinstall the app, then retry.')
       } else if (message.event === 'plugins.ended') {
-        const ended = parsePluginsEnded(message.data)
-        if (!ended) return
+        const done = parsePluginsEnded(message.data)
+        if (!done) return
+        ended.current.add(done.job)
         setQuestion(null)
         setJob(null)
-        setList((old) => (old ? { ...old, plugins: ended.plugins } : old))
-        setStatus({ tone: TONE[ended.outcome], text: ended.sentence })
-        if (ended.outcome === 'installed') setSource('')
+        setList((old) => (old ? { ...old, plugins: done.plugins } : old))
+        setStatus({ tone: TONE[done.outcome], text: done.sentence })
+        if (done.outcome === 'installed') setSource('')
       }
     })
     return () => {
@@ -94,6 +98,7 @@ export function Plugins(): React.JSX.Element {
   const started = (answer: unknown, waiting: string) => {
     const id = parseJob(answer)
     if (!id) throw new Error('This agent answered with a job this window cannot read. Rebuild or reinstall the app, then retry.')
+    if (ended.current.has(id)) return
     setJob(id)
     setStatus({ tone: 'info', text: waiting })
   }
