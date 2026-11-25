@@ -851,6 +851,18 @@ class Scanning(unittest.TestCase):
         self.assertIn("200 samples, self 50.0%, inclusive 60.0%", text)
         self.assertIn("at `a.rs:1`", text)
 
+    def test_a_start_over_its_threshold_is_rendered_with_its_worst_run_and_no_function_shares(self):
+        """An implementation that renders the sample text for any row with a `samples` field reads
+        `self_share` from a startup candidate, whose `samples` is its run count, and raises KeyError
+        in the reviewer prompt and in the draft body."""
+        entry = lanes.startup_row("version", "bravebot --version", [0.9, 1.0, 1.1, 1.2, 5.0])
+        candidate = dict(lanes.judge(entry, None), id="S1")
+        text = p.render_candidate(candidate)
+        self.assertIn("(worst run 5.00s)", text)
+        self.assertNotIn("samples", text)
+        self.assertIn("S1", p.build_prompt("startup", [candidate], "/r.json", "reading", "/root"))
+        self.assertIn("(worst run 5.00s)", p.body_for({"lane": "startup", "candidates": ["S1"]}, {"candidates": {"S1": candidate}}))
+
 
 import unittest.mock  # noqa: E402
 

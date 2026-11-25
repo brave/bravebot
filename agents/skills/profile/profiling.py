@@ -133,7 +133,7 @@ def render_candidate(candidate):
         text += f" (worst run {lane_rules.fmt(candidate['worst'], candidate['unit'])})"
     if candidate.get("critical"):
         text += " (on the critical path)"
-    if candidate.get("samples"):
+    if candidate["lane"] == "functions":
         text += f" ({candidate['samples']} samples, self {candidate['self_share'] * 100:.1f}%, inclusive {candidate['inclusive_share'] * 100:.1f}%)"
     if candidate.get("location"):
         text += f" at `{candidate['location']}`"
