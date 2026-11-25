@@ -13,9 +13,11 @@ export interface PlannerStep {
 /**
  * A model service of the test's own, as in packages/agent-client/tests/support/model-stub.ts.
  *
- * Which plan a conversation follows is read from the plan key its latest user prompt carries, and
- * its step from how many tool results follow that prompt, so the service keeps no per-session
- * state. Every request body is kept so a test can look for what the planner was sent.
+ * Which plan a conversation follows is read from the plan key its latest keyed user message carries,
+ * and its step from how many tool results follow that message, so the service keeps no per-session
+ * state. The binary may put a user message of its own after the prompt (the session's scratch
+ * directory), so the latest user message is not necessarily the prompt. Every request body is kept
+ * so a test can look for what the planner was sent.
  */
 export class ModelStub {
   readonly requests: string[] = []
@@ -83,10 +85,13 @@ export class ModelStub {
     }
     this.requests.push(body)
     const conversation = JSON.parse(body) as { messages: { role: string; content: unknown }[] }
-    // The latest prompt picks the plan, and the tool results since it pick the step.
-    const lastPrompt = conversation.messages.map((message) => message.role).lastIndexOf('user')
+    // The latest user message that carries a plan key picks the plan, and the tool results since it pick the step.
+    const planKeys = Object.keys(this.plans)
+    const carriesKey = (message: { role: string; content: unknown }): boolean =>
+      message.role === 'user' && planKeys.some((candidate) => JSON.stringify(message.content).includes(candidate))
+    const lastPrompt = conversation.messages.map(carriesKey).lastIndexOf(true)
     const prompt = JSON.stringify(conversation.messages[lastPrompt]?.content ?? '')
-    const key = Object.keys(this.plans).find((candidate) => prompt.includes(candidate))
+    const key = planKeys.find((candidate) => prompt.includes(candidate))
     if (key === undefined) this.unmatched.push(body)
     const results = conversation.messages.slice(lastPrompt + 1).filter((message) => message.role === 'tool').length
     const step = (key === undefined ? undefined : this.plans[key]?.[results]) ?? { say: 'done' }
