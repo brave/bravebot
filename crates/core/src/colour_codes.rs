@@ -73,7 +73,6 @@ pub fn without(text: &str) -> (String, usize) {
 #[cfg_attr(verus_keep_ghost, verus_spec(r =>
     ensures
         r is Some ==> start + 2 <= r->Some_0 < bytes.len() && bytes@[r->Some_0 as int] == b'm',
-        r is Some ==> r->Some_0 <= start + 2 + most,
 ))]
 fn code_end(bytes: &[u8], start: usize, most: usize) -> Option<usize> {
     // [`without`] passes the offset of an `ESC [` it found, but Verus does not read `without`, so

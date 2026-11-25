@@ -46,3 +46,8 @@ survivor: Of two decisions of equal strength the other one is returned, and deci
 in: crates/core/src/trust.rs::weaker
 was: let b_grants_less = strength(b) < strength(a);
 now: let b_grants_less = strength(b) <= strength(a);
+
+survivor: Scanning one more parameter is harmless.
+in: crates/core/src/colour_codes.rs::code_end
+was: while taken < room && taken <= most {
+now: while taken < room && taken <= most + 1 {

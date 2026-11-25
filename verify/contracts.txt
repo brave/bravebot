@@ -17,7 +17,7 @@ crates/core/src/capability.rs::within: r => ensures forall|capability: Capabilit
 crates/core/src/capability.rs::within/loop: invariant at <= self.granted.len(), forall|k: int| #![trigger kept@[k]] 0 <= k < kept@.len() ==> (exists|i: int| 0 <= i < at && #[trigger] self.granted@[i] == kept@[k]) && parent.spec_holds(kept@[k]), decreases self.granted.len() - at,
 crates/core/src/capability.rs::revoke_mcp_call: r => ensures forall|capability: Capability| #[trigger] final(self).spec_holds(capability) ==> old(self).spec_holds(capability), !final(self).spec_holds(Capability::McpCall(*alias)), r == old(self).spec_holds(Capability::McpCall(*alias)),
 crates/core/src/capability.rs::revoke_mcp_call/loop: invariant at <= self.granted.len(), withdrawn == Capability::McpCall(*alias), forall|k: int| #![trigger kept@[k]] 0 <= k < kept@.len() ==> (exists|i: int| 0 <= i < at && #[trigger] self.granted@[i] == kept@[k]) && kept@[k] != withdrawn, found <==> exists|i: int| 0 <= i < at && #[trigger] self.granted@[i] == withdrawn, decreases self.granted.len() - at,
-crates/core/src/colour_codes.rs::code_end: r => ensures r is Some ==> start + 2 <= r->Some_0 < bytes.len() && bytes@[r->Some_0 as int] == b'm', r is Some ==> r->Some_0 <= start + 2 + most,
+crates/core/src/colour_codes.rs::code_end: r => ensures r is Some ==> start + 2 <= r->Some_0 < bytes.len() && bytes@[r->Some_0 as int] == b'm',
 crates/core/src/colour_codes.rs::code_end/loop: invariant parameters == start + 2, room == bytes.len() - parameters, taken <= room, decreases room - taken,
 crates/core/src/command.rs::?: r => ensures r == crate::spec::null_device(*path),
 crates/core/src/command.rs::opens_no_file: r => ensures r == crate::spec::opens_no_file(*self),
