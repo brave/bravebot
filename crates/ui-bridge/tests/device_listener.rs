@@ -290,6 +290,9 @@ fn a_listen_that_cannot_be_bound_stops_the_host_before_its_client_starts() {
         std::thread::sleep(Duration::from_millis(20));
     };
     assert_eq!(status.code(), Some(1));
+    // A client that is never started gives no event to wait for. This is the time in which a client
+    // the host started before it exited would reach the relay, as `quit_ends_a_phones_connection_and_stops_the_host`
+    // shows one does when the bind succeeds.
     assert!(host.client_within(Duration::from_millis(500)).is_none());
 }
 
