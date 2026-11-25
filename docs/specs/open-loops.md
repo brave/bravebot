@@ -203,7 +203,7 @@ Undoing a turn takes its writes and commands out of the record, so a resume afte
 `verified-by: bravebot_ui_bridge::open_loops::a_reopened_session_that_left_nothing_open_replies_with_no_line`
 `verified-by: bravebot_ui_bridge::open_loops::a_rewound_turn_leaves_nothing_open_on_reopen`
 `verified-by: bravebot_ui_bridge::checkouts::a_reopened_session_counts_the_kept_checkout_it_did_not_apply`
-`verified-by: bravebot_ui_bridge::turn::a_delegates_write_is_not_kept_as_one_the_session_wrote`
+`verified-by: bravebot_ui_bridge::written_tests::a_delegates_write_is_not_kept_as_one_the_session_wrote`
 `verified-by: bravebot_agent::open_loops::the_sentence_a_resume_shows_names_the_same_counts`
 `verified-by: bravebot_ui_bridge::open_loops::a_record_with_failing_work_and_open_todos_reads_as_those_loops`
 `verified-by: bravebot_ui_bridge::open_loops::a_record_from_before_open_loops_reads_as_nothing_open`
