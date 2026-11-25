@@ -154,11 +154,27 @@ or the scripts that run them, on the merge queue's branch, and on `main`. It ins
 `VERUS_SHA256`, and the toolchain `VERUS_TOOLCHAIN` names. A bump of the release changes all three
 together.
 
-`crates/core/src/spec.rs`, `verify/` and the three scripts have code owners in
-`.github/CODEOWNERS`. A contract that is removed or weakened in the crate has to change
-`verify/contracts.txt` to pass, and a definition a contract names lives in `spec.rs`, so either
-change needs an owner's approval. A survivor listed in `verify/survivors.txt` needs one as well.
-The body a contract holds needs none, because Verus checks it.
+A pull request that weakens what these hold is flagged for a person. After CI runs on a pull
+request, the `Proof weakened` workflow runs `contrib/check-verus-weakened.py` against the merge base
+and lists in its job summary every contract the change removes or changes, assumption it adds,
+mutation it removes and survivor it adds, counting a line the ledger already holds once more, and
+every edit to `spec.rs`, `verify/history.rs` or a script that runs the checks. Where it lists any,
+it labels the pull request `proof-weakened` and asks the owners of `verify/` to review. It runs from
+the default branch with that branch's copy of the script, on the commit GitHub says CI ran on, so a
+pull request can change neither the script nor which pull request is labelled, and its code is
+read with `git show` and never run.
+It blocks nothing, since a changed contract can be a stronger one and an assumption added can be
+the price of a proof, so the pull request says why each item is right. `make check-verus-weakened`
+prints the same list here. A function that should have a contract and was given none changes no
+line of the ledger, and this does not see it.
+
+`crates/core/src/spec.rs`, `verify/` and the scripts have code owners in `.github/CODEOWNERS`, so
+GitHub asks an owner to review a change to them. A contract that is removed or weakened in the
+crate has to change `verify/contracts.txt` to pass, and a definition a contract names lives in
+`spec.rs`, so either change reaches an owner, and so does a survivor listed in
+`verify/survivors.txt`. The `main` ruleset does not require that owner's approval, so the
+`proof-weakened` label is what tells a reviewer to read it. The body a contract holds needs no
+owner, because Verus checks it.
 
 ## Running
 

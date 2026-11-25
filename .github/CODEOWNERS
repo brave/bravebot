@@ -82,3 +82,4 @@
 /contrib/check-verus.py @bbondy @darkdh
 /contrib/check-verus-contracts.py @bbondy @darkdh
 /contrib/check-verus-sweep.py @bbondy @darkdh
+/contrib/check-verus-weakened.py @bbondy @darkdh
