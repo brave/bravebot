@@ -2,9 +2,9 @@
 //! PLUGIN-13).
 //!
 //! A projection of what `bravebot_agent::plugins` staged and read as data, and nothing more. It
-//! decides nothing: it puts no question, answers none and starts nothing. The rows are the ones
-//! `crates/tui/src/confirm/plugin.rs` and `confirm/plugin/update.rs` draw, so the two front ends
-//! list the same parts.
+//! decides nothing: it puts no question, answers none and starts nothing. The rows and the update
+//! pairing are `bravebot_agent::plugin_listing`'s, which the terminal draws from too, so the two
+//! front ends list the same parts.
 //!
 //! Every string the plugin wrote sits under a key named `untrusted`, as a string, a list or an
 //! object, and the window draws everything under such a key inside the margin that marks untrusted
@@ -14,13 +14,16 @@
 //! which names another source's origin and is drawn behind the margin as the terminal draws it.
 //! Text is carried as read, never cut, so every word of every argv reaches the window.
 
+use bravebot_agent::plugin_listing::{
+    self as shared, DefinitionRow, Delta, HookRow, InstallRequest, Listed, PartDeltas, Reach,
+    ServerRow, SkillRow, UpdateRequest,
+};
 use bravebot_agent::plugin_servers;
 use bravebot_agent::plugin_source::Source;
-use bravebot_agent::plugins::{self, Before, Change, Installed, Offer, Offered, Staged};
+use bravebot_agent::plugins::{Before, Change, Installed, Staged};
 use bravebot_agent::skills::Catalogue;
-use bravebot_config::hooks::{Hook, Unkept};
-use bravebot_config::mcp::Declaration;
-use bravebot_config::plugin::{FileFault, HookList, ServerList};
+use bravebot_config::hooks::Unkept;
+use bravebot_config::plugin::FileFault;
 use bravebot_core::delegate::Definitions;
 use serde_json::{Value, json};
 
@@ -31,26 +34,22 @@ use serde_json::{Value, json};
 /// `catalogue` and `definitions` are what discovery found for the session the shadow marks are
 /// checked against.
 pub fn install(staged: &Staged, catalogue: &Catalogue, definitions: &Definitions) -> Value {
-    let (skills, kinds) = offer_rows(&plugins::staged_offers(staged), catalogue, definitions);
-    let (requested_ref, commit) = git_of(&staged.source);
+    let request = InstallRequest::from_staged(staged, catalogue, definitions);
+    let git = request.git.as_ref();
     json!({
-        "git": commit.is_some(),
+        "git": git.is_some(),
         "untrusted": {
-            "name": staged.manifest.name,
-            "version": staged.manifest.version,
-            "source": staged.source.to_string(),
-            "requestedRef": requested_ref,
-            "commit": commit,
-            "skipped": staged
-                .skipped
-                .iter()
-                .map(|path| path.to_string_lossy().into_owned())
-                .collect::<Vec<_>>(),
+            "name": request.name,
+            "version": request.version,
+            "source": request.source,
+            "requestedRef": git.and_then(|git| git.requested_ref.clone()),
+            "commit": git.map(|git| git.commit.clone()),
+            "skipped": skipped(staged),
         },
-        "skills": skills,
-        "definitions": kinds,
-        "hooks": hooks_of(staged.hooks.as_ref()),
-        "servers": servers_of(&staged.manifest.name, staged.servers.as_ref()),
+        "skills": request.skills.iter().map(skill_row).collect::<Vec<_>>(),
+        "definitions": request.definitions.iter().map(definition_row).collect::<Vec<_>>(),
+        "hooks": hooks_of(request.hooks.as_ref()),
+        "servers": servers_of(&request.name, request.servers.as_ref()),
     })
 }
 
@@ -63,48 +62,64 @@ pub fn update(
     catalogue: &Catalogue,
     definitions: &Definitions,
 ) -> Value {
-    let (old_skills, old_kinds) = offer_rows(&before.offers, catalogue, definitions);
-    let (new_skills, new_kinds) =
-        offer_rows(&plugins::staged_offers(staged), catalogue, definitions);
-    let old_hooks = hooks_of(before.hooks.as_ref());
-    let new_hooks = hooks_of(staged.hooks.as_ref());
-    let old_servers = servers_of(&installed.name, before.servers.as_ref());
-    let new_servers = servers_of(&staged.manifest.name, staged.servers.as_ref());
+    let request = UpdateRequest::from_parts(staged, installed, before, catalogue, definitions);
+    let (old_skills, old_kinds) = shared::offer_rows(&before.offers, catalogue, definitions);
+    let old_hooks = shared::hooks_from(before.hooks.as_ref());
+    let old_servers = shared::servers_from(&installed.name, before.servers.as_ref());
     let (requested_ref, new_commit) = git_of(&staged.source);
     let (_, installed_commit) = git_of(&installed.source);
-    let git = installed_commit.is_some() && new_commit.is_some();
+    let new_name = &staged.manifest.name;
     json!({
-        "git": git,
+        "git": request.git.is_some(),
         "enabled": installed.enabled,
         "installedDigest": installed.digest,
         "newDigest": staged.digest,
         "untrusted": {
-            "name": staged.manifest.name,
-            "installedVersion": installed.version,
-            "newVersion": staged.manifest.version,
-            "source": staged.source.to_string(),
+            "name": request.name,
+            "installedVersion": request.installed_version,
+            "newVersion": request.new_version,
+            "source": request.source,
             "installedSource": installed.source.to_string(),
             "requestedRef": requested_ref,
             "installedCommit": installed_commit,
             "newCommit": new_commit,
-            "skipped": staged
-                .skipped
-                .iter()
-                .map(|path| path.to_string_lossy().into_owned())
-                .collect::<Vec<_>>(),
+            "skipped": skipped(staged),
         },
         "before": {
-            "readable": before.readable,
-            "skills": old_skills,
-            "definitions": old_kinds,
-            "hooks": old_hooks,
-            "servers": old_servers,
+            "readable": request.installed_readable,
+            "skills": old_skills.iter().map(skill_row).collect::<Vec<_>>(),
+            "definitions": old_kinds.iter().map(definition_row).collect::<Vec<_>>(),
+            "hooks": hooks_of(old_hooks.as_ref()),
+            "servers": servers_of(&installed.name, old_servers.as_ref()),
         },
-        "skills": deltas(&old_skills, &new_skills, offer_key),
-        "definitions": deltas(&old_kinds, &new_kinds, offer_key),
-        "hooks": part_deltas(&old_hooks, &new_hooks, hook_key),
-        "servers": part_deltas(&old_servers, &new_servers, server_key),
-        "files": plugins::file_changes(staged, before).map(|files| {
+        "skills": deltas_of(&request.skills, skill_row),
+        "definitions": deltas_of(&request.definitions, definition_row),
+        "hooks": request.hooks.as_ref().map_or(Value::Null, |part| {
+            let passed = staged.hooks.as_ref().map(|_| passed_over(part.new_unkept));
+            part_deltas_of(part, hook_row, passed)
+        }),
+        "servers": request.servers.as_ref().map_or(Value::Null, |part| {
+            // A row of the installed copy names the installed plugin, and a row of the staged tree
+            // the staged one, so each is reached under its own name.
+            let delta_rows = part.deltas.iter().map(|delta| match delta {
+                Delta::Added(now) => json!({"change": "added", "now": server_row(new_name, now)}),
+                Delta::Removed(was) => {
+                    json!({"change": "removed", "was": server_row(&installed.name, was)})
+                }
+                Delta::Changed { was, now } => json!({
+                    "change": "changed",
+                    "was": server_row(&installed.name, was),
+                    "now": server_row(new_name, now),
+                }),
+            });
+            json!({
+                "deltas": delta_rows.collect::<Vec<_>>(),
+                "installedFault": part.installed_fault.map(fault_word),
+                "newFault": part.new_fault.map(fault_word),
+                "passedOver": Value::Null,
+            })
+        }),
+        "files": request.files.as_ref().map(|files| {
             files
                 .iter()
                 .map(|file| {
@@ -117,6 +132,15 @@ pub fn update(
                 .collect::<Vec<_>>()
         }),
     })
+}
+
+/// The paths the staging passed over.
+fn skipped(staged: &Staged) -> Vec<String> {
+    staged
+        .skipped
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect()
 }
 
 /// The ref the person named and the full commit of a git source, or two nulls for a local path,
@@ -132,62 +156,46 @@ fn git_of(source: &Source) -> (Option<String>, Option<String>) {
     }
 }
 
-/// The skill rows and the definition rows of `offers`, each carrying the origin of a source above a
-/// plugin that offers the same name.
-fn offer_rows(
-    offers: &[Offer],
-    catalogue: &Catalogue,
-    definitions: &Definitions,
-) -> (Vec<Value>, Vec<Value>) {
-    let mut skills = Vec::new();
-    let mut kinds = Vec::new();
-    for mark in plugins::shadow_marks(offers, catalogue, definitions) {
-        match mark.offer.what {
-            Offered::Skill { description } => skills.push(json!({
-                "untrusted": {"name": mark.offer.name, "description": description},
-                "shadowedBy": mark.by,
-            })),
-            Offered::Definition { kind } => kinds.push(json!({
-                "kind": kind.to_string(),
-                "untrusted": {"name": mark.offer.name},
-                "shadowedBy": mark.by,
-            })),
-        }
-    }
-    (skills, kinds)
+fn skill_row(row: &SkillRow) -> Value {
+    json!({
+        "untrusted": {"name": row.name, "description": row.description},
+        "shadowedBy": row.shadowed_by,
+    })
+}
+
+fn definition_row(row: &DefinitionRow) -> Value {
+    json!({
+        "kind": row.kind,
+        "untrusted": {"name": row.name},
+        "shadowedBy": row.shadowed_by,
+    })
 }
 
 /// The hooks section, `null` where the manifest names no hooks file. A file that could not be read
 /// is a `fault` with no rows, never an empty list of hooks.
-fn hooks_of(read: Option<&Result<HookList, FileFault>>) -> Value {
-    match read {
-        None => Value::Null,
-        Some(Ok(list)) => json!({
-            "rows": list.hooks.declared().iter().map(hook_row).collect::<Vec<_>>(),
-            "fault": Value::Null,
-            "passedOver": passed_over(list.unkept),
-        }),
-        Some(Err(fault)) => json!({
-            "rows": [],
-            "fault": fault_word(*fault),
-            "passedOver": passed_over(Unkept::default()),
-        }),
-    }
+fn hooks_of(listed: Option<&Listed<HookRow>>) -> Value {
+    listed.map_or(Value::Null, |listed| {
+        json!({
+            "rows": listed.rows.iter().map(hook_row).collect::<Vec<_>>(),
+            "fault": listed.fault.map(fault_word),
+            "passedOver": passed_over(listed.unkept),
+        })
+    })
 }
 
 /// One hook, its argv as it will run: each word on its own, `${PLUGIN_ROOT}` already the installed
 /// directory (PLUGIN-13).
-fn hook_row(hook: &Hook) -> Value {
+fn hook_row(hook: &HookRow) -> Value {
     json!({
-        "timeoutSecs": hook.timeout().map(|bound| bound.as_secs()),
+        "timeoutSecs": hook.timeout_secs,
         "untrusted": {
-            "moment": hook.moment().as_str(),
-            "tool": hook.tool(),
-            "watches": hook.path(),
-            "argv": hook.run(),
+            "moment": hook.moment,
+            "tool": hook.tool,
+            "watches": hook.watches,
+            "argv": hook.argv,
         },
         "reaches": hook
-            .run()
+            .argv
             .first()
             .map(|program| vec![reach("command", program)])
             .unwrap_or_default(),
@@ -205,93 +213,48 @@ fn passed_over(unkept: Unkept) -> Value {
 /// The servers section, `null` where the manifest names no servers file. An entry that states no
 /// usable declaration is a row marked never started, as is one whose `<plugin>_<alias>` is longer
 /// than an alias may be.
-fn servers_of(plugin: &str, read: Option<&Result<ServerList, FileFault>>) -> Value {
-    match read {
-        None => Value::Null,
-        Some(Ok(list)) => json!({
-            "rows": list
-                .entries
+fn servers_of(plugin: &str, listed: Option<&Listed<ServerRow>>) -> Value {
+    listed.map_or(Value::Null, |listed| {
+        json!({
+            "rows": listed
+                .rows
                 .iter()
-                .map(|entry| match &entry.declaration {
-                    Ok(declaration) => server_row(plugin, &entry.alias, declaration),
-                    Err(_) => unusable_row(&entry.alias),
-                })
+                .map(|row| server_row(plugin, row))
                 .collect::<Vec<_>>(),
-            "fault": Value::Null,
-        }),
-        Some(Err(fault)) => json!({"rows": [], "fault": fault_word(*fault)}),
-    }
-}
-
-fn server_row(plugin: &str, alias: &str, declaration: &Declaration) -> Value {
-    let reachable = plugin_servers::is_reachable(plugin, alias);
-    let mut variables: Vec<String> = declaration.variables().to_vec();
-    variables.extend(declaration.bearer_env().map(str::to_string));
-    variables.extend(
-        declaration
-            .env_http_headers()
-            .map(|(header, variable)| format!("{variable} ({header})")),
-    );
-    let stored: Vec<String> = declaration
-        .stored_values()
-        .map(|(name, value)| format!("{name}={value}"))
-        .collect();
-    json!({
-        "usable": true,
-        "reachable": reachable,
-        "tooLong": plugin_servers::is_too_long(plugin, alias),
-        "neverStarted": !reachable,
-        "untrusted": {
-            "alias": alias,
-            "transport": declaration.transport().to_string(),
-            "argv": declaration.argv(),
-            "url": declaration.url(),
-            "variables": variables,
-            "stored": stored,
-        },
-        "reaches": reaches(declaration),
+            "fault": listed.fault.map(fault_word),
+        })
     })
 }
 
-/// An entry that states no declaration that can be used. Its alias is listed and nothing else.
-fn unusable_row(alias: &str) -> Value {
+/// One server of the plugin called `plugin`. An entry that states no declaration that can be used
+/// lists its alias and nothing else.
+fn server_row(plugin: &str, row: &ServerRow) -> Value {
     json!({
-        "usable": false,
-        "reachable": false,
-        "tooLong": false,
-        "neverStarted": true,
+        "usable": row.usable,
+        "reachable": row.reachable,
+        "tooLong": row.usable && plugin_servers::is_too_long(plugin, &row.alias),
+        "neverStarted": !row.reachable,
         "untrusted": {
-            "alias": alias,
-            "transport": "",
-            "argv": [],
-            "url": Value::Null,
-            "variables": [],
-            "stored": [],
+            "alias": row.alias,
+            "transport": row.transport,
+            "argv": row.argv,
+            "url": row.url,
+            "variables": row.variables,
+            "stored": row.stored,
         },
-        "reaches": [],
+        "reaches": row.reaches.iter().map(reach_row).collect::<Vec<_>>(),
     })
 }
 
-/// The program a declaration would start, the hosts it would reach, the files it may read and the
-/// directory it runs in, one row each.
-fn reaches(declaration: &Declaration) -> Vec<Value> {
-    let mut found = Vec::new();
-    if let Some(program) = declaration.argv().first() {
-        found.push(reach("command", program));
+/// The program a declaration would start, a host it would reach, a file it may read or the
+/// directory it runs in.
+fn reach_row(reach_of: &Reach) -> Value {
+    match reach_of {
+        Reach::Command(program) => reach("command", program),
+        Reach::Host(host) => reach("host", host),
+        Reach::File(file) => reach("file", file),
+        Reach::Directory(directory) => reach("directory", directory),
     }
-    if let Some(host) = declaration.url().and_then(bravebot_core::url::host_of) {
-        found.push(reach("host", &host));
-    }
-    for host in declaration.allowed_hosts().unwrap_or_default() {
-        found.push(reach("host", host));
-    }
-    for file in declaration.reads() {
-        found.push(reach("file", file));
-    }
-    if let Some(directory) = declaration.directory() {
-        found.push(reach("directory", directory));
-    }
-    found
 }
 
 fn reach(kind: &str, value: &str) -> Value {
@@ -319,62 +282,32 @@ fn change_word(change: Change) -> &'static str {
     }
 }
 
-fn offer_key(row: &Value) -> Value {
-    row["untrusted"]["name"].clone()
+/// The deltas `bravebot_agent::plugin_listing` paired, each row drawn by `row`.
+fn deltas_of<T>(deltas: &[Delta<T>], row: impl Fn(&T) -> Value) -> Vec<Value> {
+    deltas
+        .iter()
+        .map(|delta| match delta {
+            Delta::Added(now) => json!({"change": "added", "now": row(now)}),
+            Delta::Removed(was) => json!({"change": "removed", "was": row(was)}),
+            Delta::Changed { was, now } => {
+                json!({"change": "changed", "was": row(was), "now": row(now)})
+            }
+        })
+        .collect()
 }
 
-fn hook_key(row: &Value) -> Value {
-    let words = &row["untrusted"];
-    json!([words["moment"], words["tool"], words["watches"]])
-}
-
-fn server_key(row: &Value) -> Value {
-    row["untrusted"]["alias"].clone()
-}
-
-/// The rows turning `old` into `new`, as the terminal's update difference pairs them. A row equal
-/// on both sides is left out. Of the rest, a row of `new` with the `key` of a row of `old` is
-/// changed, one with no partner is added, and a row of `old` left over is removed. Added and changed
-/// come in the order of `new`, then removed in the order of `old`.
-fn deltas(old: &[Value], new: &[Value], key: impl Fn(&Value) -> Value) -> Vec<Value> {
-    let mut left: Vec<Option<&Value>> = old.iter().map(Some).collect();
-    let mut unmatched = Vec::new();
-    for row in new {
-        match left.iter().position(|held| *held == Some(row)) {
-            Some(at) => left[at] = None,
-            None => unmatched.push(row),
-        }
-    }
-    let mut found = Vec::new();
-    for row in unmatched {
-        let partner = left
-            .iter()
-            .position(|held| held.is_some_and(|held| key(held) == key(row)));
-        found.push(match partner.and_then(|at| left[at].take()) {
-            Some(was) => json!({"change": "changed", "was": was, "now": row}),
-            None => json!({"change": "added", "now": row}),
-        });
-    }
-    found.extend(
-        left.into_iter()
-            .flatten()
-            .map(|was| json!({"change": "removed", "was": was})),
-    );
-    found
-}
-
-/// The difference between two readings of a hooks or servers file, `null` where neither side names
-/// one. A side that could not be read is said as its fault, so its rows are not taken for none.
-fn part_deltas(old: &Value, new: &Value, key: impl Fn(&Value) -> Value) -> Value {
-    if old.is_null() && new.is_null() {
-        return Value::Null;
-    }
-    let rows = |part: &Value| part["rows"].as_array().cloned().unwrap_or_default();
+/// The difference between two readings of a hooks file. A side that could not be read is said as
+/// its fault, so its rows are not taken for none.
+fn part_deltas_of<T>(
+    part: &PartDeltas<T>,
+    row: impl Fn(&T) -> Value,
+    passed_over: Option<Value>,
+) -> Value {
     json!({
-        "deltas": deltas(&rows(old), &rows(new), key),
-        "installedFault": old["fault"],
-        "newFault": new["fault"],
-        "passedOver": new["passedOver"],
+        "deltas": deltas_of(&part.deltas, row),
+        "installedFault": part.installed_fault.map(fault_word),
+        "newFault": part.new_fault.map(fault_word),
+        "passedOver": passed_over,
     })
 }
 
@@ -382,7 +315,7 @@ fn part_deltas(old: &Value, new: &Value, key: impl Fn(&Value) -> Value) -> Value
 mod tests {
     use super::*;
     use bravebot_agent::confirm::FetchRequest;
-    use bravebot_agent::plugins::Asker;
+    use bravebot_agent::plugins::{self, Asker};
     use bravebot_agent::workspace::Workspace;
     use std::path::Path;
 
