@@ -30,8 +30,8 @@ A debug build asks for the network because it fetches its JavaScript from Metro 
 Both apps use the desktop app's icon. The Android app's is cut from the drawing in `ui/build/icon.svg` by `scripts/make-icons.sh`, which writes the files under `android/`. It needs `python3` with Pillow. After the drawing changes, run it again and commit the result.
 
 - iOS: the Icon Composer document `ios/Bravebot/AppIcon.icon`, a copy of `ui/build/icon.icon` that `scripts/make-ios-icon.sh` makes. Xcode 26 compiles it into `Assets.car` for iOS 26 and later and writes flat fallback images for earlier versions, so building the app needs Xcode 26 or later. The project's icon name stays `AppIcon`, which is why the copy has that name.
-- Android 8 and later: an adaptive icon. The mascot is the foreground layer, sized so that its whole figure fits inside the 66 dp circle every launcher mask shows, over a plain white background. It has a monochrome layer for themed icons on Android 13 and later: the mascot as one colour with the white of its eyes cut out. Each size draws the mascot with a whole number of pixels per square, so no edge is blurred.
-- Android 7, which the app still supports (`minSdkVersion` 24): the mascot on a white rounded tile, and on a white round one, in `mipmap-*dpi`.
+- Android: an adaptive icon. The mascot is the foreground layer, sized so that its whole figure fits inside the 66 dp circle every launcher mask shows, over a plain white background. It has a monochrome layer for themed icons on Android 13 and later: the mascot as one colour with the white of its eyes cut out. Each size draws the mascot with a whole number of pixels per square, so no edge is blurred.
+- Android 12 is the oldest version the app supports (`minSdkVersion` 31), so the adaptive icon is the only one the app needs.
 
 ## Consuming the client package
 
