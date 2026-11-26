@@ -2871,7 +2871,8 @@ def key_tree(**bodies):
     """Sources holding the functions that key a name, each with the body given or a clean one.
 
     `normalise`, `key` (the trust map's), `file_authority_key` and `key_of` are the names a body is
-    given under, and the helpers that fold and decompose a name are there with clean bodies. The
+    given under, and the helpers that fold, decompose, read and write a name are there with clean
+    bodies. The
     map's `key` sits in an `impl` and a second function follows it, so a body that ran on would be
     read for a construct that belongs to the neighbour.
     """
@@ -2895,6 +2896,18 @@ def key_tree(**bodies):
             "}",
             "pub(crate) fn canonical_form(key: &str, folds_case: bool) -> Cow<'_, str> {",
             "    Cow::Borrowed(key)",
+            "}",
+            "fn names_something(segment: &[char]) -> bool {",
+            "    !segment.is_empty()",
+            "}",
+            "fn push_segment(key: &mut Vec<char>, segment: &[char], wrote: bool) {",
+            "    key.extend(segment)",
+            "}",
+            "fn chars_of(s: &str) -> Vec<char> {",
+            "    s.chars().collect()",
+            "}",
+            "fn string_of(chars: Vec<char>) -> String {",
+            "    chars.into_iter().collect()",
             "}",
             "impl TrustStore {",
             "    pub(crate) fn key(&self, path: &str) -> String {",

@@ -773,15 +773,63 @@ pub fn is_absolute_key(key: &str) -> bool {
 /// path is bytes, so `note.md ` is a file of its own, apart from `note.md`, and so is a name made
 /// only of whitespace, apart from the directory it is in.
 pub(crate) fn normalise(path: &str) -> String {
-    let segments = path
-        .split('/')
-        .filter(|segment| !segment.is_empty() && *segment != ".")
-        .collect::<Vec<_>>()
-        .join("/");
-    match is_absolute_key(path) {
-        true => format!("/{segments}"),
-        false => segments,
+    let chars = chars_of(path);
+    let absolute = !chars.is_empty() && chars[0] == '/';
+    let mut key: Vec<char> = Vec::new();
+    if absolute {
+        key.push('/');
     }
+    let mut segment: Vec<char> = Vec::new();
+    let mut wrote = false;
+    let mut at = 0;
+    while at < chars.len() {
+        let character = chars[at];
+        if character == '/' {
+            let keep = names_something(&segment);
+            if keep {
+                push_segment(&mut key, &segment, wrote);
+                wrote = true;
+            }
+            segment = Vec::new();
+        } else {
+            segment.push(character);
+        }
+        at += 1;
+    }
+    let keep = names_something(&segment);
+    if keep {
+        push_segment(&mut key, &segment, wrote);
+    }
+    string_of(key)
+}
+
+/// Whether a segment of a path names something: an empty segment and a `.` both name the directory
+/// they are in.
+fn names_something(segment: &[char]) -> bool {
+    let dot = segment.len() == 1 && segment[0] == '.';
+    !segment.is_empty() && !dot
+}
+
+/// Write `segment` onto the end of `key`, after a `/` where `key` already holds a segment.
+fn push_segment(key: &mut Vec<char>, segment: &[char], wrote: bool) {
+    if wrote {
+        key.push('/');
+    }
+    let mut at = 0;
+    while at < segment.len() {
+        key.push(segment[at]);
+        at += 1;
+    }
+}
+
+/// The characters of `s`, in order.
+fn chars_of(s: &str) -> Vec<char> {
+    s.chars().collect()
+}
+
+/// The string of `chars`, in order.
+fn string_of(chars: Vec<char>) -> String {
+    chars.into_iter().collect()
 }
 
 /// `key` with its letter case folded out, the way a map that folds case compares names.
@@ -941,15 +989,47 @@ fn covers_by(prefix: &str, path: &str, folds_case: bool, fold: fn(&str) -> Strin
 /// Counts segments and not bytes, since a rule can be written in a spelling of a different length
 /// than the prefix it is under (`ss` under `\u{17f}\u{17f}`). `key` is a key [`covers_by`] found under
 /// `prefix`.
-fn tail_beneath<'k>(prefix: &str, key: &'k str) -> &'k str {
-    let skipped = prefix
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .count();
-    key.trim_start_matches('/')
-        .splitn(skipped + 1, '/')
-        .nth(skipped)
-        .unwrap_or("")
+fn tail_beneath(prefix: &str, key: &str) -> String {
+    let skipped = segments_in(prefix);
+    let key = chars_of(key);
+    let mut at = 0;
+    while at < key.len() && key[at] == '/' {
+        at += 1;
+    }
+    let mut passed: usize = 0;
+    while passed < skipped && at < key.len() {
+        if key[at] == '/' {
+            passed += 1;
+        }
+        at += 1;
+    }
+    let mut tail: Vec<char> = Vec::new();
+    while at < key.len() {
+        tail.push(key[at]);
+        at += 1;
+    }
+    string_of(tail)
+}
+
+/// How many segments `prefix` has that are not empty.
+fn segments_in(prefix: &str) -> usize {
+    let prefix = chars_of(prefix);
+    let mut count: usize = 0;
+    let mut in_segment = false;
+    let mut at = 0;
+    while at < prefix.len() {
+        let character = prefix[at];
+        if character == '/' {
+            in_segment = false;
+        } else {
+            if !in_segment {
+                count += 1;
+            }
+            in_segment = true;
+        }
+        at += 1;
+    }
+    count
 }
 
 /// [`covers`] for two keys already in the form they are compared in.
