@@ -139,13 +139,20 @@ impl LanguageServers {
             // credentials, which is RUN-12: a person approving a server did not approve handing it
             // what this agent authenticates with. Computed when each server starts, since the
             // provider blocks in force can change during a session.
-            servers: Arc::new(Mutex::new(Servers::new(
-                root.clone(),
-                state.clone(),
-                resolve_program,
-                incognito,
-                bravebot_config::scrub::withheld,
-            ))),
+            //
+            // A session that keeps no index makes one under the account's cache directory, which a
+            // stage of `run` may not write, and not under the system temporary directory, which it
+            // may.
+            servers: Arc::new(Mutex::new(
+                Servers::new(
+                    root.clone(),
+                    state.clone(),
+                    resolve_program,
+                    incognito,
+                    bravebot_config::scrub::withheld,
+                )
+                .session_indexes_in(crate::home::cache()),
+            )),
             root,
             state,
         }

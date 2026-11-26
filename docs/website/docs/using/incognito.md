@@ -53,22 +53,25 @@ Ten things still reach the filesystem:
 - **Programs you run.** A program reaches the filesystem with the access your own shell would give
   it, and may write whatever it likes. What confines one is
   [confinement](../security/security.md#confinement), which is a different question.
-- **The editor hand-off.** Composing in `$EDITOR` writes a scratch file. It goes to the system
-  temporary directory rather than `~/.bravebot`, is readable by nobody else, and does not outlive the
-  edit.
+- **The editor hand-off.** Composing in `$EDITOR` writes a scratch file. It goes to a directory of its
+  own under your cache directory rather than `~/.bravebot` or the system temporary directory, which
+  every program Brave Bot confines may write, so none of them can replace it. It is readable by
+  nobody else and does not outlive the edit, except that a session killed outright while the editor
+  is open leaves its directory behind.
 - **The session's own scratch directory.** Somewhere to put a file that is not part of the project is
   something a turn needs, and this mode does not take it away. It sits in the system temporary
-  directory on the same terms as the editor's file and goes with the session. Its name says which
-  program made it and nothing about which project or which session, so an empty one records only that
-  this program ran at this time.
+  directory, readable by nobody else, and goes with the session. Its name says which program made it
+  and nothing about which project or which session, so an empty one records only that this program
+  ran at this time.
 - **A language server's index.** A server indexes the workspace before it can answer anything, and
-  the index is too large to hold in memory. It goes to a directory of its own in the system temporary
-  directory and goes with the session, so the next session indexes again. It is never written into the
-  project.
+  the index is too large to hold in memory. It goes to a directory of its own under your cache
+  directory, not in the system temporary directory, which every program Brave Bot confines may
+  write, and goes with the session, so the next session indexes again. It is never written into the
+  project. A session killed outright leaves it behind.
 - **A local MCP server's home.** A [server](../customize/mcp-servers.md) is given a directory of its
   own to keep its files in, such as a runner's cache. Here it sits in the system temporary directory
-  on the same terms and goes once the server stops, so a runner fetches its package again each
-  session.
+  on the same terms as the scratch directory above and goes once the server stops, so a runner
+  fetches its package again each session.
 - **A ChatGPT sign-in whose access token was replaced.** A stored
   [ChatGPT sign-in](../customize/providers/chatgpt.md) is used as in any session. When its access
   token is replaced the new tokens are written to `chatgpt-account.json` under `~/.bravebot`, and a

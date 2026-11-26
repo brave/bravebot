@@ -571,8 +571,9 @@ impl PolicyFile {
 /// directory is not: a stage that replaces the file before `openshell` opens it chooses the policy
 /// the sandbox is made with.
 mod tempfile_path {
-    use std::io::{Read, Write};
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+    use crate::private::{owner_only_directory, random_name};
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     use std::path::{Path, PathBuf};
 
     pub(super) struct TempPath(PathBuf);
@@ -603,42 +604,6 @@ mod tempfile_path {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
         }
-    }
-
-    /// `directory`, made if absent and set to mode 0700 whether it was made now or before. Refused
-    /// where the path is a link or a directory another account owns, since a mode on those says
-    /// nothing about who may replace what is inside.
-    fn owner_only_directory(directory: &Path) -> std::io::Result<()> {
-        crate::policy::make_a_directory(directory)?;
-        let found = std::fs::symlink_metadata(directory)?;
-        if !found.is_dir() {
-            return Err(std::io::Error::other(format!(
-                "`{}` is not a directory",
-                directory.display()
-            )));
-        }
-        if found.uid() != rustix::process::geteuid().as_raw() {
-            return Err(std::io::Error::other(format!(
-                "`{}` is not owned by this account",
-                directory.display()
-            )));
-        }
-        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
-    }
-
-    /// Thirty-two lower-case hexadecimal digits (128 bits) read from `/dev/urandom`, which the
-    /// operating system fills from its own randomness. No other source is used, because a stage can
-    /// work out a name made from the process id, a counter or the time and create that file first.
-    fn random_name() -> std::io::Result<String> {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut bytes = [0u8; 16];
-        std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
-        let mut name = String::with_capacity(32);
-        for byte in bytes {
-            name.push(char::from(HEX[usize::from(byte >> 4)]));
-            name.push(char::from(HEX[usize::from(byte & 0xf)]));
-        }
-        Ok(name)
     }
 }
 

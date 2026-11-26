@@ -1524,8 +1524,11 @@ account's own, but on Linux it is ordinarily the world-writable `/tmp`, where a 
 composes is one another account can create first, or leave pointing at a file of theirs. Refusing a
 name already taken is what keeps a write from going through one of those, and the mode is what keeps
 another account away from what lands inside, because a file arriving there comes in at a umask
-whether this program opened it for a redirection or a program wrote it itself. It is what the editor
-hand-off already does with the one file it has to write ([incognito.md](incognito.md#INCOG-8)). The
+whether this program opened it for a redirection or a program wrote it itself. The editor hand-off
+creates its one file the same way, at `0600` and refusing a name already taken, but makes it in a
+directory under the account's cache directory and not in the temporary directory
+([INPUT-14](terminal-input.md#INPUT-14)), because a stage that can write the temporary directory can
+replace a file there whatever its mode and name, and the editor's text is read back. The
 mode is Unix's alone: the Windows temporary path is ordinarily the account's own and takes its
 permissions from that, and the refusal to reuse a name covers the rest.
 

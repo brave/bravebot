@@ -460,6 +460,68 @@ fn no_audit_trail_is_written() {
     );
 }
 
+/// INCOG-8 (#4609): the editor hand-off is still made in an incognito session, in a directory of its
+/// own under the account's cache directory, and adds nothing to `~/.bravebot`. The editor here is a
+/// script that records the path it was handed and saves over the file, so the test reads where the
+/// file was made from the editor's own argument, and that what it saved came back.
+///
+/// The regressions it rejects are a file made under the state directory, which an incognito session
+/// may not write and which refuses the hand-off, and a fallback to the system temporary directory
+/// where the state directory is refused, which every stage of `run` may write.
+#[cfg(unix)]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[test]
+fn the_editor_hand_off_is_made_under_the_cache_directory_and_adds_nothing_to_the_state_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::incognito("editor");
+    let record = scratch.project.join("handed");
+    let editor = scratch.project.join("editor.sh");
+    std::fs::write(
+        &editor,
+        format!(
+            "#!/bin/sh\nprintf '%s' \"$1\" > '{}'\nprintf 'saved by the person' > \"$1\"\n",
+            record.display()
+        ),
+    )
+    .expect("an editor script");
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    // SAFETY: `HOME` is held for as long as `scratch` lives, and nothing else in this binary reads
+    // these variables; `EDITOR` is removed and `XDG_CACHE_HOME` put back below.
+    unsafe { std::env::remove_var("VISUAL") };
+    let cache_variable = std::env::var_os("XDG_CACHE_HOME");
+    // SAFETY: as above.
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+    // SAFETY: as above.
+    unsafe { std::env::set_var("EDITOR", &editor) };
+
+    let edited = bravebot_tui::editor::edit("a prompt nobody should see");
+    let cache = bravebot_agent::home::cache();
+    // SAFETY: as above.
+    unsafe { std::env::remove_var("EDITOR") };
+    if let Some(value) = cache_variable {
+        // SAFETY: as above.
+        unsafe { std::env::set_var("XDG_CACHE_HOME", value) };
+    }
+
+    assert_eq!(
+        edited.expect("the hand-off was refused in an incognito session"),
+        "saved by the person"
+    );
+    let handed = PathBuf::from(std::fs::read_to_string(&record).expect("the editor ran"));
+    let cache = cache.expect("the scratch home names a cache directory");
+    assert!(
+        handed.starts_with(cache.join("bravebot").join("editor")),
+        "the file was made at {}",
+        handed.display()
+    );
+    assert!(!handed.exists(), "the file outlived the edit");
+    assert!(
+        !scratch.own_directory().exists(),
+        "an incognito session made {}",
+        scratch.own_directory().display()
+    );
+}
+
 /// UPDATE-11: with the check off the recorded answer is not read, so no line is said.
 ///
 /// The same seeded record as the test below says a line with the check left on, which is what

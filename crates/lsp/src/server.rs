@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Stdio};
+#[cfg(not(unix))]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -437,17 +438,37 @@ fn cache_under(keep: &Path, workspace: &Path) -> PathBuf {
 /// working directory, which is the workspace the question was about, so the index lands in the
 /// user's tree as a side effect of a read, the one outcome LSP-10 forbids outright.
 ///
-/// So it goes where the platform keeps what does not outlive a process, and goes with the session.
-/// The cost is the one LSP-10's "why not a temporary directory" names, the index being built again
-/// next time, and it is the cost incognito already accepts.
+/// So it goes to a directory of its own under the one the caller names, and goes with the session.
+/// That directory is the user's cache directory and not the system temporary directory, which every
+/// stage of `run` may write: a stage that replaced what is under it would change what a server
+/// builds and loads with the person's access. The cost is the one LSP-10's "why not a temporary
+/// directory" names, the index being built again next time, and it is the cost incognito already
+/// accepts.
 #[derive(Debug)]
 struct SessionIndex {
     path: PathBuf,
 }
 
 impl SessionIndex {
-    /// Make one, under the directory the platform keeps temporary files in.
-    fn create() -> std::io::Result<Self> {
+    /// Make one, under `place`.
+    ///
+    /// Where there is no `place` the platform has no directory to give this account, and nothing
+    /// else is used in its place: the system temporary directory is never the fallback.
+    #[cfg(unix)]
+    fn create(place: Option<&Path>) -> std::io::Result<Self> {
+        let place = place.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "this account has no cache directory to keep a session's index in",
+            )
+        })?;
+        Self::created_at(reserved_in(place)?)
+    }
+
+    /// Windows gives each account a temporary directory a stage does not write, so the name stays
+    /// there.
+    #[cfg(not(unix))]
+    fn create(_place: Option<&Path>) -> std::io::Result<Self> {
         Self::created_at(reserved_name())
     }
 
@@ -458,13 +479,13 @@ impl SessionIndex {
 
     /// [`SessionIndex::create`], at a named path, so a test can hand it one twice.
     ///
-    /// **Created, never adopted.** On Linux the temporary directory is ordinarily the
-    /// world-writable `/tmp`, where a name this program composes is one another account can take
-    /// first, or leave pointing at a directory of theirs. Adopting one would put an index derived
-    /// from every file in the workspace where they can read it. `DirBuilder::create` is not
-    /// recursive, so a name already there comes back as an error rather than as a directory, and
-    /// the mode keeps another account out of what lands inside. Windows has no mode to set, and
-    /// gives each user a temporary directory of their own.
+    /// **Created, never adopted.** A name already there may be one another account made, or a
+    /// link into a directory of theirs. Adopting one would put an index derived from every file in
+    /// the workspace where they can read it. `DirBuilder::create` is not recursive, so a name
+    /// already there comes back as an error rather than as a directory, and the mode keeps another
+    /// account out of what lands inside. On Unix the name is a random one under the account's cache
+    /// directory, which no stage of `run` may write. Windows has no mode to set, and gives each
+    /// user a temporary directory of their own, where the name is made by `reserved_name`.
     fn created_at(path: PathBuf) -> std::io::Result<Self> {
         #[cfg(unix)]
         let builder = {
@@ -496,12 +517,30 @@ impl Drop for SessionIndex {
     }
 }
 
-/// A name for a directory nothing has taken.
+/// The directory `bravebot/lsp-sessions` under `place`, and a name in it taken from the operating
+/// system's random source.
+///
+/// Each directory is refused where it is a link or belongs to another account, and is narrowed to
+/// mode 0700, so what is inside is reached by this account alone. The name is random because one
+/// made from the process id, the time or a count is one a program that can write `place` works out
+/// and creates first. Nothing in it says which workspace is being indexed, which is a name in a
+/// directory anybody on the machine may list.
+#[cfg(unix)]
+fn reserved_in(place: &Path) -> std::io::Result<PathBuf> {
+    let root = place.join("bravebot");
+    bravebot_sandbox::private::owner_only_directory(&root)?;
+    let sessions = root.join("lsp-sessions");
+    bravebot_sandbox::private::owner_only_directory(&sessions)?;
+    Ok(sessions.join(bravebot_sandbox::private::random_name()?))
+}
+
+/// A name for a directory nothing has taken, in the temporary directory of an account.
 ///
 /// The pid separates processes, the stamp separates sessions within one, and the count separates
 /// two taken in the same moment: the clock behind the stamp holds a value for thousands of reads,
 /// so two names taken together are routinely the same name. Nothing in it says which workspace is
 /// being indexed, which is a name in a directory anybody on the machine can list.
+#[cfg(not(unix))]
 fn reserved_name() -> PathBuf {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -517,6 +556,7 @@ fn reserved_name() -> PathBuf {
 }
 
 /// What tells two names taken by one process apart.
+#[cfg(not(unix))]
 static SESSION_INDEXES: AtomicU64 = AtomicU64::new(0);
 
 /// Create a cache directory, and the directories between it and the state directory, reachable
@@ -524,9 +564,9 @@ static SESSION_INDEXES: AtomicU64 = AtomicU64::new(0);
 ///
 /// The index is derived from every file in the workspace, so who may read it is who may read the
 /// workspace. The mode is asked for as each directory is created, because a directory keeps the
-/// mode it was made with. Spelled out here rather than shared with the crate that has a helper for
-/// it: this crate depends on the kernel alone, as layering.md records, and a language server client
-/// is not worth a dependency for four lines.
+/// mode it was made with. This is for the state directory, which this program owns. The directories
+/// a session that keeps nothing makes under the cache directory go through
+/// `bravebot_sandbox::private`, which refuses a link and another account's directory.
 fn create_cache(path: &Path) -> std::io::Result<()> {
     if let Some(state) = path.parent().and_then(Path::parent) {
         remove_misplaced_index(state);
@@ -1558,6 +1598,10 @@ pub struct Servers {
     /// nothing of a server leaves nothing behind at all, and held here because the lifetime it
     /// wants is the session's: this is built once for one and carried by the turn.
     session: Option<SessionIndex>,
+    /// The directory [`SessionIndex`] is made under: a place of this user's that no stage may
+    /// write. `None` until [`Servers::session_indexes_in`] names one, and a session that keeps
+    /// nothing then starts no server.
+    session_place: Option<PathBuf>,
     /// This agent's own credential names, withheld from every server. RUN-12's reason.
     ///
     /// Asked at each launch rather than once, because servers start lazily (LSP-8) and a provider
@@ -1591,9 +1635,22 @@ impl Servers {
             resolve,
             incognito,
             session: None,
+            session_place: None,
             withheld,
             roster: Roster::default(),
         }
+    }
+
+    /// Name the directory a session that keeps no index makes its own directory under.
+    ///
+    /// It has to be one no stage of `run` may write, which the system temporary directory is not,
+    /// and one outside the state directory, which such a session adds nothing to. The caller that
+    /// knows the account's cache directory passes it. Left unnamed, a session that keeps nothing
+    /// starts no server, under LSP-6.
+    #[must_use]
+    pub fn session_indexes_in(mut self, place: Option<PathBuf>) -> Self {
+        self.session_place = place;
+        self
     }
 
     /// Report the running servers to `roster` from now on, and say which are running now.
@@ -1836,7 +1893,8 @@ impl Servers {
     /// A directory the platform will not give this session is reported as a server that did not
     /// start, which is LSP-6 and the same answer the directories below it already give.
     fn index_dir(&mut self, language: &Served) -> LspResult<PathBuf> {
-        self.index_dir_using(language, SessionIndex::create)
+        let place = self.session_place.clone();
+        self.index_dir_using(language, move || SessionIndex::create(place.as_deref()))
     }
 
     /// [`Servers::index_dir`] with the creation of the session's own directory passed in, so a
@@ -1939,6 +1997,30 @@ mod tests {
 
     fn root() -> PathBuf {
         PathBuf::from("/workspace")
+    }
+
+    /// A directory under the checkout's scratch root standing in for the account's cache directory,
+    /// for a test that starts a server for a session that keeps no index. Each session makes a
+    /// directory of its own with a random name beneath it.
+    ///
+    /// One per call and named for this process, and removed when the test's thread ends, with
+    /// the `bravebot/lsp-sessions` the first start made in it, so a test run leaves nothing under
+    /// the scratch root.
+    fn a_place_for_session_indexes() -> PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static MADE: AtomicUsize = AtomicUsize::new(0);
+        thread_local! {
+            static PLACES: std::cell::RefCell<Vec<crate::testutil::Scratch>> =
+                const { std::cell::RefCell::new(Vec::new()) };
+        }
+        let place = crate::testutil::Scratch::new(&format!(
+            "bravebot-lsp-session-indexes-under-{}-{}",
+            std::process::id(),
+            MADE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let path = place.to_path_buf();
+        PLACES.with(|places| places.borrow_mut().push(place));
+        path
     }
 
     /// Serialises the tests that read the process-wide diagnostic log.
@@ -2087,7 +2169,8 @@ done
     #[test]
     fn starting_a_server_is_put_to_a_person() {
         let mut asked = 0;
-        let mut servers = Servers::new(root(), None, |_| None, false, Vec::new);
+        let mut servers = Servers::new(root(), None, |_| None, false, Vec::new)
+            .session_indexes_in(Some(a_place_for_session_indexes()));
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut routing = bravebot_core::policy::Routing::new();
         routing.insert_trusted("task", "look up");
@@ -2141,7 +2224,8 @@ done
         // A server already running is not asked about again, which is what the map decides. Pinned on
         // the bookkeeping rather than on a live process: `running` is what `ask` consults before it
         // reaches the approval, so a language present in it is a language nobody is asked about.
-        let servers = Servers::new(root(), None, |_| None, false, Vec::new);
+        let servers = Servers::new(root(), None, |_| None, false, Vec::new)
+            .session_indexes_in(Some(a_place_for_session_indexes()));
         assert_eq!(servers.running(), 0);
         assert_eq!(
             Language::for_path("src/a.rs"),
@@ -2542,28 +2626,36 @@ done
         assert!(cache_for(None, &root(), false).is_none());
     }
 
-    /// LSP-10 and TRUST-11's reasoning about the temporary directory: the directory an index goes
-    /// in when nothing is kept is created, never adopted.
+    /// LSP-10 and TRUST-11's reasoning about a directory that is not this process's alone: the
+    /// directory an index goes in when nothing is kept is created, never adopted.
     ///
-    /// On Linux that directory is ordinarily the world-writable `/tmp`, so a name already there
-    /// may be another account's, or a link into one. Adopting it would hand a server an index
-    /// directory somebody else can read, which is the whole of what STATE-1's mode is for.
+    /// A name already under the place may be another account's, or a link into one. Adopting it
+    /// would hand a server an index directory somebody else can read, which is the whole of what
+    /// STATE-1's mode is for.
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_session_index_directory_is_created_never_adopted() {
         use std::os::unix::fs::PermissionsExt;
 
-        let held = SessionIndex::create().expect("a directory of its own");
+        let place = crate::testutil::Scratch::new("bravebot-lsp-never-adopted");
+        let held = SessionIndex::create(Some(&place)).expect("a directory of its own");
         assert!(held.path().is_dir(), "{}", held.path().display());
-        let mode = std::fs::metadata(held.path())
-            .expect("exists")
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(
-            mode, 0o700,
-            "another account can read what a server indexes"
-        );
+        // The directory and each one this process made above it, up to the place it was given.
+        let canonical = place.canonicalize().expect("the place");
+        for directory in held.path().ancestors().take_while(|d| *d != canonical) {
+            let mode = std::fs::metadata(directory)
+                .expect("exists")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(
+                mode,
+                0o700,
+                "another account can read what a server indexes: {}",
+                directory.display()
+            );
+        }
 
         // A name already taken is an error rather than a directory to write into.
         SessionIndex::created_at(held.path().to_path_buf())
@@ -2604,6 +2696,7 @@ done
         let debug = format!(
             "{:?}",
             Servers::new(root(), None, |_| None, false, Vec::new)
+                .session_indexes_in(Some(a_place_for_session_indexes()))
         );
         for name in names {
             assert!(
@@ -2674,7 +2767,8 @@ done
     /// guessing one from the symbol's name.
     #[test]
     fn a_query_with_no_file_is_told_no_server_is_running() {
-        let mut servers = Servers::new(root(), None, |_| None, false, Vec::new);
+        let mut servers = Servers::new(root(), None, |_| None, false, Vec::new)
+            .session_indexes_in(Some(a_place_for_session_indexes()));
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut routing = bravebot_core::policy::Routing::new();
         routing.insert_trusted("task", "look up");
@@ -2736,7 +2830,8 @@ done
             |program| Some(PathBuf::from("/usr/bin").join(program)),
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut routing = bravebot_core::policy::Routing::new();
         routing.insert_trusted("task", "look up");
@@ -2901,14 +2996,16 @@ done
             a_program_that_cannot_be_run,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
         let mut absent = Servers::new(
             scratch.to_path_buf(),
             None,
             no_program_anywhere,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
 
         let (unconfigured, asked) = asked_about(&mut absent, "notes.txt");
         let unconfigured =
@@ -2976,7 +3073,8 @@ done
                 the_approved_declared_server,
                 false,
                 Vec::new,
-            );
+            )
+            .session_indexes_in(Some(a_place_for_session_indexes()));
             servers.declare(vec![declared]);
             let mut sink = bravebot_core::event::RecordingSink::new();
             let mut policy = a_policy_that_holds_the_capability(&mut sink);
@@ -2991,7 +3089,8 @@ done
     /// LSP-8: nothing starts until something asks.
     #[test]
     fn no_server_starts_until_a_request_needs_one() {
-        let servers = Servers::new(root(), None, |_| None, false, Vec::new);
+        let servers = Servers::new(root(), None, |_| None, false, Vec::new)
+            .session_indexes_in(Some(a_place_for_session_indexes()));
         assert_eq!(
             servers.running(),
             0,
@@ -3002,7 +3101,8 @@ done
     /// LSP-8: the set is what stops the processes, so dropping it must stop them all.
     #[test]
     fn dropping_the_set_stops_every_server() {
-        let servers = Servers::new(root(), None, |_| None, false, Vec::new);
+        let servers = Servers::new(root(), None, |_| None, false, Vec::new)
+            .session_indexes_in(Some(a_place_for_session_indexes()));
         // Nothing running, so this is the degenerate case; the property that matters is that the
         // set owns its servers, which is by construction, and that dropping it is not a leak.
         drop(servers);
@@ -3092,7 +3192,8 @@ done
     /// question for a language already running starts nothing, which is what the map decides.
     #[test]
     fn a_server_is_started_once_and_reused() {
-        let servers = Servers::new(root(), None, |_| None, false, Vec::new);
+        let servers = Servers::new(root(), None, |_| None, false, Vec::new)
+            .session_indexes_in(Some(a_place_for_session_indexes()));
         assert_eq!(servers.running(), 0);
 
         // Two files of the same language must map to one server, and two languages to two.
@@ -3128,7 +3229,8 @@ done
     #[cfg(unix)]
     #[test]
     fn a_request_without_the_capability_is_refused() {
-        let mut servers = Servers::new(root(), None, |_| None, false, Vec::new);
+        let mut servers = Servers::new(root(), None, |_| None, false, Vec::new)
+            .session_indexes_in(Some(a_place_for_session_indexes()));
         // The grant a file read gives is not this one, which is the whole clause.
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut policy = a_policy_holding(&mut sink, [Capability::FileRead]);
@@ -3365,7 +3467,8 @@ done
             the_server_that_rejects_a_position,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
 
         for operation in [
             Operation::Definition,
@@ -3436,7 +3539,8 @@ done
             the_server_that_rejects_a_query,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
 
         // A whole-tree query names no file, so it goes to whichever server is running. The
         // document question is what starts one, and it is the first of the three cases.
@@ -3501,7 +3605,8 @@ done
             the_server_that_rejects_with_prose,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
 
         let refused = ask_with_the_server_approved(
             &mut servers,
@@ -3736,7 +3841,8 @@ done
             the_server_that_ignores_shutdown,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
 
         a_definition_in(&mut servers, &file);
         let pid: u32 = std::fs::read_to_string(scratch.join("pid"))
@@ -3868,7 +3974,8 @@ done
             the_server_that_waits_for_the_other,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
         a_definition_in(&mut servers, &rust_file);
         a_definition_in(&mut servers, &go_file);
         assert_eq!(servers.running(), 2, "the set did not start both servers");
@@ -3917,7 +4024,8 @@ done
             the_server_that_reports_in_incognito,
             true,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
 
         a_definition_in(&mut servers, &file);
 
@@ -3963,7 +4071,8 @@ done
             the_server_that_reports_with_no_state_directory,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
 
         a_definition_in(&mut servers, &file);
 
@@ -4012,7 +4121,8 @@ done
             the_server_that_reports_with_a_state_directory,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
 
         a_definition_in(&mut servers, &file);
 
@@ -4026,6 +4136,160 @@ done
         // And it is still there when the session is not, which is the whole point of keeping it.
         drop(servers);
         assert!(index.is_dir(), "{} did not survive", index.display());
+    }
+
+    #[cfg(unix)]
+    const OUTSIDE_THE_TEMPORARY_DIRECTORY_INCOGNITO: &str =
+        "bravebot-lsp-outside-the-temporary-directory-incognito";
+
+    #[cfg(unix)]
+    const OUTSIDE_THE_TEMPORARY_DIRECTORY_NO_STATE: &str =
+        "bravebot-lsp-outside-the-temporary-directory-no-state";
+
+    #[cfg(unix)]
+    fn the_server_that_reports_outside_the_temporary_directory_incognito(
+        _: &str,
+    ) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(OUTSIDE_THE_TEMPORARY_DIRECTORY_INCOGNITO).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_server_that_reports_outside_the_temporary_directory_no_state(
+        _: &str,
+    ) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(OUTSIDE_THE_TEMPORARY_DIRECTORY_NO_STATE).join("server"))
+    }
+
+    /// Start a Rust server for a session that keeps no index, naming a directory of the scratch
+    /// root as the place its index goes under, and return that place and the index the server was
+    /// handed, both with their links resolved.
+    #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_index_handed_to_a_session_that_keeps_nothing(
+        name: &str,
+        resolve: fn(&str) -> Option<PathBuf>,
+        state: bool,
+        incognito: bool,
+    ) -> (PathBuf, PathBuf) {
+        let (_launching, scratch, workspace, file) = a_workspace_with_a_reporting_server(name);
+        let place = scratch.join("cache");
+        std::fs::create_dir_all(&place).expect("create the place");
+        let mut servers = Servers::new(
+            workspace,
+            state.then(|| scratch.join("state")),
+            resolve,
+            incognito,
+            Vec::new,
+        )
+        .session_indexes_in(Some(place.clone()));
+
+        a_definition_in(&mut servers, &file);
+
+        let (index, _) = what_the_server_reported(&scratch);
+        (place.canonicalize().expect("the place was made"), index)
+    }
+
+    /// LSP-10 and SANDBOX-12: where a session keeps no index, the directory the server is handed
+    /// for `CARGO_TARGET_DIR` is under the place the caller named, which a confined stage cannot
+    /// write, and not under the system temporary directory, which every stage may write. Both
+    /// arms: incognito, and a machine with no state directory.
+    ///
+    /// The regression it rejects is an index placed under the system temporary directory: a stage of the
+    /// same account replaces what is under it, and the server builds and loads that with the
+    /// person's access.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_session_that_keeps_nothing_indexes_under_the_place_it_was_given_and_not_the_temporary_directory()
+     {
+        let temporary = std::env::temp_dir()
+            .canonicalize()
+            .expect("the temporary directory");
+        for (arm, (place, index)) in [
+            (
+                "incognito",
+                the_index_handed_to_a_session_that_keeps_nothing(
+                    OUTSIDE_THE_TEMPORARY_DIRECTORY_INCOGNITO,
+                    the_server_that_reports_outside_the_temporary_directory_incognito,
+                    true,
+                    true,
+                ),
+            ),
+            (
+                "no state directory",
+                the_index_handed_to_a_session_that_keeps_nothing(
+                    OUTSIDE_THE_TEMPORARY_DIRECTORY_NO_STATE,
+                    the_server_that_reports_outside_the_temporary_directory_no_state,
+                    false,
+                    false,
+                ),
+            ),
+        ] {
+            assert!(
+                index.starts_with(&place),
+                "{arm}: {} is not under {}",
+                index.display(),
+                place.display()
+            );
+            // A checkout cloned into the temporary directory has its scratch root there, and the
+            // place is then under it by the test's own doing.
+            assert!(
+                !index.starts_with(&temporary) || place.starts_with(&temporary),
+                "{arm}: {} is under the system temporary directory, which a stage may write",
+                index.display()
+            );
+        }
+    }
+
+    /// LSP-10 and SANDBOX-12: where a session keeps no index, a Go server's `GOCACHE` is inside the
+    /// directory made for the session under the place the caller named, and not under the system
+    /// temporary directory.
+    ///
+    /// It rejects a launch that points `CARGO_TARGET_DIR` at the session's directory and leaves
+    /// `GOCACHE` somewhere else: gopls loads and runs what is in its build cache with the person's
+    /// access.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_go_servers_build_cache_of_a_session_that_keeps_nothing_is_under_the_place_it_was_given() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _launching = LAUNCHING.lock().unwrap_or_else(|held| held.into_inner());
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-go-cache-keeps-nothing");
+        let workspace = scratch.join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create the workspace");
+        let program = scratch.join("server");
+        std::fs::write(&program, ENVIRONMENT_SERVER).expect("write the server");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let place = scratch.join("cache");
+        std::fs::create_dir_all(&place).expect("create the place");
+        let mut servers = Servers::new(workspace.clone(), None, |_| None, false, Vec::new)
+            .session_indexes_in(Some(place.clone()));
+
+        let index = servers
+            .index_dir(&Language::Go.into())
+            .expect("a directory for this session");
+        let server = Server::launch(Language::Go, &program, &workspace, &index, &[])
+            .expect("the server starts");
+        drop(server);
+
+        let written = std::fs::read_to_string(scratch.join("environment"))
+            .expect("the server records its environment before it answers");
+        let gocache = written
+            .lines()
+            .find_map(|line| line.strip_prefix("GOCACHE="))
+            .expect("a GOCACHE line");
+        let place = place.canonicalize().expect("the place was made");
+        assert!(
+            Path::new(gocache).starts_with(&place),
+            "GOCACHE {gocache} is not under {}",
+            place.display()
+        );
+        assert!(
+            Path::new(gocache).starts_with(&index),
+            "GOCACHE {gocache} is not inside the index directory {}",
+            index.display()
+        );
     }
 
     /// A language server that records the variables LSP-10 points at an index directory, and then
@@ -4072,7 +4336,6 @@ done
     /// something already there.
     #[cfg(unix)]
     #[expect(clippy::expect_used, reason = "a test fails by panicking")]
-    #[expect(clippy::panic, reason = "a test fails by panicking")]
     fn what_a_started_server_saw(
         name: &str,
         served: Served,
@@ -4092,10 +4355,28 @@ done
         let cache = cache_for(Some(&state), &workspace, false).expect("a cache is given");
         before(&cache);
 
+        let seen =
+            the_environment_a_started_server_saw(&scratch, served, &program, &workspace, &cache);
+        // Run before the scratch directory goes, so a test can look at what the start made.
+        after(&cache, seen);
+    }
+
+    /// Launch `served` from `program` with `cache` as its index directory, stop it, and return what
+    /// it recorded in `scratch` as `(GOCACHE, TMPDIR, CARGO_TARGET_DIR)`.
+    ///
+    /// The caller holds [`LAUNCHING`] and has written [`ENVIRONMENT_SERVER`] as `program`.
+    #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn the_environment_a_started_server_saw(
+        scratch: &Path,
+        served: Served,
+        program: &Path,
+        workspace: &Path,
+        cache: &Path,
+    ) -> (String, String, String) {
         let server = match served {
-            Served::Builtin(language) => {
-                Server::launch(language, &program, &workspace, &cache, &[])
-            }
+            Served::Builtin(language) => Server::launch(language, program, workspace, cache, &[]),
             Served::Declared(name) => Server::launch_declared(
                 &Declared {
                     name: name.to_string(),
@@ -4106,9 +4387,9 @@ done
                     initialization_options: None,
                     digest: "one".into(),
                 },
-                &program,
-                &workspace,
-                &cache,
+                program,
+                workspace,
+                cache,
                 &[],
             ),
         }
@@ -4124,11 +4405,7 @@ done
                 .unwrap_or_else(|| panic!("no {prefix} line in {written}"))
                 .to_string()
         };
-        // Run before the scratch directory goes, so a test can look at what the start made.
-        after(
-            &cache,
-            (seen("GOCACHE="), seen("TMPDIR="), seen("CARGO_TARGET_DIR=")),
-        );
+        (seen("GOCACHE="), seen("TMPDIR="), seen("CARGO_TARGET_DIR="))
     }
 
     /// LSP-10: a Go server's build cache is a directory of its own inside the index directory, made
@@ -4244,7 +4521,8 @@ done
         let scratch = crate::testutil::Scratch::new("bravebot-lsp-nothing-of-this-workspace-");
         let workspace = scratch.join("a-workspace-nobody-else-names");
         std::fs::create_dir_all(&workspace).expect("create the workspace");
-        let mut servers = Servers::new(workspace.clone(), None, |_| None, false, Vec::new);
+        let mut servers = Servers::new(workspace.clone(), None, |_| None, false, Vec::new)
+            .session_indexes_in(Some(a_place_for_session_indexes()));
 
         let index = servers
             .index_dir(&Language::Rust.into())
@@ -4293,7 +4571,8 @@ done
         let scratch = crate::testutil::Scratch::new("bravebot-lsp-no-session-directory");
         let workspace = scratch.join("workspace");
         std::fs::create_dir_all(&workspace).expect("create the workspace");
-        let mut servers = Servers::new(workspace.clone(), None, |_| None, false, Vec::new);
+        let mut servers = Servers::new(workspace.clone(), None, |_| None, false, Vec::new)
+            .session_indexes_in(Some(a_place_for_session_indexes()));
 
         let refused = servers.index_dir_using(&Language::Rust.into(), || {
             Err(std::io::Error::new(
@@ -4316,6 +4595,443 @@ done
                 .is_none(),
             "something was made in the workspace instead"
         );
+    }
+
+    #[cfg(unix)]
+    const NO_PLACE_FOR_THE_INDEX: &str = "bravebot-lsp-no-place-for-the-index";
+
+    #[cfg(unix)]
+    fn the_server_that_reports_with_no_place_for_the_index(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(NO_PLACE_FOR_THE_INDEX).join("server"))
+    }
+
+    #[cfg(unix)]
+    const A_STAGE_REWRITES_THE_TEMPORARY_DIRECTORY: &str =
+        "bravebot-lsp-a-stage-rewrites-the-temporary-directory";
+
+    #[cfg(unix)]
+    fn the_server_that_a_stage_rewrites_the_temporary_directory_under(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(A_STAGE_REWRITES_THE_TEMPORARY_DIRECTORY).join("server"))
+    }
+
+    /// The names in `directory`, sorted, or none where it cannot be read.
+    #[cfg(unix)]
+    fn names_in(directory: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(directory)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter_map(|entry| entry.file_name().into_string().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    /// LSP-10 and LSP-6: where the account has no place to keep the index of a session that keeps
+    /// nothing, the server does not start, and nothing is made in the system temporary directory
+    /// in its stead.
+    ///
+    /// It rejects a fallback to the temporary directory when no place is named, which would give
+    /// a server an index directory every stage of `run` may replace. Driven through a question,
+    /// so what is observed is that the stand-in server never ran and the question came back as a
+    /// server that did not start, and not only the answer of the function that picks the place.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn a_session_with_no_place_for_its_index_starts_no_server_and_makes_nothing_in_the_temporary_directory()
+     {
+        let (_launching, scratch, workspace, file) =
+            a_workspace_with_a_reporting_server(NO_PLACE_FOR_THE_INDEX);
+        // The directory an implementation that put the session index in the temporary directory
+        // would use. Only read, to see that nothing is made in it.
+        // shared-temp-name: read and never written, to show a refused start makes nothing there
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let temporary = std::env::temp_dir();
+        let sessions = temporary.join("bravebot").join("lsp-sessions");
+        let before = names_in(&sessions);
+        let mut servers = Servers::new(
+            workspace,
+            None,
+            the_server_that_reports_with_no_place_for_the_index,
+            false,
+            Vec::new,
+        )
+        .session_indexes_in(None);
+
+        let refused = ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Definition,
+                path: file.to_str().expect("a utf-8 scratch path"),
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        );
+
+        match refused {
+            Err(LspError::Start { detail, .. }) => {
+                assert!(detail.contains("index directory"), "{detail}");
+                assert!(detail.contains("no cache directory"), "{detail}");
+            }
+            other => panic!("a session with nowhere to index must not start a server: {other:?}"),
+        }
+        assert!(
+            !scratch.join("reported").exists(),
+            "a server was started with no place for its index"
+        );
+        assert_eq!(
+            names_in(&sessions),
+            before,
+            "an index directory was made in the system temporary directory"
+        );
+        let own = format!("bravebot-lsp-{}-", std::process::id());
+        assert!(
+            names_in(&temporary)
+                .iter()
+                .all(|name| !name.starts_with(&own)),
+            "a directory named for this process was made in the system temporary directory"
+        );
+    }
+
+    /// LSP-10 and SANDBOX-12: where a session keeps no index, TypeScript, Python and a declared
+    /// server are given the directory made for the session as `TMPDIR`, under the place the
+    /// caller named and not under the system temporary directory.
+    ///
+    /// It rejects a launch that sets `TMPDIR` only for an index kept under the state directory,
+    /// which leaves these servers the system temporary directory a stage may write, while the
+    /// Rust and Go servers index under the session's directory. Run on the directory a session
+    /// that keeps nothing is handed, which the test beside it for a kept index does not reach.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_server_that_has_no_index_variable_is_given_the_directory_made_for_a_session_that_keeps_nothing()
+     {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = std::env::temp_dir()
+            .canonicalize()
+            .expect("the temporary directory");
+        let _launching = LAUNCHING.lock().unwrap_or_else(|held| held.into_inner());
+        for (name, served) in [
+            (
+                "bravebot-lsp-session-tmpdir-typescript",
+                Served::Builtin(Language::TypeScript),
+            ),
+            (
+                "bravebot-lsp-session-tmpdir-python",
+                Served::Builtin(Language::Python),
+            ),
+            (
+                "bravebot-lsp-session-tmpdir-declared",
+                Served::Declared("mine".into()),
+            ),
+        ] {
+            let label = format!("{served:?}");
+            let scratch = crate::testutil::Scratch::new(name);
+            let workspace = scratch.join("workspace");
+            std::fs::create_dir_all(&workspace).expect("create the workspace");
+            let program = scratch.join("server");
+            std::fs::write(&program, ENVIRONMENT_SERVER).expect("write the server");
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod");
+            let place = scratch.join("cache");
+            std::fs::create_dir_all(&place).expect("create the place");
+            let mut servers = Servers::new(workspace.clone(), None, |_| None, false, Vec::new)
+                .session_indexes_in(Some(place.clone()));
+            let index = servers
+                .index_dir(&served)
+                .expect("a directory for this session");
+
+            let (_, tmpdir, _) = the_environment_a_started_server_saw(
+                &scratch, served, &program, &workspace, &index,
+            );
+
+            let place = place.canonicalize().expect("the place was made");
+            assert_eq!(
+                tmpdir,
+                index.to_str().expect("a utf-8 path"),
+                "{label} was not given the session's directory as TMPDIR"
+            );
+            assert!(
+                index.starts_with(&place),
+                "{label}: {} is not under {}",
+                index.display(),
+                place.display()
+            );
+            assert!(
+                !index.starts_with(&temporary) || place.starts_with(&temporary),
+                "{label}: {} is under the system temporary directory",
+                index.display()
+            );
+        }
+    }
+
+    /// LSP-10 and SANDBOX-12: what a stage can do to the system temporary directory changes
+    /// nothing a server indexes into, since a session that keeps nothing is not given a directory
+    /// there.
+    ///
+    /// The stand-in for the stage is a thread that runs from before the server starts until after
+    /// it has been asked a question. It removes every entry named `bravebot-lsp-<this process's
+    /// id>-`, the name an implementation that put the session index in the temporary directory
+    /// would use, and puts a link to a directory of its own in its place, which is all a stage of
+    /// the same account may do to that directory. The test
+    /// rejects an index directory made in the temporary directory under that name: the stage would
+    /// replace the directory the server builds and loads from, and the session directory would be
+    /// a link or gone.
+    ///
+    /// The session index is never made under that name, so the stage would find nothing to
+    /// replace and the test would pass whatever it did. A control entry is planted under that
+    /// name first, and the test asserts that the stage replaced it, which shows that the stage ran
+    /// against this directory while the server started and answered.
+    #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the stage thread ignores a failed removal or link, as a stage would"
+    )]
+    #[test]
+    fn a_stage_rewriting_the_temporary_directory_changes_nothing_a_server_indexes_into() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let (_launching, scratch, workspace, file) =
+            a_workspace_with_a_reporting_server(A_STAGE_REWRITES_THE_TEMPORARY_DIRECTORY);
+        let place = scratch.join("cache");
+        std::fs::create_dir_all(&place).expect("create the place");
+        let decoy = scratch.join("decoy");
+        std::fs::create_dir_all(&decoy).expect("create the decoy");
+        let mut servers = Servers::new(
+            workspace,
+            None,
+            the_server_that_a_stage_rewrites_the_temporary_directory_under,
+            false,
+            Vec::new,
+        )
+        .session_indexes_in(Some(place.clone()));
+
+        // shared-temp-name: the stage's own target, matched by this process's id and replaced
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let temporary = std::env::temp_dir();
+        let own = format!("bravebot-lsp-{}-", std::process::id());
+        let control = temporary.join(format!("{own}control"));
+        std::fs::write(&control, "kept").expect("plant the control entry");
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let passes = std::sync::Arc::new(AtomicUsize::new(0));
+        let stage = {
+            let (stop, passes, decoy, temporary) = (
+                stop.clone(),
+                passes.clone(),
+                decoy.clone(),
+                temporary.clone(),
+            );
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    for entry in std::fs::read_dir(&temporary)
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                    {
+                        if entry.file_name().to_string_lossy().starts_with(&own) {
+                            let _ = std::fs::remove_dir_all(entry.path());
+                            let _ = std::fs::remove_file(entry.path());
+                            let _ = std::os::unix::fs::symlink(&decoy, entry.path());
+                        }
+                    }
+                    passes.fetch_add(1, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            })
+        };
+        // The server starts and answers while the stage is passing over the directory.
+        a_definition_in(&mut servers, &file);
+        let (index, _) = what_the_server_reported(&scratch);
+        // And at least two whole passes over the directory after it is running.
+        let started = passes.load(Ordering::SeqCst);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while passes.load(Ordering::SeqCst) < started + 2 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        stop.store(true, Ordering::SeqCst);
+        stage.join().expect("the stage thread ends");
+        let replaced =
+            std::fs::symlink_metadata(&control).is_ok_and(|found| found.file_type().is_symlink());
+        let _ = std::fs::remove_file(&control);
+        assert!(
+            passes.load(Ordering::SeqCst) >= started + 2,
+            "the stage did not pass over the temporary directory twice"
+        );
+        assert!(
+            replaced,
+            "the stage did not replace the control entry, so it shows nothing about the index"
+        );
+
+        let session = index
+            .parent()
+            .and_then(Path::parent)
+            .expect("the directory this session was given");
+        assert!(
+            index.is_dir()
+                && std::fs::symlink_metadata(session).is_ok_and(|found| found.file_type().is_dir()),
+            "the stage replaced the directory the server indexes into: {}",
+            session.display()
+        );
+        assert!(
+            index.starts_with(place.canonicalize().expect("the place")),
+            "{} is not under the place it was given",
+            index.display()
+        );
+    }
+
+    /// LSP-10 and STATE-1: a link where the directory above a session's own should be is refused,
+    /// and nothing is made where the link leads. Both directories the process makes above the
+    /// session's own are tried.
+    ///
+    /// It rejects creating the parents with a call that follows a link (`create_dir_all`, which
+    /// accepts a link to a directory as the directory): the session's directory and the index
+    /// inside it would be made in a place the link names, which may be anywhere this account
+    /// writes, and the mode of that place is not this process's to change.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_link_where_a_parent_of_a_session_index_should_be_is_refused_and_leads_nowhere_new() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        for linked in ["bravebot", "bravebot/lsp-sessions"] {
+            let scratch = crate::testutil::Scratch::new("bravebot-lsp-linked-parent");
+            let place = scratch.join("place");
+            let elsewhere = scratch.join("elsewhere");
+            std::fs::create_dir_all(&elsewhere).expect("create where the link leads");
+            std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod");
+            std::fs::create_dir_all(place.join("bravebot")).expect("create the place");
+            let link = place.join(linked);
+            if linked == "bravebot" {
+                std::fs::remove_dir(&link).expect("take the directory out of the way");
+            }
+            symlink(&elsewhere, &link).expect("link");
+
+            let refused = SessionIndex::create(Some(&place));
+
+            assert!(
+                refused.is_err(),
+                "{linked} was a link and a session index was made under it: {refused:?}"
+            );
+            assert!(
+                std::fs::read_dir(&elsewhere)
+                    .expect("read where the link leads")
+                    .next()
+                    .is_none(),
+                "{linked}: something was made where the link leads"
+            );
+            let mode = std::fs::metadata(&elsewhere)
+                .expect("exists")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(
+                mode, 0o755,
+                "{linked}: the mode of the linked directory changed"
+            );
+            assert!(
+                std::fs::symlink_metadata(&link).is_ok_and(|found| found.file_type().is_symlink()),
+                "{linked} is no longer a link"
+            );
+        }
+    }
+
+    /// LSP-10 and STATE-1: a directory above a session's own that an earlier run left open is
+    /// narrowed to 0700 on the way past, as the session's own directory is made at it.
+    ///
+    /// It rejects creating the parents with a call that keeps the mode an existing directory has
+    /// (`create_dir_all`): the directories that hold every session's index would stay readable
+    /// by another account.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_session_index_narrows_the_directories_above_it_that_an_earlier_run_left_open() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-open-parents");
+        let place = scratch.join("place");
+        let sessions = place.join("bravebot").join("lsp-sessions");
+        std::fs::create_dir_all(&sessions).expect("create the parents");
+        for open in [place.join("bravebot"), sessions.clone()] {
+            std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).expect("chmod");
+        }
+
+        let held = SessionIndex::create(Some(&place)).expect("a directory of its own");
+
+        let mode_of = |directory: &Path| {
+            std::fs::metadata(directory)
+                .expect("exists")
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        for directory in [place.join("bravebot"), sessions, held.path().to_path_buf()] {
+            assert_eq!(
+                mode_of(&directory),
+                0o700,
+                "{} was left readable by another account",
+                directory.display()
+            );
+        }
+    }
+
+    /// LSP-10 and SANDBOX-12: the name of the directory made for a session that keeps nothing is
+    /// 32 lower-case hexadecimal digits that no program able to write the cache directory can work
+    /// out, so none can create the name first.
+    ///
+    /// The regression it rejects is a name built from the process id, a clock reading or a counter,
+    /// padded to the same length: each is a value a stage computes. Read as two 64-bit halves, such
+    /// a name has a half that is zero, constant or a few steps from the same half of the name
+    /// before it, and a random name has none of those but with a probability of about 2^-28.
+    #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(
+        clippy::string_slice,
+        reason = "the name is checked to be ASCII hexadecimal"
+    )]
+    #[test]
+    fn the_name_of_a_session_index_directory_is_not_one_a_stage_could_work_out() {
+        let place = crate::testutil::Scratch::new("bravebot-lsp-unpredictable-name");
+        let held: Vec<SessionIndex> = (0..8)
+            .map(|_| SessionIndex::create(Some(&place)).expect("a directory of its own"))
+            .collect();
+        let halves: Vec<(u64, u64)> = held
+            .iter()
+            .map(|index| {
+                let name = index
+                    .path()
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("a utf-8 name");
+                assert_eq!(name.len(), 32, "{name}");
+                assert!(
+                    name.bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                    "{name} is not lower-case hexadecimal"
+                );
+                (
+                    u64::from_str_radix(&name[..16], 16).expect("hexadecimal"),
+                    u64::from_str_radix(&name[16..], 16).expect("hexadecimal"),
+                )
+            })
+            .collect();
+        for pair in halves.windows(2) {
+            let (first, second) = (pair[0], pair[1]);
+            assert!(
+                first.0.abs_diff(second.0) > 1 << 32,
+                "two names in a row share their first half or step it: {first:x?} {second:x?}"
+            );
+            assert!(
+                first.1.abs_diff(second.1) > 1 << 32,
+                "two names in a row share their second half or step it: {first:x?} {second:x?}"
+            );
+        }
     }
 
     #[test]
@@ -4616,7 +5332,8 @@ done
             the_approved_declared_server,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
         servers.declare(vec![declared]);
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut policy = a_policy_that_holds_the_capability(&mut sink);
@@ -4683,7 +5400,8 @@ done
             the_server_declared_for_another_extension,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
         servers.declare(vec![declared]);
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut policy = a_policy_that_holds_the_capability(&mut sink);
@@ -4714,7 +5432,8 @@ done
             the_changed_declared_server,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
         servers.declare(vec![declared.clone()]);
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut policy = a_policy_that_holds_the_capability(&mut sink);
@@ -4883,7 +5602,8 @@ done
             the_server_started_out_of_order,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
         servers.reporting_to(roster.clone());
         servers.declare(declared);
         let mut sink = bravebot_core::event::RecordingSink::new();
@@ -4949,7 +5669,8 @@ done
             the_server_asked_about_while_others_run,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
         servers.reporting_to(roster.clone());
         servers.declare(declared);
         let mut sink = bravebot_core::event::RecordingSink::new();
@@ -5019,7 +5740,8 @@ done
             initialization_options: None,
             digest: digest.into(),
         };
-        let mut servers = Servers::new(root(), None, |_| None, false, Vec::new);
+        let mut servers = Servers::new(root(), None, |_| None, false, Vec::new)
+            .session_indexes_in(Some(a_place_for_session_indexes()));
         servers.declare(vec![declaring("first", "1"), declaring("second", "2")]);
         let question = Question {
             operation: Operation::Definition,
@@ -5059,7 +5781,8 @@ done
             the_server_diagnosing_after_the_change,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
         let path = file.to_str().expect("a utf-8 scratch path");
         ask_with_the_server_approved(
             &mut servers,
@@ -5109,7 +5832,8 @@ done
             the_server_with_a_stale_notice,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
         let path = file.to_str().expect("a utf-8 scratch path");
         ask_with_the_server_approved(
             &mut servers,
@@ -5150,7 +5874,8 @@ done
             the_silent_server,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
         let path = file.to_str().expect("a utf-8 scratch path");
         ask_with_the_server_approved(
             &mut servers,
@@ -5188,7 +5913,8 @@ done
             the_server_without_the_capability,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
         let path = file.to_str().expect("a utf-8 scratch path");
 
         let mut sink = bravebot_core::event::RecordingSink::new();
@@ -5265,7 +5991,8 @@ done
             the_server_diagnosing_on_request,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
         let path = file.to_str().expect("a utf-8 scratch path");
         let question = Question {
             operation: Operation::Diagnostics,
@@ -5322,7 +6049,8 @@ done
             the_server_saying_nothing_on_request,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
         let path = file.to_str().expect("a utf-8 scratch path");
 
         let error = ask_with_the_server_approved(
@@ -5361,7 +6089,8 @@ done
             the_server_diagnosing_before_it_is_indexed,
             false,
             Vec::new,
-        );
+        )
+        .session_indexes_in(Some(a_place_for_session_indexes()));
         let path = file.to_str().expect("a utf-8 scratch path");
         ask_with_the_server_approved(
             &mut servers,

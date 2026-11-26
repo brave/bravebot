@@ -8,6 +8,14 @@
 //! Nothing labelled passes through here. The line is the user's own words on their way from the
 //! keyboard to their editor and back, and nothing read out of the workspace joins them.
 //!
+//! The file the editor is handed is made in a directory of its own under the account's cache
+//! directory (`bravebot/editor/<random>/`), and not in the system temporary directory. A stage of
+//! `run` is the same account and may write the temporary directory (SANDBOX-12), so a file there
+//! can be replaced before the editor opens it and after it saves, and what is read back goes into
+//! the prompt box or a write body. No row of a stage's profile names the cache directory as a
+//! whole. [INPUT-14](../../../docs/specs/terminal-input.md#INPUT-14) states the rule and what it
+//! leaves.
+//!
 //! `$VISUAL` and `$EDITOR` hold a command line by convention, and one is split into argv here
 //! rather than handed to a shell. That is the rule the rest of the system runs under, and it
 //! costs nothing to keep: a shell between the user's configuration and what starts would be a
@@ -18,6 +26,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+#[cfg(not(unix))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// What to open when nothing is configured, in the order they are tried.
@@ -77,7 +86,7 @@ impl fmt::Display for Failure {
 /// Quitting without saving returns `line` unchanged, because the file already holds it: not
 /// saving loses the edits rather than the prompt.
 pub fn edit(line: &str) -> Result<String, Failure> {
-    round_trip(line, open_in_an_editor)
+    round_trip(place().as_deref(), line, open_in_an_editor)
 }
 
 /// Put the transcript in front of the user in their editor, and read nothing back.
@@ -87,7 +96,7 @@ pub fn edit(line: &str) -> Result<String, Failure> {
 /// record that can be edited into the session is not a record. The file is theirs to do anything
 /// with, and this process never looks at it again.
 pub fn show(text: &str) -> Result<(), Failure> {
-    show_through(text, open_in_an_editor)
+    show_through(place().as_deref(), text, open_in_an_editor)
 }
 
 /// Put the file at `path` in front of the user in their editor, at `line` and `column` where they
@@ -122,18 +131,19 @@ pub fn open_file(path: &Path, line: Option<u32>, column: Option<u32>) -> Result<
 
 /// The file half of [`show`], with opening it left to the caller so it can be tested.
 fn show_through(
+    place: Option<&Path>,
     text: &str,
     open: impl FnOnce(&Path) -> Result<(), Failure>,
 ) -> Result<(), Failure> {
-    let path = scratch("transcript", "md");
-    if let Err(failure) = write_scratch(&path, text) {
-        let _ = std::fs::remove_file(&path);
+    let file = scratch(place, "transcript", "md")?;
+    if let Err(failure) = write_scratch(&file.path, text) {
+        file.forget();
         return Err(failure);
     }
-    let opened = open(&path);
+    let opened = open(&file.path);
     // Before the result is examined, so a transcript does not outlive the look at it down any
     // path. Whatever the person wanted to keep, they kept from inside their own editor.
-    let _ = std::fs::remove_file(&path);
+    file.forget();
     opened
 }
 
@@ -142,10 +152,11 @@ fn show_through(
 /// Separated so the file half can be tested without an editor, which is the half with the
 /// property worth pinning: what comes back when nothing was written.
 fn round_trip(
+    place: Option<&Path>,
     line: &str,
     open: impl FnOnce(&Path) -> Result<(), Failure>,
 ) -> Result<String, Failure> {
-    let mut text = through_a_file(scratch("prompt", "md"), line, open)?;
+    let mut text = through_a_file(scratch(place, "prompt", "md")?, line, open)?;
     tidy(&mut text);
     Ok(text)
 }
@@ -158,16 +169,17 @@ fn round_trip(
 /// write prompt shows the effect of on the screen where the text is approved. `extension` names
 /// the scratch file so the editor chooses the syntax of the file the body is for.
 pub fn edit_body(body: &str, extension: &str) -> Result<String, Failure> {
-    body_round_trip(body, extension, open_in_an_editor)
+    body_round_trip(place().as_deref(), body, extension, open_in_an_editor)
 }
 
 /// The file half of [`edit_body`], with opening it left to the caller so it can be tested.
 fn body_round_trip(
+    place: Option<&Path>,
     body: &str,
     extension: &str,
     open: impl FnOnce(&Path) -> Result<(), Failure>,
 ) -> Result<String, Failure> {
-    through_a_file(scratch("write", extension), body, open)
+    through_a_file(scratch(place, "write", extension)?, body, open)
 }
 
 /// What to call the scratch file of a body bound for `path`, so the editor takes it for the kind of
@@ -175,7 +187,7 @@ fn body_round_trip(
 ///
 /// The extension of the last component, where it is short and made of letters and digits, and
 /// `txt` otherwise. Nothing else of the name is used: the path is the planner's, and this is a
-/// file name in a shared directory.
+/// file name.
 pub fn scratch_extension(path: &str) -> String {
     Path::new(path)
         .extension()
@@ -192,61 +204,142 @@ pub fn scratch_extension(path: &str) -> String {
 /// The longest extension a scratch file takes from a path.
 const MOST_EXTENSION_BYTES: usize = 12;
 
-/// Write `text` to `path`, run `open` on it and read back what is there, removing the file on every
-/// path out.
+/// Write `text` to `file`, run `open` on it and read back what is there, removing the file and its
+/// directory on every path out.
 fn through_a_file(
-    path: PathBuf,
+    file: ScratchFile,
     text: &str,
     open: impl FnOnce(&Path) -> Result<(), Failure>,
 ) -> Result<String, Failure> {
-    if let Err(failure) = write_scratch(&path, text) {
+    if let Err(failure) = write_scratch(&file.path, text) {
         // A write that failed partway leaves a file behind, and one holding a prompt is not
-        // something to leave in a shared directory.
-        let _ = std::fs::remove_file(&path);
+        // something to leave in a directory.
+        file.forget();
         return Err(failure);
     }
 
-    let opened = open(&path);
-    let saved = std::fs::read_to_string(&path);
+    let opened = open(&file.path);
+    let saved = std::fs::read_to_string(&file.path);
     // Before either result is examined, so the text does not outlive the edit down any path.
-    let _ = std::fs::remove_file(&path);
+    file.forget();
 
     opened?;
     saved.map_err(Failure::Scratch)
 }
 
-/// Where the line is put for the editor to open.
+/// Where the file the editor is handed is made: under the account's cache directory.
 ///
-/// The system's temporary directory rather than `~/.bravebot`, which is the user's configuration
-/// surface and is read as trusted: scratch files do not belong in it.
-fn scratch(kind: &str, extension: &str) -> PathBuf {
+/// Not the system temporary directory, which every stage of `run` may write (SANDBOX-12), and so
+/// may replace what the editor is shown and what it saved. Not `~/.bravebot` either, which is the
+/// user's configuration surface, is read as trusted, and is not written in an incognito session.
+fn place() -> Option<PathBuf> {
+    bravebot_agent::home::cache()
+}
+
+/// A file made for the editor to open, and the directory made for it where there is one.
+struct ScratchFile {
+    /// The file.
+    path: PathBuf,
+    /// The directory made for this one file, which goes with it. `None` where the file is in a
+    /// directory that is not this file's to remove.
+    directory: Option<PathBuf>,
+}
+
+impl ScratchFile {
+    /// Take the file and its directory away. A failure is not reported: this runs as an edit ends,
+    /// where there is nobody to tell, and the directory is one only this account can enter.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "nobody is left to tell when an edit has ended, and a file already gone is the aim"
+    )]
+    fn forget(&self) {
+        let _ = std::fs::remove_file(&self.path);
+        if let Some(directory) = &self.directory {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+    }
+}
+
+/// The file and its directory go when the value does, so an unwind out of the editor's own call (a
+/// panic) removes them as a return does. A process that is killed, or that aborts on a panic as the
+/// release build does, runs no destructor, and leaves them.
+impl Drop for ScratchFile {
+    fn drop(&mut self) {
+        self.forget();
+    }
+}
+
+/// Where the line is put for the editor to open: `bravebot/editor/<32 random hexadecimal
+/// digits>/<kind>.<extension>` under `place`.
+///
+/// Each directory above the one made for this file is refused where it is a link or belongs to
+/// another account, and is set to mode 0700, so a program of another account cannot replace what is
+/// inside. The directory made for this file is created and never adopted: a name already there is an
+/// error and not a directory to use. The name is read from the operating system's random source,
+/// since one made from the process id, the time or a count is one a program that can write `place`
+/// works out and creates first. Where there is no `place` the platform has no directory to give this
+/// account, and nothing else is used in its place: the system temporary directory is never the
+/// fallback.
+#[cfg(unix)]
+fn scratch(place: Option<&Path>, kind: &str, extension: &str) -> Result<ScratchFile, Failure> {
+    use std::os::unix::fs::DirBuilderExt;
+    let place = place.ok_or_else(|| {
+        Failure::Scratch(io::Error::new(
+            io::ErrorKind::NotFound,
+            "this account has no cache directory to make the file in",
+        ))
+    })?;
+    let made = |directory: PathBuf| -> io::Result<PathBuf> {
+        bravebot_sandbox::private::owner_only_directory(&directory)?;
+        Ok(directory)
+    };
+    let directory = (|| -> io::Result<PathBuf> {
+        let editor = made(made(place.join("bravebot"))?.join("editor"))?;
+        let directory = editor.join(bravebot_sandbox::private::random_name()?);
+        std::fs::DirBuilder::new().mode(0o700).create(&directory)?;
+        Ok(directory)
+    })()
+    .map_err(Failure::Scratch)?;
+    Ok(ScratchFile {
+        path: directory.join(format!("{kind}.{extension}")),
+        directory: Some(directory),
+    })
+}
+
+/// Windows has no mode to set on a directory, and gives each account a temporary directory a stage
+/// is not granted where the session has a scratch directory, so the file stays there.
+#[cfg(not(unix))]
+fn scratch(_place: Option<&Path>, kind: &str, extension: &str) -> Result<ScratchFile, Failure> {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|since| since.as_nanos())
         .unwrap_or(0);
     let nth = SCRATCH_NAMES.fetch_add(1, Ordering::Relaxed);
     // The name carries the pid, a stamp and a count, and `write_scratch` below creates it
-    // with `create_new` and mode 0600 -- the secure creation this rule asks for, and the
-    // reason a name already taken is refused rather than reused.
+    // with `create_new`, the reason a name already taken is refused rather than reused.
     // nosemgrep: rust.lang.security.temp-dir.temp-dir
-    std::env::temp_dir().join(format!(
+    let path = std::env::temp_dir().join(format!(
         "bravebot-{kind}-{}-{stamp}-{nth}.{extension}",
         std::process::id()
-    ))
+    ));
+    Ok(ScratchFile {
+        path,
+        directory: None,
+    })
 }
 
-/// What tells two scratch names from one process apart.
+/// What tells two scratch names from one process apart, where the name is made from the process.
 ///
 /// The stamp is in nanoseconds and the clock behind it is not: it holds a value for thousands of
 /// reads, so two names taken in the same moment are routinely the same name. The pid separates
 /// processes and this separates the calls within one.
+#[cfg(not(unix))]
 static SCRATCH_NAMES: AtomicU64 = AtomicU64::new(0);
 
 /// Write the line where the editor will find it.
 ///
-/// Created rather than opened: on a shared temporary directory an existing name may be a symlink
-/// someone else left pointing at a file of theirs, and refusing to reuse one is what keeps this
-/// from writing the prompt through it. Readable by nobody else for the same reason.
+/// Created rather than opened, so an existing name is refused and not written through. Readable by
+/// nobody else of the account's machine: the mode is 0600, and the directory above it is 0700.
 fn write_scratch(path: &Path, line: &str) -> Result<(), Failure> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -679,12 +772,198 @@ mod tests {
         );
     }
 
+    /// A directory standing for the account's cache directory, removed with the test. Nothing runs
+    /// in it, so its place under the system temporary directory costs the test nothing.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_place() -> tempfile::TempDir {
+        tempfile::tempdir().expect("a directory to stand for the cache directory")
+    }
+
+    /// INPUT-14 (#4609): where the file is made is under the directory the caller names, in a
+    /// directory made for this one file, mode 0700, with the directories above it narrowed to 0700
+    /// where an earlier run left them open, and a name that is not one a stage could work out.
+    ///
+    /// The regression it rejects is a directory made with `create_dir_all`, which keeps the mode an
+    /// existing directory has, so the directories that hold every edit's file stay open to another
+    /// account.
+    #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[test]
+    fn the_file_is_made_in_a_directory_of_its_own_that_only_this_account_enters() {
+        use std::os::unix::fs::PermissionsExt;
+        let place = a_place();
+        let editor = place.path().join("bravebot").join("editor");
+        std::fs::create_dir_all(&editor).expect("create the parents");
+        for open in [place.path().join("bravebot"), editor.clone()] {
+            std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).expect("chmod");
+        }
+
+        let file = scratch(Some(place.path()), "prompt", "md").expect("a file of its own");
+
+        let mode_of = |path: &Path| {
+            std::fs::metadata(path)
+                .expect("exists")
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        let made = file.directory.clone().expect("a directory of its own");
+        assert_eq!(made.parent(), Some(editor.as_path()));
+        assert_eq!(file.path.parent(), Some(made.as_path()));
+        for directory in [place.path().join("bravebot"), editor, made] {
+            assert_eq!(
+                mode_of(&directory),
+                0o700,
+                "{} was left readable by another account",
+                directory.display()
+            );
+        }
+        file.forget();
+    }
+
+    /// INPUT-14 (#4609): where `bravebot` or `bravebot/editor` is a link, nothing is made and nothing
+    /// is made where the link leads. A link there is not one a stage can make (SANDBOX-12 keeps it out
+    /// of the cache rows), but a person can, and a directory made through it is in a place this
+    /// process does not know the owner or the mode of.
+    ///
+    /// The regression it rejects is a directory made with `create_dir_all`, which follows the link.
+    #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[test]
+    fn a_link_where_a_directory_above_the_file_should_be_is_refused_and_leads_nowhere_new() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        for linked in ["bravebot", "bravebot/editor"] {
+            let place = a_place();
+            let elsewhere = place.path().join("elsewhere");
+            std::fs::create_dir_all(&elsewhere).expect("create where the link leads");
+            std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod");
+            std::fs::create_dir_all(place.path().join("bravebot")).expect("create the parent");
+            let link = place.path().join(linked);
+            if linked == "bravebot" {
+                std::fs::remove_dir(&link).expect("take the directory out of the way");
+            }
+            symlink(&elsewhere, &link).expect("link");
+
+            let refused = scratch(Some(place.path()), "prompt", "md");
+
+            assert!(
+                refused.is_err(),
+                "{linked} was a link and a file was made under it"
+            );
+            assert!(
+                std::fs::read_dir(&elsewhere)
+                    .expect("read where the link leads")
+                    .next()
+                    .is_none(),
+                "{linked}: something was made where the link leads"
+            );
+            let mode = std::fs::metadata(&elsewhere)
+                .expect("exists")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(
+                mode, 0o755,
+                "{linked}: the mode of the linked directory changed"
+            );
+        }
+    }
+
+    /// INPUT-14 (#4609): with no directory to make the file in, the edit is refused and the
+    /// temporary directory is not the fallback. A session in which the account names no cache
+    /// directory has none, and the file holds the person's prompt.
+    ///
+    /// The regression it rejects is a fallback to the system temporary directory, which every stage
+    /// may write, so what the editor shows and what comes back could be a stage's.
+    #[cfg(unix)]
+    #[expect(
+        clippy::panic,
+        reason = "the editor standing in for a real one fails the test by panicking if it is started"
+    )]
+    #[test]
+    fn with_no_directory_to_make_it_in_nothing_is_made_and_the_temporary_directory_is_not_used() {
+        let outcome = round_trip(None, "something private", |_| {
+            panic!("the editor was started with no file")
+        });
+        assert!(
+            matches!(outcome, Err(Failure::Scratch(_))),
+            "no directory, and the edit was not refused: {outcome:?}"
+        );
+        let shown = show_through(None, "what happened", |_| {
+            panic!("the editor was started with no file")
+        });
+        assert!(matches!(shown, Err(Failure::Scratch(_))), "{shown:?}");
+        let body = body_round_trip(None, "the body", "rs", |_| {
+            panic!("the editor was started with no file")
+        });
+        assert!(matches!(body, Err(Failure::Scratch(_))), "{body:?}");
+    }
+
+    /// INPUT-14 (#4609): the name of the directory made for a file is 32 lower-case hexadecimal digits
+    /// that no program able to write the cache directory can work out, so none can create the name
+    /// first or find the file by listing a name it can predict.
+    ///
+    /// The regression it rejects is a name built from the process id, a clock reading or a counter,
+    /// padded to the same length: each is a value a stage computes. Read as two 64-bit halves, such a
+    /// name has a half that is zero, constant or a few steps from the same half of the name before
+    /// it, and a random name has none of those but with a probability of about 2^-28. A test of the
+    /// format alone passes a counter padded to 32 digits.
+    #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(
+        clippy::string_slice,
+        reason = "the name is checked to be ASCII hexadecimal"
+    )]
+    #[test]
+    fn the_name_of_the_directory_made_for_a_file_is_not_one_a_stage_could_work_out() {
+        let place = a_place();
+        let held: Vec<ScratchFile> = (0..8)
+            .map(|_| scratch(Some(place.path()), "prompt", "md").expect("a file of its own"))
+            .collect();
+        let halves: Vec<(u64, u64)> = held
+            .iter()
+            .map(|file| {
+                let name = file
+                    .directory
+                    .as_deref()
+                    .and_then(Path::file_name)
+                    .and_then(OsStr::to_str)
+                    .expect("a utf-8 name");
+                assert_eq!(name.len(), 32, "{name}");
+                assert!(
+                    name.bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                    "{name} is not lower-case hexadecimal"
+                );
+                (
+                    u64::from_str_radix(&name[..16], 16).expect("hexadecimal"),
+                    u64::from_str_radix(&name[16..], 16).expect("hexadecimal"),
+                )
+            })
+            .collect();
+        for pair in halves.windows(2) {
+            let (first, second) = (pair[0], pair[1]);
+            assert!(
+                first.0.abs_diff(second.0) > 1 << 32,
+                "two names in a row share their first half or step it: {first:x?} {second:x?}"
+            );
+            assert!(
+                first.1.abs_diff(second.1) > 1 << 32,
+                "two names in a row share their second half or step it: {first:x?} {second:x?}"
+            );
+        }
+        for file in held {
+            file.forget();
+        }
+    }
+
     /// A name already taken is refused rather than reused, so two names that are the same name
     /// cost whichever prompt asked second its editor.
     ///
-    /// Taken at once, because that is the only way to reach it: the stamp is in nanoseconds and
-    /// the clock behind it is not, so two reads in the same moment return the same value, and
-    /// nothing else in the name varies within a process.
+    /// Taken at once, because that is the only way to reach it: a name made from the clock repeats
+    /// within one reading, and nothing else in a name made from the process varies within it.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     #[test]
     fn scratch_names_taken_at_once_still_differ() {
         use std::collections::HashSet;
@@ -693,26 +972,29 @@ mod tests {
         const AT_ONCE: usize = 8;
         const ROUNDS: usize = 25;
 
+        let place = a_place();
         let mut taken: HashSet<PathBuf> = HashSet::new();
         for _ in 0..ROUNDS {
             let gate = Arc::new(Barrier::new(AT_ONCE));
             let together: Vec<_> = (0..AT_ONCE)
                 .map(|_| {
                     let gate = Arc::clone(&gate);
+                    let place = place.path().to_path_buf();
                     std::thread::spawn(move || {
                         gate.wait();
-                        scratch("prompt", "md")
+                        scratch(Some(&place), "prompt", "md").expect("a file of its own")
                     })
                 })
                 .collect();
 
             for opened in together {
-                let name = opened.join().expect("the thread finished");
+                let file = opened.join().expect("the thread finished");
                 assert!(
-                    taken.insert(name.clone()),
+                    taken.insert(file.path.clone()),
                     "two scratch names taken at once were the same name: {}",
-                    name.display()
+                    file.path.display()
                 );
+                file.forget();
             }
         }
     }
@@ -1296,8 +1578,9 @@ mod tests {
     /// stays in the editor.
     #[test]
     fn a_transcript_opened_in_the_editor_is_never_read_back() {
+        let place = a_place();
         let mut opened = None;
-        show_through("what happened", |path| {
+        show_through(Some(place.path()), "what happened", |path| {
             assert_eq!(
                 std::fs::read_to_string(path).expect("the transcript is there"),
                 "what happened"
@@ -1324,19 +1607,21 @@ mod tests {
     /// Rejects: a `show` that reads the file back under any helper name, such as the read of
     /// `through_a_file` left in place when the transcript is shown, which a source scan for the
     /// names of the standard calls does not see once the read is behind another function.
+    #[cfg(unix)]
     #[test]
     #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn showing_a_transcript_succeeds_when_the_file_cannot_be_read_after_the_editor() {
+        let place = a_place();
         let mut replaced = None;
-        let shown = show_through("what happened", |path| {
+        let shown = show_through(Some(place.path()), "what happened", |path| {
             std::fs::remove_file(path).expect("the transcript is there");
             std::fs::create_dir(path).expect("a directory takes the file's place");
             replaced = Some(path.to_path_buf());
             Ok(())
         });
         let replaced = replaced.expect("the editor was never handed a file");
-        // `show_through` removes a file, which a directory is not, so the test removes it.
-        std::fs::remove_dir(&replaced).expect("the directory the editor left");
+        // The directory made for the file goes with it, and the directory the editor left is in it.
+        assert!(!replaced.exists(), "the directory the editor left was kept");
         assert!(
             shown.is_ok(),
             "a transcript the editor left unreadable made showing it fail: {shown:?}"
@@ -1398,11 +1683,15 @@ mod tests {
     }
 
     /// A transcript holds content nobody vouched for. It goes where scratch files go, and not
-    /// into the workspace, where the next turn would find it as a file somebody had written.
+    /// into the workspace, where the next turn would find it as a file somebody had written. That
+    /// is the directory made for it under the cache directory, which is the one place named, and not
+    /// the system temporary directory a stage may write.
+    #[cfg(unix)]
     #[test]
     fn a_transcript_opened_in_the_editor_is_written_outside_the_workspace() {
+        let place = a_place();
         let mut written = None;
-        show_through("what happened", |path| {
+        show_through(Some(place.path()), "what happened", |path| {
             written = Some(path.to_path_buf());
             Ok(())
         })
@@ -1410,7 +1699,7 @@ mod tests {
 
         let written = written.expect("the editor was handed a file");
         assert!(
-            written.starts_with(std::env::temp_dir()),
+            written.starts_with(place.path().join("bravebot").join("editor")),
             "the transcript was written to {}",
             written.display()
         );
@@ -1421,12 +1710,30 @@ mod tests {
         );
     }
 
-    /// It does not outlive the look at it, down either path. A transcript left in a shared
-    /// temporary directory is the session's contents sitting where anyone can read them.
+    /// What is left under the directory the files are made in, once an edit is over: the directories
+    /// above the one made for each file stay, and each file's own goes with it.
+    #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn left_under(place: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(place.join("bravebot").join("editor"))
+            .expect("the directory the files are made in")
+            .flatten()
+            .map(|entry| entry.path())
+            .collect()
+    }
+
+    /// It does not outlive the look at it, down either path, and neither does the directory made for
+    /// it. A transcript left behind is the session's contents sitting on disk after the editor is
+    /// closed.
+    ///
+    /// The regression it rejects is a removal of the file that leaves its directory, which passes a
+    /// check of the file alone.
+    #[cfg(unix)]
     #[test]
     fn the_file_goes_when_the_editor_exits() {
+        let place = a_place();
         let mut left = None;
-        show_through("what happened", |path| {
+        show_through(Some(place.path()), "what happened", |path| {
             left = Some(path.to_path_buf());
             Ok(())
         })
@@ -1435,9 +1742,10 @@ mod tests {
             !left.expect("a file").exists(),
             "the transcript was left behind"
         );
+        assert_eq!(left_under(place.path()), Vec::<PathBuf>::new());
 
         let mut left = None;
-        let failed = show_through("what happened", |path| {
+        let failed = show_through(Some(place.path()), "what happened", |path| {
             left = Some(path.to_path_buf());
             Err(Failure::Editor("no".to_string()))
         });
@@ -1446,12 +1754,41 @@ mod tests {
             !left.expect("a file").exists(),
             "an editor that failed left the transcript behind"
         );
+        assert_eq!(left_under(place.path()), Vec::<PathBuf>::new());
+    }
+
+    /// The file and its directory go when the editor's own call panics, which unwinds out of
+    /// [`round_trip`] without reaching the explicit removal after the call.
+    ///
+    /// The regression it rejects is a `ScratchFile` with no `Drop`, which removes the file only on
+    /// the paths that return.
+    #[cfg(unix)]
+    #[expect(clippy::panic, reason = "the editor standing in for a real one panics")]
+    #[test]
+    fn a_panic_while_the_editor_has_the_file_leaves_nothing_behind() {
+        let place = a_place();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            round_trip(Some(place.path()), "something private", |_| {
+                panic!("the editor panicked")
+            })
+        }));
+        assert!(outcome.is_err(), "the editor did not panic");
+        assert_eq!(left_under(place.path()), Vec::<PathBuf>::new());
+    }
+
+    /// [`round_trip`] in a place of its own, for a test that looks only at what comes back.
+    fn round(
+        line: &str,
+        open: impl FnOnce(&Path) -> Result<(), Failure>,
+    ) -> Result<String, Failure> {
+        let place = a_place();
+        round_trip(Some(place.path()), line, open)
     }
 
     /// The whole point of the round trip: what was saved is what comes back.
     #[test]
     fn what_the_editor_saved_becomes_the_line() {
-        let line = round_trip("first thoughts", |path| {
+        let line = round("first thoughts", |path| {
             std::fs::write(path, "second thoughts").unwrap();
             Ok(())
         })
@@ -1464,7 +1801,7 @@ mod tests {
     /// what comes back is what went in, and not saving costs the edits rather than the prompt.
     #[test]
     fn quitting_without_saving_leaves_the_line_as_it_was() {
-        let line = round_trip("first thoughts", |_| Ok(())).expect("the round trip completes");
+        let line = round("first thoughts", |_| Ok(())).expect("the round trip completes");
 
         assert_eq!(line, "first thoughts");
     }
@@ -1473,44 +1810,49 @@ mod tests {
     /// halfway through a prompt continues it rather than starting again.
     #[test]
     fn the_editor_opens_on_what_was_already_typed() {
-        round_trip("half a thought", |path| {
+        round("half a thought", |path| {
             assert_eq!(std::fs::read_to_string(path).unwrap(), "half a thought");
             Ok(())
         })
         .expect("the round trip completes");
     }
 
-    /// A prompt is the user's own words and has no business staying in a shared directory after
-    /// the edit, whether the edit worked or not.
+    /// A prompt is the user's own words and has no business staying on disk after the edit, whether
+    /// the edit worked or not, and the directory made for it goes too.
+    #[cfg(unix)]
     #[test]
     fn the_file_does_not_outlive_the_edit() {
+        let place = a_place();
         let mut opened = PathBuf::new();
-        round_trip("something private", |path| {
+        round_trip(Some(place.path()), "something private", |path| {
             opened = path.to_path_buf();
             Ok(())
         })
         .expect("the round trip completes");
         assert!(!opened.exists(), "the file was left behind after an edit");
+        assert_eq!(left_under(place.path()), Vec::<PathBuf>::new());
 
         let mut failed = PathBuf::new();
-        let outcome = round_trip("something private", |path| {
+        let outcome = round_trip(Some(place.path()), "something private", |path| {
             failed = path.to_path_buf();
             Err(Failure::Editor("no".to_string()))
         });
         assert!(outcome.is_err());
         assert!(!failed.exists(), "the file was left behind after a failure");
+        assert_eq!(left_under(place.path()), Vec::<PathBuf>::new());
     }
 
-    /// The file holds the user's own words in a shared temporary directory, so no group or other
-    /// bit may be set on it while the editor has it open. A stricter umask only narrows it.
+    /// The file holds the user's own words, so no group or other bit may be set on it while the
+    /// editor has it open. A stricter umask only narrows it.
     #[cfg(unix)]
     #[test]
     fn the_file_the_editor_opens_is_readable_by_nobody_else() {
         use std::os::unix::fs::PermissionsExt;
         let mode_of = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let place = a_place();
 
         let mut prompt = 0;
-        round_trip("something private", |path| {
+        round_trip(Some(place.path()), "something private", |path| {
             prompt = mode_of(path);
             Ok(())
         })
@@ -1518,7 +1860,7 @@ mod tests {
         assert_eq!(prompt & 0o077, 0, "the prompt file had mode {prompt:o}");
 
         let mut transcript = 0;
-        show_through("what happened", |path| {
+        show_through(Some(place.path()), "what happened", |path| {
             transcript = mode_of(path);
             Ok(())
         })
@@ -1534,7 +1876,7 @@ mod tests {
     /// was rather than being replaced by whatever happened to be in the file.
     #[test]
     fn an_editor_that_failed_does_not_produce_a_line() {
-        let outcome = round_trip("first thoughts", |path| {
+        let outcome = round("first thoughts", |path| {
             std::fs::write(path, "half an edit").unwrap();
             Err(Failure::Editor("stopped".to_string()))
         });
@@ -1574,14 +1916,15 @@ mod tests {
     #[test]
     fn a_body_comes_back_exactly_as_the_editor_wrote_it() {
         let written = "fn main() {\r\n    run();\r\n}\r\n\r\n";
-        let saved = body_round_trip("fn main() {}\n", "rs", |path| {
+        let place = a_place();
+        let saved = body_round_trip(Some(place.path()), "fn main() {}\n", "rs", |path| {
             std::fs::write(path, written).unwrap();
             Ok(())
         })
         .expect("the round trip completes");
         assert_eq!(saved, written);
 
-        let untouched = body_round_trip("no final newline", "txt", |_| Ok(()))
+        let untouched = body_round_trip(Some(place.path()), "no final newline", "txt", |_| Ok(()))
             .expect("the round trip completes");
         assert_eq!(untouched, "no final newline");
     }
@@ -1593,9 +1936,10 @@ mod tests {
     #[test]
     fn the_file_a_body_is_edited_in_is_private_named_for_its_kind_and_removed() {
         use std::os::unix::fs::PermissionsExt;
+        let place = a_place();
         let mut opened = PathBuf::new();
         let mut mode = 0;
-        body_round_trip("the body", "rs", |path| {
+        body_round_trip(Some(place.path()), "the body", "rs", |path| {
             opened = path.to_path_buf();
             mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
             Ok(())
@@ -1604,19 +1948,21 @@ mod tests {
         assert_eq!(opened.extension().and_then(OsStr::to_str), Some("rs"));
         assert_eq!(mode & 0o077, 0, "the body's file had mode {mode:o}");
         assert!(!opened.exists(), "the file was left behind after an edit");
+        assert_eq!(left_under(place.path()), Vec::<PathBuf>::new());
 
         let mut failed = PathBuf::new();
-        let outcome = body_round_trip("the body", "rs", |path| {
+        let outcome = body_round_trip(Some(place.path()), "the body", "rs", |path| {
             failed = path.to_path_buf();
             Err(Failure::Editor("no".to_string()))
         });
         assert!(outcome.is_err());
         assert!(!failed.exists(), "the file was left behind after a failure");
+        assert_eq!(left_under(place.path()), Vec::<PathBuf>::new());
     }
 
     /// WRITE-7: the scratch file takes the extension of the last component of the path, where that
     /// is a few letters or digits, and `txt` for everything else. The path is the planner's, so
-    /// nothing else of it reaches a file name in a shared directory.
+    /// nothing else of it reaches a file name.
     #[test]
     fn a_scratch_file_takes_a_plain_extension_from_the_path_and_nothing_else() {
         for (path, extension) in [

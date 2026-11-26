@@ -964,10 +964,58 @@ wanted. The trailing newline an editor leaves is dropped, one only, and line end
 way a paste's do. The file the editor opened is the user's own words, is readable by nobody else,
 and does not outlive the edit down any path. The key does nothing while a turn runs.
 
+On Unix the file is made in a directory of its own, `bravebot/editor/<name>` under the account's
+cache directory (`~/Library/Caches` on macOS, `$XDG_CACHE_HOME` or `~/.cache` on Linux), and not in
+the system temporary directory, which every stage of `run` may write
+([SANDBOX-12](sandboxing.md#SANDBOX-12)). A stage that could write the file could replace it before
+the editor opens it and after the editor saves it, and what is read back goes into the box or into the
+body of a write. The same holds for the transcript's file ([SCROLL-6](scroller.md#SCROLL-6)) and for
+the body of a proposed write ([PROMPT-14](prompting.md#PROMPT-14)), which are made the same way. No
+row of a stage's profile names the cache directory as a whole, only a directory in it per toolchain
+([SANDBOX-15](sandboxing.md#SANDBOX-15)), so no stage may write this one.
+
+Each directory above the one made for the file is made at mode 0700, set to it where it already
+exists, and refused where it is a link or belongs to another account. The directory made for the
+file is created by this process and never adopted from a name already taken. Its name is 32
+hexadecimal digits read from the operating system's random source, so it is not a name a stage can
+work out and create first. The file in it is created and not opened, at mode 0600, and is named for
+the kind of text it holds, with the extension of the path for a write's body so that the editor
+chooses the syntax of the file. The file and its directory are removed once the editor returns, down
+any path. Where the account has no cache directory, or a directory cannot be made or is refused,
+the editor is not started and the failure is said, as one that cannot start the
+editor is. The system temporary directory is never used in its place. An incognito session hands
+off in the same place: the cache directory is not the state directory, which that session adds
+nothing to ([INCOG-8](incognito.md#INCOG-8)).
+
 **Why.** A prompt worth thinking about outgrows a box ten rows tall with nothing to search or
 reflow with. The failure that matters is the one that blanks a paragraph somebody just wrote, so
 every path that does not end in a save ends in the line untouched. Handing the terminal to an
-editor mid-turn would take the screen from the turn drawing on it.
+editor mid-turn would take the screen from the turn drawing on it. The saved text goes into the box
+as though the person had typed it, so a file a stage could replace would let it type for them.
+
+**Known costs.**
+
+- **A stage that can read the cache directory can read what is being edited.** The directory stops a
+  stage replacing the file, and does not stop it reading it: the account's cache directory is not
+  withheld from reading, and a stage reads what the account does. A prompt or a transcript is what the
+  person typed or saw, which the person has chosen to put in front of an editor that may itself be a
+  program of the person's choosing. A session opened on the home directory or on the cache directory
+  is granted that directory to write as well ([SANDBOX-18](sandboxing.md#SANDBOX-18)), and a stage
+  of such a session can replace the file.
+- **A process killed with the editor open leaves the directory.** Removal happens as the edit ends,
+  and a process that is killed does not end it. The name is random and carries no process id, so a
+  later run cannot tell a live directory from a dead one, and nothing sweeps the cache directory, which
+  the retention sweep ([STATE-4](state-directory.md#STATE-4)) does not reach. The directories above
+  it stay after every edit. A person removes `bravebot/editor` under the cache directory while no
+  session is running.
+- **On Windows the file stays in the account's temporary directory.** The helper that makes the
+  directories is compiled on Unix only, since it checks the owner by a user id and sets a mode, and
+  no Windows check of the same kind is written. A Windows stage is granted a `temp` directory inside
+  the session's scratch directory and not the account's temporary directory
+  ([SANDBOX-12](sandboxing.md#SANDBOX-12)), so the file is out of its
+  reach there where the session has a scratch directory, and in it where there is none. The name is
+  the process id, a time and a count, and the file is created and not opened. This is not tested on
+  Windows.
 
 `verified-by: bravebot_tui::app::tests::input_keys::ctrl_g_asks_for_the_editor`
 `verified-by: bravebot_tui::app::tests::input_history_and_box::the_editor_key_does_nothing_while_a_turn_runs`
@@ -981,6 +1029,18 @@ editor mid-turn would take the screen from the turn drawing on it.
 `verified-by: bravebot_tui::editor::only_the_last_newline_goes`
 `verified-by: bravebot_tui::editor::line_endings_come_back_the_way_a_paste_does`
 `verified-by: bravebot_tui::editor::the_file_does_not_outlive_the_edit`
+`verified-by: bravebot_tui::editor::the_file_is_made_in_a_directory_of_its_own_that_only_this_account_enters`
+`verified-by: bravebot_tui::editor::a_link_where_a_directory_above_the_file_should_be_is_refused_and_leads_nowhere_new`
+`verified-by: bravebot_tui::editor::with_no_directory_to_make_it_in_nothing_is_made_and_the_temporary_directory_is_not_used`
+`verified-by: bravebot_tui::editor::the_name_of_the_directory_made_for_a_file_is_not_one_a_stage_could_work_out`
+`verified-by: bravebot_tui::editor::scratch_names_taken_at_once_still_differ`
+`verified-by: bravebot_tui::editor_stage::a_stage_replacing_what_it_can_write_changes_neither_what_the_editor_shows_of_the_prompt_nor_what_comes_back`
+`verified-by: bravebot_tui::editor_stage::the_file_does_not_outlive_the_edit_wherever_it_was_made`
+`verified-by: bravebot_tui::editor::the_file_goes_when_the_editor_exits`
+`verified-by: bravebot_tui::editor::the_file_a_body_is_edited_in_is_private_named_for_its_kind_and_removed`
+`verified-by: bravebot_tui::incognito::the_editor_hand_off_is_made_under_the_cache_directory_and_adds_nothing_to_the_state_directory`
+`verified-by: bravebot_sandbox::private::a_directory_another_account_owns_is_refused`
+`verified-by: bravebot_agent::confine::no_stage_of_a_session_beside_the_home_writes_the_directory_the_editor_is_handed_a_file_in`
 
 <a id="INPUT-15"></a>
 ### INPUT-15: `$VISUAL`, then `$EDITOR`, then a list that prefers a full editor to a last resort
