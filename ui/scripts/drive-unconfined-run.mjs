@@ -9,25 +9,17 @@ import assert from 'node:assert/strict'
 import { mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
+import { launchMocked } from './drive-mock.mjs'
 import { eventsFor, installBridge, makeProfile } from './acceptance-fixture.mjs'
 import { APPROVE_BUTTON, COMPOSER_NAME } from './drive-support.mjs'
 
 const output = process.env.UNCONFINED_OUTPUT || join(tmpdir(), 'bravebot-unconfined-run')
 mkdirSync(output, { recursive: true })
 const { profile, directory, state } = makeProfile()
-const app = await electron.launch({
-  args: ['.', ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), '--disable-renderer-backgrounding', '--disable-background-timer-throttling', `--user-data-dir=${profile}`],
-  cwd: process.cwd(), timeout: 40000, env: { ...process.env, BRAVEBOT_HOME: state },
-})
+const { app, page, errors } = await launchMocked({ profile, x11: true, env: { BRAVEBOT_HOME: state }, viewport: { width: 1350, height: 900 }, timeout: 7000 })
 const UNCONFINED_NOTE = 'the model asked for this one line to run with no sandbox: no profile holds it, and the next line is held to the session\'s mode again'
 const NOT_REMEMBERED_NOTE = 'a line the model asked to run with no sandbox is asked about every time, so neither the line nor the request is remembered'
 try {
-  const page = await app.firstWindow()
-  await page.setViewportSize({ width: 1350, height: 900 })
-  page.setDefaultTimeout(7000)
-  const errors = []
-  page.on('pageerror', (e) => errors.push(e.message))
   await installBridge(app, { directory })
   const { emit } = eventsFor(app)
   await page.reload()

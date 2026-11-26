@@ -13,8 +13,8 @@
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
 import { agentInfo, threeModelList } from './acceptance-fixture.mjs'
+import { launchMocked, mockedSessionOpen } from './drive-mock.mjs'
 import { ASSISTANT_BUBBLE, COMPOSER_NAME } from './drive-support.mjs'
 
 const tolerance = Number(process.env.PERF_TOLERANCE) || 1
@@ -59,13 +59,9 @@ const directory = mkdtempSync(join(tmpdir(), 'bravebot-perf-project-'))
 mkdirSync(directory, { recursive: true })
 const id = '11111111-1111-4111-8111-111111111111'
 
-const app = await electron.launch({
-  args: ['.', '--disable-renderer-backgrounding', '--disable-background-timer-throttling', `--user-data-dir=${profile}`],
-  cwd: process.cwd(), timeout: 40000,
-})
+const { app, page, errors } = await launchMocked({ profile, timeout: 15000 })
 const rows = []
 const failures = []
-const errors = []
 const percentile = (values, p) => {
   const sorted = [...values].sort((a, b) => a - b)
   return sorted[Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1)]
@@ -77,11 +73,7 @@ const record = (name, measured, limit, ok, unit = 'ms') => {
 }
 
 try {
-  const page = await app.firstWindow()
-  page.setDefaultTimeout(15000)
-  page.on('pageerror', (e) => { errors.push(e.message); console.error('RENDERER', e.message) })
-
-  await app.evaluate(({ ipcMain, BrowserWindow }, { directory, id, entries, sessions, info, models }) => {
+  await app.evaluate(({ ipcMain, BrowserWindow }, { directory, id, entries, sessions, info, models, opened }) => {
     // The long conversation is the newest; the rest are spread over eight checkouts, older by ten
     // minutes each, the way a sidebar looks after a few months of use.
     const now = Math.floor(Date.now() / 1000)
@@ -108,14 +100,14 @@ try {
       if (method === 'agent.info') return { ok: info }
       if (method === 'session.list') return { ok: { sessions: rows } }
       if (method === 'models.list') return { ok: models }
-      if (method === 'session.open') return { ok: { session: 's-' + p.id, model: 'sample/fast', record: { ...rows[0], started: 1, turns: 1, tokens: 100, build: 'fixture' }, said, todos: {}, context: '', trust: { known: true, rules: [] }, archived: 0, branchNote: null, buildNote: null, frontNote: null } }
+      if (method === 'session.open') return { ok: { ...opened, session: 's-' + p.id, record: { ...rows[0], ...opened.record }, said } }
       if (method === 'turn.send') return { ok: { turn: 2 } }
       if (method === 'permissions.list') return { ok: { paths: [], commands: [] } }
       if (method === 'watches.list') return { ok: { busy: false, watches: [] } }
       return { ok: {} }
     })
     replace('bravebot:files:list', (_, session, path) => ({ path, rows: [], truncated: false }))
-  }, { directory, id, entries: ENTRIES, sessions: SESSIONS, info: agentInfo, models: threeModelList })
+  }, { directory, id, entries: ENTRIES, sessions: SESSIONS, info: agentInfo, models: threeModelList, opened: mockedSessionOpen({ turns: 1, tokens: 100 }) })
 
   // 0. Opening the window. Watched from before the page's own script runs: every long task, and
   // the moment the first sidebar row is painted (a rAF callback, then a message delivered once

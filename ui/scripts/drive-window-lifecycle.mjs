@@ -15,8 +15,8 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
 import { oneModelList } from './acceptance-fixture.mjs'
+import { launchMocked } from './drive-mock.mjs'
 
 if (process.platform !== 'darwin') {
   console.log('SKIP: closing the last window quits the app off macOS, so there is no menu left to choose from')
@@ -28,16 +28,8 @@ const home = mkdtempSync(join(tmpdir(), 'bravebot-lifecycle-home-'))
 const directory = mkdtempSync(join(tmpdir(), 'bravebot-lifecycle-project-'))
 writeFileSync(join(profile, 'experience.json'), JSON.stringify({ conversations: {} }))
 
-const app = await electron.launch({
-  args: ['.', '--disable-renderer-backgrounding', '--disable-background-timer-throttling', `--user-data-dir=${profile}`],
-  cwd: process.cwd(),
-  timeout: 40000,
-  env: { ...process.env, HOME: home, BRAVEBOT_HOME: join(home, '.bravebot') },
-})
+const { app, page: first } = await launchMocked({ profile, env: { HOME: home, BRAVEBOT_HOME: join(home, '.bravebot') }, timeout: 15000 })
 try {
-  const first = await app.firstWindow()
-  first.setDefaultTimeout(15000)
-
   await app.evaluate(({ ipcMain }, { models, directory }) => {
     globalThis.__uncaught = []
     process.on('uncaughtException', (error) => globalThis.__uncaught.push(String(error?.message ?? error)))

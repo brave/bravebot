@@ -10,8 +10,8 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
 import { oneModelList } from './acceptance-fixture.mjs'
+import { launchMocked, mockedSessionOpen } from './drive-mock.mjs'
 import { COMPOSER_NAME } from './drive-support.mjs'
 
 // PAGE in components/Sessions.tsx.
@@ -45,17 +45,9 @@ const rows = Array.from({ length: SESSIONS }, (_, n) => {
 const archived = Object.fromEntries(rows.slice(ACTIVE).map((row) => [JSON.stringify([row.directory, row.id]), { archived: true }]))
 writeFileSync(join(profile, 'experience.json'), JSON.stringify({ conversations: archived }))
 
-const app = await electron.launch({
-  args: ['.', '--disable-renderer-backgrounding', '--disable-background-timer-throttling', `--user-data-dir=${profile}`],
-  cwd: process.cwd(), timeout: 40000,
-})
-let page
+const { app, page, errors } = await launchMocked({ profile })
 try {
-  page = await app.firstWindow()
-  page.setDefaultTimeout(10000)
-  const errors = []
-  page.on('pageerror', (e) => { errors.push(e.message); console.error('RENDERER', e.message) })
-  await app.evaluate(({ ipcMain, BrowserWindow }, { rows, models }) => {
+  await app.evaluate(({ ipcMain, BrowserWindow }, { rows, models, opened }) => {
     const emit = (event, data, session) => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:event', { event, data, session })
     ipcMain.removeHandler('bravebot:request')
     ipcMain.handle('bravebot:request', async (_, method, p = {}) => {
@@ -63,14 +55,14 @@ try {
       if (method === 'session.list') return { ok: { sessions: rows } }
       if (method === 'models.list') return { ok: models }
       if (method === 'session.open') {
-        const record = { ...rows.find((row) => row.id === p.id), started: 1, turns: 0, tokens: 0, build: 'fixture' }
-        return { ok: { session: `s-${p.id}`, model: 'sample/fast', record, said: [], todos: {}, context: '', trust: { known: true, rules: [] }, archived: 0, branchNote: null, buildNote: null, frontNote: null } }
+        const row = rows.find((each) => each.id === p.id)
+        return { ok: { ...opened, session: `s-${p.id}`, record: { ...row, ...opened.record } } }
       }
       // A turn that starts and never ends, so the session stays working after another is opened.
       if (method === 'turn.send') { emit('turn.started', { turn: 1 }, p.session); return { ok: { turn: 1 } } }
       return { ok: {} }
     })
-  }, { rows, models: oneModelList })
+  }, { rows, models: oneModelList, opened: mockedSessionOpen() })
   await page.setViewportSize({ width: 1350, height: 900 })
   await page.reload()
 

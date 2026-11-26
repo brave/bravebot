@@ -389,6 +389,21 @@ its temporary root with `makeWorld`, start its model service with `startModelSer
 `launchWorld` and open its project with `openProject`, all from `scripts/drive-world.mjs`, and mock or
 isolate whatever else the bridge would reach.
 
+`drive-background-sessions`, `drive-close-chat`, `drive-conversation-workflow`, `drive-perf`,
+`drive-session-list`, `drive-shown`, `drive-turn-details`, `drive-unconfined-run`,
+`drive-ux-acceptance`, `drive-visual` and `drive-window-lifecycle` replace the bridge and launch
+through `scripts/drive-mock.mjs`. `launchMocked({ profile, env, args, x11, timeout, viewport })` always
+passes `--disable-renderer-backgrounding`, `--disable-background-timer-throttling` and
+`--user-data-dir`, sets the window's default wait (10 s unless `timeout` says otherwise) and returns
+`{ app, page, errors }`, where `errors` collects the page's errors and each is also printed as
+`RENDERER <message>`. `args` adds flags (`drive-shown` adds `--disable-backgrounding-occluded-windows`),
+`x11` adds `--ozone-platform=x11` on Linux, and `env` is added to the variables the driver runs with.
+`mockedSessionOpen({ said, todos, turns, tokens, model })` is the `session.open` answer the mocked
+bridges of `drive-background-sessions`, `drive-close-chat`, `drive-session-list`, `drive-perf`,
+`drive-shown` and `drive-visual` send: the driver passes it into its `app.evaluate` call as data and
+the handler there adds the session and the stored row, so a field the renderer starts to read is added
+in one place. A new driver with a mocked bridge launches through `launchMocked`.
+
 ### The visual gallery
 
 `scripts/drive-visual.mjs` is the tool for looking at the interface rather than asserting on it.

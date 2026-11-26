@@ -12,8 +12,8 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
 import { oneModelList } from './acceptance-fixture.mjs'
+import { launchMocked, mockedSessionOpen } from './drive-mock.mjs'
 import { SIDEBAR_TAB } from './drive-support.mjs'
 
 const output = process.env.BACKGROUND_OUTPUT || mkdtempSync(join(tmpdir(), 'bravebot-background-'))
@@ -60,17 +60,9 @@ const chats = [{
   directory, project: 'project', branch: 'main', bytes: 20,
 }]
 
-const app = await electron.launch({
-  args: ['.', ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), '--disable-renderer-backgrounding', '--disable-background-timer-throttling', `--user-data-dir=${profile}`],
-  cwd: process.cwd(), timeout: 40000,
-})
-let page
+const { app, page, errors } = await launchMocked({ profile, x11: true })
 try {
-  page = await app.firstWindow()
-  page.setDefaultTimeout(10000)
-  const errors = []
-  page.on('pageerror', (e) => { errors.push(e.message); console.error('RENDERER', e.message) })
-  await app.evaluate(({ ipcMain }, { roster, chats, models }) => {
+  await app.evaluate(({ ipcMain }, { roster, chats, models, opened }) => {
     globalThis.backgroundRoster = roster
     globalThis.backgroundReads = 0
     globalThis.requested = []
@@ -81,14 +73,14 @@ try {
       if (method === 'session.list') return { ok: { sessions: chats } }
       // Choosing the Chats tab opens the chat at the top of the list.
       if (method === 'session.open') {
-        const record = { ...chats.find((row) => row.id === p.id), started: 1, turns: 0, tokens: 0, build: 'fixture' }
-        return { ok: { session: `s-${p.id}`, model: 'sample/fast', record, said: [], todos: {}, context: '', trust: { known: true, rules: [] }, archived: 0, branchNote: null, buildNote: null, frontNote: null } }
+        const row = chats.find((each) => each.id === p.id)
+        return { ok: { ...opened, session: `s-${p.id}`, record: { ...row, ...opened.record } } }
       }
       if (method === 'models.list') return { ok: models }
       if (method === 'background.list') { globalThis.backgroundReads++; return { ok: globalThis.backgroundRoster } }
       return { ok: {} }
     })
-  }, { roster: listed(roster), chats, models: oneModelList })
+  }, { roster: listed(roster), chats, models: oneModelList, opened: mockedSessionOpen() })
   const setRoster = (rows) => app.evaluate((_, answer) => { globalThis.backgroundRoster = answer }, listed(rows))
   const reads = () => app.evaluate(() => globalThis.backgroundReads)
   // Tall enough that the six rows and the detail fit in the column without scrolling.
