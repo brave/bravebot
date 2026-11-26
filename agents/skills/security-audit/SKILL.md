@@ -19,15 +19,23 @@ untrusted content in their context.** The driver is `bravebot-core` and `bravebo
 The planner is the model. This skill answers one question about that: **does the guarantee
 hold?**
 
-Scripts are written below by the absolute path of the main clone's copy, `<clone>/agents/skills/...`, where
-`<clone>` is the first path `git worktree list` prints.
+A run works in worktrees it makes in step 0 and never in the checkout the session started in, which may
+hold uncommitted changes or be on any branch. Two paths are written below:
+
+- `<tree>` is the worktree of the commit being audited. The scripts analyse it, and the lanes and
+  verifiers read it.
+- `<tool>` is the worktree the scripts run from, as `<tool>/agents/skills/...`. For a run of a commit
+  nobody is reviewing (the default, `upstream/main`, or a release tag) it is `<tree>`. For a branch
+  run or `--before-pr`, it is a second worktree at `upstream/main`, because the branch's own copy of
+  these scripts would run with the person's access.
 
 - **Full run** (default): all fifteen lanes.
 - **Scoped run** (`/security-audit laundering gates`): named lanes only.
 - **Branch run** (`/security-audit changed`): the lanes a branch's diff touches. This is the
-  one to run before asking for review on a diff that touches a label.
-- **Before a pull request** (`python3 <clone>/agents/skills/security-audit/security-audit.py --before-pr
-  BASE`): the check to run before opening a pull request. Where the branch's commits since
+  one to run before asking for review on a diff that touches a label. `<tree>` is the branch's
+  worktree.
+- **Before a pull request** (`python3 <tool>/agents/skills/security-audit/security-audit.py --before-pr
+  BASE`, run in `<tree>`): the check to run before opening a pull request. Where the branch's commits since
   `BASE`, or its staged and unstaged changes to tracked files, reach a path that keeps answers
   (the paths the `Stop` hook checks), it runs the mechanical half and exits
   1 on an error. Untracked files are not counted. Otherwise it checks nothing and exits 0. It
@@ -101,18 +109,39 @@ reading it would defeat the whole arrangement.
 
 ## The job
 
-Run each script by the absolute path of the main clone's copy, written
-`<clone>/agents/skills/security-audit/security-audit.py` below. A relative path runs the copy in the
-session's directory, and in a worktree that is the branch's own script, which would run with the person's
-access.
+### Step 0: make the worktrees
 
-The scripts analyse the current directory, which has to be a repository root, and not the directory the
-script is in. Run from a worktree, they analyse the worktree.
+Name the commit to audit: what the person gave (a tag, a branch, a pull request's head), or
+`upstream/main` where the checkout has that remote and `origin/main` otherwise. Fetch it, then make a
+detached worktree in `.worktrees/`, which `.gitignore` lists, so the file tools reach it with no
+`/add-dir`:
+
+```bash
+git fetch <remote> <ref>
+git worktree add --detach .worktrees/audit-<short-sha> <commit>
+```
+
+That is `<tree>`. Where `<tool>` is a second worktree, make it the same way from `upstream/main`, as
+`.worktrees/audit-tool-<short-sha>`. On macOS the `git worktree add` call takes `unconfined: true`,
+since the sandbox refuses a write under `.git` from any program other than `git`, and the fetch takes
+`scopes: ["remote"]`.
+
+A path that already exists is used only when `git -C <path> rev-parse HEAD` is the commit named and
+`git -C <path> status --porcelain` prints nothing. Otherwise make one under another name. Never run
+`git checkout` or `git stash` in the checkout the session started in, never remove a worktree, and
+leave the person to remove them with the
+[clean-branches-and-worktrees skill](../clean-branches-and-worktrees/SKILL.md).
+
+Run each script by the absolute path of its `<tool>` copy, written
+`<tool>/agents/skills/security-audit/security-audit.py` below, with the `run` call's `directory` set to
+`<tree>`. A relative path runs the copy in the session's directory, which may be the branch's own
+script. The scripts analyse the current directory, which has to be a repository root, and not the
+directory the script is in, so `directory` decides which tree is audited.
 
 ### Step 1: enumerate (zero model tokens)
 
 ```bash
-python3 <clone>/agents/skills/security-audit/security-audit.py [lane ...] [--changed BASE] [--mechanical-only]
+python3 <tool>/agents/skills/security-audit/security-audit.py [lane ...] [--changed BASE] [--mechanical-only]
 ```
 
 Stdout is `{"work_dir": ..., "manifest": ...}`. The mechanical report goes to stderr; print
@@ -159,7 +188,7 @@ is a finding the collector reports.
 ### Step 4: pair each candidate with a verifier (zero model tokens)
 
 ```bash
-python3 <clone>/agents/skills/security-audit/verify-findings.py --work-dir "$WORK_DIR"
+python3 <tool>/agents/skills/security-audit/verify-findings.py --work-dir "$WORK_DIR"
 ```
 
 Print its output: one line per verification with its lane, its claim and its prompt file. A line that
@@ -198,7 +227,7 @@ Wait for all of them.
 ### Step 6: collect (zero model tokens)
 
 ```bash
-python3 <clone>/agents/skills/security-audit/collect-findings.py --work-dir "$WORK_DIR"
+python3 <tool>/agents/skills/security-audit/collect-findings.py --work-dir "$WORK_DIR"
 ```
 
 Print its output. Exit code 1 means something at severity `error` survived. `high` and
@@ -208,7 +237,7 @@ every lane.
 ### Step 7: draft an issue per finding (zero model tokens)
 
 ```bash
-python3 <clone>/agents/skills/security-audit/draft-issues.py --work-dir "$WORK_DIR"
+python3 <tool>/agents/skills/security-audit/draft-issues.py --work-dir "$WORK_DIR"
 ```
 
 Print its output. One body per confirmed finding is now on disk: the user impact, what
@@ -234,8 +263,7 @@ with an invented one.
 
 Launch one subagent (subagent_type: `general-purpose`) per draft that wants a screen, all in a
 single message, with `{...}` filled in from the draft's line in the table, `{repo}` the absolute path of
-the checkout this session is working on, and `<clone>` replaced by the path described at the top of this
-section:
+`<tree>`, and `<tool>` replaced by the path described at the top of this skill:
 
 ```
 A security audit found a bug that shows up on a screen. Capture what the interface draws, and change nothing.
@@ -244,8 +272,8 @@ How to reach it: {screen_wanted}
 
 1. `cargo build` in {repo}.
 2. Write a drive_tui script to {session_file}: one step per line, `timeout keys`. `contrib/README.md` says how, and the steps have to answer the trust prompt first.
-3. From a disposable directory: `<clone>/contrib/drive_tui.py {session_file} --raw {capture_file} -- {repo}/target/debug/bravebot`
-4. `python3 <clone>/contrib/terminal-screenshot.py {capture_file} --strict > {screen_file}`
+3. From a disposable directory: `<tool>/contrib/drive_tui.py {session_file} --raw {capture_file} -- {repo}/target/debug/bravebot`
+4. `python3 <tool>/contrib/terminal-screenshot.py {capture_file} --strict > {screen_file}`
 5. Read {screen_file}. If it does not show the behaviour described above, fix the script and go round again. If you cannot reach it in three tries, delete {screen_file} and report that you could not.
 
 Write only those three files, all of them in the work directory. Do not edit the tree, do not fix the bug, and never write a screen you did not capture.
