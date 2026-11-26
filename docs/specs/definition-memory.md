@@ -546,8 +546,9 @@ that name as it does one typed after `/agent`
 ([addressing-a-definition.md](addressing-a-definition.md)). That includes the turns the desktop
 composes itself, such as the one it sends after a compaction, and the turn a watch the person armed
 there fires. The name comes from the row the person opened, never from the line they typed and never
-from a reply. A turn a person summons another bot for is the one exception, and lasts that turn
-([MEMORY-14](#MEMORY-14)). A row whose definition no longer resolves, because the file was removed
+from a reply. There are two exceptions, each lasting one turn: a turn a person summons another bot
+for ([MEMORY-14](#MEMORY-14)), and a turn a person addresses to a definition picked from the desktop's
+`@` list ([ADDRESS-3](addressing-a-definition.md#ADDRESS-3)). A row whose definition no longer resolves, because the file was removed
 or no longer loads, runs nothing and says so, naming the definition.
 
 A reply is drawn in the bot's window under the name the bot is shown under, which comes from that
@@ -736,8 +737,8 @@ window cannot call.
 
 In both front ends, typing `@` lists the definitions a message may be addressed to above the files
 ([ADDRESS-2](addressing-a-definition.md#ADDRESS-2)). The desktop's list is the person's bots, less
-the archived ones and the bot whose conversation is open. The terminal's is the set `/agent`
-accepts. Picking one writes a marker, `[@Name]`, into the draft and stages the definition beside it,
+the archived ones and the bot whose conversation is open, followed by the definitions the bridge
+offers. The terminal's is the set `/agent` accepts. Picking one writes a marker, `[@Name]`, into the draft and stages the definition beside it,
 as a dropped file is staged ([DROP-6](dropping.md#DROP-6)). Deleting the marker takes the
 definition off. A message addresses at most one, and picking a second replaces the first. A message
 that addresses one is queued while a turn runs and is never sent into that turn. In the terminal it
@@ -749,7 +750,8 @@ rows of the list, how a typed word matches them, the marker's text, whether the 
 the draft and the task left once it is removed are pure functions in `bravebot-mentions`. The
 terminal calls them directly. The bridge offers the rows to a client that asks for them with
 `definitions` on `mentions.offer`, so a client reads a pick as the terminal does. The desktop builds
-its own bot rows and marker and does not send `definitions`.
+its own bot rows and their marker, and sends `definitions` to list the resolved definitions after
+its bot rows ([ADDRESS-2](addressing-a-definition.md#ADDRESS-2)).
 
 The marker is not an `@` name, so a line holding it names no file
 ([NAME-9](naming-files.md#NAME-9)).

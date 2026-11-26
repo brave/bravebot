@@ -23,6 +23,7 @@ const load = (contents) => {
 const { sendAddressedTurn } = load(`export { sendAddressedTurn } from './src/main/addressing'`)
 const { Summoning } = load(`export { Summoning } from './src/main/summon-turn'`)
 const staging = load(`export * from './src/renderer/staging'; export { definitionMarker } from './src/shared/summons'`)
+const { route } = load(`export { route } from './src/renderer/interjecting'`)
 
 const SESSION = '11111111-1111-4111-8111-111111111111'
 const definitionRow = (path, description = null) => ({ path, shownPath: path, written: path, directory: false, kind: 'definition', description })
@@ -40,7 +41,11 @@ function services({ rows = [definitionRow('lantern', 'Lights the way'), definiti
     sent: () => requests.filter(([method]) => method === 'turn.send').map(([, params]) => params),
     request: async (method, params) => {
       requests.push([method, params])
-      if (method === 'mentions.offer') return { typed: params.line.slice(1), word: params.line, entries: rows, completes: true }
+      // As the bridge does, only the rows whose names hold the typed word.
+      if (method === 'mentions.offer') {
+        const typed = params.line.slice(1)
+        return { typed, word: params.line, entries: rows.filter((row) => row.path.toLowerCase().includes(typed.toLowerCase())), completes: true }
+      }
       if (method === 'turn.send') return { turn: 1 }
       throw new Error(`unexpected ${method}`)
     },
@@ -91,7 +96,9 @@ test('a name absent from the definition rows sends nothing and is refused with t
 
   assert.equal(answer.error.code, 'no_such_definition')
   assert.match(answer.error.message, /ghost/)
+  // The rows for `@ghost` hold none, so the refusal lists the ones a bare `@` offers.
   assert.match(answer.error.message, /lantern, reviewer/)
+  assert.deepEqual(held.requests.filter(([method]) => method === 'mentions.offer').map(([, params]) => params.line), ['@ghost', '@'])
   assert.deepEqual(held.sent(), [])
 })
 
@@ -188,6 +195,12 @@ test('a pick leaves drops, pastes and folded text staged', () => {
   assert.equal(picked.staging.made, pasted.staging.made)
 })
 
+test('a line with a definition picked waits for the running turn to end', () => {
+  const picked = staging.stageDefinition(empty, lantern, 'ask @lan', '@lan')
+  assert.equal(route({}, staging.named(picked.staging, picked.draft)), 'queue')
+  assert.equal(route({}, []), 'interject')
+})
+
 test('addressOf is null once the marker is deleted from the draft', () => {
   const picked = staging.stageDefinition(empty, lantern, 'ask @lan', '@lan')
   const deleted = staging.withoutMarker(picked.draft, '[@lantern]')
@@ -196,7 +209,7 @@ test('addressOf is null once the marker is deleted from the draft', () => {
   assert.equal(staging.addressOf([]), null)
 })
 
-const transcript = load(`export { userSaid, fromSaid, addressedReplies, summonedReplies, summonedAt } from './src/renderer/transcript'`)
+const transcript = load(`export { userSaid, fromSaid, addressedFor, addressedReplies, summonedReplies, summonedAt } from './src/renderer/transcript'`)
 
 test('a live addressed prompt labels its first reply with the definition and no reply after it', () => {
   const said = transcript.userSaid('[@lantern] light it', undefined, undefined, 'lantern')
@@ -211,6 +224,15 @@ test('a live addressed prompt labels its first reply with the definition and no 
   ]
   assert.deepEqual([...transcript.addressedReplies(entries)], [['a1', 'lantern']])
   assert.deepEqual([...transcript.summonedReplies(entries)], [])
+})
+
+test('the turn that runs is addressed while its prompt is, past lines read into it, and not after a watch', () => {
+  const said = transcript.userSaid('light it', undefined, undefined, 'lantern')
+  assert.equal(transcript.addressedFor([said]), 'lantern')
+  assert.equal(transcript.addressedFor([said, transcript.userSaid('also this', undefined, true)]), 'lantern')
+  assert.equal(transcript.addressedFor([said, { kind: 'watch', id: 'w1', text: 'File watch 1: a.txt' }]), undefined)
+  assert.equal(transcript.addressedFor([transcript.userSaid('plain')]), undefined)
+  assert.equal(transcript.addressedFor([]), undefined)
 })
 
 test('a watch after an addressed prompt that got no reply is a turn of its own', () => {

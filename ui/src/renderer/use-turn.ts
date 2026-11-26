@@ -151,7 +151,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     const task = addressed ? withoutMarker(prompt, addressed.marker).trim() : prompt
     const taskShown = addressed ? withoutMarker(line, addressed.marker).trim() : line
     if (addressed?.via === 'address' && !task) {
-      refuse(`${addressed.definition.name} needs a task. Write what it should do after the marker.`)
+      refuse(`${addressed.definition.name} needs a task. Write what it should do after ${addressed.marker}.`)
       return
     }
     const mentioned = await window.bravebot.request<{ files: string[] }>('mentions.named', { session: handle, prompt: line })
@@ -163,12 +163,14 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     const reads = [...new Set([...attachments.map((file) => file.path), ...mentionedFiles])]
     // Made here rather than inside the update so its id can be remembered: the agent says where
     // this prompt landed when the turn ends, and that answer has to find the row it belongs to.
-    const said = t.userSaid(prompt, summoned?.slug, undefined, addressed?.via === 'address' ? addressed.definition.name : undefined)
+    // An addressed prompt is drawn as the bridge records it, the task alone, with the definition
+    // it was addressed to drawn as a label at its start, so a fork finds it by its text.
+    const said = t.userSaid(task, summoned?.slug, undefined, addressed?.via === 'address' ? addressed.definition.name : undefined)
     updateSession(handle, (old) =>
       old
         ? {
             ...old,
-            summary: old.summary.title === NEW_CHAT ? { ...old.summary, title: prompt.slice(0, 70) } : old.summary,
+            summary: old.summary.title === NEW_CHAT ? { ...old.summary, title: task.slice(0, 70) } : old.summary,
             attachments: selectedFiles ? old.attachments : [],
             sendRefused: null,
             staging: queued ? old.staging : sent(old.staging),

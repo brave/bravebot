@@ -422,7 +422,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
         )}
         <div className={`composer-shell${footer ? ' with-footer' : ''}`}>
         <div className="composer-box">
-          {(attachments.length > 0 || staged.some((item) => item.via !== 'summon')) && (
+          {(attachments.length > 0 || staged.some((item) => item.via !== 'summon' && item.via !== 'address')) && (
             <div className="attachment-chips">
               {attachments.map((file) => (
                 <span className="attachment-chip" key={file.id}>

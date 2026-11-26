@@ -28,7 +28,7 @@ export function MentionList({ bots, entries, active, onActive, onChoose, onSummo
   const definitions = entries.filter((entry) => entry.kind === 'definition').length
   return (
     <div className="mention-list" data-test="mention-list">
-      <div className="mention-rows" role="listbox" aria-label={bots.length || definitions ? 'Bots, definitions and project files' : 'Project files'}>
+      <div className="mention-rows" role="listbox" aria-label={listName(bots.length > 0, definitions > 0)}>
         {bots.length > 0 && <div className="mention-section" role="presentation">Bots</div>}
         {bots.map((bot, index) => (
           <div key={`bot:${bot.slug}`} role="option" aria-selected={index === active} data-test="mention-bot"
@@ -42,14 +42,15 @@ export function MentionList({ bots, entries, active, onActive, onChoose, onSummo
         ))}
         {entries.map((entry, at) => {
           const index = bots.length + at
-          // The bridge lists the definitions ahead of the files (ADDRESS-2).
-          const heading = at === 0 && entry.kind === 'definition' && bots.length > 0
-            ? 'Definitions'
+          // The bridge lists the definitions ahead of the files (ADDRESS-2). Their heading says
+          // which kind of row they are, so a row carries no kind label of its own.
+          const heading = at === 0 && entry.kind === 'definition'
+            ? 'Agents'
             : at === definitions && entry.kind !== 'definition' && (bots.length > 0 || definitions > 0) ? 'Files' : null
           const section = heading && <div className="mention-section" role="presentation">{heading}</div>
           if (entry.kind === 'definition') {
-            // A definition is staged to answer the message and never written as an `@` name, so
-            // the row says which kind of thing it is (ADDRESS-2).
+            // A definition is staged to answer the message and never written as an `@` name
+            // (ADDRESS-2).
             return (
               <Fragment key={`definition:${entry.path}`}>
                 {section}
@@ -58,10 +59,9 @@ export function MentionList({ bots, entries, active, onActive, onChoose, onSummo
                   ref={index === active ? (row) => row?.scrollIntoView({ block: 'nearest' }) : undefined}
                   onMouseEnter={() => onActive(index)}
                   onMouseDown={(event) => { event.preventDefault(); onChoose(entry) }}>
-                  <Icon name="product-brave-leo" />
+                  <Icon name="robot" />
                   <span className="mention-definition-name">{entry.shownPath}</span>
                   {entry.description && <span className="mention-description">{entry.description}</span>}
-                  <span className="mention-kind">Definition</span>
                 </div>
               </Fragment>
             )
@@ -101,7 +101,7 @@ export function MentionList({ bots, entries, active, onActive, onChoose, onSummo
         ) : onDefinition ? (
           <>
             <Icon name="message-bubble" />
-            <span>The definition answers this message alone</span>
+            <span>This agent answers this message only</span>
           </>
         ) : (
           <>
@@ -109,8 +109,21 @@ export function MentionList({ bots, entries, active, onActive, onChoose, onSummo
             <span>Named files are sent as trusted context</span>
           </>
         )}
-        <span className="mention-keys">Tab to complete</span>
+        {/* Both hints sit in one cell with the other one hidden, so the foot keeps its width
+            from row to row. */}
+        <span className="mention-keys" data-test="mention-keys">
+          <span className={onBot || onDefinition ? undefined : 'mention-keys-hidden'} aria-hidden={onBot || onDefinition ? undefined : true}>Enter to address</span>
+          <span className={onBot || onDefinition ? 'mention-keys-hidden' : undefined} aria-hidden={onBot || onDefinition ? true : undefined}>Tab to complete</span>
+        </span>
       </div>
     </div>
   )
+}
+
+/** The list's accessible name, naming the kinds of row it holds. */
+function listName(bots: boolean, agents: boolean): string {
+  if (bots && agents) return 'Bots, agents and project files'
+  if (bots) return 'Bots and project files'
+  if (agents) return 'Agents and project files'
+  return 'Project files'
 }

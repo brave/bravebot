@@ -596,6 +596,10 @@
 .bot-label { max-width: 100%; vertical-align: middle; --leo-icon-size: var(--icon-control); }
 .bot-label-face { display: inline-flex; align-items: center; }
 .bot-label-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* An agent addressed for one message (ADDRESS-3): the agent mark at 16px, and over the reply,
+   pulled left by the label's own inline padding so the icon sits on the reply's left text edge. */
+.agent-label { --leo-label-icon-size: var(--icon-control); }
+.address-label { margin-inline-start: calc(-1 * var(--leo-spacing-s)); }
 
 /* A reply the bot gave elsewhere, in its own conversation: a raised card that opens the reply. */
 .replied-card {

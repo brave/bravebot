@@ -156,8 +156,12 @@ command, so `/agents are useful` stays a prompt.
 The `@` list is a second way to address a definition, and it costs the first alternative's
 ambiguity only in what the person sees. The terminal lists the definitions a message may be
 addressed to as rows above the files, each with its description. The desktop lists the same
-definition rows, each with its description and a label saying it is a definition, and lists its
-bots as rows of its own. The rows, how a typed word matches them and what Enter does on one are
+definition rows under an Agents heading, each with its description, and lists its bots as rows of
+its own. It lists only the definitions whose name is a slug, because the turn it sends names the
+definition as `address`, which takes only a slug, so a definition named otherwise is reached on the
+desktop by no row and in the terminal by `/agent`. A definition named exactly as typed is listed
+first, so the limit on how many rows are listed never leaves it out. The rows, how a typed word
+matches them and what Enter does on one are
 `bravebot-mentions`', and the bridge offers them to a client that asks, so a client that takes
 them cannot read a pick differently from the terminal
 ([MEMORY-14](definition-memory.md#MEMORY-14)). A pick is never written as an `@` name. It writes a
@@ -171,7 +175,7 @@ earlier on the line, and picking a bot takes out a definition. A desktop line ho
 marker sends nothing, says a task is needed, and keeps the line in the box
 ([ADDRESS-5](#ADDRESS-5)).
 Shift-Enter starts a line in the box and does not send it, so it leaves the marker and the pick as
-they are. The row a person picks says which kind of thing it is, and
+they are. The heading over the rows a person picks from says which kind of thing they are, and
 the list is the cost: a person typing `@` is offered names that a directory's files do not
 contain, and has to read which kind each row is.
 
@@ -187,7 +191,9 @@ it already addresses the definition.
 `verified-by: bravebot_tui::app::tests::naming::a_stopped_turn_comes_back_naming_a_definition_only_where_the_session_would_not`
 `verified-by: bravebot_mentions::lib::a_typed_word_picks_the_definitions_whose_name_holds_it`
 `verified-by: bravebot_mentions::lib::the_marker_is_not_an_at_word_and_a_name_cannot_break_it`
+`verified-by: bravebot_mentions::lib::a_name_typed_in_full_is_offered_first_past_the_cap`
 `verified-by: bravebot_ui_bridge::addressing::the_at_list_offers_the_definitions_ahead_of_the_files`
+`verified-by: bravebot_ui_bridge::addressing::the_at_list_leaves_out_a_definition_whose_name_is_no_slug`
 `verified-by: bravebot_ui_bridge::mentions_running_tests::offering_definitions_during_a_turn_uses_the_last_list`
 `verified-by: bravebot_tui::app::tests::summoning::the_definitions_are_listed_ahead_of_the_files_with_what_each_is_for`
 `verified-by: bravebot_tui::app::tests::summoning::a_picked_definition_addresses_the_line_as_the_agent_command_does`
@@ -246,11 +252,12 @@ that turn. The window never names the definition on `turn.send` itself: the main
 `bravebot:definitions:address`. There it checks the picked name against the set the bridge resolves
 for that session at the moment of sending, by asking `mentions.offer` for the definition rows, and
 sends the turn with `address` only when a definition row has exactly that name. A name the bridge
-did not list sends nothing, and the refusal names the definition and lists the ones the bridge did
-list. In a bot's conversation the bot's own definition stays standing, as it does for a summon. The
+did not list sends nothing, and the refusal names the definition and lists the definitions the
+bridge offers for a bare `@`. In a bot's conversation the bot's own definition stays standing, as it does for a summon. The
 bridge resolves the set again for the turn ([ADDRESS-5](#ADDRESS-5)), so a definition removed
-between the check and the turn ends in `turn.error` naming it, and nothing is sent. A line queued
-while a turn runs keeps its pick and is addressed when it starts.
+between the check and the turn ends in `turn.error` naming it, and nothing is sent. A line with a
+pick is never sent into a running turn: it is queued, keeps its pick and is addressed when it
+starts.
 
 `verified-by: bravebot_tui::app::tests::naming::a_line_addressing_a_definition_queued_while_a_turn_ran_addresses_it_when_the_turn_ends`
 `verified-by: bravebot_cli::main::the_agent_flag_is_taken_out_with_the_name_it_gave`
@@ -267,7 +274,7 @@ while a turn runs keeps its pick and is addressed when it starts.
 `verified-by: bravebot_ui_bridge::interop::resuming_a_session_started_under_a_definition_stops_recording_it`
 `verified-by: bravebot_ui_bridge::addressing::an_address_to_a_definition_that_is_no_bot_runs_under_it_for_one_turn`
 `verified-by: bravebot_ui_bridge::addressing::an_address_naming_nothing_resolved_sends_nothing_and_names_it`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles; ui/scripts/addressing.test.mjs holds sendAddressedTurn, given a fake request, to sending turn.send with address only for a name among the definition rows mentions.offer returned, to keeping a host bot's definition standing beside the pick, to sending nothing and returning no_such_definition with the rows listed for a name absent from them or present only as a file row, to returning needs_a_task for an empty prompt and bad_request for a name that is not a slug; ui/scripts/sanitise.test.mjs holds address sent by a window on turn.send to being stripped; make check-ui runs both)`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles; ui/scripts/addressing.test.mjs holds sendAddressedTurn, given a fake request, to sending turn.send with address only for a name among the definition rows mentions.offer returned, to keeping a host bot's definition standing beside the pick, to sending nothing and returning no_such_definition, listing the definitions a bare @ offers, for a name absent from them or present only as a file row, to returning needs_a_task for an empty prompt and bad_request for a name that is not a slug; ui/scripts/sanitise.test.mjs holds address sent by a window on turn.send to being stripped; ui/scripts/addressing.test.mjs holds route to queueing a line with a definition picked while a turn runs; make check-ui runs both)`
 `verified-by: by-construction (in the interface a name reaches a turn only through Session::address or Session::work_under; the first's one caller settles the Action::Address that only the /agent branch of dispatch_command returns, and dispatch_command is reached from the input box's key handler and from the queue that handler filled; the second's one caller is the event loop before its first turn, with the name main took off the command line or the one the record carries, which only Handle::set_agent writes, from that same argument or the session's own standing definition; a session in lines and a one-shot run put a name on a Task only from that same argument; and the turn reads the name off the session as it starts, so nothing a turn produced sets one)`
 
 <a id="ADDRESS-4"></a>

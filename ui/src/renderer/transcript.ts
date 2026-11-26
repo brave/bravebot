@@ -369,6 +369,19 @@ export function summonedFor(entries: Entry[]): string | undefined {
   return undefined
 }
 
+/**
+ * The definition a person picked for the turn that runs now, or undefined where it is not an
+ * addressed one: the name on the prompt that started it, past any lines read into it since.
+ */
+export function addressedFor(entries: Entry[]): string | undefined {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!
+    if (entry.kind === 'user' && !entry.interjected) return entry.addressed
+    if (entry.kind === 'watch' || entry.kind === 'consolidation') return undefined
+  }
+  return undefined
+}
+
 /** The entries with each prompt `found` names marked with the bot that answered it. */
 export function summonedAt(entries: Entry[], found: Map<number, string>): Entry[] {
   if (found.size === 0) return entries

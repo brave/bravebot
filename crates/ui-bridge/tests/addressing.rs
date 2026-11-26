@@ -772,6 +772,31 @@ fn the_at_list_offers_the_definitions_ahead_of_the_files() {
     );
 }
 
+/// ADDRESS-2: the bridge offers only the definitions a per-turn `address` can name. One whose name
+/// is not a slug resolves for `/agent` but would be refused at send, so it is not listed.
+#[test]
+fn the_at_list_leaves_out_a_definition_whose_name_is_no_slug() {
+    let scratch = Scratch::new("bridge-addressing-offer-slug");
+    scratch.define("lantern");
+    scratch.define("Lantern-Big");
+    let (endpoint, _received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+    let session = window.session.clone();
+
+    let offered = window.call(
+        "mentions.offer",
+        json!({"session": session, "line": "ask @lan", "definitions": true}),
+    );
+    let names: Vec<&str> = offered["ok"]["entries"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .filter(|row| row["kind"] == "definition")
+        .map(|row| row["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["lantern"], "{offered}");
+}
+
 /// ADDRESS-3: a per-turn `address` may name any definition that resolves, not only a bot's. The
 /// bridge knows nothing of bots, so a plain definition is addressed for that turn as a bot's is:
 /// its body is in the request, `turn.done` records it as not standing, and the next turn, which

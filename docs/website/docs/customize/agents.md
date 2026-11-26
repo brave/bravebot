@@ -43,9 +43,10 @@ bot's own conversation shows a **Replied to** card that opens it. The card is dr
 longer loads, the bot runs nothing and says which definition it could not find. Editing the file by
 hand is how you narrow the bot's tools.
 
-The desktop's `@` list also shows every definition the chat can use, each labelled as a definition
-with its description, and picking one addresses that one message to it, as `/agent <name> <task>`
-does in the terminal. The next message goes to the chat's planner again.
+The desktop's `@` list also shows, under Agents, every definition the chat can use whose name is
+lowercase letters, digits and single hyphens, each with its description. Picking one addresses that
+one message to it, as `/agent <name> <task>` does in the terminal. The next message goes to the
+chat's planner again.
 
 The bot's details panel has a **Servers** choice for which of your [MCP servers](mcp-servers.md) the
 bot may use. **Every connected server** removes the `mcpServers` line from the definition. **Only

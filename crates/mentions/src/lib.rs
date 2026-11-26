@@ -121,17 +121,21 @@ pub fn definition_entry(name: &str, description: &str) -> Entry {
 ///
 /// Decided here from the name alone, so both clients list the same rows for the same word. A word
 /// with a slash is a path being walked and matches none. At most [`MAX_DEFINITIONS`], in the order
-/// `held` is in, which is where a caller puts them ahead of the files.
+/// `held` is in, which is where a caller puts them ahead of the files, except that a definition
+/// whose name is the typed word, ignoring case, comes first. So a name typed in full is always
+/// listed, however many other names hold it.
 pub fn definitions_matching(typed: &str, held: &[Entry]) -> Vec<Entry> {
     if typed.contains('/') {
         return Vec::new();
     }
     let wanted = typed.to_lowercase();
-    held.iter()
+    let mut rows: Vec<&Entry> = held
+        .iter()
         .filter(|row| row.kind == Kind::Definition && row.path.to_lowercase().contains(&wanted))
-        .take(MAX_DEFINITIONS)
-        .cloned()
-        .collect()
+        .collect();
+    // Stable, so the rest keep `held`'s order.
+    rows.sort_by_key(|row| row.path.to_lowercase() != wanted);
+    rows.into_iter().take(MAX_DEFINITIONS).cloned().collect()
 }
 
 /// The marker a definition picked from the list is written into a line as: `[@Name]`.
@@ -1120,6 +1124,20 @@ mod tests {
         let offered = definitions_matching("bot", &many);
         assert_eq!(offered.len(), MAX_DEFINITIONS);
         assert_eq!(offered[0].path, "bot-00");
+    }
+
+    /// A name typed in full is listed first, so the cap never leaves it out, and the rest keep
+    /// the order they were held in.
+    #[test]
+    fn a_name_typed_in_full_is_offered_first_past_the_cap() {
+        let mut many: Vec<Entry> = (0..MAX_DEFINITIONS + 5)
+            .map(|n| definition_entry(&format!("bot-{n:02}"), ""))
+            .collect();
+        many.push(definition_entry("bot", ""));
+        let offered = definitions_matching("BOT", &many);
+        assert_eq!(offered.len(), MAX_DEFINITIONS);
+        assert_eq!(offered[0].path, "bot");
+        assert_eq!(offered[1].path, "bot-00");
     }
 
     /// The marker is `[@Name]` and never an `@` word, so a line carrying it names no file and the

@@ -627,9 +627,11 @@ export function Transcript({
     [summons, live?.summary.directory, live?.summary.id])
   const entries = useMemo(() => live ? t.summonedAt(live.entries, recorded) : NO_ENTRIES, [live?.entries, recorded])
   // The face over the working row is the bot answering the turn that runs: the one summoned for
-  // its prompt where there is one.
+  // its prompt where there is one. A turn addressed to a definition is not the bot's, and a
+  // definition has no face, so its working row has none.
   const answering = useMemo(() => {
     const slug = live?.running ? t.summonedFor(entries) : undefined
+    if (slug === undefined && live?.running && t.addressedFor(entries) !== undefined) return null
     return slug ? faces.get(slug) ?? null : bot
   }, [live?.running, entries, faces, bot])
   // A plan card waiting for its answer, during which the working row is not shown.
@@ -1453,16 +1455,23 @@ function SummonLabel({ slug, faces }: { slug: string; faces: Map<string, Face> }
 }
 
 /**
- * The definition that answered a message alone, over its reply (ADDRESS-3). Drawn as a bot's label
- * is, with the definition mark the `@` list gives it, since a definition has no face.
+ * An agent's name in a Nala label, with the agent mark the `@` list and the sidebar's Agents entry
+ * give it, since an agent has no face.
  */
+function AgentLabel({ name, tooltip, test }: { name: string; tooltip: string; test: string }): React.JSX.Element {
+  return (
+    <Label color="neutral" className="bot-label agent-label" data-test={test} data-tooltip={tooltip}>
+      <span slot="icon-before" className="bot-label-face"><Icon name="robot" /></span>
+      <span className="bot-label-name">{name}</span>
+    </Label>
+  )
+}
+
+/** The agent that answered a message alone, over its reply (ADDRESS-3), its icon on the reply's left text edge. */
 function AddressLabel({ name }: { name: string }): React.JSX.Element {
   return (
-    <div className="summon-label">
-      <Label color="neutral" className="bot-label" data-test="address-label" data-tooltip={`Answered by the ${name} definition`}>
-        <span slot="icon-before" className="bot-label-face"><Icon name="product-brave-leo" /></span>
-        <span className="bot-label-name">{name}</span>
-      </Label>
+    <div className="summon-label address-label">
+      <AgentLabel name={name} tooltip={`Answered by ${name}`} test="address-label" />
     </div>
   )
 }
@@ -1472,7 +1481,15 @@ function AddressLabel({ name }: { name: string }): React.JSX.Element {
  * person typed it. The marker is looked up by the name the bot has now, so a message that was
  * sent under another name is shown as typed.
  */
-function SaidText({ text, summoned, face }: { text: string; summoned: string | undefined; face: Face | undefined }): React.JSX.Element {
+function SaidText({ text, summoned, face, addressed }: { text: string; summoned: string | undefined; face: Face | undefined; addressed?: string }): React.JSX.Element {
+  // A prompt addressed to an agent is the task alone, as the bridge records it, so the agent it
+  // was addressed to is drawn at its start where the person's marker stood.
+  if (addressed !== undefined && summoned === undefined) {
+    return <>
+      <AgentLabel name={addressed} tooltip={`${addressed} answers this message`} test="address-mention" />
+      {' '}{text}
+    </>
+  }
   const marker = summoned !== undefined && face ? summonMarker(face.name, summoned) : null
   const at = marker === null ? -1 : text.indexOf(marker)
   if (marker === null || at < 0 || !face) return <>{text}</>
@@ -1494,6 +1511,7 @@ const LONG_PROMPT_LINES = 8
 function UserBubble({
   text,
   summoned,
+  addressed,
   face,
   revealed,
   forkable,
@@ -1502,6 +1520,7 @@ function UserBubble({
 }: {
   text: string
   summoned: string | undefined
+  addressed: string | undefined
   face: Face | undefined
   revealed: boolean
   forkable: boolean
@@ -1515,7 +1534,7 @@ function UserBubble({
   return (
     <div className="bubble user">
       <div className={`bubble-text${expanded ? '' : ' folded'}`}>
-        <SaidText text={text} summoned={summoned} face={face} />
+        <SaidText text={text} summoned={summoned} face={face} addressed={addressed} />
       </div>
       {long && (
         <Button
@@ -2290,6 +2309,7 @@ function Card({
         <UserBubble
           text={entry.text}
           summoned={entry.summoned}
+          addressed={entry.addressed}
           face={face}
           revealed={revealed === true}
           forkable={forkable}

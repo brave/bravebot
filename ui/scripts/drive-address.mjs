@@ -1,8 +1,10 @@
 // Addressing a definition for one message from the composer's `@` list (ADDRESS-2, ADDRESS-3,
-// ADDRESS-5): the definition row with its kind and description ahead of the files, Enter staging a
-// `[@name]` marker, Shift-Enter keeping it, a line holding only the marker refused with nothing
-// sent, a send running one turn under the definition with its reply labelled with the definition,
-// and the next message going unaddressed and unlabelled.
+// ADDRESS-5): the definition row under an Agents heading with its description ahead of the files,
+// the foot's key hint for the row the cursor is on, Enter staging a `[@name]` marker with no chip
+// row, Shift-Enter keeping it, a line holding only the marker refused with nothing sent, a send
+// running one turn under the definition with its reply labelled with the definition, the sent
+// message drawn as the task with the agent's label at its start and the conversation titled from
+// the task, and the next message going unaddressed and unlabelled.
 //
 // The real app and the real bridge, against a model service this script serves itself, so nothing
 // is paid for. What the model was sent is read off that service.
@@ -49,18 +51,36 @@ try {
   await page.keyboard.type('@lan')
   await list.locator('[data-test="mention-definition"]').waitFor()
   const options = (await list.getByRole('option').allInnerTexts()).map((text) => text.replace(/\s+/g, ' ').trim())
-  assert.deepEqual(options, ['lantern Keeps the lights. Definition', 'lantern-notes.md'], 'the definition row comes first and says what it is')
+  assert.deepEqual(options, ['lantern Keeps the lights.', 'lantern-notes.md'], 'the definition row comes first with what it is for')
+  // The Agents heading says which kind of row it is, though no bot is listed.
+  assert.deepEqual(await list.locator('.mention-section').allInnerTexts(), ['Agents', 'Files'])
+  assert.equal(await list.getByRole('listbox').getAttribute('aria-label'), 'Agents and project files')
+  const foot = list.locator('.mention-foot')
+  const keys = list.locator('[data-test="mention-keys"] > span:not(.mention-keys-hidden)')
+  assert.equal(await keys.innerText(), 'Enter to address')
+  assert.match(await foot.innerText(), /This agent answers this message only/)
+  const footWidth = async () => (await list.locator('[data-test="mention-keys"]').boundingBox()).width
+  const onAgent = await footWidth()
   await page.screenshot({ path: join(output, 'address-list-light.png') })
   await page.evaluate(() => window.bravebot.writeTheme('dark'))
   await page.waitForFunction(() => document.documentElement.getAttribute('data-theme') === 'dark')
   await page.waitForTimeout(300)
   await page.screenshot({ path: join(output, 'address-list-dark.png') })
   await page.evaluate(() => window.bravebot.writeTheme('system'))
+  // On a file row the foot gives the key that applies there, in the same width.
+  await page.keyboard.press('ArrowDown')
+  await page.waitForFunction(() => document.querySelector('[data-test="mention-keys"] > span:not(.mention-keys-hidden)')?.textContent === 'Tab to complete')
+  assert.equal(await footWidth(), onAgent, 'the hint keeps its width between rows')
+  await page.screenshot({ path: join(output, 'address-list-file-row-light.png') })
+  await page.keyboard.press('ArrowUp')
+  await page.waitForFunction(() => document.querySelector('[data-test="mention-keys"] > span:not(.mention-keys-hidden)')?.textContent === 'Enter to address')
 
   // ---- Enter stages the marker and sends nothing; Shift-Enter keeps it ---------------------------
   await page.keyboard.press('Enter')
   await valueIs('[@lantern] ')
   assert.equal(rounds.length, 0, 'Enter on the row picked it rather than sending')
+  // The pick is no chip, so it adds no empty chip row above the box.
+  assert.equal(await page.locator('.composer .attachment-chips').count(), 0, 'a staged definition draws no chip row')
   await page.keyboard.press('Shift+Enter')
   await valueIs('[@lantern] \n')
   assert.equal(rounds.length, 0)
@@ -70,8 +90,13 @@ try {
   // ---- a line holding only the marker says a task is needed and sends nothing --------------------
   await page.keyboard.press('Enter')
   await refusal.waitFor()
-  assert.match(await refusal.innerText(), /lantern needs a task/)
+  assert.equal((await refusal.innerText()).replace(/\s+/g, ' ').trim(), 'Not sent · lantern needs a task. Write what it should do after [@lantern].')
   await page.screenshot({ path: join(output, 'address-needs-a-task-light.png') })
+  await page.evaluate(() => window.bravebot.writeTheme('dark'))
+  await page.waitForFunction(() => document.documentElement.getAttribute('data-theme') === 'dark')
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: join(output, 'address-needs-a-task-dark.png') })
+  await page.evaluate(() => window.bravebot.writeTheme('system'))
   // The line is put back as it was sent, trimmed, with the marker and the pick kept.
   await valueIs('[@lantern]')
   assert.equal(rounds.length, 0, 'the model was sent nothing')
@@ -100,6 +125,21 @@ try {
   assert.equal((await labels.innerText()).trim(), 'lantern')
   const labelledReply = page.locator('.entry-hit', { has: labels }).locator(ASSISTANT_BUBBLE)
   assert.equal(await labelledReply.count(), 1, 'the label sits over a reply')
+  // The label's icon starts on the reply's left text edge.
+  const icon = await labels.locator('leo-icon').boundingBox()
+  const replyText = await labelledReply.evaluate((bubble) => {
+    const range = document.createRange()
+    range.selectNodeContents(bubble)
+    return range.getClientRects()[0]?.left ?? bubble.getBoundingClientRect().left
+  })
+  assert.ok(Math.abs(icon.x - replyText) <= 1.5, `the label's icon at ${icon.x} lines up with the reply text at ${replyText}`)
+  assert.equal(Math.round(icon.width), 16, 'the agent icon is 16px')
+  // The sent message is the task, with the agent it was addressed to drawn as a label at its start.
+  const bubble = page.locator('.bubble.user').first()
+  assert.equal(await bubble.locator('[data-test="address-mention"]').count(), 1)
+  assert.equal((await bubble.locator('.bubble-text').innerText()).replace(/\s+/g, ' ').trim(), 'lantern say hello')
+  // The conversation is titled from the task, without the marker.
+  assert.equal(await page.locator('.transcript h1, header h1').first().innerText(), 'say hello')
   await page.screenshot({ path: join(output, 'address-label-light.png') })
   await page.evaluate(() => window.bravebot.writeTheme('dark'))
   await page.waitForFunction(() => document.documentElement.getAttribute('data-theme') === 'dark')

@@ -26,7 +26,9 @@ function definitionRows(offer: unknown): string[] {
  * A prompt that is empty once trimmed is refused with `needs_a_task`, as `/agent` refuses one
  * (ADDRESS-5). The name has to be a slug, the rule the bridge's `address` applies, and has to be
  * among the definition rows `mentions.offer` returns for this session, which is the set `/agent`
- * accepts. A file or directory row of the same name does not count. In a bot's conversation the
+ * accepts, less any whose name is not a slug. The bridge lists a definition named exactly as typed
+ * first, so its cap on rows never leaves the name out. A file or directory row of the same name
+ * does not count, and a miss lists the definitions a bare `@` offers. In a bot's conversation the
  * bot's own definition goes as `definition`, which the bridge keeps standing, as
  * `sendSummonedTurn` sends it. Nothing is recorded in `Summoning`, since no bot was summoned.
  *
@@ -54,7 +56,15 @@ export async function sendAddressedTurn(
     return { error: services.failure(error) }
   }
   if (!offered.includes(name)) {
-    const listed = offered.length === 0 ? 'none' : offered.join(', ')
+    // The rows for the name hold only definitions whose names hold it, so the refusal lists the
+    // ones a bare `@` offers.
+    let all: string[]
+    try {
+      all = definitionRows(await request('mentions.offer', { session, line: '@', cursor: 0, definitions: true }))
+    } catch (error) {
+      return { error: services.failure(error) }
+    }
+    const listed = all.length === 0 ? 'none' : all.join(', ')
     return { error: { code: 'no_such_definition', message: `no definition named ${name}; definitions: ${listed}` } }
   }
 

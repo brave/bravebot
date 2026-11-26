@@ -5086,6 +5086,10 @@ fn session_workspace(open: &Open, settings: &Settings) -> Result<Workspace, Fail
 ///
 /// While a turn holds the session's state the set is the one the last list was drawn from, since
 /// the trust map it resolves under is the turn's. Only names and descriptions are carried.
+///
+/// A definition whose name is not a slug is left out. The desktop is the only client that asks the
+/// bridge for these rows, and its pick reaches a turn as `address`, which takes only a slug
+/// ([`crate::wire::address`]), so a row it could not send is not offered.
 fn offered_definitions(open: &Open, settings: Option<&Path>) -> Vec<bravebot_mentions::Entry> {
     let Ok(state) = open.state.try_lock() else {
         return open
@@ -5108,6 +5112,7 @@ fn offered_definitions(open: &Open, settings: Option<&Path>) -> Vec<bravebot_men
     drop(state);
     let rows: Vec<bravebot_mentions::Entry> = resolved
         .iter()
+        .filter(|definition| bravebot_agent::memory::is_a_slug(definition.name()))
         .map(|definition| {
             bravebot_mentions::definition_entry(definition.name(), definition.description())
         })
