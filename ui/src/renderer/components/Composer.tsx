@@ -422,9 +422,9 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 </span>
               ))}
               {staged.map((item) => {
-                // A summoned bot is not a chip: its marker stays in the message and is drawn as
-                // the bot's label once the message is sent.
-                if (item.via === 'summon') return null
+                // A summoned bot or an addressed definition is not a chip: its marker stays in the
+                // message and is drawn as the reply's label once the message is sent.
+                if (item.via === 'summon' || item.via === 'address') return null
                 if (item.via === 'text') {
                   return (
                     <span className="attachment-chip dropped" key={item.marker} data-test="pasted-text-chip">

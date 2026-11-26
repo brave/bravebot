@@ -15,6 +15,10 @@ export interface MentionEntry {
   /** The path as it is written in a line: each whitespace character and backslash behind a backslash (NAME-8). From the bridge. */
   written: string
   directory: boolean
+  /** Which kind of thing the row names. A `definition` row is addressed for one turn and never written as an `@` name (ADDRESS-2). From the bridge. */
+  kind: 'file' | 'directory' | 'session' | 'definition'
+  /** A definition row's description, else `null`. From the bridge. */
+  description: string | null
 }
 
 /** The bridge's answer to `mentions.offer` for one line and one cursor row. */

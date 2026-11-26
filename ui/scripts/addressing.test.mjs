@@ -22,6 +22,7 @@ const load = (contents) => {
 
 const { sendAddressedTurn } = load(`export { sendAddressedTurn } from './src/main/addressing'`)
 const { Summoning } = load(`export { Summoning } from './src/main/summon-turn'`)
+const staging = load(`export * from './src/renderer/staging'; export { definitionMarker } from './src/shared/summons'`)
 
 const SESSION = '11111111-1111-4111-8111-111111111111'
 const definitionRow = (path, description = null) => ({ path, shownPath: path, written: path, directory: false, kind: 'definition', description })
@@ -129,4 +130,68 @@ test('no agent running and a session that is not open send nothing', async () =>
   assert.equal((await sendAddressedTurn({ ...held, request: null }, SESSION, 'lantern', 'go', {})).error.code, 'no_bridge')
   assert.equal((await sendAddressedTurn(held, '22222222-2222-4222-8222-222222222222', 'lantern', 'go', {})).error.code, 'bad_request')
   assert.deepEqual(held.sent(), [])
+})
+
+const lantern = { name: 'lantern', description: 'Lights the way' }
+const reviewerDefinition = { name: 'reviewer', description: null }
+const ada = { slug: 'ada', name: 'Ada', avatar: 'v2:ada' }
+const empty = { made: 0, staged: [] }
+
+/** The words `bravebot_mentions` reads as `@` names: whitespace-separated words that start with `@`. */
+const atWords = (line) => line.split(/\s+/).filter((word) => word.startsWith('@'))
+
+test('a definition’s marker is never an @ name', () => {
+  assert.equal(staging.definitionMarker('lantern'), '[@lantern]')
+  assert.equal(staging.definitionMarker('[@x]'), '[@x]')
+  assert.equal(staging.definitionMarker('two  words'), '[@two words]')
+  assert.deepEqual(atWords(staging.definitionMarker('two words')), [])
+})
+
+test('picking a definition replaces the half-typed word with a marker that is not an @ word', () => {
+  const picked = staging.stageDefinition(empty, lantern, 'ask @lan', '@lan')
+  assert.equal(picked.draft, 'ask [@lantern] ')
+  assert.equal(picked.caret, picked.draft.length)
+  assert.deepEqual(atWords(picked.draft), [])
+  assert.deepEqual(picked.staging.staged, [{ marker: '[@lantern]', via: 'address', definition: lantern }])
+  assert.deepEqual(staging.addressOf(staging.named(picked.staging, picked.draft)), lantern)
+  assert.equal(staging.summonOf(staging.named(picked.staging, picked.draft)), null)
+  assert.equal(staging.stageDefinition(empty, lantern, 'no name here', '@lan'), null)
+  assert.equal(staging.stageDefinition(empty, lantern, 'ask lan', 'lan'), null)
+})
+
+test('a second definition pick replaces the first, marker and all', () => {
+  const first = staging.stageDefinition(empty, lantern, 'ask @lan', '@lan')
+  const second = staging.stageDefinition(first.staging, reviewerDefinition, `${first.draft}or @rev`, '@rev')
+  assert.equal(second.draft, 'ask or [@reviewer] ')
+  assert.deepEqual(second.staging.staged.map((item) => item.definition.name), ['reviewer'])
+  assert.deepEqual(staging.addressOf(staging.named(second.staging, second.draft)), reviewerDefinition)
+})
+
+test('a bot pick replaces a definition pick, and a definition pick replaces a bot pick', () => {
+  const addressed = staging.stageDefinition(empty, lantern, 'ask @lan', '@lan')
+  const summoned = staging.stageSummon(addressed.staging, ada, `${addressed.draft}or @ad`, '@ad')
+  assert.equal(summoned.draft, 'ask or [@Ada] ')
+  assert.deepEqual(summoned.staging.staged.map((item) => item.via), ['summon'])
+  assert.equal(staging.addressOf(staging.named(summoned.staging, summoned.draft)), null)
+  assert.deepEqual(staging.summonOf(staging.named(summoned.staging, summoned.draft)), ada)
+
+  const back = staging.stageDefinition(summoned.staging, lantern, `${summoned.draft}then @lan`, '@lan')
+  assert.equal(back.draft, 'ask or then [@lantern] ')
+  assert.deepEqual(back.staging.staged.map((item) => item.via), ['address'])
+  assert.equal(staging.summonOf(staging.named(back.staging, back.draft)), null)
+})
+
+test('a pick leaves drops, pastes and folded text staged', () => {
+  const pasted = staging.stageText(empty, 'one\ntwo\nthree\nfour', 'see ', 4)
+  const picked = staging.stageDefinition(pasted.staging, lantern, `${pasted.draft}@lan`, '@lan')
+  assert.deepEqual(picked.staging.staged.map((item) => item.via), ['text', 'address'])
+  assert.equal(picked.staging.made, pasted.staging.made)
+})
+
+test('addressOf is null once the marker is deleted from the draft', () => {
+  const picked = staging.stageDefinition(empty, lantern, 'ask @lan', '@lan')
+  const deleted = staging.withoutMarker(picked.draft, '[@lantern]')
+  assert.equal(deleted, 'ask ')
+  assert.equal(staging.addressOf(staging.named(picked.staging, deleted)), null)
+  assert.equal(staging.addressOf([]), null)
 })

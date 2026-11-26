@@ -14,7 +14,7 @@
 
 import type { DropOutcome, DroppedFile } from '../shared/drops'
 import { FOLDED_TEXT_MAX, type PastedPicture, type PastedText } from '../shared/pastes'
-import { summonMarker } from '../shared/summons'
+import { definitionMarker, summonMarker } from '../shared/summons'
 import { btwQuestion, isRecap } from '../shared/aside'
 import { goalArgument } from '../shared/goal'
 import { scheduleArgument } from '../shared/schedule'
@@ -26,11 +26,18 @@ export interface SummonedBot {
   avatar: string
 }
 
+/** A definition picked from the `@` list to address one message to (ADDRESS-2). */
+export interface AddressedDefinition {
+  name: string
+  description: string | null
+}
+
 /** One staged thing and the marker that stands for it. */
 export type Staged =
   | { marker: string; via: 'drop'; file: DroppedFile }
   | { marker: string; via: 'paste'; picture: PastedPicture }
   | { marker: string; via: 'summon'; bot: SummonedBot }
+  | { marker: string; via: 'address'; definition: AddressedDefinition }
   | { marker: string; via: 'text'; pasted: PastedText }
 
 export interface Staging {
@@ -222,26 +229,49 @@ function writtenAt(draft: string, caret: number, written: string[]): { draft: st
 }
 
 /**
- * Summon `bot` for the message: the half-typed `word` at the end of `draft` becomes the bot's
- * marker. A message summons one bot, so a bot picked before is taken off, marker and all.
- * `null` where the draft does not end in `word`, as `acceptMention` leaves such a draft alone.
+ * The half-typed `word` at the end of `draft` replaced by `item`'s marker. A message summons one
+ * bot or is addressed to one definition, so a bot or definition picked before is taken off,
+ * marker and all. `null` where the draft does not end in `word`, as `acceptMention` leaves such a
+ * draft alone.
  */
-export function stageSummon(staging: Staging, bot: SummonedBot, draft: string, word: string | null): StagedPaste | null {
+function picked(staging: Staging, item: Extract<Staged, { via: 'summon' | 'address' }>, draft: string, word: string | null): StagedPaste | null {
   if (word === null || !word.startsWith('@') || !draft.endsWith(word)) return null
-  const marker = summonMarker(bot.name, bot.slug)
   let kept = draft.slice(0, draft.length - word.length)
-  const staged = staging.staged.filter((item) => {
-    if (item.via !== 'summon') return true
-    kept = withoutMarker(kept, item.marker)
+  const staged = staging.staged.filter((old) => {
+    if (old.via !== 'summon' && old.via !== 'address') return true
+    kept = withoutMarker(kept, old.marker)
     return false
   })
-  const text = `${marker} `
-  return { staging: { made: staging.made, staged: [...staged, { marker, via: 'summon', bot }] }, draft: kept + text, caret: kept.length + text.length }
+  const text = `${item.marker} `
+  return { staging: { made: staging.made, staged: [...staged, item] }, draft: kept + text, caret: kept.length + text.length }
+}
+
+/**
+ * Summon `bot` for the message: the half-typed `word` at the end of `draft` becomes the bot's
+ * marker, and any bot or definition picked before is taken off.
+ */
+export function stageSummon(staging: Staging, bot: SummonedBot, draft: string, word: string | null): StagedPaste | null {
+  return picked(staging, { marker: summonMarker(bot.name, bot.slug), via: 'summon', bot }, draft, word)
+}
+
+/**
+ * Address the message to `definition` (ADDRESS-2): the half-typed `word` at the end of `draft`
+ * becomes the definition's marker, which is never an `@` name, and any bot or definition picked
+ * before is taken off.
+ */
+export function stageDefinition(staging: Staging, definition: AddressedDefinition, draft: string, word: string | null): StagedPaste | null {
+  return picked(staging, { marker: definitionMarker(definition.name), via: 'address', definition }, draft, word)
 }
 
 /** The bot a send summons, if its draft still names one. */
 export function summonOf(items: Staged[]): SummonedBot | null {
   for (const item of items) if (item.via === 'summon') return item.bot
+  return null
+}
+
+/** The definition a send is addressed to, if its draft still names one. */
+export function addressOf(items: Staged[]): AddressedDefinition | null {
+  for (const item of items) if (item.via === 'address') return item.definition
   return null
 }
 
