@@ -44,7 +44,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/detach` | | Leave a background session you attached to, leaving it running |
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
 | `/reach` | `[<where> -- <command>]` | Remember a directory or credential for a command, or list and remove them |
-| `/sandbox` | `[<mode>]` | Show the sandbox mode, or change it |
+| `/sandbox` | `[<mode>]` | Choose the sandbox mode from a list, or name one to change it |
 | `/loop` | `[[interval] <prompt> \| stop [n]]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/after` | `<delay> <prompt>` | Send a prompt once, after a delay |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
@@ -553,8 +553,11 @@ same file and decides later `git` commands that reach that owner.
 
 ## `/sandbox [strict | read-only | workspace-write | off]`
 
-Bare, it says the sandbox mode programs `run` starts are held to and what chose it: the default, a
-settings file, the managed file, `--sandbox`, or an earlier `/sandbox`. With a word it sets the mode
+Bare, it opens a list of the four modes with the one in force marked and the cursor on it. Up and
+Down move the cursor and Enter sets the mode, as typing the word does, with the same reply; a click
+on a row works as in the other pickers, and Escape leaves the mode as it was. It opens at the prompt
+and while a turn runs. The Sandbox row of the info panel opens the same list when clicked, and
+`/status` and `bravebot doctor` say what chose the mode in force. With a word it sets the mode
 for the rest of the session. Typed while a turn runs with nothing waiting, a mode is set at once,
 `off` included, and the turn running uses it for each program it starts from then on and tells the
 model the mode changed. A program already started keeps the profile it started under, and so does a
@@ -913,7 +916,7 @@ has the rest. [`/sidebar`](#sidebar) chooses which sections it draws.
 ## `/sidebar`
 
 Opens a checklist titled `info panel` with a row for each section of the info panel: Session, Model,
-Goal, Pull requests, Issues, Context, Language servers, MCP servers, Files and Plan. A row reads
+Sandbox, Goal, Pull requests, Issues, Context, Language servers, MCP servers, Files and Plan. A row reads
 `[x]` while the panel draws the section and `[ ]` while it is turned off. Up and Down, or `j` and
 `k`, move the cursor, Space or Enter turns the row under it on or off, and a click on a row does the
 same in one press. The panel follows each change as it is made. Escape closes the checklist and keeps

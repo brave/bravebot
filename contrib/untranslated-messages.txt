@@ -100,6 +100,7 @@ fr:gateway-key-file-not-absolute
 fr:gateway-key-file-too-large
 fr:gateway-key-file-unreadable
 fr:hover-panel-close-peek
+fr:hover-panel-sandbox
 fr:keybindings-undeliverable
 fr:keybindings-undeliverable-more
 fr:lsp-none-started
@@ -163,6 +164,7 @@ fr:open-loops-uncommitted
 fr:outputs-hint
 fr:outputs-none
 fr:panel-rename-line-in-use
+fr:panel-sandbox
 fr:peek-close
 fr:peek-heading
 fr:peek-keys
@@ -301,6 +303,12 @@ fr:run-kept-scope-not-remembered
 fr:run-not-confined-checkout-entry
 fr:run-write-lands-on
 fr:run-write-protected
+fr:sandbox-hint-off
+fr:sandbox-hint-read-only
+fr:sandbox-hint-strict
+fr:sandbox-hint-workspace-write
+fr:sandbox-picker-keys
+fr:sandbox-picker-title
 fr:schedule-already-paused
 fr:schedule-cleared
 fr:schedule-not-paused

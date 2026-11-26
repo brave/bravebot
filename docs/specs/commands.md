@@ -642,7 +642,7 @@ does not read:
 - **`/sandbox`.** It sets the mode the programs `run` starts are held to
   ([SANDBOX-22](sandboxing.md#SANDBOX-22)). A turn reads the mode again when each call begins, so a
   mode set mid-turn applies to every call the turn makes after that, and a program already started
-  keeps its profile. The reply says so. The bare word reports the mode and says nothing of the turn.
+  keeps its profile. The reply says so. The bare word opens the list of modes ([SANDBOX-22](sandboxing.md#SANDBOX-22)) as it is typed, which is a picker of the session like `/model`'s, and says nothing of the turn: choosing a row is the same as typing its word, the reply included.
   `/sandbox off` is carried out as it is typed, like the other modes, and asks nothing. A managed
   floor refuses a looser mode as at rest, so the refusal is said under the turn. `/status` mid-turn names the mode set
   meanwhile, which is the one the rest of the turn runs its programs under.
@@ -800,7 +800,8 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::effort_session_with_a_level_waits_behind_what_could_change_the_choice_and_not_behind_the_rest`
 `verified-by: bravebot_tui::app::a_language_named_mid_turn_is_saved_as_it_is_typed`
 `verified-by: bravebot_tui::app::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_follows_it`
-`verified-by: bravebot_tui::app::the_sandbox_report_is_given_mid_turn`
+`verified-by: bravebot_tui::app::a_bare_sandbox_command_opens_the_picker_mid_turn`
+`verified-by: bravebot_tui::app::a_sandbox_row_taken_mid_turn_adds_the_note_that_the_turn_follows_it`
 `verified-by: bravebot_tui::app::moving_the_sandbox_to_off_mid_turn_is_carried_out_when_typed`
 `verified-by: bravebot_tui::app::a_sandbox_mode_named_behind_a_waiting_line_waits_behind_it`
 `verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_sandbox_mode_set_mid_turn`
@@ -1585,7 +1586,8 @@ Once `/sandbox ` is typed, the box draws the four modes it takes, `strict`, `rea
 `workspace-write` and `off`, after the caret in place of `[<mode>]`. `/sandbox standard` is read
 as `workspace-write` and is not listed. Tab after `/sandbox ` and the start of a mode, with the caret at
 the end of the line, finishes it by the rule CMD-21 gives for `/effort`, so `/sandbox w` becomes
-`/sandbox workspace-write`.
+`/sandbox workspace-write`. The bare `/sandbox` opens a list of the same four modes
+([SANDBOX-22](sandboxing.md#SANDBOX-22)).
 
 `/limit` draws `[<n>[k|m] | <n> credits | off]`, the figures it takes, and not the words `tokens`
 and `credits` as choices. `/review` draws `[staged | since <ref> | commit <ref> | pr <n>] [focus]`,

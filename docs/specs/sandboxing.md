@@ -2897,8 +2897,13 @@ window has chosen a mode for the session with `session.sandbox`, which replaces 
 from the next turn. `off` is read there as `workspace-write`, because a window says a program is unconfined only on the card for one line asked to run with no sandbox ([SANDBOX-29](#SANDBOX-29)), and nothing it draws says that every program of a session is. A
 subagent's programs run under the mode of the session that started it, and the mode is not in the
 session record, so a resumed session takes the mode its start-up chose and not the one it was
-saved under. `/sandbox` alone says the mode in force and the flag or file that chose it, in the words `doctor`
-uses. `/sandbox strict`, `/sandbox read-only`, `/sandbox workspace-write` and `/sandbox off` set the mode for the rest of the
+saved under. `/sandbox` alone opens a list of the four modes, `off` among them, with the mode in
+force marked and the cursor on it, and the same list opens from a click on the Sandbox row of the
+info panel ([PANEL-9](info-panel.md#PANEL-9), [MOUSE-11](mouse.md#MOUSE-11)). Enter on a row is
+the same as typing `/sandbox` and its word, so the managed floor, the reply and the note to a
+running turn are those of the typed word, and Escape leaves the mode as it was. The list opens at
+rest and while a turn runs, as a picker of the session. The flag or file that chose the mode in
+force is read from `/status` and `doctor`. `/sandbox strict`, `/sandbox read-only`, `/sandbox workspace-write` and `/sandbox off` set the mode for the rest of the
 process, and only a person's typed word does ([CMD-1](commands.md#CMD-1)): no tool, skill, hook or
 `AGENTS.md` line sets it, and the planner is told the mode in force and nothing about the command.
 A mode named while a turn runs is set as it is typed, `off` included ([CMD-8](commands.md#CMD-8)), and the
@@ -3102,6 +3107,14 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_agent::sandbox_reason::each_way_a_mode_is_looser_than_the_pin_has_its_own_sentence`
 `verified-by: bravebot_tui::sandbox_command::a_word_that_is_not_a_mode_changes_nothing_and_the_bare_word_only_reports`
 `verified-by: bravebot_tui::sandbox_command::the_report_names_what_chose_the_mode`
+`verified-by: bravebot_tui::sandbox_prompt::the_list_is_every_mode_in_the_order_they_are_listed`
+`verified-by: bravebot_tui::sandbox_prompt::the_picker_opens_on_the_mode_in_force`
+`verified-by: bravebot_tui::sandbox_prompt::the_mode_in_force_is_drawn_as_current_and_no_other`
+`verified-by: bravebot_tui::sandbox_prompt::the_picker_is_drawn_as_a_titled_panel_with_its_keys`
+`verified-by: bravebot_tui::app::a_bare_sandbox_command_opens_the_picker_and_says_nothing`
+`verified-by: bravebot_tui::app::a_row_taken_in_the_sandbox_picker_sets_the_mode_and_escape_leaves_it`
+`verified-by: bravebot_tui::app::a_row_the_managed_file_refuses_is_refused_when_taken`
+`verified-by: bravebot_tui::app::a_click_on_the_panels_sandbox_row_opens_the_sandbox_picker_at_rest_and_mid_turn`
 `verified-by: bravebot_tui::app::the_sandbox_command_carries_its_word_unparsed`
 `verified-by: bravebot_tui::app::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_follows_it`
 `verified-by: bravebot_tui::app::moving_the_sandbox_to_off_mid_turn_is_carried_out_when_typed`

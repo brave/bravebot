@@ -78,6 +78,7 @@ pub mod render;
 pub mod resume;
 pub mod review_command;
 pub mod sandbox_command;
+pub mod sandbox_prompt;
 pub mod select;
 pub mod sessions_keys;
 pub mod sessions_screen;

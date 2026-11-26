@@ -13,6 +13,14 @@ fn a_session_beside_the_panel() -> (Session, (u16, u16)) {
     (session, cell)
 }
 
+/// The same session, and the cell of the panel's session name, which is its first row and so is
+/// not under a picker as tall as the model picker.
+fn a_session_beside_the_panel_clear_of_a_tall_picker() -> (Session, (u16, u16)) {
+    let (session, buffer) = panel_with_a_context();
+    let cell = find_on(&buffer, "PANELMARK");
+    (session, cell)
+}
+
 /// The cell of row `index` of the list the open picker drew, as the last frame recorded it.
 fn row_of_the_picker(session: &Session, index: u16) -> (u16, u16) {
     let list = session
@@ -108,6 +116,41 @@ fn a_second_press_on_a_row_of_the_effort_picker_takes_it_in_the_scope_in_force()
             other => panic!("{case}: the row taken was {other:?}"),
         }
     }
+}
+
+/// MOUSE-15. Rejects: a press on a row of the sandbox picker opened mid-turn that takes the row at
+/// once, one that moves nothing, and a second press that leaves the picker open or takes another
+/// mode.
+#[test]
+fn a_press_on_a_row_of_the_sandbox_picker_moves_the_cursor_and_a_second_takes_it() {
+    use bravebot_sandbox::SandboxMode;
+    let (mut session, _) = a_session_beside_the_panel();
+    session.open_picking(Picking::Sandbox(crate::sandbox_prompt::Picker::new(
+        SandboxMode::WorkspaceWrite,
+    )));
+    drawn(&mut session);
+    let cursor = |session: &Session| match session.picking() {
+        Some(Picking::Sandbox(picker)) => picker.chosen().map(|row| row.0),
+        _ => None,
+    };
+    assert_eq!(cursor(&session), Some(SandboxMode::WorkspaceWrite));
+
+    let (row, column) = row_of_the_picker(&session, 1);
+    press(&mut session, row, column, KeyModifiers::NONE);
+    assert_eq!(cursor(&session), Some(SandboxMode::ReadOnly));
+    assert!(
+        session.take_pick().is_none(),
+        "the first press took the row"
+    );
+
+    press(&mut session, row, column, KeyModifiers::NONE);
+    assert!(session.picking().is_none(), "the second press left it open");
+    assert_eq!(
+        session.take_pick(),
+        Some(Picked::Sandbox(crate::sandbox_prompt::Row(
+            SandboxMode::ReadOnly
+        )))
+    );
 }
 
 /// A `/theme` picker opened as a mode of the session, drawn, with the cursor on `current`.
@@ -484,7 +527,8 @@ fn model_under_the_cursor(session: &Session) -> Option<String> {
 /// against the rows of a list that has headings in it.
 #[test]
 fn the_model_picker_opened_mid_turn_takes_a_press_the_wheel_and_a_press_outside() {
-    let (mut session, (outside, outside_column)) = a_session_beside_the_panel();
+    let (mut session, (outside, outside_column)) =
+        a_session_beside_the_panel_clear_of_a_tall_picker();
     open_models(&mut session);
     let buffer = drawn(&mut session);
     assert_eq!(
@@ -674,7 +718,7 @@ fn the_panel_follows_each_toggle_at_once_and_escape_keeps_them_at_rest_and_while
         assert!(the_panel_draws(&buffer, context), "{running}: Space");
         assert!(matches!(session.picking(), Some(Picking::Sidebar(_))));
 
-        for _ in 0..5 {
+        for _ in 0..6 {
             send(&mut session, KeyCode::Down);
         }
         let buffer = send(&mut session, KeyCode::Enter);

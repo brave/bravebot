@@ -317,11 +317,14 @@ a mouse. At the plain prompt the click is [MOUSE-23](#MOUSE-23).
 `verified-by: bravebot_tui::app::a_click_on_every_row_of_a_delegates_block_in_the_scroller_opens_its_view`
 
 <a id="MOUSE-11"></a>
-### MOUSE-11: a click on the panel's model or effort row asks what the command asks
+### MOUSE-11: a click on the panel's model, sandbox or effort row asks what the command asks
 
 In the info panel, a left click that sweeps nothing on the row that names the model asks for the
 model picker, as `/model` does, and one on the row that names the effort asks for the effort picker,
-as `/effort` does, in the scope that records the pick for every session. That holds whether the level
+as `/effort` does, in the scope that records the pick for every session. A click on the row of the
+Sandbox section ([PANEL-9](info-panel.md#PANEL-9)) opens the list of sandbox modes, as a bare
+`/sandbox` does ([SANDBOX-22](sandboxing.md#SANDBOX-22)), on the mode in force, at rest and while a
+turn runs, and says nothing. That holds whether the level
 in force was recorded or was chosen with `/effort session`, and a second press on a row of the
 opened picker takes the row in the scope the picker is then in ([MOUSE-15](#MOUSE-15)). The row under
 the effort that says `this session only` ([PANEL-9](info-panel.md#PANEL-9)) is not a target. The commands are typed at the plain prompt, so a click over the scroller or a history search asks for nothing, and [MOUSE-29](#MOUSE-29) says what the click does while something is running. Where a definition in force names the model the click is refused as the command
@@ -337,6 +340,7 @@ put there ([PANEL-11](info-panel.md#PANEL-11)).
 `verified-by: bravebot_tui::app::a_click_on_the_panels_model_or_effort_row_opens_that_picker`
 `verified-by: bravebot_tui::app::a_click_on_the_panels_effort_row_opens_the_every_session_picker_whatever_is_in_force`
 `verified-by: bravebot_tui::app::a_click_off_the_models_rows_asks_for_no_picker`
+`verified-by: bravebot_tui::app::a_click_on_the_panels_sandbox_row_opens_the_sandbox_picker_at_rest_and_mid_turn`
 `verified-by: bravebot_tui::app::a_drag_over_the_model_row_opens_no_picker_and_a_double_click_opens_it_once`
 `verified-by: bravebot_tui::app::a_press_elsewhere_let_go_on_the_model_row_opens_no_picker`
 `verified-by: bravebot_tui::app::a_click_on_the_model_row_over_the_scroller_opens_no_picker`
@@ -888,12 +892,12 @@ the lines back into the box ([INPUT-18](terminal-input.md#INPUT-18)), and cleari
 <a id="MOUSE-29"></a>
 ### MOUSE-29: a click that stands for a command does what the command typed would do where it is
 
-A click on the panel's model, effort, context, MCP server or language server row or on its Files
+A click on the panel's model, sandbox, effort, context, MCP server or language server row or on its Files
 section ([MOUSE-11](#MOUSE-11), [MOUSE-12](#MOUSE-12), [MOUSE-13](#MOUSE-13), [MOUSE-22](#MOUSE-22),
 [MOUSE-20](#MOUSE-20)) is carried out as Enter on the command it stands for would be, and leaves the
 box as it was. At the plain prompt that is what Enter does there. While a
 turn runs it is carried out at once where the table says the command runs mid-turn and no line
-waiting ahead of it could change what it acts on ([CMD-8](commands.md#CMD-8)): `/model` and
+waiting ahead of it could change what it acts on ([CMD-8](commands.md#CMD-8)): `/model`, `/sandbox` and
 `/effort` ask for their picker as a mode of the session, `/context` and a bare `/mcp` are said as a
 command's answer is, so what the turn did is not counted as what it said, and `/diff` draws the
 files state or says why it cannot in the same way. Otherwise it waits in the queue

@@ -912,6 +912,7 @@ impl Session {
             Target::Issue(row) => reference_address(self, LinkKind::Issue, row),
             Target::Name
             | Target::Model
+            | Target::Sandbox
             | Target::Effort
             | Target::Context
             | Target::Servers
