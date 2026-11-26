@@ -288,6 +288,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
         state.hook_notices,
         &mut state.worked,
         state.steps,
+        plan.beside,
     )?;
 
     // After the collection above, which adds what a finished delegate spent, so a delegate
@@ -496,6 +497,7 @@ pub(super) enum AfterReply {
 )]
 pub(super) fn after_a_reply<S: Sink, C: Confirmer, R: Reporter>(
     inputs: Inputs<'_>,
+    plan: &Plan<'_>,
     state: &mut State<'_>,
     policy: &mut Policy<'_, S>,
     conversation: &mut Conversation,
@@ -579,6 +581,7 @@ pub(super) fn after_a_reply<S: Sink, C: Confirmer, R: Reporter>(
             state.hook_notices,
             &mut state.worked,
             state.steps,
+            plan.beside,
         )?;
         return Ok(AfterReply::Answer);
     }
@@ -610,6 +613,7 @@ pub(super) fn after_a_reply<S: Sink, C: Confirmer, R: Reporter>(
                 state.hook_notices,
                 &mut state.worked,
                 state.steps,
+                plan.beside,
             )?;
             // A wake by a typed line collected nobody, and its window still belongs to the
             // delegates' requests that ran inside it.

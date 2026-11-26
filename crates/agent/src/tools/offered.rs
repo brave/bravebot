@@ -119,10 +119,12 @@ pub enum Named {
     RequestPath,
     Search,
     SpawnAgent,
+    Lsp,
+    ApplyCheckout,
 }
 
 impl Named {
-    const ALL: [Named; 12] = [
+    const ALL: [Named; 14] = [
         Named::Run,
         Named::ReadOutput,
         Named::ReadFile,
@@ -135,6 +137,8 @@ impl Named {
         Named::RequestPath,
         Named::Search,
         Named::SpawnAgent,
+        Named::Lsp,
+        Named::ApplyCheckout,
     ];
 
     /// The name the tool is offered under. `run` is read as [`Running::on`] reads it, so it has
@@ -153,6 +157,8 @@ impl Named {
             Named::RequestPath => Some("request_path"),
             Named::Search => Some("search"),
             Named::SpawnAgent => Some("spawn_agent"),
+            Named::Lsp => Some("lsp"),
+            Named::ApplyCheckout => Some("apply_checkout"),
         }
     }
 

@@ -1761,6 +1761,9 @@ fn collect_delegates<S: Sink, R: Reporter>(
     // back in (TURN-4).
     worked: &mut Worked,
     round: usize,
+    // The collecting turn's own tool list, so a checkout notice names another tool only where
+    // this turn's list holds it too (TOOL-6).
+    beside: tools::Beside,
 ) -> Result<usize, TurnError> {
     let mut collected = 0;
     while let Some(at) = delegates
@@ -1883,7 +1886,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
         };
 
         if let Some((retired, checkout)) = retired {
-            let (said, mark) = delegate_end::checkout_account(retired, &checkout);
+            let (said, mark) = delegate_end::checkout_account(retired, &checkout, beside);
             body.push_str("\n\n");
             body.push_str(&said);
             note = format!("{note}; {mark}");
@@ -3798,6 +3801,7 @@ where
                 &mut *state.hook_notices,
                 &mut state.worked,
                 state.steps,
+                plan.beside,
             );
         }
         result
@@ -4135,6 +4139,7 @@ where
         };
         match round_steps::after_a_reply(
             inputs,
+            plan,
             state,
             policy,
             conversation,
@@ -5747,6 +5752,7 @@ mod tests {
     /// Cleanup entered after cancellation must still charge requests that overlap its join.
     /// A controlled worker keeps the interval open independently of transport polling.
     #[test]
+    #[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
     fn cancelled_cleanup_retains_inflight_delegate_inference() {
         const LIMIT: Duration = Duration::from_secs(5);
         struct Joining;
@@ -5837,6 +5843,7 @@ mod tests {
                     &mut Vec::new(),
                     &mut Worked::default(),
                     0,
+                    tools::Beside::every(),
                 )
                 .unwrap(),
                 1
@@ -5929,6 +5936,7 @@ mod tests {
                 &mut Vec::new(),
                 &mut Worked::default(),
                 0,
+                tools::Beside::every(),
             )
             .unwrap();
         });
@@ -6055,6 +6063,7 @@ mod tests {
                 &mut Vec::new(),
                 &mut Worked::default(),
                 0,
+                tools::Beside::every(),
             )
             .unwrap();
         });
@@ -6408,6 +6417,7 @@ mod tests {
                 &mut Vec::new(),
                 &mut Worked::default(),
                 0,
+                tools::Beside::every(),
             )
             .unwrap();
         });
@@ -6506,6 +6516,7 @@ mod tests {
                 &mut Vec::new(),
                 &mut Worked::default(),
                 0,
+                tools::Beside::every(),
             )
             .unwrap();
         });
@@ -6609,6 +6620,7 @@ mod tests {
                 &mut Vec::new(),
                 &mut Worked::default(),
                 0,
+                tools::Beside::every(),
             )
             .unwrap();
         });
@@ -6742,6 +6754,7 @@ mod tests {
                     &mut Vec::new(),
                     &mut Worked::default(),
                     0,
+                    tools::Beside::every(),
                 )
                 .unwrap();
                 assert!(delegates.is_empty(), "a delegate that had ended was left");
@@ -7058,6 +7071,7 @@ mod tests {
                     &mut Vec::new(),
                     &mut Worked::default(),
                     0,
+                    tools::Beside::every(),
                 )
             });
             let Err(TurnError::Precommit(refused)) = outcome else {
@@ -7183,6 +7197,7 @@ mod tests {
                 &mut Vec::new(),
                 &mut Worked::default(),
                 1,
+                tools::Beside::every(),
             )
             .unwrap();
             assert!(
