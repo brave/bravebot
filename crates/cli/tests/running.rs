@@ -20063,6 +20063,138 @@ fn requests(gateway: &Gateway) -> Vec<String> {
     bodies
 }
 
+/// What a chat request sends ahead of the conversation: its system messages and its tool schemas.
+/// A prompt cache is matched from the first byte of a request, so these two are the part that has
+/// to be the same in every process for the second to read what the first wrote.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_standing_prefix(body: &str) -> (Vec<serde_json::Value>, serde_json::Value) {
+    let request: serde_json::Value = serde_json::from_str(body).expect("a request body is JSON");
+    let system: Vec<serde_json::Value> = request["messages"]
+        .as_array()
+        .expect("a request carries messages")
+        .iter()
+        .take_while(|message| message["role"] == "system")
+        .cloned()
+        .collect();
+    assert!(
+        !system.is_empty(),
+        "the request has no system message: {body}"
+    );
+    let tools = request["tools"].clone();
+    assert!(
+        tools.as_array().is_some_and(|tools| !tools.is_empty()),
+        "the request carries no tool schemas: {body}"
+    );
+    (system, tools)
+}
+
+/// The first request a new process sends for `arguments`, as a one-shot task in the checkout the
+/// run helpers start in.
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn the_first_request_of_a_process(
+    gateway: &Gateway,
+    scratch: &Scratch,
+    arguments: &[&str],
+) -> String {
+    let _ = requests(gateway);
+    let mut all = vec!["--trust-workspace", "--json"];
+    all.extend_from_slice(arguments);
+    let output = bravebot(&scratch.path, AT_A_GATEWAY, &all);
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{arguments:?}: {stdout}{stderr}");
+    requests(gateway)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("{arguments:?} sent no request: {stdout}{stderr}"))
+}
+
+/// INSTR-9: two processes started one after the other send the same system message and the same
+/// tool schemas, with and without `--safe` and with `--incognito`. The directory a session has to
+/// itself has a different name in each process, and a prompt cache is matched from the first byte,
+/// so a per-start value anywhere in these two makes every new process write the whole prefix again
+/// and read none of it. The requests as a whole differ, because the directory is named in the
+/// conversation, so the comparison cannot be of one request with itself.
+#[test]
+fn two_process_starts_send_the_same_system_message_and_tools() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch = Scratch::new("cli-running-stable-prefix").with_settings(&settings_for(&gateway));
+    let temporary = a_temporary_directory_beside(&scratch.path);
+    let temporary = temporary.to_string_lossy();
+
+    for arguments in [
+        &["-p", "say something"][..],
+        &["--safe", "-p", "say something"][..],
+        &["--incognito", "-p", "say something"][..],
+        &["--incognito", "--safe", "-p", "say something"][..],
+    ] {
+        let first = the_first_request_of_a_process(&gateway, &scratch, arguments);
+        let second = the_first_request_of_a_process(&gateway, &scratch, arguments);
+
+        let (first_system, first_tools) = the_standing_prefix(&first);
+        let (second_system, second_tools) = the_standing_prefix(&second);
+        assert_eq!(
+            first_system, second_system,
+            "{arguments:?}: the system message differs between two starts"
+        );
+        assert_eq!(
+            first_tools, second_tools,
+            "{arguments:?}: the tool schemas differ between two starts"
+        );
+        assert!(
+            !serde_json::Value::Array(first_system)
+                .to_string()
+                .contains(&*temporary),
+            "{arguments:?}: the system message names the temporary directory: {first}"
+        );
+        assert!(
+            first.contains("The scratch directory of this session is")
+                && second.contains("The scratch directory of this session is"),
+            "{arguments:?}: a request does not say where the session's directory is"
+        );
+        assert_ne!(
+            first, second,
+            "{arguments:?}: two starts sent identical requests, so the directory was not named per process"
+        );
+    }
+}
+
+/// INSTR-9: a process that carries on a recorded session with `--resume` or `--continue` sends the
+/// system message and tool schemas a new session sends. The directory a resumed session names is
+/// the new process's, and the one in its record is not named.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_resumed_process_sends_the_system_message_and_tools_a_new_one_does() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch =
+        Scratch::new("cli-running-stable-prefix-resumed").with_settings(&settings_for(&gateway));
+    let _ = requests(&gateway);
+    let (output, stdout, stderr) = a_recorded_run(&scratch, &["--trust-workspace", "-p", "FIRST"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    let id = session_of(&stdout).expect("the first run named its session");
+    let fresh = requests(&gateway)
+        .into_iter()
+        .next()
+        .expect("the first run sent a request");
+
+    let resumed =
+        the_first_request_of_a_process(&gateway, &scratch, &["--resume", &id, "-p", "SECOND"]);
+    let continued =
+        the_first_request_of_a_process(&gateway, &scratch, &["--continue", "-p", "THIRD"]);
+
+    let expected = the_standing_prefix(&fresh);
+    for (how, sent) in [("--resume", &resumed), ("--continue", &continued)] {
+        assert!(
+            sent.contains("FIRST"),
+            "{how} did not carry the session: {sent}"
+        );
+        assert_eq!(
+            the_standing_prefix(sent),
+            expected,
+            "{how} sent a different system message or tool schemas than a new session"
+        );
+    }
+}
+
 /// PLUGIN-4, CLI-31: a one-shot task opening with `/` is sent to the model as words and is not
 /// carried out as a command, so `/plugin add <directory>` as the task installs nothing: no
 /// directory or record appears under the state directory's `plugins`, and the planner's request
