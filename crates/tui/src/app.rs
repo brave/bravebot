@@ -205,6 +205,7 @@ fn status_report(
         confinement: &session.confinement,
         sockets_with_a_path_reachable: session.sockets_with_a_path_reachable,
         sandbox_mode: session.sandbox_mode(),
+        sandbox_chosen: crate::sandbox_command::detail(session.sandbox()),
         servers: &session.servers,
         permission_mode: session.permission_mode(),
         began_in_bypass: session.began_in_bypass(),
@@ -10268,8 +10269,9 @@ mod tests {
     /// MOUSE-11. A click on the panel's sandbox row opens the same list a bare `/sandbox` opens,
     /// on the mode in force, at rest and while a turn runs, and nothing is queued or said.
     ///
-    /// Rejects: a click that is a copy, a click that waits for the turn, a click that reports the
-    /// mode as the old bare word did, and a list opened on a mode other than the one held.
+    /// Rejects: a click that is a copy, a click that waits for the turn, a click that notes the
+    /// mode in force instead of opening the list, and a list opened on a mode other than the one
+    /// held.
     #[test]
     fn a_click_on_the_panels_sandbox_row_opens_the_sandbox_picker_at_rest_and_mid_turn() {
         use crate::picking::Picking;
@@ -33943,7 +33945,7 @@ mod tests {
             );
         }
         // The report is one note per line, so the transcript grows by exactly its lines.
-        const STATUS_REPORT_LINES: usize = 11;
+        const STATUS_REPORT_LINES: usize = 12;
         assert_eq!(
             session.transcript.len(),
             transcript + STATUS_REPORT_LINES,
@@ -35318,8 +35320,8 @@ mod tests {
     }
 
     /// A bare `/sandbox` opens the list of modes and carries nothing to the loop, and says nothing:
-    /// no report is noted. Rejects: the bare word still returning `Action::Sandbox("")` (the old
-    /// report), and a picker opened on a mode other than the one held.
+    /// no report is noted. Rejects: the bare word carried to the loop as `Action::Sandbox("")`,
+    /// which notes a report, and a picker opened on a mode other than the one held.
     #[test]
     fn a_bare_sandbox_command_opens_the_picker_and_says_nothing() {
         use crate::picking::Picking;

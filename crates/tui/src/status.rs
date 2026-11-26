@@ -154,6 +154,9 @@ pub struct Facts<'a> {
     pub sockets_with_a_path_reachable: bool,
     /// The sandbox mode programs `run` starts are held to now, which `/sandbox` can change.
     pub sandbox_mode: bravebot_sandbox::SandboxMode,
+    /// The mode in force with the flag, file or `/sandbox` that chose it, as
+    /// [`crate::sandbox_command::detail`] words it.
+    pub sandbox_chosen: String,
     /// The MCP servers the session started.
     pub servers: &'a crate::state::Servers,
     /// How much the session is asking before it acts, as the mode key last left it.
@@ -792,6 +795,13 @@ fn sandbox_lines(facts: &Facts<'_>) -> Vec<Line> {
             false => t!(status_confinement_nothing_confined),
         }),
     );
+
+    // What chose the mode, which the panel's row and the list opened by a bare `/sandbox` do not
+    // say (SANDBOX-22).
+    lines.push(Line::new(
+        t!(status_sandbox_mode),
+        facts.sandbox_chosen.clone(),
+    ));
 
     // Only where it is closed, for the reason the mode and the vetting lines are: an open network is
     // what every session had, and a line saying so on each would be skimmed past. The note says who
@@ -1496,6 +1506,23 @@ mod tests {
         }
     }
 
+    /// SANDBOX-22: `/status` says which flag, file or `/sandbox` chose the mode in force, since a
+    /// bare `/sandbox` opens the list and says nothing. Rejects: a report with no row naming it, and
+    /// one that leaves out the mode the choice was for.
+    #[test]
+    fn the_status_names_what_chose_the_sandbox_mode() {
+        let config = config_for("https://ai-chat.bsg.brave.com", None);
+        let trust = TrustStore::new("/work");
+        let mut facts = facts(&config, &trust);
+        facts.sandbox_chosen = "strict from /sandbox".to_string();
+        let shown = report(&facts)
+            .lines
+            .into_iter()
+            .find(|line| line.label.trim() == t!(status_sandbox_mode))
+            .map(|line| line.value);
+        assert_eq!(shown.as_deref(), Some("strict from /sandbox"));
+    }
+
     /// SANDBOX-3: `/status` says a session's programs reach every unix socket that has a path where
     /// the kernel leaves them open, under `workspace-write`, with why beside it. The regressions it
     /// rejects: no line on such a kernel, a line where the kernel governs the sockets, and a line
@@ -1566,6 +1593,7 @@ mod tests {
             // reports. The test about the line sets it itself.
             sockets_with_a_path_reachable: false,
             sandbox_mode: bravebot_sandbox::SandboxMode::WorkspaceWrite,
+            sandbox_chosen: "workspace-write (the default)".to_string(),
             servers: &NO_SERVERS,
             // Asking, which is what every session does unless somebody changed it. The tests about
             // the line set this themselves.

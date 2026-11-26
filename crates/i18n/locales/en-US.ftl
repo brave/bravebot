@@ -3165,6 +3165,8 @@ status-confinement = Confinement
 status-confinement-nothing-confined = this session confines nothing
 # Where the session started MCP servers, the level is in force over them and over nothing else.
 status-confinement-servers = this session confines the MCP servers it started, and nothing else it runs
+# The mode and what chose it: the flag, the file or `/sandbox`, which no other row says.
+status-sandbox-mode = Sandbox mode
 status-mcp-servers = MCP servers
 status-mcp-servers-none = none
 # How one started server's tools stand. A list nobody has read yet is put to the person at the

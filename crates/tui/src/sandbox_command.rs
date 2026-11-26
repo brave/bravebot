@@ -62,10 +62,10 @@ fn names() -> String {
     SandboxMode::ALL.map(SandboxMode::name).join(", ")
 }
 
-/// The mode in force and the flag or file that chose it, in the words `doctor` uses.
-fn report(held: &Sandboxed) -> String {
+/// The mode in force and the flag, file or command that chose it, in the words `doctor` uses.
+pub fn detail(held: &Sandboxed) -> String {
     let mode = held.choice.mode.name();
-    let detail = match (&held.choice.source, held.typed) {
+    match (&held.choice.source, held.typed) {
         (_, true) => t!(session_sandbox_from_command, mode = mode),
         (Source::Default, false) => t!(doctor_sandbox_default, mode = mode),
         (Source::Flag, false) => t!(session_sandbox_from_flag, mode = mode),
@@ -74,8 +74,12 @@ fn report(held: &Sandboxed) -> String {
             mode = mode,
             path = path.display().to_string()
         ),
-    };
-    t!(session_sandbox_report, detail = detail)
+    }
+}
+
+/// [`detail`] as a sentence.
+fn report(held: &Sandboxed) -> String {
+    t!(session_sandbox_report, detail = detail(held))
 }
 
 /// The sentence a mode the managed file does not allow is refused with, naming the file.
