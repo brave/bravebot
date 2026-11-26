@@ -24,6 +24,7 @@ import {
   approveTrust,
   approveTrustIfAsked,
   checker,
+  heldTurns,
   launchArguments,
   launchLive,
   openFirstSession,
@@ -31,6 +32,7 @@ import {
   sessionsOrSkip,
   showSessions,
   trustQuestion,
+  untilIn,
 } from './drive-support.mjs'
 
 // A page that records what it was asked, in order, and answers every wait and click with the
@@ -309,4 +311,77 @@ test('a trust check that throws counts as no question, and approveTrustIfAsked t
 test('a launch names the user-data directory it is given, and none otherwise', () => {
   assert.deepEqual(launchArguments('/tmp/scratch/user-data'), ['.', '--user-data-dir=/tmp/scratch/user-data'])
   assert.deepEqual(launchArguments(), ['.'])
+})
+
+// Whether a promise has settled, read without waiting on it.
+const settled = (promise) => Promise.race([promise.then(() => true), new Promise((resolve) => setImmediate(resolve, false))])
+
+test('a held turn stays pending and listed until release, which settles every one held and empties the list', async () => {
+  const { hold, release, waiting } = heldTurns()
+  assert.equal(waiting.length, 0)
+  const first = hold()
+  const second = hold()
+  assert.equal(waiting.length, 2)
+  assert.equal(await settled(first), false)
+  assert.equal(await settled(second), false)
+  release()
+  assert.equal(waiting.length, 0)
+  assert.equal(await settled(first), true)
+  assert.equal(await settled(second), true)
+  const third = hold()
+  assert.equal(waiting.length, 1, 'a turn held after a release is listed again')
+  assert.equal(await settled(third), false)
+  release()
+  assert.equal(await settled(third), true)
+})
+
+test('release with nothing held does nothing, and each heldTurns keeps its own list', async () => {
+  const one = heldTurns()
+  const other = heldTurns()
+  one.release()
+  const held = one.hold()
+  other.release()
+  assert.equal(one.waiting.length, 1)
+  assert.equal(other.waiting.length, 0)
+  assert.equal(await settled(held), false)
+  one.release()
+  assert.equal(await settled(held), true)
+})
+
+// A page that answers each wait by recording its length.
+function pollingPage() {
+  const waits = []
+  return { waits, waitForTimeout: async (ms) => waits.push(ms) }
+}
+
+test('until returns as soon as the check is true, waiting 50 ms between checks and not after the last', async () => {
+  const page = pollingPage()
+  let checks = 0
+  await untilIn(page)(async () => ++checks === 4, 'never')
+  assert.equal(checks, 4)
+  assert.deepEqual(page.waits, [50, 50, 50])
+  const ready = pollingPage()
+  await untilIn(ready)(async () => true, 'never')
+  assert.deepEqual(ready.waits, [])
+})
+
+test('until fails with what it waited for after 200 checks, and after the number of tries it is given', async () => {
+  const page = pollingPage()
+  let checks = 0
+  await assert.rejects(untilIn(page)(async () => { checks++; return false }, 'the held turn reached the model'), { message: 'the held turn reached the model' })
+  assert.equal(checks, 200)
+  assert.equal(page.waits.length, 200)
+  checks = 0
+  await assert.rejects(untilIn(page)(async () => { checks++; return false }, 'again', 3), { message: 'again' })
+  assert.equal(checks, 3)
+  checks = 0
+  await assert.rejects(untilIn(page, 400)(async () => { checks++; return false }, 'slow'), { message: 'slow' })
+  assert.equal(checks, 400)
+})
+
+test('until succeeds on the last check it allows', async () => {
+  const page = pollingPage()
+  let checks = 0
+  await untilIn(page, 400)(async () => ++checks === 400, 'never')
+  assert.equal(checks, 400)
 })
