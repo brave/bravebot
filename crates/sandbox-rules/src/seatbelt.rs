@@ -9,6 +9,8 @@
 
 use crate::quote::seatbelt_literal;
 #[cfg(verus_keep_ghost)]
+use crate::spec::*;
+#[cfg(verus_keep_ghost)]
 use vstd::prelude::*;
 
 /// Whether a rule lets the operation through or refuses it.
@@ -231,6 +233,10 @@ impl Action {
 
 impl Write {
     /// The operation a rule about this write is about.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == write_operation(self),
+    ))]
     fn operation(self) -> Operation {
         match self {
             Self::Any => Operation::FileWrite,
@@ -302,14 +308,30 @@ pub fn write(rules: &[Rule]) -> String {
 }
 
 /// `allows` as the action a row takes.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == (if allows { Action::Allow } else { Action::Deny }),
+))]
 fn action(allows: bool) -> Action {
     if allows { Action::Allow } else { Action::Deny }
 }
 
 /// Each name of `list` as a string, in order.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r@.len() == N,
+        forall|k: int| 0 <= k < N ==> #[trigger] r@[k]@ == list@[k]@,
+))]
 fn names<const N: usize>(list: &[&str; N]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= N,
+            out@.len() == at,
+            forall|k: int| 0 <= k < at ==> #[trigger] out@[k]@ == list@[k]@,
+        decreases N - at,
+    ))]
     while at < N {
         out.push(list[at].to_string());
         at += 1;
@@ -317,22 +339,92 @@ fn names<const N: usize>(list: &[&str; N]) -> Vec<String> {
     out
 }
 
+/// Push `rule` onto `out`, which holds the rules of a profile for `parts` after its first.
+#[cfg_attr(
+    not(verus_keep_ghost),
+    expect(unused_variables, reason = "only the contract reads `parts`")
+)]
+#[cfg_attr(verus_keep_ghost, verus_spec(
+    requires
+        may_hold(rule, *parts),
+        forall|i: int| 1 <= i < old(out)@.len() ==> may_hold(#[trigger] old(out)@[i], *parts),
+    ensures
+        final(out)@ == old(out)@.push(rule),
+        forall|i: int| 1 <= i < final(out)@.len() ==> may_hold(#[trigger] final(out)@[i], *parts),
+))]
+fn push(out: &mut Vec<Rule>, rule: Rule, parts: &Parts) {
+    #[cfg(verus_keep_ghost)]
+    proof_decl! {
+        let ghost before = out@;
+    }
+    out.push(rule);
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        assert forall|i: int| 1 <= i < out@.len() implies may_hold(#[trigger] out@[i], *parts) by {
+            if i < before.len() {
+                assert(out@[i] == before[i]);
+            }
+        }
+    }
+}
+
 /// The Mach services the profile for `parts` allows a lookup of: the fixed list, and the trust
 /// services only where the network is allowed.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        forall|k: int| 0 <= k < r@.len() ==> service_allowed(#[trigger] r@[k]@, parts.network),
+))]
 fn services(parts: &Parts) -> Vec<String> {
     let mut out = names(&MACH_SERVICES);
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        assert forall|k: int| 0 <= k < out@.len() implies service_allowed(
+            #[trigger] out@[k]@,
+            parts.network,
+        ) by {
+            assert(MACH_SERVICES@[k]@ == out@[k]@);
+        }
+    }
     if !parts.network {
         return out;
     }
     let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= 2,
+            parts.network,
+            forall|k: int| 0 <= k < out@.len() ==> service_allowed(#[trigger] out@[k]@, parts.network),
+        decreases 2 - at,
+    ))]
     while at < TRUST_SERVICES.len() {
+        #[cfg(verus_keep_ghost)]
+        proof_decl! {
+            let ghost before = out@;
+        }
         out.push(TRUST_SERVICES[at].to_string());
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            assert forall|k: int| 0 <= k < out@.len() implies service_allowed(
+                #[trigger] out@[k]@,
+                parts.network,
+            ) by {
+                if k < before.len() {
+                    assert(out@[k] == before[k]);
+                } else {
+                    assert(TRUST_SERVICES@[at as int]@ == out@[k]@);
+                }
+            }
+        }
         at += 1;
     }
     out
 }
 
 /// A rule about everything `operation` reaches.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == (Rule { action, operation, target: Target::Any }),
+))]
 fn any(action: Action, operation: Operation) -> Rule {
     Rule {
         action,
@@ -342,16 +434,50 @@ fn any(action: Action, operation: Operation) -> Rule {
 }
 
 /// Push a rule taking `operation` for each of `rows` onto `out`, in order.
-fn push_rows(out: &mut Vec<Rule>, rows: &[Row], operation: Operation) {
+#[cfg_attr(verus_keep_ghost, verus_spec(
+    requires
+        old(out)@.len() >= 1,
+        forall|i: int| 1 <= i < old(out)@.len() ==> may_hold(#[trigger] old(out)@[i], *parts),
+        forall|j: int| 0 <= j < rows@.len() ==> may_hold(
+            #[trigger] row_rule(rows@[j], operation),
+            *parts,
+        ),
+    ensures
+        final(out)@.len() >= old(out)@.len(),
+        final(out)@[0] == old(out)@[0],
+        forall|i: int| 1 <= i < final(out)@.len() ==> may_hold(#[trigger] final(out)@[i], *parts),
+))]
+fn push_rows(out: &mut Vec<Rule>, rows: &[Row], operation: Operation, parts: &Parts) {
     let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= rows@.len(),
+            old(out)@.len() >= 1,
+            out@.len() >= old(out)@.len(),
+            out@[0] == old(out)@[0],
+            forall|i: int| 1 <= i < out@.len() ==> may_hold(#[trigger] out@[i], *parts),
+            forall|j: int| 0 <= j < rows@.len() ==> may_hold(
+                #[trigger] row_rule(rows@[j], operation),
+                *parts,
+            ),
+        decreases rows@.len() - at,
+    ))]
     while at < rows.len() {
         let row = &rows[at];
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            assert(may_hold(row_rule(rows@[at as int], operation), *parts));
+        }
         let rule = Rule {
             action: action(row.allows),
             operation,
             target: Target::Subpath(row.path.clone()),
         };
-        out.push(rule);
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            assert(rule == row_rule(rows@[at as int], operation));
+        }
+        push(out, rule, parts);
         at += 1;
     }
 }
@@ -361,6 +487,12 @@ fn push_rows(out: &mut Vec<Rule>, rows: &[Row], operation: Operation) {
 /// The profile refuses everything first and then adds what the policy grants. The last matching
 /// rule wins, so each section follows the rules it narrows. What a rule may be is
 /// `crate::spec::may_hold`, and Verus proves every rule after the first is one.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r@.len() > 0,
+        r@[0] == deny_default(),
+        forall|i: int| 1 <= i < r@.len() ==> may_hold(#[trigger] r@[i], *parts),
+))]
 pub fn rules(parts: &Parts) -> Vec<Rule> {
     let mut out = Vec::new();
     out.push(any(Action::Deny, Operation::Default));
@@ -368,11 +500,11 @@ pub fn rules(parts: &Parts) -> Vec<Rule> {
     // system libraries look up the services in `MACH_SERVICES`, and `TRUST_SERVICES` where the
     // network is allowed. Those grant no filesystem or network reach of their own, and no other
     // service is reachable.
-    out.push(any(Action::Allow, Operation::ProcessExec));
+    push(&mut out, any(Action::Allow, Operation::ProcessExec), parts);
     // KERN_PROCARGS2 can be authorised through either sysctl-read or process-info*. Refuse both
     // routes: emptying a child's environment does not erase the parent's exec-time environment.
     // Only named machine-information queries are allowed.
-    out.push(any(Action::Deny, Operation::ProcessInfo));
+    push(&mut out, any(Action::Deny, Operation::ProcessInfo), parts);
     // System tools query their own pidinfo during startup. This exception cannot name the parent
     // or any other process, including another process in the same sandbox.
     let own = Rule {
@@ -380,25 +512,34 @@ pub fn rules(parts: &Parts) -> Vec<Rule> {
         operation: Operation::ProcessInfoPidinfo,
         target: Target::SelfProcess,
     };
-    out.push(own);
+    push(&mut out, own, parts);
     // CPU count and page size serve language runtimes (the numeric page-size query resolves to
     // pagesize_compat). hw.memsize is the physical memory size, which sort reads to size its
     // buffer. kern.argmax is the one system-wide argument-size limit that xargs, find -exec {} +
     // and getconf ARG_MAX read. The remaining names are uname's fields, used by Python's package
     // platform detection. No process arguments or environment query is in this list.
     let sysctls = names(&SYSCTL_NAMES);
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        assert forall|k: int| 0 <= k < sysctls@.len() implies in_list(
+            SYSCTL_NAMES,
+            #[trigger] sysctls@[k]@,
+        ) by {
+            assert(SYSCTL_NAMES@[k]@ == sysctls@[k]@);
+        }
+    }
     let sysctl = Rule {
         action: Action::Allow,
         operation: Operation::SysctlRead,
         target: Target::SysctlNames(sysctls),
     };
-    out.push(sysctl);
+    push(&mut out, sysctl, parts);
     let lookup = Rule {
         action: Action::Allow,
         operation: Operation::MachLookup,
         target: Target::GlobalNames(services(parts)),
     };
-    out.push(lookup);
+    push(&mut out, lookup, parts);
     push_files(&mut out, parts);
     push_network(&mut out, parts);
     out
@@ -406,6 +547,16 @@ pub fn rules(parts: &Parts) -> Vec<Rule> {
 
 /// Push the rules about files onto `out`: the root directory, the read rows, the write rows and
 /// what holds them in place, and the look at any path.
+#[cfg_attr(verus_keep_ghost, verus_spec(
+    requires
+        old(out)@.len() >= 1,
+        old(out)@[0] == deny_default(),
+        forall|i: int| 1 <= i < old(out)@.len() ==> may_hold(#[trigger] old(out)@[i], *parts),
+    ensures
+        final(out)@.len() >= 1,
+        final(out)@[0] == deny_default(),
+        forall|i: int| 1 <= i < final(out)@.len() ==> may_hold(#[trigger] final(out)@[i], *parts),
+))]
 fn push_files(out: &mut Vec<Rule>, parts: &Parts) {
     // The dynamic loader reads the root directory entry itself, which a subpath grant for e.g.
     // /usr does not cover. Without this the process dies with SIGABRT before main runs, which
@@ -413,24 +564,63 @@ fn push_files(out: &mut Vec<Rule>, parts: &Parts) {
     // separates opening `/` from listing it, so this row also lets a process list the entries of
     // `/`. That is the one directory listing SANDBOX-13 allows outside the grants; no file
     // contents are readable through it.
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        reveal_strlit("/");
+    }
     let root = Rule {
         action: Action::Allow,
         operation: Operation::FileRead,
         target: Target::Literal("/".to_string()),
     };
-    out.push(root);
+    push(out, root, parts);
 
-    push_rows(out, &parts.reads, Operation::FileRead);
-    push_rows(out, &parts.writes, Operation::FileWrite);
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        assert forall|j: int| 0 <= j < parts.reads@.len() implies may_hold(
+            #[trigger] row_rule(parts.reads@[j], Operation::FileRead),
+            *parts,
+        ) by {
+            if parts.reads@[j].allows {
+                assert(granted(parts.reads@, parts.reads@[j].path@));
+            }
+        }
+    }
+    push_rows(out, &parts.reads, Operation::FileRead, parts);
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        assert forall|j: int| 0 <= j < parts.writes@.len() implies may_hold(
+            #[trigger] row_rule(parts.writes@[j], Operation::FileWrite),
+            *parts,
+        ) by {
+            if parts.writes@[j].allows {
+                assert(granted(parts.writes@, parts.writes@[j].path@));
+            }
+        }
+    }
+    push_rows(out, &parts.writes, Operation::FileWrite, parts);
     let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= parts.holds@.len(),
+            out@.len() >= 1,
+            out@[0] == deny_default(),
+            forall|i: int| 1 <= i < out@.len() ==> may_hold(#[trigger] out@[i], *parts),
+        decreases parts.holds@.len() - at,
+    ))]
     while at < parts.holds.len() {
         let hold = &parts.holds[at];
         let rule = Rule {
             action: hold.action,
             operation: hold.write.operation(),
-            target: hold.target.clone(),
+            target: copy_target(&hold.target),
         };
-        out.push(rule);
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            assert(parts.holds@[at as int] == *hold);
+            assert(held(parts.holds@, rule));
+        }
+        push(out, rule, parts);
         at += 1;
     }
     // Looking at a path answers what it is and not what it holds: this allows stat and readlink,
@@ -439,10 +629,20 @@ fn push_files(out: &mut Vec<Rule>, parts: &Parts) {
     // the first such entry rather than going on to the next, as node's does when it starts
     // anything; and node resolves its own script through each directory above it. Landlock
     // restricts no look at all, so this is the reach Linux already gives.
-    out.push(any(Action::Allow, Operation::FileReadMetadata));
+    push(out, any(Action::Allow, Operation::FileReadMetadata), parts);
 }
 
 /// Push the rules about the network, starting another process and signals onto `out`.
+#[cfg_attr(verus_keep_ghost, verus_spec(
+    requires
+        old(out)@.len() >= 1,
+        old(out)@[0] == deny_default(),
+        forall|i: int| 1 <= i < old(out)@.len() ==> may_hold(#[trigger] old(out)@[i], *parts),
+    ensures
+        final(out)@.len() >= 1,
+        final(out)@[0] == deny_default(),
+        forall|i: int| 1 <= i < final(out)@.len() ==> may_hold(#[trigger] final(out)@[i], *parts),
+))]
 fn push_network(out: &mut Vec<Rule>, parts: &Parts) {
     // A connect to a unix socket is network-outbound on Seatbelt, so the socket rows are written
     // only where egress is. Host names resolve through the platform resolver's socket, where Linux
@@ -451,7 +651,18 @@ fn push_network(out: &mut Vec<Rule>, parts: &Parts) {
     // Egress limited to a port is to that port on the loopback address and to nothing else by IP,
     // and the resolver is left out: the proxy on that port resolves the names it is asked for.
     if parts.network {
-        push_rows(out, &parts.sockets, Operation::NetworkOutbound);
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            assert forall|j: int| 0 <= j < parts.sockets@.len() implies may_hold(
+                #[trigger] row_rule(parts.sockets@[j], Operation::NetworkOutbound),
+                *parts,
+            ) by {
+                if parts.sockets@[j].allows {
+                    assert(granted(parts.sockets@, parts.sockets@[j].path@));
+                }
+            }
+        }
+        push_rows(out, &parts.sockets, Operation::NetworkOutbound, parts);
         let to = parts.egress_to.clone();
         // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
         let any_address = to.is_none();
@@ -460,14 +671,14 @@ fn push_network(out: &mut Vec<Rule>, parts: &Parts) {
             operation: Operation::NetworkOutbound,
             target: Target::RemoteIp(to),
         };
-        out.push(egress);
+        push(out, egress, parts);
         if any_address {
             let resolver = Rule {
                 action: Action::Allow,
                 operation: Operation::NetworkOutbound,
                 target: Target::Literal(RESOLVER.to_string()),
             };
-            out.push(resolver);
+            push(out, resolver, parts);
         }
     }
     // Listening is `network-inbound`, which covers binding the port as well as accepting on it.
@@ -481,18 +692,18 @@ fn push_network(out: &mut Vec<Rule>, parts: &Parts) {
             operation: Operation::NetworkInbound,
             target: Target::LocalIp(LOOPBACK.to_string()),
         };
-        out.push(listen);
+        push(out, listen, parts);
         if parts.egress_to.is_none() {
             let connect = Rule {
                 action: Action::Allow,
                 operation: Operation::NetworkOutbound,
                 target: Target::RemoteIp(Some(LOOPBACK.to_string())),
             };
-            out.push(connect);
+            push(out, connect, parts);
         }
     }
     if parts.subprocesses {
-        out.push(any(Action::Allow, Operation::ProcessFork));
+        push(out, any(Action::Allow, Operation::ProcessFork), parts);
     }
     // Without a signal row a process cannot stop a child it started, and a test runner or a
     // `timeout` waits on it for good. `same-sandbox` reaches what this profile started and no
@@ -502,5 +713,16 @@ fn push_network(out: &mut Vec<Rule>, parts: &Parts) {
         operation: Operation::Signal,
         target: Target::SameSandbox,
     };
-    out.push(signal);
+    push(out, signal, parts);
+}
+
+/// `target` as it is. A target holds names a caller made, and Verus reads no `Clone` of a type
+/// that holds a `Vec`.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == *target,
+))]
+fn copy_target(target: &Target) -> Target {
+    target.clone()
 }

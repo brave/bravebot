@@ -253,6 +253,7 @@ single-instance socket among them. A stage reaches each of those with that serve
 macOS while it has egress and on Linux whatever its network.
 
 `verified-by: bravebot_sandbox::macos::network_is_only_allowed_when_requested`
+`verified-by: bravebot_sandbox_rules::spec::a_seatbelt_profile_refuses_first_and_grants_only_what_its_parts_allow`
 `verified-by: bravebot_sandbox::macos::a_confined_process_cannot_reach_the_network`
 `verified-by: bravebot_sandbox::macos::loopback_is_granted_by_its_own_rows_and_opens_no_other_address`
 `verified-by: bravebot_sandbox::macos::a_process_granted_loopback_connects_to_a_local_port_and_one_without_it_cannot`
@@ -7052,6 +7053,7 @@ fetch on macOS.
 
 `verified-by: bravebot_sandbox::macos::the_profile_allows_a_lookup_of_named_services_and_not_of_every_service`
 `verified-by: bravebot_sandbox::macos::the_trust_services_are_looked_up_only_where_the_network_is_allowed`
+`verified-by: bravebot_sandbox_rules::spec::a_seatbelt_profile_refuses_first_and_grants_only_what_its_parts_allow`
 `verified-by: bravebot_sandbox::macos::a_confined_process_finds_the_services_programs_need_and_none_that_act_for_the_person`
 
 <a id="SANDBOX-33"></a>

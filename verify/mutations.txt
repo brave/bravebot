@@ -817,3 +817,75 @@ replace: push_backslashes(&mut quoted, backslashes + 1); => push_backslashes(&mu
 mutation: quoted does not double the backslashes before the closing quotation mark, so they escape it and the argument runs on
 file: crates/sandbox-rules/src/quote.rs
 replace: push_backslashes(&mut quoted, backslashes); => push_backslashes(&mut quoted, 0);
+
+mutation: seatbelt::rules opens a profile by allowing everything, so a rule it leaves out grants instead of refusing
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: out.push(any(Action::Deny, Operation::Default)); => out.push(any(Action::Allow, Operation::Default));
+
+mutation: seatbelt::rules allows the process information of every process, which reads another process's environment
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: push(&mut out, any(Action::Deny, Operation::ProcessInfo), parts); => push(&mut out, any(Action::Allow, Operation::ProcessInfo), parts);
+
+mutation: seatbelt::rules lets a process read the pidinfo of any process, not only its own
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: target: Target::SelfProcess, => target: Target::Any,
+
+mutation: seatbelt::rules lets the trust services be looked up with the network closed, so trustd fetches a URL for the stage
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: if !parts.network { => if false {
+
+mutation: seatbelt::rules lets a read row that refuses be written as one that grants
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: action: action(row.allows), => action: Action::Allow,
+
+mutation: seatbelt::rules grants a read of everything beneath the root directory where it grants only the root itself
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: target: Target::Literal("/".to_string()), => target: Target::Subpath("/".to_string()),
+
+mutation: Write::operation writes a refusal to make a name as a rule about reading, so the profile it is in reads a path no read row grants
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: // Making a name, which a refusal names to keep a refused path from being moved there. => Self::Create => Operation::FileRead,
+
+mutation: seatbelt::rules writes the socket rows as rules about listening, which lets a stage listen at any socket path under a write row
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: push_rows(out, &parts.sockets, Operation::NetworkOutbound, parts); => push_rows(out, &parts.sockets, Operation::NetworkInbound, parts);
+
+mutation: seatbelt::rules grants the resolver to a stage held to the proxy's port, past the host list
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: let any_address = to.is_none(); => let any_address = true;
+
+mutation: seatbelt::rules lets a stage that may listen on loopback listen on any address
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: target: Target::LocalIp(LOOPBACK.to_string()), => target: Target::LocalIp(RESOLVER.to_string()),
+
+mutation: seatbelt::rules lets every process start another, whether or not the policy allows it
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: if parts.subprocesses { => if true {
+
+mutation: seatbelt::rules lets a process signal any process of the account, the session's included
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: target: Target::SameSandbox, => target: Target::Any,
+
+mutation: seatbelt::rules lets a stage with the network open listen on loopback, which the policy did not grant
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: if parts.loopback { => if parts.loopback || parts.network {
+
+mutation: seatbelt::rules writes the socket rows and the egress row with the network closed
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: if parts.network { => if true {
+
+mutation: seatbelt::rules lets a stage held to the proxy's port connect to any local port, which can carry it past the host list
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: if parts.egress_to.is_none() { => if true {
+
+mutation: seatbelt::rules lets a stage held to the proxy's port connect to every address
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: let to = parts.egress_to.clone(); => let to = None;
+
+mutation: seatbelt::rules writes a refusal that holds a name in place as a rule that allows the write
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: action: hold.action, => action: Action::Allow,
+
+mutation: seatbelt::rules lets a stage connect to the sockets under its read rows, which the write rows alone reach
+file: crates/sandbox-rules/src/seatbelt.rs
+replace: push_rows(out, &parts.sockets, Operation::NetworkOutbound, parts); => push_rows(out, &parts.reads, Operation::NetworkOutbound, parts);
