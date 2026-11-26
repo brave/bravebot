@@ -7063,9 +7063,8 @@ stage may write, is never used in its place. Where the session has no state dire
 in an incognito session, the start is refused before the sandbox is created and nothing is run.
 
 **A known cost.** A session with no writable state directory cannot start a server in an OpenShell
-sandbox. The policy could be passed on standard input or as a descriptor instead, but nothing
-confirms that `openshell` takes `--policy` from either, and `openshell` is not available to check
-it against, so that path is not built.
+sandbox. The policy is passed as a file because nothing confirms that `openshell` takes `--policy`
+from standard input or a descriptor.
 
 OpenShell inspects the TLS of what the program sends, through a certificate authority the sandbox
 trusts by `SSL_CERT_FILE` and the variables like it. That is how its rules see the host of an HTTPS
