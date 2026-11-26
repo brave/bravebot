@@ -38074,6 +38074,57 @@ mod tests {
         assert!(session.input().is_empty());
     }
 
+    /// A summary thread that panicked took the conversation with it, and a fresh one in its place is
+    /// trusted and public, which resets what the conversation had read (COMPACT-3) and is then saved
+    /// over the record. The join is an error that carries the catalog's sentence, so the session ends
+    /// with the conversation and the record as they were.
+    #[test]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn a_summary_worker_that_panics_is_an_error_and_returns_no_conversation() {
+        let worker = std::thread::spawn(
+            || -> (
+                Result<Option<bravebot_agent::compact::Compacted>, String>,
+                Conversation,
+                Trail,
+            ) { panic!("the summary worker failed") },
+        );
+
+        match join_the_summary(worker) {
+            Ok((done, conversation, _trail)) => panic!(
+                "a conversation came back from a worker that panicked: {} messages, {}",
+                conversation.len(),
+                match done {
+                    Ok(_) => "a summary".to_string(),
+                    Err(problem) => problem,
+                }
+            ),
+            Err(error) => assert_eq!(error.to_string(), t!(compact_ended_unexpectedly)),
+        }
+    }
+
+    /// A worker that returned is handed back whole, with the failure it reported, so only a join
+    /// that fails changes what the session does.
+    #[test]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn a_summary_worker_that_returns_is_handed_back_with_its_conversation() {
+        let mut conversation = Conversation::new();
+        conversation.push(bravebot_aichat::protocol::Message::user("port the parser"));
+        let worker = std::thread::spawn(move || {
+            (
+                Err::<Option<bravebot_agent::compact::Compacted>, String>("offline".to_string()),
+                conversation,
+                Trail::new(),
+            )
+        });
+
+        let Ok((done, conversation, _trail)) = join_the_summary(worker) else {
+            panic!("a worker that returned was reported as having panicked");
+        };
+
+        assert!(matches!(done, Err(ref problem) if problem == "offline"));
+        assert_eq!(conversation.len(), 1);
+    }
+
     /// A loopback model answering every request with `words`, streamed the way the real one is.
     #[cfg(unix)]
     fn a_model_answering_every_request(words: &'static str) -> String {
