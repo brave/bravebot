@@ -111353,8 +111353,10 @@ fn a_search_or_listing_that_asks_to_read_more_than_one_result_may_hold_keeps_it_
                 "{mode:?} {tool}: a result past the cap reached the planner: {after}"
             );
             assert!(
-                after.contains("It is longer than a result may hold"),
-                "{mode:?} {tool}: the result does not say why it was kept back: {after}"
+                after.contains("It is longer than a result may hold (8 bytes)")
+                    && after.contains("vet_content costs about")
+                    && !after.contains("To read part of the page instead"),
+                "{mode:?} {tool}: the result does not say why it was kept back, with the cap and the cost, and no route for a page: {after}"
             );
             assert_eq!(
                 walked.checks_made(),
@@ -111803,8 +111805,10 @@ fn a_fetch_that_asks_to_read_more_than_one_result_may_hold_keeps_the_page_and_sa
         );
         assert!(after.contains("ref:1"), "{mode:?}: no reference: {after}");
         assert!(
-            after.contains("It is longer than a result may hold"),
-            "{mode:?}: the result does not say why the page was left out: {after}"
+            after.contains("It is longer than a result may hold (64 bytes)")
+                && after.contains("vet_content costs about")
+                && after.contains("tokens, which stay in every later request"),
+            "{mode:?}: the result does not say why the page was left out, with the cap and the cost: {after}"
         );
         assert_eq!(
             fetched.checks_made(),

@@ -5223,13 +5223,15 @@ where
                         // back as a reference: said once, so it does not read as an unexplained
                         // quarantine. Nothing for a run, whose sentence is `run_advice`'s.
                         let not_returned = if a_run {
-                            ""
+                            String::new()
                         } else {
                             sentences::read_not_returned(
                                 output.read_asked,
                                 read_gate,
                                 reference.bytes,
                                 output_cap,
+                                &output.tool,
+                                plan.beside,
                             )
                         };
                         // Only where git ran in a directory whose repository read_git

@@ -90,8 +90,11 @@ In every other case the content stays behind its reference and the result says t
 return it. That includes any other word from the check and a check that could not be made, and it
 names neither. Nobody is asked at the call. Where you answer `vet_content` yourself, `read` changes
 nothing: you are asked only if the planner calls `vet_content`. A picture is never released this way,
-content longer than one result may hold stays behind its reference with the reason, and content of
-zero bytes is reported as empty without a check. A `list_files` call that asks this way, where the
+content longer than one result may hold, 16 KiB unless `run.maxOutput` sets another size, stays
+behind its reference. The result says why, how large the content is and about how many tokens
+`vet_content` would add to every later request, and for a fetch it names `run` with `curl` and a
+filter as a way to see part of the page. Content of zero bytes is reported as empty without a check. A
+`list_files` call that asks this way, where the
 mode or a check answers, holds the listing as one reference so that one release covers it; where it
 is kept back, that one reference comes back in place of one for each entry. `read` must be `true`
 or `false`, and a call that

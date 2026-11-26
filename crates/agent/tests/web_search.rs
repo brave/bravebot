@@ -407,6 +407,56 @@ fn a_search_that_asks_to_read_is_released_as_a_fetch_is_and_one_that_does_not_is
     }
 }
 
+/// VET-6: a search that asks to read results larger than the task's output cap keeps them behind
+/// the reference, and the result says what the cap is, how large the results are and what
+/// `vet_content` would cost, without the curl route that is advice about a page.
+///
+/// The regressions it rejects: results past the cap put into the result, a bare "too long" with no
+/// figure, and the fetch's `run` and curl route given to a search.
+#[test]
+fn a_search_that_asks_to_read_past_the_output_cap_is_told_the_cap_the_size_and_the_cost() {
+    let (_keep, key) = a_key_file("search-read-cap");
+    let (index, _heads) = serve_the_index(vec![json_results(&format!(
+        r#"{{"results":["{SENTINEL} {}"]}}"#,
+        "x".repeat(300)
+    ))]);
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "web_search",
+            r#"{"service":"web","q":"rust async","read":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let mode = bravebot_agent::PermissionMode::Bypass;
+    let mut inner = Asked::answering(Decision::Approve);
+    let mut confirmer = bravebot_agent::Confining::new(&mut inner, mode, false);
+    let bodies = a_turn_with(
+        &searching(&endpoint, &key, &index),
+        Task::new("search")
+            .with_permission_mode(mode)
+            .with_auto_vetting(false)
+            .with_output_cap(Some(64)),
+        &mut confirmer,
+        &received,
+    );
+    let said = told(&bodies);
+    assert!(
+        !said.contains(SENTINEL),
+        "results past the cap were released: {said}"
+    );
+    assert!(
+        said.contains("It is longer than a result may hold (64 bytes)")
+            && said.contains("This one is ")
+            && said.contains("vet_content costs about")
+            && said.contains("tokens, which stay in every later request"),
+        "the cap, the size and the cost were not stated: {said}"
+    );
+    assert!(
+        !said.contains("To read part of the page instead"),
+        "a search was given the route for a page: {said}"
+    );
+}
+
 /// WEBSEARCH-9 (FETCH-9): a `read` that is not a boolean is refused, the refusal says what it must
 /// be, nobody is asked and no request reaches the index. The regression it rejects: a string read as
 /// false, which searches under a call the planner did not validly make.

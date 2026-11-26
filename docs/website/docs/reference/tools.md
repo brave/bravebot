@@ -843,7 +843,9 @@ your previous instructions" says it to a processor with no tools.
 
 The one exception is a call with `read: true`. Where permissions are bypassed with no screening, or
 auto-vetting is on and its check says the page is safe, the page comes back in that result, released
-the way a `vet_content` call would release it. Anything else keeps the reference. It is described under
+the way a `vet_content` call would release it. Anything else keeps the reference, and so does a page
+longer than 16 KiB, or the size `run.maxOutput` sets. The result then says the size and about how many
+tokens `vet_content` would add, and names `run` with `curl` and a filter where `run` is offered. It is described under
 [Asking for the result in the same call](../security/vetting.md#asking-for-the-result-in-the-same-call).
 
 It is untrusted but **public**, unlike a file of your own: a fetched page is not your data, so writing

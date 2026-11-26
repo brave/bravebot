@@ -409,21 +409,48 @@ pub(super) fn delegate_note(beside: Beside) -> &'static str {
 /// explanation. A slot of 0 bytes is not named here: the trail says no check was made, and
 /// there is nothing to see. `bytes` is the size the slot states, and `cap` is the largest result
 /// a read may hold.
+///
+/// A result past the cap says what the cap is, the size it states and the approximate token cost
+/// of `vet_content`, which releases the whole of it with no range or pattern and whose result
+/// stays in every later request (VET-6). For `fetch_url`, and only where the list holds `run`, it
+/// also names `run` with curl and a filter as the narrower route. Decided from the size, the cap,
+/// the tool's name and the list, never from what the content holds. A server's tool and the walks
+/// get no route, since curl is advice about a page.
 pub(super) fn read_not_returned(
     read_asked: bool,
     vet_content_is: ReadOutputIs,
     bytes: Option<usize>,
     cap: usize,
-) -> &'static str {
+    tool: &str,
+    beside: Beside,
+) -> String {
     match (read_asked, vet_content_is, bytes) {
-        (false, _, _) | (_, ReadOutputIs::Asked, _) | (_, _, Some(0)) => "",
+        (false, _, _) | (_, ReadOutputIs::Asked, _) | (_, _, Some(0)) => String::new(),
         (true, _, Some(bytes)) if bytes <= cap => {
             "\n\nYour read: true did not return it in this result, so vet_content is the way to \
              see it."
+                .to_string()
         }
         (true, _, _) => {
-            "\n\nIt is longer than a result may hold, so it was left out of this one. \
-             vet_content is the way to see it."
+            let size = match bytes {
+                Some(bytes) => format!(
+                    " This one is {bytes} bytes, so vet_content costs about {} tokens, which \
+                     stay in every later request.",
+                    crate::tools::about_tokens(bytes)
+                ),
+                None => String::new(),
+            };
+            let narrower = if tool == "fetch_url" && beside.holds(Named::Run) {
+                " To read part of the page instead, call run with curl piped to a filter such \
+                 as grep or head, and read: true."
+            } else {
+                ""
+            };
+            format!(
+                "\n\nIt is longer than a result may hold ({cap} bytes), so it was left out of \
+                 this one. vet_content is the way to see it, and it releases the whole of it \
+                 with no range or pattern.{size}{narrower}"
+            )
         }
     }
 }
@@ -923,7 +950,10 @@ mod tests {
     }
 
     const NOT_RETURNED: &str = "\n\nYour read: true did not return it in this result, so vet_content is the way to see it.";
-    const TOO_LONG: &str = "\n\nIt is longer than a result may hold, so it was left out of this one. vet_content is the way to see it.";
+    /// The too-long sentence for a size and a list, with a fetch's route where `run` is on it.
+    fn too_long(gate: ReadOutputIs, bytes: Option<usize>, tool: &str, beside: Beside) -> String {
+        read_not_returned(true, gate, bytes, 10, tool, beside)
+    }
 
     /// The regression it rejects: a sentence about a flag the planner did not pass, or about a
     /// content that was handed over, either of which tells the planner something false; and
@@ -932,24 +962,30 @@ mod tests {
     #[test]
     fn nothing_is_said_of_a_read_that_was_not_asked_or_has_nothing_to_answer() {
         for gate in [ReadOutputIs::Unasked, ReadOutputIs::ByACheck] {
-            assert_eq!(read_not_returned(false, gate, Some(5), 10), "");
-            assert_eq!(read_not_returned(false, gate, None, 10), "");
+            for bytes in [Some(5), Some(11), None] {
+                assert_eq!(
+                    read_not_returned(false, gate, bytes, 10, "fetch_url", Beside::every()),
+                    ""
+                );
+            }
         }
         for bytes in [Some(0), Some(5), Some(11), None] {
             assert_eq!(
-                read_not_returned(true, ReadOutputIs::Asked, bytes, 10),
+                read_not_returned(
+                    true,
+                    ReadOutputIs::Asked,
+                    bytes,
+                    10,
+                    "fetch_url",
+                    Beside::every()
+                ),
                 "",
                 "a person is asked anyway, so the flag has nothing to answer ({bytes:?})"
             );
         }
-        assert_eq!(
-            read_not_returned(true, ReadOutputIs::ByACheck, Some(0), 10),
-            ""
-        );
-        assert_eq!(
-            read_not_returned(true, ReadOutputIs::Unasked, Some(0), 10),
-            ""
-        );
+        for gate in [ReadOutputIs::ByACheck, ReadOutputIs::Unasked] {
+            assert_eq!(too_long(gate, Some(0), "fetch_url", Beside::every()), "");
+        }
     }
 
     /// The regression it rejects: the size sentence used where the content fitted (the planner
@@ -958,18 +994,76 @@ mod tests {
     #[test]
     fn a_read_that_fit_and_was_not_returned_says_so_and_names_vet_content() {
         for gate in [ReadOutputIs::Unasked, ReadOutputIs::ByACheck] {
-            assert_eq!(read_not_returned(true, gate, Some(1), 10), NOT_RETURNED);
-            assert_eq!(read_not_returned(true, gate, Some(10), 10), NOT_RETURNED);
+            for bytes in [1, 10] {
+                assert_eq!(
+                    too_long(gate, Some(bytes), "fetch_url", Beside::every()),
+                    NOT_RETURNED
+                );
+            }
         }
     }
 
-    /// The regression it rejects: a result past the cap, or one whose size is not known, being
-    /// told it was merely not returned, which sends the planner to ask again for the same thing.
+    /// The regression it rejects: a result past the cap being told it was merely not returned,
+    /// which sends the planner to ask again for the same thing, or the too-long sentence leaving
+    /// out the cap, the size in bytes, the token cost `vet_content` would add (the bytes divided by
+    /// four, as `read_output` states it), or that `vet_content` releases the whole of it (VET-6).
     #[test]
-    fn a_read_past_the_cap_or_of_unknown_size_says_it_is_too_long_for_a_result() {
+    fn a_read_past_the_cap_says_the_cap_the_size_the_cost_and_that_it_is_released_whole() {
         for gate in [ReadOutputIs::Unasked, ReadOutputIs::ByACheck] {
-            assert_eq!(read_not_returned(true, gate, Some(11), 10), TOO_LONG);
-            assert_eq!(read_not_returned(true, gate, None, 10), TOO_LONG);
+            let said = too_long(gate, Some(40_001), "fetch_url", Beside::every());
+            for part in [
+                "It is longer than a result may hold (10 bytes), so it was left out of this one.",
+                "vet_content is the way to see it",
+                "releases the whole of it with no range or pattern",
+                "This one is 40001 bytes, so vet_content costs about 10000 tokens",
+                "stay in every later request",
+            ] {
+                assert!(said.contains(part), "{gate:?}: missing '{part}': {said}");
+            }
+        }
+    }
+
+    /// The regression it rejects: a size of unknown size being given a figure ("0 bytes"), or
+    /// the sentence not being said at all, which leaves a planner with a bare reference.
+    #[test]
+    fn a_read_of_unknown_size_says_it_is_too_long_and_states_no_figure() {
+        for gate in [ReadOutputIs::Unasked, ReadOutputIs::ByACheck] {
+            let said = too_long(gate, None, "fetch_url", without(&["run"]));
+            assert!(
+                said.contains("It is longer than a result may hold (10 bytes)")
+                    && said.contains("vet_content is the way to see it"),
+                "{gate:?}: {said}"
+            );
+            assert!(
+                !said.contains("This one is") && !said.contains("tokens"),
+                "{gate:?}: a figure for a size nobody stated: {said}"
+            );
+        }
+    }
+
+    /// The regression it rejects: the narrower route named where the list lacks `run` (a name the
+    /// planner cannot call), left out of a fetch's sentence where it is there, or given to a
+    /// server's tool or a walk, for which curl is no advice.
+    #[test]
+    fn a_fetch_past_the_cap_names_run_with_curl_only_where_run_is_on_the_list() {
+        let route = "run with curl piped to a filter";
+        let on = too_long(
+            ReadOutputIs::Unasked,
+            Some(99),
+            "fetch_url",
+            Beside::every(),
+        );
+        assert!(on.contains(route) && on.contains("read: true"), "{on}");
+        let off = too_long(
+            ReadOutputIs::Unasked,
+            Some(99),
+            "fetch_url",
+            without(&["run"]),
+        );
+        assert!(!off.contains("curl") && !off.contains("run"), "{off}");
+        for tool in ["search", "list_files", "mcp__forecast__forecast"] {
+            let said = too_long(ReadOutputIs::Unasked, Some(99), tool, Beside::every());
+            assert!(!said.contains("curl"), "{tool}: {said}");
         }
     }
 

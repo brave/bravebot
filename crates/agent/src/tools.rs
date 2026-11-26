@@ -8748,8 +8748,15 @@ pub(crate) fn read_output_cost(bytes: Option<usize>, cap: usize, beside: Beside)
     format!(
         " read_output returns all {bytes} bytes of it, about {} tokens, which stay in every later \
          request.{filter}",
-        bytes / 4
+        about_tokens(bytes)
     )
+}
+
+/// The approximate number of tokens `bytes` bytes come to: one for every four bytes, which is the
+/// figure `read_output_cost` and the sentence about `vet_content` both state. Derived from a size
+/// the slot states, so no byte of the content is read.
+pub(crate) fn about_tokens(bytes: usize) -> usize {
+    bytes / 4
 }
 
 /// The cost sentence for a quarantined slot, from the size it states.
@@ -19400,6 +19407,32 @@ mod tests {
                     "{tool}: read names '{forbidden}': {read}"
                 );
             }
+        }
+    }
+
+    /// VET-6. The `read` argument of `fetch_url` and of `web_search` says what a result may hold,
+    /// so a planner that asks to read a page it can tell is large is not left to find the cap out
+    /// from a reference.
+    ///
+    /// A wrong implementation keeps the wording that says only "too long for one result", which
+    /// names no figure, or states a figure other than the cap the turn runs under by default.
+    #[test]
+    fn the_read_argument_of_fetch_url_and_web_search_states_the_cap() {
+        let mut offered = the_table_without(&[]);
+        offer_web_search(&mut offered);
+        assert_eq!(OUTPUT_CAP, 16 * 1024, "the descriptions say 16 KiB");
+        for tool in ["fetch_url", "web_search"] {
+            let on_the_list = offered.iter().find(|offered| offered.function.name == tool);
+            assert!(on_the_list.is_some(), "{tool} is not on the list");
+            let read =
+                on_the_list.unwrap().function.parameters["properties"]["read"]["description"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
+            assert!(
+                read.contains("16 KiB") && !read.contains("too long for one result"),
+                "{tool}: read does not state the cap: {read}"
+            );
         }
     }
 

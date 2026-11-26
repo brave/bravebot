@@ -410,7 +410,18 @@ check the person stopped are not kept, so `vet_content` makes its own check afte
 
 The size bounds the release as [RUN-21](run.md#RUN-21) bounds a run's. A slot larger than the
 task's output cap stays behind its reference, no check is made, and the result says the content is
-longer than one result may hold and that `vet_content` is the way to see it. A slot whose stated
+longer than one result may hold, what the cap is in bytes, and that `vet_content` is the way to see
+it and releases the whole of it with no range or pattern. Where the slot states its size, the result
+also says the size in bytes and the approximate token cost of that release, the size divided by four,
+which stays in every later request, as [RUN-21](run.md#RUN-21) says of `read_output`. Where the slot
+states no size, the result says the cap and gives no figure. For a `fetch_url` call, and only on a
+list that holds `run`, the result also names `run` with `curl` piped to a filter such as `grep` or
+`head`, and `read: true`, as the way to see part of the page. A `web_search`, a `search`, a
+`list_files` or a server's tool gets no such route, since `curl` is advice about a page. These
+sentences are decided from the size the slot states, the cap, the tool's name and the tools on the
+list, and never from a byte of the content. The `read` property of `fetch_url` and of `web_search`
+says in its description that a result longer than one result may hold, 16 KiB by default, still comes
+back as a reference, so a planner can tell before the call. A slot whose stated
 size is 0 is not released and no check is made over it: the reference states that it holds 0 bytes,
 and the trail records, under `vet_content`, that the slot holds 0 bytes and so nothing was checked or
 released. A picture is never released this way ([VET-4](#VET-4)): it reaches the planner only as the
@@ -492,3 +503,8 @@ as outside the workspace ([PATHREQ-7](request-path.md#PATHREQ-7)). The reference
 `verified-by: bravebot_agent::web_search::a_search_whose_read_is_not_a_boolean_is_refused_before_a_question_or_a_request`
 `verified-by: bravebot_agent::turn::a_fetched_image_asked_to_be_read_is_released_as_vet_content_releases_the_same_fetch`
 `verified-by: bravebot_agent::turn::vet_content_does_not_check_again_a_page_the_fetchs_read_found_unsafe`
+`verified-by: bravebot_agent::turn::sentences::a_read_past_the_cap_says_the_cap_the_size_the_cost_and_that_it_is_released_whole`
+`verified-by: bravebot_agent::turn::sentences::a_read_of_unknown_size_says_it_is_too_long_and_states_no_figure`
+`verified-by: bravebot_agent::turn::sentences::a_fetch_past_the_cap_names_run_with_curl_only_where_run_is_on_the_list`
+`verified-by: bravebot_agent::tools::the_read_argument_of_fetch_url_and_web_search_states_the_cap`
+`verified-by: bravebot_agent::web_search::a_search_that_asks_to_read_past_the_output_cap_is_told_the_cap_the_size_and_the_cost`
