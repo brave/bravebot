@@ -67,7 +67,7 @@ see.
 `verified-by: bravebot_tui::sessions_screen_tests::left_is_the_boxs_while_something_else_has_the_line`
 `verified-by: bravebot_tui::sessions_screen_tests::left_opens_the_sessions_screen_while_a_turn_runs_and_only_over_an_empty_box`
 `verified-by: bravebot_tui::sessions_screen_tests::left_in_a_run_of_keys_is_not_the_key_that_opens_it`
-`verified-by: bravebot_tui::app::the_sessions_screen_opens_over_a_running_turn_and_leaves_it_running`
+`verified-by: bravebot_tui::app::tests::remainder::the_sessions_screen_opens_over_a_running_turn_and_leaves_it_running`
 `verified-by: bravebot_tui::sessions_screen_tests::the_sessions_screen_command_opens_the_sessions_screen_as_the_key_does`
 `verified-by: bravebot_tui::sessions_screen_tests::the_sessions_screen_command_is_offered_while_it_is_typed`
 `verified-by: bravebot_tui::sessions_screen_tests::the_sessions_screen_takes_every_key_and_leaves_the_box_as_it_was`

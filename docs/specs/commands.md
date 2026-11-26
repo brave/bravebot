@@ -159,43 +159,43 @@ argument that CMD-17 and the table say it does not take, for one command only. M
 a command would apply the name without the look at the roster that the picker gives. The line is the
 text of the person's own box, and what it decides is only which fixed note is drawn.
 
-`verified-by: bravebot_tui::app::a_longer_word_starting_with_the_command_is_a_prompt`
-`verified-by: bravebot_tui::app::an_argument_is_taken_only_after_the_whole_command_word`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_add_dir_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_status_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_cost_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_copy_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_clear_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_compact_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_model_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_theme_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_longer_word_starting_with_theme_is_a_prompt`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_effort_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_advisor_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_longer_word_starting_with_advisor_is_a_prompt`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_config_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_longer_word_starting_with_effort_is_a_prompt`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_rename_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_exit_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::the_bare_add_dir_command_is_still_the_command`
-`verified-by: bravebot_tui::app::the_bare_rename_command_is_still_the_command`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_loop_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_longer_word_starting_with_loop_is_a_prompt`
-`verified-by: bravebot_tui::app::the_bare_loop_command_says_what_is_repeating`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_cd_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_longer_word_starting_with_cd_is_a_prompt`
-`verified-by: bravebot_tui::app::the_bare_cd_command_is_still_the_command`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_btw_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_longer_word_starting_with_btw_is_a_prompt`
-`verified-by: bravebot_tui::app::the_bare_btw_command_is_still_the_command`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_caffeinate_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_longer_word_starting_with_caffeinate_is_a_prompt`
-`verified-by: bravebot_tui::app::init_with_words_after_it_is_a_prompt`
-`verified-by: bravebot_tui::app::a_lone_leave_word_is_sent_at_the_first_enter`
-`verified-by: bravebot_tui::app::a_line_that_holds_more_than_a_leave_word_is_sent_without_the_mark`
-`verified-by: bravebot_tui::app::the_keys_the_note_on_a_sent_leave_word_names_stop_the_turn_and_leave`
-`verified-by: bravebot_tui::app::the_exit_command_leaves_on_the_first_enter_and_marks_nothing`
-`verified-by: bravebot_tui::app::a_bare_leave_word_in_shell_mode_is_run_as_the_command_line_it_is`
+`verified-by: bravebot_tui::app::tests::commands_words::a_longer_word_starting_with_the_command_is_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::an_argument_is_taken_only_after_the_whole_command_word`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_add_dir_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_status_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_cost_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_copy_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_clear_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_compact_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_model_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_theme_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_longer_word_starting_with_theme_is_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_effort_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_advisor_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_longer_word_starting_with_advisor_is_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_config_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_longer_word_starting_with_effort_is_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_rename_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_exit_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::the_bare_add_dir_command_is_still_the_command`
+`verified-by: bravebot_tui::app::tests::commands_words::the_bare_rename_command_is_still_the_command`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_loop_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_longer_word_starting_with_loop_is_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::the_bare_loop_command_says_what_is_repeating`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_cd_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_longer_word_starting_with_cd_is_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::the_bare_cd_command_is_still_the_command`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_btw_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_longer_word_starting_with_btw_is_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::the_bare_btw_command_is_still_the_command`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_caffeinate_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_longer_word_starting_with_caffeinate_is_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::init_with_words_after_it_is_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::a_lone_leave_word_is_sent_at_the_first_enter`
+`verified-by: bravebot_tui::app::tests::commands_words::a_line_that_holds_more_than_a_leave_word_is_sent_without_the_mark`
+`verified-by: bravebot_tui::app::tests::input_keys::the_keys_the_note_on_a_sent_leave_word_names_stop_the_turn_and_leave`
+`verified-by: bravebot_tui::app::tests::commands_words::the_exit_command_leaves_on_the_first_enter_and_marks_nothing`
+`verified-by: bravebot_tui::app::tests::commands_words::a_bare_leave_word_in_shell_mode_is_run_as_the_command_line_it_is`
 `verified-by: bravebot_tui::state::a_turn_begun_on_a_lone_leave_word_is_marked_and_one_on_any_other_line_is_not`
 `verified-by: bravebot_tui::state::the_prompt_after_a_marked_turn_does_not_inherit_the_mark`
 `verified-by: bravebot_tui::state::a_turn_that_begins_without_a_line_from_the_box_takes_down_the_mark`
@@ -204,9 +204,9 @@ text of the person's own box, and what it decides is only which fixed note is dr
 `verified-by: bravebot_tui::render::the_row_under_the_box_says_a_sent_leave_word_went_to_the_model_as_a_prompt`
 `verified-by: bravebot_tui::render::the_row_under_the_box_says_nothing_of_a_prompt_that_is_more_than_a_leave_word`
 `verified-by: bravebot_tui::render::the_note_on_a_sent_leave_word_leaves_the_permission_mode_on_an_eighty_column_row`
-`verified-by: bravebot_tui::app::a_no_argument_command_given_words_is_sent_as_a_prompt_with_the_mark`
-`verified-by: bravebot_tui::app::a_line_that_is_not_a_no_argument_command_given_words_is_sent_without_that_mark`
-`verified-by: bravebot_tui::app::a_no_argument_command_given_words_in_shell_mode_is_run_as_the_command_line_it_is`
+`verified-by: bravebot_tui::app::tests::commands_words::a_no_argument_command_given_words_is_sent_as_a_prompt_with_the_mark`
+`verified-by: bravebot_tui::app::tests::commands_words::a_line_that_is_not_a_no_argument_command_given_words_is_sent_without_that_mark`
+`verified-by: bravebot_tui::app::tests::commands_words::a_no_argument_command_given_words_in_shell_mode_is_run_as_the_command_line_it_is`
 `verified-by: bravebot_tui::state::a_turn_begun_on_a_command_given_words_is_marked_and_one_on_any_other_line_is_not`
 `verified-by: bravebot_tui::state::the_prompt_after_a_command_marked_turn_does_not_inherit_the_mark`
 `verified-by: bravebot_tui::state::a_turn_that_begins_without_a_line_from_the_box_takes_down_the_command_mark`
@@ -236,15 +236,15 @@ mid-turn over a line that was typed at rest to be run. What the press may never 
 that line to the turn: `echo pwned` reaching the planner as a sentence somebody said is the one
 reading of the keystroke nobody asked for.
 
-`verified-by: bravebot_tui::app::a_slash_command_in_shell_mode_is_a_command_line`
-`verified-by: bravebot_tui::app::shell_mode_offers_no_completions`
-`verified-by: bravebot_tui::app::a_shell_line_is_not_taken_for_a_command_while_a_turn_runs`
-`verified-by: bravebot_tui::app::a_command_line_is_not_sent_to_the_running_turn`
-`verified-by: bravebot_tui::app::the_command_line_queued_while_a_turn_ran_is_run_when_the_turn_ends`
-`verified-by: bravebot_tui::app::queueing_a_command_line_leaves_shell_mode`
-`verified-by: bravebot_tui::app::a_queued_command_line_is_not_what_the_turn_took`
-`verified-by: bravebot_tui::app::a_prompt_queued_behind_a_command_line_is_sent_once_it_has_run`
-`verified-by: bravebot_tui::app::a_queued_command_line_comes_back_to_the_box`
+`verified-by: bravebot_tui::app::tests::commands_words::a_slash_command_in_shell_mode_is_a_command_line`
+`verified-by: bravebot_tui::app::tests::commands_words::shell_mode_offers_no_completions`
+`verified-by: bravebot_tui::app::tests::commands_words::a_shell_line_is_not_taken_for_a_command_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::commands_words::a_command_line_is_not_sent_to_the_running_turn`
+`verified-by: bravebot_tui::app::tests::commands_words::the_command_line_queued_while_a_turn_ran_is_run_when_the_turn_ends`
+`verified-by: bravebot_tui::app::tests::commands_words::queueing_a_command_line_leaves_shell_mode`
+`verified-by: bravebot_tui::app::tests::commands_words::a_queued_command_line_is_not_what_the_turn_took`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_queued_behind_a_command_line_is_sent_once_it_has_run`
+`verified-by: bravebot_tui::app::tests::commands_words::a_queued_command_line_comes_back_to_the_box`
 `verified-by: bravebot_tui::shell_mode::a_waiting_command_line_is_drawn_behind_the_marker`
 
 ## What a command does to the line
@@ -263,24 +263,24 @@ the conversation with a question on the end of it, which [watching.md](watching.
 is the task after the word, which [permission-modes.md](permission-modes.md) governs. None of them sends
 the typed line.
 
-`verified-by: bravebot_tui::app::typing_the_status_command_reports_rather_than_prompting`
-`verified-by: bravebot_tui::app::typing_the_cost_command_reports_rather_than_prompting`
-`verified-by: bravebot_tui::app::typing_the_copy_command_copies_the_latest_reply_rather_than_prompting`
-`verified-by: bravebot_tui::app::typing_the_clear_command_starts_a_new_session`
-`verified-by: bravebot_tui::app::the_compact_command_asks_for_a_summary_rather_than_being_sent`
-`verified-by: bravebot_tui::app::the_add_dir_command_carries_its_directory`
-`verified-by: bravebot_tui::app::typing_the_model_command_opens_the_picker`
-`verified-by: bravebot_tui::app::typing_the_theme_command_opens_the_picker`
-`verified-by: bravebot_tui::app::the_theme_command_carries_its_name`
-`verified-by: bravebot_tui::app::typing_the_effort_command_opens_the_picker`
-`verified-by: bravebot_tui::app::typing_the_config_command_opens_the_panel`
-`verified-by: bravebot_tui::app::the_effort_command_carries_its_level`
-`verified-by: bravebot_tui::app::typing_the_exit_command_quits`
-`verified-by: bravebot_tui::app::the_loop_command_sends_what_is_left_after_the_interval`
-`verified-by: bravebot_tui::app::the_cd_command_carries_its_directory`
-`verified-by: bravebot_tui::app::the_btw_command_carries_its_question`
-`verified-by: bravebot_tui::app::the_checkouts_command_lists_and_removes_by_number`
-`verified-by: bravebot_tui::app::a_command_typed_while_a_turn_runs_is_not_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::typing_the_status_command_reports_rather_than_prompting`
+`verified-by: bravebot_tui::app::tests::commands_words::typing_the_cost_command_reports_rather_than_prompting`
+`verified-by: bravebot_tui::app::tests::commands_words::typing_the_copy_command_copies_the_latest_reply_rather_than_prompting`
+`verified-by: bravebot_tui::app::tests::commands_words::typing_the_clear_command_starts_a_new_session`
+`verified-by: bravebot_tui::app::tests::commands_words::the_compact_command_asks_for_a_summary_rather_than_being_sent`
+`verified-by: bravebot_tui::app::tests::commands_words::the_add_dir_command_carries_its_directory`
+`verified-by: bravebot_tui::app::tests::commands_words::typing_the_model_command_opens_the_picker`
+`verified-by: bravebot_tui::app::tests::commands_words::typing_the_theme_command_opens_the_picker`
+`verified-by: bravebot_tui::app::tests::commands_words::the_theme_command_carries_its_name`
+`verified-by: bravebot_tui::app::tests::commands_words::typing_the_effort_command_opens_the_picker`
+`verified-by: bravebot_tui::app::tests::commands_words::typing_the_config_command_opens_the_panel`
+`verified-by: bravebot_tui::app::tests::commands_words::the_effort_command_carries_its_level`
+`verified-by: bravebot_tui::app::tests::commands_words::typing_the_exit_command_quits`
+`verified-by: bravebot_tui::app::tests::commands_words::the_loop_command_sends_what_is_left_after_the_interval`
+`verified-by: bravebot_tui::app::tests::commands_words::the_cd_command_carries_its_directory`
+`verified-by: bravebot_tui::app::tests::commands_words::the_btw_command_carries_its_question`
+`verified-by: bravebot_tui::app::tests::remainder::the_checkouts_command_lists_and_removes_by_number`
+`verified-by: bravebot_tui::app::tests::commands_words::a_command_typed_while_a_turn_runs_is_not_sent_as_a_prompt`
 
 
 <a id="CMD-5"></a>
@@ -307,18 +307,18 @@ waits during a turn.
 session is stored under. A person is taken to have endorsed exactly the characters they typed, so
 exactly those characters have to arrive.
 
-`verified-by: bravebot_tui::app::the_rename_command_carries_the_whole_name`
-`verified-by: bravebot_tui::app::the_add_dir_command_carries_its_directory`
-`verified-by: bravebot_tui::app::the_add_dir_close_command_carries_the_directory_to_close`
-`verified-by: bravebot_tui::app::the_cd_command_carries_its_directory`
-`verified-by: bravebot_tui::app::the_btw_command_carries_its_question`
-`verified-by: bravebot_tui::app::a_session_can_ask_for_a_manifest_run`
-`verified-by: bravebot_tui::app::a_tilde_is_expanded_only_as_a_whole_first_segment`
+`verified-by: bravebot_tui::app::tests::commands_words::the_rename_command_carries_the_whole_name`
+`verified-by: bravebot_tui::app::tests::commands_words::the_add_dir_command_carries_its_directory`
+`verified-by: bravebot_tui::app::tests::commands_words::the_add_dir_close_command_carries_the_directory_to_close`
+`verified-by: bravebot_tui::app::tests::commands_words::the_cd_command_carries_its_directory`
+`verified-by: bravebot_tui::app::tests::commands_words::the_btw_command_carries_its_question`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_session_can_ask_for_a_manifest_run`
+`verified-by: bravebot_tui::app::tests::remainder::a_tilde_is_expanded_only_as_a_whole_first_segment`
 `verified-by: bravebot_tui::app::tests::pasting::a_picture_pasted_into_a_question_goes_with_it`
 `verified-by: bravebot_tui::app::tests::pasting::a_picture_a_command_line_named_is_carried_out_as_words_rather_than_as_its_marker`
 `verified-by: bravebot_tui::app::tests::dropping::a_picture_dropped_onto_a_question_goes_with_it`
 `verified-by: bravebot_tui::app::tests::dropping::a_file_dropped_onto_a_command_line_is_carried_out_as_its_name`
-`verified-by: bravebot_tui::app::btw_with_a_dropped_file_beside_a_turn_is_refused`
+`verified-by: bravebot_tui::app::tests::commands_words::btw_with_a_dropped_file_beside_a_turn_is_refused`
 `verified-by: bravebot_ui_bridge::asking_aside::a_picture_pasted_on_a_btw_at_rest_goes_with_the_question_and_not_into_the_exchange`
 `verified-by: bravebot_ui_bridge::asking_aside::a_picture_dropped_on_a_btw_at_rest_goes_with_the_question`
 `verified-by: bravebot_ui_bridge::asking_aside::a_text_file_dropped_on_a_btw_is_its_name_in_the_question`
@@ -344,9 +344,9 @@ item. The rows drawn are the rows a press can pick, as [mouse.md](mouse.md) desc
 leaving the rest advertising something that no longer works, which a person discovers by typing
 it.
 
-`verified-by: bravebot_tui::app::compacting_is_offered_while_a_command_is_being_typed`
-`verified-by: bravebot_tui::app::the_config_command_is_offered_like_every_other`
-`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::app::tests::commands_words::compacting_is_offered_while_a_command_is_being_typed`
+`verified-by: bravebot_tui::app::tests::commands_words::the_config_command_is_offered_like_every_other`
+`verified-by: bravebot_tui::app::tests::commands_words::every_command_in_the_table_dispatches`
 `verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
 `verified-by: bravebot_tui::command_table::the_mcp_hint_names_every_subcommand_the_usage_message_names`
 `verified-by: bravebot_tui::app::tests::completions::the_list_under_the_box_scrolls_to_keep_the_cursor_drawn`
@@ -633,12 +633,12 @@ does not read:
   nothing until they have arrived. A listing that fails closes the list, leaves the model as it
   was and says why.
 
-  `verified-by: bravebot_tui::app::the_model_command_opens_its_picker_before_the_listing_has_arrived`
-  `verified-by: bravebot_tui::app::model_session_typed_mid_turn_opens_its_list_in_the_this_session_scope`
-  `verified-by: bravebot_tui::app::a_session_only_model_picked_mid_turn_applies_from_the_next_turn`
-  `verified-by: bravebot_tui::app::effort_session_typed_mid_turn_opens_its_list_in_the_this_session_scope`
-  `verified-by: bravebot_tui::app::a_session_only_level_picked_mid_turn_applies_from_the_next_turn`
-  `verified-by: bravebot_tui::app::a_listing_that_fails_after_the_picker_opened_closes_it_and_says_why`
+  `verified-by: bravebot_tui::app::tests::commands_mid_turn::the_model_command_opens_its_picker_before_the_listing_has_arrived`
+  `verified-by: bravebot_tui::app::tests::commands_mid_turn::model_session_typed_mid_turn_opens_its_list_in_the_this_session_scope`
+  `verified-by: bravebot_tui::app::tests::commands_mid_turn::a_session_only_model_picked_mid_turn_applies_from_the_next_turn`
+  `verified-by: bravebot_tui::app::tests::commands_mid_turn::effort_session_typed_mid_turn_opens_its_list_in_the_this_session_scope`
+  `verified-by: bravebot_tui::app::tests::commands_mid_turn::a_session_only_level_picked_mid_turn_applies_from_the_next_turn`
+  `verified-by: bravebot_tui::app::tests::commands_mid_turn::a_listing_that_fails_after_the_picker_opened_closes_it_and_says_why`
 - **`/sandbox`.** It sets the mode the programs `run` starts are held to
   ([SANDBOX-22](sandboxing.md#SANDBOX-22)). A turn reads the mode again when each call begins, so a
   mode set mid-turn applies to every call the turn makes after that, and a program already started
@@ -739,134 +739,134 @@ by what is already waiting; a `now` row reads `queued` while a line of the same 
 on a half-typed word, takes the highlighted row and queues nothing; Enter on a whole command is
 carried out or queued as above.
 
-`verified-by: bravebot_tui::app::a_command_typed_while_a_turn_runs_is_not_sent_as_a_prompt`
-`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
-`verified-by: bravebot_tui::app::a_command_that_reads_or_ends_what_the_session_keeps_answers_mid_turn`
-`verified-by: bravebot_tui::app::a_command_that_would_start_a_loop_or_a_goal_waits_for_the_turn`
-`verified-by: bravebot_tui::app::a_command_typed_behind_a_waiting_one_of_its_own_waits_with_it`
-`verified-by: bravebot_tui::app::the_mcp_list_is_carried_out_beside_a_turn_as_it_is_typed`
-`verified-by: bravebot_tui::app::the_mcp_list_beside_a_turn_names_the_servers_an_installed_plugin_carries_and_writes_nothing`
-`verified-by: bravebot_tui::app::the_mcp_forms_that_start_or_change_a_server_wait_for_the_turn_in_flight`
-`verified-by: bravebot_tui::app::a_list_waits_behind_a_waiting_mcp_start_and_not_behind_a_waiting_prompt`
-`verified-by: bravebot_tui::app::status_asked_mid_turn_answers_now_and_leaves_the_turns_rules_unstated`
+`verified-by: bravebot_tui::app::tests::commands_words::a_command_typed_while_a_turn_runs_is_not_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_command_that_reads_or_ends_what_the_session_keeps_answers_mid_turn`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_command_that_would_start_a_loop_or_a_goal_waits_for_the_turn`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_command_typed_behind_a_waiting_one_of_its_own_waits_with_it`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::the_mcp_list_is_carried_out_beside_a_turn_as_it_is_typed`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::the_mcp_list_beside_a_turn_names_the_servers_an_installed_plugin_carries_and_writes_nothing`
+`verified-by: bravebot_tui::app::tests::remainder::the_mcp_forms_that_start_or_change_a_server_wait_for_the_turn_in_flight`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_list_waits_behind_a_waiting_mcp_start_and_not_behind_a_waiting_prompt`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::status_asked_mid_turn_answers_now_and_leaves_the_turns_rules_unstated`
 `verified-by: bravebot_tui::status::a_report_whose_rules_are_the_turns_states_neither_the_trust_nor_the_programs`
-`verified-by: bravebot_tui::app::a_command_typed_during_a_compaction_waits`
-`verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_command_answered_mid_turn`
-`verified-by: bravebot_tui::app::ctrl_enter_on_a_command_answered_mid_turn_hurries_nothing`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_command_typed_during_a_compaction_waits`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_stopped_prompt_comes_back_after_a_command_answered_mid_turn`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::ctrl_enter_on_a_command_answered_mid_turn_hurries_nothing`
 `verified-by: bravebot_tui::app::tests::command_history::a_command_carried_out_at_rest_is_recalled_and_runs_again`
 `verified-by: bravebot_tui::app::tests::command_history::a_command_carried_out_mid_turn_is_remembered`
 `verified-by: bravebot_tui::app::tests::command_history::a_command_that_waited_is_remembered_once_and_not_when_it_is_released`
 `verified-by: bravebot_tui::app::tests::command_history::a_command_with_a_paste_is_remembered_as_the_words_pasted`
 `verified-by: bravebot_tui::app::tests::summoning::a_picked_definition_is_remembered_as_the_agent_line_it_addresses`
-`verified-by: bravebot_tui::app::a_session_renamed_mid_turn_is_renamed_as_it_is_typed`
-`verified-by: bravebot_tui::app::a_session_renamed_mid_turn_gives_up_the_running_turns_rewind_point`
-`verified-by: bravebot_tui::app::a_rename_with_no_name_mid_turn_keeps_the_running_turns_rewind_point`
-`verified-by: bravebot_tui::app::a_link_set_mid_turn_is_set_as_it_is_typed`
-`verified-by: bravebot_tui::app::a_command_that_changes_something_waits_behind_what_was_typed_first`
-`verified-by: bravebot_tui::app::a_note_typed_behind_a_waiting_sandbox_off_is_carried_out_when_typed`
-`verified-by: bravebot_tui::app::every_settings_command_but_sandbox_is_carried_out_behind_a_waiting_sandbox_off`
-`verified-by: bravebot_tui::app::a_sandbox_mode_typed_behind_a_waiting_sandbox_off_waits_behind_it`
-`verified-by: bravebot_tui::app::a_link_typed_behind_a_line_that_keeps_the_record_is_set_when_typed`
-`verified-by: bravebot_tui::app::a_link_typed_behind_a_line_that_replaces_the_record_waits_behind_it`
-`verified-by: bravebot_tui::app::a_model_level_or_advisor_typed_behind_a_line_that_builds_no_request_is_set_when_typed`
-`verified-by: bravebot_tui::app::a_model_level_or_advisor_typed_behind_a_line_that_builds_a_request_waits_behind_it`
-`verified-by: bravebot_tui::app::a_choice_names_the_first_waiting_line_that_could_change_it`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_session_renamed_mid_turn_is_renamed_as_it_is_typed`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::a_session_renamed_mid_turn_gives_up_the_running_turns_rewind_point`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_rename_with_no_name_mid_turn_keeps_the_running_turns_rewind_point`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_link_set_mid_turn_is_set_as_it_is_typed`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_command_that_changes_something_waits_behind_what_was_typed_first`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_note_typed_behind_a_waiting_sandbox_off_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::every_settings_command_but_sandbox_is_carried_out_behind_a_waiting_sandbox_off`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_sandbox_mode_typed_behind_a_waiting_sandbox_off_waits_behind_it`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_link_typed_behind_a_line_that_keeps_the_record_is_set_when_typed`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_link_typed_behind_a_line_that_replaces_the_record_waits_behind_it`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_model_level_or_advisor_typed_behind_a_line_that_builds_no_request_is_set_when_typed`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_model_level_or_advisor_typed_behind_a_line_that_builds_a_request_waits_behind_it`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_choice_names_the_first_waiting_line_that_could_change_it`
 `verified-by: bravebot_tui::command_table::every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`
-`verified-by: bravebot_tui::app::a_style_typed_behind_a_line_that_cannot_change_it_is_carried_out_when_typed`
-`verified-by: bravebot_tui::app::a_style_typed_behind_a_line_that_could_change_it_waits_behind_it`
-`verified-by: bravebot_tui::app::a_forgotten_answer_typed_behind_a_line_that_cannot_change_it_is_carried_out_when_typed`
-`verified-by: bravebot_tui::app::a_forgotten_answer_typed_behind_a_line_that_could_change_it_waits_behind_it`
-`verified-by: bravebot_tui::app::opening_or_closing_a_directory_does_not_change_what_forgetting_trust_withdraws`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_style_typed_behind_a_line_that_cannot_change_it_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_style_typed_behind_a_line_that_could_change_it_waits_behind_it`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_forgotten_answer_typed_behind_a_line_that_cannot_change_it_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_forgotten_answer_typed_behind_a_line_that_could_change_it_waits_behind_it`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::opening_or_closing_a_directory_does_not_change_what_forgetting_trust_withdraws`
 `verified-by: bravebot_agent::reach::a_reach_leaves_the_answer_kept_about_the_directory_as_it_was`
-`verified-by: bravebot_tui::app::a_note_or_a_name_typed_behind_a_line_that_leaves_the_record_alone_is_carried_out_when_typed`
-`verified-by: bravebot_tui::app::a_note_or_a_name_typed_behind_a_line_that_could_change_the_record_waits_behind_it`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_note_or_a_name_typed_behind_a_line_that_leaves_the_record_alone_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_note_or_a_name_typed_behind_a_line_that_could_change_the_record_waits_behind_it`
 `verified-by: bravebot_session::sessions::a_save_for_a_command_line_keeps_the_name_and_the_notes_given_before_it`
-`verified-by: bravebot_tui::app::a_theme_or_config_typed_behind_a_waiting_line_is_carried_out_when_typed`
-`verified-by: bravebot_tui::app::a_language_typed_behind_a_waiting_line_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_theme_or_config_typed_behind_a_waiting_line_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_language_typed_behind_a_waiting_line_is_carried_out_when_typed`
 `verified-by: bravebot_tui::render::a_command_waiting_behind_a_line_names_that_line_on_its_mark`
 `verified-by: bravebot_tui::render::a_command_that_waits_for_the_turn_does_not_name_the_line_ahead_of_it`
 `verified-by: bravebot_tui::render::a_command_does_not_name_a_line_typed_after_it`
 `verified-by: bravebot_tui::render::a_mark_with_no_room_for_the_line_it_waits_behind_says_where_the_line_goes`
-`verified-by: bravebot_tui::app::a_command_names_the_first_waiting_line_that_holds_it_back`
-`verified-by: bravebot_tui::app::export_typed_mid_turn_writes_the_transcript_as_it_stands`
-`verified-by: bravebot_tui::app::export_typed_mid_turn_refuses_a_path_outside_the_working_directory`
-`verified-by: bravebot_tui::app::every_command_carried_out_mid_turn_answers_in_the_transcript`
-`verified-by: bravebot_tui::app::ctrl_enter_on_a_rename_mid_turn_hurries_nothing`
-`verified-by: bravebot_tui::app::trust_forgotten_mid_turn_is_forgotten_as_it_is_typed`
-`verified-by: bravebot_tui::app::an_effort_named_mid_turn_is_set_as_it_is_typed`
-`verified-by: bravebot_tui::app::effort_session_with_a_level_typed_mid_turn_is_carried_out_as_typed_and_recorded_nowhere`
-`verified-by: bravebot_tui::app::a_level_set_mid_turn_is_the_next_turns_and_the_running_turn_keeps_its_own`
-`verified-by: bravebot_tui::app::a_queued_effort_line_is_dispatched_by_the_parse_a_line_typed_at_rest_gets`
-`verified-by: bravebot_tui::app::effort_session_with_a_level_waits_behind_what_could_change_the_choice_and_not_behind_the_rest`
-`verified-by: bravebot_tui::app::a_language_named_mid_turn_is_saved_as_it_is_typed`
-`verified-by: bravebot_tui::app::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_follows_it`
-`verified-by: bravebot_tui::app::a_bare_sandbox_command_opens_the_picker_mid_turn`
-`verified-by: bravebot_tui::app::a_sandbox_row_taken_mid_turn_adds_the_note_that_the_turn_follows_it`
-`verified-by: bravebot_tui::app::moving_the_sandbox_to_off_mid_turn_is_carried_out_when_typed`
-`verified-by: bravebot_tui::app::a_sandbox_mode_named_behind_a_waiting_line_waits_behind_it`
-`verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_sandbox_mode_set_mid_turn`
-`verified-by: bravebot_tui::app::a_command_that_waits_for_the_turn_says_why`
-`verified-by: bravebot_tui::app::a_theme_or_an_effort_nobody_has_is_refused_mid_turn`
-`verified-by: bravebot_tui::app::a_command_that_opens_a_picker_opens_it_as_it_is_typed_mid_turn`
-`verified-by: bravebot_tui::app::a_level_picked_in_a_picker_opened_mid_turn_is_kept_and_said_in_the_transcript`
-`verified-by: bravebot_tui::app::leaving_a_picker_opened_mid_turn_does_not_stop_the_turn`
-`verified-by: bravebot_tui::app::a_picker_still_open_when_the_turn_ends_goes_on_at_rest`
-`verified-by: bravebot_tui::app::a_row_taken_while_another_working_loop_runs_is_carried_out_afterwards`
-`verified-by: bravebot_tui::app::the_model_command_opens_the_model_picker_as_it_is_typed_mid_turn`
-`verified-by: bravebot_tui::app::a_model_picked_mid_turn_is_the_next_turns_and_the_running_turn_keeps_its_own`
-`verified-by: bravebot_tui::app::a_paste_while_a_picker_is_open_lands_nowhere`
-`verified-by: bravebot_tui::app::a_picker_left_open_takes_the_keys_while_a_command_runs`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_command_names_the_first_waiting_line_that_holds_it_back`
+`verified-by: bravebot_tui::app::tests::sessions_records::export_typed_mid_turn_writes_the_transcript_as_it_stands`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::export_typed_mid_turn_refuses_a_path_outside_the_working_directory`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::every_command_carried_out_mid_turn_answers_in_the_transcript`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::ctrl_enter_on_a_rename_mid_turn_hurries_nothing`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::trust_forgotten_mid_turn_is_forgotten_as_it_is_typed`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::an_effort_named_mid_turn_is_set_as_it_is_typed`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::effort_session_with_a_level_typed_mid_turn_is_carried_out_as_typed_and_recorded_nowhere`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_level_set_mid_turn_is_the_next_turns_and_the_running_turn_keeps_its_own`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_queued_effort_line_is_dispatched_by_the_parse_a_line_typed_at_rest_gets`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::effort_session_with_a_level_waits_behind_what_could_change_the_choice_and_not_behind_the_rest`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_language_named_mid_turn_is_saved_as_it_is_typed`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_follows_it`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_bare_sandbox_command_opens_the_picker_mid_turn`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_sandbox_row_taken_mid_turn_adds_the_note_that_the_turn_follows_it`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::moving_the_sandbox_to_off_mid_turn_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_sandbox_mode_named_behind_a_waiting_line_waits_behind_it`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_stopped_prompt_comes_back_after_a_sandbox_mode_set_mid_turn`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_command_that_waits_for_the_turn_says_why`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_theme_or_an_effort_nobody_has_is_refused_mid_turn`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_command_that_opens_a_picker_opens_it_as_it_is_typed_mid_turn`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_level_picked_in_a_picker_opened_mid_turn_is_kept_and_said_in_the_transcript`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::leaving_a_picker_opened_mid_turn_does_not_stop_the_turn`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_picker_still_open_when_the_turn_ends_goes_on_at_rest`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_row_taken_while_another_working_loop_runs_is_carried_out_afterwards`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::the_model_command_opens_the_model_picker_as_it_is_typed_mid_turn`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_model_picked_mid_turn_is_the_next_turns_and_the_running_turn_keeps_its_own`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_paste_while_a_picker_is_open_lands_nowhere`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_picker_left_open_takes_the_keys_while_a_command_runs`
 `verified-by: bravebot_tui::render::a_picker_opened_mid_turn_is_drawn_over_the_turn`
 `verified-by: bravebot_tui::theme_prompt::a_key_press_previews_the_row_and_leaving_puts_the_old_theme_back`
 `verified-by: bravebot_tui::render::what_a_command_answered_mid_turn_is_drawn_under_the_turn`
-`verified-by: bravebot_tui::app::no_command_is_sent_as_a_prompt_while_a_turn_runs`
-`verified-by: bravebot_tui::app::a_command_with_an_argument_is_not_sent_as_a_prompt_while_a_turn_runs`
-`verified-by: bravebot_tui::app::a_command_that_takes_no_argument_is_only_the_bare_word_mid_turn`
-`verified-by: bravebot_tui::app::a_prompt_mentioning_a_command_is_queued_while_a_turn_runs`
-`verified-by: bravebot_tui::app::the_command_queued_while_a_turn_ran_is_carried_out_when_the_turn_ends`
-`verified-by: bravebot_tui::app::a_prompt_queued_behind_a_command_is_sent_once_the_command_has_run`
-`verified-by: bravebot_tui::app::a_queued_command_is_not_what_the_turn_took`
-`verified-by: bravebot_tui::app::a_queued_command_comes_back_to_the_box`
-`verified-by: bravebot_tui::app::copy_typed_mid_turn_takes_the_reply_without_waiting`
-`verified-by: bravebot_tui::app::a_typed_text_command_copies_a_reply_as_the_screen_shows_it_and_counts_back_as_copy_does`
-`verified-by: bravebot_tui::app::a_typed_text_command_copies_what_the_menu_item_copies`
-`verified-by: bravebot_tui::app::a_typed_text_command_refuses_what_it_cannot_take_and_copies_nothing`
-`verified-by: bravebot_tui::app::a_typed_text_command_takes_the_reply_without_waiting_while_a_turn_runs`
-`verified-by: bravebot_tui::app::tab_finishes_text_after_the_copy_command`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::no_command_is_sent_as_a_prompt_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_command_with_an_argument_is_not_sent_as_a_prompt_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_command_that_takes_no_argument_is_only_the_bare_word_mid_turn`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_mentioning_a_command_is_queued_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::the_command_queued_while_a_turn_ran_is_carried_out_when_the_turn_ends`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_prompt_queued_behind_a_command_is_sent_once_the_command_has_run`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_queued_command_is_not_what_the_turn_took`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_queued_command_comes_back_to_the_box`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::copy_typed_mid_turn_takes_the_reply_without_waiting`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_typed_text_command_copies_a_reply_as_the_screen_shows_it_and_counts_back_as_copy_does`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_typed_text_command_copies_what_the_menu_item_copies`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_typed_text_command_refuses_what_it_cannot_take_and_copies_nothing`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_typed_text_command_takes_the_reply_without_waiting_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::mouse_controls::tab_finishes_text_after_the_copy_command`
 `verified-by: bravebot_tui::app::tests::menu::copy_as_text_and_the_typed_command_put_the_same_words_on_the_clipboard`
 `verified-by: bravebot_tui::render::each_command_row_says_whether_it_runs_now_or_waits_while_a_turn_runs`
 `verified-by: bravebot_tui::render::every_command_row_reads_the_label_the_spec_table_gives_it`
 `verified-by: bravebot_tui::render::every_row_is_queued_during_an_aside`
-`verified-by: bravebot_tui::app::btw_typed_mid_turn_goes_out_beside_the_turn_and_is_not_queued`
-`verified-by: bravebot_tui::app::btw_typed_before_the_first_request_says_there_is_nothing_to_read`
-`verified-by: bravebot_tui::app::the_published_exchange_is_kept_and_dropped_when_the_next_turn_begins`
-`verified-by: bravebot_tui::app::a_second_btw_beside_a_turn_is_refused`
-`verified-by: bravebot_tui::app::btw_with_a_dropped_file_beside_a_turn_is_refused`
-`verified-by: bravebot_tui::app::btw_typed_mid_turn_is_asked_at_once_with_a_prompt_waiting`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::btw_typed_mid_turn_goes_out_beside_the_turn_and_is_not_queued`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::btw_typed_before_the_first_request_says_there_is_nothing_to_read`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::the_published_exchange_is_kept_and_dropped_when_the_next_turn_begins`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_second_btw_beside_a_turn_is_refused`
+`verified-by: bravebot_tui::app::tests::commands_words::btw_with_a_dropped_file_beside_a_turn_is_refused`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::btw_typed_mid_turn_is_asked_at_once_with_a_prompt_waiting`
 `verified-by: bravebot_agent::aside::a_fork_shares_the_stored_messages_instead_of_copying_them`
 `verified-by: bravebot_agent::aside::a_question_shares_the_stored_messages_instead_of_copying_them`
-`verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_btw_asked_mid_turn`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_stopped_prompt_comes_back_after_a_btw_asked_mid_turn`
 `verified-by: bravebot_tui::app::tests::waiting_commands::ctrl_enter_on_a_waiting_command_stops_the_turn_and_carries_the_command_out`
 `verified-by: bravebot_tui::app::tests::waiting_commands::exit_typed_mid_turn_waits_for_the_turn_and_does_not_stop_it`
 `verified-by: bravebot_tui::app::tests::waiting_commands::a_file_the_open_command_numbers_is_refused_while_a_turn_runs_and_not_queued`
 `verified-by: bravebot_tui::app::tests::waiting_commands::a_btw_typed_behind_a_waiting_btw_waits_behind_it`
-`verified-by: bravebot_tui::app::stopping_the_turn_stops_the_question_beside_it`
-`verified-by: bravebot_tui::app::a_question_still_out_when_the_turn_is_stopped_is_stopped`
-`verified-by: bravebot_tui::app::a_question_still_out_when_the_turn_ends_by_itself_stays_out`
-`verified-by: bravebot_tui::app::a_btw_answered_after_the_turn_ended_is_a_row_and_a_line_and_leaves_the_view`
-`verified-by: bravebot_tui::app::a_btw_that_failed_after_the_turn_ended_says_why`
-`verified-by: bravebot_tui::app::settling_with_no_question_out_does_nothing`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::stopping_the_turn_stops_the_question_beside_it`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_question_still_out_when_the_turn_is_stopped_is_stopped`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_question_still_out_when_the_turn_ends_by_itself_stays_out`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_btw_answered_after_the_turn_ended_is_a_row_and_a_line_and_leaves_the_view`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_btw_that_failed_after_the_turn_ended_says_why`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::settling_with_no_question_out_does_nothing`
 `verified-by: bravebot_tui::state::clearing_stops_and_drops_a_question_still_out`
 `verified-by: bravebot_agent::turn::the_exchange_is_forked_once_per_parent_request_and_never_for_a_delegate`
 `verified-by: bravebot_agent::turn::a_question_over_a_published_exchange_holds_the_prompt_and_ends_with_the_question`
 `verified-by: bravebot_tui::render::a_row_reads_queued_while_a_line_of_its_command_waits`
 `verified-by: bravebot_tui::render::the_rows_carry_no_label_when_nothing_is_running`
-`verified-by: bravebot_tui::app::enter_completes_a_half_typed_command_instead_of_queueing_it_while_a_turn_runs`
-`verified-by: bravebot_tui::app::a_whole_command_is_still_carried_out_or_queued_while_a_turn_runs`
-`verified-by: bravebot_tui::app::mid_turn_schedule_reads_are_answered_and_every_other_form_waits`
-`verified-by: bravebot_tui::app::a_schedule_read_waits_behind_a_schedule_write_typed_before_it`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::enter_completes_a_half_typed_command_instead_of_queueing_it_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_whole_command_is_still_carried_out_or_queued_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::mid_turn_schedule_reads_are_answered_and_every_other_form_waits`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_schedule_read_waits_behind_a_schedule_write_typed_before_it`
 `verified-by: bravebot_schedule::words::only_the_three_readers_and_the_bare_word_are_carried_out_while_a_turn_runs`
-`verified-by: bravebot_tui::app::every_schedule_subcommand_reaches_the_shared_function_as_words_and_answers_in_a_note`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::every_schedule_subcommand_reaches_the_shared_function_as_words_and_answers_in_a_note`
 `verified-by: bravebot_ui_bridge::reports_tests::the_status_report_leaves_out_the_rules_a_running_turn_holds`
 `verified-by: by-construction (the desktop window is not a crate this workspace compiles, so ui/scripts/commands.test.mjs asserts that Chat › Session Status… is offered on an open chat during a turn and after it and is routed to its own action, and ui/scripts/reports.test.mjs that the status says the rules are held by the running turn when the bridge sets rulesHeldByTurn and lists them otherwise; make check-ui runs both)`
 `verified-by: bravebot_ui_bridge::asking_aside::a_btw_at_rest_is_answered_over_the_exchange_with_no_tools`
@@ -926,15 +926,15 @@ Reading the skills once a line, rather than once a session or once a key, is bec
 reads directories: once a session would go on offering a skill that was deleted, and once a key
 would read them on every letter.
 
-`verified-by: bravebot_tui::app::a_slash_offers_the_skills_after_the_commands`
-`verified-by: bravebot_tui::app::a_skill_is_completed_mid_sentence_and_sent_as_a_prompt`
-`verified-by: bravebot_tui::app::enter_completes_a_half_typed_skill_and_sends_a_whole_one`
-`verified-by: bravebot_tui::app::the_arrows_walk_from_the_commands_onto_the_skills`
-`verified-by: bravebot_tui::app::enter_takes_a_skill_row_the_arrows_moved_onto_instead_of_the_typed_command`
-`verified-by: bravebot_tui::app::a_command_word_typed_in_full_still_offers_the_skills_extending_it`
-`verified-by: bravebot_tui::app::the_skills_are_resolved_once_a_line_and_let_go_after_it`
-`verified-by: bravebot_tui::app::no_skill_is_offered_in_a_command_line_or_inside_a_command`
-`verified-by: bravebot_tui::app::a_slash_offers_every_command_and_no_skill_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::commands_other::a_slash_offers_the_skills_after_the_commands`
+`verified-by: bravebot_tui::app::tests::commands_other::a_skill_is_completed_mid_sentence_and_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_other::enter_completes_a_half_typed_skill_and_sends_a_whole_one`
+`verified-by: bravebot_tui::app::tests::commands_other::the_arrows_walk_from_the_commands_onto_the_skills`
+`verified-by: bravebot_tui::app::tests::commands_other::enter_takes_a_skill_row_the_arrows_moved_onto_instead_of_the_typed_command`
+`verified-by: bravebot_tui::app::tests::commands_other::a_command_word_typed_in_full_still_offers_the_skills_extending_it`
+`verified-by: bravebot_tui::app::tests::commands_other::the_skills_are_resolved_once_a_line_and_let_go_after_it`
+`verified-by: bravebot_tui::app::tests::commands_other::no_skill_is_offered_in_a_command_line_or_inside_a_command`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_slash_offers_every_command_and_no_skill_while_a_turn_runs`
 `verified-by: bravebot_tui::skills::the_word_being_typed_is_the_last_one_on_the_line`
 `verified-by: bravebot_tui::skills::nothing_is_offered_inside_a_command_line`
 `verified-by: bravebot_tui::skills::what_matches_is_every_name_starting_with_the_word_in_name_order`
@@ -982,7 +982,7 @@ and `--help` lists `/model [session]`.
 `verified-by: bravebot_tui::render::a_turn_running_draws_no_skill_as_recognised`
 `verified-by: bravebot_tui::render::a_hint_is_cut_to_the_row_and_holds_no_escape`
 `verified-by: bravebot_tui::command_table::typing_model_and_a_space_offers_the_session_word`
-`verified-by: bravebot_tui::app::the_skills_are_resolved_once_a_line_and_let_go_after_it`
+`verified-by: bravebot_tui::app::tests::commands_other::the_skills_are_resolved_once_a_line_and_let_go_after_it`
 
 ## Copying a reply
 
@@ -1043,24 +1043,24 @@ planner never read it. A reply is planner output released for display
 ([terminal-transcript.md](terminal-transcript.md#VIEW-6)), which a sweep could already copy off the
 screen and `/export` already writes to a file.
 
-`verified-by: bravebot_tui::app::typing_the_copy_command_copies_the_latest_reply_rather_than_prompting`
-`verified-by: bravebot_tui::app::copy_takes_how_many_replies_back`
-`verified-by: bravebot_tui::app::copy_counts_only_the_replies`
-`verified-by: bravebot_tui::app::a_blank_reply_is_not_one_to_copy`
-`verified-by: bravebot_tui::app::copy_refuses_what_it_cannot_take_and_copies_nothing`
-`verified-by: bravebot_tui::app::a_copied_reply_carries_no_control_character_but_its_breaks_and_tabs`
-`verified-by: bravebot_tui::app::a_copy_says_how_much_it_took_and_a_failed_one_says_so`
-`verified-by: bravebot_tui::app::a_typed_block_command_copies_the_words_the_click_on_that_block_copies`
-`verified-by: bravebot_tui::app::a_typed_block_command_counts_blocks_back_through_the_replies`
-`verified-by: bravebot_tui::app::a_typed_block_command_refuses_what_it_cannot_take_and_copies_nothing`
-`verified-by: bravebot_tui::app::a_typed_block_command_runs_mid_turn_and_counts_the_blocks_that_have_a_word`
-`verified-by: bravebot_tui::app::tab_finishes_block_after_the_copy_command_and_leaves_a_number_alone`
-`verified-by: bravebot_tui::app::the_copy_command_names_block_and_keeps_the_words_after_it`
+`verified-by: bravebot_tui::app::tests::commands_words::typing_the_copy_command_copies_the_latest_reply_rather_than_prompting`
+`verified-by: bravebot_tui::app::tests::commands_other::copy_takes_how_many_replies_back`
+`verified-by: bravebot_tui::app::tests::commands_other::copy_counts_only_the_replies`
+`verified-by: bravebot_tui::app::tests::commands_other::a_blank_reply_is_not_one_to_copy`
+`verified-by: bravebot_tui::app::tests::commands_other::copy_refuses_what_it_cannot_take_and_copies_nothing`
+`verified-by: bravebot_tui::app::tests::commands_other::a_copied_reply_carries_no_control_character_but_its_breaks_and_tabs`
+`verified-by: bravebot_tui::app::tests::commands_other::a_copy_says_how_much_it_took_and_a_failed_one_says_so`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_typed_block_command_copies_the_words_the_click_on_that_block_copies`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_typed_block_command_counts_blocks_back_through_the_replies`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_typed_block_command_refuses_what_it_cannot_take_and_copies_nothing`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_typed_block_command_runs_mid_turn_and_counts_the_blocks_that_have_a_word`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::tab_finishes_block_after_the_copy_command_and_leaves_a_number_alone`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::the_copy_command_names_block_and_keeps_the_words_after_it`
 `verified-by: bravebot_tui::markdown::a_block_with_nothing_between_its_fences_is_not_one_to_copy`
-`verified-by: bravebot_tui::app::a_copy_takes_down_what_an_earlier_sweep_left_up`
-`verified-by: bravebot_tui::app::a_copys_count_is_taken_down_by_the_next_prompt`
-`verified-by: bravebot_tui::app::copy_reaches_the_replies_a_resumed_session_brought_back`
-`verified-by: bravebot_tui::app::copy_typed_mid_turn_takes_the_reply_without_waiting`
+`verified-by: bravebot_tui::app::tests::commands_other::a_copy_takes_down_what_an_earlier_sweep_left_up`
+`verified-by: bravebot_tui::app::tests::commands_other::a_copys_count_is_taken_down_by_the_next_prompt`
+`verified-by: bravebot_tui::app::tests::commands_other::copy_reaches_the_replies_a_resumed_session_brought_back`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::copy_typed_mid_turn_takes_the_reply_without_waiting`
 
 ## Keeping the machine awake
 
@@ -1126,7 +1126,7 @@ did not write ([sandboxing.md](sandboxing.md)).
 `verified-by: bravebot_tui::state::a_turn_holds_the_machine_awake_until_it_ends`
 `verified-by: bravebot_tui::state::a_missing_inhibitor_is_said_and_turns_caffeinate_off`
 `verified-by: bravebot_tui::state::the_first_caffeinate_says_what_it_does_and_holds_nothing`
-`verified-by: bravebot_tui::app::the_caffeinate_command_explains_before_it_turns_on`
+`verified-by: bravebot_tui::app::tests::commands_other::the_caffeinate_command_explains_before_it_turns_on`
 `verified-by: bravebot_tui::caffeinate::an_idle_session_holds_nothing_while_caffeinate_is_on`
 `verified-by: bravebot_tui::caffeinate::pending_work_is_held_and_released_once_it_is_done`
 `verified-by: bravebot_tui::caffeinate::caffeinate_off_holds_nothing_and_turning_it_off_releases`
@@ -1169,8 +1169,8 @@ untrusted content, and the planner never has those bytes ([AGENTS.md](../../agen
 the only footing it has there is what the person says. Refusing on the name keeps `/init` from
 offering a write over a file somebody wrote, and keeps the check from depending on content.
 
-`verified-by: bravebot_tui::app::the_init_command_starts_a_turn_with_the_drivers_own_prompt`
-`verified-by: bravebot_tui::app::the_init_command_starts_no_turn_where_agents_md_exists`
+`verified-by: bravebot_tui::app::tests::commands_other::the_init_command_starts_a_turn_with_the_drivers_own_prompt`
+`verified-by: bravebot_tui::app::tests::commands_other::the_init_command_starts_no_turn_where_agents_md_exists`
 `verified-by: bravebot_tui::init_command::a_file_of_the_name_is_there_whatever_it_holds`
 `verified-by: bravebot_tui::init_command::a_link_with_no_target_is_there`
 `verified-by: bravebot_tui::init_command::the_prompt_names_no_path_for_the_person_to_vouch_for`
@@ -1221,11 +1221,11 @@ planner could act on would be the driver branching on processor output, which th
 the exceptions in [labels.md](labels.md) that read a processor's or a check's answer and which needs the maintainers' agreement
 before it is built. This command is the part that needs none of that.
 
-`verified-by: bravebot_tui::app::the_review_command_starts_a_turn_with_the_drivers_own_prompt`
-`verified-by: bravebot_tui::app::the_review_command_starts_no_turn_for_a_target_it_cannot_use`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_review_command_or_a_longer_word_is_still_a_prompt`
-`verified-by: bravebot_tui::app::the_review_command_waits_for_a_running_turn`
-`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::app::tests::commands_other::the_review_command_starts_a_turn_with_the_drivers_own_prompt`
+`verified-by: bravebot_tui::app::tests::commands_other::the_review_command_starts_no_turn_for_a_target_it_cannot_use`
+`verified-by: bravebot_tui::app::tests::commands_other::a_prompt_containing_the_review_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_other::the_review_command_waits_for_a_running_turn`
+`verified-by: bravebot_tui::app::tests::commands_words::every_command_in_the_table_dispatches`
 `verified-by: bravebot_tui::review_command::a_bare_command_reviews_the_uncommitted_changes`
 `verified-by: bravebot_tui::review_command::each_reserved_word_names_its_target`
 `verified-by: bravebot_tui::review_command::words_after_the_target_are_the_focus`
@@ -1264,15 +1264,15 @@ another session. Typed during a turn it waits for the turn to end (CMD-8).
 route into them would restore a different set. Choosing a record reads none of its content to
 decide, so the command only says which one the person meant.
 
-`verified-by: bravebot_tui::app::the_resume_command_carries_its_id_and_is_never_a_prompt`
-`verified-by: bravebot_tui::app::the_resume_command_waits_for_the_turn_in_flight`
+`verified-by: bravebot_tui::app::tests::commands_other::the_resume_command_carries_its_id_and_is_never_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::the_resume_command_waits_for_the_turn_in_flight`
 `verified-by: bravebot_tui::sessions::resume_by_id_reads_the_record_named_and_refuses_what_it_cannot_continue`
 `verified-by: bravebot_tui::sessions::resume_refuses_a_record_a_running_background_session_holds`
 `verified-by: bravebot_tui::sessions::resume_by_id_does_not_follow_an_id_out_of_the_sessions_directory`
-`verified-by: bravebot_tui::app::resuming_ends_the_session_and_leaves_its_record_resumable`
-`verified-by: bravebot_tui::app::resume_where_the_directory_holds_no_other_session_stays_and_does_not_echo_the_id`
-`verified-by: bravebot_tui::app::resuming_ends_the_loop_the_goal_the_watches_and_the_checkouts_the_session_kept`
-`verified-by: bravebot_tui::app::typing_resume_with_an_id_leaves_the_loop_with_the_record_chosen`
+`verified-by: bravebot_tui::app::tests::commands_other::resuming_ends_the_session_and_leaves_its_record_resumable`
+`verified-by: bravebot_tui::app::tests::commands_other::resume_where_the_directory_holds_no_other_session_stays_and_does_not_echo_the_id`
+`verified-by: bravebot_tui::app::tests::commands_other::resuming_ends_the_loop_the_goal_the_watches_and_the_checkouts_the_session_kept`
+`verified-by: bravebot_tui::app::tests::commands_other::typing_resume_with_an_id_leaves_the_loop_with_the_record_chosen`
 `verified-by: bravebot_tui::sessions_screen_tests::a_bare_resume_lists_the_other_sessions_beside_the_current_one_and_keeps_the_session`
 
 <a id="CMD-15"></a>
@@ -1293,9 +1293,9 @@ offered and answered while a turn runs. Before any turn has sent a request the d
 **Why.** The view answers what the planner was just sent, which is most worth asking while a turn is
 running.
 
-`verified-by: bravebot_tui::app::the_request_command_opens_the_view_and_starts_no_turn`
-`verified-by: bravebot_tui::app::words_after_the_request_command_make_a_prompt`
-`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::tests::commands_other::the_request_command_opens_the_view_and_starts_no_turn`
+`verified-by: bravebot_tui::app::tests::commands_other::words_after_the_request_command_make_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 `verified-by: bravebot_tui::remote_confirm::the_request_a_turn_built_travels_to_the_thread_that_draws_it`
 `verified-by: bravebot_ui_bridge::reports_tests::the_request_report_is_none_before_a_turn`
 `verified-by: bravebot_ui_bridge::reports_tests::the_reports_are_answered_while_a_turn_holds_the_session`
@@ -1325,9 +1325,9 @@ own for a person who has been away is the terminal's alone (CMD-20).
 transcript back to find out is the cost the command removes. Sending it as a prompt would put the
 question and the account into the conversation the planner reads for the rest of the session.
 
-`verified-by: bravebot_tui::app::the_recap_command_is_a_recap_and_not_a_prompt`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_recap_command_or_a_longer_word_is_still_a_prompt`
-`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::app::tests::commands_other::the_recap_command_is_a_recap_and_not_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_other::a_prompt_containing_the_recap_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::every_command_in_the_table_dispatches`
 `verified-by: bravebot_agent::turn::a_recap_is_cut_to_its_limit_and_leaves_the_conversation_alone`
 `verified-by: bravebot_agent::aside::a_recap_longer_than_the_limit_is_cut_to_it`
 `verified-by: bravebot_agent::aside::a_recap_within_the_limit_is_not_cut`
@@ -1408,17 +1408,17 @@ the person saw. Refusing a body that opens with a command, and not looking the n
 directory listing, keep CMD-1 and CMD-7 whole. The `model` name only moves a cursor, so no model is
 put in force by a file, and `!` commands and `@` includes are not read from a file.
 
-`verified-by: bravebot_tui::app::a_prompt_file_expands_into_the_box_and_is_sent_by_the_next_enter`
-`verified-by: bravebot_tui::app::a_slash_word_with_no_file_is_sent_as_typed`
-`verified-by: bravebot_tui::app::a_file_named_for_a_command_does_not_replace_it`
-`verified-by: bravebot_tui::app::a_prompt_file_that_cannot_be_used_is_said_and_not_sent`
-`verified-by: bravebot_tui::app::a_prompt_file_is_not_expanded_in_shell_mode`
-`verified-by: bravebot_tui::app::enter_on_a_highlighted_row_takes_the_row_not_a_file`
-`verified-by: bravebot_tui::app::a_prompt_file_expands_while_a_turn_is_running_before_it_is_queued`
-`verified-by: bravebot_tui::app::a_prompt_file_naming_a_model_fills_the_box_and_asks_for_the_picker`
-`verified-by: bravebot_tui::app::a_prompt_file_naming_a_model_opens_no_picker_under_a_definition_that_names_one`
-`verified-by: bravebot_tui::app::a_prompt_file_naming_a_model_asks_for_the_picker_while_a_turn_is_running`
-`verified-by: bravebot_tui::app::escape_on_the_picker_a_prompt_file_opened_leaves_the_model_and_the_text`
+`verified-by: bravebot_tui::app::tests::commands_other::a_prompt_file_expands_into_the_box_and_is_sent_by_the_next_enter`
+`verified-by: bravebot_tui::app::tests::commands_other::a_slash_word_with_no_file_is_sent_as_typed`
+`verified-by: bravebot_tui::app::tests::commands_other::a_file_named_for_a_command_does_not_replace_it`
+`verified-by: bravebot_tui::app::tests::commands_other::a_prompt_file_that_cannot_be_used_is_said_and_not_sent`
+`verified-by: bravebot_tui::app::tests::commands_other::a_prompt_file_is_not_expanded_in_shell_mode`
+`verified-by: bravebot_tui::app::tests::commands_other::enter_on_a_highlighted_row_takes_the_row_not_a_file`
+`verified-by: bravebot_tui::app::tests::commands_other::a_prompt_file_expands_while_a_turn_is_running_before_it_is_queued`
+`verified-by: bravebot_tui::app::tests::commands_other::a_prompt_file_naming_a_model_fills_the_box_and_asks_for_the_picker`
+`verified-by: bravebot_tui::app::tests::commands_other::a_prompt_file_naming_a_model_opens_no_picker_under_a_definition_that_names_one`
+`verified-by: bravebot_tui::app::tests::commands_other::a_prompt_file_naming_a_model_asks_for_the_picker_while_a_turn_is_running`
+`verified-by: bravebot_tui::app::tests::commands_other::escape_on_the_picker_a_prompt_file_opened_leaves_the_model_and_the_text`
 `verified-by: bravebot_tui::model_prompt::a_picker_opened_for_a_named_model_puts_the_cursor_on_it_when_the_rows_arrive`
 `verified-by: bravebot_tui::model_prompt::a_named_model_the_list_lacks_is_said_and_the_cursor_stays_on_the_one_in_use`
 `verified-by: bravebot_tui::prompt_files::a_model_in_the_front_matter_is_named_beside_the_body`
@@ -1434,16 +1434,16 @@ put in force by a file, and `!` commands and `@` includes are not read from a fi
 `verified-by: bravebot_tui::prompt_files::a_body_that_opens_with_a_command_is_refused`
 `verified-by: bravebot_tui::prompt_files::a_file_that_cannot_be_used_is_refused_rather_than_ignored`
 `verified-by: bravebot_tui::command_table::model_takes_exactly_the_word_session_and_nothing_else`
-`verified-by: bravebot_tui::app::model_session_asks_for_the_picker_in_the_this_session_scope`
-`verified-by: bravebot_tui::app::the_bare_model_command_opens_the_picker_and_marks_nothing`
-`verified-by: bravebot_tui::app::a_model_taken_in_the_this_session_scope_is_not_recorded`
-`verified-by: bravebot_tui::app::a_model_taken_in_the_every_session_scope_is_recorded`
-`verified-by: bravebot_tui::app::model_session_under_a_definition_naming_a_model_is_refused_as_model_is`
-`verified-by: bravebot_tui::app::an_incognito_session_takes_a_session_only_pick_and_writes_nothing`
-`verified-by: bravebot_tui::app::a_prompt_file_naming_a_model_opens_the_picker_in_the_every_session_scope`
-`verified-by: bravebot_tui::app::a_resume_after_a_session_only_pick_opens_on_the_recorded_pick`
-`verified-by: bravebot_tui::app::a_branch_keeps_a_session_only_pick_and_records_it_nowhere`
-`verified-by: bravebot_tui::app::a_session_only_pick_survives_a_clear_and_a_handoff`
+`verified-by: bravebot_tui::app::tests::commands_other::model_session_asks_for_the_picker_in_the_this_session_scope`
+`verified-by: bravebot_tui::app::tests::commands_other::the_bare_model_command_opens_the_picker_and_marks_nothing`
+`verified-by: bravebot_tui::app::tests::commands_other::a_model_taken_in_the_this_session_scope_is_not_recorded`
+`verified-by: bravebot_tui::app::tests::commands_other::a_model_taken_in_the_every_session_scope_is_recorded`
+`verified-by: bravebot_tui::app::tests::commands_other::model_session_under_a_definition_naming_a_model_is_refused_as_model_is`
+`verified-by: bravebot_tui::app::tests::commands_other::an_incognito_session_takes_a_session_only_pick_and_writes_nothing`
+`verified-by: bravebot_tui::app::tests::commands_other::a_prompt_file_naming_a_model_opens_the_picker_in_the_every_session_scope`
+`verified-by: bravebot_tui::app::tests::backends_models::a_resume_after_a_session_only_pick_opens_on_the_recorded_pick`
+`verified-by: bravebot_tui::app::tests::commands_other::a_branch_keeps_a_session_only_pick_and_records_it_nowhere`
+`verified-by: bravebot_tui::app::tests::commands_other::a_session_only_pick_survives_a_clear_and_a_handoff`
 
 <a id="CMD-19"></a>
 ### CMD-19: `/context` divides the measured count of the last request into fixed sections
@@ -1475,11 +1475,11 @@ same function, and each empty state is named in words, as here.
 results fill the window, and so whether to compact, clear or trim what is loaded. Every input here is
 a length the driver already holds, so nothing branches on untrusted content.
 
-`verified-by: bravebot_tui::app::the_context_command_divides_the_measured_total_by_section`
-`verified-by: bravebot_tui::app::the_context_command_says_when_nothing_has_been_measured`
-`verified-by: bravebot_tui::app::the_context_command_does_not_describe_a_conversation_it_has_no_request_for`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_context_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::tests::commands_other::the_context_command_divides_the_measured_total_by_section`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::the_context_command_says_when_nothing_has_been_measured`
+`verified-by: bravebot_tui::app::tests::commands_other::the_context_command_does_not_describe_a_conversation_it_has_no_request_for`
+`verified-by: bravebot_tui::app::tests::commands_other::a_prompt_containing_the_context_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 `verified-by: bravebot_agent::request_view::a_count_is_apportioned_in_whole_numbers_that_add_up_to_it`
 `verified-by: bravebot_agent::request_view::each_span_is_counted_in_the_section_its_role_and_provenance_name`
 `verified-by: bravebot_agent::request_view::a_section_with_nothing_in_it_is_left_out`
@@ -1522,12 +1522,12 @@ least likely to remember what it was doing, and the first thing they would do is
 `verified-by: bravebot_tui::away::a_recap_is_not_made_twice_in_a_row`
 `verified-by: bravebot_tui::away::a_recap_is_not_made_where_the_setting_turned_it_off`
 `verified-by: bravebot_tui::away::a_session_with_no_completed_turn_owes_nothing`
-`verified-by: bravebot_tui::app::leaving_the_terminal_after_a_completed_turn_makes_a_recap_due`
+`verified-by: bravebot_tui::app::tests::commands_other::leaving_the_terminal_after_a_completed_turn_makes_a_recap_due`
 `verified-by: bravebot_config::settings::only_a_boolean_turns_the_away_recap_off`
 `verified-by: bravebot_config::settings::the_away_recap_switch_is_among_the_names_reported`
 `verified-by: bravebot_config::settings::a_settings_file_names_how_long_before_the_away_recap`
 `verified-by: bravebot_config::settings::a_checkout_may_turn_the_away_recap_off_and_not_on`
-`verified-by: bravebot_tui::app::a_checkouts_away_recap_does_not_turn_the_recap_on`
+`verified-by: bravebot_tui::app::tests::commands_other::a_checkouts_away_recap_does_not_turn_the_recap_on`
 
 <a id="CMD-21"></a>
 ### CMD-21: `/effort` spells out `session` and its levels after the word, and Tab finishes one
@@ -1567,17 +1567,17 @@ refusal for an unknown word in step.
 `verified-by: bravebot_tui::render::the_effort_command_offers_its_levels_after_its_word`
 `verified-by: bravebot_tui::render::after_effort_session_the_box_draws_the_levels_alone`
 `verified-by: bravebot_tui::render::the_effort_hint_with_session_in_it_fits_eighty_columns_and_is_cut_below_that`
-`verified-by: bravebot_tui::app::the_effort_hint_lists_every_level_and_the_list_stays_short`
+`verified-by: bravebot_tui::app::tests::commands_effort::the_effort_hint_lists_every_level_and_the_list_stays_short`
 `verified-by: bravebot_tui::command_table::typing_effort_and_a_space_offers_the_session_word_and_the_levels`
 `verified-by: bravebot_tui::command_table::a_start_fitting_session_and_a_level_is_carried_as_far_as_they_agree`
 `verified-by: bravebot_tui::command_table::the_effort_hints_and_tab_and_the_levels_the_command_accepts_are_one_set`
 `verified-by: bravebot_tui::command_table::the_effort_and_sandbox_hints_and_completions_offer_the_same_words`
 `verified-by: bravebot_cli::running::help_lists_the_effort_command_with_the_session_word_and_the_levels`
 `verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
-`verified-by: bravebot_tui::app::tab_finishes_a_level_started_after_the_effort_command`
-`verified-by: bravebot_tui::app::tab_leaves_alone_a_start_it_cannot_finish`
-`verified-by: bravebot_tui::app::tab_leaves_a_shell_line_alone`
-`verified-by: bravebot_tui::app::tab_leaves_a_line_alone_while_the_caret_is_not_at_its_end`
+`verified-by: bravebot_tui::app::tests::commands_effort::tab_finishes_a_level_started_after_the_effort_command`
+`verified-by: bravebot_tui::app::tests::commands_effort::tab_leaves_alone_a_start_it_cannot_finish`
+`verified-by: bravebot_tui::app::tests::commands_effort::tab_leaves_a_shell_line_alone`
+`verified-by: bravebot_tui::app::tests::commands_effort::tab_leaves_a_line_alone_while_the_caret_is_not_at_its_end`
 
 <a id="CMD-22"></a>
 ### CMD-22: `/sandbox`, `/limit`, `/review`, `/reach`, `/mcp` and `/schedule` spell out what they take after the word
@@ -1611,9 +1611,9 @@ apart from the parser drifts from it.
 `verified-by: bravebot_tui::render::the_sandbox_command_offers_its_modes_after_its_word`
 `verified-by: bravebot_tui::render::the_mcp_command_offers_its_subcommands_after_its_word`
 `verified-by: bravebot_tui::render::every_slash_row_shows_its_whole_description_at_120_columns`
-`verified-by: bravebot_tui::app::the_sandbox_hint_lists_every_mode_and_the_list_stays_short`
-`verified-by: bravebot_tui::app::the_limit_review_and_reach_hints_show_forms_their_parsers_take`
-`verified-by: bravebot_tui::app::tab_finishes_a_mode_started_after_the_sandbox_command`
+`verified-by: bravebot_tui::app::tests::commands_effort::the_sandbox_hint_lists_every_mode_and_the_list_stays_short`
+`verified-by: bravebot_tui::app::tests::commands_effort::the_limit_review_and_reach_hints_show_forms_their_parsers_take`
+`verified-by: bravebot_tui::app::tests::commands_effort::tab_finishes_a_mode_started_after_the_sandbox_command`
 `verified-by: bravebot_tui::command_table::tab_completes_the_schedule_subcommands`
 
 <a id="CMD-23"></a>
@@ -1675,15 +1675,15 @@ diff of vouched paths is refused where the planner's own read would ask, because
 prompt to agree.
 
 `verified-by: bravebot_agent::commit_message::a_range_is_two_written_out_revisions`
-`verified-by: bravebot_tui::app::the_commit_message_command_carries_its_source_and_is_not_sent_as_a_prompt`
-`verified-by: bravebot_tui::app::the_commit_message_command_starts_no_request_for_a_range_it_cannot_use`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_commit_message_command_or_a_longer_word_is_still_a_prompt`
-`verified-by: bravebot_tui::app::the_commit_message_command_waits_for_a_running_turn`
-`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
-`verified-by: bravebot_tui::app::a_draft_that_spells_a_command_is_sent_as_a_prompt_and_not_carried_out`
-`verified-by: bravebot_tui::app::a_draft_has_the_characters_a_terminal_draws_as_nothing_taken_out`
-`verified-by: bravebot_tui::app::a_draft_arriving_over_typed_text_keeps_the_text_as_a_draft`
-`verified-by: bravebot_tui::app::a_stopped_or_failed_draft_leaves_the_box_alone`
+`verified-by: bravebot_tui::app::tests::commands_other::the_commit_message_command_carries_its_source_and_is_not_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_other::the_commit_message_command_starts_no_request_for_a_range_it_cannot_use`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_commit_message_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::the_commit_message_command_waits_for_a_running_turn`
+`verified-by: bravebot_tui::app::tests::commands_words::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::app::tests::commands_other::a_draft_that_spells_a_command_is_sent_as_a_prompt_and_not_carried_out`
+`verified-by: bravebot_tui::app::tests::commands_other::a_draft_has_the_characters_a_terminal_draws_as_nothing_taken_out`
+`verified-by: bravebot_tui::app::tests::commands_other::a_draft_arriving_over_typed_text_keeps_the_text_as_a_draft`
+`verified-by: bravebot_tui::app::tests::commands_other::a_stopped_or_failed_draft_leaves_the_box_alone`
 `verified-by: bravebot_tui::commit_message_command::a_bare_command_drafts_from_the_staged_changes`
 `verified-by: bravebot_tui::commit_message_command::a_range_names_its_source_and_the_rest_is_the_format`
 `verified-by: bravebot_tui::commit_message_command::a_flag_only_counts_as_the_first_word`
@@ -1698,7 +1698,7 @@ prompt to agree.
 `verified-by: bravebot_agent::commit_message::a_diff_holding_a_credential_is_not_sent`
 `verified-by: bravebot_agent::commit_message::an_answer_with_no_marker_is_no_draft`
 `verified-by: bravebot_agent::commit_message::an_unvouched_diff_gives_no_draft_and_no_request_whatever_its_text_holds`
-`verified-by: bravebot_tui::app::an_answer_with_no_message_leaves_the_box_alone_and_says_no_draft_was_written`
+`verified-by: bravebot_tui::app::tests::commands_other::an_answer_with_no_message_leaves_the_box_alone_and_says_no_draft_was_written`
 
 ## Answering from what this program carries
 
@@ -1731,16 +1731,16 @@ skill in the prompt, so the question is answered from the documentation of the r
 whatever the wording. The question goes into the driver's sentence and not the other way round, so
 the typed line itself is never sent (CMD-4).
 
-`verified-by: bravebot_tui::app::the_help_command_starts_a_turn_with_the_drivers_own_prompt_around_the_question`
-`verified-by: bravebot_tui::app::the_help_command_with_no_question_says_what_it_takes_and_starts_no_turn`
-`verified-by: bravebot_tui::app::a_help_question_typed_while_a_turn_runs_waits_and_then_starts_its_own_turn`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_help_command_or_a_longer_word_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_help_turn_is_the_drivers_prompt_and_is_offered_no_later_look`
-`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
-`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::app::tests::commands_other::the_help_command_starts_a_turn_with_the_drivers_own_prompt_around_the_question`
+`verified-by: bravebot_tui::app::tests::commands_other::the_help_command_with_no_question_says_what_it_takes_and_starts_no_turn`
+`verified-by: bravebot_tui::app::tests::commands_other::a_help_question_typed_while_a_turn_runs_waits_and_then_starts_its_own_turn`
+`verified-by: bravebot_tui::app::tests::commands_other::a_prompt_containing_the_help_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_other::a_help_turn_is_the_drivers_prompt_and_is_offered_no_later_look`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::tests::commands_words::every_command_in_the_table_dispatches`
 `verified-by: bravebot_tui::help_command::the_prompt_names_the_help_skill_and_carries_the_question_as_typed`
 `verified-by: bravebot_tui::help_command::the_prompt_names_no_path_for_the_person_to_vouch_for`
-`verified-by: bravebot_tui::app::a_help_questions_file_names_are_the_persons_while_its_prompt_is_the_drivers`
+`verified-by: bravebot_tui::app::tests::commands_other::a_help_questions_file_names_are_the_persons_while_its_prompt_is_the_drivers`
 
 <a id="CMD-25"></a>
 ### CMD-25: `/changelog` shows the release notes this program carries, and starts no turn
@@ -1767,9 +1767,9 @@ newest release's rather than the running version's.
 runs is what a person asking has in mind. The text is carried in the program, so the notes match
 the build with no network and no checkout, and a model is not needed to read out a file.
 
-`verified-by: bravebot_tui::app::the_changelog_command_shows_notes_and_starts_no_turn`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_changelog_command_or_a_longer_word_is_still_a_prompt`
-`verified-by: bravebot_tui::app::the_changelog_command_is_carried_out_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::commands_other::the_changelog_command_shows_notes_and_starts_no_turn`
+`verified-by: bravebot_tui::app::tests::commands_other::a_prompt_containing_the_changelog_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_other::the_changelog_command_is_carried_out_while_a_turn_runs`
 `verified-by: bravebot_tui::state::the_changelog_is_headed_by_the_running_version_and_has_its_links_written_as_text`
 `verified-by: bravebot_tui::state::the_changelog_of_a_build_with_no_notes_of_its_own_says_whose_notes_it_shows`
 `verified-by: bravebot_tui::state::a_changelog_with_no_release_says_so`
@@ -1830,17 +1830,17 @@ and nothing else. It does not vouch for what the server says, which reaches the 
 reference and never as text. A prompt that was a command would have a path that carries a server's
 word into a dispatch that decides something.
 
-`verified-by: bravebot_tui::app::a_servers_prompt_is_offered_at_the_start_of_a_line`
-`verified-by: bravebot_tui::app::a_servers_prompt_is_not_offered_after_other_words`
-`verified-by: bravebot_tui::app::taking_a_prompt_row_writes_its_word_and_required_argument_names_and_sends_nothing`
+`verified-by: bravebot_tui::app::tests::commands_other::a_servers_prompt_is_offered_at_the_start_of_a_line`
+`verified-by: bravebot_tui::app::tests::commands_other::a_servers_prompt_is_not_offered_after_other_words`
+`verified-by: bravebot_tui::app::tests::commands_other::taking_a_prompt_row_writes_its_word_and_required_argument_names_and_sends_nothing`
 `verified-by: bravebot_tui::skills::taking_a_row_writes_the_names_of_the_arguments_a_prompt_cannot_run_without`
-`verified-by: bravebot_tui::app::a_line_running_a_prompt_with_words_that_are_not_arguments_is_said_and_not_sent`
-`verified-by: bravebot_tui::app::a_line_running_a_prompt_with_words_that_are_not_arguments_is_not_queued`
-`verified-by: bravebot_tui::app::a_line_the_person_wrote_carries_its_prompt_to_the_turn`
+`verified-by: bravebot_tui::app::tests::commands_other::a_line_running_a_prompt_with_words_that_are_not_arguments_is_said_and_not_sent`
+`verified-by: bravebot_tui::app::tests::commands_other::a_line_running_a_prompt_with_words_that_are_not_arguments_is_not_queued`
+`verified-by: bravebot_tui::app::tests::commands_other::a_line_the_person_wrote_carries_its_prompt_to_the_turn`
 `verified-by: bravebot_tui::render::a_servers_prompt_row_names_its_server_and_what_it_takes`
 `verified-by: bravebot_tui::render::a_servers_prompt_is_drawn_as_recognised_only_from_the_first_word`
-`verified-by: bravebot_tui::app::a_line_naming_two_servers_or_no_argument_name_is_said_and_not_sent`
-`verified-by: bravebot_tui::app::a_prompt_file_whose_text_would_run_a_servers_prompt_is_refused`
+`verified-by: bravebot_tui::app::tests::commands_other::a_line_naming_two_servers_or_no_argument_name_is_said_and_not_sent`
+`verified-by: bravebot_tui::app::tests::commands_other::a_prompt_file_whose_text_would_run_a_servers_prompt_is_refused`
 `verified-by: bravebot_agent::mcp::a_typed_line_names_a_prompt_only_of_a_server_this_session_reached`
 `verified-by: bravebot_agent::mcp::arguments_are_pairs_and_a_quoted_value_may_hold_spaces`
 `verified-by: bravebot_agent::mcp::a_quoted_value_unescapes_a_quote_and_a_backslash_and_nothing_else`
@@ -1868,9 +1868,9 @@ does not name: the turn in flight was built without the change.
 mode needs no second list. Taking only a name the driver enumerated keeps the mode a choice among
 sources already trusted for skills, and not a way to name a file.
 
-`verified-by: bravebot_tui::app::the_mode_command_puts_a_skill_in_force_by_its_whole_name_and_off_leaves_it`
-`verified-by: bravebot_tui::app::the_mode_command_takes_a_name_or_nothing`
-`verified-by: bravebot_tui::app::enter_on_mode_typed_in_full_runs_mode_and_not_model`
+`verified-by: bravebot_tui::app::tests::instructions::the_mode_command_puts_a_skill_in_force_by_its_whole_name_and_off_leaves_it`
+`verified-by: bravebot_tui::app::tests::commands_other::the_mode_command_takes_a_name_or_nothing`
+`verified-by: bravebot_tui::app::tests::instructions::enter_on_mode_typed_in_full_runs_mode_and_not_model`
 `verified-by: bravebot_tui::command_table::every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`
 `verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
 
@@ -1898,16 +1898,16 @@ in the same way, at the box, and while a turn runs.
 is working to is what a person most often wants to read whole. The session already holds it, so no
 model is needed to read it out.
 
-`verified-by: bravebot_tui::app::the_todos_command_prints_the_plan_and_starts_no_turn`
-`verified-by: bravebot_tui::app::the_todos_command_says_so_when_there_is_no_plan`
+`verified-by: bravebot_tui::app::tests::commands_other::the_todos_command_prints_the_plan_and_starts_no_turn`
+`verified-by: bravebot_tui::app::tests::commands_other::the_todos_command_says_so_when_there_is_no_plan`
 `verified-by: bravebot_tui::render::a_waiting_task_is_drawn_with_its_own_mark_whether_or_not_a_turn_runs`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_todos_command_or_a_longer_word_is_still_a_prompt`
-`verified-by: bravebot_tui::app::the_todos_command_is_carried_out_while_a_turn_runs`
-`verified-by: bravebot_tui::app::the_todos_key_prints_the_plan_as_the_command_does`
+`verified-by: bravebot_tui::app::tests::commands_other::a_prompt_containing_the_todos_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_other::the_todos_command_is_carried_out_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::commands_other::the_todos_key_prints_the_plan_as_the_command_does`
 `verified-by: bravebot_tui::panel::the_key_and_the_command_print_the_same_whole_plan_and_cut_none_of_it`
 `verified-by: bravebot_tui::panel::a_printed_plan_draws_open_rows_as_the_panel_does_and_keeps_that_after_the_turn`
-`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
-`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::tests::commands_words::every_command_in_the_table_dispatches`
 
 ## Known costs
 
@@ -1977,11 +1977,11 @@ terminal is too narrow for it, has no other way to ask which programs running wi
 the session has started. Every word it says is a fixed sentence or a program the person approved, so
 nothing branches on untrusted content.
 
-`verified-by: bravebot_tui::app::the_lsp_command_says_which_language_servers_the_session_has_started`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_lsp_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::the_lsp_command_answers_at_once_while_a_turn_runs`
-`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
-`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::tests::commands_other::the_lsp_command_says_which_language_servers_the_session_has_started`
+`verified-by: bravebot_tui::app::tests::commands_other::a_prompt_containing_the_lsp_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_other::the_lsp_command_answers_at_once_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::commands_words::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 
 <a id="CMD-30"></a>
 ### CMD-30: `/open` lists the web addresses and file paths in the latest reply that has any, and opens one
@@ -2080,19 +2080,19 @@ is over.
 `verified-by: bravebot_tui::link_clicks::a_typed_address_the_opener_would_refuse_opens_nothing_and_says_so`
 `verified-by: bravebot_tui::link_clicks::a_typed_name_is_shown_or_refused_in_the_words_the_click_on_a_path_gets`
 `verified-by: bravebot_tui::link_clicks::a_typed_address_opens_while_a_turn_runs_and_a_typed_name_is_refused`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_open_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::tab_finishes_edit_after_the_open_command_and_leaves_a_number_alone`
-`verified-by: bravebot_tui::app::edit_typed_while_a_summary_runs_waits_and_asks_for_the_editor_when_it_is_over`
-`verified-by: bravebot_tui::app::edit_with_nothing_to_open_says_what_the_open_command_takes`
-`verified-by: bravebot_tui::app::a_typed_link_waits_behind_a_summary_and_is_opened_when_it_is_over`
-`verified-by: bravebot_tui::app::the_open_command_answers_at_once_while_a_turn_runs`
-`verified-by: bravebot_tui::app::a_number_typed_while_a_turn_runs_starts_the_browser_for_an_address`
-`verified-by: bravebot_tui::app::a_number_typed_while_a_summary_runs_waits_and_shows_the_file_when_it_is_over`
-`verified-by: bravebot_tui::app::another_turn_ends_the_list_a_number_was_read_beside`
-`verified-by: bravebot_tui::app::a_rewind_ends_the_list_a_number_was_read_beside`
-`verified-by: bravebot_tui::app::moving_to_another_directory_ends_the_list_a_number_was_read_beside`
-`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
-`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::tests::commands_other::a_prompt_containing_the_open_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_other::tab_finishes_edit_after_the_open_command_and_leaves_a_number_alone`
+`verified-by: bravebot_tui::app::tests::commands_other::edit_typed_while_a_summary_runs_waits_and_asks_for_the_editor_when_it_is_over`
+`verified-by: bravebot_tui::app::tests::commands_other::edit_with_nothing_to_open_says_what_the_open_command_takes`
+`verified-by: bravebot_tui::app::tests::commands_other::a_typed_link_waits_behind_a_summary_and_is_opened_when_it_is_over`
+`verified-by: bravebot_tui::app::tests::commands_other::the_open_command_answers_at_once_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::commands_other::a_number_typed_while_a_turn_runs_starts_the_browser_for_an_address`
+`verified-by: bravebot_tui::app::tests::commands_other::a_number_typed_while_a_summary_runs_waits_and_shows_the_file_when_it_is_over`
+`verified-by: bravebot_tui::app::tests::commands_other::another_turn_ends_the_list_a_number_was_read_beside`
+`verified-by: bravebot_tui::app::tests::commands_other::a_rewind_ends_the_list_a_number_was_read_beside`
+`verified-by: bravebot_tui::app::tests::commands_other::moving_to_another_directory_ends_the_list_a_number_was_read_beside`
+`verified-by: bravebot_tui::app::tests::commands_words::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 
 <a id="CMD-31"></a>
 ### CMD-31: `/issues` and `/prs` list the issues and the pull requests the session has met, and start no turn
@@ -2121,12 +2121,12 @@ holds the list, so no model is needed to read it out. Every item is built from a
 and a number that [PANEL-16](info-panel.md#PANEL-16) validated, and nothing a reply or a tool result
 said is printed, so nothing branches on untrusted content.
 
-`verified-by: bravebot_tui::app::issues_and_prs_are_commands_of_their_own_beside_issue_and_pr`
-`verified-by: bravebot_tui::app::issues_and_prs_typed_mid_turn_answer_at_once_from_what_has_been_met`
+`verified-by: bravebot_tui::app::tests::commands_other::issues_and_prs_are_commands_of_their_own_beside_issue_and_pr`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::issues_and_prs_typed_mid_turn_answer_at_once_from_what_has_been_met`
 `verified-by: bravebot_tui::state::references::the_commands_print_each_item_with_its_address_or_say_there_are_none`
 `verified-by: bravebot_tui::state::references::the_list_of_a_kind_starts_with_the_own_link_and_leaves_out_what_is_not_one`
-`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
-`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::tests::commands_words::every_command_in_the_table_dispatches`
 
 <a id="CMD-32"></a>
 ### CMD-32: `/sidebar` opens the checklist of the info panel's sections, and starts no turn
@@ -2146,10 +2146,10 @@ preference, so it needs no model and no turn, and a person who is watching a lon
 most likely to want fewer sections.
 
 `verified-by: bravebot_tui::app::tests::pickers::the_bare_word_sidebar_opens_the_checklist_and_nothing_else_happens`
-`verified-by: bravebot_tui::app::a_section_turned_off_mid_turn_is_saved_at_once_and_the_turn_is_not_touched`
-`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
-`verified-by: bravebot_tui::app::a_command_that_opens_a_picker_opens_it_as_it_is_typed_mid_turn`
-`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::app::tests::panel::a_section_turned_off_mid_turn_is_saved_at_once_and_the_turn_is_not_touched`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_command_that_opens_a_picker_opens_it_as_it_is_typed_mid_turn`
+`verified-by: bravebot_tui::app::tests::commands_words::every_command_in_the_table_dispatches`
 
 <a id="CMD-33"></a>
 ### CMD-33: `/redraw` gives the terminal's modes back, asks for them again and draws the whole screen
@@ -2170,10 +2170,10 @@ and a slash offers the word with the commands that begin like it (CMD-9).
 returning to the window sends no event that would repair it. Opening a long list, such as the one a
 slash offers, repairs only the rows it covers.
 
-`verified-by: bravebot_tui::app::the_redraw_command_retakes_the_terminal_and_runs_mid_turn`
-`verified-by: bravebot_tui::app::redraw_is_a_command_only_as_the_whole_line`
-`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
-`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::app::tests::commands_other::the_redraw_command_retakes_the_terminal_and_runs_mid_turn`
+`verified-by: bravebot_tui::app::tests::commands_words::redraw_is_a_command_only_as_the_whole_line`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::tests::commands_words::every_command_in_the_table_dispatches`
 
 ## The desktop window's conversation commands
 
@@ -2302,38 +2302,38 @@ sentence mentioning a level is never read as a scope, and a refusal names what w
 mistyped word is visible.
 
 `verified-by: bravebot_tui::command_table::effort_takes_session_and_a_level_and_reads_the_rest_as_a_level_to_record`
-`verified-by: bravebot_tui::app::effort_session_asks_for_the_picker_in_the_this_session_scope`
-`verified-by: bravebot_tui::app::typing_the_effort_command_opens_the_picker`
-`verified-by: bravebot_tui::app::the_effort_command_carries_its_level`
-`verified-by: bravebot_tui::app::effort_session_and_a_level_reach_the_action_with_the_level_and_the_scope`
-`verified-by: bravebot_tui::app::a_level_named_with_effort_session_is_in_force_and_recorded_nowhere`
-`verified-by: bravebot_tui::app::a_word_after_effort_session_that_is_no_level_changes_nothing_and_says_so`
-`verified-by: bravebot_tui::app::a_level_this_program_does_not_know_changes_nothing_and_says_so`
-`verified-by: bravebot_tui::app::a_level_named_without_session_is_recorded_and_ends_a_session_only_mark`
-`verified-by: bravebot_tui::app::a_level_picked_in_the_this_session_scope_is_not_recorded`
-`verified-by: bravebot_tui::app::a_level_picked_in_the_every_session_scope_is_recorded`
-`verified-by: bravebot_tui::app::the_effort_picker_opened_at_rest_records_by_the_scope_tab_left_it_in`
-`verified-by: bravebot_tui::app::the_effort_picker_opened_at_rest_takes_a_second_press_in_the_scope_tab_left_it_in`
-`verified-by: bravebot_tui::app::tab_in_an_open_effort_picker_switches_the_scope_at_rest_and_under_a_turn`
-`verified-by: bravebot_tui::app::a_turn_begun_after_effort_session_is_asked_for_that_level`
-`verified-by: bravebot_tui::app::effort_session_typed_mid_turn_opens_its_list_in_the_this_session_scope`
-`verified-by: bravebot_tui::app::a_session_only_level_picked_mid_turn_applies_from_the_next_turn`
-`verified-by: bravebot_tui::app::effort_session_with_a_level_typed_mid_turn_is_carried_out_as_typed_and_recorded_nowhere`
-`verified-by: bravebot_tui::app::a_queued_effort_line_is_dispatched_by_the_parse_a_line_typed_at_rest_gets`
-`verified-by: bravebot_tui::app::effort_session_with_a_level_waits_behind_what_could_change_the_choice_and_not_behind_the_rest`
-`verified-by: bravebot_tui::app::a_level_set_mid_turn_is_the_next_turns_and_the_running_turn_keeps_its_own`
-`verified-by: bravebot_tui::app::a_level_chosen_for_this_session_is_held_and_recorded_nowhere`
-`verified-by: bravebot_tui::app::a_recorded_level_replaces_a_session_only_one_and_ends_the_mark`
-`verified-by: bravebot_tui::app::a_level_the_command_line_named_or_the_files_settled_is_not_marked_as_this_sessions`
-`verified-by: bravebot_tui::app::a_session_only_level_is_asked_for_over_the_record_and_the_files_and_the_next_session_ignores_it`
-`verified-by: bravebot_tui::app::an_incognito_session_takes_a_session_only_level_and_writes_nothing`
-`verified-by: bravebot_tui::app::a_session_only_level_survives_a_clear_and_a_handoff`
-`verified-by: bravebot_tui::app::a_branch_keeps_a_session_only_level_chosen_after_the_last_turn_and_records_it_nowhere`
-`verified-by: bravebot_tui::app::the_record_and_a_branch_hold_the_level_in_force_when_the_last_turn_finished`
-`verified-by: bravebot_tui::app::a_resume_after_a_session_only_level_opens_on_the_recorded_level`
-`verified-by: bravebot_tui::app::the_effort_a_turn_was_sent_with_is_what_the_record_is_given`
+`verified-by: bravebot_tui::app::tests::commands_effort::effort_session_asks_for_the_picker_in_the_this_session_scope`
+`verified-by: bravebot_tui::app::tests::commands_words::typing_the_effort_command_opens_the_picker`
+`verified-by: bravebot_tui::app::tests::commands_words::the_effort_command_carries_its_level`
+`verified-by: bravebot_tui::app::tests::commands_effort::effort_session_and_a_level_reach_the_action_with_the_level_and_the_scope`
+`verified-by: bravebot_tui::app::tests::commands_effort::a_level_named_with_effort_session_is_in_force_and_recorded_nowhere`
+`verified-by: bravebot_tui::app::tests::commands_effort::a_word_after_effort_session_that_is_no_level_changes_nothing_and_says_so`
+`verified-by: bravebot_tui::app::tests::commands_effort::a_level_this_program_does_not_know_changes_nothing_and_says_so`
+`verified-by: bravebot_tui::app::tests::commands_effort::a_level_named_without_session_is_recorded_and_ends_a_session_only_mark`
+`verified-by: bravebot_tui::app::tests::commands_effort::a_level_picked_in_the_this_session_scope_is_not_recorded`
+`verified-by: bravebot_tui::app::tests::commands_effort::a_level_picked_in_the_every_session_scope_is_recorded`
+`verified-by: bravebot_tui::app::tests::view::the_effort_picker_opened_at_rest_records_by_the_scope_tab_left_it_in`
+`verified-by: bravebot_tui::app::tests::view::the_effort_picker_opened_at_rest_takes_a_second_press_in_the_scope_tab_left_it_in`
+`verified-by: bravebot_tui::app::tests::view::tab_in_an_open_effort_picker_switches_the_scope_at_rest_and_under_a_turn`
+`verified-by: bravebot_tui::app::tests::commands_effort::a_turn_begun_after_effort_session_is_asked_for_that_level`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::effort_session_typed_mid_turn_opens_its_list_in_the_this_session_scope`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_session_only_level_picked_mid_turn_applies_from_the_next_turn`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::effort_session_with_a_level_typed_mid_turn_is_carried_out_as_typed_and_recorded_nowhere`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_queued_effort_line_is_dispatched_by_the_parse_a_line_typed_at_rest_gets`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::effort_session_with_a_level_waits_behind_what_could_change_the_choice_and_not_behind_the_rest`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_level_set_mid_turn_is_the_next_turns_and_the_running_turn_keeps_its_own`
+`verified-by: bravebot_tui::app::tests::commands_effort::a_level_chosen_for_this_session_is_held_and_recorded_nowhere`
+`verified-by: bravebot_tui::app::tests::commands_effort::a_recorded_level_replaces_a_session_only_one_and_ends_the_mark`
+`verified-by: bravebot_tui::app::tests::commands_effort::a_level_the_command_line_named_or_the_files_settled_is_not_marked_as_this_sessions`
+`verified-by: bravebot_tui::app::tests::backends_effort::a_session_only_level_is_asked_for_over_the_record_and_the_files_and_the_next_session_ignores_it`
+`verified-by: bravebot_tui::app::tests::backends_effort::an_incognito_session_takes_a_session_only_level_and_writes_nothing`
+`verified-by: bravebot_tui::app::tests::backends_effort::a_session_only_level_survives_a_clear_and_a_handoff`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_branch_keeps_a_session_only_level_chosen_after_the_last_turn_and_records_it_nowhere`
+`verified-by: bravebot_tui::app::tests::sessions_records::the_record_and_a_branch_hold_the_level_in_force_when_the_last_turn_finished`
+`verified-by: bravebot_tui::app::tests::backends_effort::a_resume_after_a_session_only_level_opens_on_the_recorded_level`
+`verified-by: bravebot_tui::app::tests::sessions_records::the_effort_a_turn_was_sent_with_is_what_the_record_is_given`
 `verified-by: bravebot_tui::persist::a_level_chosen_for_this_session_is_recorded_nowhere_and_the_next_session_ignores_it`
-`verified-by: bravebot_tui::app::a_chatgpt_account_is_sent_the_level_its_session_began_with_when_another_is_chosen_for_this_session_only`
-`verified-by: bravebot_tui::app::a_clear_begins_the_account_session_at_a_session_only_level`
-`verified-by: bravebot_tui::app::a_session_only_level_on_a_chatgpt_account_is_said_to_apply_from_clear_and_not_to_be_recorded`
-`verified-by: bravebot_tui::app::a_level_picked_on_a_chatgpt_account_says_the_sentence_of_the_scope_it_was_picked_in`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_chatgpt_account_is_sent_the_level_its_session_began_with_when_another_is_chosen_for_this_session_only`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_clear_begins_the_account_session_at_a_session_only_level`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_session_only_level_on_a_chatgpt_account_is_said_to_apply_from_clear_and_not_to_be_recorded`
+`verified-by: bravebot_tui::app::tests::commands_effort::a_level_picked_on_a_chatgpt_account_says_the_sentence_of_the_scope_it_was_picked_in`

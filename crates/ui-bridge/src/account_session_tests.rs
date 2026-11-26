@@ -550,3 +550,49 @@ fn effort_get_without_an_open_session_carries_no_starting_level() {
         assert!(report.contains_key("recorded"));
     }
 }
+
+/// A turn holds its session's state for the whole turn, and the dispatch thread answers every
+/// request of the window, including the answer to a question the turn itself asked. So `effort.get`
+/// with a session's handle answers while that state is held, and still carries the level the
+/// session began with (CHATGPT-10). The regressions it rejects are a read of the level through the
+/// state's lock, which waits for the turn, and a read that gives up on the lock and reports no
+/// level.
+#[test]
+fn effort_get_names_the_starting_level_while_a_turn_holds_the_sessions_state() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
+    let (directory, _workspace, _trust) = project();
+    let mut bridge = Bridge::new(Box::new(|_| {}));
+    dispatch_when_idle(&mut bridge, "effort.set", json!({"level": "low"}));
+    let handle = dispatch_when_idle(
+        &mut bridge,
+        "session.new",
+        json!({"directory": directory.path()}),
+    )["session"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    dispatch_when_idle(&mut bridge, "effort.set", json!({"level": "high"}));
+
+    let state = Arc::clone(&bridge.open[&handle].state);
+    let held = state.lock().unwrap();
+    let params = json!({"directory": directory.path(), "session": handle});
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let line = json!({"id": 1, "method": "effort.get", "params": params}).to_string();
+        sender
+            .send(bridge.dispatch(&Request::parse(&line).unwrap()))
+            .ok();
+    });
+    let outcome = receiver.recv_timeout(std::time::Duration::from_secs(10));
+    drop(held);
+    assert!(
+        matches!(outcome, Ok(Ok(_))),
+        "effort.get did not answer while a turn held the session's state: {outcome:?}"
+    );
+    let report = outcome.unwrap().unwrap();
+
+    assert_eq!(report["recorded"], "high");
+    assert_eq!(report["sessionBegan"], "low");
+}

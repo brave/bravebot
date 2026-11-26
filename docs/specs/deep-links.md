@@ -79,7 +79,7 @@ for them. A session the person then opens with `/resume` reads the setting as an
 `verified-by: bravebot_cli::deep_link::a_link_asking_for_anything_else_is_refused_whole`
 `verified-by: bravebot_cli::running::a_link_that_asks_for_more_or_is_switched_off_starts_nothing`
 `verified-by: bravebot_cli::auto_start::a_session_a_link_starts_asks_where_the_setting_opens_others_in_auto`
-`verified-by: bravebot_tui::app::a_session_a_link_started_opens_asking_where_the_setting_opens_others_in_auto`
+`verified-by: bravebot_tui::app::tests::remainder::a_session_a_link_started_opens_asking_where_the_setting_opens_others_in_auto`
 
 <a id="LINK-3"></a>
 ### LINK-3: a link starts in the directory it names only where a person already vouched for it
@@ -119,10 +119,10 @@ only whitespace puts nothing in the box and draws no line.
 theirs. A session that sent them would act on a page's request before anybody read it. A long prompt
 is where a request hides: the box shows the first rows and the person presses Enter on the rest.
 
-`verified-by: bravebot_tui::app::the_words_a_link_carries_are_in_the_box_and_are_not_sent`
-`verified-by: bravebot_tui::app::the_banner_goes_when_the_words_are_sent_or_cleared_and_stays_gone`
-`verified-by: bravebot_tui::app::a_link_with_no_words_leaves_the_box_empty`
-`verified-by: bravebot_tui::app::a_long_link_prompt_is_written_whole_and_not_folded`
+`verified-by: bravebot_tui::app::tests::remainder::the_words_a_link_carries_are_in_the_box_and_are_not_sent`
+`verified-by: bravebot_tui::app::tests::remainder::the_banner_goes_when_the_words_are_sent_or_cleared_and_stays_gone`
+`verified-by: bravebot_tui::app::tests::remainder::a_link_with_no_words_leaves_the_box_empty`
+`verified-by: bravebot_tui::app::tests::remainder::a_long_link_prompt_is_written_whole_and_not_folded`
 `verified-by: bravebot_tui::render::the_hint_line_names_the_link_and_gives_the_length_of_a_long_prompt`
 
 <a id="LINK-5"></a>
@@ -145,7 +145,7 @@ wrote the prompt ([CLI-31](cli.md#CLI-31)). The two things the link does not do 
 it does not send, and it cannot raise what the session may do, since [LINK-2](#LINK-2) refuses a
 parameter that would.
 
-`verified-by: bravebot_tui::app::the_banner_goes_when_the_words_are_sent_or_cleared_and_stays_gone`
+`verified-by: bravebot_tui::app::tests::remainder::the_banner_goes_when_the_words_are_sent_or_cleared_and_stays_gone`
 
 <a id="LINK-6"></a>
 ### LINK-6: the installer registers the handler on Linux and Windows, and a setting stops links being opened

@@ -3111,13 +3111,13 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_tui::sandbox_prompt::the_picker_opens_on_the_mode_in_force`
 `verified-by: bravebot_tui::sandbox_prompt::the_mode_in_force_is_drawn_as_current_and_no_other`
 `verified-by: bravebot_tui::sandbox_prompt::the_picker_is_drawn_as_a_titled_panel_with_its_keys`
-`verified-by: bravebot_tui::app::a_bare_sandbox_command_opens_the_picker_and_says_nothing`
-`verified-by: bravebot_tui::app::a_row_taken_in_the_sandbox_picker_sets_the_mode_and_escape_leaves_it`
-`verified-by: bravebot_tui::app::a_row_the_managed_file_refuses_is_refused_when_taken`
-`verified-by: bravebot_tui::app::a_click_on_the_panels_sandbox_row_opens_the_sandbox_picker_at_rest_and_mid_turn`
-`verified-by: bravebot_tui::app::the_sandbox_command_carries_its_word_unparsed`
-`verified-by: bravebot_tui::app::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_follows_it`
-`verified-by: bravebot_tui::app::moving_the_sandbox_to_off_mid_turn_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::tests::pickers::a_bare_sandbox_command_opens_the_picker_and_says_nothing`
+`verified-by: bravebot_tui::app::tests::pickers::a_row_taken_in_the_sandbox_picker_sets_the_mode_and_escape_leaves_it`
+`verified-by: bravebot_tui::app::tests::pickers::a_row_the_managed_file_refuses_is_refused_when_taken`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_the_panels_sandbox_row_opens_the_sandbox_picker_at_rest_and_mid_turn`
+`verified-by: bravebot_tui::app::tests::commands_words::the_sandbox_command_carries_its_word_unparsed`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_follows_it`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::moving_the_sandbox_to_off_mid_turn_is_carried_out_when_typed`
 `verified-by: bravebot_agent::live_sandbox::a_mode_set_through_one_handle_is_read_through_its_clones`
 `verified-by: bravebot_agent::live_sandbox::handles_made_apart_do_not_share_a_mode`
 `verified-by: bravebot_agent::turn::a_sandbox_mode_chosen_during_a_turn_applies_to_the_calls_after_it`
@@ -4485,7 +4485,7 @@ the session only; and whether a covered line is announced in the transcript befo
 
 The programs bravebot starts on its own account and looks up by name, unconfined and with the
 person's access to `~/.ssh`, `~/.aws` and `~/.bravebot`, are the AWS CLI (`aws`), the clipboard
-tools, `osascript`, the inhibitor `/caffeinate` starts, a hook's program, the `crontab`, `launchctl` and `systemctl` that `bravebot schedule` and `/schedule` run and the destination program of a scheduled entry ([SCHEDULE-7](schedule.md#SCHEDULE-7), [SCHEDULE-8](schedule.md#SCHEDULE-8)), a language server, the
+tools, `osascript`, the inhibitor `/caffeinate` starts, the shell a line typed at the `!` prompt runs through when `$SHELL` is a bare name ([SHELL-1](shell-mode.md#SHELL-1)), a hook's program, the `crontab`, `launchctl` and `systemctl` that `bravebot schedule` and `/schedule` run and the destination program of a scheduled entry ([SCHEDULE-7](schedule.md#SCHEDULE-7), [SCHEDULE-8](schedule.md#SCHEDULE-8)), a language server, the
 editor Ctrl-G opens, which `v` uses as well and a ctrl-click on a file path starts without this agent's own credentials ([CRED-14](credential-protection.md#CRED-14)), the browser opener that `auth login chatgpt` and a click on a link in the terminal
 interface start (`open`, `xdg-open` or `rundll32`, [CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13)), the credential authority ([CONNECTOR-2](connectors.md#CONNECTOR-2)), the `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` runs
 ([SANDBOX-16](#SANDBOX-16)), the `git` that `/plugin add` runs to fetch a plugin source
@@ -5007,7 +5007,8 @@ file. A new spawn that looks a name up through
   | The browser opener | reduced to the entries the lookup searches, on every platform: an opener that is a script starts its interpreter by name |
   | The clipboard tools and `osascript` | reduced to the entries the lookup searches, on every platform: a tool that is a script or a launcher starts its interpreter by name |
   | The inhibitor `/caffeinate` starts | reduced to the entries the lookup searches, on every platform. On Linux the one name it is given, `cat`, is resolved first. `DBUS_SYSTEM_BUS_ADDRESS` is removed whatever it holds, so no program named by a `unixexec:` address is started. |
-  | A `run` stage or background job, a line typed at the `!` prompt and the client the host starts | not applicable: the program is the one the planner or the person named, and what it starts is theirs. A stage under the sandbox is given the `PATH` a session's stage is given. |
+  | A `run` stage or background job and the client the host starts | not applicable: the program is the one the planner or the person named, and what it starts is theirs. A stage under the sandbox is given the `PATH` a session's stage is given. |
+  | The shell a line typed at the `!` prompt runs through | bravebot's own, accepted: the shell is resolved to an absolute path first when `$SHELL` is a bare name ([SHELL-1](shell-mode.md#SHELL-1)), and the names inside the line the person typed are looked up by that shell on the person's `PATH`, which is theirs |
   | `xcode-select` and `sandbox-exec` | not applicable: each is an absolute path written in the source that starts no other program by name |
   | The background supervisor, the host and a bug report | not applicable: each starts this program's own executable or a path stored by it |
 
@@ -6753,6 +6754,11 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_agent::hooks::a_hook_named_bare_never_starts_a_file_found_only_where_a_stage_may_write`
 `verified-by: bravebot_agent::hooks::a_hook_named_by_a_path_is_not_looked_up`
 `verified-by: bravebot_agent::hooks::a_hook_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
+`verified-by: bravebot_agent::shell_path::a_bare_shell_is_never_the_file_found_only_where_a_stage_may_write`
+`verified-by: bravebot_agent::shell_path::a_bare_shell_found_only_where_a_stage_may_write_is_not_started`
+`verified-by: bravebot_agent::shell_path::a_shell_given_as_an_absolute_path_starts_as_given`
+`verified-by: bravebot_agent::shell_path::a_shell_given_as_a_relative_path_starts_as_given`
+`verified-by: bravebot_agent::shell_path::a_blank_shell_runs_the_system_shell_and_not_a_planted_sh`
 `verified-by: bravebot_cli::push_identity::a_program_ssh_starts_by_name_is_never_one_a_stage_may_have_written`
 `verified-by: bravebot_cli::push_identity::the_ssh_keygen_ssh_and_git_starts_all_go_through_started`
 `verified-by: bravebot_cli::push_identity::an_askpass_program_is_never_handed_to_the_start`

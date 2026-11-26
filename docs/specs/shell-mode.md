@@ -36,8 +36,19 @@ what the rule is about, so a line the user typed is outside it.
 
 Globs, `$VAR`, redirection, `&&` and `$(...)` all work as they do in the user's terminal. The
 marker is a mode rather than a character: the prompt changes colour, backspace or escape leaves,
-and the mode lasts one command. `$SHELL` falls back to a POSIX shell when unset. An empty line is
-not run.
+and the mode lasts one command. `$SHELL` falls back to `/bin/sh`, started as that absolute path,
+when it is unset or blank. An empty line is not run.
+
+The shell is started as every program bravebot starts unconfined is ([SANDBOX-30](sandboxing.md#SANDBOX-30)).
+A `$SHELL` with a path separator in it, absolute or relative to the directory the line runs in, is the
+person's own path and is started as given, with no lookup. A bare `$SHELL`, such as `bash`, is looked
+up first, in the absolute entries of `PATH` that lie outside every directory a confined stage may
+write, so a `bash` a stage wrote into a writable `PATH` directory is not the shell that runs. Where
+the lookup finds nothing, the line is not run and the person is told `'bash' could not be started:
+entity not found`. It is not run by `/bin/sh` instead, because the person named that shell and
+another one reads the line under other syntax. The line itself is unchanged: it runs as `$SHELL -c
+<line>` with the whole environment and `PATH`, and the shell looks up the names inside it on the
+person's `PATH`.
 
 `verified-by: bravebot_agent::shell::a_glob_is_expanded_by_the_shell`
 `verified-by: bravebot_agent::shell::a_variable_is_expanded_by_the_shell`
@@ -46,6 +57,11 @@ not run.
 `verified-by: bravebot_agent::shell::commands_joined_with_and_both_run`
 `verified-by: bravebot_agent::shell::the_shell_falls_back_to_a_posix_one_when_the_variable_is_unset`
 `verified-by: bravebot_agent::shell::an_empty_line_is_not_run`
+`verified-by: bravebot_agent::shell_path::a_bare_shell_is_never_the_file_found_only_where_a_stage_may_write`
+`verified-by: bravebot_agent::shell_path::a_bare_shell_found_only_where_a_stage_may_write_is_not_started`
+`verified-by: bravebot_agent::shell_path::a_shell_given_as_an_absolute_path_starts_as_given`
+`verified-by: bravebot_agent::shell_path::a_shell_given_as_a_relative_path_starts_as_given`
+`verified-by: bravebot_agent::shell_path::a_blank_shell_runs_the_system_shell_and_not_a_planted_sh`
 `verified-by: bravebot_tui::shell_mode::the_prompt_marker_changes_in_shell_mode`
 `verified-by: bravebot_tui::shell_mode::the_hint_names_the_shell_while_in_shell_mode`
 
@@ -102,11 +118,11 @@ first. A line queued behind a turn keeps its form. Only a keystroke makes a line
 cannot (SHELL-4). This opts out of what SHELL-3 delivers and does not change the default: a plain `!`
 still records.
 
-`verified-by: bravebot_tui::app::a_second_bang_makes_the_command_private`
-`verified-by: bravebot_tui::app::a_plain_command_after_a_private_one_is_recorded_again`
-`verified-by: bravebot_tui::app::a_pasted_bang_does_not_make_the_command_private`
-`verified-by: bravebot_tui::app::backspace_leaves_the_private_form_before_shell_mode`
-`verified-by: bravebot_tui::app::a_private_command_leaves_the_conversation_unchanged`
+`verified-by: bravebot_tui::app::tests::shell_mode::a_second_bang_makes_the_command_private`
+`verified-by: bravebot_tui::app::tests::shell_mode::a_plain_command_after_a_private_one_is_recorded_again`
+`verified-by: bravebot_tui::app::tests::shell_mode::a_pasted_bang_does_not_make_the_command_private`
+`verified-by: bravebot_tui::app::tests::shell_mode::backspace_leaves_the_private_form_before_shell_mode`
+`verified-by: bravebot_tui::app::tests::shell_mode::a_private_command_leaves_the_conversation_unchanged`
 `verified-by: bravebot_tui::state::a_queued_private_line_is_taken_as_private_only`
 `verified-by: bravebot_tui::shell_mode::the_private_form_is_drawn_with_a_doubled_marker_and_says_where_the_output_goes`
 `verified-by: bravebot_tui::shell_mode::private_output_is_drawn_and_says_it_went_no_further`
@@ -155,9 +171,9 @@ after standard output, and the rows put each where it was read.
 `verified-by: bravebot_agent::shell::a_command_runs_on_when_nothing_is_reading_what_it_prints`
 `verified-by: bravebot_agent::shell::a_stopped_command_has_sent_what_it_printed_and_is_still_cancelled`
 `verified-by: bravebot_agent::shell::what_was_read_before_a_pipe_failed_is_kept`
-`verified-by: bravebot_tui::app::a_frame_drawn_while_a_command_runs_shows_what_it_has_printed`
-`verified-by: bravebot_tui::app::a_stopped_command_keeps_what_it_printed_on_the_screen_and_out_of_the_conversation`
-`verified-by: bravebot_tui::app::a_command_that_ended_is_drawn_as_the_text_the_gate_released`
+`verified-by: bravebot_tui::app::tests::shell_mode::a_frame_drawn_while_a_command_runs_shows_what_it_has_printed`
+`verified-by: bravebot_tui::app::tests::shell_mode::a_stopped_command_keeps_what_it_printed_on_the_screen_and_out_of_the_conversation`
+`verified-by: bravebot_tui::app::tests::shell_mode::a_command_that_ended_is_drawn_as_the_text_the_gate_released`
 `verified-by: bravebot_tui::shell_mode::output_that_has_been_printed_is_drawn_while_the_command_runs`
 `verified-by: bravebot_tui::shell_mode::a_command_that_ended_draws_its_output_once`
 `verified-by: bravebot_tui::shell_mode::running_output_cannot_draw_its_own_escapes`
@@ -170,10 +186,10 @@ after standard output, and the rows put each where it was read.
 `verified-by: bravebot_tui::shell_mode::a_line_still_being_written_counts_as_one_of_the_lines_held`
 `verified-by: bravebot_tui::shell_mode::a_piece_larger_than_the_bound_is_cut_from_its_end_and_counted`
 `verified-by: bravebot_tui::shell_mode::a_stopped_command_keeps_the_count_of_the_lines_before_the_rows`
-`verified-by: bravebot_tui::app::a_command_stopped_before_it_printed_says_only_that_it_stopped`
-`verified-by: bravebot_tui::app::what_a_command_printed_after_the_last_frame_is_taken_when_it_ends`
-`verified-by: bravebot_tui::app::a_command_whose_output_was_refused_leaves_none_of_it_on_the_screen`
-`verified-by: bravebot_tui::app::a_private_command_that_ended_is_drawn_as_released_and_says_it_was_not_sent`
+`verified-by: bravebot_tui::app::tests::shell_mode::a_command_stopped_before_it_printed_says_only_that_it_stopped`
+`verified-by: bravebot_tui::app::tests::shell_mode::what_a_command_printed_after_the_last_frame_is_taken_when_it_ends`
+`verified-by: bravebot_tui::app::tests::shell_mode::a_command_whose_output_was_refused_leaves_none_of_it_on_the_screen`
+`verified-by: bravebot_tui::app::tests::shell_mode::a_private_command_that_ended_is_drawn_as_released_and_says_it_was_not_sent`
 `verified-by: bravebot_tui::app::tests::watching::the_view_left_open_under_a_running_command_does_not_draw_what_it_prints`
 
 <a id="SHELL-4"></a>
@@ -185,7 +201,7 @@ never a line reconstructed from a transcript.
 **Why.** The justification cannot be checked from the bytes, so it lives at the call site. Today
 that is the TUI's shell mode and nothing else.
 
-`verified-by: bravebot_tui::app::a_pasted_line_does_not_arm_shell_mode`
+`verified-by: bravebot_tui::app::tests::shell_mode::a_pasted_line_does_not_arm_shell_mode`
 `verified-by: bravebot_tui::state::a_command_comes_back_as_words_and_not_as_a_command`
 
 <a id="SHELL-5"></a>
@@ -218,10 +234,10 @@ bang and a pasted one are the same characters in the box and only a keystroke ma
 ([SHELL-4](#SHELL-4)). Holding the line loses nothing: Enter at rest sends it as words, as it does
 for a pasted line.
 
-`verified-by: bravebot_tui::app::a_bang_line_pressed_mid_turn_is_held_and_never_interjected`
-`verified-by: bravebot_tui::app::ctrl_enter_on_a_bang_line_mid_turn_neither_queues_it_nor_stops_the_turn`
-`verified-by: bravebot_tui::app::a_line_with_a_bang_after_its_first_character_is_still_queued`
-`verified-by: bravebot_tui::app::shell_mode_cannot_be_entered_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::shell_mode::a_bang_line_pressed_mid_turn_is_held_and_never_interjected`
+`verified-by: bravebot_tui::app::tests::shell_mode::ctrl_enter_on_a_bang_line_mid_turn_neither_queues_it_nor_stops_the_turn`
+`verified-by: bravebot_tui::app::tests::shell_mode::a_line_with_a_bang_after_its_first_character_is_still_queued`
+`verified-by: bravebot_tui::app::tests::shell_mode::shell_mode_cannot_be_entered_while_a_turn_runs`
 
 ## Known costs
 

@@ -89,12 +89,12 @@ place of everything the person pasted, with nothing on the screen to say so.
 `verified-by: bravebot_tui::state::a_short_paste_lands_in_the_box_whole`
 `verified-by: bravebot_tui::state::a_paste_into_a_command_line_is_never_folded`
 `verified-by: bravebot_tui::render::a_folded_paste_keeps_its_lines_off_the_screen`
-`verified-by: bravebot_tui::app::a_paste_that_ends_in_a_newline_does_not_send_it`
-`verified-by: bravebot_tui::app::a_pasted_prompt_is_sent_when_the_user_says_so`
-`verified-by: bravebot_tui::app::a_long_paste_folds_while_a_turn_is_running`
-`verified-by: bravebot_tui::app::a_folded_paste_in_a_btw_question_is_the_words_that_were_pasted`
-`verified-by: bravebot_tui::app::a_folded_paste_in_a_loop_prompt_is_the_words_that_were_pasted`
-`verified-by: bravebot_tui::app::a_folded_paste_in_a_manifest_task_is_the_words_that_were_pasted`
+`verified-by: bravebot_tui::app::tests::remainder::a_paste_that_ends_in_a_newline_does_not_send_it`
+`verified-by: bravebot_tui::app::tests::remainder::a_pasted_prompt_is_sent_when_the_user_says_so`
+`verified-by: bravebot_tui::app::tests::remainder::a_long_paste_folds_while_a_turn_is_running`
+`verified-by: bravebot_tui::app::tests::remainder::a_folded_paste_in_a_btw_question_is_the_words_that_were_pasted`
+`verified-by: bravebot_tui::app::tests::remainder::a_folded_paste_in_a_loop_prompt_is_the_words_that_were_pasted`
+`verified-by: bravebot_tui::app::tests::remainder::a_folded_paste_in_a_manifest_task_is_the_words_that_were_pasted`
 
 
 <a id="PASTE-2"></a>
@@ -360,9 +360,9 @@ Persian, Indic and emoji text needs only the first of each, after a character th
 `verified-by: bravebot_tui::state::a_paste_of_nothing_but_hidden_characters_writes_nothing_and_says_so`
 `verified-by: bravebot_tui::state::a_folded_paste_is_put_back_without_what_a_terminal_draws_as_nothing`
 `verified-by: bravebot_tui::state::a_paste_into_a_command_line_loses_what_a_terminal_draws_as_nothing`
-`verified-by: bravebot_tui::app::a_paste_loses_what_a_terminal_draws_as_nothing`
-`verified-by: bravebot_tui::app::text_read_off_the_clipboard_loses_what_a_terminal_draws_as_nothing`
-`verified-by: bravebot_tui::app::a_pasted_prompt_waits_in_the_box_without_what_a_terminal_draws_as_nothing`
+`verified-by: bravebot_tui::app::tests::remainder::a_paste_loses_what_a_terminal_draws_as_nothing`
+`verified-by: bravebot_tui::app::tests::remainder::text_read_off_the_clipboard_loses_what_a_terminal_draws_as_nothing`
+`verified-by: bravebot_tui::app::tests::remainder::a_pasted_prompt_waits_in_the_box_without_what_a_terminal_draws_as_nothing`
 `verified-by: bravebot_ui_bridge::attaching::a_window_asks_the_bridge_to_clean_a_paste_and_is_told_the_terminals_note`
 `verified-by: bravebot_ui_bridge::english_notes::a_note_for_the_window_is_in_english_whatever_the_machine_says`
 `verified-by: by-construction (the preload and the renderer are not crates this workspace compiles, so ui/scripts/pastes.test.mjs pins pasteText, which writes the cleaned text over the composer's selection and writes nothing for empty text, and cleanPaste, which passes on the text, count and note a stub pastes.clean gives and has nothing pasted when the bridge does not answer or answers something else; make check-ui runs the tests)`

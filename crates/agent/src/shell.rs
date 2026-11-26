@@ -168,20 +168,41 @@ pub fn run_live(
     run_sending(line, directory, cancel, Some(live))
 }
 
+/// The program to start for `shell`, or `None` when its bare name is found only where a confined
+/// stage may write.
+///
+/// A name with a separator in it is the person's own path and is started as given. A bare name is
+/// looked up as every program bravebot starts unconfined is (SANDBOX-30), so a `bash` a stage wrote
+/// into a `PATH` directory is not the shell that runs. The shell is not replaced by another one
+/// when nothing is found: the person asked for that shell, so it is reported as not started.
+fn program_to_start(shell: &str) -> Option<bravebot_sandbox::programs::Resolved> {
+    use bravebot_sandbox::programs::Resolved;
+
+    if crate::programs::has_separator(shell) {
+        return Some(Resolved::named_by_person(shell));
+    }
+    Resolved::find(std::ffi::OsStr::new(shell))
+}
+
 fn run_sending(
     line: &str,
     directory: &std::path::Path,
     cancel: &Cancel,
     live: Option<&mpsc::Sender<String>>,
 ) -> Result<Ran, ShellError> {
-    use bravebot_sandbox::programs::{CodeSelectors, Inherits, Resolved, SearchPath};
+    use bravebot_sandbox::programs::{CodeSelectors, Inherits, SearchPath};
 
     if line.trim().is_empty() {
         return Err(ShellError::Io("there was no command to run".to_string()));
     }
 
     let shell = shell();
-    let program = Resolved::named_by_person(&shell);
+    let Some(program) = program_to_start(&shell) else {
+        return Err(ShellError::NotStarted {
+            shell,
+            detail: std::io::Error::from(ErrorKind::NotFound).to_string(),
+        });
+    };
     let mut command = bravebot_sandbox::programs::start(
         &program,
         Inherits::All,

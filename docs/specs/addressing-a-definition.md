@@ -174,10 +174,10 @@ Enter on it would run the work under everything the definition was there to take
 started under that definition ([CLI-17](cli.md#CLI-17)) only the task comes back, because Enter on
 it already addresses the definition.
 
-`verified-by: bravebot_tui::app::a_session_can_address_a_definition`
-`verified-by: bravebot_tui::app::a_longer_word_starting_with_agent_is_a_prompt`
-`verified-by: bravebot_tui::app::a_stopped_addressed_turn_puts_the_whole_agent_line_back_in_the_box`
-`verified-by: bravebot_tui::app::a_stopped_turn_comes_back_naming_a_definition_only_where_the_session_would_not`
+`verified-by: bravebot_tui::app::tests::naming::a_session_can_address_a_definition`
+`verified-by: bravebot_tui::app::tests::naming::a_longer_word_starting_with_agent_is_a_prompt`
+`verified-by: bravebot_tui::app::tests::naming::a_stopped_addressed_turn_puts_the_whole_agent_line_back_in_the_box`
+`verified-by: bravebot_tui::app::tests::naming::a_stopped_turn_comes_back_naming_a_definition_only_where_the_session_would_not`
 `verified-by: bravebot_mentions::lib::a_typed_word_picks_the_definitions_whose_name_holds_it`
 `verified-by: bravebot_mentions::lib::the_marker_is_not_an_at_word_and_a_name_cannot_break_it`
 `verified-by: bravebot_ui_bridge::addressing::the_at_list_offers_the_definitions_ahead_of_the_files`
@@ -230,17 +230,17 @@ what stands in for the keystroke is making the bot and opening its conversation.
 `@` list for one message. The pick stands in for the keystroke, and the name lasts that turn, as a
 `/agent` line's does.
 
-`verified-by: bravebot_tui::app::a_line_addressing_a_definition_queued_while_a_turn_ran_addresses_it_when_the_turn_ends`
+`verified-by: bravebot_tui::app::tests::naming::a_line_addressing_a_definition_queued_while_a_turn_ran_addresses_it_when_the_turn_ends`
 `verified-by: bravebot_cli::main::the_agent_flag_is_taken_out_with_the_name_it_gave`
-`verified-by: bravebot_tui::app::a_name_from_the_command_line_is_worked_under_where_it_was_written_and_refused_where_not`
+`verified-by: bravebot_tui::app::tests::remainder::a_name_from_the_command_line_is_worked_under_where_it_was_written_and_refused_where_not`
 `verified-by: bravebot_session::sessions::a_session_records_the_definition_it_was_started_under_and_its_fork_and_resume_keep_it`
-`verified-by: bravebot_tui::app::a_resumed_session_works_under_the_definition_its_record_names`
-`verified-by: bravebot_tui::app::a_recorded_definition_that_is_gone_is_said_and_the_session_opens_without_it`
-`verified-by: bravebot_tui::app::a_recorded_definition_whose_model_needs_a_sign_in_is_refused_not_replaced`
+`verified-by: bravebot_tui::app::tests::naming::a_resumed_session_works_under_the_definition_its_record_names`
+`verified-by: bravebot_tui::app::tests::naming::a_recorded_definition_that_is_gone_is_said_and_the_session_opens_without_it`
+`verified-by: bravebot_tui::app::tests::naming::a_recorded_definition_whose_model_needs_a_sign_in_is_refused_not_replaced`
 `verified-by: bravebot_cli::running::a_continued_run_works_under_the_definition_the_session_recorded`
-`verified-by: bravebot_tui::app::a_name_typed_with_a_resume_replaces_the_recorded_one`
-`verified-by: bravebot_tui::app::the_typed_name_outranks_the_recorded_one_and_only_a_recorded_miss_is_survivable`
-`verified-by: bravebot_tui::app::a_cleared_session_records_the_definition_it_still_works_under`
+`verified-by: bravebot_tui::app::tests::naming::a_name_typed_with_a_resume_replaces_the_recorded_one`
+`verified-by: bravebot_tui::app::tests::naming::the_typed_name_outranks_the_recorded_one_and_only_a_recorded_miss_is_survivable`
+`verified-by: bravebot_tui::app::tests::naming::a_cleared_session_records_the_definition_it_still_works_under`
 `verified-by: bravebot_cli::running::a_definition_named_on_a_continued_run_replaces_the_recorded_one`
 `verified-by: bravebot_ui_bridge::interop::resuming_a_session_started_under_a_definition_stops_recording_it`
 `verified-by: by-construction (in the interface a name reaches a turn only through Session::address or Session::work_under; the first's one caller settles the Action::Address that only the /agent branch of dispatch_command returns, and dispatch_command is reached from the input box's key handler and from the queue that handler filled; the second's one caller is the event loop before its first turn, with the name main took off the command line or the one the record carries, which only Handle::set_agent writes, from that same argument or the session's own standing definition; a session in lines and a one-shot run put a name on a Task only from that same argument; and the turn reads the name off the session as it starts, so nothing a turn produced sets one)`
@@ -289,8 +289,8 @@ many definitions were not read ([CLI-17](cli.md#CLI-17)).
 `verified-by: bravebot_agent::turn::a_name_this_session_did_not_resolve_sends_nothing_and_lists_what_it_did`
 `verified-by: bravebot_agent::agents::the_set_an_interface_resolves_is_the_one_a_turn_would`
 `verified-by: bravebot_agent::agents::a_definition_a_deny_rule_covers_is_selectable_nowhere_through_a_link_to_it`
-`verified-by: bravebot_tui::app::a_name_this_session_did_not_resolve_runs_nothing_and_lists_what_it_did`
-`verified-by: bravebot_tui::app::a_name_with_no_task_runs_nothing_and_says_a_task_is_needed`
+`verified-by: bravebot_tui::app::tests::naming::a_name_this_session_did_not_resolve_runs_nothing_and_lists_what_it_did`
+`verified-by: bravebot_tui::app::tests::naming::a_name_with_no_task_runs_nothing_and_says_a_task_is_needed`
 `verified-by: bravebot_cli::running::a_run_refuses_a_definition_only_an_untrusted_checkout_holds_and_says_it_counted_one`
 
 <a id="ADDRESS-6"></a>
@@ -314,7 +314,7 @@ row writes a prompt naming the skill, which the planner is asked about like any 
 definition's name is only ever the argument of `/agent`, so a row for one would write a command
 line that starts a run.
 
-`verified-by: bravebot_tui::app::the_bare_word_says_what_this_session_resolved`
+`verified-by: bravebot_tui::app::tests::naming::the_bare_word_says_what_this_session_resolved`
 `verified-by: by-construction (the completion list reads the command table and the resolved skills and nothing else, nothing is offered after the word of a command line except that Tab finishes the word session or a level typed after /effort from the fixed words session and the levels, which no definition name is part of, and the resolved set of definitions exists only in the event loop after a line is submitted, so nothing drawn while a person types can hold a definition name)`
 
 ## What it may do
@@ -440,9 +440,9 @@ Ticks and rounds are addressed too, because addressing only narrows what a turn 
 ([ADDRESS-7](#ADDRESS-7)). An unaddressed tick would have more tools than the turns the person
 typed.
 
-`verified-by: bravebot_tui::app::an_addressed_line_runs_the_named_definition_on_its_task_for_one_turn`
-`verified-by: bravebot_tui::app::a_session_started_under_a_definition_addresses_every_turn_a_loop_tick_included`
-`verified-by: bravebot_tui::app::a_definition_named_on_the_line_lasts_one_turn_under_the_one_the_session_works_under`
+`verified-by: bravebot_tui::app::tests::naming::an_addressed_line_runs_the_named_definition_on_its_task_for_one_turn`
+`verified-by: bravebot_tui::app::tests::remainder::a_session_started_under_a_definition_addresses_every_turn_a_loop_tick_included`
+`verified-by: bravebot_tui::app::tests::remainder::a_definition_named_on_the_line_lasts_one_turn_under_the_one_the_session_works_under`
 `verified-by: bravebot_tui::status::the_report_names_the_definition_every_turn_is_addressed_to`
 `verified-by: bravebot_agent::turn::the_turn_after_an_addressed_one_holds_the_exchange_and_not_the_definition`
 
@@ -468,11 +468,11 @@ names the model for this one invocation. The run says so, so that whoever reads 
 definition did not get the model it asked for.
 
 `verified-by: bravebot_agent::turn::an_addressed_definition_whose_model_needs_a_sign_in_sends_nothing_and_says_so`
-`verified-by: bravebot_tui::app::a_definition_whose_model_needs_a_sign_in_runs_nothing_and_says_so`
+`verified-by: bravebot_tui::app::tests::naming::a_definition_whose_model_needs_a_sign_in_runs_nothing_and_says_so`
 `verified-by: bravebot_agent::turn::an_addressed_definition_answered_by_another_model_says_so`
 `verified-by: bravebot_agent::turn::a_delegate_an_addressed_turn_spawns_inherits_the_definitions_model`
-`verified-by: bravebot_tui::app::addressing_a_definition_that_names_a_model_carries_that_model`
-`verified-by: bravebot_tui::app::an_addressed_turn_is_held_against_the_model_its_definition_named`
+`verified-by: bravebot_tui::app::tests::naming::addressing_a_definition_that_names_a_model_carries_that_model`
+`verified-by: bravebot_tui::app::tests::naming::an_addressed_turn_is_held_against_the_model_its_definition_named`
 `verified-by: bravebot_agent::turn::a_model_the_command_line_named_outranks_the_definitions_and_the_turn_says_so`
 
 <a id="ADDRESS-12"></a>
@@ -562,10 +562,10 @@ reason in [ADDRESS-11](#ADDRESS-11).
 `verified-by: bravebot_cli::running::a_session_in_lines_works_under_the_agent_setting`
 `verified-by: bravebot_cli::running::the_agent_flag_outranks_the_agent_setting_in_a_session_in_lines`
 `verified-by: bravebot_cli::running::an_agent_setting_naming_nothing_is_said_and_a_session_in_lines_goes_on`
-`verified-by: bravebot_tui::app::a_session_with_no_other_name_works_under_the_agent_setting`
-`verified-by: bravebot_tui::app::the_agent_setting_does_not_replace_a_typed_or_recorded_name`
-`verified-by: bravebot_tui::app::an_agent_setting_naming_nothing_is_said_and_the_session_opens`
-`verified-by: bravebot_tui::app::the_agent_setting_is_survivable_where_a_typed_name_is_not`
+`verified-by: bravebot_tui::app::tests::naming::a_session_with_no_other_name_works_under_the_agent_setting`
+`verified-by: bravebot_tui::app::tests::naming::the_agent_setting_does_not_replace_a_typed_or_recorded_name`
+`verified-by: bravebot_tui::app::tests::naming::an_agent_setting_naming_nothing_is_said_and_the_session_opens`
+`verified-by: bravebot_tui::app::tests::naming::the_agent_setting_is_survivable_where_a_typed_name_is_not`
 `verified-by: bravebot_cli::running::an_agent_setting_whose_definitions_model_is_refused_ends_the_run`
 
 ## Open questions

@@ -115,15 +115,15 @@ editor ([SCROLL-6](scroller.md#SCROLL-6)). The clauses about what a selection ta
 made ([MOUSE-2](#MOUSE-2) and [MOUSE-3](#MOUSE-3), [MOUSE-5](#MOUSE-5) to [MOUSE-8](#MOUSE-8) and
 [MOUSE-34](#MOUSE-34) to [MOUSE-39](#MOUSE-39)) are about this one act.
 
-`verified-by: bravebot_tui::app::a_drag_from_the_transcript_never_copies_the_panel`
-`verified-by: bravebot_tui::app::a_drag_from_the_panel_never_copies_the_transcript`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_drag_from_the_transcript_never_copies_the_panel`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_drag_from_the_panel_never_copies_the_transcript`
 `verified-by: bravebot_tui::select::a_sweep_past_the_edge_of_its_pane_stops_at_the_edge`
 `verified-by: bravebot_tui::select::a_drag_that_ends_on_the_last_column_of_a_pane_takes_it_in`
 `verified-by: bravebot_tui::app::tests::selection::a_drag_to_the_last_column_of_the_screen_copies_the_last_character_of_a_panel_row`
 `verified-by: bravebot_tui::app::tests::box_text::a_drag_across_the_box_copies_its_words_and_not_its_border`
 `verified-by: bravebot_tui::select::rows_between_the_ends_are_cut_to_the_pane`
 `verified-by: bravebot_tui::select::a_highlight_stays_inside_its_pane`
-`verified-by: bravebot_tui::app::a_drag_past_the_bottom_stops_at_the_last_row_of_the_pane`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_drag_past_the_bottom_stops_at_the_last_row_of_the_pane`
 `verified-by: bravebot_tui::app::tests::selection::a_drag_below_the_last_row_of_a_short_transcript_copies_down_to_the_end_of_it`
 `verified-by: bravebot_tui::app::tests::selection::a_selection_ended_below_a_reply_that_is_being_written_survives_its_next_words`
 `verified-by: bravebot_tui::app::tests::selection::a_selection_ended_below_a_reply_that_wraps_as_it_is_written_survives_it`
@@ -131,13 +131,13 @@ made ([MOUSE-2](#MOUSE-2) and [MOUSE-3](#MOUSE-3), [MOUSE-5](#MOUSE-5) to [MOUSE
 `verified-by: bravebot_tui::app::tests::selection::a_drag_from_the_blank_rows_under_the_text_up_into_it_copies_from_the_end_of_the_text`
 `verified-by: bravebot_tui::app::tests::selection::a_drag_below_the_last_row_in_the_scroller_copies_down_to_the_end_of_it`
 `verified-by: bravebot_tui::app::tests::selection::a_selection_held_under_the_scrollers_key_list_is_not_marked_over_it`
-`verified-by: bravebot_tui::app::a_terminal_one_row_high_takes_a_mouse_report_anywhere_without_panicking`
-`verified-by: bravebot_tui::app::a_release_over_the_transcript_hands_the_clipboard_its_text_and_none_of_the_panel`
-`verified-by: bravebot_tui::app::a_release_over_the_panel_hands_the_clipboard_its_text_and_none_of_the_transcript`
-`verified-by: bravebot_tui::app::a_release_at_rest_hands_the_clipboard_what_was_swept`
-`verified-by: bravebot_tui::app::a_release_while_a_turn_runs_hands_the_clipboard_what_was_swept`
-`verified-by: bravebot_tui::app::a_click_hands_over_nothing_and_a_refused_copy_is_not_reported`
-`verified-by: bravebot_tui::app::a_drag_in_a_history_search_begins_no_selection_and_copies_nothing`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_terminal_one_row_high_takes_a_mouse_report_anywhere_without_panicking`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_release_over_the_transcript_hands_the_clipboard_its_text_and_none_of_the_panel`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_release_over_the_panel_hands_the_clipboard_its_text_and_none_of_the_transcript`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_release_at_rest_hands_the_clipboard_what_was_swept`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_release_while_a_turn_runs_hands_the_clipboard_what_was_swept`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_click_hands_over_nothing_and_a_refused_copy_is_not_reported`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_drag_in_a_history_search_begins_no_selection_and_copies_nothing`
 `verified-by: bravebot_tui::app::tests::selection::every_loop_that_answers_the_mouse_carries_out_the_copy_a_release_asks_for`
 
 <a id="MOUSE-2"></a>
@@ -150,9 +150,9 @@ state, where the border is not a handle ([FILES-4](files-mode.md#FILES-4)), a pr
 nothing at all.
 
 `verified-by: bravebot_tui::select::a_press_between_recorded_panes_belongs_to_none`
-`verified-by: bravebot_tui::app::a_press_outside_every_pane_starts_no_selection`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_press_outside_every_pane_starts_no_selection`
 `verified-by: bravebot_tui::panel::a_drag_from_the_border_never_selects_or_copies`
-`verified-by: bravebot_tui::app::a_press_on_the_panels_border_starts_no_selection_in_the_files_state`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_press_on_the_panels_border_starts_no_selection_in_the_files_state`
 
 <a id="MOUSE-3"></a>
 ### MOUSE-3: a selection does not outlive its pane
@@ -163,12 +163,12 @@ direction, because the cells it named then hold other text. A selection of the t
 dropped when the transcript is drawn at another width, as opening or closing the info panel or
 dragging its border does, since the text then wraps into other rows ([MOUSE-34](#MOUSE-34)).
 
-`verified-by: bravebot_tui::app::closing_the_panel_drops_a_selection_inside_it`
-`verified-by: bravebot_tui::app::a_width_change_drops_the_selection`
-`verified-by: bravebot_tui::app::a_height_change_drops_the_selection`
-`verified-by: bravebot_tui::app::a_height_only_resize_in_the_scroller_drops_the_selection`
-`verified-by: bravebot_tui::app::a_resize_in_the_middle_of_a_drag_leaves_nothing_to_extend_or_copy`
-`verified-by: bravebot_tui::app::toggling_the_panel_drops_a_selection_of_the_transcript_it_would_leave_over_other_text`
+`verified-by: bravebot_tui::app::tests::mouse_selection::closing_the_panel_drops_a_selection_inside_it`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_width_change_drops_the_selection`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_height_change_drops_the_selection`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_height_only_resize_in_the_scroller_drops_the_selection`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_resize_in_the_middle_of_a_drag_leaves_nothing_to_extend_or_copy`
+`verified-by: bravebot_tui::app::tests::mouse_selection::toggling_the_panel_drops_a_selection_of_the_transcript_it_would_leave_over_other_text`
 
 <a id="MOUSE-4"></a>
 ### MOUSE-4: mouse capture can be turned off
@@ -189,9 +189,9 @@ stand for a click either, which no click reaches: the word that copies a fenced 
 `verified-by: bravebot_config::settings::only_a_boolean_turns_mouse_capture_off`
 `verified-by: bravebot_config::settings::a_checkout_may_turn_the_mouse_and_the_context_menu_off_and_not_on`
 `verified-by: bravebot_config::settings::a_checkouts_tui_block_does_not_replace_the_persons`
-`verified-by: bravebot_tui::app::a_checkouts_tui_block_does_not_turn_the_mouse_or_the_menu_back_on`
-`verified-by: bravebot_tui::app::a_session_with_the_mouse_off_never_asks_for_mouse_reporting`
-`verified-by: bravebot_tui::app::the_mouse_is_captured_unless_the_settings_turn_it_off`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_checkouts_tui_block_does_not_turn_the_mouse_or_the_menu_back_on`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_session_with_the_mouse_off_never_asks_for_mouse_reporting`
+`verified-by: bravebot_tui::app::tests::mouse_selection::the_mouse_is_captured_unless_the_settings_turn_it_off`
 `verified-by: bravebot_tui::render::the_shortcuts_name_the_terminals_own_selection`
 `verified-by: bravebot_tui::render::the_key_list_names_the_mouse_only_where_it_is_reported`
 `verified-by: bravebot_tui::app::tests::chrome::the_word_that_copies_a_block_is_drawn_only_where_the_mouse_is_reported`
@@ -211,9 +211,9 @@ same rows, and its lines are not joined by it.
 `verified-by: bravebot_tui::select::a_panel_selection_takes_the_text_and_not_the_border_or_indent`
 `verified-by: bravebot_tui::select::a_panel_highlight_covers_the_text_and_not_the_chrome_or_padding`
 `verified-by: bravebot_tui::select::a_joined_row_runs_on_into_the_next_without_a_break`
-`verified-by: bravebot_tui::app::a_drag_over_the_session_id_copies_the_id_alone`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_drag_over_the_session_id_copies_the_id_alone`
 `verified-by: bravebot_tui::select::the_rows_the_panel_joins_are_joined_only_in_a_selection_of_the_panel`
-`verified-by: bravebot_tui::app::a_copy_of_the_transcript_beside_the_session_id_keeps_its_lines_apart`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_copy_of_the_transcript_beside_the_session_id_keeps_its_lines_apart`
 
 <a id="MOUSE-6"></a>
 ### MOUSE-6: a double click takes a word and a triple click a row
@@ -238,8 +238,8 @@ another cell or after the interval is a single press.
 `verified-by: bravebot_tui::select::a_drag_after_a_triple_click_grows_by_rows`
 `verified-by: bravebot_tui::select::a_word_never_leaves_its_pane`
 `verified-by: bravebot_tui::select::a_press_counts_as_part_of_a_run_only_on_the_same_cell_in_time`
-`verified-by: bravebot_tui::app::a_double_click_selects_a_word_and_a_triple_click_a_row`
-`verified-by: bravebot_tui::app::two_presses_on_different_cells_are_not_a_double_click`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_double_click_selects_a_word_and_a_triple_click_a_row`
+`verified-by: bravebot_tui::app::tests::mouse_selection::two_presses_on_different_cells_are_not_a_double_click`
 
 <a id="MOUSE-7"></a>
 ### MOUSE-7: a shift-click extends the selection held
@@ -250,8 +250,8 @@ blank before the text of a row of the info panel, which is no text, extends a se
 to the first column of the text. A shift-press anywhere else, or with no selection held, is an
 ordinary press. Terminals that keep shift for their own selection never report it.
 
-`verified-by: bravebot_tui::app::a_shift_click_extends_the_selection_held`
-`verified-by: bravebot_tui::app::a_shift_click_in_another_pane_begins_a_new_selection`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_shift_click_extends_the_selection_held`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_shift_click_in_another_pane_begins_a_new_selection`
 `verified-by: bravebot_tui::app::tests::selection::a_shift_click_on_the_indent_of_a_panel_row_extends_the_selection_held`
 
 <a id="MOUSE-8"></a>
@@ -278,9 +278,9 @@ panel is drawn on the same ones.
 `verified-by: bravebot_tui::render::transcript::the_breaks_of_the_rows_shown_of_a_very_long_line_are_read_from_its_start`
 `verified-by: bravebot_tui::app::tests::wrapped::a_wrapped_reply_copies_as_its_words_whatever_the_blanks_and_the_width`
 `verified-by: bravebot_tui::select::a_wrap_in_the_transcript_does_not_join_the_rows_of_another_pane`
-`verified-by: bravebot_tui::app::a_wrapped_reply_copies_as_one_paragraph`
-`verified-by: bravebot_tui::app::a_release_in_the_scroller_hands_the_clipboard_the_paragraph_that_was_swept`
-`verified-by: bravebot_tui::app::a_whole_transcript_copies_as_the_lines_it_is_made_of`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_wrapped_reply_copies_as_one_paragraph`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_release_in_the_scroller_hands_the_clipboard_the_paragraph_that_was_swept`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_whole_transcript_copies_as_the_lines_it_is_made_of`
 
 <a id="MOUSE-9"></a>
 ### MOUSE-9: a click on a call in the scroller expands it
@@ -291,11 +291,11 @@ The press and the release are on one cell and the press is a single click, so a 
 the key list open over the transcript, or in a delegate's view, does nothing to any call. The key
 stays the way to do it without a mouse.
 
-`verified-by: bravebot_tui::app::a_click_on_a_call_in_the_scroller_expands_and_collapses_it`
-`verified-by: bravebot_tui::app::a_click_off_a_call_or_a_drag_over_one_expands_nothing`
-`verified-by: bravebot_tui::app::a_click_with_the_scroller_help_open_expands_nothing`
-`verified-by: bravebot_tui::app::a_click_in_a_delegates_view_expands_nothing`
-`verified-by: bravebot_tui::app::a_click_on_every_row_of_a_call_in_the_scroller_expands_it`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_a_call_in_the_scroller_expands_and_collapses_it`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_off_a_call_or_a_drag_over_one_expands_nothing`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_with_the_scroller_help_open_expands_nothing`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_in_a_delegates_view_expands_nothing`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_every_row_of_a_call_in_the_scroller_expands_it`
 
 <a id="MOUSE-10"></a>
 ### MOUSE-10: a click on a delegate in the scroller opens its view
@@ -309,12 +309,12 @@ the views of the delegates from the scroller as it does at the prompt ([SCROLL-2
 the list where there are several and the view where there is one, and stays the way to do it without
 a mouse. At the plain prompt the click is [MOUSE-23](#MOUSE-23).
 
-`verified-by: bravebot_tui::app::a_click_on_a_delegate_in_the_scroller_opens_that_delegates_view`
-`verified-by: bravebot_tui::app::a_drag_over_a_delegate_or_a_click_off_one_opens_no_view`
-`verified-by: bravebot_tui::app::a_click_with_the_scroller_help_open_opens_no_delegate`
-`verified-by: bravebot_tui::app::the_watch_key_opens_the_delegates_from_the_scroller_and_closing_returns_to_it`
-`verified-by: bravebot_tui::app::escape_from_a_clicked_delegate_returns_to_where_the_click_was`
-`verified-by: bravebot_tui::app::a_click_on_every_row_of_a_delegates_block_in_the_scroller_opens_its_view`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_a_delegate_in_the_scroller_opens_that_delegates_view`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_drag_over_a_delegate_or_a_click_off_one_opens_no_view`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_with_the_scroller_help_open_opens_no_delegate`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::the_watch_key_opens_the_delegates_from_the_scroller_and_closing_returns_to_it`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::escape_from_a_clicked_delegate_returns_to_where_the_click_was`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_every_row_of_a_delegates_block_in_the_scroller_opens_its_view`
 
 <a id="MOUSE-11"></a>
 ### MOUSE-11: a click on the panel's model, sandbox or effort row asks what the command asks
@@ -337,14 +337,14 @@ for want of room or because the effort is not one the model reads, is not a targ
 stays the way to do it without a mouse, and the click acts only on rows the person's own choices
 put there ([PANEL-11](info-panel.md#PANEL-11)).
 
-`verified-by: bravebot_tui::app::a_click_on_the_panels_model_or_effort_row_opens_that_picker`
-`verified-by: bravebot_tui::app::a_click_on_the_panels_effort_row_opens_the_every_session_picker_whatever_is_in_force`
-`verified-by: bravebot_tui::app::a_click_off_the_models_rows_asks_for_no_picker`
-`verified-by: bravebot_tui::app::a_click_on_the_panels_sandbox_row_opens_the_sandbox_picker_at_rest_and_mid_turn`
-`verified-by: bravebot_tui::app::a_drag_over_the_model_row_opens_no_picker_and_a_double_click_opens_it_once`
-`verified-by: bravebot_tui::app::a_press_elsewhere_let_go_on_the_model_row_opens_no_picker`
-`verified-by: bravebot_tui::app::a_click_on_the_model_row_over_the_scroller_opens_no_picker`
-`verified-by: bravebot_tui::app::a_click_on_the_model_row_under_a_standing_definition_is_refused_as_the_command_is`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_the_panels_model_or_effort_row_opens_that_picker`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_the_panels_effort_row_opens_the_every_session_picker_whatever_is_in_force`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_off_the_models_rows_asks_for_no_picker`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_the_panels_sandbox_row_opens_the_sandbox_picker_at_rest_and_mid_turn`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_drag_over_the_model_row_opens_no_picker_and_a_double_click_opens_it_once`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_press_elsewhere_let_go_on_the_model_row_opens_no_picker`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_the_model_row_over_the_scroller_opens_no_picker`
+`verified-by: bravebot_tui::app::tests::remainder::a_click_on_the_model_row_under_a_standing_definition_is_refused_as_the_command_is`
 `verified-by: bravebot_tui::panel::only_the_drawn_model_and_effort_rows_are_click_targets`
 
 <a id="MOUSE-12"></a>
@@ -358,8 +358,8 @@ reading are not targets, nor is a reading cut for want of room. The command stay
 without a mouse, and what the click says is the session's own reading, with nothing a tool returned
 in it ([PANEL-11](info-panel.md#PANEL-11)).
 
-`verified-by: bravebot_tui::app::a_click_on_the_panels_context_reading_reports_the_context`
-`verified-by: bravebot_tui::app::a_drag_over_the_context_reading_or_a_click_in_the_scroller_reports_nothing`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_the_panels_context_reading_reports_the_context`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_drag_over_the_context_reading_or_a_click_in_the_scroller_reports_nothing`
 `verified-by: bravebot_tui::panel::only_the_context_reading_is_a_context_click_target`
 
 <a id="MOUSE-13"></a>
@@ -375,8 +375,8 @@ the listing is the session's own, with nothing a tool returned in it
 ([PANEL-11](info-panel.md#PANEL-11)). It ends with the line that names `/mcp remove`
 ([SERVERS-19](mcp-servers.md#SERVERS-19)), which is how a click on a server leads to removing it.
 
-`verified-by: bravebot_tui::app::a_click_on_the_panels_mcp_server_row_lists_the_servers`
-`verified-by: bravebot_tui::app::a_drag_over_an_mcp_server_row_or_a_click_in_the_scroller_lists_nothing`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_the_panels_mcp_server_row_lists_the_servers`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_drag_over_an_mcp_server_row_or_a_click_in_the_scroller_lists_nothing`
 `verified-by: bravebot_tui::panel::only_a_started_mcp_servers_rows_are_click_targets`
 
 <a id="MOUSE-14"></a>
@@ -399,10 +399,10 @@ ordinary mode too. Auto hands the run and fetch questions to a model
 the ordinary mode. The key reaches bypass where it is reachable. The key stays the way to do it
 without a mouse, and is the only way into bypass and into auto.
 
-`verified-by: bravebot_tui::app::a_click_on_the_footers_permission_mode_cycles_it`
-`verified-by: bravebot_tui::app::a_click_on_the_permission_mode_moves_as_the_key_does_and_never_into_bypass`
-`verified-by: bravebot_tui::app::a_click_on_the_permission_mode_in_bypass_moves_out_of_it`
-`verified-by: bravebot_tui::app::a_drag_over_the_mode_or_a_click_beside_it_leaves_the_permission_mode_alone`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_the_footers_permission_mode_cycles_it`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_the_permission_mode_moves_as_the_key_does_and_never_into_bypass`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_the_permission_mode_in_bypass_moves_out_of_it`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_drag_over_the_mode_or_a_click_beside_it_leaves_the_permission_mode_alone`
 
 <a id="MOUSE-15"></a>
 ### MOUSE-15: a press on a row of a picker moves the cursor, and a second takes it
@@ -490,8 +490,8 @@ cursor ([MOUSE-46](#MOUSE-46)).
 `verified-by: bravebot_tui::model_prompt::a_press_where_the_wheel_has_since_drawn_another_model_is_a_first_press_on_it`
 `verified-by: bravebot_tui::model_prompt::a_key_after_a_press_moves_the_list_as_the_keys_alone_do`
 `verified-by: bravebot_tui::app::tests::pickers::the_model_picker_opened_mid_turn_takes_a_press_the_wheel_and_a_press_outside`
-`verified-by: bravebot_tui::app::tab_in_an_open_model_picker_switches_the_scope_at_rest_and_under_a_turn`
-`verified-by: bravebot_tui::app::tab_in_an_open_effort_picker_switches_the_scope_at_rest_and_under_a_turn`
+`verified-by: bravebot_tui::app::tests::mouse_controls::tab_in_an_open_model_picker_switches_the_scope_at_rest_and_under_a_turn`
+`verified-by: bravebot_tui::app::tests::view::tab_in_an_open_effort_picker_switches_the_scope_at_rest_and_under_a_turn`
 `verified-by: bravebot_tui::effort_prompt::tab_switches_the_scope_in_both_directions_and_touches_nothing_else`
 `verified-by: bravebot_tui::app::tests::pickers::a_second_press_on_a_row_of_the_effort_picker_takes_it_in_the_scope_in_force`
 `verified-by: bravebot_tui::app::tests::history_search::a_press_on_a_prompt_moves_the_cursor_and_a_second_takes_it_into_the_box`
@@ -539,18 +539,18 @@ picker, in the vi style of box, and in the files state does nothing to the caret
 largest row or column a terminal can name is a cell outside the box. The arrow keys stay the way to
 move it without a mouse.
 
-`verified-by: bravebot_tui::app::a_click_in_the_box_puts_the_caret_where_it_landed`
-`verified-by: bravebot_tui::app::a_click_in_the_box_counts_a_wide_character_as_one`
-`verified-by: bravebot_tui::app::a_click_on_a_marker_puts_the_caret_before_it`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_in_the_box_puts_the_caret_where_it_landed`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_in_the_box_counts_a_wide_character_as_one`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_a_marker_puts_the_caret_before_it`
 `verified-by: bravebot_tui::app::tests::box_text::a_click_right_of_a_row_broken_at_a_space_puts_the_caret_at_the_end_of_that_row`
 `verified-by: bravebot_tui::app::tests::box_text::a_click_after_a_control_character_lands_on_the_character_drawn_there`
 `verified-by: bravebot_tui::app::tests::box_text::a_click_in_a_box_that_has_scrolled_lands_on_the_word_drawn_there`
 `verified-by: bravebot_tui::app::tests::box_text::a_click_at_the_largest_coordinates_is_a_cell_outside_the_box`
-`verified-by: bravebot_tui::app::a_drag_a_double_click_or_a_click_off_the_text_leaves_the_caret_alone`
-`verified-by: bravebot_tui::app::a_click_in_the_box_does_nothing_where_another_mode_is_in_use`
-`verified-by: bravebot_tui::app::a_click_on_a_row_of_a_line_that_has_changed_since_it_was_drawn_lands_nowhere`
-`verified-by: bravebot_tui::app::a_click_at_the_largest_column_or_row_lands_outside_the_box`
-`verified-by: bravebot_tui::app::a_mouse_report_at_the_last_coordinate_overflows_nothing`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_drag_a_double_click_or_a_click_off_the_text_leaves_the_caret_alone`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_in_the_box_does_nothing_where_another_mode_is_in_use`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_a_row_of_a_line_that_has_changed_since_it_was_drawn_lands_nowhere`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_at_the_largest_column_or_row_lands_outside_the_box`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_mouse_report_at_the_last_coordinate_overflows_nothing`
 
 <a id="MOUSE-17"></a>
 ### MOUSE-17: a click on a row of the `/theme` picker previews it, and a second takes it
@@ -664,8 +664,8 @@ column is the resize
 handle, no other row is a target for this, and the files state has none
 ([MOUSE-18](#MOUSE-18)). The key stays the way to do it without a mouse.
 
-`verified-by: bravebot_tui::app::a_click_on_the_panels_hide_row_hides_the_panel`
-`verified-by: bravebot_tui::app::a_drag_over_the_hide_row_or_a_click_in_the_scroller_leaves_the_panel_open`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_the_panels_hide_row_hides_the_panel`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_drag_over_the_hide_row_or_a_click_in_the_scroller_leaves_the_panel_open`
 `verified-by: bravebot_tui::panel::only_the_hide_row_is_a_hide_target`
 
 <a id="MOUSE-22"></a>
@@ -681,10 +681,10 @@ row cut for want of room. The command stays the way to do it without a mouse, an
 says is the session's own list of the programs the person approved, with nothing a server said in
 it ([PANEL-11](info-panel.md#PANEL-11), [PANEL-13](info-panel.md#PANEL-13)).
 
-`verified-by: bravebot_tui::app::a_click_on_a_panel_row_does_what_the_command_typed_does_at_rest`
-`verified-by: bravebot_tui::app::a_click_on_a_panel_row_does_what_the_command_typed_does_while_a_turn_runs`
-`verified-by: bravebot_tui::app::a_drag_over_a_language_server_row_or_a_click_in_the_scroller_says_nothing`
-`verified-by: bravebot_tui::app::a_double_click_on_a_language_server_row_says_it_once`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_a_panel_row_does_what_the_command_typed_does_at_rest`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_a_panel_row_does_what_the_command_typed_does_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_drag_over_a_language_server_row_or_a_click_in_the_scroller_says_nothing`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_double_click_on_a_language_server_row_says_it_once`
 `verified-by: bravebot_tui::panel::only_a_started_language_servers_rows_are_click_targets`
 
 <a id="MOUSE-23"></a>
@@ -701,12 +701,12 @@ the delegate's task or report says. The delegate is the one the block holds, fou
 among the delegates the session has started and not by its number, which every turn begins at one
 again. The watch key stays the way to do it without a mouse.
 
-`verified-by: bravebot_tui::app::a_click_on_a_delegate_at_rest_opens_that_delegates_view`
-`verified-by: bravebot_tui::app::a_click_on_a_delegate_while_a_turn_runs_opens_its_view`
-`verified-by: bravebot_tui::app::a_click_off_a_delegate_or_a_drag_over_one_opens_no_view_at_rest`
-`verified-by: bravebot_tui::app::a_click_on_a_delegate_opens_no_view_where_another_mode_is_in_use`
-`verified-by: bravebot_tui::app::a_click_opens_the_delegate_of_the_block_when_two_turns_number_theirs_alike`
-`verified-by: bravebot_tui::app::a_click_on_every_row_of_a_delegates_block_at_rest_opens_its_view`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_a_delegate_at_rest_opens_that_delegates_view`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_a_delegate_while_a_turn_runs_opens_its_view`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_off_a_delegate_or_a_drag_over_one_opens_no_view_at_rest`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_a_delegate_opens_no_view_where_another_mode_is_in_use`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_opens_the_delegate_of_the_block_when_two_turns_number_theirs_alike`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_every_row_of_a_delegates_block_at_rest_opens_its_view`
 
 <a id="MOUSE-24"></a>
 ### MOUSE-24: a click on the way back out of a delegate's view leaves it
@@ -724,15 +724,15 @@ not paint it. The label is drawn where two blank cells after the header's words,
 last column fit, and a header with less room draws none. The keys stay the way to do it without a
 mouse.
 
-`verified-by: bravebot_tui::app::a_click_on_the_back_label_leaves_a_delegates_view`
-`verified-by: bravebot_tui::app::a_click_on_the_sentence_that_closes_a_delegates_view_leaves_it`
-`verified-by: bravebot_tui::app::a_drag_over_the_way_back_or_the_closing_sentence_leaves_the_view_open`
-`verified-by: bravebot_tui::app::a_click_on_the_closing_sentence_returns_to_the_scroller_it_was_opened_over`
-`verified-by: bravebot_tui::app::a_drag_along_the_header_copies_no_way_back`
-`verified-by: bravebot_tui::app::a_header_with_no_room_for_the_label_draws_none`
-`verified-by: bravebot_tui::app::the_label_is_drawn_when_two_blanks_and_one_more_cell_fit_beside_the_words`
-`verified-by: bravebot_tui::app::the_cells_that_answer_as_the_way_back_are_the_label_and_a_blank_either_side`
-`verified-by: bravebot_tui::app::a_click_on_each_row_a_closing_sentence_wraps_over_leaves_the_view`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_the_back_label_leaves_a_delegates_view`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_the_sentence_that_closes_a_delegates_view_leaves_it`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_drag_over_the_way_back_or_the_closing_sentence_leaves_the_view_open`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_the_closing_sentence_returns_to_the_scroller_it_was_opened_over`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_drag_along_the_header_copies_no_way_back`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_header_with_no_room_for_the_label_draws_none`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::the_label_is_drawn_when_two_blanks_and_one_more_cell_fit_beside_the_words`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::the_cells_that_answer_as_the_way_back_are_the_label_and_a_blank_either_side`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_each_row_a_closing_sentence_wraps_over_leaves_the_view`
 `verified-by: bravebot_tui::select::a_copy_and_a_highlight_leave_out_the_cells_drawn_for_a_click`
 
 <a id="MOUSE-25"></a>
@@ -752,12 +752,12 @@ search, the files state and a delegate's view open nothing. What decides is the 
 whether the call has more to show than it draws, and nothing a result says. The keys stay
 the way to do it without a mouse.
 
-`verified-by: bravebot_tui::app::a_click_on_a_call_at_rest_opens_the_scroller_on_it_expanded`
-`verified-by: bravebot_tui::app::a_click_on_a_long_write_at_rest_opens_the_scroller_on_every_change`
-`verified-by: bravebot_tui::app::a_click_off_a_call_or_a_drag_over_one_opens_no_scroller_at_rest`
-`verified-by: bravebot_tui::app::a_click_on_a_call_opens_no_scroller_where_another_mode_is_in_use`
-`verified-by: bravebot_tui::app::a_click_on_a_call_while_a_turn_runs_opens_the_scroller_on_it`
-`verified-by: bravebot_tui::app::a_click_on_every_row_of_a_call_at_rest_opens_the_scroller_on_it`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_a_call_at_rest_opens_the_scroller_on_it_expanded`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_a_long_write_at_rest_opens_the_scroller_on_every_change`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_off_a_call_or_a_drag_over_one_opens_no_scroller_at_rest`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_a_call_opens_no_scroller_where_another_mode_is_in_use`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_a_call_while_a_turn_runs_opens_the_scroller_on_it`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_every_row_of_a_call_at_rest_opens_the_scroller_on_it`
 `verified-by: bravebot_tui::state::opening_the_scroller_on_a_call_shows_it_where_it_was_or_whole`
 
 <a id="MOUSE-26"></a>
@@ -777,12 +777,12 @@ delegate's view open nothing. The loops that run while a turn, a compaction or a
 the copy out and leave the view where it was. What decides is the cell clicked and which reply was
 drawn there. `/copy` stays the way to do it without a mouse.
 
-`verified-by: bravebot_tui::app::a_click_on_a_replys_marker_copies_that_reply_as_copy_does`
-`verified-by: bravebot_tui::app::a_click_off_a_replys_marker_copies_no_reply`
-`verified-by: bravebot_tui::app::a_reply_still_arriving_has_no_marker_to_click`
-`verified-by: bravebot_tui::app::a_reply_is_copied_by_its_marker_while_a_turn_runs_and_in_the_scroller`
-`verified-by: bravebot_tui::app::a_click_on_a_replys_marker_copies_nothing_where_another_mode_is_in_use`
-`verified-by: bravebot_tui::app::the_loops_that_run_while_work_does_copy_the_reply_a_click_named`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_a_replys_marker_copies_that_reply_as_copy_does`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_off_a_replys_marker_copies_no_reply`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_reply_still_arriving_has_no_marker_to_click`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_reply_is_copied_by_its_marker_while_a_turn_runs_and_in_the_scroller`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_a_replys_marker_copies_nothing_where_another_mode_is_in_use`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::the_loops_that_run_while_work_does_copy_the_reply_a_click_named`
 
 <a id="MOUSE-27"></a>
 ### MOUSE-27: a click on the word at the right of a fenced block's header copies the block
@@ -810,16 +810,16 @@ lines, has no word. `/copy block` is the way to do it without a mouse
 ([CMD-11](commands.md#CMD-11)): it copies the same words, and the blocks it counts back from the latest
 are the blocks that hold words, whether or not the row has room to draw the word.
 
-`verified-by: bravebot_tui::app::a_click_on_a_blocks_copy_word_copies_the_block_alone`
-`verified-by: bravebot_tui::app::a_click_off_a_blocks_copy_word_copies_no_block`
-`verified-by: bravebot_tui::app::a_drag_over_a_block_does_not_copy_its_copy_word`
-`verified-by: bravebot_tui::app::a_block_in_a_reply_still_arriving_has_no_copy_word_until_it_ends`
-`verified-by: bravebot_tui::app::a_blocks_copy_word_works_in_the_scroller_and_while_a_turn_runs`
-`verified-by: bravebot_tui::app::a_click_on_a_blocks_copy_word_copies_nothing_where_another_mode_is_in_use`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_a_blocks_copy_word_copies_the_block_alone`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_off_a_blocks_copy_word_copies_no_block`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_drag_over_a_block_does_not_copy_its_copy_word`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_block_in_a_reply_still_arriving_has_no_copy_word_until_it_ends`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_blocks_copy_word_works_in_the_scroller_and_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_click_on_a_blocks_copy_word_copies_nothing_where_another_mode_is_in_use`
 `verified-by: bravebot_tui::render::transcript::the_word_that_copies_a_block_sits_where_the_layout_says_at_every_width`
 `verified-by: bravebot_tui::render::a_search_finds_what_a_reply_says_and_not_the_word_that_copies_its_block`
-`verified-by: bravebot_tui::app::a_typed_block_command_copies_the_words_the_click_on_that_block_copies`
-`verified-by: bravebot_tui::app::a_typed_block_command_runs_mid_turn_and_counts_the_blocks_that_have_a_word`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_typed_block_command_copies_the_words_the_click_on_that_block_copies`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::a_typed_block_command_runs_mid_turn_and_counts_the_blocks_that_have_a_word`
 
 <a id="MOUSE-28"></a>
 ### MOUSE-28: a click on a prompt waiting behind a turn takes it back into the box, and words on its row remove it
@@ -866,25 +866,25 @@ picker or a history search open nothing. The rows are recorded as drawn, so a li
 attached above the queue moves them with it. The keys stay the way to do it without a mouse: Up takes
 the lines back into the box ([INPUT-18](terminal-input.md#INPUT-18)), and clearing the box discards them.
 
-`verified-by: bravebot_tui::app::a_click_on_a_waiting_prompt_takes_it_and_the_ones_after_it_back_into_the_box`
-`verified-by: bravebot_tui::app::a_click_on_the_oldest_waiting_prompt_leaves_what_the_key_leaves`
-`verified-by: bravebot_tui::app::a_click_on_the_newest_waiting_prompt_takes_that_one_and_keeps_the_line_in_the_box`
-`verified-by: bravebot_tui::app::a_click_off_a_waiting_prompt_or_a_drag_over_one_takes_nothing_back`
-`verified-by: bravebot_tui::app::a_click_on_a_prompt_the_turn_has_taken_leaves_the_box_alone`
-`verified-by: bravebot_tui::app::a_click_on_a_waiting_prompt_takes_nothing_back_where_another_mode_is_in_use`
-`verified-by: bravebot_tui::app::a_line_put_away_above_the_queue_does_not_move_what_a_click_takes`
-`verified-by: bravebot_tui::app::a_file_attached_above_the_queue_does_not_move_what_a_click_takes`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_a_waiting_prompt_takes_it_and_the_ones_after_it_back_into_the_box`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_the_oldest_waiting_prompt_leaves_what_the_key_leaves`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_the_newest_waiting_prompt_takes_that_one_and_keeps_the_line_in_the_box`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_off_a_waiting_prompt_or_a_drag_over_one_takes_nothing_back`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_a_prompt_the_turn_has_taken_leaves_the_box_alone`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_a_waiting_prompt_takes_nothing_back_where_another_mode_is_in_use`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_line_put_away_above_the_queue_does_not_move_what_a_click_takes`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_file_attached_above_the_queue_does_not_move_what_a_click_takes`
 `verified-by: bravebot_tui::state::taking_back_from_a_place_in_the_queue_gives_back_that_prompt_and_the_ones_after`
 `verified-by: bravebot_tui::state::a_click_cannot_take_back_what_the_turn_has_already_been_given`
 `verified-by: bravebot_tui::state::a_command_line_a_click_queued_is_not_given_back_to_the_box`
-`verified-by: bravebot_tui::app::a_click_queued_command_stays_waiting_when_the_prompts_come_back`
-`verified-by: bravebot_tui::app::a_click_on_a_command_a_click_queued_removes_it`
-`verified-by: bravebot_tui::app::the_word_remove_takes_that_prompt_out_of_the_queue_and_out_of_the_turns_reach`
-`verified-by: bravebot_tui::app::the_words_clear_all_remove_every_waiting_line_and_leave_the_box`
-`verified-by: bravebot_tui::app::clear_all_is_drawn_once_two_wait_and_a_narrow_row_draws_no_words`
-`verified-by: bravebot_tui::app::a_click_on_the_last_prompt_drawn_takes_the_ones_not_drawn_back_with_it`
-`verified-by: bravebot_tui::app::remove_and_clear_all_reach_the_prompts_not_drawn`
-`verified-by: bravebot_tui::app::removing_a_prompt_the_turn_took_changes_nothing_and_one_after_it_is_the_one_removed`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_queued_command_stays_waiting_when_the_prompts_come_back`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_a_command_a_click_queued_removes_it`
+`verified-by: bravebot_tui::app::tests::mouse_controls::the_word_remove_takes_that_prompt_out_of_the_queue_and_out_of_the_turns_reach`
+`verified-by: bravebot_tui::app::tests::mouse_controls::the_words_clear_all_remove_every_waiting_line_and_leave_the_box`
+`verified-by: bravebot_tui::app::tests::mouse_controls::clear_all_is_drawn_once_two_wait_and_a_narrow_row_draws_no_words`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_the_last_prompt_drawn_takes_the_ones_not_drawn_back_with_it`
+`verified-by: bravebot_tui::app::tests::mouse_controls::remove_and_clear_all_reach_the_prompts_not_drawn`
+`verified-by: bravebot_tui::app::tests::mouse_controls::removing_a_prompt_the_turn_took_changes_nothing_and_one_after_it_is_the_one_removed`
 `verified-by: bravebot_tui::state::discarding_removes_a_click_queued_command_and_stops_at_a_prompt_the_turn_took`
 `verified-by: bravebot_agent::interjections::forget_after_drops_the_line_that_many_from_the_newest_and_keeps_the_rest_in_order`
 `verified-by: bravebot_agent::interjections::forget_after_says_false_for_a_line_the_turn_has_taken`
@@ -910,12 +910,12 @@ the line it queues is not remembered as one that was typed. While a
 picker is open the click is on the picker and asks for nothing, as it does over the scroller and a
 history search. The command stays the way to do it without a mouse.
 
-`verified-by: bravebot_tui::app::a_click_on_a_panel_row_does_what_the_command_typed_does_at_rest`
-`verified-by: bravebot_tui::app::a_click_on_a_panel_row_does_what_the_command_typed_does_while_a_turn_runs`
-`verified-by: bravebot_tui::app::a_click_on_a_panel_row_queues_the_command_where_no_turn_is_running`
-`verified-by: bravebot_tui::app::a_click_on_a_panel_row_waits_for_the_command_that_is_running`
-`verified-by: bravebot_tui::app::a_click_on_a_panel_row_leaves_a_line_being_typed_in_the_box`
-`verified-by: bravebot_tui::app::a_click_on_a_panel_row_under_an_open_picker_asks_for_nothing`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_a_panel_row_does_what_the_command_typed_does_at_rest`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_a_panel_row_does_what_the_command_typed_does_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_a_panel_row_queues_the_command_where_no_turn_is_running`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_a_panel_row_waits_for_the_command_that_is_running`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_a_panel_row_leaves_a_line_being_typed_in_the_box`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_a_panel_row_under_an_open_picker_asks_for_nothing`
 
 <a id="MOUSE-30"></a>
 ### MOUSE-30: a click on the session's name puts the command that renames it in the box
@@ -937,13 +937,13 @@ are on one cell and the press is a single click, so a drag is a selection, and a
 the directory, the branch and the id are not targets. `/rename` stays the way to do it without a
 mouse.
 
-`verified-by: bravebot_tui::app::a_click_on_the_session_name_puts_rename_and_the_name_in_the_box`
-`verified-by: bravebot_tui::app::a_click_on_the_session_name_while_a_turn_runs_puts_rename_in_the_box`
-`verified-by: bravebot_tui::app::a_name_with_control_characters_is_put_in_the_box_without_them`
-`verified-by: bravebot_tui::app::a_tab_in_the_name_is_put_in_the_box_as_the_space_the_panel_draws`
-`verified-by: bravebot_tui::app::the_note_of_a_click_on_the_name_while_a_turn_runs_is_not_something_the_turn_did`
-`verified-by: bravebot_tui::app::a_click_that_cannot_put_rename_in_the_box_leaves_it_alone`
-`verified-by: bravebot_tui::app::a_double_click_on_the_session_name_puts_rename_in_the_box_once`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_the_session_name_puts_rename_and_the_name_in_the_box`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_the_session_name_while_a_turn_runs_puts_rename_in_the_box`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_name_with_control_characters_is_put_in_the_box_without_them`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_tab_in_the_name_is_put_in_the_box_as_the_space_the_panel_draws`
+`verified-by: bravebot_tui::app::tests::mouse_controls::the_note_of_a_click_on_the_name_while_a_turn_runs_is_not_something_the_turn_did`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_that_cannot_put_rename_in_the_box_leaves_it_alone`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_double_click_on_the_session_name_puts_rename_in_the_box_once`
 `verified-by: bravebot_tui::panel::only_the_rows_of_the_sessions_name_are_name_targets`
 
 <a id="MOUSE-31"></a>
@@ -1025,7 +1025,7 @@ words ([MOUSE-32](#MOUSE-32)), the place a task's click goes to is read from whe
 ([MOUSE-31](#MOUSE-31)), and the commands the clicks stand for say what they say at the keyboard
 ([MOUSE-29](#MOUSE-29)).
 
-`verified-by: bravebot_tui::app::a_click_on_any_target_of_the_panel_never_draws_what_a_tool_returned`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_any_target_of_the_panel_never_draws_what_a_tool_returned`
 
 <a id="MOUSE-34"></a>
 ### MOUSE-34: a selection in the transcript stays on the text it was put on
@@ -1080,34 +1080,34 @@ those lines is kept when one is, and dropped when the view steps to another dele
 `verified-by: bravebot_tui::select::what_is_above_a_line_is_told_by_the_text_of_each_line_above_it`
 `verified-by: bravebot_tui::select::a_mark_leaves_out_the_cells_drawn_for_a_click_and_the_blanks_before_them`
 `verified-by: bravebot_tui::select::the_first_frame_sets_what_an_end_is_told_by_and_a_later_one_must_agree`
-`verified-by: bravebot_tui::app::a_call_finishing_above_a_selection_does_not_leave_it_over_other_text`
-`verified-by: bravebot_tui::app::a_call_finishing_above_a_selection_in_a_delegates_view_does_not_leave_it_over_other_text`
-`verified-by: bravebot_tui::app::thinking_taken_down_above_a_selection_does_not_leave_it_over_other_text`
-`verified-by: bravebot_tui::app::calls_finishing_and_a_reply_arriving_below_a_selection_leave_it_alone`
-`verified-by: bravebot_tui::app::a_selection_ending_on_a_line_still_being_written_survives_the_line_growing`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_call_finishing_above_a_selection_does_not_leave_it_over_other_text`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_call_finishing_above_a_selection_in_a_delegates_view_does_not_leave_it_over_other_text`
+`verified-by: bravebot_tui::app::tests::mouse_selection::thinking_taken_down_above_a_selection_does_not_leave_it_over_other_text`
+`verified-by: bravebot_tui::app::tests::mouse_selection::calls_finishing_and_a_reply_arriving_below_a_selection_leave_it_alone`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_selection_ending_on_a_line_still_being_written_survives_the_line_growing`
 `verified-by: bravebot_tui::app::tests::selection::a_selection_ended_below_a_reply_being_written_survives_its_next_words_in_the_scroller`
 `verified-by: bravebot_tui::app::tests::selection::a_drag_held_below_a_reply_being_written_that_scrolls_to_its_tail_keeps_the_selection`
 `verified-by: bravebot_tui::app::tests::selection::a_change_above_an_end_below_a_reply_being_written_still_puts_the_selection_away`
-`verified-by: bravebot_tui::app::a_reply_becoming_an_entry_keeps_a_selection_of_its_rows`
-`verified-by: bravebot_tui::app::a_reply_with_a_block_becoming_an_entry_keeps_a_selection_from_its_header_down`
-`verified-by: bravebot_tui::app::a_prompt_queued_under_the_box_leaves_a_selection_of_the_transcript_held`
-`verified-by: bravebot_tui::app::a_search_over_a_selection_does_not_drop_it`
-`verified-by: bravebot_tui::app::a_row_put_ahead_of_the_watched_delegate_leaves_a_selection_of_its_lines_alone`
-`verified-by: bravebot_tui::app::stepping_to_another_delegate_drops_a_selection_of_the_one_before`
-`verified-by: bravebot_tui::app::a_selection_on_the_opening_screen_goes_when_the_opening_ends`
-`verified-by: bravebot_tui::app::a_wheel_turn_leaves_the_selection_on_the_text_it_was_put_on`
-`verified-by: bravebot_tui::app::the_scrollers_keys_leave_the_selection_on_the_text_it_was_put_on`
-`verified-by: bravebot_tui::app::the_keys_that_scroll_at_rest_leave_the_selection_on_the_text_it_was_put_on`
-`verified-by: bravebot_tui::app::a_click_that_sweeps_nothing_reaches_its_target_while_a_selection_of_rows_is_held`
-`verified-by: bravebot_tui::app::a_click_that_sweeps_nothing_reaches_a_link_a_path_a_block_and_the_panel_while_rows_are_held`
-`verified-by: bravebot_tui::app::rows_a_turn_adds_below_do_not_move_the_selection_off_its_text`
-`verified-by: bravebot_tui::app::a_release_straight_after_a_wheel_turn_copies_the_text_that_was_swept`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_reply_becoming_an_entry_keeps_a_selection_of_its_rows`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_reply_with_a_block_becoming_an_entry_keeps_a_selection_from_its_header_down`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_prompt_queued_under_the_box_leaves_a_selection_of_the_transcript_held`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_search_over_a_selection_does_not_drop_it`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_row_put_ahead_of_the_watched_delegate_leaves_a_selection_of_its_lines_alone`
+`verified-by: bravebot_tui::app::tests::mouse_selection::stepping_to_another_delegate_drops_a_selection_of_the_one_before`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_selection_on_the_opening_screen_goes_when_the_opening_ends`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_wheel_turn_leaves_the_selection_on_the_text_it_was_put_on`
+`verified-by: bravebot_tui::app::tests::mouse_selection::the_scrollers_keys_leave_the_selection_on_the_text_it_was_put_on`
+`verified-by: bravebot_tui::app::tests::mouse_selection::the_keys_that_scroll_at_rest_leave_the_selection_on_the_text_it_was_put_on`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_click_that_sweeps_nothing_reaches_its_target_while_a_selection_of_rows_is_held`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_click_that_sweeps_nothing_reaches_a_link_a_path_a_block_and_the_panel_while_rows_are_held`
+`verified-by: bravebot_tui::app::tests::mouse_selection::rows_a_turn_adds_below_do_not_move_the_selection_off_its_text`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_release_straight_after_a_wheel_turn_copies_the_text_that_was_swept`
 `verified-by: bravebot_tui::app::tests::selection::a_drag_straight_after_a_wheel_turn_selects_the_text_under_the_pointer_now`
 `verified-by: bravebot_tui::app::tests::selection::a_press_straight_after_a_wheel_turn_begins_on_the_text_under_the_pointer_now`
-`verified-by: bravebot_tui::app::a_drag_that_began_with_the_view_scrolled_back_selects_the_rows_under_it`
-`verified-by: bravebot_tui::app::a_transcript_that_shrinks_drops_a_selection_that_reached_what_went`
-`verified-by: bravebot_tui::app::opening_the_scroller_drops_a_selection_held_in_the_plain_view`
-`verified-by: bravebot_tui::app::expanding_a_call_drops_a_selection_held_in_the_scroller`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_drag_that_began_with_the_view_scrolled_back_selects_the_rows_under_it`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_transcript_that_shrinks_drops_a_selection_that_reached_what_went`
+`verified-by: bravebot_tui::app::tests::mouse_selection::opening_the_scroller_drops_a_selection_held_in_the_plain_view`
+`verified-by: bravebot_tui::app::tests::mouse_selection::expanding_a_call_drops_a_selection_held_in_the_scroller`
 `verified-by: bravebot_tui::app::tests::selection::a_transcript_of_more_rows_than_a_layout_counts_is_selected_by_the_rows_of_the_screen`
 
 <a id="MOUSE-35"></a>
@@ -1128,10 +1128,10 @@ which costs in proportion to the transcript, and draws the rows of the selection
 what it holds drawn at once is bounded and does not grow with the selection. A line the wrap cut over
 more rows than a window holds is joined across the windows as it is within one.
 
-`verified-by: bravebot_tui::app::a_selection_longer_than_the_screen_copies_in_full`
-`verified-by: bravebot_tui::app::a_selection_wholly_out_of_view_copies_its_rows_and_nothing_of_the_panel`
-`verified-by: bravebot_tui::app::a_row_reads_the_same_on_the_screen_and_off_it`
-`verified-by: bravebot_tui::app::a_whole_transcript_copies_as_the_lines_it_is_made_of`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_selection_longer_than_the_screen_copies_in_full`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_selection_wholly_out_of_view_copies_its_rows_and_nothing_of_the_panel`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_row_reads_the_same_on_the_screen_and_off_it`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_whole_transcript_copies_as_the_lines_it_is_made_of`
 `verified-by: bravebot_tui::app::tests::selection::a_line_that_wraps_over_several_windows_of_rows_copies_as_one_line`
 `verified-by: bravebot_tui::select::a_selection_longer_than_the_rows_drawn_at_once_copies_each_row_once_in_order`
 `verified-by: bravebot_tui::select::rows_either_side_of_a_boundary_between_windows_join_as_they_do_within_one`
@@ -1149,8 +1149,8 @@ out.
 
 `verified-by: bravebot_tui::select::a_character_two_cells_wide_is_copied_once`
 `verified-by: bravebot_tui::select::what_a_highlight_marks_of_a_character_two_cells_wide_is_what_a_copy_takes`
-`verified-by: bravebot_tui::app::a_drag_over_wide_characters_in_the_box_copies_them_once`
-`verified-by: bravebot_tui::app::a_whole_transcript_copies_as_the_lines_it_is_made_of`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_drag_over_wide_characters_in_the_box_copies_them_once`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_whole_transcript_copies_as_the_lines_it_is_made_of`
 
 <a id="MOUSE-37"></a>
 ### MOUSE-37: a drag held outside the transcript scrolls it and extends the selection
@@ -1177,13 +1177,13 @@ the transcript keeps the end of the selection on the last row in view that holds
 copied reaches the rows the turn goes on to add. Rows added below a view that is held do not move the selection
 ([MOUSE-34](#MOUSE-34)). The wheel and the keys scroll the view with no drag held.
 
-`verified-by: bravebot_tui::app::a_drag_held_below_the_transcript_scrolls_it_and_extends_the_selection`
-`verified-by: bravebot_tui::app::a_drag_held_on_the_first_row_scrolls_the_transcript_back_and_extends_the_selection`
-`verified-by: bravebot_tui::app::a_drag_held_below_a_transcript_a_turn_is_writing_under_follows_it_to_the_tail`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_drag_held_below_the_transcript_scrolls_it_and_extends_the_selection`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_drag_held_on_the_first_row_scrolls_the_transcript_back_and_extends_the_selection`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_drag_held_below_a_transcript_a_turn_is_writing_under_follows_it_to_the_tail`
 `verified-by: bravebot_tui::app::tests::selection::a_drag_held_below_a_reply_being_written_that_scrolls_to_its_tail_keeps_the_selection`
-`verified-by: bravebot_tui::app::nothing_scrolls_unless_a_held_drag_is_past_an_edge_of_the_transcript`
-`verified-by: bravebot_tui::app::a_view_at_the_end_the_drag_is_past_stays_where_it_is`
-`verified-by: bravebot_tui::app::the_steps_owed_follow_the_time_and_the_distance_past_the_edge`
+`verified-by: bravebot_tui::app::tests::mouse_selection::nothing_scrolls_unless_a_held_drag_is_past_an_edge_of_the_transcript`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_view_at_the_end_the_drag_is_past_stays_where_it_is`
+`verified-by: bravebot_tui::app::tests::mouse_selection::the_steps_owed_follow_the_time_and_the_distance_past_the_edge`
 `verified-by: bravebot_tui::select::a_pointer_is_past_an_edge_of_the_transcript_only_beyond_it_or_where_the_screen_ends`
 `verified-by: bravebot_tui::app::tests::selection::every_loop_that_answers_the_mouse_steps_a_drag_held_outside_the_transcript`
 
@@ -1203,10 +1203,10 @@ press that swept nothing holds no selection, and Escape does what it did.
 A turn in flight is stopped by the second press of Escape, or at once by Ctrl-C, which a selection
 does not take ([INPUT-4](terminal-input.md#INPUT-4)).
 
-`verified-by: bravebot_tui::app::escape_puts_a_held_selection_away_before_it_clears_the_box`
-`verified-by: bravebot_tui::app::escape_puts_a_held_selection_away_before_it_stops_a_turn_and_the_next_stops_it`
-`verified-by: bravebot_tui::app::escape_puts_a_held_selection_away_before_a_mode_takes_it`
-`verified-by: bravebot_tui::app::escape_is_not_taken_by_a_click_and_a_picker_takes_it_before_a_selection`
+`verified-by: bravebot_tui::app::tests::mouse_selection::escape_puts_a_held_selection_away_before_it_clears_the_box`
+`verified-by: bravebot_tui::app::tests::mouse_selection::escape_puts_a_held_selection_away_before_it_stops_a_turn_and_the_next_stops_it`
+`verified-by: bravebot_tui::app::tests::mouse_selection::escape_puts_a_held_selection_away_before_a_mode_takes_it`
+`verified-by: bravebot_tui::app::tests::mouse_selection::escape_is_not_taken_by_a_click_and_a_picker_takes_it_before_a_selection`
 `verified-by: bravebot_tui::app::tests::selection::escape_puts_a_held_selection_away_before_it_stops_a_command_and_the_next_stops_it`
 `verified-by: bravebot_tui::app::tests::selection::escape_puts_a_held_selection_away_before_the_scroller_under_a_command_and_the_command`
 `verified-by: bravebot_tui::app::tests::selection::escape_puts_a_held_selection_away_before_it_stops_a_request_or_a_goal_check`
@@ -1228,7 +1228,7 @@ message in the catalog, with its count.
 `verified-by: bravebot_tui::render::a_copy_names_the_pane_it_came_from_unless_that_is_the_transcript`
 `verified-by: bravebot_tui::render::a_copy_of_one_character_from_a_named_pane_reads_naturally`
 `verified-by: bravebot_tui::render::a_copy_says_how_much_it_took`
-`verified-by: bravebot_tui::app::the_notice_of_a_copy_names_the_pane_it_was_taken_from`
+`verified-by: bravebot_tui::app::tests::mouse_selection::the_notice_of_a_copy_names_the_pane_it_was_taken_from`
 
 <a id="MOUSE-40"></a>
 ### MOUSE-40: a click with ctrl held on a web address in the assistant's words opens it in the browser
@@ -1334,7 +1334,7 @@ they read or the exact address, and nothing in the address.
 `verified-by: bravebot_tui::markdown::a_run_of_schemes_that_is_not_an_address_is_measured_once`
 `verified-by: bravebot_tui::opener::only_a_web_address_with_a_host_in_printable_ascii_is_openable`
 `verified-by: bravebot_tui::link_clicks::a_number_asks_for_what_a_click_on_that_link_asks_for_in_every_shape_the_link_tests_use`
-`verified-by: bravebot_tui::app::a_number_typed_while_a_turn_runs_starts_the_browser_for_an_address`
+`verified-by: bravebot_tui::app::tests::commands_other::a_number_typed_while_a_turn_runs_starts_the_browser_for_an_address`
 `verified-by: bravebot_tui::link_clicks::what_is_typed_asks_for_what_a_click_on_that_link_asks_for_in_every_shape_the_link_tests_use`
 `verified-by: bravebot_tui::link_clicks::a_typed_address_the_opener_would_refuse_opens_nothing_and_says_so`
 `verified-by: bravebot_tui::link_clicks::a_typed_address_opens_while_a_turn_runs_and_a_typed_name_is_refused`
@@ -1484,7 +1484,7 @@ with a blank in it, can be shown too. `@src/main.rs` in a prompt sends the file 
 `verified-by: bravebot_tui::link_clicks::a_file_with_escape_sequences_cannot_draw_on_the_screen`
 `verified-by: bravebot_tui::link_clicks::a_path_that_names_no_file_in_reach_says_so_without_repeating_it`
 `verified-by: bravebot_tui::link_clicks::a_denied_file_and_a_file_too_large_are_refused_in_words`
-`verified-by: bravebot_tui::app::a_click_on_a_path_is_held_to_the_working_directory_and_only_the_preview_to_the_deny_rules`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_a_path_is_held_to_the_working_directory_and_only_the_preview_to_the_deny_rules`
 `verified-by: bravebot_tui::text_links::what_reads_as_a_path_and_the_place_after_it`
 `verified-by: bravebot_tui::text_links::what_does_not_read_as_a_path`
 `verified-by: bravebot_tui::text_links::a_path_stops_where_the_sentence_resumes`
@@ -1521,7 +1521,7 @@ with a blank in it, can be shown too. `@src/main.rs` in a prompt sends the file 
 `verified-by: bravebot_agent::file_preview::the_release_is_recorded_as_one_for_a_screen`
 `verified-by: bravebot_tui::link_clicks::a_number_asks_for_what_a_click_on_that_link_asks_for_in_every_shape_the_link_tests_use`
 `verified-by: bravebot_tui::link_clicks::a_file_is_shown_where_a_click_on_a_path_acts_and_nowhere_else`
-`verified-by: bravebot_tui::app::a_number_typed_while_a_summary_runs_waits_and_shows_the_file_when_it_is_over`
+`verified-by: bravebot_tui::app::tests::commands_other::a_number_typed_while_a_summary_runs_waits_and_shows_the_file_when_it_is_over`
 `verified-by: bravebot_tui::link_clicks::what_is_typed_asks_for_what_a_click_on_that_link_asks_for_in_every_shape_the_link_tests_use`
 `verified-by: bravebot_tui::link_clicks::a_typed_name_is_shown_or_refused_in_the_words_the_click_on_a_path_gets`
 
@@ -1589,14 +1589,14 @@ the path.
 `verified-by: bravebot_tui::editor::what_the_editor_saves_is_the_file_and_nothing_is_read_back`
 `verified-by: bravebot_tui::editor::an_editor_that_exits_badly_does_not_claim_the_file_is_unchanged`
 `verified-by: bravebot_tui::editor::a_file_is_not_opened_in_an_editor_nobody_chose`
-`verified-by: bravebot_tui::app::a_click_on_a_path_is_held_to_the_working_directory_and_only_the_preview_to_the_deny_rules`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_a_path_is_held_to_the_working_directory_and_only_the_preview_to_the_deny_rules`
 `verified-by: bravebot_tui::editor::an_editor_a_click_opens_is_not_handed_this_agents_credentials_and_the_prompt_editor_is`
 `verified-by: bravebot_tui::editor::the_editor_a_click_opens_is_started_without_this_agents_own_credentials`
 `verified-by: bravebot_agent::file_preview::a_name_that_is_not_a_file_in_reach_shows_nothing`
 `verified-by: bravebot_agent::file_preview::an_absolute_name_inside_the_working_directory_is_the_file_it_names`
 `verified-by: bravebot_tui::link_clicks::edit_and_a_number_ask_for_what_a_ctrl_click_on_that_path_asks_for_in_every_shape`
 `verified-by: bravebot_tui::link_clicks::edit_asks_for_no_editor_while_a_turn_is_drawing_on_the_terminal`
-`verified-by: bravebot_tui::app::edit_typed_while_a_summary_runs_waits_and_asks_for_the_editor_when_it_is_over`
+`verified-by: bravebot_tui::app::tests::commands_other::edit_typed_while_a_summary_runs_waits_and_asks_for_the_editor_when_it_is_over`
 `verified-by: bravebot_tui::link_clicks::what_is_typed_asks_for_what_a_click_on_that_link_asks_for_in_every_shape_the_link_tests_use`
 
 <a id="MOUSE-44"></a>
@@ -2064,7 +2064,7 @@ reports ctrl-click as one, and some terminals keep a right click for a menu of t
 wheel and the drag the interface reads are wanted anyway.
 
 `verified-by: bravebot_config::settings::a_checkout_may_turn_the_mouse_and_the_context_menu_off_and_not_on`
-`verified-by: bravebot_tui::app::a_checkouts_tui_block_does_not_turn_the_mouse_or_the_menu_back_on`
+`verified-by: bravebot_tui::app::tests::mouse_selection::a_checkouts_tui_block_does_not_turn_the_mouse_or_the_menu_back_on`
 `verified-by: bravebot_tui::app::tests::menu::a_right_press_opens_the_menu_of_what_is_under_it_and_nowhere_else`
 `verified-by: bravebot_tui::app::tests::menu::with_a_selection_held_and_the_pointer_inside_it_the_menu_copies_the_selection`
 `verified-by: bravebot_tui::app::tests::menu::the_menu_is_drawn_inside_the_screen_wherever_the_pointer_is_and_wraps_nothing`

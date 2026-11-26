@@ -80,7 +80,7 @@ decision somebody made; this one is what holds when they have made none.
 `verified-by: bravebot_agent::permission_mode::the_default_mode_asks_about_everything`
 `verified-by: bravebot_agent::permission_mode::asking_puts_a_write_a_run_an_output_a_file_and_a_vouch_to_the_person`
 `verified-by: bravebot_tui::state::a_session_starts_by_asking_about_everything`
-`verified-by: bravebot_tui::app::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
+`verified-by: bravebot_tui::app::tests::permissions::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
 `verified-by: bravebot_cli::auto_start::the_flag_opens_a_session_in_auto_and_a_start_without_it_asks`
 `verified-by: bravebot_cli::running::a_one_shot_run_with_no_flag_and_no_setting_opens_asking`
 `verified-by: bravebot_cli::scheduled_runs::a_scheduled_run_opens_asking_where_the_home_settings_open_sessions_in_auto`
@@ -484,8 +484,8 @@ read and where the key is read, so the two cannot disagree about whether the mod
 `verified-by: bravebot_agent::permission_mode::the_key_reaches_auto_after_planning_and_before_bypass`
 `verified-by: bravebot_cli::main::the_bypass_flag_is_refused_where_a_layer_made_the_mode_unreachable`
 `verified-by: bravebot_cli::running::the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable`
-`verified-by: bravebot_tui::app::the_key_reaches_bypass_without_the_flag`
-`verified-by: bravebot_tui::app::the_key_cannot_reach_bypass_where_a_layer_made_it_unreachable`
+`verified-by: bravebot_tui::app::tests::permissions::the_key_reaches_bypass_without_the_flag`
+`verified-by: bravebot_tui::app::tests::permissions::the_key_cannot_reach_bypass_where_a_layer_made_it_unreachable`
 `verified-by: bravebot_tui::state::entering_bypass_with_auto_vetting_on_says_what_bypass_refuses`
 `verified-by: bravebot_tui::state::entering_bypass_with_auto_vetting_off_says_nothing_extra`
 `verified-by: bravebot_tui::state::leaving_bypass_and_other_steps_say_nothing_about_vetting`
@@ -493,9 +493,9 @@ read and where the key is read, so the two cannot disagree about whether the mod
 `verified-by: bravebot_cli::progress::bypass_with_auto_vetting_says_what_bypass_refuses_after_the_flags_line`
 `verified-by: bravebot_cli::progress::bypass_without_auto_vetting_or_without_the_flag_says_nothing_extra`
 `verified-by: bravebot_cli::running::a_one_shot_run_in_bypass_says_what_bypass_refuses_only_with_auto_vetting_on`
-`verified-by: bravebot_tui::app::a_session_in_bypass_is_put_back_to_asking_when_a_layer_takes_bypass_away`
-`verified-by: bravebot_tui::app::reading_the_rules_of_a_checkout_that_forbids_bypassing_takes_bypass_away`
-`verified-by: bravebot_tui::app::the_flag_opens_the_session_in_bypass_and_can_be_cycled_out_of`
+`verified-by: bravebot_tui::app::tests::permissions::a_session_in_bypass_is_put_back_to_asking_when_a_layer_takes_bypass_away`
+`verified-by: bravebot_tui::app::tests::permissions::reading_the_rules_of_a_checkout_that_forbids_bypassing_takes_bypass_away`
+`verified-by: bravebot_tui::app::tests::permissions::the_flag_opens_the_session_in_bypass_and_can_be_cycled_out_of`
 `verified-by: bravebot_tui::status::named_mode_names_asking_where_the_session_began_in_bypass`
 `verified-by: bravebot_tui::render::the_hint_line_names_asking_after_a_session_leaves_bypass`
 `verified-by: bravebot_tui::render::the_hint_line_says_nothing_about_the_ordinary_mode`
@@ -505,7 +505,7 @@ read and where the key is read, so the two cannot disagree about whether the mod
 `verified-by: bravebot_cli::main::it_composes_with_incognito`
 `verified-by: bravebot_cli::running::auto_is_refused_with_the_other_mode_flags_and_where_nothing_opens_in_it`
 `verified-by: bravebot_cli::auto_start::a_mode_typed_on_the_line_beats_the_setting`
-`verified-by: bravebot_tui::app::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
+`verified-by: bravebot_tui::app::tests::permissions::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
 
 <a id="MODE-6"></a>
 ### MODE-6: no mode answers a question a rule already refused
@@ -587,7 +587,7 @@ withdraw it.
 `verified-by: bravebot_tui::undo_tests::undoing_a_turn_that_went_into_plan_mode_leaves_no_plan_mode_to_retract`
 `verified-by: bravebot_agent::permission_mode::a_confirmer_follows_the_mode_chosen_after_it_was_made`
 `verified-by: bravebot_agent::permission_mode::the_planner_is_told_only_of_a_change_into_or_out_of_plan_mode`
-`verified-by: bravebot_tui::app::the_mode_can_be_changed_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::permissions::the_mode_can_be_changed_while_a_turn_runs`
 `verified-by: bravebot_ui_bridge::permission_mode::a_mode_chosen_while_a_turn_runs_applies_to_that_turn`
 `verified-by: bravebot_ui_bridge::permission_mode::planning_chosen_while_a_turn_runs_refuses_the_rest_of_that_turn`
 
@@ -705,10 +705,10 @@ after the word, never the typed line. Typed while a turn runs it waits for that 
 the key that reaches it, and a person who wants one read-only request has one line to say so. A
 word for bypassing would let a session reach the one mode MODE-5 keeps to the command line.
 
-`verified-by: bravebot_tui::app::the_plan_command_sets_plan_mode_and_sends_only_its_task`
-`verified-by: bravebot_tui::app::the_plan_command_without_a_task_sets_the_mode_and_sends_nothing`
-`verified-by: bravebot_tui::app::the_plan_command_sets_plan_mode_rather_than_cycling_to_the_next`
-`verified-by: bravebot_tui::app::the_plan_command_waits_for_the_turn_in_flight`
+`verified-by: bravebot_tui::app::tests::permissions::the_plan_command_sets_plan_mode_and_sends_only_its_task`
+`verified-by: bravebot_tui::app::tests::permissions::the_plan_command_without_a_task_sets_the_mode_and_sends_nothing`
+`verified-by: bravebot_tui::app::tests::permissions::the_plan_command_sets_plan_mode_rather_than_cycling_to_the_next`
+`verified-by: bravebot_tui::app::tests::permissions::the_plan_command_waits_for_the_turn_in_flight`
 `verified-by: bravebot_ui_bridge::permission_mode::a_window_plan_line_sets_plan_mode_and_its_turn_is_sent_only_the_task`
 
 <a id="MODE-13"></a>

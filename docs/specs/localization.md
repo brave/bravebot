@@ -189,7 +189,7 @@ the file because it is the later act, as a saved model or effort level outranks 
 `verified-by: bravebot_session::store::a_saved_language_is_read_back_replaced_and_forgotten`
 `verified-by: bravebot_session::store::a_pipe_where_the_language_file_should_be_is_no_choice_and_holds_nothing_up`
 `verified-by: bravebot_session::store::a_language_file_grown_large_still_answers_with_its_first_line`
-`verified-by: bravebot_tui::app::the_language_command_carries_its_word`
+`verified-by: bravebot_tui::app::tests::remainder::the_language_command_carries_its_word`
 `verified-by: bravebot_ui_bridge::language::a_language_chosen_in_the_window_is_saved_where_the_terminal_reads_it_and_read_back`
 `verified-by: bravebot_ui_bridge::language::automatic_removes_the_saved_choice`
 `verified-by: bravebot_ui_bridge::language::a_word_no_catalog_answers_is_refused_and_nothing_is_saved`
@@ -197,11 +197,11 @@ the file because it is the later act, as a saved model or effort level outranks 
 `verified-by: bravebot_ui_bridge::language::a_choice_that_could_not_be_saved_says_so_and_changes_nothing`
 `verified-by: bravebot_ui_bridge::language::with_nothing_else_named_the_systems_languages_choose_the_window_s_catalog`
 `verified-by: bravebot_i18n::lib::a_window_with_nothing_named_takes_the_first_system_language_a_catalog_answers`
-`verified-by: bravebot_tui::app::a_language_a_catalog_answers_is_saved_under_the_catalogs_own_tag`
-`verified-by: bravebot_tui::app::a_language_no_catalog_answers_is_refused_and_not_saved`
-`verified-by: bravebot_tui::app::auto_gives_the_choice_back_and_leaves_no_file`
-`verified-by: bravebot_tui::app::a_session_that_keeps_nothing_says_the_language_was_not_saved`
-`verified-by: bravebot_tui::app::the_bare_language_command_says_what_is_in_use_and_what_was_saved`
+`verified-by: bravebot_tui::app::tests::remainder::a_language_a_catalog_answers_is_saved_under_the_catalogs_own_tag`
+`verified-by: bravebot_tui::app::tests::remainder::a_language_no_catalog_answers_is_refused_and_not_saved`
+`verified-by: bravebot_tui::app::tests::remainder::auto_gives_the_choice_back_and_leaves_no_file`
+`verified-by: bravebot_tui::app::tests::remainder::a_session_that_keeps_nothing_says_the_language_was_not_saved`
+`verified-by: bravebot_tui::app::tests::remainder::the_bare_language_command_says_what_is_in_use_and_what_was_saved`
 `verified-by: bravebot_cli::running::a_language_in_the_settings_file_outranks_what_the_shell_says`
 `verified-by: bravebot_cli::running::without_the_key_the_shell_still_chooses_the_language`
 `verified-by: bravebot_cli::running::a_language_saved_by_the_command_outranks_the_settings_file`

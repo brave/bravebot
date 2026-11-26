@@ -54,7 +54,7 @@ write its own would be a turn that decides when it has finished, and a turn that
 attacker wrote would be handing that decision to them. The person endorsed a sentence, so that
 sentence is what is judged.
 
-`verified-by: bravebot_tui::app::the_goal_command_carries_the_whole_condition`
+`verified-by: bravebot_tui::app::tests::commands_words::the_goal_command_carries_the_whole_condition`
 `verified-by: bravebot_agent::goal::the_condition_is_marked_as_one_rather_than_left_on_the_end_of_the_work`
 
 <a id="GOAL-2"></a>
@@ -68,7 +68,7 @@ state, and turning one into a first prompt would send a request the person did n
 by this program, about work it had guessed at.
 
 `verified-by: bravebot_tui::state::setting_a_goal_starts_no_turn`
-`verified-by: bravebot_tui::app::the_goal_command_sets_a_condition_without_sending_anything`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_goal_command_sets_a_condition_without_sending_anything`
 
 <a id="GOAL-3"></a>
 ### GOAL-3: the judge is a separate request, with no tools, over a copy of the exchange
@@ -184,8 +184,8 @@ and pressed Enter. The sentence a goal sends back is this program's, quoting a j
 no keystroke behind an `@` inside it. Reading one would let a model open a file wearing an
 endorsement nobody gave, and it would do so on a path the person never saw.
 
-`verified-by: bravebot_tui::app::a_path_named_in_a_sentence_the_driver_wrote_vouches_for_nothing`
-`verified-by: bravebot_tui::app::a_path_named_in_a_line_the_person_queued_still_names_a_file`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_path_named_in_a_sentence_the_driver_wrote_vouches_for_nothing`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_path_named_in_a_line_the_person_queued_still_names_a_file`
 
 ## What ends one
 
@@ -267,19 +267,19 @@ likeliest place to meet one: nothing closes a view when a turn ends, so one open
 just judged is still standing there.
 
 `verified-by: bravebot_tui::state::clearing_a_goal_says_so_and_says_nothing_when_there_was_none`
-`verified-by: bravebot_tui::app::interrupting_takes_the_goal_off_before_it_leaves`
-`verified-by: bravebot_tui::app::a_stop_key_takes_the_goal_off_and_stops_the_check`
-`verified-by: bravebot_tui::app::a_stopped_goal_check_is_not_reported_as_a_failure`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::interrupting_takes_the_goal_off_before_it_leaves`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_stop_key_takes_the_goal_off_and_stops_the_check`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_stopped_goal_check_is_not_reported_as_a_failure`
 `verified-by: bravebot_agent::turn::a_stop_pressed_during_a_goal_check_reaches_the_request_and_no_verdict_comes_back`
 `verified-by: bravebot_tui::app::tests::watching::the_view_answers_the_stop_keys_before_the_goal_check_does`
-`verified-by: bravebot_tui::app::the_search_answers_the_stop_keys_before_the_goal_check_does`
-`verified-by: bravebot_tui::app::stopping_a_turn_leaves_the_goal_set`
-`verified-by: bravebot_tui::app::a_turn_that_failed_leaves_the_goal_where_it_was`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_search_answers_the_stop_keys_before_the_goal_check_does`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::stopping_a_turn_leaves_the_goal_set`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_turn_that_failed_leaves_the_goal_where_it_was`
 `verified-by: bravebot_tui::state::clearing_the_session_takes_the_goal_off`
 `verified-by: bravebot_tui::state::clearing_a_session_with_no_goal_says_nothing_of_one`
 `verified-by: bravebot_tui::state::a_verdict_after_the_goal_was_cleared_is_neither_acted_on_nor_announced`
-`verified-by: bravebot_tui::app::a_goal_is_not_judged_after_the_person_asked_to_leave`
-`verified-by: bravebot_tui::app::a_goal_is_not_judged_while_a_command_waits_in_the_queue`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_goal_is_not_judged_after_the_person_asked_to_leave`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_goal_is_not_judged_while_a_command_waits_in_the_queue`
 
 <a id="GOAL-11"></a>
 ### GOAL-11: a goal and a loop are never both running
@@ -352,8 +352,8 @@ one copy of it in the conversation per round.
 `verified-by: bravebot_agent::turn::a_turn_under_a_goal_is_told_the_condition_it_is_working_towards`
 `verified-by: bravebot_agent::turn::a_turn_with_no_goal_is_told_nothing_about_a_condition`
 `verified-by: bravebot_agent::preamble::a_turn_under_a_goal_is_told_it_cannot_change_the_condition`
-`verified-by: bravebot_tui::app::a_turn_under_a_paused_goal_is_told_nothing_about_a_condition`
-`verified-by: bravebot_tui::app::the_task_a_turn_is_built_with_carries_the_goal_only_while_it_is_in_force`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_turn_under_a_paused_goal_is_told_nothing_about_a_condition`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_task_a_turn_is_built_with_carries_the_goal_only_while_it_is_in_force`
 
 <a id="GOAL-15"></a>
 ### GOAL-15: a turn is told to wait for the world inside the turn
@@ -439,7 +439,7 @@ for having been interrupted would punish the detour the pause exists for.
 `verified-by: bravebot_tui::state::pausing_or_resuming_says_when_it_changed_nothing`
 `verified-by: bravebot_tui::state::a_verdict_after_the_goal_was_paused_is_neither_acted_on_nor_announced`
 `verified-by: bravebot_tui::state::a_paused_goal_is_replaced_by_a_loop_and_still_refuses_one_a_turn_arranged`
-`verified-by: bravebot_tui::app::the_goal_command_pauses_and_resumes_the_goal_even_mid_turn`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_goal_command_pauses_and_resumes_the_goal_even_mid_turn`
 `verified-by: bravebot_tui::status::the_report_says_a_goal_is_paused`
 `verified-by: bravebot_tui::panel::a_paused_goal_is_drawn_and_says_it_is_paused`
 
