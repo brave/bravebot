@@ -414,8 +414,15 @@ fn run_client(
     current: &Current,
 ) {
     let name = &client.name;
+    // `Start::checked` accepts only an absolute program, so a name with no separator is not started.
+    let program = bravebot_sandbox::programs::Resolved::named_by_person(&client.program);
+    let Some(program) = program else {
+        current.served(place);
+        eprintln!("bravebot-host: cannot start client {name}: the program was not found");
+        return;
+    };
     let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::named_by_person(&client.program),
+        &program,
         bravebot_sandbox::programs::Inherits::All,
         bravebot_sandbox::programs::SearchPath::Inherited,
         // The client the person named, started with the environment they set (SANDBOX-30).

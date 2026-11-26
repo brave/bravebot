@@ -170,7 +170,11 @@ impl Supervisor {
 
 /// The command that starts the process for `id` again, idle, in the directory it worked in and in
 /// asking, which no setting changes (BG-8, BG-12).
-fn restart_command(program: &Path, id: &str, facts: &Facts) -> std::process::Command {
+fn restart_command(
+    program: &bravebot_sandbox::programs::Resolved,
+    id: &str,
+    facts: &Facts,
+) -> std::process::Command {
     let mut command =
         crate::background::host_command(program, id, Some(Path::new(&facts.directory)), Mode::Ask);
     command
@@ -191,7 +195,7 @@ fn restart_command(program: &Path, id: &str, facts: &Facts) -> std::process::Com
 /// the one that comes up.
 fn restart(
     roster: &Roster,
-    program: &Path,
+    program: &bravebot_sandbox::programs::Resolved,
     id: &str,
     facts: &Facts,
     children: &mut Vec<Child>,
@@ -249,9 +253,7 @@ pub(crate) fn supervise() -> ExitCode {
     };
     // Its own session, so closing the terminal that started it does not end it.
     bravebot_session::jobs::leave_the_terminal();
-    // The supervisor is this same program started again; nothing is trusted from where it says it is.
-    // nosemgrep: rust.lang.security.current-exe.current-exe
-    let Ok(program) = std::env::current_exe() else {
+    let Ok(program) = bravebot_sandbox::programs::Resolved::own_executable() else {
         return ExitCode::FAILURE;
     };
     let mut supervisor = Supervisor::new(roster.clone());
@@ -464,6 +466,7 @@ mod tests {
     /// BG-12, BG-8: a process is started again as the hidden host in the directory it worked in, in
     /// asking, whatever it ran in before, with its output going nowhere.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_process_is_started_again_in_its_directory_asking() {
         let mut accepting = an_entry(A, State::Idle, None);
         accepting.mode = Mode::AcceptEdits;
@@ -471,7 +474,9 @@ mod tests {
         roster.publish(&accepting).expect("published");
         let facts = roster.facts(A).expect("facts");
 
-        let command = restart_command(Path::new("/bin/bravebot"), A, &facts);
+        let program = bravebot_sandbox::programs::Resolved::found_earlier("/bin/bravebot")
+            .expect("an absolute path");
+        let command = restart_command(&program, A, &facts);
         let arguments: Vec<_> = command.get_args().collect();
         assert_eq!(arguments, ["__bg-host", A, "ask"]);
         assert_eq!(command.get_current_dir(), Some(Path::new("/work")));
@@ -528,6 +533,7 @@ mod tests {
     /// BG-12: a line a terminal has left for the process it is starting is not replaced by the
     /// supervisor's empty one, and no process is started beside the terminal's.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_restart_does_not_replace_the_line_a_terminal_is_starting_the_process_with() {
         let roster = a_roster();
         roster
@@ -543,7 +549,9 @@ mod tests {
         };
         let mut children = Vec::new();
 
-        restart(&roster, Path::new("/bin/sh"), A, &facts, &mut children).expect("left alone");
+        let program = bravebot_sandbox::programs::Resolved::found_earlier("/bin/sh")
+            .expect("an absolute path");
+        restart(&roster, &program, A, &facts, &mut children).expect("left alone");
 
         assert_eq!(
             roster.take_first_prompt(A).as_deref(),

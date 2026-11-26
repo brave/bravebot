@@ -2748,6 +2748,7 @@ impl Bridge {
             return Err(Failure::bad_request(crate::background::NOTHING_RECORDED));
         };
         let program = crate::background::program()
+            .and_then(bravebot_sandbox::programs::Resolved::found_earlier)
             .ok_or_else(|| Failure::bad_request(crate::background::NO_PROGRAM))?;
 
         let closed = self.close(&handle)?;

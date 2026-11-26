@@ -240,7 +240,7 @@ impl Fixture {
     fn start(&self, program: &Path, name: &str, value: &Path, checked: bool) -> Command {
         if checked {
             start_against(
-                &Resolved::named_by_person(program),
+                &Resolved::named_by_person(program).unwrap(),
                 Inherits::All,
                 SearchPath::Inherited,
                 CodeSelectors::Checked(&[]),
@@ -249,7 +249,7 @@ impl Fixture {
             )
         } else {
             start_against(
-                &Resolved::named_by_person(program),
+                &Resolved::named_by_person(program).unwrap(),
                 Inherits::All,
                 SearchPath::Inherited,
                 // The control: the same start with nothing checked, to show the variable selects code.

@@ -820,12 +820,19 @@ fn run(
             std::io::Error::from(std::io::ErrorKind::NotFound).to_string(),
         ));
     };
+    // `program_to_start` gives the person's own path, which has a separator, or an absolute path
+    // from the lookup, so a bare name is refused here only if that changes.
+    let Some(resolved) = bravebot_sandbox::programs::Resolved::named_by_person(program) else {
+        return Some(Trouble::NotStarted(
+            std::io::Error::from(std::io::ErrorKind::NotFound).to_string(),
+        ));
+    };
     // Without this agent's own credentials, and with the names the hook starts itself (an `env`
     // shebang, a launcher) searching only the entries the lookup above searches, whether it was
     // named bare or by a path (SANDBOX-30).
     let withheld = bravebot_config::scrub::withheld();
     let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::named_by_person(program),
+        &resolved,
         bravebot_sandbox::programs::Inherits::Without(&withheld),
         bravebot_sandbox::programs::SearchPath::Reduced,
         // A hook is a command the person wrote for themselves (SANDBOX-30).

@@ -1396,13 +1396,14 @@ mod tests {
         }
 
         /// A backend given `policy_directory` to write its policy files in, or none.
+        #[expect(clippy::expect_used, reason = "a test fails by panicking")]
         fn shell_writing_in(
             &self,
             hosts: &[String],
             policy_directory: Option<&std::path::Path>,
         ) -> OpenShell {
             OpenShell::with_program(
-                Resolved::found_earlier(self.dir.join("openshell")),
+                Resolved::found_earlier(self.dir.join("openshell")).expect("an absolute path"),
                 "bb-testsandbox1",
                 "python:3.13-slim",
                 hosts,

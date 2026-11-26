@@ -1175,7 +1175,8 @@ impl<'a> Running<'a> {
         let last = steps.len() - 1;
 
         for (index, step) in steps.iter().enumerate() {
-            let command = command_for(step, self.directory, self.scratch, &expanded[index]);
+            let command = command_for(step, self.directory, self.scratch, &expanded[index])
+                .map_err(|error| error.started_before(self.before_stage(&children)))?;
             // Decided before a redirection's file is opened, so a step the platform will not
             // confine is refused ahead of every effect its line has.
             let launching = crate::confine::begin(self.confinement, command, step, self.directory)
@@ -2277,14 +2278,14 @@ fn command_for(
     directory: &std::path::Path,
     scratch: Option<&std::path::Path>,
     expanded: &[(String, Secret)],
-) -> Command {
+) -> Result<Command, ExecError> {
     // Exhaustive so that a field added to `Step` stops the build here. This is where a step
     // becomes a real process, so a field this applies that no standing answer's key holds
     // would be a line running differently from the one somebody was shown ([RUN-8]).
     //
     // [RUN-8]: ../../../docs/specs/tools/run.md
     let Step {
-        program: _,
+        program,
         resolved: _,
         started_as,
         args: _,
@@ -2304,8 +2305,18 @@ fn command_for(
     // would be the whole of the hole.
     let withheld = bravebot_config::scrub::withheld();
     let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
+    // A `started_as` with no separator was not returned by a lookup, which gives an absolute path
+    // ([`Step::started_as`]). It is refused rather than left to the operating system's search of
+    // `PATH` (SANDBOX-30), as a program that is not there is.
+    let Some(resolved) = bravebot_sandbox::programs::Resolved::found_earlier(started_as) else {
+        return Err(ExecError::NotStarted {
+            program: program.clone(),
+            detail: std::io::Error::from(std::io::ErrorKind::NotFound).to_string(),
+            before: StartedBefore::Nothing,
+        });
+    };
     let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
+        &resolved,
         inherits,
         bravebot_sandbox::programs::SearchPath::Inherited,
         // The line is the person's, run in the confinement chosen for it (SANDBOX-30).
@@ -2337,7 +2348,7 @@ fn command_for(
     // Withheld again, since the line is the planner's and a name it assigns is not the
     // person's own: `run.scrubEnv` lists what their commands may not be handed.
     inherits.withhold(&mut command);
-    command
+    Ok(command)
 }
 
 /// Start the steps of a compiled plan and leave them running. Every step is started, chained the
@@ -2379,7 +2390,14 @@ pub fn start_steps_within(
     let last = steps.len() - 1;
 
     for (index, step) in steps.iter().enumerate() {
-        let command = command_for(step, directory, scratch, &expanded[index]);
+        let command = match command_for(step, directory, scratch, &expanded[index]) {
+            Ok(command) => command,
+            Err(error) => {
+                let before = resolving.before_stage(&children);
+                stop(&mut children);
+                return Err(error.started_before(before));
+            }
+        };
         let launching = match crate::confine::begin(confinement, command, step, directory) {
             Ok(launching) => launching,
             Err(error) => {

@@ -880,8 +880,17 @@ impl Server {
         // granted without having been seen. The names come from the caller because which they are is
         // the host's business, the same reason `resolved` is passed in rather than looked up here.
         // Its `PATH` is bravebot's own: it runs the project's interpreter on purpose (LSP-5).
+        // The host resolves the program before the person is asked, so `resolved` holds a path. A
+        // value with no separator would be searched for on that `PATH`, so it is not started.
+        let to_start =
+            bravebot_sandbox::programs::Resolved::found_earlier(resolved).ok_or_else(|| {
+                LspError::Start {
+                    language: served.clone(),
+                    detail: "the program is not an absolute path".into(),
+                }
+            })?;
         let mut command = bravebot_sandbox::programs::start(
-            &bravebot_sandbox::programs::Resolved::found_earlier(resolved),
+            &to_start,
             bravebot_sandbox::programs::Inherits::Without(withheld),
             bravebot_sandbox::programs::SearchPath::Inherited,
             // A language server runs the project's toolchain on purpose (LSP-5).

@@ -10,7 +10,7 @@
 
 use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
-use bravebot_sandbox::programs::{Names, selectors};
+use bravebot_sandbox::programs::{Names, Resolved, selectors};
 use bravebot_sandbox::scope::Address;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -182,7 +182,7 @@ impl Ssh for Machine {
 }
 
 /// `ssh-keygen -lf <key>`: the fingerprint of a public key file.
-fn fingerprint_command(program: &Path, key: &Path) -> std::process::Command {
+fn fingerprint_command(program: &Resolved, key: &Path) -> std::process::Command {
     let mut command = started(program);
     command.arg("-lf").arg(key);
     command
@@ -190,7 +190,7 @@ fn fingerprint_command(program: &Path, key: &Path) -> std::process::Command {
 
 /// `ssh -T -i <key> -o IdentitiesOnly=yes -o ConnectTimeout=15 git@<host>`: a connection that
 /// offers `key` and no other.
-fn greeting_command(program: &Path, key: &Path, host: &str) -> std::process::Command {
+fn greeting_command(program: &Resolved, key: &Path, host: &str) -> std::process::Command {
     let mut command = started(program);
     command
         .args(["-T", "-i"])
@@ -201,7 +201,7 @@ fn greeting_command(program: &Path, key: &Path, host: &str) -> std::process::Com
 }
 
 /// `git config --get remote.origin.url`: the address `origin` has.
-fn origin_command(program: &Path) -> std::process::Command {
+fn origin_command(program: &Resolved) -> std::process::Command {
     let mut command = started(program);
     command.args(["config", "--get", "remote.origin.url"]);
     command
@@ -264,7 +264,7 @@ const SHELL: &str = "/bin/sh";
 /// whatever the person's is.
 ///
 /// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
-fn started(program: &Path) -> std::process::Command {
+fn started(program: &Resolved) -> std::process::Command {
     started_with(
         program,
         std::env::vars_os(),
@@ -275,12 +275,12 @@ fn started(program: &Path) -> std::process::Command {
 /// [`started`] against a given environment and a given judgment of which files are outside the
 /// directories a stage may write.
 fn started_with(
-    program: &Path,
+    program: &Resolved,
     held: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
     outside_stage_writable: &impl Fn(&Path) -> bool,
 ) -> std::process::Command {
     let mut command = bravebot_sandbox::programs::start_against(
-        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        program,
         bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
         bravebot_sandbox::programs::SearchPath::Reduced,
         bravebot_sandbox::programs::CodeSelectors::Checked(&CODE_SELECTORS),
@@ -291,18 +291,19 @@ fn started_with(
     command
 }
 
-/// Standard output and standard error of the command `build` makes from `program`, run to
-/// completion within [`WAIT`].
+/// Standard output and standard error of the command `build` makes from the program `program`
+/// names, run to completion within [`WAIT`].
 ///
 /// `program` is found as [SANDBOX-30] says, and one found only where a stage could have written is
-/// not started: it reads as absent. `build` is one of the `_command` functions above, each of which
+/// not started: it reads as absent. The program `build` is given is the absolute path the lookup
+/// returned, never the bare name. `build` is one of the `_command` functions above, each of which
 /// begins from [`started`].
 ///
 /// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
-fn run(program: &str, build: impl FnOnce(&Path) -> std::process::Command) -> Option<String> {
+fn run(program: &str, build: impl FnOnce(&Resolved) -> std::process::Command) -> Option<String> {
     use std::io::Read;
     use std::process::Stdio;
-    let found = bravebot_sandbox::programs::find(std::ffi::OsStr::new(program))?;
+    let found = Resolved::find(std::ffi::OsStr::new(program))?;
     let mut child = build(&found)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -618,11 +619,17 @@ mod tests {
         names
     }
 
+    /// A program at an absolute path, as a lookup that found it would give it.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn at(path: &str) -> Resolved {
+        Resolved::found_earlier(path).expect("an absolute path")
+    }
+
     /// Whether the start takes `name` off, when the person's environment holds `name` set to `value`
     /// and only a path under `/safe` is outside the directories a stage may write.
     fn withheld_value(name: &str, value: &str) -> bool {
         let command = started_with(
-            Path::new("/usr/bin/git"),
+            &at("/usr/bin/git"),
             [(
                 std::ffi::OsString::from(name),
                 std::ffi::OsString::from(value),
@@ -716,7 +723,7 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
         let removed = |name: &str, value: &std::ffi::OsStr| {
             started_with(
-                Path::new("/usr/bin/git"),
+                &at("/usr/bin/git"),
                 [(std::ffi::OsString::from(name), value.to_os_string())],
                 &|path: &Path| path.starts_with("/safe"),
             )
@@ -735,7 +742,7 @@ mod tests {
 
         let removed_where_only_the_lookalike_is_outside = |name: &str, value: &std::ffi::OsStr| {
             started_with(
-                Path::new("/usr/bin/git"),
+                &at("/usr/bin/git"),
                 [(std::ffi::OsString::from(name), value.to_os_string())],
                 &|path: &Path| {
                     path == Path::new("/safe/run\u{FFFD}")
@@ -779,7 +786,7 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
         let removed = |value: &std::ffi::OsStr| {
             started_with(
-                Path::new("/usr/bin/git"),
+                &at("/usr/bin/git"),
                 [(std::ffi::OsString::from("BROWSER"), value.to_os_string())],
                 &|path: &Path| path.starts_with("/safe"),
             )
@@ -802,7 +809,7 @@ mod tests {
         // An environment that holds none of the selector names, so what is removed is the
         // credentials alone whatever the machine running the test has set.
         let command = started_with(
-            Path::new("/usr/bin/ssh"),
+            &at("/usr/bin/ssh"),
             [],
             &bravebot_sandbox::programs::outside_stage_writable,
         );
@@ -813,16 +820,13 @@ mod tests {
     #[cfg(unix)]
     fn the_three_starts() -> [std::process::Command; 3] {
         [
-            fingerprint_command(
-                Path::new("/usr/bin/ssh-keygen"),
-                Path::new("/h/.ssh/bot.pub"),
-            ),
+            fingerprint_command(&at("/usr/bin/ssh-keygen"), Path::new("/h/.ssh/bot.pub")),
             greeting_command(
-                Path::new("/usr/bin/ssh"),
+                &at("/usr/bin/ssh"),
                 Path::new("/h/.ssh/bot.pub"),
                 "github.com",
             ),
-            origin_command(Path::new("/usr/bin/git")),
+            origin_command(&at("/usr/bin/git")),
         ]
     }
 
@@ -888,7 +892,7 @@ mod tests {
         let row = writable.to_path_buf();
         let rows = std::slice::from_ref(&row);
         let command = started_with(
-            Path::new("/usr/bin/ssh"),
+            &at("/usr/bin/ssh"),
             [(
                 std::ffi::OsString::from(name),
                 value.as_os_str().to_os_string(),
@@ -1027,7 +1031,7 @@ mod tests {
         let rows = [session.path.clone()];
         for held in [Some(planted), Some(genuine), None] {
             let command = started_with(
-                Path::new("/usr/bin/ssh"),
+                &at("/usr/bin/ssh"),
                 held.clone()
                     .map(|shell| (std::ffi::OsString::from("SHELL"), shell.into_os_string())),
                 &|file: &Path| {

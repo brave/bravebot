@@ -151,12 +151,16 @@ fn is_wl_copy(program: &Path) -> bool {
 /// [`CODE_SELECTORS`] removed as well, `osascript` has [`OSASCRIPT_CODE_SELECTORS`],
 /// `systemd-inhibit` has [`SYSTEMD_INHIBIT_CODE_SELECTORS`], `wl-copy` has
 /// [`WL_COPY_CODE_SELECTORS`], and no other tool has a list.
-pub(crate) fn start(program: PathBuf) -> Command {
-    start_against(
-        &Resolved::found_earlier(program),
+///
+/// `None` for a `program` with no path separator. A lookup returns a path, so a caller that found
+/// the program never gets `None`, and a bare name is not started by the operating system's search
+/// of `PATH`.
+pub(crate) fn start(program: PathBuf) -> Option<Command> {
+    Some(start_against(
+        &Resolved::found_earlier(program)?,
         std::env::vars_os(),
         &bravebot_sandbox::programs::outside_stage_writable,
-    )
+    ))
 }
 
 /// [`start`] against a given environment and a given judgment of which files are outside the
@@ -265,10 +269,11 @@ mod tests {
 
     /// The command that starts `program` when the person's environment holds `value` for `name` and
     /// the session's directory is the one a stage may write.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn started(program: &str, name: &str, value: impl AsRef<OsStr>, fixture: &Fixture) -> Command {
         let writable = vec![fixture.session.clone()];
         start_against(
-            &Resolved::found_earlier(program),
+            &Resolved::found_earlier(program).expect("an absolute path"),
             [(OsString::from(name), value.as_ref().to_os_string())],
             &|file: &Path| {
                 bravebot_sandbox::programs::outside_stage_writable_with(file, &writable, &[])
@@ -679,6 +684,7 @@ mod tests {
     /// or `osacompile` is absent, and fails under `CI` on macOS.
     #[cfg(target_os = "macos")]
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_script_library_under_a_planted_user_home_does_not_run_through_the_checked_start() {
         let (osascript, osacompile) = (
             Path::new("/usr/bin/osascript"),
@@ -738,7 +744,7 @@ mod tests {
         // The checked start, with the session the one directory a stage may write.
         let writable = vec![session];
         let mut start = start_against(
-            &Resolved::found_earlier(osascript),
+            &Resolved::found_earlier(osascript).expect("an absolute path"),
             [(
                 OsString::from("CFFIXED_USER_HOME"),
                 home.clone().into_os_string(),
@@ -817,6 +823,7 @@ mod tests {
     /// reaches the program only if that start did not remove it. A `stand_in` is a script written
     /// as `program_name` in the session directory, for a program that is not installed.
     #[cfg(target_os = "linux")]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_unixexec_address_runs_the_helper(
         label: &str,
         program_name: &str,
@@ -854,7 +861,7 @@ mod tests {
         let mut command = if checked {
             let writable = vec![session.clone()];
             let mut command = start_against(
-                &Resolved::found_earlier(&program),
+                &Resolved::found_earlier(&program).expect("an absolute path"),
                 [(OsString::from(name), address.clone())],
                 &|file: &Path| {
                     bravebot_sandbox::programs::outside_stage_writable_with(file, &writable, &[])
@@ -871,7 +878,7 @@ mod tests {
             command
         } else {
             let mut command = bravebot_sandbox::programs::start(
-                &Resolved::found_earlier(&program),
+                &Resolved::found_earlier(&program).expect("an absolute path"),
                 Inherits::All,
                 SearchPath::Inherited,
                 CodeSelectors::Kept,

@@ -410,8 +410,14 @@ impl Authority {
         // The names the authority starts itself (an `env` shebang, a launcher) search only the
         // entries a lookup by bravebot searches, not a directory a confined stage may write
         // (SANDBOX-30).
+        // `Authority::new` holds an absolute path, which the constructor accepts. A value it
+        // refuses is reported as an authority that cannot be reached, with nothing started.
+        let program = bravebot_sandbox::programs::Resolved::named_by_person(&self.program)
+            .ok_or_else(|| {
+                ConnectorError::Unreachable(format!("'{}' is not a path", self.program.display()))
+            })?;
         let mut command = bravebot_sandbox::programs::start(
-            &bravebot_sandbox::programs::Resolved::named_by_person(&self.program),
+            &program,
             bravebot_sandbox::programs::Inherits::Only(&PASSED),
             bravebot_sandbox::programs::SearchPath::Reduced,
             // The authority is a program the person named, started with only `PASSED`.

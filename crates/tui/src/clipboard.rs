@@ -60,7 +60,7 @@ const COPY_TOOLS: &[(&str, &[&str])] = &[
 /// A tool that is a script or a launcher starts programs by name too, so it is given only the
 /// `PATH` entries the lookup searched (SANDBOX-30). `powershell`, which Windows pastes through, is
 /// also given the variables it reads to choose code ([`crate::powershell::CODE_SELECTORS`]).
-fn start_tool(program: PathBuf) -> Command {
+fn start_tool(program: PathBuf) -> Option<Command> {
     crate::powershell::start(program)
 }
 
@@ -79,7 +79,10 @@ fn pipe_into_found_by(
     let Some(program) = find(OsStr::new(program)) else {
         return false;
     };
-    let Ok(mut child) = start_tool(program)
+    let Some(mut command) = start_tool(program) else {
+        return false;
+    };
+    let Ok(mut child) = command
         .args(arguments)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -647,7 +650,7 @@ fn run_bytes_found_by(
     arguments: &[&str],
 ) -> Option<Vec<u8>> {
     let program = find(OsStr::new(program))?;
-    let output = start_tool(program)
+    let output = start_tool(program)?
         .args(arguments)
         .stdin(Stdio::null())
         .stderr(Stdio::null())

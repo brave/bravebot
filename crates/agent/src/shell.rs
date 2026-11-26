@@ -179,7 +179,7 @@ fn program_to_start(shell: &str) -> Option<bravebot_sandbox::programs::Resolved>
     use bravebot_sandbox::programs::Resolved;
 
     if crate::programs::has_separator(shell) {
-        return Some(Resolved::named_by_person(shell));
+        return Resolved::named_by_person(shell);
     }
     Resolved::find(std::ffi::OsStr::new(shell))
 }
