@@ -370,6 +370,9 @@ pub const DENIED: &[&str] = &[
     // window's own composer (CMD-1). A program never types that line.
     "loop.command",
     "loops.list",
+    // The loop clock, which sends a due tick as a turn. Called by the desktop's main process and
+    // by nothing else, as `watches.poll` is.
+    "loops.poll",
     "manifest.run",
     "manifest.read",
     "manifest.reply",

@@ -702,6 +702,10 @@ impl Bridge {
             "session.goal.continue" => self.goal_continue(request),
             "loop.command" => self.loop_command(request),
             "loops.list" => self.loops_list(request),
+            "loops.poll" => {
+                self.poll_loops();
+                Ok(json!({}))
+            }
             "caffeinate.confirmed" => {
                 Ok(json!({"confirmed": bravebot_session::store::load_caffeinate_confirmed()}))
             }
@@ -2427,6 +2431,23 @@ impl Bridge {
         // The condition this turn works towards, read when it starts as the terminal reads it: a
         // paused goal's turns are not told of it (GOAL-14).
         let working_towards = goal.lock().ok().and_then(|slot| slot.in_force());
+        let loops = Arc::clone(&open.loops);
+        // Which tick of a loop this turn is, where it is one: the loop `fire_loop` has just
+        // dispatched is the one in flight (LOOP-10). A prompt typed while loops wait is no tick.
+        //
+        // And whether a wait this turn asks for would become a later look at its line, which
+        // decides whether it is offered a way to ask for one (LOOP-14, SCHED-6). Only a line the
+        // person typed, in a session with no loop and no watch of its own already running.
+        let (tick, looking_again) = {
+            let loops = loops.lock().map_err(|_| {
+                Failure::new(ErrorCode::Internal, "the session's loops are unavailable")
+            })?;
+            let watching = watches.lock().map(|w| !w.is_empty()).unwrap_or(true);
+            (
+                loops.in_flight().and_then(|running| running.tick()),
+                composed.is_none() && recall && loops.is_empty() && !watching,
+            )
+        };
         let (turn_number, tokens_at_turn) = state
             .lock()
             .map(|s| (s.turns + 1, s.tokens))
@@ -2522,6 +2543,9 @@ impl Bridge {
                 watches,
                 goal,
                 working_towards,
+                loops,
+                tick,
+                looking_again,
                 emitter,
                 session,
                 project,
@@ -3620,6 +3644,19 @@ impl Bridge {
         if let Ok(mut watches) = open.watches.lock() {
             watches.stop_firing();
         }
+        // Stopping a turn ends every loop, whether or not the turn was a tick of one (LOOP-11).
+        // Said here, once, with how many went; the worker then finds none to end.
+        let stopped_loops = match stopping {
+            Some(running) if !running.is_finished() => open
+                .loops
+                .lock()
+                .map(|mut loops| loops.stop_all())
+                .unwrap_or(0),
+            _ => 0,
+        };
+        for (name, data) in crate::loop_command::stopped(stopped_loops) {
+            self.emitter.send(Event::new(name, &handle, data));
+        }
         // Cancelling when nothing is running is not an error: the turn may have finished
         // between the user pressing the key and this arriving.
         Ok(if expected.is_some() {
@@ -4415,16 +4452,126 @@ impl Bridge {
             .open
             .get(&handle)
             .ok_or_else(Failure::no_such_session)?;
-        let mut loops = open
-            .loops
-            .lock()
-            .map_err(|_| Failure::bad_request("Loops unavailable."))?;
-        crate::loop_command::command(
-            &argument,
-            &mut loops,
-            open.running.is_some(),
-            std::time::Instant::now(),
-        )
+        let (answer, started) = {
+            let mut loops = open
+                .loops
+                .lock()
+                .map_err(|_| Failure::bad_request("Loops unavailable."))?;
+            crate::loop_command::command(
+                &argument,
+                &mut loops,
+                open.running.is_some(),
+                open.ready_for_work(),
+                std::time::Instant::now(),
+            )?
+        };
+        // The first tick goes at once rather than an interval later (LOOP-4).
+        if let Some(number) = started {
+            self.fire_loop(&handle, number);
+        }
+        Ok(answer)
+    }
+
+    /// Called by the desktop's clock: send the tick of every idle session's loop that is due.
+    fn poll_loops(&mut self) {
+        self.poll_loops_at(std::time::Instant::now());
+    }
+
+    /// The loop clock, read at `now`.
+    ///
+    /// A session is passed over while a turn runs, while it is being compacted, before its trust
+    /// question is answered, while a question about its settings waits, and while a worker still
+    /// holds its state: a tick waits for an idle session and never interrupts (LOOP-6). What the
+    /// person queued in the window is the main process's to hold back, since this crate cannot see
+    /// that queue. Loops past their age end first, whether or not the session is idle (LOOP-11).
+    fn poll_loops_at(&mut self, now: std::time::Instant) {
+        let handles: Vec<_> = self.open.keys().cloned().collect();
+        for handle in handles {
+            self.reap(&handle);
+            let Some(open) = self.open.get(&handle) else {
+                continue;
+            };
+            let due = {
+                let Ok(mut loops) = open.loops.lock() else {
+                    continue;
+                };
+                for number in loops.age_out(now) {
+                    self.emitter.send(Event::new(
+                        "loop.ended",
+                        &handle,
+                        json!({"number": number, "reason": "aged"}),
+                    ));
+                }
+                loops.next_due(now)
+            };
+            let Some(number) = due else {
+                continue;
+            };
+            if open.running.is_some()
+                || open.compacting.is_some()
+                || !open.answered_trust
+                || open.questions.reply_method().is_some()
+            {
+                continue;
+            }
+            // A tick starts a turn, which takes the state. Where a worker still holds it the tick
+            // waits for the next poll, and the dispatch thread never waits on the worker.
+            if matches!(
+                open.state.try_lock(),
+                Err(std::sync::TryLockError::WouldBlock)
+            ) {
+                continue;
+            }
+            self.fire_loop(&handle, number);
+        }
+    }
+
+    /// Send a tick of loop `number` as a turn, announcing it first, and end the loop where the
+    /// turn cannot start.
+    ///
+    /// The line is the loop's own, sent as a prompt and never handed to a command (LOOP-2). The
+    /// worker reads the loop's tick off the loops when the turn starts, so the planner is told it
+    /// is one (LOOP-10).
+    fn fire_loop(&mut self, handle: &str, number: usize) {
+        let Some(open) = self.open.get(handle) else {
+            return;
+        };
+        let dispatched = open.loops.lock().ok().and_then(|mut loops| {
+            let running = loops.get_mut(number)?;
+            let (prompt, ()) = running.dispatching();
+            Some((prompt, running.ticks(), running.quiet()))
+        });
+        let Some((prompt, tick, quiet)) = dispatched else {
+            return;
+        };
+        // Announced before the worker starts, so the turn's own events follow it (LOOP-13).
+        self.emitter.send(Event::new(
+            "loop.tick",
+            handle,
+            json!({"number": number, "tick": tick, "quiet": quiet}),
+        ));
+        // Not recalled: the person typed `/loop`, and the tick is the program sending their line
+        // again, which is not a line to scroll back to or to name the session after.
+        let request = Request::parse(
+            &json!({"id": 0, "method": "turn.send", "params": {"session": handle, "prompt": prompt, "recall": false}})
+                .to_string(),
+        );
+        let failed = match request {
+            Ok(request) => self.start_turn(&request, None).err(),
+            Err(_) => Some(Failure::bad_request("The loop's line could not be sent.")),
+        };
+        if let Some(error) = failed {
+            if let Some(open) = self.open.get(handle)
+                && let Ok(mut loops) = open.loops.lock()
+            {
+                loops.stop(number);
+            }
+            self.emitter.send(Event::new(
+                "loop.ended",
+                handle,
+                json!({"number": number, "reason": "failed", "message": error.message}),
+            ));
+        }
     }
 
     /// `loops.list`: the session's loops, for the row beside the composer and the status view.
@@ -5395,6 +5542,12 @@ struct Work {
     /// The condition of the goal in force when the turn started, which the planner is told of
     /// (GOAL-14). `None` where no goal is set or it is paused.
     working_towards: Option<String>,
+    /// The session's loops, whose next tick is armed from this turn's end (LOOP-5).
+    loops: Arc<Mutex<bravebot_agent::repeat::Loops>>,
+    /// Which tick of a loop this turn is, where it is one (LOOP-10).
+    tick: Option<bravebot_agent::turn::Tick>,
+    /// Whether a wait this turn asks for starts a loop over its line (LOOP-14).
+    looking_again: bool,
     model: Option<String>,
     /// The definition this turn is addressed to, where it is a turn in a bot's conversation
     /// (MEMORY-10).
@@ -5525,6 +5678,9 @@ fn work(work: Work) {
         watches,
         goal,
         working_towards,
+        loops,
+        tick,
+        looking_again,
         model,
         addressing,
         addressing_standing,
@@ -5668,7 +5824,11 @@ fn work(work: Work) {
         .with_open_loops(state.open_loops.for_the_planner())
         // The goal in force, which the planner is told it works towards (GOAL-14, GOAL-15,
         // GOAL-16), as the terminal tells it.
-        .working_towards(working_towards);
+        .working_towards(working_towards)
+        // Told it is a tick of a loop and which kind, where it is one (LOOP-10), and a self-paced
+        // tick is offered the tool that says when to run again.
+        .ticking(tick)
+        .looking_again(looking_again);
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }
@@ -5828,6 +5988,8 @@ fn work(work: Work) {
     });
     let open_line = say_open_loops(&mut state, &workspace, stopped_goal);
 
+    // What the turn's end did to the session's loops, said once the turn has.
+    let mut loop_events = Vec::new();
     let event = match outcome {
         Ok(outcome) => {
             if let Ok(mut watches) = watches.lock() {
@@ -5842,6 +6004,21 @@ fn work(work: Work) {
                         );
                     }
                 }
+            }
+            // After the watches: a turn that asked for both a watch and a later look meant the
+            // watch. The next tick is measured from here, the end of the turn (LOOP-5).
+            let watching = watches.lock().map(|w| !w.is_empty()).unwrap_or(true);
+            if let Ok(mut held) = loops.lock() {
+                loop_events = crate::loop_command::turn_ended(
+                    &mut held,
+                    crate::loop_command::TurnEnd {
+                        wakeup: outcome.wakeup,
+                        cancelled: false,
+                        looking_again: looking_again.then(|| prompt.clone()),
+                        watching,
+                    },
+                    std::time::Instant::now(),
+                );
             }
             state.tokens += outcome.tokens;
             state
@@ -5932,6 +6109,21 @@ fn work(work: Work) {
             )
         }
         Err(error) => {
+            // A stopped turn ends every loop, whether or not it was a tick (LOOP-11). Any other
+            // failure is a tick that said nothing, so a self-paced loop falls back to the driver's
+            // own wait and ends on the second silence rather than on one failed request (LOOP-9).
+            if let Ok(mut held) = loops.lock() {
+                loop_events = crate::loop_command::turn_ended(
+                    &mut held,
+                    crate::loop_command::TurnEnd {
+                        wakeup: None,
+                        cancelled: cancel.is_cancelled(),
+                        looking_again: None,
+                        watching: false,
+                    },
+                    std::time::Instant::now(),
+                );
+            }
             let charged = &mut *state;
             bravebot_session::sessions::charge_failed_turn(
                 &mut charged.tokens,
@@ -5979,6 +6171,9 @@ fn work(work: Work) {
     // Finish bookkeeping and release the session before inviting the next request.
     if let Ok(mut watches) = watches.lock() {
         watches.turn_ended(std::time::Instant::now());
+    }
+    for (name, data) in loop_events {
+        emitter.send(Event::new(name, &session, data));
     }
     // An agent does not outlive its turn (DELEGATE-17). Said before the event that ends the turn,
     // so the window has the list it is to draw when it hears the end (VIEW-35).

@@ -11,6 +11,7 @@
 
 use crate::protocol::{ErrorCode, Failure};
 use bravebot_agent::repeat::{self, Asked, Held, Loops, Pacing, Running};
+use bravebot_agent::turn::Wakeup;
 use bravebot_i18n::t;
 use serde_json::{Value, json};
 use std::time::Instant;
@@ -19,18 +20,24 @@ use std::time::Instant;
 ///
 /// `turn_running` is whether the session has a turn in flight. A start is refused then with
 /// `TurnInFlight`, so the window holds the line until the turn ends (LOOP-6, CMD-8): the first
-/// tick of a loop is a turn of its own. The bare form and `stop` are answered at once, and `stop`
-/// leaves the turn in flight running (LOOP-11).
+/// tick of a loop is a turn of its own. `ready` is whether the session could start a turn at all,
+/// and a start is refused with its failure where it could not, so no loop is recorded whose first
+/// tick has nowhere to go. The bare form and `stop` are answered at once, and `stop` leaves the
+/// turn in flight running (LOOP-11).
+///
+/// Answers with the number of the loop it started, where it started one, so the caller sends that
+/// loop's first tick at once (LOOP-4).
 pub fn command(
     argument: &str,
     loops: &mut Loops,
     turn_running: bool,
+    ready: Result<(), Failure>,
     now: Instant,
-) -> Result<Value, Failure> {
+) -> Result<(Value, Option<usize>), Failure> {
     match repeat::parse(argument) {
-        Asked::Report => Ok(report(loops, now)),
-        Asked::Stop(which) => Ok(stop(loops, which)),
-        Asked::Unreadable => Ok(said(&[t!(loop_needs_a_prompt).to_string()], true)),
+        Asked::Report => Ok((report(loops, now), None)),
+        Asked::Stop(which) => Ok((stop(loops, which), None)),
+        Asked::Unreadable => Ok((said(&[t!(loop_needs_a_prompt).to_string()], true), None)),
         Asked::Start(request) => {
             if turn_running {
                 return Err(Failure::new(
@@ -38,19 +45,82 @@ pub fn command(
                     t!(loop_busy).to_string(),
                 ));
             }
+            ready?;
             // Refused rather than replacing one: the person typed every loop that is live
             // (LOOP-16).
             if loops.is_full() {
-                return Ok(said(&[t!(loop_full, count = repeat::MAX_LIVE)], true));
+                return Ok((said(&[t!(loop_full, count = repeat::MAX_LIVE)], true), None));
             }
-            Ok(start(loops, request))
+            let (answer, number) = start(loops, request);
+            Ok((answer, Some(number)))
         }
+    }
+}
+
+/// How a turn ended, as far as the session's loops need to know.
+pub struct TurnEnd {
+    /// What the turn asked for with `schedule_next`, where it finished and asked.
+    pub wakeup: Option<Wakeup>,
+    /// Whether the turn was stopped, which ends every loop (LOOP-11).
+    pub cancelled: bool,
+    /// The line the turn ran, where the person typed it and the turn was offered a later look at
+    /// it (LOOP-14). `None` for a tick, and for a line this program composed.
+    pub looking_again: Option<String>,
+    /// Whether a standing watch is live once the turn's own watches are armed. A session does one
+    /// of a watch and a loop at a time, and a turn that asked for both meant the watch.
+    pub watching: bool,
+}
+
+/// Arm the next tick from the turn that has just ended, and give back the events that say what
+/// changed.
+///
+/// Only the loop whose tick that turn was is touched. A turn the person typed in the middle of a
+/// loop is not a tick of it, and its ending does not reset the clock (LOOP-6). The next tick is
+/// measured from `now`, the end of the turn, and not from when the tick went (LOOP-5).
+pub fn turn_ended(loops: &mut Loops, end: TurnEnd, now: Instant) -> Vec<(&'static str, Value)> {
+    if end.cancelled {
+        let count = loops.stop_all();
+        return stopped(count);
+    }
+    if let Some(running) = loops.in_flight_mut() {
+        let (number, once) = (running.number(), running.once());
+        if running.ended(end.wakeup, now) {
+            return Vec::new();
+        }
+        loops.stop(number);
+        let reason = match end.wakeup {
+            _ if once => "sent",
+            Some(wakeup) if wakeup.stop => "finished",
+            _ => "silent",
+        };
+        return vec![("loop.ended", json!({"number": number, "reason": reason}))];
+    }
+    // A turn that asked to look again while nothing loops starts a loop over the person's line,
+    // with its first tick the wait away (LOOP-14).
+    match (end.looking_again, end.wakeup) {
+        (Some(line), Some(wakeup)) if !end.watching && !loops.is_full() => {
+            let number = loops.start(Running::armed(line, wakeup, now));
+            vec![(
+                "loop.armed",
+                json!({"number": number, "after": repeat::spell(wakeup.after)}),
+            )]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The event that says a stop ended every loop, with how many went (LOOP-11). Nothing where none
+/// was live.
+pub fn stopped(count: usize) -> Vec<(&'static str, Value)> {
+    match count {
+        0 => Vec::new(),
+        count => vec![("loop.ended", json!({"reason": "stopped", "count": count}))],
     }
 }
 
 /// Record a loop and say what it is. Numbered before anything is said, so the answer names the
 /// number `/loop stop` takes.
-fn start(loops: &mut Loops, request: repeat::Request) -> Value {
+fn start(loops: &mut Loops, request: repeat::Request) -> (Value, usize) {
     let (adjusted, pacing) = (request.adjusted, request.pacing);
     let number = loops.start(Running::begin(request));
     let mut lines = Vec::new();
@@ -84,7 +154,7 @@ fn start(loops: &mut Loops, request: repeat::Request) -> Value {
     answer["number"] = json!(number);
     answer["pace"] = json!(pace);
     answer["adjusted"] = held;
-    answer
+    (answer, number)
 }
 
 /// The bare `/loop`: each loop under its number, then how to end one, or that nothing repeats
