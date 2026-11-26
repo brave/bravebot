@@ -336,7 +336,12 @@ matcher does not have is named for the same reason.
 
 There are three ways to come back partial, and all three say so: stopping at the match cap, stopping
 before every file was opened, and running out of time. The last two are the dangerous ones, because
-with nothing found there is nothing that looks incomplete. Which files a capped search kept does not
+with nothing found there is nothing that looks incomplete. A search that ran out of time says how many
+files it opened and that `search.maxSeconds` sets the time. It also says that a directory or an
+include glob gives it fewer files to read but does not make the clock longer, since a narrowed search
+on a busy machine can run out again. A search is not held to the clock until it has tried its first
+1,000 files, so under load the same query covers at least that many files of the sorted order, and a
+tree of 1,000 files or fewer is read whole whatever `search.maxSeconds` says. Which files a capped search kept does not
 depend on the order the filesystem handed them over: each directory is sorted and its own files are
 taken before descending, so a partial answer is the shallow part of the tree and is the same answer
 on every machine.
@@ -374,7 +379,8 @@ checkout on a network filesystem is where they are not, and there every search c
 See [Configuration](../customize/configuration.md).
 
 Raising a cap does not unbound a search. The walk still stops at `search.maxFiles`, the reading still
-stops at `search.maxSeconds`, and the match cap holds regardless of both. A search's walk is not
+stops at `search.maxSeconds` once it has tried 1,000 files, and the match cap holds regardless of
+both. A search's walk is not
 stopped by the clock, and a listing's is.
 
 ## `read_git`

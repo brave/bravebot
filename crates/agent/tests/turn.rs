@@ -100757,7 +100757,8 @@ fn a_search_whose_clock_ran_out(
     std::fs::write(scratch.path.join("f.txt"), "needle\n").unwrap();
     let workspace = Workspace::new(&scratch.path)
         .expect("workspace")
-        .with_search_caps(None, Some(std::time::Duration::ZERO));
+        .with_search_caps(None, Some(std::time::Duration::ZERO))
+        .with_search_floor(0);
 
     let (endpoint, received) = serve_sequence(vec![
         tool_request_2("search", r#"{"pattern":"needle","directory":"."}"#),
@@ -100808,6 +100809,20 @@ fn a_search_that_ran_out_of_time_tells_the_model_it_did_not_read_the_rest() {
     assert!(
         !second.contains("did not reach the whole tree"),
         "the clock was reported as the cap on files: {second}"
+    );
+    // SEARCH-3: the notice names the setting that sets the time, and does not offer narrowing as
+    // the whole remedy, since a search narrowed on a busy machine can run out again.
+    assert!(
+        second.contains("raise search.maxSeconds in the settings"),
+        "the notice did not name the setting that sets the search time: {second}"
+    );
+    assert!(
+        second.contains("a busy machine can stop the narrowed search again"),
+        "the notice offered narrowing as if it could not time out again: {second}"
+    );
+    assert!(
+        !second.contains("narrow it with a directory or an include glob"),
+        "the notice kept the advice that narrowing alone fixes a timeout: {second}"
     );
 }
 

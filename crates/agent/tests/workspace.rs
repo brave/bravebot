@@ -3608,14 +3608,16 @@ fn a_search_that_reached_every_file_makes_no_claim() {
 ///
 /// No wall clock is waited on. A budget of nothing is spent before the first file, which is the
 /// same state a real timeout leaves the search in and is the only one a test can reach without
-/// a tree slow enough to take ten seconds.
+/// a tree slow enough to take ten seconds. The floor of files tried before the clock counts
+/// (SEARCH-3) is set to nothing so that the spent clock is read at the first file.
 #[test]
 fn a_search_that_ran_out_of_time_says_so() {
     let scratch = Scratch::new("search-timed-out");
     std::fs::write(scratch.path.join("f.txt"), "needle\n").unwrap();
     let workspace = Workspace::new(&scratch.path)
         .expect("workspace")
-        .with_search_caps(None, Some(Duration::ZERO));
+        .with_search_caps(None, Some(Duration::ZERO))
+        .with_search_floor(0);
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -3650,6 +3652,141 @@ fn a_search_that_ran_out_of_time_says_so() {
     assert!(
         found.matches.is_empty(),
         "nothing was read, so nothing matched"
+    );
+}
+
+/// SEARCH-3: the clock counts seconds and a busy machine turns them into fewer files, so a search
+/// is held to its time only after it has tried a floor of files. With the clock already spent and
+/// a floor of three, the search reads the first three files of its sorted order and then says it ran
+/// out of time; the same query on a tree that fits in the floor reads every file and makes no claim.
+/// No wall clock is waited on: a budget of nothing stands for any load, since it is spent at the
+/// first file the floor allows.
+///
+/// The regressions it rejects: a floor that is not applied, so the spent clock stops the search
+/// before the first file as under the old rule (`searched` 0); a floor that stops the clock for good,
+/// so the search reads the whole tree and never reports a timeout (`timed_out` false at three of
+/// five); and a floor counted past the files tried, which reads four or more.
+#[test]
+fn a_search_tries_a_floor_of_files_before_its_clock_can_stop_it() {
+    let scratch = Scratch::new("search-floor");
+    for n in 0..5 {
+        std::fs::write(scratch.path.join(format!("f{n:05}.txt")), "needle\n").unwrap();
+    }
+    let searched_under = |floor: usize| {
+        let workspace = Workspace::new(&scratch.path)
+            .unwrap()
+            .with_search_caps(None, Some(Duration::ZERO))
+            .with_search_floor(floor);
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .unwrap();
+        let found = workspace
+            .grep(
+                &mut policy,
+                std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+                &Labelled::trusted(".".to_string()),
+                None,
+                true,
+                1,
+            )
+            .unwrap();
+        let proof = policy.authorise_content_release("test", "matches");
+        let found = found.declassify(&proof);
+        (found.searched, found.timed_out, found.matches.len())
+    };
+
+    assert_eq!(
+        searched_under(3),
+        (3, true, 3),
+        "a floor of three files with a spent clock did not read exactly three"
+    );
+    assert_eq!(
+        searched_under(5),
+        (5, false, 5),
+        "a floor covering the tree still reported a timeout"
+    );
+    assert_eq!(
+        searched_under(0),
+        (0, true, 0),
+        "no floor must leave the clock alone in charge"
+    );
+}
+
+/// A cap nobody named leaves the floor at its built-in number, which holds a tree of a dozen files
+/// whole under a spent clock, and `search.maxSeconds` does not name the floor: a settings layer can
+/// move the time and not the floor (SEARCH-9). The regression it rejects: a built-in floor of zero,
+/// which is the old wall-clock-only rule.
+#[test]
+fn the_built_in_floor_holds_a_small_tree_whole_under_a_spent_clock() {
+    let (searched, timed_out) =
+        search_under_a_spent_clock_at_the_built_in_floor("search-built-in-floor", 12, "needle\n");
+
+    assert_eq!(searched, 12, "the built-in floor stopped a small tree");
+    assert!(
+        !timed_out,
+        "a search that read every file claimed a timeout"
+    );
+}
+
+/// `(searched, timed_out)` of a search for `needle` over `files` files of `contents` under a spent
+/// clock, with no floor named, so the built-in one applies.
+fn search_under_a_spent_clock_at_the_built_in_floor(
+    name: &str,
+    files: usize,
+    contents: &str,
+) -> (usize, bool) {
+    let scratch = Scratch::new(name);
+    for n in 0..files {
+        std::fs::write(scratch.path.join(format!("f{n:05}.txt")), contents).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path)
+        .unwrap()
+        .with_search_caps(None, Some(Duration::ZERO));
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .unwrap();
+    let found = workspace
+        .grep(
+            &mut policy,
+            std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+            &Labelled::trusted(".".to_string()),
+            None,
+            true,
+            1,
+        )
+        .unwrap();
+    let proof = policy.authorise_content_release("test", "matches");
+    let found = found.declassify(&proof);
+    (found.searched, found.timed_out)
+}
+
+/// SEARCH-3: the built-in floor is exactly 1,000 files. A tree of 1,001 files that match nothing,
+/// searched under a spent clock, is read for its first 1,000 files and then reported as out of
+/// time. The test above holds for any floor of twelve or more, so it cannot tell a floor of 1,000
+/// from one of 500 or one of 5,000; this one can.
+///
+/// The regressions it rejects: a floor below 1,000 (`searched` is that many), and one above it,
+/// which reads the thousand-and-first file and makes no claim about time.
+#[test]
+fn the_built_in_floor_is_a_thousand_files() {
+    assert_eq!(
+        search_under_a_spent_clock_at_the_built_in_floor(
+            "search-floor-thousand",
+            1_001,
+            "filler\n"
+        ),
+        (1_000, true),
+        "the built-in floor is not 1,000 files"
     );
 }
 
@@ -4011,8 +4148,9 @@ fn a_rule_still_keeps_a_directory_a_pattern_names_out_of_a_listing() {
 }
 
 /// SEARCH-9 beside LIST-4: only a listing's walk has a clock. A search whose budget is spent still
-/// walks the whole tree and reports every file it considered, and says it ran out of time because
-/// it opened none of them. The regression it rejects: the listing's clock set in the walk both
+/// walks the whole tree and reports every file it considered. The floor of files a search tries
+/// before its own clock is read (SEARCH-3) is larger than this tree, so both files are read and
+/// nothing is said about time. The regression it rejects: the listing's clock set in the walk both
 /// share, so a search is cut off at a different file on every run.
 #[test]
 fn a_search_walks_the_whole_tree_whatever_its_clock_says() {

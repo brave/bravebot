@@ -16346,11 +16346,7 @@ fn search<S: Sink>(
                     body.push_str(&format!("\n\n({})", search_links_clause(found.links)));
                 }
                 if found.timed_out {
-                    body.push_str(&format!(
-                        "\n\n(this search ran out of time after {} files and did not read the \
-                         rest; narrow it with a directory or an include glob)",
-                        found.searched
-                    ));
+                    body.push_str(&search_time_note(found.searched));
                 }
                 if found.output.summarises() && (found.unvisited || found.timed_out) {
                     // Nothing in a list of paths or counts looks short, which is why it is said:
@@ -16475,6 +16471,21 @@ fn git_failure(mut said: String, e: &crate::workspace::WorkspaceError, running: 
         said.push_str(instead);
     }
     said
+}
+
+/// What a search that ran out of time tells the planner, written inside the body. It says how many
+/// files were opened, which the workspace counted, and names the setting that sets the time, as
+/// [`read_git_time_note`] does for a status. A directory or an include glob gives the search fewer
+/// files to open, and it is not offered as the whole remedy: the clock is wall time, so a search on a
+/// busy machine can stop again on the narrowed tree. Fixed words, the count and no name from the tree
+/// (SEARCH-3).
+fn search_time_note(searched: usize) -> String {
+    format!(
+        "\n\n(this search ran out of time after {searched} files and did not read the rest; \
+         a directory or an include glob gives it fewer files to read, but a busy machine can \
+         stop the narrowed search again, so raise search.maxSeconds in the settings to give a \
+         search more time)"
+    )
 }
 
 /// What a read_git answer that ran out of time tells the planner can narrow it. A status takes

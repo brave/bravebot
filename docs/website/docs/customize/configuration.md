@@ -1783,8 +1783,11 @@ is why this is worth setting.
 The two are independent, so naming one says nothing about the other in any layer. A cap of zero, or
 any value that is not a whole count, is absence and leaves the built-in cap in force rather than
 permitting a search that reads nothing. Raising a cap does not unbound a search: the walk still stops
-at `maxFiles`, the reading still stops at `maxSeconds`, and the match cap holds regardless of both.
-A search's walk is not stopped by the clock; a listing's walk is, and says so. See
+at `maxFiles`, the reading still stops at `maxSeconds` once it has tried 1,000 files (the clock is not
+read before then, so a search under load still covers that many), and the match cap holds regardless
+of both. `maxSeconds` does not move that count.
+A search's walk is not stopped by the clock; a listing's walk is, and says so. A search that ran out
+of time names `maxSeconds` in its notice as the setting that gives it more time. See
 [`search`](../reference/tools.md#search).
 
 ### `vetting`

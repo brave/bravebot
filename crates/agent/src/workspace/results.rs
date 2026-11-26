@@ -89,6 +89,17 @@ pub(super) const MAX_TALLIED_FILES: usize = 200;
 /// than a local disk, and nothing here can tell which it is on.
 pub(super) const MAX_SEARCH_TIME: Duration = Duration::from_secs(10);
 
+/// How many files a search tries to open before [`MAX_SEARCH_TIME`] may stop it (SEARCH-3).
+///
+/// The time cap counts seconds, and under load seconds buy fewer files: other searches sharing the
+/// machine slow every file read, so the same query covered a dozen files on one run and the whole
+/// tree on another. This counts the work, so a search covers at least this many files of its sorted
+/// order whatever the load, and the clock bounds what comes after them. The count is of files the
+/// loop tried, taken from the walk's list of paths, so no file's bytes decide it.
+///
+/// Searches only. A listing's walk, `read_git` and a status keep the clock alone.
+pub(super) const MIN_SEARCH_READS: usize = 1_000;
+
 /// Caps on a single paged read.
 ///
 /// A turn re-sends the whole message history each round, so the cost of one oversized read

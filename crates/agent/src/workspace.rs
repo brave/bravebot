@@ -137,7 +137,7 @@ pub use results::{
 };
 use results::{
     MAX_CONTEXT_LINES, MAX_LINE, MAX_MAP_BYTES, MAX_MAP_FILE_BYTES, MAX_MATCH_LINE, MAX_MATCHES,
-    MAX_PAGE_CHARS, MAX_PAGE_LINES, MAX_SEARCH_TIME, MAX_TALLIED_FILES,
+    MAX_PAGE_CHARS, MAX_PAGE_LINES, MAX_SEARCH_TIME, MAX_TALLIED_FILES, MIN_SEARCH_READS,
 };
 pub(crate) use results::{MAX_ENTRIES, MAX_FILES_PER_DIRECTORY, MAX_SUBDIRECTORIES_PER_DIRECTORY};
 pub use touched::TouchedRecord;
@@ -320,6 +320,12 @@ pub struct Workspace {
     /// different things: a tree large enough to need a wider walk is not always slow enough to
     /// need a longer read.
     search_time: Duration,
+    /// How many files a search tries before `search_time` may stop it. [`MIN_SEARCH_READS`], and
+    /// not a setting: a person who wants a search to stop sooner lowers `search.maxFiles`.
+    ///
+    /// A field so a test of the clock itself can spend it before the first file, which the default
+    /// would not let a tree of a few files do.
+    search_floor: usize,
     /// Whether a settings layer asked for the file tools to stay inside the primary root
     /// (PERM-16).
     ///
@@ -560,6 +566,7 @@ impl Workspace {
             memories: None,
             search_files: MAX_SEARCH_FILES,
             search_time: MAX_SEARCH_TIME,
+            search_floor: MIN_SEARCH_READS,
             reads_stay_inside: false,
             #[cfg(unix)]
             identity: directory_identity,
@@ -695,6 +702,15 @@ impl Workspace {
     pub fn with_search_caps(mut self, files: Option<usize>, time: Option<Duration>) -> Self {
         self.search_files = files.unwrap_or(self.search_files);
         self.search_time = time.unwrap_or(self.search_time);
+        self
+    }
+
+    /// Let a search's clock stop it after `files` files rather than [`MIN_SEARCH_READS`], so a test
+    /// can spend the clock before the first file without a tree of that many.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_search_floor(mut self, files: usize) -> Self {
+        self.search_floor = files;
         self
     }
 
@@ -3860,7 +3876,11 @@ impl Workspace {
                 }
                 // Checked per file rather than per line: the clock is here to bound a walk over a
                 // large tree, and a single file cannot be large enough to matter beside that.
-                if started.elapsed() >= self.search_time {
+                //
+                // Not before `search_floor` files have been tried (SEARCH-3): the clock counts
+                // seconds, and a busy machine turns them into fewer files. `index` is the position
+                // in the walk's sorted list of paths, so what a file holds does not move the stop.
+                if index >= self.search_floor && started.elapsed() >= self.search_time {
                     timed_out = true;
                     reached = index;
                     break;
