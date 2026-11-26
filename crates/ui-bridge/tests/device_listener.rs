@@ -160,12 +160,12 @@ fn a_phone_pairs_through_the_hosts_input_and_is_shown_synthetic_data() {
     let info = say(&mut connection, "instance.info", &json!({}));
     assert_eq!(info["ok"]["synthetic"], true);
     assert_eq!(info["ok"]["device"]["grant"], "control");
-    let refused = say(
+    let opened = say(
         &mut connection,
         "session.new",
         &json!({"directory": scratch.path("project")}),
     );
-    assert_eq!(refused["error"]["code"], "not_allowed");
+    assert_eq!(opened["ok"]["session"], "synthetic-1");
 
     host.command("devices");
     let listed = host.says("kitchen-phone control");
@@ -296,6 +296,107 @@ fn a_listen_that_cannot_be_bound_stops_the_host_before_its_client_starts() {
     assert!(host.client_within(Duration::from_millis(500)).is_none());
 }
 
+/// A phone paired through the host's input as `name` with `grant`, which is told the host's address
+/// and key, and has sent nothing since it was paired.
+fn paired_phone(
+    host: &mut Host,
+    scratch: &Scratch,
+    name: &str,
+    grant: &str,
+) -> (Phone, std::net::SocketAddr, [u8; 32]) {
+    host.command(&format!(
+        "pair {name} {grant} {}",
+        scratch.path("project").display()
+    ));
+    let link = parse_link(
+        host.says("or type this link on the phone: ")
+            .split("or type this link on the phone: ")
+            .nth(1)
+            .unwrap(),
+    )
+    .unwrap();
+    let phone = Phone::new().unwrap();
+    let mut connection = phone.connect(link.addresses[0], link.host).unwrap();
+    let code = connection.begin_pairing(&link.secret, None).unwrap();
+    host.says(&format!("is asking to pair as {name}"));
+    host.command(&format!("confirm {code}"));
+    host.says(&format!("paired {name}"));
+    assert_eq!(
+        connection.receive().unwrap().as_deref(),
+        Some(r#"{"id":1,"ok":{"paired":true}}"#)
+    );
+    (phone, link.addresses[0], link.host)
+}
+
+/// The controls a device could send by hand, each with the parameters the host offers it with.
+fn control_frames() -> Vec<(&'static str, Value)> {
+    vec![
+        ("session.new", json!({"directory": "/anywhere"})),
+        (
+            "turn.send",
+            json!({"session": "synthetic-1", "prompt": "hi", "messageId": "m1"}),
+        ),
+        (
+            "turn.cancel",
+            json!({"session": "synthetic-1", "target": "t1"}),
+        ),
+        ("session.close", json!({"session": "synthetic-1"})),
+        (
+            "confirm.reply",
+            json!({"session": "synthetic-1", "request": 1, "decision": "approve"}),
+        ),
+        (
+            "trust.reply",
+            json!({"session": "synthetic-1", "trusted": true}),
+        ),
+    ]
+}
+
+/// A `read` phone that sends a control by hand, without any screen of an app in the way, has its
+/// connection ended with nothing sent, for each control and for a line that is not a request, and is
+/// still paired and served reads when it connects again. A `control` phone's same frames are
+/// answered, for the synthetic session only.
+#[test]
+fn a_read_phones_raw_controls_end_its_connection_and_a_control_phones_are_answered() {
+    let scratch = Scratch::new();
+    let kept = Kept::default();
+    let mut host = listening_host(&scratch, &kept);
+    host.says("listening on");
+    let (reader, address, key) = paired_phone(&mut host, &scratch, "reader", "read");
+    for (method, params) in control_frames() {
+        let mut connection = reader.connect(address, key).unwrap();
+        let info = say(&mut connection, "instance.info", &json!({}));
+        assert_eq!(info["ok"]["device"]["grant"], "read");
+        connection
+            .send(&json!({"id": 9, "method": method, "params": params}).to_string())
+            .unwrap();
+        assert!(connection.ended(), "a read phone was answered {method}");
+    }
+    for line in [
+        r#"{"method":"turn.send","params":{"session":"synthetic-1","prompt":"hi"}}"#,
+        "not a request",
+    ] {
+        let mut connection = reader.connect(address, key).unwrap();
+        connection.send(line).unwrap();
+        assert!(connection.ended(), "a read phone was let send {line}");
+    }
+    host.command("devices");
+    host.says("reader read");
+
+    let (controller, address, key) = paired_phone(&mut host, &scratch, "controller", "control");
+    let mut connection = controller.connect(address, key).unwrap();
+    for (method, params) in control_frames() {
+        let answer = say(&mut connection, method, &params);
+        assert!(answer["ok"]["synthetic"] == true, "{method}: {answer}");
+        let mut elsewhere = params.clone();
+        if elsewhere.get("session").is_some() {
+            elsewhere["session"] = json!("a-real-session");
+            let refused = say(&mut connection, method, &elsewhere);
+            assert_eq!(refused["error"]["code"], "no_such_session", "{method}");
+        }
+    }
+}
+
 /// `quit` ends a phone's connection as it ends a client's, and the host stops.
 #[test]
 fn quit_ends_a_phones_connection_and_stops_the_host() {
@@ -394,11 +495,11 @@ fn a_command_line_phone_pairs_with_the_real_host_and_is_answered() {
     {
         let mut written = written.clone();
         std::thread::spawn(move || {
-            let mut input = std::io::Cursor::new(
+            let input = std::io::Cursor::new(
                 "{\"id\":1,\"method\":\"instance.info\",\"params\":{}}\n\
                  {\"id\":2,\"method\":\"session.new\",\"params\":{}}\n",
             );
-            let done = bravebot_listener::phone::pair_and_talk(&link, &mut input, &mut written);
+            let done = bravebot_listener::phone::pair_and_talk(&link, input, &mut written);
             finished.send(done).ok();
         });
     }
@@ -423,7 +524,10 @@ fn a_command_line_phone_pairs_with_the_real_host_and_is_answered() {
         .unwrap();
     let text = written.text();
     assert!(text.contains("\"synthetic\":true"), "{text}");
-    assert!(text.contains("\"code\":\"not_allowed\""), "{text}");
+    assert!(
+        text.contains(r#"host: {"id":2,"ok":{"session":"synthetic-1","synthetic":true}}"#),
+        "{text}"
+    );
     host.command("devices");
     host.says("by-hand control");
 }

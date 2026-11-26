@@ -7,10 +7,13 @@
 //! the person types on the host, and answering a device with synthetic data.
 //!
 //! Nothing here reaches [`crate::host::Host`] or a bridge. A paired device is given a session that
-//! does not exist, which says so, so the transport and the pairing can be used before the decisions
-//! that let a device see a real session are built (LISTEN-6). What the person types on the host is
-//! the only way a device is paired or removed, and what a device sends is never read as a command.
+//! does not exist, which says so, so the transport, the pairing and the grants can be used before the
+//! decisions that let a device see a real session are built (LISTEN-6). Whether a request reads or
+//! controls is the host's allowlist's answer for its method ([`allowlist::access_of`]). What the
+//! person types on the host is the only way a device is paired or removed, and what a device sends is
+//! never read as a command.
 
+use crate::allowlist::{self, Access};
 use crate::protocol::{ErrorCode, Failure, Request, Unreadable, response};
 use bravebot_core::device::Grant;
 use bravebot_listener::identity::{Identity, KeyHash};
@@ -27,8 +30,9 @@ use std::sync::Arc;
 /// The one session a device is shown.
 const SESSION: &str = "synthetic-1";
 
-/// Answers a device from nothing but its own record: a session that is not real, and a refusal of
-/// everything else.
+/// Answers a device from nothing but its own record and the request: a session that is not real, a
+/// fixed answer to each control the host offers, which changes nothing, and a refusal of everything
+/// else.
 pub struct Synthetic;
 
 fn grant_word(grant: Grant) -> &'static str {
@@ -39,42 +43,70 @@ fn grant_word(grant: Grant) -> &'static str {
 }
 
 impl Service for Synthetic {
-    /// The line is read here, with no lock held, and what is returned only builds the answer.
+    /// The line is read here, with no lock held, and what is returned only builds the answer. A line
+    /// that is not a request asks to control, so a `read` device is let through only with a request
+    /// the allowlist says reads.
     fn prepare<'a>(&'a self, line: &'a str) -> Prepared<'a> {
         let request = match Request::parse(line) {
             Ok(request) => request,
             Err(Unreadable::Answerable { id, failure }) => {
-                return Box::new(move |_| vec![response(id, Err(failure)).to_string()]);
+                return Prepared::new(Access::Control, move |_| {
+                    vec![response(id, Err(failure)).to_string()]
+                });
             }
-            Err(Unreadable::Unanswerable { .. }) => return Box::new(|_| Vec::new()),
+            Err(Unreadable::Unanswerable { .. }) => {
+                return Prepared::new(Access::Control, |_| Vec::new());
+            }
         };
-        Box::new(move |device| answer(device, &request))
+        let access = allowlist::access_of(&request.method);
+        Prepared::new(access, move |device| answer(device, &request))
     }
 }
 
 /// The answer to a request from `device`.
 fn answer(device: &Device, request: &Request) -> Vec<String> {
+    let session = request.params.get("session").and_then(Value::as_str);
     let outcome = match request.method.as_str() {
         "instance.info" => Ok(json!({
             "synthetic": true,
             "device": {"name": device.name, "grant": grant_word(device.grant)},
             "sessions": [{"handle": SESSION, "state": "open", "attached": false}],
         })),
-        "session.attach"
-            if request.params.get("session").and_then(Value::as_str) == Some(SESSION) =>
-        {
+        "session.attach" if session == Some(SESSION) => {
             Ok(json!({"version": 1, "sequence": 1, "omitted": 0}))
         }
-        "session.attach" => Err(Failure::new(
-            ErrorCode::NoSuchSession,
-            "this connection serves one synthetic session",
-        )),
-        _ => Err(Failure::new(
-            ErrorCode::NotAllowed,
-            "this connection serves synthetic data only",
-        )),
+        "session.attach" => Err(no_such_session()),
+        method if allowlist::access_of(method) == Access::Control => controlled(request, session),
+        _ => Err(synthetic_only()),
     };
     vec![response(request.id, outcome).to_string()]
+}
+
+/// A control the host offers, with the parameters it offers it with, answered without doing anything:
+/// `session.new` names the synthetic session, whatever directory it names, and every other control of
+/// the synthetic session is answered as done. A control of another session has no session, and a
+/// method the host does not offer is refused.
+fn controlled(request: &Request, session: Option<&str>) -> Result<Value, Failure> {
+    allowlist::check(request).map_err(|_| synthetic_only())?;
+    match request.method.as_str() {
+        "session.new" => Ok(json!({"session": SESSION, "synthetic": true})),
+        _ if session == Some(SESSION) => Ok(json!({"synthetic": true})),
+        _ => Err(no_such_session()),
+    }
+}
+
+fn no_such_session() -> Failure {
+    Failure::new(
+        ErrorCode::NoSuchSession,
+        "this connection serves one synthetic session",
+    )
+}
+
+fn synthetic_only() -> Failure {
+    Failure::new(
+        ErrorCode::NotAllowed,
+        "this connection serves synthetic data only",
+    )
 }
 
 /// Where the host's words about a pairing go.
@@ -346,14 +378,16 @@ mod tests {
         }
     }
 
-    /// What the service answers `line` from a device with `grant`, in the two steps it is run in.
+    /// What the service answers `line` from a device with `grant`, in the two steps it is run in. The
+    /// gate is not asked here, so a test of what a `read` device is answered asks only for a read.
     fn answered(grant: Grant, line: &str) -> Vec<String> {
-        Synthetic.prepare(line)(&device(grant))
+        (Synthetic.prepare(line).answer)(&device(grant))
     }
 
+    /// What a `control` device is answered, which is every device the gate lets ask anything.
     fn asked(method: &str, params: &Value) -> Value {
         let lines = answered(
-            Grant::Read,
+            Grant::Control,
             &json!({"id": 7, "method": method, "params": params}).to_string(),
         );
         assert_eq!(lines.len(), 1);
@@ -378,32 +412,119 @@ mod tests {
         assert_eq!(missing["error"]["code"], "no_such_session");
     }
 
-    /// Every other method is refused, including the ones the host offers a client it started, and
-    /// none reaches a session: this service holds no way to one.
+    /// The reads the host offers a client it started, other than `instance.info` and
+    /// `session.attach`, and every method it does not offer are refused for a `control` device, and
+    /// none reaches a session: this service holds no way to one. A `read` device that asks one of
+    /// them that needs control is ended by the gate before this answer is made.
     #[test]
     fn every_other_method_is_refused() {
         for method in [
-            "session.new",
-            "turn.send",
-            "turn.cancel",
-            "session.close",
-            "trust.reply",
-            "confirm.reply",
             "agent.info",
+            "changelog.read",
+            "session.view.start",
+            "session.view.resync",
+            "turn.lookup",
+            "session.list",
+            "output.reply",
             "pair.begin",
             "anything-else",
         ] {
-            let answer = asked(method, &json!({}));
+            let answer = asked(method, &json!({"session": SESSION}));
             assert_eq!(answer["error"]["code"], "not_allowed", "{method}");
             assert_eq!(answer["id"], 7);
         }
     }
 
+    /// Each request is prepared with the access the host's allowlist gives its method, so a control
+    /// is asked of the gate as a control. A line the host cannot read as a request is a control too,
+    /// whatever method it names, so a line with a control's name and no number to answer under is not
+    /// let through as a read.
+    #[test]
+    fn each_request_asks_the_gate_for_the_access_its_method_has() {
+        for operation in allowlist::OFFERED {
+            let line = json!({"id": 1, "method": operation.method, "params": {}}).to_string();
+            assert_eq!(
+                Synthetic.prepare(&line).operation,
+                operation.access,
+                "{}",
+                operation.method
+            );
+        }
+        for method in ["session.list", "pair.begin", "anything-else"] {
+            let line = json!({"id": 1, "method": method, "params": {}}).to_string();
+            assert_eq!(
+                Synthetic.prepare(&line).operation,
+                Access::Control,
+                "{method}"
+            );
+        }
+        for line in [
+            "not json",
+            r#"{"id":3}"#,
+            r#"{"method":"turn.send","params":{"session":"synthetic-1"}}"#,
+            r#"{"id":-1,"method":"session.close"}"#,
+        ] {
+            assert_eq!(Synthetic.prepare(line).operation, Access::Control, "{line}");
+        }
+    }
+
+    /// A control the host offers is answered for the synthetic session as done, and changes nothing:
+    /// a second `instance.info` shows the same one session. A control of another session has none,
+    /// and one with a parameter the host does not offer is refused.
+    #[test]
+    fn a_control_is_answered_for_the_synthetic_session_and_changes_nothing() {
+        let before = asked("instance.info", &json!({}));
+        let opened = asked("session.new", &json!({"directory": "/anywhere"}));
+        assert_eq!(opened["ok"], json!({"session": SESSION, "synthetic": true}));
+        for (method, params) in [
+            (
+                "turn.send",
+                json!({"session": SESSION, "prompt": "hi", "messageId": "m1"}),
+            ),
+            ("turn.cancel", json!({"session": SESSION, "target": "t1"})),
+            (
+                "confirm.reply",
+                json!({"session": SESSION, "request": 1, "decision": "approve"}),
+            ),
+            (
+                "run.reply",
+                json!({"session": SESSION, "request": 1, "decision": "approve"}),
+            ),
+            (
+                "fetch.reply",
+                json!({"session": SESSION, "request": 1, "decision": "approve"}),
+            ),
+            (
+                "ask.reply",
+                json!({"session": SESSION, "request": 1, "answers": []}),
+            ),
+            ("trust.reply", json!({"session": SESSION, "trusted": true})),
+            ("session.close", json!({"session": SESSION})),
+        ] {
+            let done = asked(method, &params);
+            assert_eq!(done["ok"], json!({"synthetic": true}), "{method}");
+            let mut elsewhere = params.clone();
+            elsewhere["session"] = json!("another");
+            assert_eq!(
+                asked(method, &elsewhere)["error"]["code"],
+                "no_such_session",
+                "{method}"
+            );
+        }
+        let with_files = asked(
+            "turn.send",
+            &json!({"session": SESSION, "prompt": "hi", "files": ["/etc/passwd"]}),
+        );
+        assert_eq!(with_files["error"]["code"], "not_allowed");
+        assert_eq!(asked("instance.info", &json!({})), before);
+    }
+
+    /// For a `control` device, the only one the gate lets send a line that is not a request.
     #[test]
     fn a_line_that_cannot_be_answered_gets_no_answer_and_one_that_can_gets_a_failure() {
-        assert!(answered(Grant::Read, "not json").is_empty());
-        assert!(answered(Grant::Read, r#"{"method":"instance.info"}"#).is_empty());
-        let lines = answered(Grant::Read, r#"{"id":3}"#);
+        assert!(answered(Grant::Control, "not json").is_empty());
+        assert!(answered(Grant::Control, r#"{"method":"instance.info"}"#).is_empty());
+        let lines = answered(Grant::Control, r#"{"id":3}"#);
         let failure: Value = serde_json::from_str(&lines[0]).unwrap();
         assert_eq!(failure["error"]["code"], "bad_request");
     }

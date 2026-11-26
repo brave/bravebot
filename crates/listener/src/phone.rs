@@ -123,6 +123,8 @@ impl Write for Wire {
 pub struct Connection {
     stream: BufReader<StreamOwned<ClientConnection, Wire>>,
     key: KeyHash,
+    /// What has come of a line that has not ended, kept across a read that waited its time.
+    pending: Vec<u8>,
 }
 
 impl Phone {
@@ -210,6 +212,7 @@ impl Phone {
         Ok(Connection {
             stream: BufReader::new(StreamOwned::new(connection, Wire { tcp, pause: None })),
             key: self.identity.key_hash(),
+            pending: Vec::new(),
         })
     }
 }
@@ -261,12 +264,17 @@ impl Connection {
     }
 
     /// The next line, `Ok(None)` once the host has ended the connection by any means, and an error
-    /// where nothing came in the time a test waits, which is a connection that is still open.
+    /// where nothing came in the time a test waits, which is a connection that is still open. What
+    /// came of a line before such an error is kept for the next call.
     pub fn receive(&mut self) -> io::Result<Option<String>> {
-        let mut line = String::new();
-        match self.stream.read_line(&mut line) {
-            Ok(0) => Ok(None),
-            Ok(_) => Ok(Some(line.trim_end_matches('\n').to_string())),
+        match self.stream.read_until(b'\n', &mut self.pending) {
+            Ok(_) if self.pending.last() == Some(&b'\n') => {
+                self.pending.pop();
+                let line = std::mem::take(&mut self.pending);
+                Ok(Some(String::from_utf8_lossy(&line).into_owned()))
+            }
+            // The end of the stream, with or without part of a line before it.
+            Ok(_) => Ok(None),
             Err(error)
                 if matches!(
                     error.kind(),
@@ -336,8 +344,12 @@ impl Connection {
 /// two minutes, and this is a little longer so that the host's own end of it is what ends the wait.
 const FOR_THE_CODE: Duration = Duration::from_secs(130);
 
-/// How long a command-line phone waits for more of an answer after the last line it was sent.
+/// How long a command-line phone waits for more of an answer after the last line it sent, once its
+/// input has ended.
 const FOR_MORE_OF_AN_ANSWER: Duration = Duration::from_millis(500);
+
+/// How long a command-line phone waits on the host at a time before it looks at its input again.
+const TICK: Duration = Duration::from_millis(50);
 
 /// The one argument a command-line phone takes: the invitation's link.
 pub fn link_from_arguments(
@@ -357,7 +369,7 @@ pub fn link_from_arguments(
 /// phone's would be.
 pub fn pair_and_talk(
     link: &str,
-    input: &mut impl BufRead,
+    input: impl BufRead + Send + 'static,
     output: &mut impl Write,
 ) -> io::Result<()> {
     let invitation = parse_link(link).ok_or_else(|| {
@@ -395,31 +407,86 @@ pub fn pair_and_talk(
             ));
         }
     }
-    for line in input.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        connection.send(&line)?;
-        loop {
-            match connection.receive_within(FOR_MORE_OF_AN_ANSWER) {
-                Ok(Some(answer)) => writeln!(output, "host: {answer}")?,
-                Ok(None) => {
-                    writeln!(output, "the host ended the connection")?;
-                    return Ok(());
-                }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    break;
-                }
-                Err(error) => return Err(error),
+    talk(&mut connection, input, output)
+}
+
+/// What a command-line phone does once it is paired: send each line of `input`, one at a time with
+/// what the host sends read between them, write each line the host sends after `host:`, and answer
+/// each heartbeat with a blank line without writing it. The input is read on a thread of its own, so
+/// a person who types nothing for a while does not stop the phone answering. Ends when the host ends
+/// the connection, or when the input has ended and nothing has come for a moment after the last line
+/// sent. An input that cannot be read ends the sending in the same way, and then the phone stops with
+/// the error.
+fn talk(
+    connection: &mut Connection,
+    input: impl BufRead + Send + 'static,
+    output: &mut impl Write,
+) -> io::Result<()> {
+    let (typed, lines) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in input.lines() {
+            let failed = line.is_err();
+            if typed.send(line).is_err() || failed {
+                break;
             }
         }
-        output.flush()?;
+    });
+    let mut input_ended = false;
+    let mut input_failed = None;
+    let mut last = std::time::Instant::now();
+    // Whether a line was sent and nothing has come since. The next line waits until something comes
+    // or the host is quiet for a moment, so the phone reads between the lines it sends and neither end
+    // fills the other's socket while it is not reading.
+    let mut waiting = false;
+    loop {
+        let quiet = match connection.receive_within(TICK) {
+            Ok(Some(line)) if line == crate::server::HEARTBEAT => {
+                connection.send("")?;
+                false
+            }
+            Ok(Some(line)) => {
+                writeln!(output, "host: {line}")?;
+                output.flush()?;
+                last = std::time::Instant::now();
+                waiting = false;
+                false
+            }
+            Ok(None) => {
+                writeln!(output, "the host ended the connection")?;
+                return Ok(());
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                true
+            }
+            Err(error) => return Err(error),
+        };
+        if quiet {
+            waiting = false;
+        }
+        while !input_ended && !waiting {
+            match lines.try_recv() {
+                Ok(Err(error)) => {
+                    input_failed = Some(error);
+                    input_ended = true;
+                }
+                Ok(Ok(line)) => {
+                    if !line.trim().is_empty() {
+                        connection.send(&line)?;
+                        last = std::time::Instant::now();
+                        waiting = true;
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => input_ended = true,
+            }
+        }
+        if input_ended && last.elapsed() >= FOR_MORE_OF_AN_ANSWER {
+            return input_failed.map_or(Ok(()), Err);
+        }
     }
-    Ok(())
 }

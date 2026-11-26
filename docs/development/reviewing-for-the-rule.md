@@ -154,8 +154,10 @@ The eleventh is the device listener in `crates/listener/`, which is not the driv
 read at most 4,096 bytes as a request to pair, and the proof and the code are checked by the
 library's equal-time comparison. The label a phone gives itself is carried to the person's screen
 escaped and compared with nothing. A paired device's lines reach a service that holds no way to a
-session, so a branch on any other byte of a connection, or a way from that service to a session
-before the scope check and the destination policy exist, is a violation of shape 1.
+session. That service reads a line by method, as a client's is read. A line it can read as a
+request asks to read or to control as its method says, and every other line asks to control. A
+branch on any other byte of a connection, or a way from that service to a session before the scope
+check and the destination policy exist, is a violation of shape 1.
 
 A count that comes from file-type metadata is not one of the eleven. A listing or a search tells the
 planner how many symbolic links its walk did not enter. The walk reads each directory entry's file

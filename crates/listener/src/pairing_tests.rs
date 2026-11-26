@@ -13,7 +13,7 @@ use crate::pairing;
 use crate::phone::{Connection, Phone};
 use crate::registry::{Device, Registry};
 use crate::server::{Listener, Prepared, Service};
-use bravebot_core::device::{Grant, Standing};
+use bravebot_core::device::{Grant, Operation, Standing};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -23,7 +23,9 @@ struct Echo;
 
 impl Service for Echo {
     fn prepare<'a>(&'a self, line: &'a str) -> Prepared<'a> {
-        Box::new(move |device| vec![format!("{}:{line}", device.name)])
+        Prepared::new(Operation::Read, move |device| {
+            vec![format!("{}:{line}", device.name)]
+        })
     }
 }
 
@@ -543,21 +545,156 @@ impl Kept {
     }
 }
 
-/// A command-line phone run on a thread, with the lines it will send and the text it wrote.
-fn command_line_phone(
+/// A command-line phone run on a thread, with what it reads as its input and the text it wrote.
+fn command_line_phone_reading(
     link: String,
-    lines: &'static str,
+    input: impl std::io::BufRead + Send + 'static,
 ) -> (Kept, std::sync::mpsc::Receiver<std::io::Result<()>>) {
     let kept = Kept::default();
     let (finished, result) = std::sync::mpsc::channel();
     let output = kept.clone();
     std::thread::spawn(move || {
         let mut output = output;
-        let done =
-            crate::phone::pair_and_talk(&link, &mut std::io::Cursor::new(lines), &mut output);
+        let done = crate::phone::pair_and_talk(&link, input, &mut output);
         finished.send(done).ok();
     });
     (kept, result)
+}
+
+/// A command-line phone run on a thread, with the lines it will send and the text it wrote.
+fn command_line_phone(
+    link: String,
+    lines: &'static str,
+) -> (Kept, std::sync::mpsc::Receiver<std::io::Result<()>>) {
+    command_line_phone_reading(link, std::io::Cursor::new(lines))
+}
+
+/// A command-line phone given more input at once than the sockets between it and the host hold writes
+/// every answer, because it reads what the host sends between the lines it sends. One that sent the
+/// whole input first would stop reading while the host stopped reading too.
+#[test]
+fn a_command_line_phone_given_a_large_input_writes_every_answer() {
+    let rig = rig();
+    let opened = rig.invitations.open(terms("one", Grant::Read)).unwrap();
+    let link = crate::invitation::link(
+        &rig.listener.key_hash(),
+        &[rig.listener.address()],
+        &opened.secret,
+    );
+    let lines = 300;
+    let input: String = (0..lines)
+        .map(|n| format!("{n:04}{}\n", "x".repeat(8 * 1024)))
+        .collect();
+    let (output, finished) = command_line_phone_reading(link, std::io::Cursor::new(input));
+    let code = output.code();
+    rig.hears(|said| matches!(said, Announcement::Asking { .. }));
+    rig.invitations.confirm(&code).unwrap();
+    finished
+        .recv_timeout(Duration::from_secs(30))
+        .unwrap()
+        .unwrap();
+    let text = output.text();
+    assert_eq!(text.matches("host: one:").count(), lines, "{}", text.len());
+}
+
+/// A command-line phone whose input cannot be read, here a line that is not text, sends what came
+/// before it, writes the host's answers to that, and stops with the error. It does not take the error
+/// for the end of the input, and sends nothing after it.
+#[test]
+fn a_command_line_phone_stops_with_an_error_its_input_gives() {
+    let rig = rig();
+    let opened = rig.invitations.open(terms("one", Grant::Read)).unwrap();
+    let link = crate::invitation::link(
+        &rig.listener.key_hash(),
+        &[rig.listener.address()],
+        &opened.secret,
+    );
+    let (output, finished) = command_line_phone_reading(
+        link,
+        std::io::Cursor::new(b"hello\n\xff\xfe\nworld\n".to_vec()),
+    );
+    let code = output.code();
+    rig.hears(|said| matches!(said, Announcement::Asking { .. }));
+    rig.invitations.confirm(&code).unwrap();
+    let ended = finished.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(
+        ended.map_err(|error| error.kind()),
+        Err(std::io::ErrorKind::InvalidData)
+    );
+    let text = output.text();
+    assert!(text.contains("host: one:hello"), "{text}");
+    assert!(!text.contains("host: one:world"), "{text}");
+}
+
+/// Input a test types into a command-line phone a line at a time, which ends when the test drops its
+/// sender, as a person's terminal does when they type nothing for a while and then go on.
+struct Typed {
+    lines: std::sync::mpsc::Receiver<String>,
+    left: Vec<u8>,
+}
+
+impl std::io::Read for Typed {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if self.left.is_empty() {
+            match self.lines.recv() {
+                Ok(line) => self.left = format!("{line}\n").into_bytes(),
+                Err(_) => return Ok(0),
+            }
+        }
+        let taken = self.left.len().min(buffer.len());
+        buffer[..taken].copy_from_slice(&self.left[..taken]);
+        self.left.drain(..taken);
+        Ok(taken)
+    }
+}
+
+/// A command-line phone whose person types nothing for many times the silence the host allows keeps
+/// its connection, because it answers each heartbeat, and is answered when the person goes on. The
+/// heartbeats are not written for the person to read.
+#[test]
+fn a_command_line_phone_answers_heartbeats_while_its_person_types_nothing() {
+    let limits = Limits {
+        heartbeat: Duration::from_millis(100),
+        silence: Duration::from_secs(1),
+        ..Limits::default()
+    };
+    let rig = rig_with(limits);
+    let opened = rig.invitations.open(terms("one", Grant::Read)).unwrap();
+    let link = crate::invitation::link(
+        &rig.listener.key_hash(),
+        &[rig.listener.address()],
+        &opened.secret,
+    );
+    let (typing, lines) = std::sync::mpsc::channel();
+    let (output, finished) = command_line_phone_reading(
+        link,
+        std::io::BufReader::new(Typed {
+            lines,
+            left: Vec::new(),
+        }),
+    );
+    let code = output.code();
+    rig.hears(|said| matches!(said, Announcement::Asking { .. }));
+    rig.invitations.confirm(&code).unwrap();
+    typing.send("hello".to_string()).unwrap();
+    let until = Instant::now() + Duration::from_secs(5);
+    while !output.text().contains("host: one:hello") {
+        assert!(Instant::now() < until, "{}", output.text());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // The person typing nothing is what is under test, for three times the silence the host allows.
+    std::thread::sleep(limits.silence * 3);
+    // A phone that lost its connection has stopped reading its input, and the assertions below say so.
+    typing.send("world".to_string()).ok();
+    drop(typing);
+    finished
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
+    let text = output.text();
+    assert!(text.contains("host: one:world"), "{text}");
+    assert!(!text.contains("heartbeat"), "{text}");
+    assert!(!text.contains("ended"), "{text}");
 }
 
 /// The command-line phone pairs from the link the host shows, writes the code for the person to

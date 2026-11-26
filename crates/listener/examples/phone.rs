@@ -21,10 +21,9 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let stdin = std::io::stdin();
     let result = bravebot_listener::phone::pair_and_talk(
         &link,
-        &mut stdin.lock(),
+        std::io::BufReader::new(std::io::stdin()),
         &mut std::io::stdout().lock(),
     );
     if let Err(error) = result {

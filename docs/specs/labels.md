@@ -1412,8 +1412,10 @@ arrives at all.
     typed on the host against one computed from the same inputs. Each check takes the same time
     whatever the sender sent, and a mismatch closes the window.
   - **The lines of a paired device.** A paired device is the person's own phone, and its lines are
-    read as a client's are, by method. The service the host gives a device holds no way to a
-    session, a bridge or a tool, and answers a method with a fixed answer or a fixed refusal.
+    read as a client's are, by method. A line the host can read as a request asks to read or to
+    control as the host's allowlist says for its method, and every other line asks to control.
+    That is the operation the gate is asked about. The service the host gives a device holds no way
+    to a session, a bridge or a tool, and answers a method with a fixed answer or a fixed refusal.
 
   Nothing a device sends reaches a turn, a prompt or a tool, and no byte of it reaches the planner.
   A branch in the listener on any other byte of a connection, or a service that gives a device a way

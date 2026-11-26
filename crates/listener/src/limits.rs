@@ -30,6 +30,11 @@ pub struct Limits {
     pub first_line: usize,
     /// The longest a write to a device may wait before the connection is given up.
     pub write: Duration,
+    /// How long the host writes nothing to a paired device before it sends it a heartbeat.
+    pub heartbeat: Duration,
+    /// How long a paired device may send nothing before its connection is ended. A device answers a
+    /// heartbeat with a line, which may be blank, so one that answers is never this quiet.
+    pub silence: Duration,
 }
 
 impl Default for Limits {
@@ -41,6 +46,8 @@ impl Default for Limits {
             line: 8 * 1024 * 1024,
             first_line: 4096,
             write: Duration::from_secs(5),
+            heartbeat: Duration::from_secs(15),
+            silence: Duration::from_secs(45),
         }
     }
 }
