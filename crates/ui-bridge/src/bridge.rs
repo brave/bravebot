@@ -701,6 +701,7 @@ impl Bridge {
             "session.goal" => self.goal_command(request),
             "session.goal.continue" => self.goal_continue(request),
             "loop.command" => self.loop_command(request),
+            "after.command" => self.after_command(request),
             "loops.list" => self.loops_list(request),
             "loops.poll" => {
                 self.poll_loops(request)?;
@@ -4480,6 +4481,30 @@ impl Bridge {
             self.fire_loop(&handle, number);
         }
         Ok(answer)
+    }
+
+    /// `after.command`: `/after <argument>` typed into the composer of a session (LOOP-18).
+    ///
+    /// Takes `files` and `pictures` as `loop.command` does (DROP-4). Sends nothing now: the line's
+    /// one tick goes from the loop clock once its delay is up and the session is idle.
+    fn after_command(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let argument = request.string("argument")?;
+        let argument = crate::attached::in_words_for_a_command(request, &argument)?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let mut loops = open
+            .loops
+            .lock()
+            .map_err(|_| Failure::bad_request("Loops unavailable."))?;
+        Ok(crate::loop_command::after(
+            &argument,
+            &mut loops,
+            std::time::Instant::now(),
+        ))
     }
 
     /// Called by the desktop's clock: send the tick of every idle session's loop that is due.

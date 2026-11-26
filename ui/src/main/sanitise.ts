@@ -121,8 +121,9 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
   // in. What is forwarded is the argument and the names and markers the bridge puts into words
   // (DROP-4): a name is only text, never a path it opens, and no drop or paste grant crosses.
   // A `/loop` line is the same: the driver keeps the line and sends it as each tick's prompt, so a
-  // file on it goes as its name and a picture as the sentence that it cannot join (DROP-4).
-  if (method === 'schedule.command' || method === 'loop.command') {
+  // file on it goes as its name and a picture as the sentence that it cannot join (DROP-4). A
+  // `/after` line is kept and sent once in the same way (LOOP-18).
+  if (method === 'schedule.command' || method === 'loop.command' || method === 'after.command') {
     const files = Array.isArray(held.files)
       ? held.files.map((file: { marker?: unknown; name?: unknown }) => ({ marker: file?.marker, name: file?.name }))
       : undefined

@@ -1,4 +1,7 @@
-/** What the bridge answers for `loop.command`. */
+/** Which command a line that takes a place among a session's loops is: `/loop`, or `/after` (LOOP-18). */
+export type LoopKind = 'loop' | 'after'
+
+/** What the bridge answers for `loop.command` and `after.command`. */
 export interface LoopAnswer {
   /** Each line already has its control characters pictured by the bridge. */
   lines: string[]
@@ -109,8 +112,20 @@ export function loopStatusWords(list: LoopList, elapsed: number): string | null 
  * it is in the terminal.
  */
 export function loopArgument(line: string): string | null {
+  return argumentTo(line, '/loop')
+}
+
+/**
+ * The argument of a line that is `/after` or `/after <argument>`, or null for any other line
+ * (LOOP-18). Cut as `loopArgument` cuts: the bridge reads the delay and the line to send.
+ */
+export function afterArgument(line: string): string | null {
+  return argumentTo(line, '/after')
+}
+
+function argumentTo(line: string, word: string): string | null {
   const rest = line.trim()
-  if (rest === '/loop') return ''
-  if (!rest.startsWith('/loop ')) return null
-  return rest.slice('/loop '.length).trim()
+  if (rest === word) return ''
+  if (!rest.startsWith(`${word} `)) return null
+  return rest.slice(word.length + 1).trim()
 }

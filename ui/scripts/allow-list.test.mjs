@@ -32,6 +32,7 @@ test('model discovery is on the allow-list', () => {
 test('the window may start and list loops, and only the main process sends a tick', () => {
   const names = allowed()
   assert.ok(names.includes('loop.command'), 'a typed /loop line goes to the bridge')
+  assert.ok(names.includes('after.command'), 'a typed /after line goes to the bridge')
   assert.ok(names.includes('loops.list'), 'the row under the composer lists the loops')
   assert.ok(!names.includes('loops.poll'), 'a tick is not the window\'s to send')
   assert.ok(!names.includes('watches.poll'), 'nor is a watch\'s poll')

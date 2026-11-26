@@ -12,7 +12,7 @@ import { conversationPreferences, setConversation } from './experience'
 import { Unconfigurable, METHOD, call, callBot, callSummon } from './rpc'
 import { RequestFailed } from './rewind'
 import type { ScheduleAnswer } from '../shared/schedule'
-import type { LoopAnswer } from '../shared/loop'
+import type { LoopAnswer, LoopKind } from '../shared/loop'
 import type { AsideStarted } from '../shared/aside'
 import { manifestTask } from '../shared/manifest'
 import { planRun as startPlanRun } from './plan-run'
@@ -262,21 +262,25 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
    * waits waits behind it, whatever it is, so a `/loop stop` does not end the loops before the
    * `/loop` typed first has started its own (LOOP-11, CMD-8).
    *
+   * `kind` is `after` for a `/after` line (LOOP-18), which goes to `after.command` and takes a place
+   * among the same loops. The bridge takes it while a turn runs, since it sends nothing until its
+   * delay is up, so it waits in the queue only behind a `/loop` or `/after` line already waiting.
+   *
    * `staged` is what the line names. Only its markers and file names are sent, and the bridge puts
    * each back as the file's name, or as the sentence that a picture cannot join (DROP-4).
    */
-  const loopCommand = useCallback(async (handle: string, argument: string, line: string, staged: Staged[], queuedAlready = false) => {
+  const loopCommand = useCallback(async (handle: string, kind: LoopKind, argument: string, line: string, staged: Staged[], queuedAlready = false) => {
     const waiting = !queuedAlready && openedLives.current.get(handle)?.queued?.some((item) => item.loop !== undefined)
     if (waiting) {
-      updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged, loop: argument }] } : old)
+      updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged, loop: argument, loopKind: kind }] } : old)
       return
     }
     try {
-      const answer = await call<LoopAnswer>('loop.command', { session: handle, argument, ...markersOf(staged) })
+      const answer = await call<LoopAnswer>(`${kind}.command`, { session: handle, argument, ...markersOf(staged) })
       updateSession(handle, (old) => old ? { ...old, entries: t.loopAnswered(old.entries, answer) } : old)
     } catch (error) {
       if (error instanceof RequestFailed && error.code === 'turn_in_flight' && !queuedAlready) {
-        updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged, loop: argument }] } : old)
+        updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged, loop: argument, loopKind: kind }] } : old)
         return
       }
       updateSession(handle, (old) => old ? { ...old, entries: [...old.entries, t.errored(error instanceof RequestFailed ? error.reason : String(error))] } : old)
@@ -374,7 +378,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       const settled = message.aside === 'recap'
         ? askAside(handle, 'recap', '', message.prompt, [], true)
         : message.loop !== undefined
-          ? loopCommand(handle, message.loop, message.prompt, message.staged, true)
+          ? loopCommand(handle, message.loopKind ?? 'loop', message.loop, message.prompt, message.staged, true)
           : message.schedule !== undefined
             ? schedule(handle, message.schedule, message.prompt, message.staged, true)
             : message.manifest !== undefined
@@ -490,7 +494,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       const handle = handleRef.current
       setDraft('')
       setLive((old) => old ? { ...old, attachments: [], staging: sent(old.staging) } : old)
-      void loopCommand(handle, exit.argument, exit.line, exit.staged)
+      void loopCommand(handle, exit.kind, exit.argument, exit.line, exit.staged)
       return
     }
     if (exit.to === 'aside' && handleRef.current) {
@@ -537,7 +541,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     if (exit.to === 'loop') {
       setDraft('')
       setLive((old) => old ? { ...old, attachments: [], staging: sent(old.staging) } : old)
-      void loopCommand(handleRef.current, exit.argument, exit.line, exit.staged)
+      void loopCommand(handleRef.current, exit.kind, exit.argument, exit.line, exit.staged)
       return
     }
     const task = exit.to === 'prompt' ? planTask(exit.line) : null
@@ -588,7 +592,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     if (exit.to === 'loop') {
       setDraft('')
       setLive((old) => old ? { ...old, attachments: [], staging: sent(old.staging) } : old)
-      void loopCommand(handle, exit.argument, exit.line, exit.staged)
+      void loopCommand(handle, exit.kind, exit.argument, exit.line, exit.staged)
       return
     }
     // Never interjected: a plan line waits for the running turn (MODE-12).

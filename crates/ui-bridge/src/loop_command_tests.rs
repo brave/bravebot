@@ -796,3 +796,106 @@ fn a_typed_turn_between_ticks_leaves_the_loops_alone() {
     assert!(said.is_empty());
     assert_eq!(loops.next_due(due), Some(1));
 }
+
+/// `/after <argument>`, answered at once.
+fn after(bridge: &mut Bridge, handle: &str, argument: &str) -> Value {
+    call(
+        bridge,
+        "after.command",
+        json!({"session": handle, "argument": argument}),
+    )
+    .unwrap_or_else(|failure| panic!("/after {argument} failed: {}", failure.message))
+}
+
+/// LOOP-18, LOOP-10. Rejects an `/after` line sent before its delay is up, sent more than once,
+/// left among the loops once it was sent, or sent to a turn told it is a tick.
+#[test]
+fn an_after_line_is_sent_once_after_its_delay_and_leaves_no_loop() {
+    let (mut bridge, handle, events, bodies, _held) = opened();
+    let before = Instant::now();
+    let answer = after(&mut bridge, &handle, "5m check the deploy");
+    let typed = Instant::now();
+    assert_eq!(answer["refused"], false);
+    assert_eq!(answer["number"], 1);
+    assert_eq!(answer["adjusted"], Value::Null);
+    assert!(
+        answer["lines"][0].as_str().unwrap().contains("5m"),
+        "{answer}"
+    );
+    // Nothing goes now.
+    assert!(named(&events, "loop.tick").is_empty());
+    assert!(named(&events, "turn.started").is_empty());
+    let listed = call(&mut bridge, "loops.list", json!({"session": handle})).unwrap();
+    assert_eq!(listed["loops"][0]["once"], true, "{listed}");
+
+    bridge.poll_loops_at(before + Duration::from_secs(299));
+    assert!(named(&events, "loop.tick").is_empty());
+
+    bridge.poll_loops_at(typed + Duration::from_secs(300));
+    assert_eq!(
+        named(&events, "loop.tick"),
+        [json!({"number": 1, "tick": 1, "quiet": 0})]
+    );
+    settle(&mut bridge, &handle);
+    assert!(numbers(&mut bridge, &handle).is_empty());
+    assert_eq!(
+        named(&events, "loop.ended"),
+        [json!({"number": 1, "reason": "sent"})]
+    );
+
+    bridge.poll_loops_at(typed + Duration::from_secs(3600));
+    assert_eq!(named(&events, "loop.tick").len(), 1);
+    assert_eq!(named(&events, "turn.started").len(), 1);
+    let bodies = bodies.lock().unwrap();
+    assert!(bodies.iter().any(|body| body.contains("check the deploy")));
+    assert!(!bodies.iter().any(|body| body.contains("timing is theirs")));
+}
+
+/// LOOP-18, LOOP-16. Rejects an `/after` line that does not take a number among the loops, does
+/// not count towards the five, or is taken when five are held.
+#[test]
+fn an_after_line_counts_towards_the_cap() {
+    let (mut bridge, handle, _events, _bodies, _held) = opened();
+    for n in 1..=4 {
+        typed(&mut bridge, &handle, &format!("5m line {n}"));
+    }
+    assert_eq!(after(&mut bridge, &handle, "5m later")["number"], 5);
+    assert_eq!(numbers(&mut bridge, &handle), [1, 2, 3, 4, 5]);
+
+    let refused = after(&mut bridge, &handle, "5m one more");
+    assert_eq!(refused["refused"], true);
+    assert_eq!(refused["number"], Value::Null);
+    let looped = typed(&mut bridge, &handle, "5m one more");
+    assert_eq!(looped["refused"], true);
+    assert_eq!(numbers(&mut bridge, &handle), [1, 2, 3, 4, 5]);
+
+    // `/loop stop` ends it as it ends a loop.
+    typed(&mut bridge, &handle, "stop 5");
+    assert_eq!(numbers(&mut bridge, &handle), [1, 2, 3, 4]);
+}
+
+/// LOOP-18. Rejects an `/after` line refused while a turn runs, which sends nothing then; a line
+/// with no leading delay, or a delay alone, taken as a request; and a delay held to the bounds
+/// without saying so.
+#[test]
+fn an_after_line_is_taken_during_a_turn_and_needs_a_leading_delay() {
+    let (mut bridge, handle, events, _bodies, _held) = opened();
+    running_turn(&mut bridge, &handle);
+    assert_eq!(after(&mut bridge, &handle, "5m during")["number"], 1);
+    bridge.open.get_mut(&handle).unwrap().running = None;
+
+    for unreadable in ["", "5m", "check the deploy every 5m"] {
+        let said = after(&mut bridge, &handle, unreadable);
+        assert_eq!(said["refused"], true, "{unreadable}");
+    }
+    assert_eq!(numbers(&mut bridge, &handle), [1]);
+
+    let raised = after(&mut bridge, &handle, "1s soon");
+    assert_eq!(raised["adjusted"]["held"], "raised");
+    assert_eq!(raised["adjusted"]["every"], "5s");
+    assert!(
+        raised["lines"][0].as_str().unwrap().contains("raised"),
+        "{raised}"
+    );
+    assert!(named(&events, "loop.tick").is_empty());
+}

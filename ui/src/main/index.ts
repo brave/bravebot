@@ -733,6 +733,8 @@ const ALLOWED = new Set([
   // A typed `/loop` line (LOOP-3), and the loops a session holds, for the row under the composer
   // (LOOP-13). Sending a due tick is `loops.poll`, which only the clock in this process calls.
   'loop.command',
+  // A typed `/after` line, which takes a place among the same loops (LOOP-18).
+  'after.command',
   'loops.list',
   // The text of the window's own title, for the name and state the window gives (PANEL-19).
   'window.title',

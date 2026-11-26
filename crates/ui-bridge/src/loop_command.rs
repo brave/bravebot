@@ -1,4 +1,4 @@
-//! `/loop` typed in the window, and the list of a session's loops the window draws.
+//! `/loop` and `/after` typed in the window, and the list of a session's loops the window draws.
 //!
 //! The argument is read by [`bravebot_agent::repeat::parse`], the function the terminal's `/loop`
 //! reads it with, and the session's loops are the same [`Loops`] the terminal holds (LOOP-15,
@@ -10,7 +10,7 @@
 //! [`bravebot_agent::confirm::printable`] before it is answered.
 
 use crate::protocol::{ErrorCode, Failure};
-use bravebot_agent::repeat::{self, Asked, Held, Loops, Pacing, Running};
+use bravebot_agent::repeat::{self, Asked, Delayed, Held, Loops, Pacing, Running};
 use bravebot_agent::turn::Wakeup;
 use bravebot_i18n::t;
 use serde_json::{Value, json};
@@ -55,6 +55,54 @@ pub fn command(
             Ok((answer, Some(number)))
         }
     }
+}
+
+/// Carry out `/after <argument>` against a session's loops (LOOP-18).
+///
+/// The line takes a place among the loops, so it has a number and counts towards the cap. Nothing
+/// is sent now: the one tick is due when the delay is up and the session is idle, and the poll
+/// clock sends it. So unlike `/loop` it is taken while a turn runs, and the delay counts from
+/// `now`, when the person typed it. The clock sends the tick only to a session that can start a
+/// turn, so nothing here asks whether this one can yet.
+pub fn after(argument: &str, loops: &mut Loops, now: Instant) -> Value {
+    let request = match repeat::parse_after(argument) {
+        Delayed::Start(request) => request,
+        Delayed::Unreadable => return said(&[t!(after_needs_a_delay).to_string()], true),
+    };
+    if loops.is_full() {
+        return said(&[t!(loop_full, count = repeat::MAX_LIVE)], true);
+    }
+    let mut lines = Vec::new();
+    let held = match request.adjusted {
+        Some(Held::Raised(delay)) => {
+            lines.push(t!(after_delay_raised, delay = repeat::spell(delay)));
+            json!({"held": "raised", "every": repeat::spell(delay)})
+        }
+        Some(Held::Capped(delay)) => {
+            lines.push(t!(after_delay_capped, delay = repeat::spell(delay)));
+            json!({"held": "capped", "every": repeat::spell(delay)})
+        }
+        None => Value::Null,
+    };
+    let delay = match request.pacing {
+        Pacing::Once(delay) => delay,
+        _ => Default::default(),
+    };
+    let number = loops.start(Running::after(request, now));
+    lines.push(t!(
+        after_started,
+        number = number,
+        delay = repeat::spell(delay)
+    ));
+    let pace = loops
+        .iter()
+        .find(|running| running.number() == number)
+        .map(Running::pace);
+    let mut answer = said(&lines, false);
+    answer["number"] = json!(number);
+    answer["pace"] = json!(pace);
+    answer["adjusted"] = held;
+    answer
 }
 
 /// How a turn ended, as far as the session's loops need to know.

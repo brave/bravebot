@@ -18,7 +18,7 @@ import { summonMarker } from '../shared/summons'
 import { btwQuestion, isRecap } from '../shared/aside'
 import { goalArgument } from '../shared/goal'
 import { scheduleArgument } from '../shared/schedule'
-import { loopArgument } from '../shared/loop'
+import { afterArgument, loopArgument, type LoopKind } from '../shared/loop'
 
 /** A bot picked from the `@` list for one message (MEMORY-14). */
 export interface SummonedBot {
@@ -184,7 +184,7 @@ export function leaving(staging: Staging | undefined, draft: string): { words: s
  */
 export type Exit =
   | { to: 'schedule'; argument: string; line: string; staged: Staged[] }
-  | { to: 'loop'; argument: string; line: string; staged: Staged[] }
+  | { to: 'loop'; kind: LoopKind; argument: string; line: string; staged: Staged[] }
   | { to: 'aside'; kind: 'btw' | 'recap'; question: string; line: string; staged: Staged[] }
   | { to: 'goal'; argument: string; line: string; staged: Staged[] }
   | { to: 'prompt'; line: string; staged: Staged[] }
@@ -198,7 +198,9 @@ export function exitOf(staging: Staging | undefined, draft: string): Exit | null
   const condition = goalArgument(line)
   if (condition !== null) return { to: 'goal', argument: condition, line, staged }
   const repeated = loopArgument(line)
-  if (repeated !== null) return { to: 'loop', argument: repeated, line, staged }
+  if (repeated !== null) return { to: 'loop', kind: 'loop', argument: repeated, line, staged }
+  const later = afterArgument(line)
+  if (later !== null) return { to: 'loop', kind: 'after', argument: later, line, staged }
   const question = btwQuestion(line)
   if (question !== null) return { to: 'aside', kind: 'btw', question, line, staged }
   if (isRecap(line)) return { to: 'aside', kind: 'recap', question: '', line, staged }

@@ -50,11 +50,48 @@ test('only the command word, alone or with an argument, is the command', () => {
 })
 
 test('the composer routes /loop lines to the loop exit and leaves a longer word as a prompt', () => {
-  assert.deepEqual(staging.exitOf(undefined, '/loop 10s say hi'), { to: 'loop', argument: '10s say hi', line: '/loop 10s say hi', staged: [] })
-  assert.deepEqual(staging.exitOf(undefined, '/loop'), { to: 'loop', argument: '', line: '/loop', staged: [] })
+  assert.deepEqual(staging.exitOf(undefined, '/loop 10s say hi'), { to: 'loop', kind: 'loop', argument: '10s say hi', line: '/loop 10s say hi', staged: [] })
+  assert.deepEqual(staging.exitOf(undefined, '/loop'), { to: 'loop', kind: 'loop', argument: '', line: '/loop', staged: [] })
   assert.equal(staging.exitOf(undefined, '/looping').to, 'prompt')
   // A `/schedule` line is still the schedule exit.
   assert.equal(staging.exitOf(undefined, '/schedule list').to, 'schedule')
+})
+
+test('only /after, alone or with an argument, is the after command, and it takes the loop exit (LOOP-18)', () => {
+  assert.equal(shared.afterArgument('/after'), '')
+  assert.equal(shared.afterArgument('  /after 5m check the deploy  '), '5m check the deploy')
+  for (const prompt of ['/afterwards', '/after-5m x', 'please /after 5m x', 'after 5m x', '/loop 5m x', '']) {
+    assert.equal(shared.afterArgument(prompt), null, prompt)
+  }
+  assert.deepEqual(staging.exitOf(undefined, '/after 5m /status'), { to: 'loop', kind: 'after', argument: '5m /status', line: '/after 5m /status', staged: [] })
+  assert.deepEqual(staging.exitOf(undefined, '/after'), { to: 'loop', kind: 'after', argument: '', line: '/after', staged: [] })
+  assert.equal(staging.exitOf(undefined, '/afterwards check').to, 'prompt')
+  assert.equal(staging.exitOf(undefined, '/loop 5m x').kind, 'loop')
+})
+
+test('a /after line goes to after.command, waits only behind a waiting loop line, and leaves the queue as /after (LOOP-18, CMD-8)', () => {
+  const turn = readFileSync('src/renderer/use-turn.ts', 'utf8')
+  const body = turn.slice(turn.indexOf('const loopCommand = '), turn.indexOf('const askAside = '))
+  // The method is named by the exit's kind, and by nothing read off the line here.
+  assert.match(body, /call<LoopAnswer>\(`\$\{kind\}\.command`, \{ session: handle, argument, \.\.\.markersOf\(staged\) \}\)/)
+  assert.equal([...body.matchAll(/loop: argument, loopKind: kind/g)].length, 2, 'both places a line is queued keep its kind')
+  assert.match(turn, /loopCommand\(handle, message\.loopKind \?\? 'loop', message\.loop, message\.prompt, message\.staged, true\)/)
+  // The window's main process lets the line through, with its markers and nothing else.
+  const index = readFileSync('src/main/index.ts', 'utf8')
+  assert.match(index, /'after\.command',/)
+  const sanitiser = readFileSync('src/main/sanitise.ts', 'utf8')
+  assert.match(sanitiser, /method === 'loop\.command' \|\| method === 'after\.command'\) \{/)
+})
+
+test('the answer to /after is drawn as its own row, held lines first, and its tick ends as sent (LOOP-18)', () => {
+  const answer = { lines: ['The delay was raised to 5s.', 'Loop 1 will send its line in 5s.'], refused: false, number: 1, pace: 'once', adjusted: { held: 'raised', every: '5s' } }
+  const entries = transcript.loopAnswered(live().entries, answer)
+  assert.equal(entries.at(-1).kind, 'narration')
+  assert.equal(entries.at(-1).text, 'The delay was raised to 5s.\nLoop 1 will send its line in 5s.')
+  const unreadable = transcript.loopAnswer({ lines: ['/after needs a delay and a line.'], refused: true, number: null, pace: null, adjusted: null })
+  assert.equal(unreadable.refused, true)
+  const sent = heard(live(), { event: 'loop.ended', session: 's', data: { number: 1, reason: 'sent' } })
+  assert.equal(sent.entries.at(-1).text, 'Loop 1 ended: its line was sent')
 })
 
 test('a tick row carries its loop number, its own, and the quiet ticks only where there are any (LOOP-13)', () => {
@@ -120,7 +157,7 @@ test('the composer asks for the command only from the typed line, and never send
     assert.match(site, /void loopCommand\(.*, exit\.argument, exit\.line, exit\.staged\)$/m)
   }
   const body = turn.slice(turn.indexOf('const loopCommand = '))
-  assert.match(body, /call<LoopAnswer>\('loop\.command', \{ session: handle, argument, \.\.\.markersOf\(staged\) \}\)/)
+  assert.match(body, /call<LoopAnswer>\(`\$\{kind\}\.command`, \{ session: handle, argument, \.\.\.markersOf\(staged\) \}\)/)
   assert.match(body, /entries: t\.loopAnswered\(old\.entries, answer\)/)
 })
 
@@ -128,21 +165,21 @@ test('a start the bridge refuses while a turn runs waits in the queue, and is as
   const turn = readFileSync('src/renderer/use-turn.ts', 'utf8')
   const body = turn.slice(turn.indexOf('const loopCommand = '), turn.indexOf('const askAside = '))
   // The window queues on the bridge's refusal, never on a reading of the line.
-  assert.match(body, /error instanceof RequestFailed && error\.code === 'turn_in_flight' && !queuedAlready\) \{\s*updateSession\(handle, \(old\) => old \? \{ \.\.\.old, queued: \[\.\.\.\(old\.queued \?\? \[\]\), \{ prompt: line, attachments: \[\], staged, loop: argument \}\] \} : old\)\s*return/)
+  assert.match(body, /error instanceof RequestFailed && error\.code === 'turn_in_flight' && !queuedAlready\) \{\s*updateSession\(handle, \(old\) => old \? \{ \.\.\.old, queued: \[\.\.\.\(old\.queued \?\? \[\]\), \{ prompt: line, attachments: \[\], staged, loop: argument, loopKind: kind \}\] \} : old\)\s*return/)
   assert.doesNotMatch(body, /startsWith\(|stop/)
   assert.equal([...turn.matchAll(/loop: argument/g)].length, 2, 'the bridge refusal and a line behind a waiting loop line')
   // Leaving the queue, the line goes back to `loop.command`, not to `send`.
-  assert.match(turn, /message\.loop !== undefined\s*\?\s*loopCommand\(handle, message\.loop, message\.prompt, message\.staged, true\)/)
+  assert.match(turn, /message\.loop !== undefined\s*\?\s*loopCommand\(handle, message\.loopKind \?\? 'loop', message\.loop, message\.prompt, message\.staged, true\)/)
 })
 
 test('a /loop stop typed behind a waiting /loop line waits behind it, and is not sent to the bridge first (LOOP-11, CMD-8)', () => {
   const turn = readFileSync('src/renderer/use-turn.ts', 'utf8')
   const body = turn.slice(turn.indexOf('const loopCommand = '))
   const read = body.indexOf('item.loop !== undefined')
-  const called = body.indexOf("call<LoopAnswer>('loop.command'")
+  const called = body.indexOf('call<LoopAnswer>(`${kind}.command`')
   assert.ok(read > 0 && called > read, 'the queue is read before loop.command is called')
   assert.match(body.slice(0, called), /!queuedAlready && openedLives\.current\.get\(handle\)\?\.queued\?\.some\(\(item\) => item\.loop !== undefined\)/)
-  assert.match(body.slice(0, called), /if \(waiting\) \{.*?queued: \[\.\.\.\(old\.queued \?\? \[\]\), \{ prompt: line, attachments: \[\], staged, loop: argument \}\].*?return\s*\}/s)
+  assert.match(body.slice(0, called), /if \(waiting\) \{.*?queued: \[\.\.\.\(old\.queued \?\? \[\]\), \{ prompt: line, attachments: \[\], staged, loop: argument, loopKind: kind \}\].*?return\s*\}/s)
 })
 
 test('the tick row is drawn as an automatic turn, in the transcript', () => {
