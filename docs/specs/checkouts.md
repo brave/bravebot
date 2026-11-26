@@ -613,7 +613,7 @@ does the description of `isolation`.
 `verified-by: bravebot_agent::workspace::a_directory_the_planner_names_is_offered_as_itself`
 `verified-by: bravebot_agent::workspace::a_file_or_a_new_name_is_still_offered_through_the_directory_it_is_in`
 `verified-by: bravebot_agent::workspace::a_directory_that_holds_the_working_directory_is_the_one_that_ends_checkouts`
-`verified-by: bravebot_tui::app::add_dir_of_a_directory_holding_the_project_says_it_ends_checkouts`
+`verified-by: bravebot_tui::app::tests::remainder::add_dir_of_a_directory_holding_the_project_says_it_ends_checkouts`
 `verified-by: bravebot_cli::main::a_directory_holding_the_working_directory_is_said_to_end_checkouts`
 `verified-by: bravebot_agent::turn::the_answer_to_a_spawn_in_a_checkout_says_the_checkouts_share_the_repositorys_refs`
 `verified-by: bravebot_agent::tools::the_isolation_field_says_checkouts_share_refs_and_who_fetches_once`
@@ -911,7 +911,7 @@ not text, is named and left.
 `verified-by: bravebot_agent::turn::only_a_recorded_path_of_a_kept_checkout_is_brought_back`
 `verified-by: bravebot_agent::workspace::a_checkouts_candidate_is_read_with_its_paths_label_and_nothing_else_is_read`
 `verified-by: bravebot_agent::turn::a_typed_checkouts_apply_asks_about_each_recorded_file`
-`verified-by: bravebot_tui::app::the_checkouts_command_lists_and_removes_by_number`
+`verified-by: bravebot_tui::app::tests::remainder::the_checkouts_command_lists_and_removes_by_number`
 `verified-by: bravebot_tui::checkouts_command::apply_a_number_and_paths_brings_back_only_those_paths`
 `verified-by: bravebot_agent::turn::a_typed_checkouts_apply_with_paths_asks_only_about_those_paths`
 `verified-by: bravebot_agent::turn::a_checkout_file_whose_directory_leaves_the_working_directory_is_refused_before_the_person_is_asked`
@@ -1009,9 +1009,9 @@ stays until a person deletes it and runs `git worktree prune`.
 `verified-by: bravebot_tui::checkouts_command::a_ref_that_cannot_be_read_reads_as_unread`
 `verified-by: bravebot_tui::checkouts_command::a_pipe_is_not_waited_on`
 `verified-by: bravebot_tui::checkouts_command::a_branch_git_pushed_reads_as_pushed`
-`verified-by: bravebot_tui::app::a_checkout_worked_in_is_removed_only_when_the_person_says_so`
-`verified-by: bravebot_tui::app::a_checkout_nothing_was_done_in_is_removed_without_asking`
-`verified-by: bravebot_tui::app::a_checkout_not_kept_or_not_removable_is_said_so`
+`verified-by: bravebot_tui::app::tests::remainder::a_checkout_worked_in_is_removed_only_when_the_person_says_so`
+`verified-by: bravebot_tui::app::tests::remainder::a_checkout_nothing_was_done_in_is_removed_without_asking`
+`verified-by: bravebot_tui::app::tests::remainder::a_checkout_not_kept_or_not_removable_is_said_so`
 `verified-by: bravebot_tui::confirm::grants::the_remove_checkout_question_names_the_checkout_and_what_removing_it_deletes`
 `verified-by: bravebot_tui::confirm::grants::a_remove_checkout_question_takes_a_yes_only_from_a_draw_showing_what_it_removes`
 
@@ -1164,7 +1164,7 @@ once for each `apply_checkout` call that brought a file back, and not for one th
 `verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_with_changes_holds_the_tree_the_planner_has`
 `verified-by: bravebot_agent::turn::the_trail_records_no_removal_for_a_checkout_that_was_kept_and_holds_neither_commit_nor_number`
 `verified-by: bravebot_agent::turn::a_checkout_a_delegate_made_is_recorded_under_that_delegates_number`
-`verified-by: bravebot_tui::app::removing_a_checkout_is_recorded_with_its_path_and_a_kept_one_is_not`
+`verified-by: bravebot_tui::app::tests::remainder::removing_a_checkout_is_recorded_with_its_path_and_a_kept_one_is_not`
 `verified-by: bravebot_agent::turn::a_kept_checkouts_file_comes_back_through_a_question_the_table_would_not_ask`
 `verified-by: bravebot_agent::turn::declining_the_question_brings_nothing_back`
 

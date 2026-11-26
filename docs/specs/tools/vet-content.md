@@ -325,7 +325,7 @@ refusal is VET-3's, word for word.
 `verified-by: bravebot_core::policy::a_picture_is_promoted_once_by_any_endorsement_and_attached_as_itself`
 `verified-by: bravebot_core::policy::a_copy_of_a_picture_is_a_recorded_release`
 `verified-by: bravebot_tui::confirm::vet::a_picture_is_put_to_the_person_as_a_copy_to_open`
-`verified-by: bravebot_tui::app::the_inputs_adopted_are_the_chosen_models_own`
+`verified-by: bravebot_tui::app::tests::remainder::the_inputs_adopted_are_the_chosen_models_own`
 
 <a id="VET-5"></a>
 ### VET-5: the description says who answers for the session, once, and names neither the mode nor the check

@@ -440,4 +440,4 @@ the conversation to the endpoint.
 `verified-by: bravebot_cli::doctor::doctor_reports_a_managed_retrieval_value_that_pins_nothing`
 `verified-by: bravebot_agent::dropped_keys::a_managed_retrieval_value_that_pins_nothing_is_said_and_a_pin_is_not`
 `verified-by: bravebot_cli::plain::the_opening_names_each_dropped_key_once_in_doctors_sentences_and_no_value`
-`verified-by: bravebot_tui::app::the_startup_notes_name_each_dropped_key_once_in_doctors_sentences_and_no_value`
+`verified-by: bravebot_tui::app::tests::backends_models::the_startup_notes_name_each_dropped_key_once_in_doctors_sentences_and_no_value`

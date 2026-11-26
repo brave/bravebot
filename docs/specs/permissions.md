@@ -1040,8 +1040,8 @@ directory a person typed from being reachable on different terms.
 `verified-by: bravebot_ui_bridge::project_questions_tests::a_yes_to_a_directory_removed_since_it_was_asked_about_opens_nothing`
 `verified-by: bravebot_ui_bridge::project_questions_tests::a_yes_to_a_directory_swapped_for_a_link_opens_nothing`
 `verified-by: bravebot_ui_bridge::project_questions_tests::a_resumed_session_asks_nothing`
-`verified-by: bravebot_tui::app::an_accepted_directory_is_opened_and_trusted_like_one_typed`
-`verified-by: bravebot_tui::app::clearing_closes_the_directories_a_file_named_and_opens_none`
+`verified-by: bravebot_tui::app::tests::permissions::an_accepted_directory_is_opened_and_trusted_like_one_typed`
+`verified-by: bravebot_tui::app::tests::permissions::clearing_closes_the_directories_a_file_named_and_opens_none`
 
 ## The file
 
@@ -1109,7 +1109,7 @@ allow rule quietly removed a deny rule's protection.
 `verified-by: bravebot_agent::permissions::a_domain_rule_that_names_no_host_is_reported_in_a_session`
 `verified-by: bravebot_agent::dropped_keys::a_session_start_says_each_kind_once_in_doctors_sentences`
 `verified-by: bravebot_cli::plain::the_opening_names_each_dropped_key_once_in_doctors_sentences_and_no_value`
-`verified-by: bravebot_tui::app::the_startup_notes_name_each_dropped_key_once_in_doctors_sentences_and_no_value`
+`verified-by: bravebot_tui::app::tests::backends_models::the_startup_notes_name_each_dropped_key_once_in_doctors_sentences_and_no_value`
 
 <a id="PERM-12"></a>
 ### PERM-12: no rules means no change
@@ -1146,10 +1146,10 @@ entirely, and the path in the box would begin with the person's own project whil
 outside it. A question that changes nothing either way, and one already answered a box ago, both
 train the habit of answering without reading, which is the whole of what asking is worth.
 
-`verified-by: bravebot_tui::app::a_named_directory_is_resolved_before_it_is_asked_about`
-`verified-by: bravebot_tui::app::a_directory_two_layers_both_named_is_asked_about_once`
-`verified-by: bravebot_tui::app::a_name_that_cannot_be_opened_is_said_so_rather_than_asked_about`
-`verified-by: bravebot_tui::app::a_relative_name_is_refused_against_a_working_directory_whose_name_is_not_text`
+`verified-by: bravebot_tui::app::tests::permissions::a_named_directory_is_resolved_before_it_is_asked_about`
+`verified-by: bravebot_tui::app::tests::permissions::a_directory_two_layers_both_named_is_asked_about_once`
+`verified-by: bravebot_tui::app::tests::permissions::a_name_that_cannot_be_opened_is_said_so_rather_than_asked_about`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_relative_name_is_refused_against_a_working_directory_whose_name_is_not_text`
 
 ## Which file a rule may be written in
 
@@ -1233,17 +1233,17 @@ silence reads to whoever wrote it as one in force.
 `verified-by: bravebot_config::settings::layered_withholds_a_named_file_inside_a_directory_an_earlier_process_recorded`
 `verified-by: bravebot_cli::doctor::doctor_says_why_a_named_file_in_a_writable_directory_grants_nothing`
 `verified-by: bravebot_cli::plain::the_opening_says_why_a_named_file_in_a_writable_directory_grants_nothing`
-`verified-by: bravebot_tui::app::the_opening_note_says_why_a_named_file_in_a_writable_directory_grants_nothing`
+`verified-by: bravebot_tui::app::tests::permissions::the_opening_note_says_why_a_named_file_in_a_writable_directory_grants_nothing`
 `verified-by: bravebot_cli::workspace::the_directories_a_command_line_names_are_counted_as_written_roots`
 `verified-by: bravebot_cli::running::a_stage_cannot_rewrite_the_settings_file_named_by_the_flag`
-`verified-by: bravebot_tui::app::a_named_file_inside_the_directory_left_behind_still_grants_after_moving`
+`verified-by: bravebot_tui::app::tests::permissions::a_named_file_inside_the_directory_left_behind_still_grants_after_moving`
 `verified-by: bravebot_agent::permissions::a_checkout_cannot_write_a_rule_that_answers_a_prompt`
 `verified-by: bravebot_config::settings::a_blank_allow_entry_is_not_reported_as_a_rule_that_was_withheld`
 `verified-by: bravebot_cli::running::doctor_names_an_allow_rule_a_checkout_wrote`
 `verified-by: bravebot_agent::permissions::an_allow_entry_a_checkout_wrote_is_proposed_only_where_it_is_a_rule`
 `verified-by: bravebot_cli::running::doctor_names_a_checkouts_unreadable_allow_entry_rather_than_offering_it`
 `verified-by: bravebot_cli::running::a_session_in_lines_names_an_allow_rule_a_checkout_wrote`
-`verified-by: bravebot_tui::app::the_notes_about_a_checkouts_allow_rule_spell_the_rule_and_the_files`
+`verified-by: bravebot_tui::app::tests::permissions::the_notes_about_a_checkouts_allow_rule_spell_the_rule_and_the_files`
 
 <a id="PERM-15"></a>
 ### PERM-15: a checkout proposes an allow rule, and a question naming every one grants them
@@ -1334,7 +1334,7 @@ answering a prompt in a tree nobody was asked about, with another checkout's scr
 about the first one's ([#843](https://github.com/brave/bravebot/issues/843)).
 
 `verified-by: bravebot_tui::trust_prompt::the_rules_are_granted_only_where_the_person_accepts_them`
-`verified-by: bravebot_tui::app::a_checkouts_entry_is_proposed_here_only_where_it_is_a_rule`
+`verified-by: bravebot_tui::app::tests::permissions::a_checkouts_entry_is_proposed_here_only_where_it_is_a_rule`
 `verified-by: bravebot_tui::trust_prompt::nothing_is_asked_where_there_is_nothing_to_grant`
 `verified-by: bravebot_tui::trust_prompt::leaving_at_the_rules_question_grants_nothing_and_starts_no_session`
 `verified-by: bravebot_tui::trust_prompt::the_rules_prompt_names_every_rule_and_the_file_it_came_from`
@@ -1358,12 +1358,12 @@ about the first one's ([#843](https://github.com/brave/bravebot/issues/843)).
 `verified-by: bravebot_ui_bridge::project_questions_tests::a_yes_the_record_cannot_take_holds_for_the_session_and_says_so`
 `verified-by: bravebot_ui_bridge::project_questions_tests::a_grant_names_the_session_before_it_has_a_record`
 `verified-by: bravebot_agent::opening::a_yes_that_cannot_be_written_holds_for_the_session_and_says_so`
-`verified-by: bravebot_tui::app::a_rule_granted_in_one_checkout_is_not_in_force_after_moving_to_another`
-`verified-by: bravebot_tui::app::moving_to_a_checkout_puts_its_own_deny_rules_in_force`
-`verified-by: bravebot_tui::app::a_rule_the_checkout_moved_to_proposes_is_asked_about_and_granted_there`
-`verified-by: bravebot_tui::app::leaving_at_the_rules_question_after_moving_leaves_the_session`
-`verified-by: bravebot_tui::app::bypassing_grants_what_the_checkout_moved_to_proposes_without_asking`
-`verified-by: bravebot_tui::app::reading_the_rules_again_in_the_same_checkout_asks_nothing_granted_and_reads_the_file_anew`
+`verified-by: bravebot_tui::app::tests::permissions::a_rule_granted_in_one_checkout_is_not_in_force_after_moving_to_another`
+`verified-by: bravebot_tui::app::tests::permissions::moving_to_a_checkout_puts_its_own_deny_rules_in_force`
+`verified-by: bravebot_tui::app::tests::permissions::a_rule_the_checkout_moved_to_proposes_is_asked_about_and_granted_there`
+`verified-by: bravebot_tui::app::tests::permissions::leaving_at_the_rules_question_after_moving_leaves_the_session`
+`verified-by: bravebot_tui::app::tests::permissions::bypassing_grants_what_the_checkout_moved_to_proposes_without_asking`
+`verified-by: bravebot_tui::app::tests::permissions::reading_the_rules_again_in_the_same_checkout_asks_nothing_granted_and_reads_the_file_anew`
 `verified-by: bravebot_agent::permissions::a_rule_the_person_granted_answers_the_prompt_and_one_they_did_not_does_not`
 `verified-by: bravebot_agent::permissions::a_granted_rule_does_not_beat_a_deny_rule`
 `verified-by: bravebot_agent::permissions::a_granted_line_that_is_not_a_rule_is_reported_and_decides_nothing`
@@ -1448,8 +1448,8 @@ which is [PERM-13](#PERM-13)'s reasoning about a question that changes nothing.
 `verified-by: bravebot_agent::workspace::the_rule_holding_the_file_tools_to_the_workspace_holds_inside_a_checkout`
 `verified-by: bravebot_agent::workspace::a_move_inward_is_allowed_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_move_through_a_link_out_of_the_tree_is_refused_where_reads_stay_in_the_workspace`
-`verified-by: bravebot_tui::app::a_named_directory_is_refused_rather_than_asked_about_where_reads_stay_in_the_workspace`
-`verified-by: bravebot_tui::app::add_dir_is_refused_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_tui::app::tests::permissions::a_named_directory_is_refused_rather_than_asked_about_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_tui::app::tests::permissions::add_dir_is_refused_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_ui_bridge::workspace::a_turn_is_held_inside_the_project_where_its_settings_ask_for_it`
 `verified-by: bravebot_ui_bridge::bridge::session_new_refuses_a_directory_while_reads_stay_in_the_workspace`
 `verified-by: bravebot_cli::running::add_dir_is_refused_where_a_layer_keeps_reads_in_the_workspace`
@@ -1482,11 +1482,11 @@ exactly the machine somebody else may have a legitimate say in.
 
 `verified-by: bravebot_cli::main::the_bypass_flag_is_refused_where_a_layer_made_the_mode_unreachable`
 `verified-by: bravebot_cli::running::the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable`
-`verified-by: bravebot_tui::app::reading_the_rules_of_a_checkout_that_forbids_bypassing_takes_bypass_away`
-`verified-by: bravebot_tui::app::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
+`verified-by: bravebot_tui::app::tests::permissions::reading_the_rules_of_a_checkout_that_forbids_bypassing_takes_bypass_away`
+`verified-by: bravebot_tui::app::tests::permissions::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
 `verified-by: bravebot_tui::mode_trail_tests::bypass_made_unreachable_after_the_flag_is_an_opening_and_then_a_change`
-`verified-by: bravebot_tui::app::a_session_the_startup_builds_keeps_bypass_off_the_ladder_where_the_settings_say_it_is_unreachable`
-`verified-by: bravebot_tui::app::a_managed_file_that_makes_bypass_unreachable_keeps_it_off_the_ladder_of_a_new_session`
+`verified-by: bravebot_tui::app::tests::permissions::a_session_the_startup_builds_keeps_bypass_off_the_ladder_where_the_settings_say_it_is_unreachable`
+`verified-by: bravebot_tui::app::tests::permissions::a_managed_file_that_makes_bypass_unreachable_keeps_it_off_the_ladder_of_a_new_session`
 
 <a id="PERM-18"></a>
 ### PERM-18: every layer may write either, and the strictest value any layer named holds

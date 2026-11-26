@@ -1197,7 +1197,7 @@ started under ([SANDBOX-22](../sandboxing.md#SANDBOX-22)) and is listed and stop
 The copy forgets the reach and host answers the job started with ([PROMPT-8](../prompting.md#PROMPT-8)),
 so a `run` started in the copy is asked about them again, while the programs vouched for come across
 with the record ([RUN-9](#RUN-9)) and are not asked about
-`verified-by: bravebot_tui::app::a_branch_keeps_what_the_record_holds_and_forgets_the_rest`.
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::a_branch_keeps_what_the_record_holds_and_forgets_the_rest`.
 That test pins the answers the copy keeps and forgets. No test starts a job and then branches, so
 no test covers a job surviving `/branch`.
 
@@ -1284,7 +1284,7 @@ the job names the driver minted.
 `verified-by: bravebot_tui::state::clearing_the_session_empties_the_job_list_and_goes_on_keeping_jobs`
 `verified-by: bravebot_tui::kept_jobs_tests::clearing_the_session_ends_the_program_a_kept_job_was_running`
 `verified-by: bravebot_tui::kept_jobs_tests::the_clear_command_ends_the_program_a_kept_job_was_running`
-`verified-by: bravebot_tui::app::an_incognito_session_keeps_no_jobs_between_turns`
+`verified-by: bravebot_tui::app::tests::remainder::an_incognito_session_keeps_no_jobs_between_turns`
 `verified-by: bravebot_agent::turn::a_background_server_is_still_running_when_the_next_call_is_made`
 `verified-by: bravebot_agent::turn::a_background_command_must_be_one_pipeline`
 `verified-by: bravebot_agent::turn::a_background_line_is_refused_for_any_redirection_it_carries`
@@ -2650,7 +2650,7 @@ the wrong target, could only stop the whole turn and lose the rest of its work.
 `verified-by: bravebot_tui::state::a_stop_sets_the_jobs_token_and_the_row_waits_for_the_driver`
 `verified-by: bravebot_tui::state::a_stop_reaches_the_job_of_the_delegate_it_names_and_no_other`
 `verified-by: bravebot_tui::state::a_stop_of_a_job_that_is_not_running_says_so_and_sets_nothing`
-`verified-by: bravebot_tui::app::jobs_stop_typed_mid_turn_sets_the_token_of_the_job_it_names`
+`verified-by: bravebot_tui::app::tests::remainder::jobs_stop_typed_mid_turn_sets_the_token_of_the_job_it_names`
 `verified-by: bravebot_agent::turn::a_stop_asked_for_between_turns_ends_the_job_and_the_next_turn_says_who_stopped_it`
 `verified-by: bravebot_tui::kept_jobs_tests::a_stop_between_turns_ends_the_program_and_the_row`
 `verified-by: bravebot_tui::kept_jobs_tests::a_stop_during_a_turn_leaves_the_stop_to_the_turn`

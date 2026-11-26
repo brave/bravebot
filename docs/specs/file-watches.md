@@ -198,8 +198,8 @@ the one prompt in this system nobody can label would be the one carrying bytes o
 `verified-by: bravebot_agent::watch::a_fire_for_each_change_says_one_of_three_fixed_things_about_the_path`
 `verified-by: bravebot_tui::state::a_removal_and_an_appearance_are_each_reported_as_what_they_were`
 `verified-by: bravebot_tui::state::a_fires_prompt_carries_the_watch_and_the_path_and_nothing_else`
-`verified-by: bravebot_tui::app::a_path_named_in_a_fires_prompt_vouches_for_nothing`
-`verified-by: bravebot_tui::app::a_line_typed_with_no_fire_in_flight_is_the_persons_and_names_its_files`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_path_named_in_a_fires_prompt_vouches_for_nothing`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_line_typed_with_no_fire_in_flight_is_the_persons_and_names_its_files`
 
 <a id="FSWATCH-5"></a>
 ### FSWATCH-5: a fire waits for an idle session and never interrupts, and changes while a turn runs are one fire
@@ -216,7 +216,7 @@ queue of held fires would be several turns all reporting the same sentence.
 `verified-by: bravebot_tui::state::a_fire_waits_for_the_turn_in_flight_and_for_what_is_queued`
 `verified-by: bravebot_agent::watch::changes_seen_before_a_fire_goes_out_are_one_fire`
 `verified-by: bravebot_agent::watch::a_watch_whose_fire_is_running_is_not_due_again`
-`verified-by: bravebot_tui::app::a_fire_whose_turn_failed_stops_being_the_turn_in_flight`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_fire_whose_turn_failed_stops_being_the_turn_in_flight`
 
 <a id="FSWATCH-6"></a>
 ### FSWATCH-6: a watch, a loop and a goal are never live together, and a watch asked for under one is refused
@@ -307,7 +307,7 @@ does not end at the first move for reading as a relative one.
 `verified-by: bravebot_agent::watch::a_move_ends_a_watch_that_has_a_fire_waiting_rather_than_letting_it_go_out`
 `verified-by: bravebot_agent::workspace::a_relative_look_is_out_of_reach_once_the_working_directory_has_moved`
 `verified-by: bravebot_agent::workspace::an_absolute_look_into_a_directory_that_survived_the_move_still_sees_it`
-`verified-by: bravebot_tui::app::changing_directory_ends_a_watch_armed_in_the_one_left_behind`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::changing_directory_ends_a_watch_armed_in_the_one_left_behind`
 `verified-by: bravebot_tui::state::a_watch_that_ends_itself_says_which_of_the_two_endings_it_was`
 
 ## The bounds
@@ -380,12 +380,12 @@ armed it to learn.
 
 `verified-by: bravebot_tui::state::a_watch_is_ended_by_the_number_the_report_gave_it`
 `verified-by: bravebot_tui::state::stopping_a_fires_turn_ends_the_watch_that_fired`
-`verified-by: bravebot_tui::app::stopping_a_fires_turn_through_the_driver_ends_the_watch_that_fired`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::stopping_a_fires_turn_through_the_driver_ends_the_watch_that_fired`
 `verified-by: bravebot_tui::state::stopping_a_turn_that_was_not_a_fire_ends_no_watch`
 `verified-by: bravebot_tui::state::a_person_starting_a_loop_or_a_goal_is_told_the_watches_have_ended`
 `verified-by: bravebot_tui::state::a_watch_that_ends_itself_says_which_of_the_two_endings_it_was`
 `verified-by: bravebot_tui::state::clearing_a_session_ends_every_watch`
-`verified-by: bravebot_tui::app::interrupting_ends_every_watch_before_it_leaves`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::interrupting_ends_every_watch_before_it_leaves`
 
 <a id="FSWATCH-10"></a>
 ### FSWATCH-10: a live watch is on the screen, with the turn that armed it
@@ -499,16 +499,16 @@ channel opened on a path nobody named.
 `verified-by: bravebot_agent::watch::watching_names_the_live_watch_on_a_path`
 `verified-by: bravebot_tui::watch_command::a_path_arms_a_watch_on_it`
 `verified-by: bravebot_tui::watch_command::anything_else_is_answered_by_saying_what_the_command_takes`
-`verified-by: bravebot_tui::app::the_watch_command_lists_and_stops_and_hands_a_path_to_the_loop`
-`verified-by: bravebot_tui::app::typing_watch_and_a_path_arms_a_watch_that_fires_on_a_write`
-`verified-by: bravebot_tui::app::typing_watch_on_a_directory_is_refused`
-`verified-by: bravebot_tui::app::typing_watch_on_a_path_outside_the_project_is_refused_outside_bypass`
-`verified-by: bravebot_tui::app::typing_watch_with_a_path_while_a_turn_runs_waits_for_the_turn`
-`verified-by: bravebot_tui::app::a_watch_the_person_armed_under_a_relative_path_ends_on_cd`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_watch_command_lists_and_stops_and_hands_a_path_to_the_loop`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::typing_watch_and_a_path_arms_a_watch_that_fires_on_a_write`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::typing_watch_on_a_directory_is_refused`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::typing_watch_on_a_path_outside_the_project_is_refused_outside_bypass`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::typing_watch_with_a_path_while_a_turn_runs_waits_for_the_turn`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_watch_the_person_armed_under_a_relative_path_ends_on_cd`
 `verified-by: bravebot_tui::state::a_person_arms_a_watch_and_it_fires_like_any_other`
 `verified-by: bravebot_tui::state::a_person_cannot_arm_a_watch_under_a_loop_or_a_goal_and_is_told_how_to_clear_it`
 `verified-by: bravebot_tui::state::a_person_arming_a_ninth_watch_is_refused`
-`verified-by: bravebot_tui::app::typing_watch_on_a_path_already_watched_arms_nothing_new`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::typing_watch_on_a_path_already_watched_arms_nothing_new`
 `verified-by: bravebot_agent::watch::watching_does_not_match_a_relative_watch_armed_under_another_directory`
 `verified-by: bravebot_agent::watch::a_path_is_armable_unless_empty_or_holding_a_control_character`
 `verified-by: bravebot_tui::state::a_path_the_person_cannot_reach_is_refused_and_said_so`

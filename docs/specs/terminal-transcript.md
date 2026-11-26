@@ -294,15 +294,15 @@ outside a block.
 `verified-by: bravebot_tui::theme::the_brave_note_ink_is_not_orange_or_red_on_either_background`
 `verified-by: bravebot_tui::theme::the_brave_note_ink_has_a_deeper_shade_for_a_light_background`
 `verified-by: bravebot_tui::render::a_note_of_something_done_or_refused_is_not_drawn_in_the_ink_every_note_shares`
-`verified-by: bravebot_tui::app::add_dir_draws_the_directory_it_added_apart_from_the_names_it_refused`
-`verified-by: bravebot_tui::app::add_dir_close_draws_what_it_closed_apart_from_what_it_refused`
-`verified-by: bravebot_tui::app::under_a_palette_without_colour_the_wording_tells_what_add_dir_did_from_what_it_refused`
-`verified-by: bravebot_tui::app::the_directories_a_settings_file_names_are_told_in_the_tones_of_add_dir`
-`verified-by: bravebot_tui::app::a_refused_command_is_not_taken_for_the_failure_of_the_turn_around_it`
-`verified-by: bravebot_tui::app::cd_draws_the_directory_it_moved_to_apart_from_what_it_refused`
-`verified-by: bravebot_tui::app::checkouts_remove_draws_what_it_removed_apart_from_what_it_refused`
-`verified-by: bravebot_tui::app::export_draws_what_it_wrote_apart_from_what_it_refused`
-`verified-by: bravebot_tui::app::rename_draws_the_name_it_took_apart_from_what_it_refused`
+`verified-by: bravebot_tui::app::tests::view::add_dir_draws_the_directory_it_added_apart_from_the_names_it_refused`
+`verified-by: bravebot_tui::app::tests::view::add_dir_close_draws_what_it_closed_apart_from_what_it_refused`
+`verified-by: bravebot_tui::app::tests::view::under_a_palette_without_colour_the_wording_tells_what_add_dir_did_from_what_it_refused`
+`verified-by: bravebot_tui::app::tests::view::the_directories_a_settings_file_names_are_told_in_the_tones_of_add_dir`
+`verified-by: bravebot_tui::app::tests::view::a_refused_command_is_not_taken_for_the_failure_of_the_turn_around_it`
+`verified-by: bravebot_tui::app::tests::view::cd_draws_the_directory_it_moved_to_apart_from_what_it_refused`
+`verified-by: bravebot_tui::app::tests::view::checkouts_remove_draws_what_it_removed_apart_from_what_it_refused`
+`verified-by: bravebot_tui::app::tests::view::export_draws_what_it_wrote_apart_from_what_it_refused`
+`verified-by: bravebot_tui::app::tests::view::rename_draws_the_name_it_took_apart_from_what_it_refused`
 
 <a id="VIEW-9"></a>
 ### VIEW-9: under `brave`, an ink that carries meaning is mixed, not chosen by the terminal
@@ -355,8 +355,8 @@ before committing.
 
 `verified-by: bravebot_tui::theme::a_named_theme_paints_its_own_background_and_inks`
 `verified-by: bravebot_tui::theme_prompt::preview_puts_the_cursor_theme_in_force_and_cancel_restores`
-`verified-by: bravebot_tui::app::typing_the_theme_command_opens_the_picker`
-`verified-by: bravebot_tui::app::the_theme_command_carries_its_name`
+`verified-by: bravebot_tui::app::tests::commands_words::typing_the_theme_command_opens_the_picker`
+`verified-by: bravebot_tui::app::tests::commands_words::the_theme_command_carries_its_name`
 
 <a id="VIEW-11"></a>
 ### VIEW-11: user theme files are read only from `~/.bravebot/themes`
@@ -493,7 +493,7 @@ need searching.
 `verified-by: bravebot_tui::model_prompt::the_scope_line_stays_on_one_row_at_sixty_columns`
 `verified-by: bravebot_tui::model_prompt::the_scope_line_wraps_whole_at_forty_columns`
 `verified-by: bravebot_tui::model_prompt::the_second_footer_row_takes_no_row_from_a_list_that_fits`
-`verified-by: bravebot_tui::app::tab_in_an_open_model_picker_switches_the_scope_at_rest_and_under_a_turn`
+`verified-by: bravebot_tui::app::tests::mouse_controls::tab_in_an_open_model_picker_switches_the_scope_at_rest_and_under_a_turn`
 
 <a id="VIEW-15"></a>
 ### VIEW-15: every model is drawn under the service that will answer it
@@ -722,7 +722,7 @@ its own status. Failure labels use the failure colour; shared details keep their
 Ending a turn preserves the visible scrollback position, including when the status changes height.
 The live session's export includes its failure and cancellation entries.
 
-`verified-by: bravebot_tui::app::failure_reporting_uses_safe_fields_in_the_transcript_and_status`
+`verified-by: bravebot_tui::app::tests::view::failure_reporting_uses_safe_fields_in_the_transcript_and_status`
 `verified-by: bravebot_tui::frame::a_failed_turn_says_why_with_the_audit_expanded`
 `verified-by: bravebot_tui::frame::a_failed_turn_says_why_with_the_audit_collapsed`
 `verified-by: bravebot_tui::frame::a_long_failure_reason_is_not_lost`
@@ -734,7 +734,7 @@ The live session's export includes its failure and cancellation entries.
 `verified-by: bravebot_tui::frame::an_export_of_a_failed_turn_says_why_it_failed`
 `verified-by: bravebot_tui::frame::an_export_attaches_each_reason_to_the_turn_that_had_it`
 `verified-by: bravebot_tui::frame::an_export_of_a_cancelled_turn_says_it_was_cancelled`
-`verified-by: bravebot_tui::app::a_rejected_request_is_said_with_the_configured_model_in_the_transcript`
+`verified-by: bravebot_tui::app::tests::backends_models::a_rejected_request_is_said_with_the_configured_model_in_the_transcript`
 `verified-by: bravebot_tui::failure_history::turn_endings_keep_the_visible_history_anchor`
 `verified-by: bravebot_tui::outcome_colours::what_a_successful_turn_cost_is_not_drawn_in_the_failure_colour`
 `verified-by: bravebot_tui::outcome_colours::failure_label_uses_failure_colour`
@@ -1169,7 +1169,7 @@ from naming a program to start, as [GIT-1](tools/read-git.md#GIT-1) does for the
 `verified-by: bravebot_tui::issue_links::a_number_in_quarantined_content_is_not_linked`
 `verified-by: bravebot_tui::issue_links::a_number_in_words_that_are_not_the_assistants_is_not_linked`
 `verified-by: bravebot_tui::issue_links::a_selection_over_a_linked_number_copies_the_text`
-`verified-by: bravebot_tui::app::moving_to_another_checkout_changes_the_repository_numbers_link_into`
+`verified-by: bravebot_tui::app::tests::view::moving_to_another_checkout_changes_the_repository_numbers_link_into`
 `verified-by: bravebot_session::sessions::the_origin_is_read_out_of_the_checkout_configuration`
 `verified-by: bravebot_session::sessions::a_linked_worktree_reads_the_configuration_of_the_repository_it_was_made_from`
 `verified-by: bravebot_session::sessions::an_origin_not_written_plainly_is_not_read`
@@ -1209,7 +1209,7 @@ what to show, and it decides only by the toggle and the byte count, never by wha
 `verified-by: bravebot_tui::state::thinking_is_held_shown_on_request_and_ends_with_the_round`
 `verified-by: bravebot_tui::state::a_delegates_thinking_is_not_the_turns`
 `verified-by: bravebot_tui::render::the_models_thinking_is_drawn_only_when_asked_for_and_inert`
-`verified-by: bravebot_tui::app::the_thinking_command_toggles_what_is_drawn_and_runs_mid_turn`
+`verified-by: bravebot_tui::app::tests::view::the_thinking_command_toggles_what_is_drawn_and_runs_mid_turn`
 `verified-by: bravebot_agent::turn::the_thinking_of_a_round_reaches_the_reporter_and_is_in_no_request_or_record`
 
 <a id="VIEW-34"></a>
@@ -1346,7 +1346,7 @@ taken for the interface's own, as a forged margin would be.
 `verified-by: bravebot_tui::panel::a_printed_task_cannot_draw_a_margin_a_mark_or_a_status_of_its_own`
 `verified-by: bravebot_tui::panel::a_printed_plan_stays_as_it_was_when_the_plan_changes`
 `verified-by: bravebot_tui::panel::a_printed_plan_draws_open_rows_as_the_panel_does_and_keeps_that_after_the_turn`
-`verified-by: bravebot_tui::app::the_todos_command_prints_the_plan_and_starts_no_turn`
+`verified-by: bravebot_tui::app::tests::commands_other::the_todos_command_prints_the_plan_and_starts_no_turn`
 `verified-by: bravebot_tui::panel::the_key_and_the_command_print_the_same_whole_plan_and_cut_none_of_it`
 
 <a id="VIEW-38"></a>
@@ -1720,8 +1720,8 @@ who has used one has used both.
 `verified-by: bravebot_tui::config_prompt::the_panel_of_preferences_has_no_scope_and_ignores_tab`
 `verified-by: bravebot_tui::theme_prompt::the_theme_picker_has_no_scope_and_ignores_tab`
 `verified-by: bravebot_tui::sidebar_prompt::the_sidebar_checklist_has_no_scope_and_ignores_tab`
-`verified-by: bravebot_tui::app::tab_in_an_open_effort_picker_switches_the_scope_at_rest_and_under_a_turn`
-`verified-by: bravebot_tui::app::the_effort_picker_opened_at_rest_records_by_the_scope_tab_left_it_in`
+`verified-by: bravebot_tui::app::tests::view::tab_in_an_open_effort_picker_switches_the_scope_at_rest_and_under_a_turn`
+`verified-by: bravebot_tui::app::tests::view::the_effort_picker_opened_at_rest_records_by_the_scope_tab_left_it_in`
 
 ## Known costs
 

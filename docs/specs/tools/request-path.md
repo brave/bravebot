@@ -93,8 +93,8 @@ would be a person's word nobody said.
 `verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
 `verified-by: bravebot_agent::turn::a_single_yes_to_a_path_leaves_one_path_reach_record_whoever_gave_it`
 `verified-by: bravebot_tui::status::the_report_lists_the_paths_programs_were_let_reach`
-`verified-by: bravebot_tui::app::the_status_of_a_session_lists_the_paths_programs_were_let_reach`
-`verified-by: bravebot_tui::app::a_path_the_person_lets_a_turn_reach_is_the_one_status_lists_afterwards`
+`verified-by: bravebot_tui::app::tests::trust_paths::the_status_of_a_session_lists_the_paths_programs_were_let_reach`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_path_the_person_lets_a_turn_reach_is_the_one_status_lists_afterwards`
 
 <a id="PATHREQ-5"></a>
 ### PATHREQ-5: nothing is accepted under `off` or in an untrusted workspace, and no write under `read-only`

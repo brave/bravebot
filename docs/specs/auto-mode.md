@@ -89,7 +89,7 @@ that, and goes straight to asking where a layer wrote `permissions.bypassUnreach
 `false`, or removing it, opens sessions asking again.
 
 `verified-by: bravebot_agent::permission_mode::the_key_reaches_auto_after_planning_and_before_bypass`
-`verified-by: bravebot_tui::app::a_click_on_the_permission_mode_moves_as_the_key_does_and_never_into_bypass`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_the_permission_mode_moves_as_the_key_does_and_never_into_bypass`
 `verified-by: bravebot_ui_bridge::wire::a_window_chooses_auto_and_never_bypass`
 `verified-by: bravebot_ui_bridge::permission_mode::auto_writes_unasked_and_lets_the_classifier_answer_a_command`
 `verified-by: bravebot_session::jobs::a_background_session_cannot_be_in_auto`
@@ -105,14 +105,14 @@ that, and goes straight to asking where a layer wrote `permissions.bypassUnreach
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_open_sessions_in_auto`
 `verified-by: bravebot_config::settings::a_managed_file_cannot_open_sessions_in_auto`
 `verified-by: bravebot_cli::doctor::doctor_says_a_managed_file_naming_the_start_in_auto_setting_decides_nothing`
-`verified-by: bravebot_tui::app::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
-`verified-by: bravebot_tui::app::only_the_persons_own_files_open_a_session_in_auto`
-`verified-by: bravebot_tui::app::a_session_that_opens_in_auto_names_it_on_the_line_under_the_box`
+`verified-by: bravebot_tui::app::tests::permissions::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
+`verified-by: bravebot_tui::app::tests::permissions::only_the_persons_own_files_open_a_session_in_auto`
+`verified-by: bravebot_tui::app::tests::permissions::a_session_that_opens_in_auto_names_it_on_the_line_under_the_box`
 `verified-by: bravebot_ui_bridge::permission_mode::the_persons_setting_opens_a_new_session_a_fork_and_a_resume_in_auto`
 `verified-by: bravebot_ui_bridge::permission_mode::a_checkouts_copy_of_the_setting_opens_nothing_in_auto`
 `verified-by: bravebot_ui_bridge::permission_mode::the_file_the_window_selected_opens_a_session_in_auto`
 `verified-by: bravebot_cli::auto_start::a_session_a_link_starts_asks_where_the_setting_opens_others_in_auto`
-`verified-by: bravebot_tui::app::a_session_a_link_started_opens_asking_where_the_setting_opens_others_in_auto`
+`verified-by: bravebot_tui::app::tests::remainder::a_session_a_link_started_opens_asking_where_the_setting_opens_others_in_auto`
 `verified-by: bravebot_ui_bridge::acp::a_session_an_editor_opens_asks_where_the_setting_opens_a_windows_in_auto`
 `verified-by: bravebot_ui_bridge::host_process::a_hosts_session_asks_where_the_setting_opens_a_windows_in_auto`
 

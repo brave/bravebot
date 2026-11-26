@@ -1072,10 +1072,10 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_cli::running::a_refusal_that_asked_for_a_wait_is_reported_by_the_one_shot_run_with_the_wait_and_the_status`
 `verified-by: bravebot_cli::chatgpt_account::a_one_shot_run_whose_sign_in_ended_says_it_ended_and_asks_the_token_endpoint_once`
 `verified-by: bravebot_cli::chatgpt_account::a_session_in_lines_says_the_sign_in_ended_to_every_turn_after_it_ended`
-`verified-by: bravebot_tui::app::a_goal_check_that_failed_on_the_chatgpt_account_says_its_own_sentence`
-`verified-by: bravebot_tui::app::a_manifest_run_that_failed_on_the_chatgpt_account_says_its_own_sentence`
-`verified-by: bravebot_tui::app::a_compact_that_failed_on_the_chatgpt_account_says_its_own_sentence`
-`verified-by: bravebot_tui::app::a_compact_the_account_refused_says_the_wait_and_no_status`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_goal_check_that_failed_on_the_chatgpt_account_says_its_own_sentence`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_manifest_run_that_failed_on_the_chatgpt_account_says_its_own_sentence`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_compact_that_failed_on_the_chatgpt_account_says_its_own_sentence`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_compact_the_account_refused_says_the_wait_and_no_status`
 `verified-by: bravebot_agent::chatgpt_compaction::a_summary_that_failed_on_the_account_is_narrated_in_the_accounts_sentence`
 `verified-by: bravebot_agent::report::a_failed_summary_says_the_accounts_sentence_where_it_was_the_account_and_the_category_otherwise`
 `verified-by: bravebot_agent::report::the_line_for_a_summary_the_account_refused_has_the_wait_and_no_status`
@@ -1087,7 +1087,7 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_ui_bridge::account_words::the_notices_of_a_turn_that_goes_on_after_the_account_failed_are_sentences_of_the_window`
 `verified-by: bravebot_ui_bridge::history::a_summary_that_failed_on_the_account_reaches_the_window_in_the_windows_words`
 `verified-by: bravebot_ui_bridge::acp::a_summary_that_failed_on_the_chatgpt_account_is_told_to_the_editor_in_the_windows_words`
-`verified-by: bravebot_tui::app::the_terminal_narrates_a_summary_that_failed_on_the_account_in_the_terminals_words`
+`verified-by: bravebot_tui::app::tests::backends_accounts::the_terminal_narrates_a_summary_that_failed_on_the_account_in_the_terminals_words`
 `verified-by: bravebot_agent::turn::round_steps::a_move_to_the_fallback_after_the_accounts_failure_says_the_accounts_sentence`
 `verified-by: bravebot_ui_bridge::notice_tests::a_move_to_the_fallback_after_the_account_failed_reaches_the_window_as_its_own_sentence`
 `verified-by: bravebot_ui_bridge::manifest::a_run_that_failed_on_the_chatgpt_account_says_the_windows_sentence_and_its_command`
@@ -1103,7 +1103,7 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_aichat::client::a_refusal_that_names_the_account_keeps_the_status_and_the_wait_it_came_with`
 `verified-by: bravebot_agent::backend::a_refusal_that_names_the_account_keeps_its_status_and_wait_in_the_diagnosis`
 `verified-by: bravebot_session::sessions::a_failure_with_no_account_in_it_keeps_its_category_line_its_status_and_its_count`
-`verified-by: bravebot_tui::app::a_failure_of_the_account_is_said_in_its_own_sentence_in_the_transcript`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_failure_of_the_account_is_said_in_its_own_sentence_in_the_transcript`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/marking.test.mjs draws the error card and the card of a run that stopped for a failure of the account and holds that the window's sentence is one paragraph with its command in a code element and no backtick, that markup in either the sentence or the command is drawn as characters, that a failure of any other service is described by its category, and that the code is set in the code type role; ui/scripts/agent-settings.test.mjs holds the sentence the bridge sends to the card's description, two sentences to two cards, and a failure with no sentence to the category's wording; ui/scripts/ux-state.test.mjs folds turn.error and a narration that names a command through the window's reducer and draws the real row, and ui/scripts/plan-card.test.mjs does the same for a run that failed; make check-ui runs them, and the governs list above holds failure.ts to existing)`
 `verified-by: bravebot_aichat::client::a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_as_the_sign_in_failing`
 `verified-by: bravebot_aichat::client::a_refusal_naming_a_listed_code_ends_the_turn_and_replaces_nothing`
@@ -1289,18 +1289,18 @@ model.
 `verified-by: bravebot_config::lib::the_models_a_chatgpt_entry_names_are_not_carried_where_a_gateway_holds_the_id`
 `verified-by: bravebot_config::lib::a_machine_level_provider_block_replaces_the_models_a_chatgpt_entry_names`
 `verified-by: bravebot_config::settings::only_the_layers_a_provider_block_is_read_from_choose_the_accounts_models`
-`verified-by: bravebot_tui::app::the_accounts_rows_are_met_in_reading_order_listed_or_compiled_and_nothing_else_adds_one`
-`verified-by: bravebot_tui::app::a_caller_on_a_model_that_is_not_the_accounts_never_asks_the_account`
-`verified-by: bravebot_tui::app::a_caller_on_one_of_the_accounts_models_asks_the_account_and_takes_the_window_it_lists`
-`verified-by: bravebot_tui::app::the_picker_asks_the_account_whatever_model_is_in_force_and_lists_what_it_offers`
+`verified-by: bravebot_tui::app::tests::backends_accounts::the_accounts_rows_are_met_in_reading_order_listed_or_compiled_and_nothing_else_adds_one`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_caller_on_a_model_that_is_not_the_accounts_never_asks_the_account`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_caller_on_one_of_the_accounts_models_asks_the_account_and_takes_the_window_it_lists`
+`verified-by: bravebot_tui::app::tests::backends_accounts::the_picker_asks_the_account_whatever_model_is_in_force_and_lists_what_it_offers`
 `verified-by: bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_adds_the_compiled_list_and_a_warning`
 `verified-by: bravebot_ui_bridge::account_words::each_warning_of_the_picker_is_one_sentence_and_says_nothing_where_nothing_failed`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/marking.test.mjs draws the picker's warnings and holds that the command a warning names is drawn as code and the rest as text, that a warning with no command or a command its sentence does not hold is a plain paragraph, and that markup in either is drawn as characters; make check-ui runs it; ui/scripts/drive-models.mjs opens the real picker against a model list with one warning and the command it names, and asserts that the command is drawn as code in the code type role and inside the menu, at the window's size and at its minimum)`
 `verified-by: bravebot_cli::chatgpt::each_answer_of_the_listing_has_its_own_sentence_and_only_models_send_the_person_to_choose`
-`verified-by: bravebot_tui::app::the_picker_says_why_a_signed_in_accounts_models_are_missing_and_says_nothing_otherwise`
-`verified-by: bravebot_tui::app::the_notes_the_picker_says_of_the_accounts_listing_name_only_commands_that_work_as_typed`
+`verified-by: bravebot_tui::app::tests::backends_accounts::the_picker_says_why_a_signed_in_accounts_models_are_missing_and_says_nothing_otherwise`
+`verified-by: bravebot_tui::app::tests::backends_accounts::the_notes_the_picker_says_of_the_accounts_listing_name_only_commands_that_work_as_typed`
 `verified-by: bravebot_ui_bridge::models::no_warning_the_window_sends_names_a_command_line_that_names_a_model`
-`verified-by: bravebot_tui::app::only_an_unreadable_or_a_refused_listing_is_a_problem_the_picker_says`
+`verified-by: bravebot_tui::app::tests::backends_accounts::only_an_unreadable_or_a_refused_listing_is_a_problem_the_picker_says`
 `verified-by: bravebot_ui_bridge::models::a_turn_in_the_window_asks_the_account_only_for_one_of_its_own_models`
 `verified-by: bravebot_ui_bridge::models::the_models_list_asks_the_account_whatever_model_is_configured`
 
@@ -1376,7 +1376,10 @@ change nothing, in the notice every front end gets for a skill. The info panel n
 level or for one chosen with `/effort session`. The info panel draws no `this session only` row under
 a level sent that is not the one chosen with `/effort session`. The sentences are in the message
 catalog, in English and in French. The desktop model picker, on a model of the account that reads a
-level, names the level the conversation is sent and the level chosen, where they differ.
+level, names the level the conversation is sent and the level chosen, where they differ. The bridge
+answers `effort.get` with a session's handle from the session's account session, which it holds apart
+from the session's state, so the report carries `sessionBegan` while a turn holds the state and the
+request does not wait for the turn.
 
 Nothing else a reply, a model or a settings file says is added to a request to this host: a gateway's
 options are carried into its requests, and this service takes none. The sign-in stores no identifier of the
@@ -1427,8 +1430,8 @@ sent would mislead a person about what the session costs.
 `verified-by: bravebot_agent::turn::the_advisor_a_turn_consults_is_asked_in_the_session_of_the_turn`
 `verified-by: bravebot_agent::turn::a_delegate_is_a_session_of_its_own_and_carries_one_identifier_throughout`
 `verified-by: bravebot_agent::processor::a_side_request_to_the_account_is_made_in_the_session_the_chat_was_made_for`
-`verified-by: bravebot_tui::app::every_turn_of_a_session_is_built_in_it_and_clearing_begins_another`
-`verified-by: bravebot_tui::app::branching_a_session_goes_on_with_the_identifier_of_the_conversation_it_copies`
+`verified-by: bravebot_tui::app::tests::backends_accounts::every_turn_of_a_session_is_built_in_it_and_clearing_begins_another`
+`verified-by: bravebot_tui::app::tests::backends_accounts::branching_a_session_goes_on_with_the_identifier_of_the_conversation_it_copies`
 `verified-by: bravebot_ui_bridge::running::two_sessions_open_in_one_process_carry_identifiers_of_their_own`
 `verified-by: bravebot_ui_bridge::account_session_tests::every_turn_of_a_desktop_session_is_built_in_it_and_another_session_in_its_own`
 `verified-by: bravebot_ui_bridge::account_session_tests::a_manifest_run_is_built_in_the_session_that_started_it`
@@ -1455,27 +1458,28 @@ sent would mislead a person about what the session costs.
 `verified-by: bravebot_agent::turn::a_model_of_the_account_that_refuses_the_level_is_reported_as_reading_none`
 `verified-by: bravebot_cli::chatgpt_session::a_one_shot_run_asks_for_the_level_it_was_started_with_and_a_check_of_its_goal_for_none`
 `verified-by: bravebot_cli::chatgpt_session::a_session_in_lines_asks_for_the_level_chosen_in_every_prompt`
-`verified-by: bravebot_tui::app::a_chatgpt_session_keeps_the_level_it_began_with_and_says_so_when_another_is_chosen`
-`verified-by: bravebot_tui::app::a_chatgpt_account_is_sent_the_level_its_session_began_with_when_another_is_chosen_for_this_session_only`
-`verified-by: bravebot_tui::app::a_clear_begins_the_account_session_at_a_session_only_level`
-`verified-by: bravebot_tui::app::a_session_only_level_on_a_chatgpt_account_is_said_to_apply_from_clear_and_not_to_be_recorded`
-`verified-by: bravebot_tui::app::a_recorded_level_on_a_chatgpt_account_is_said_to_apply_from_the_next_session_after_a_session_only_one`
-`verified-by: bravebot_tui::app::picking_a_chatgpt_model_after_a_session_only_level_says_the_session_only_sentence`
-`verified-by: bravebot_tui::app::a_level_picked_on_a_chatgpt_account_says_the_sentence_of_the_scope_it_was_picked_in`
-`verified-by: bravebot_tui::app::the_status_of_a_session_names_the_scope_of_a_level_chosen_with_effort_session`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_chatgpt_session_keeps_the_level_it_began_with_and_says_so_when_another_is_chosen`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_chatgpt_account_is_sent_the_level_its_session_began_with_when_another_is_chosen_for_this_session_only`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_clear_begins_the_account_session_at_a_session_only_level`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_session_only_level_on_a_chatgpt_account_is_said_to_apply_from_clear_and_not_to_be_recorded`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_recorded_level_on_a_chatgpt_account_is_said_to_apply_from_the_next_session_after_a_session_only_one`
+`verified-by: bravebot_tui::app::tests::backends_accounts::picking_a_chatgpt_model_after_a_session_only_level_says_the_session_only_sentence`
+`verified-by: bravebot_tui::app::tests::commands_effort::a_level_picked_on_a_chatgpt_account_says_the_sentence_of_the_scope_it_was_picked_in`
+`verified-by: bravebot_tui::app::tests::backends_effort::the_status_of_a_session_names_the_scope_of_a_level_chosen_with_effort_session`
 `verified-by: bravebot_tui::status::on_the_account_a_session_only_level_is_said_to_apply_from_clear_and_not_the_next_session`
-`verified-by: bravebot_tui::app::picking_a_chatgpt_model_says_which_level_it_is_sent_where_that_is_not_the_one_chosen`
-`verified-by: bravebot_tui::app::the_model_in_force_is_the_accounts_by_the_pick_or_else_by_the_default`
-`verified-by: bravebot_tui::app::a_level_the_account_refused_stops_being_sent_and_is_said`
+`verified-by: bravebot_tui::app::tests::backends_accounts::picking_a_chatgpt_model_says_which_level_it_is_sent_where_that_is_not_the_one_chosen`
+`verified-by: bravebot_tui::app::tests::backends_accounts::the_model_in_force_is_the_accounts_by_the_pick_or_else_by_the_default`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_level_the_account_refused_stops_being_sent_and_is_said`
 `verified-by: bravebot_tui::status::on_the_account_the_effort_names_the_level_sent_and_the_one_chosen_where_they_differ`
-`verified-by: bravebot_tui::app::the_status_of_a_chatgpt_session_names_the_level_it_sends`
-`verified-by: bravebot_tui::app::a_level_chosen_in_a_session_on_the_settings_model_of_the_account_is_said_to_be_kept`
+`verified-by: bravebot_tui::app::tests::backends_accounts::the_status_of_a_chatgpt_session_names_the_level_it_sends`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_level_chosen_in_a_session_on_the_settings_model_of_the_account_is_said_to_be_kept`
 `verified-by: bravebot_tui::panel::the_effort_row_of_a_chatgpt_session_is_the_level_it_was_begun_at`
 `verified-by: bravebot_agent::chatgpt_effort_in_french::the_sentences_about_a_level_a_chatgpt_session_keeps_are_said_in_the_chosen_catalog`
 `verified-by: bravebot_agent::chatgpt::the_account_is_one_provider_at_the_serving_host`
 `verified-by: bravebot_ui_bridge::account_session_tests::a_session_opens_with_the_level_its_project_settles_on`
 `verified-by: bravebot_ui_bridge::account_session_tests::effort_get_names_the_level_an_open_session_began_with_whatever_is_chosen_after`
 `verified-by: bravebot_ui_bridge::account_session_tests::effort_get_without_an_open_session_carries_no_starting_level`
+`verified-by: bravebot_ui_bridge::account_session_tests::effort_get_names_the_starting_level_while_a_turn_holds_the_sessions_state`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/drive-models.mjs opens the real picker on a model of the ChatGPT account and holds that no note is drawn at the level the conversation began with, that choosing another level draws a note naming both, that choosing the first level again removes it, and that a model of another service, a model that takes no level and a report that names no open session draw none; pnpm --dir ui drive:models runs it)`
 
 <a id="CHATGPT-11"></a>

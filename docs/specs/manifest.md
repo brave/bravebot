@@ -231,7 +231,7 @@ run's result and the label, with no line count and none of its words
 
 `verified-by: bravebot_core::manifest::only_the_answered_slot_is_named_for_release`
 `verified-by: bravebot_agent::manifest::only_the_answered_slot_reaches_the_user`
-`verified-by: bravebot_tui::app::a_manifest_runs_reply_is_exported_as_its_length_and_not_its_words`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_manifest_runs_reply_is_exported_as_its_length_and_not_its_words`
 `verified-by: bravebot_tui::manifest_answer_tests::an_untrusted_answer_is_not_written_to_an_export`
 
 <a id="MANIFEST-8"></a>
@@ -282,9 +282,9 @@ observe before it plans. Name a workspace file instead.
 `verified-by: bravebot_cli::main::an_unknown_mode_is_refused_rather_than_guessed`
 `verified-by: bravebot_cli::main::a_leading_mode_flag_is_a_task_not_an_unknown_option`
 `verified-by: bravebot_agent::manifest::piped_input_is_refused_rather_than_dropped`
-`verified-by: bravebot_tui::app::a_session_can_ask_for_a_manifest_run`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_session_can_ask_for_a_manifest_run`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/manifest-command.test.mjs asserts that a typed /manifest <task> starts one manifest.run with the session, task and model and no turn.send, and that manifest.started then manifest.done leave the chat not running with the run's reply after its task row; make check-ui runs it)`
-`verified-by: bravebot_tui::app::a_manifest_run_needs_a_task_to_plan`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_manifest_run_needs_a_task_to_plan`
 
 <a id="MANIFEST-10"></a>
 ### MANIFEST-10: a plan runs only once somebody has said yes to it
@@ -447,9 +447,9 @@ anybody ([permission-modes.md](permission-modes.md#MODE-3)).
 `verified-by: bravebot_session::sessions::a_manifest_run_is_recorded_apart_from_the_session`
 `verified-by: bravebot_session::sessions::a_session_that_started_a_run_can_still_be_resumed`
 `verified-by: bravebot_session::sessions::a_cancelled_run_leaves_no_record`
-`verified-by: bravebot_tui::app::a_run_the_person_stopped_is_read_off_the_key_and_not_off_the_error`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_run_the_person_stopped_is_read_off_the_key_and_not_off_the_error`
 `verified-by: bravebot_tui::confirm::grants::escape_at_the_plan_prompt_stops_the_run_and_n_declines_it`
-`verified-by: bravebot_tui::app::a_manifest_run_is_not_a_prompt`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_manifest_run_is_not_a_prompt`
 `verified-by: bravebot_tui::manifest_answer_tests::an_untrusted_answer_is_drawn_behind_the_bar_and_is_not_the_assistants_reply`
 `verified-by: bravebot_tui::manifest_answer_tests::an_untrusted_answer_is_not_written_to_an_export`
 `verified-by: bravebot_tui::manifest_answer_tests::a_trusted_answer_is_still_the_assistants_reply`

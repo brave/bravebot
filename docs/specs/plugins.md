@@ -69,8 +69,8 @@ provenance. Whether that happens is a decision about where bytes land and what r
 only a person's own keystrokes are a source for it that no content can author.
 
 `verified-by: bravebot_agent::tools::no_tool_offered_installs_or_changes_a_plugin`
-`verified-by: bravebot_tui::app::the_plugin_command_carries_its_words_unparsed`
-`verified-by: bravebot_tui::app::a_pasted_plugin_line_is_text_in_the_box_and_not_the_command`
+`verified-by: bravebot_tui::app::tests::commands_words::the_plugin_command_carries_its_words_unparsed`
+`verified-by: bravebot_tui::app::tests::remainder::a_pasted_plugin_line_is_text_in_the_box_and_not_the_command`
 `verified-by: bravebot_cli::running::a_one_shot_task_opening_with_slash_plugin_add_installs_nothing`
 `verified-by: bravebot_cli::running::a_one_shot_task_opening_with_slash_plugin_update_changes_nothing`
 `verified-by: bravebot_tui::plugin_command::the_words_after_the_command_read_as_the_six_forms_and_nothing_else`

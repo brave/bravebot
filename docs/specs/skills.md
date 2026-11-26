@@ -688,7 +688,7 @@ a project was vouched for from outliving the vouching.
 `verified-by: bravebot_agent::turn::a_skill_mode_is_in_the_system_prompt_of_every_turn_and_only_once`
 `verified-by: bravebot_agent::turn::a_skill_mode_that_the_gate_or_the_catalogue_does_not_hold_is_not_applied_and_is_said`
 `verified-by: bravebot_session::sessions::a_session_records_the_skill_mode_and_its_fork_and_resume_keep_it`
-`verified-by: bravebot_tui::app::a_resumed_session_is_in_the_mode_its_record_names`
+`verified-by: bravebot_tui::app::tests::instructions::a_resumed_session_is_in_the_mode_its_record_names`
 `verified-by: bravebot_tui::render::the_box_names_the_mode_while_one_is_in_force`
 
 ## Known costs

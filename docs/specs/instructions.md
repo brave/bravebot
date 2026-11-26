@@ -412,7 +412,7 @@ it is the planner's.
 `verified-by: bravebot_agent::preamble::whether_the_jenkins_cli_is_installed_is_said_either_way_and_apart_from_the_github_cli`
 `verified-by: bravebot_agent::preamble::a_jenkins_build_is_sent_to_the_cli_only_where_the_probe_found_one`
 `verified-by: bravebot_agent::turn::the_system_prompt_names_the_front_end_the_caller_named_and_none_otherwise`
-`verified-by: bravebot_tui::app::every_task_the_terminal_builds_names_the_terminal_front_end`
+`verified-by: bravebot_tui::app::tests::instructions::every_task_the_terminal_builds_names_the_terminal_front_end`
 `verified-by: bravebot_ui_bridge::acp::the_planner_is_told_an_editor_hosts_the_session`
 `verified-by: bravebot_ui_bridge::rounds::a_desktop_turn_is_told_the_person_is_using_the_desktop_app`
 `verified-by: bravebot_agent::preamble::an_installed_jenkins_cli_says_what_to_do_when_it_is_not_logged_in`
@@ -573,20 +573,20 @@ change of the file.
 `verified-by: bravebot_agent::styles::a_project_link_an_empty_file_a_long_file_and_a_bad_name_are_not_styles`
 `verified-by: bravebot_agent::styles::a_deny_rule_over_a_project_style_neither_offers_nor_resolves_it`
 `verified-by: bravebot_agent::turn::a_project_style_opens_the_prompt_only_where_the_trust_map_vouches`
-`verified-by: bravebot_tui::app::a_project_style_is_listed_and_picked_by_name_only_where_one_was_vouched_for`
+`verified-by: bravebot_tui::app::tests::instructions::a_project_style_is_listed_and_picked_by_name_only_where_one_was_vouched_for`
 `verified-by: bravebot_tui::state::the_project_styles_are_read_once_per_style_line_and_held_after_it`
 `verified-by: bravebot_agent::turn::a_style_from_a_file_opens_the_prompt_and_yields_to_system_prompt`
 `verified-by: bravebot_agent::turn::a_turn_records_the_output_style_that_opened_it`
-`verified-by: bravebot_tui::app::every_turn_the_terminal_starts_carries_the_style_in_force_ticks_and_goal_rounds_included`
-`verified-by: bravebot_tui::app::the_side_requests_the_terminal_sends_carry_no_style_and_only_a_turns_task_does`
-`verified-by: bravebot_tui::app::a_style_file_in_the_home_directory_is_listed_and_picked_by_name`
+`verified-by: bravebot_tui::app::tests::instructions::every_turn_the_terminal_starts_carries_the_style_in_force_ticks_and_goal_rounds_included`
+`verified-by: bravebot_tui::app::tests::instructions::the_side_requests_the_terminal_sends_carry_no_style_and_only_a_turns_task_does`
+`verified-by: bravebot_tui::app::tests::instructions::a_style_file_in_the_home_directory_is_listed_and_picked_by_name`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_style`
 `verified-by: bravebot_config::settings::a_style_that_is_blank_or_not_a_string_names_nothing`
-`verified-by: bravebot_tui::app::a_style_the_settings_name_is_in_force_from_the_first_turn_and_a_wrong_name_is_said`
-`verified-by: bravebot_tui::app::the_style_command_takes_a_name_or_nothing`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_style_command_or_a_longer_word_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_style_picked_under_a_replaced_opening_says_it_does_not_show`
-`verified-by: bravebot_tui::app::a_style_named_to_the_command_reaches_the_next_turn_and_only_a_known_name_does`
+`verified-by: bravebot_tui::app::tests::instructions::a_style_the_settings_name_is_in_force_from_the_first_turn_and_a_wrong_name_is_said`
+`verified-by: bravebot_tui::app::tests::instructions::the_style_command_takes_a_name_or_nothing`
+`verified-by: bravebot_tui::app::tests::instructions::a_prompt_containing_the_style_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::instructions::a_style_picked_under_a_replaced_opening_says_it_does_not_show`
+`verified-by: bravebot_tui::app::tests::instructions::a_style_named_to_the_command_reaches_the_next_turn_and_only_a_known_name_does`
 `verified-by: bravebot_agent::turn::a_delegate_carries_no_style_the_parent_has`
 `verified-by: bravebot_agent::turn::with_a_style_in_force_a_write_is_still_put_to_the_person`
 `verified-by: bravebot_agent::turn::with_a_style_in_force_plan_mode_still_refuses_a_write`
@@ -596,7 +596,7 @@ change of the file.
 `verified-by: bravebot_agent::aside::a_question_is_sent_under_its_own_system_prompt_and_no_style`
 `verified-by: bravebot_agent::compact::the_summariser_is_sent_under_its_own_system_prompt_and_no_style`
 `verified-by: bravebot_agent::manifest::a_style_in_force_is_not_sent_to_the_planner_of_a_manifest_run`
-`verified-by: bravebot_tui::app::a_resumed_session_starts_in_the_style_the_settings_name_and_not_the_earlier_pick`
+`verified-by: bravebot_tui::app::tests::instructions::a_resumed_session_starts_in_the_style_the_settings_name_and_not_the_earlier_pick`
 
 <a id="INSTR-13"></a>
 ### INSTR-13: a project's skill directories are read least specific first, at the root only

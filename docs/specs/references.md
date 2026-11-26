@@ -138,6 +138,6 @@ there to stop.
 `verified-by: bravebot_mentions::lib::a_workspace_entry_is_not_shadowed_by_an_alias`
 `verified-by: bravebot_mentions::lib::a_name_under_an_alias_resolves_to_the_file_and_cannot_climb_out`
 `verified-by: bravebot_mentions::lib::a_reference_directory_that_is_not_text_is_refused_not_rewritten`
-`verified-by: bravebot_tui::app::a_name_under_a_reference_alias_names_the_file_in_its_directory`
-`verified-by: bravebot_tui::app::the_alias_offered_follows_add_dir_close_add_dir_and_cd`
+`verified-by: bravebot_tui::app::tests::remainder::a_name_under_a_reference_alias_names_the_file_in_its_directory`
+`verified-by: bravebot_tui::app::tests::remainder::the_alias_offered_follows_add_dir_close_add_dir_and_cd`
 `verified-by: bravebot_ui_bridge::mentions::the_window_names_a_file_under_a_reference_alias`

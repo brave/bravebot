@@ -153,6 +153,120 @@ fn a_press_on_a_row_of_the_sandbox_picker_moves_the_cursor_and_a_second_takes_it
     );
 }
 
+/// A bare `/sandbox` opens the list of modes and carries nothing to the loop, and says nothing:
+/// no report is noted. Rejects: the bare word carried to the loop as `Action::Sandbox("")`,
+/// which notes a report, and a picker opened on a mode other than the one held.
+#[test]
+fn a_bare_sandbox_command_opens_the_picker_and_says_nothing() {
+    let mut session = Session::new("none");
+    session.set_sandbox_mode(bravebot_sandbox::SandboxMode::ReadOnly);
+    let noted = session.transcript.len();
+    type_line(&mut session, "/sandbox");
+    assert_eq!(
+        handle_key(&mut session, key(KeyCode::Enter)),
+        Action::Redraw
+    );
+    let opened_on = match session.picking() {
+        Some(Picking::Sandbox(picker)) => picker.chosen().map(|row| row.0),
+        _ => None,
+    };
+    assert_eq!(
+        opened_on,
+        Some(bravebot_sandbox::SandboxMode::ReadOnly),
+        "the bare word did not open the sandbox list on the mode held"
+    );
+    assert_eq!(
+        session.transcript.len(),
+        noted,
+        "the bare word said something"
+    );
+}
+
+/// Enter on a row of the picker moves the session to that mode through `carry_out_pick`, as
+/// `/sandbox <word>` does, with the same sentence. Esc leaves the mode alone.
+///
+/// Rejects: a pick that is dropped, one that sets the mode of the row the picker opened on, and
+/// an Esc that applies the row under the cursor.
+#[test]
+fn a_row_taken_in_the_sandbox_picker_sets_the_mode_and_escape_leaves_it() {
+    use bravebot_sandbox::SandboxMode;
+    let _none = bravebot_config::managed_file_on_this_thread(std::path::Path::new(
+        "/nonexistent/bravebot-managed.json",
+    ));
+    let mut config = a_config_needing_no_sign_in();
+    let mut session = Session::new("none");
+    session.set_sandbox_mode(SandboxMode::Strict);
+    session.open_picking(Picking::Sandbox(crate::sandbox_prompt::Picker::new(
+        SandboxMode::Strict,
+    )));
+    // strict, read-only, workspace-write, off: three rows down is `off`.
+    for _ in 0..3 {
+        session.press_in_picking(KeyCode::Down, KeyModifiers::NONE);
+    }
+    session.press_in_picking(KeyCode::Enter, KeyModifiers::NONE);
+    let picked = session.take_pick();
+    assert_eq!(
+        picked,
+        Some(Picked::Sandbox(crate::sandbox_prompt::Row(
+            SandboxMode::Off
+        ))),
+        "Enter took no row"
+    );
+    let Some(picked) = picked else {
+        return;
+    };
+    carry_out_pick(&mut session, &mut config, picked);
+    assert_eq!(session.sandbox_mode(), SandboxMode::Off);
+    assert_eq!(
+        session.transcript.last().map(|entry| entry.text.as_str()),
+        Some(t!(session_sandbox_set_off))
+    );
+
+    session.open_picking(Picking::Sandbox(crate::sandbox_prompt::Picker::new(
+        SandboxMode::Off,
+    )));
+    session.press_in_picking(KeyCode::Up, KeyModifiers::NONE);
+    session.press_in_picking(KeyCode::Esc, KeyModifiers::NONE);
+    assert!(session.picking().is_none());
+    assert!(session.take_pick().is_none(), "Esc took a row");
+    assert_eq!(session.sandbox_mode(), SandboxMode::Off);
+}
+
+/// A mode the managed file does not allow is refused when its row is taken, with the sentence
+/// `/sandbox <word>` gives, naming the file, and the mode does not move.
+///
+/// Rejects: a pick that sets the mode without asking the managed floor, and one that refuses
+/// without naming the file.
+#[test]
+fn a_row_the_managed_file_refuses_is_refused_when_taken() -> std::io::Result<()> {
+    use bravebot_sandbox::SandboxMode;
+    let dir = crate::testutil::scratch_dir("sandbox-picker-pin");
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir)?;
+    let file = dir.join("managed.json");
+    std::fs::write(&file, r#"{"sandbox": {"mode": "strict"}}"#)?;
+    let _machine = bravebot_config::managed_file_on_this_thread(&file);
+    let mut config = a_config_needing_no_sign_in();
+    let mut session = Session::new("none");
+    session.set_sandbox_mode(SandboxMode::Strict);
+
+    carry_out_pick(
+        &mut session,
+        &mut config,
+        Picked::Sandbox(crate::sandbox_prompt::Row(SandboxMode::Off)),
+    );
+
+    assert_eq!(session.sandbox_mode(), SandboxMode::Strict);
+    let said = session
+        .transcript
+        .last()
+        .map(|entry| entry.text.clone())
+        .unwrap_or_default();
+    assert!(said.contains(&file.display().to_string()), "{said}");
+    assert!(said.contains("off"), "{said}");
+    Ok(())
+}
+
 /// A `/theme` picker opened as a mode of the session, drawn, with the cursor on `current`.
 fn open_theme(session: &mut Session, current: &str) {
     session.open_picking(Picking::Theme(crate::theme_prompt::opened(
