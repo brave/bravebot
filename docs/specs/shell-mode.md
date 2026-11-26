@@ -36,8 +36,19 @@ what the rule is about, so a line the user typed is outside it.
 
 Globs, `$VAR`, redirection, `&&` and `$(...)` all work as they do in the user's terminal. The
 marker is a mode rather than a character: the prompt changes colour, backspace or escape leaves,
-and the mode lasts one command. `$SHELL` falls back to a POSIX shell when unset. An empty line is
-not run.
+and the mode lasts one command. `$SHELL` falls back to `/bin/sh`, started as that absolute path,
+when it is unset or blank. An empty line is not run.
+
+The shell is started as every program bravebot starts unconfined is ([SANDBOX-30](sandboxing.md#SANDBOX-30)).
+A `$SHELL` with a path separator in it, absolute or relative to the directory the line runs in, is the
+person's own path and is started as given, with no lookup. A bare `$SHELL`, such as `bash`, is looked
+up first, in the absolute entries of `PATH` that lie outside every directory a confined stage may
+write, so a `bash` a stage wrote into a writable `PATH` directory is not the shell that runs. Where
+the lookup finds nothing, the line is not run and the person is told `'bash' could not be started:
+entity not found`. It is not run by `/bin/sh` instead, because the person named that shell and
+another one reads the line under other syntax. The line itself is unchanged: it runs as `$SHELL -c
+<line>` with the whole environment and `PATH`, and the shell looks up the names inside it on the
+person's `PATH`.
 
 `verified-by: bravebot_agent::shell::a_glob_is_expanded_by_the_shell`
 `verified-by: bravebot_agent::shell::a_variable_is_expanded_by_the_shell`
@@ -46,6 +57,11 @@ not run.
 `verified-by: bravebot_agent::shell::commands_joined_with_and_both_run`
 `verified-by: bravebot_agent::shell::the_shell_falls_back_to_a_posix_one_when_the_variable_is_unset`
 `verified-by: bravebot_agent::shell::an_empty_line_is_not_run`
+`verified-by: bravebot_agent::shell_path::a_bare_shell_is_never_the_file_found_only_where_a_stage_may_write`
+`verified-by: bravebot_agent::shell_path::a_bare_shell_found_only_where_a_stage_may_write_is_not_started`
+`verified-by: bravebot_agent::shell_path::a_shell_given_as_an_absolute_path_starts_as_given`
+`verified-by: bravebot_agent::shell_path::a_shell_given_as_a_relative_path_starts_as_given`
+`verified-by: bravebot_agent::shell_path::a_blank_shell_runs_the_system_shell_and_not_a_planted_sh`
 `verified-by: bravebot_tui::shell_mode::the_prompt_marker_changes_in_shell_mode`
 `verified-by: bravebot_tui::shell_mode::the_hint_names_the_shell_while_in_shell_mode`
 

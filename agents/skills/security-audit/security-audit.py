@@ -425,6 +425,10 @@ LOOKUPS_LISTED = {
         "the `git` that fetches a plugin source for `/plugin add`, in a session: found among the entries "
         "outside every recorded directory, and not started until the person answered the host question",
     ),
+    "crates/agent/src/shell.rs": (
+        1,
+        "the shell a line typed at the `!` prompt runs through when `$SHELL` is a bare name, in a session",
+    ),
     "crates/agent/src/preamble.rs": (
         2,
         "the `gh` and `jk` probes through `programs::resolve`, once per turn of a session, after the "
