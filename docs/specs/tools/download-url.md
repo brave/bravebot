@@ -55,9 +55,14 @@ the end means a failed download cannot destroy a file a person approved replacin
 
 The URL goes through [FETCH-2](fetch-url.md#FETCH-2): a `deny` rule refuses without asking, an
 `allow` rule answers the host question, and anything else is put to a person. Every hop is held to
-the host that was approved ([FETCH-4](fetch-url.md#FETCH-4)) and a name that resolves to a
-non-public address is refused ([FETCH-8](fetch-url.md#FETCH-8)). The request carries no `Accept`
-preference of its own, since [FETCH-7](fetch-url.md#FETCH-7) is for a page a processor reads.
+the host that was approved ([FETCH-4](fetch-url.md#FETCH-4)): a redirect within that host continues,
+and a redirect off it is put to the person as the same question `fetch_url` asks, naming the host it
+reached and the host that was approved. A yes starts the transfer again from the origin with that
+host allowed for it alone; a no leaves the hop refused. A name that resolves to a non-public address
+is refused ([FETCH-8](fetch-url.md#FETCH-8)). The request carries no `Accept` preference of its own,
+since [FETCH-7](fetch-url.md#FETCH-7) is for a page a processor reads. Nothing has been written to
+the destination when a redirect is asked about, since the gate refuses the hop before any byte of
+the body arrives, so a retry is a fresh request rather than a resumption of one.
 
 The destination goes through the write gate of [WRITE-3](write-file.md#WRITE-3): the path must be
 endorsed by a person and the endorsement is single-use and bound to that path. The question is
@@ -75,6 +80,7 @@ answer to either question makes it reachable ([TRUST-10](../trust-map.md#TRUST-1
 `verified-by: bravebot_agent::turn::a_download_from_a_denied_host_is_refused_without_asking`
 `verified-by: bravebot_agent::turn::a_download_from_another_spelling_of_a_denied_host_is_refused_without_asking`
 `verified-by: bravebot_agent::turn::a_download_redirected_to_another_host_saves_nothing`
+`verified-by: bravebot_agent::turn::a_download_redirected_to_another_host_is_saved_on_a_yes`
 `verified-by: bravebot_agent::turn::a_download_sends_no_accept_preference_of_its_own`
 `verified-by: bravebot_agent::turn::an_allow_rule_answers_a_downloads_host_and_the_destination_is_still_asked`
 `verified-by: bravebot_agent::turn::a_download_from_a_name_that_resolves_to_this_machine_fails_without_reaching_it`

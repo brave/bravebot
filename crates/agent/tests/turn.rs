@@ -105178,15 +105178,16 @@ fn a_download_from_another_spelling_of_a_denied_host_is_refused_without_asking()
     assert!(second.contains("deny rule"), "{second}");
 }
 
-/// FETCH-4 for a download: a redirect onto a host nobody approved is refused and nothing is saved.
-/// The hop goes to a name that resolves nowhere, so the only thing that can refuse it is the host
-/// check, and the refusal is the one the fetch tool gives.
+/// FETCH-4, DOWNLOAD-2, #2984: a redirect onto a host nobody approved is put to the person as
+/// `fetch_url` puts it (FETCH-4), and a no leaves the hop refused and nothing saved. Before the
+/// fix, `download_url` refused this hop without asking anybody, so the only way to tell the two
+/// apart is to check that the person actually saw the question.
 #[test]
 fn a_download_redirected_to_another_host_saves_nothing() {
     let scratch = Scratch::new("download-redirect");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    // Never reached: the gate refuses the hop before anything is sent to it.
+    // The gate refuses the hop before anything is sent to it, so this host is never reached.
     let moved = "HTTP/1.1 302 Found\r\nLocation: https://sentinel-redirect.test/data\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
     let (site, _count) = serve_raw(moved.as_bytes().to_vec());
     let (endpoint, received) = serve_sequence(vec![
@@ -105198,18 +105199,35 @@ fn a_download_redirected_to_another_host_saves_nothing() {
     ]);
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
+    let mut confirmer = ApprovesFetchesAndWrites {
+        declines_hops: true,
+        ..Default::default()
+    };
 
     turns::run_with_trust(
         &config,
         &egress,
         &workspace,
         &Task::new("save it"),
-        &mut ApprovesFetchesAndWrites::default(),
+        &mut confirmer,
         &mut RecordingSink::new(),
         trusting_the_workspace(),
     )
     .expect("turn runs");
 
+    assert_eq!(
+        confirmer.hops,
+        vec![(
+            "sentinel-redirect.test".to_string(),
+            "127.0.0.1".to_string()
+        )],
+        "the person was not asked about the host the download redirected to, or not as a redirect"
+    );
+    assert_eq!(
+        confirmer.hop_urls,
+        vec![format!("{site}/data")],
+        "the redirect question carried something other than the URL that was approved"
+    );
     assert!(!scratch.path.join("data.bin").exists());
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
@@ -105224,6 +105242,71 @@ fn a_download_redirected_to_another_host_saves_nothing() {
     assert!(
         !second.contains("sentinel-redirect"),
         "the host the server chose reached the planner's context: {second}"
+    );
+}
+
+/// FETCH-4, DOWNLOAD-2, #2984: a download redirected off the approved host is put to the person as
+/// the same question `fetch_url` asks, and a yes downloads the file from where the redirect led.
+/// What the planner is told names the host it approved and never the one the server chose
+/// (DOWNLOAD-3), exactly as a fetch's result does (FETCH-6).
+#[test]
+fn a_download_redirected_to_another_host_is_saved_on_a_yes() {
+    let scratch = Scratch::new("download-redirect-yes");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let Some((landing, _landed)) =
+        serve_a_page_on_the_second_loopback(page("the redirected bytes"))
+    else {
+        return;
+    };
+    let (site, _count) = serve_raw(moved_to(&format!("{landing}/asset")).into_bytes());
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{site}/asset","path":"data.bin"}}"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut confirmer = ApprovesFetchesAndWrites::default();
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("save it"),
+        &mut confirmer,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        confirmer.hops,
+        vec![("127.0.0.2".to_string(), "127.0.0.1".to_string())],
+        "the person was not asked about the host the download redirected to, or not as a redirect"
+    );
+    assert_eq!(
+        confirmer.hop_urls,
+        vec![format!("{site}/asset")],
+        "the redirect question carried something other than the URL that was approved"
+    );
+    assert_eq!(
+        std::fs::read(scratch.path.join("data.bin")).expect("the file was saved"),
+        b"the redirected bytes",
+        "a yes to the redirect question did not save the file from where it led"
+    );
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("127.0.0.2"),
+        "the host the server chose reached the planner's context: {second}"
+    );
+    assert!(
+        second.contains(&format!("downloaded from {site}/asset")),
+        "the planner was not told that the download it approved succeeded: {second}"
     );
 }
 
