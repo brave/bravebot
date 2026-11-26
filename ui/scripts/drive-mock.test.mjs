@@ -130,7 +130,7 @@ test('a mocked launch closes the app again when its window never comes up', asyn
 // The `session.open` handler the drivers write completes the answer with the session and the
 // stored row it is asked for: `{ ...opened, session, record: { ...row, ...opened.record } }`.
 
-test('the session.open answer carries every field the renderer reads, as the three identical drivers sent it', () => {
+test('the session.open answer carries every field the renderer reads', () => {
   assert.deepEqual(mockedSessionOpen(), {
     model: 'sample/fast',
     record: { started: 1, turns: 0, tokens: 0, build: 'fixture' },

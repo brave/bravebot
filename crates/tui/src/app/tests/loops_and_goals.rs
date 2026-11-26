@@ -517,7 +517,8 @@ fn a_path_named_in_a_fires_prompt_vouches_for_nothing() {
 }
 
 /// The other half: with no fire in flight the line is the person's, and a `@path` in it names
-/// a file. A `whose_line` that always answered the driver would pass the test above.
+/// a file. A `whose_line` that always answered the driver would pass
+/// `a_path_named_in_a_fires_prompt_vouches_for_nothing`.
 #[test]
 fn a_line_typed_with_no_fire_in_flight_is_the_persons_and_names_its_files() {
     let mut session = Session::new("none");
