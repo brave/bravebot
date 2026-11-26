@@ -49,6 +49,20 @@ test('the status names the session, where it works, its modes and what it has sp
   assert.match(statusNotice(status({ title: null, sessionId: null })).body, /^Session +untitled, nothing sent yet\nDirectory/)
 })
 
+test('the status says the goal and its counts, and nothing of a goal where none is set (GOAL-13)', () => {
+  assert.doesNotMatch(statusNotice(status()).body, /Goal|goal/)
+  const goal = { condition: 'cargo test exits 0', rounds: 0, left: 10, paused: false, stalled: false, elapsedSeconds: 42, spentTokens: 900 }
+  const lines = statusNotice(status({ goal })).body.split('\n')
+  const at = lines.findIndex((line) => line.startsWith('Goal '))
+  assert.match(lines[at], /^Goal +cargo test exits 0$/)
+  assert.match(lines[at + 1], /^ +not judged yet · 10 left$/)
+  assert.match(lines[at + 2], /^ +set 42s ago · 900 tokens since$/)
+  const later = statusNotice(status({ goal: { ...goal, rounds: 3, left: 7, elapsedSeconds: 185, spentTokens: 12400 } })).body
+  assert.match(later, /\n +sent back 3 times · 7 left\n +set 3m 05s ago · 12\.4k tokens since\n/)
+  assert.match(statusNotice(status({ goal: { ...goal, rounds: 2, left: 8, paused: true } })).body, /\n +sent back 2 times · 8 left · paused, \/goal resume arms it\n/)
+  assert.match(statusNotice(status({ goal: { ...goal, rounds: 3, left: 7, stalled: true } })).body, /\n +sent back 3 times · 7 left · stopped: rounds made no tool call\n/)
+})
+
 test('between turns the status lists the rules', () => {
   const empty = statusNotice(status()).body
   assert.match(empty, /\nTrust +nothing vouched for/)

@@ -179,6 +179,55 @@ fn setting_a_goal_ends_the_watches() {
     );
 }
 
+/// GOAL-13: the desktop's `/status` says the goal's condition, the rounds gone and left, whether
+/// it is paused, how long it has been set and what the chat has spent since, the running turn's
+/// tokens counted. A chat with no goal says nothing about one. The regressions it rejects: a
+/// `/status` that leaves the goal out, one that mentions a goal nobody set, and a spend that
+/// misses the turn in flight.
+#[test]
+fn the_status_report_says_the_goal_and_nothing_without_one() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut bridge, handle, _events) = a_chat(directory.path());
+    let status = |bridge: &mut Bridge| {
+        let request = Request::parse(
+            &json!({"id": 2, "method": "session.report.status", "params": {"session": handle}})
+                .to_string(),
+        )
+        .unwrap();
+        bridge.dispatch(&request).unwrap()
+    };
+
+    let without = status(&mut bridge);
+    assert!(without.get("goal").is_none(), "{without}");
+    assert!(!without.to_string().contains("goal"), "{without}");
+
+    goal(&mut bridge, &handle, "cargo test exits 0");
+    // A turn in flight that has spent 42 tokens so far.
+    crate::reports::hold(&bridge.open.get(&handle).unwrap().reports).spent(
+        &bravebot_agent::Spent {
+            tokens: 42,
+            ..Default::default()
+        },
+    );
+    let with = status(&mut bridge);
+    assert_eq!(with["goal"]["condition"], "cargo test exits 0", "{with}");
+    assert_eq!(with["goal"]["rounds"], 0, "{with}");
+    assert_eq!(
+        with["goal"]["left"],
+        bravebot_agent::goal::MAX_ROUNDS,
+        "{with}"
+    );
+    assert_eq!(with["goal"]["paused"], false, "{with}");
+    assert_eq!(with["goal"]["spentTokens"], 42, "{with}");
+    assert!(with["goal"]["elapsedSeconds"].is_u64(), "{with}");
+
+    goal(&mut bridge, &handle, "pause");
+    assert_eq!(status(&mut bridge)["goal"]["paused"], true);
+
+    goal(&mut bridge, &handle, "clear");
+    assert!(status(&mut bridge).get("goal").is_none());
+}
+
 /// GOAL-12: a goal is never written down. A chat with a goal set, saved, leaves a record that
 /// says nothing of the condition. The regression it rejects: the goal kept in the session's state,
 /// which is what the record is written from.

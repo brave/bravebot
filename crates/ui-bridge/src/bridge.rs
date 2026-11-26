@@ -1075,7 +1075,20 @@ impl Bridge {
             "permissionMode": wire::permission_mode_name(open.permission_mode.get()),
             "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(&open.project, open.sandbox)),
         });
-        merge(&mut status, crate::reports::hold(&open.reports).status());
+        let reports = crate::reports::hold(&open.reports).status();
+        // The goal, where one is set: its spend is counted against the session's total with the
+        // running turn's tokens in it (GOAL-13). A chat with no goal says nothing about one.
+        let goal = open.goal.lock().ok().map(|slot| {
+            crate::goal::snapshot(
+                &slot,
+                reports["tokens"].as_u64().unwrap_or(0),
+                std::time::Instant::now(),
+            )
+        });
+        merge(&mut status, reports);
+        if let Some(goal) = goal.filter(|goal| !goal.is_null()) {
+            merge(&mut status, json!({ "goal": goal }));
+        }
         let running = open.running.is_some();
         merge(
             &mut status,
