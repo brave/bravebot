@@ -88,7 +88,8 @@ import { compose as composeReport, openPage, save as saveReport, showLog, type A
 import { faultReporter } from './window-fault'
 import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory, tidyMemory } from './memory'
 import { forgetSummons, noteTurnEnded, summons } from './summons'
-import { Summoning, sendSummonedTurn, type Answer } from './summon-turn'
+import { Summoning, sendSummonedTurn, type Answer, type Services } from './summon-turn'
+import { sendAddressedTurn } from './addressing'
 import { raiseMainWindow, takeSingleInstance } from './single-instance'
 
 /**
@@ -354,38 +355,62 @@ function summonedTurn(
   options: { model?: string | null; attachments?: unknown; staged?: { drops?: unknown; pastes?: unknown }; shown?: unknown },
 ): Promise<Answer> {
   return sendSummonedTurn(
-    {
-      request: bridge ? (method, params) => bridge!.request(method, params) : null,
-      summoning,
-      folderOf: rootForSession,
-      ownerOf: async (handle, folder) => botHandles.get(handle) ?? (await bots()).find((each) => each.home === folder)?.slug,
-      adopt: (handle, slug) => { botHandles.set(handle, slug) },
-      migrate: migrateBot,
-      host: async (handle, slug, folder, request) => {
-        const held = await bot(slug)
-        if (!held) return null
-        // As `sendBotTurn` does: the old notes are recorded before a definition replaces them, and
-        // are asked about once the turn that gave the bot one has ended.
-        const owes = owesCarryOver(held, folder)
-        const migrated = await migrateBot(held, request)
-        if (owes) owedCarryOver.add(handle)
-        return migrated
-      },
-      carry: (handle, params, carried) => {
-        params.files = attachmentPaths(handle, carried.attachments)
-        return withPastes(handle, carried.pastes, withDrops(handle, carried.drops, params))
-      },
-      failure: (error) => {
-        if (error instanceof SendRefused) return { code: 'bad_request', message: error.message }
-        if (error instanceof BridgeError) return { code: error.code, message: error.message }
-        return { code: 'internal', message: String(error) }
-      },
-    },
+    summonServices(),
     session,
     summoned,
     prompt,
     { model: options.model, attachments: options.attachments, drops: options.staged?.drops, pastes: options.staged?.pastes, shown: options.shown },
   )
+}
+
+/**
+ * Send one turn addressed to a definition a person picked in the composer (ADDRESS-3), with the
+ * services a summon uses. The send is `sendAddressedTurn`.
+ */
+function addressedTurn(
+  session: string,
+  name: unknown,
+  prompt: string,
+  options: { model?: string | null; attachments?: unknown; staged?: { drops?: unknown; pastes?: unknown }; shown?: unknown },
+): Promise<Answer> {
+  return sendAddressedTurn(
+    summonServices(),
+    session,
+    name,
+    prompt,
+    { model: options.model, attachments: options.attachments, drops: options.staged?.drops, pastes: options.staged?.pastes, shown: options.shown },
+  )
+}
+
+/** This process's services for a turn sent from a composer pick. See `Services`. */
+function summonServices(): Services {
+  return {
+    request: bridge ? (method, params) => bridge!.request(method, params) : null,
+    summoning,
+    folderOf: rootForSession,
+    ownerOf: async (handle, folder) => botHandles.get(handle) ?? (await bots()).find((each) => each.home === folder)?.slug,
+    adopt: (handle, slug) => { botHandles.set(handle, slug) },
+    migrate: migrateBot,
+    host: async (handle, slug, folder, request) => {
+      const held = await bot(slug)
+      if (!held) return null
+      // As `sendBotTurn` does: the old notes are recorded before a definition replaces them, and
+      // are asked about once the turn that gave the bot one has ended.
+      const owes = owesCarryOver(held, folder)
+      const migrated = await migrateBot(held, request)
+      if (owes) owedCarryOver.add(handle)
+      return migrated
+    },
+    carry: (handle, params, carried) => {
+      params.files = attachmentPaths(handle, carried.attachments)
+      return withPastes(handle, carried.pastes, withDrops(handle, carried.drops, params))
+    },
+    failure: (error) => {
+      if (error instanceof SendRefused) return { code: 'bad_request', message: error.message }
+      if (error instanceof BridgeError) return { code: error.code, message: error.message }
+      return { code: 'internal', message: String(error) }
+    },
+  }
 }
 
 /**
@@ -1198,6 +1223,33 @@ if (primary) app.whenReady().then(() => {
       if (!held) return { error: { code: 'no_such_bot', message: 'no bot by that name' } }
       if (held.retired !== 0) return { error: { code: 'bot_archived', message: 'that bot is archived' } }
       return summonedTurn(session, held, prompt, {
+        model: model as string | null | undefined,
+        attachments,
+        staged: { drops, pastes },
+        shown,
+      })
+    },
+  )
+
+  /**
+   * Send one turn addressed to a definition a person picked from the composer's `@` list
+   * (ADDRESS-3). The window names the definition; this process checks it against the definitions
+   * the bridge resolves for the session. See `sendAddressedTurn` in `addressing.ts`.
+   */
+  ipcMain.handle(
+    'bravebot:definitions:address',
+    async (_event, value: unknown): Promise<Answer> => {
+      if (typeof value !== 'object' || value === null) {
+        return { error: { code: 'bad_request', message: 'not a request' } }
+      }
+      const { session, name, prompt, shown, model, attachments, drops, pastes } = value as Record<string, unknown>
+      if (!isSessionId(session) || typeof prompt !== 'string') {
+        return { error: { code: 'bad_request', message: 'not a request' } }
+      }
+      if (model !== undefined && model !== null && typeof model !== 'string') {
+        return { error: { code: 'bad_request', message: 'invalid model' } }
+      }
+      return addressedTurn(session, name, prompt, {
         model: model as string | null | undefined,
         attachments,
         staged: { drops, pastes },

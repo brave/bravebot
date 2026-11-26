@@ -56,3 +56,17 @@ export async function callSummon(request: {
 }): Promise<void> {
   unwrap(await window.bravebot.summonBot(request))
 }
+
+/** One turn addressed to a definition a person picked in the composer. See `bravebot:definitions:address`. */
+export async function callAddress(request: {
+  session: string
+  name: string
+  prompt: string
+  shown?: string
+  model?: string | null
+  attachments?: string[]
+  drops?: string[]
+  pastes?: string[]
+}): Promise<void> {
+  unwrap(await window.bravebot.addressDefinition(request))
+}

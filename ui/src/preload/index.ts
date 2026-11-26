@@ -418,6 +418,26 @@ const api = {
   },
 
   /**
+   * Send one turn addressed to a definition a person picked from the composer's `@` list
+   * (ADDRESS-3).
+   *
+   * Names the definition and the session. The main process checks the name against the
+   * definitions the agent resolves for the session before it sends.
+   */
+  addressDefinition(request: {
+    session: string
+    name: string
+    prompt: string
+    shown?: string
+    model?: string | null
+    attachments?: string[]
+    drops?: string[]
+    pastes?: string[]
+  }): Promise<Answer<{ turn: number }>> {
+    return ipcRenderer.invoke('bravebot:definitions:address', request) as Promise<Answer<{ turn: number }>>
+  },
+
+  /**
    * Which bot answered which summoned turn, newest first. No write half: the main process writes
    * a line when a summoned turn ends, from the pick and from what the agent answered.
    */

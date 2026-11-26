@@ -622,6 +622,11 @@ const bridge: BravebotApi = {
     if (session) { session.prompts++; session.said.push({ kind: 'user', text: turn.prompt, prompt: session.prompts - 1 }); requestAnimationFrame(() => play(session.handle, 'Summoned reply', routeFor(turn.prompt))) }
     return ok({ turn: 1 })
   },
+  addressDefinition: async (turn) => {
+    const session = held.get(turn.session)
+    if (session) { session.prompts++; session.said.push({ kind: 'user', text: turn.prompt, prompt: session.prompts - 1 }); requestAnimationFrame(() => play(session.handle, 'Addressed reply', routeFor(turn.prompt))) }
+    return ok({ turn: 1 })
+  },
   readSummons: async () => SUMMONS(),
   listFiles: async (_session, path) => ({
     path,

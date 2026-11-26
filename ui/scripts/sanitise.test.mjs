@@ -41,6 +41,14 @@ test('a window’s turn reaches the agent addressed to no definition it named fo
   assert.deepEqual(forwarded, { session: 's1', prompt: 'look', files: [] })
 })
 
+// ADDRESS-3: a definition picked from the `@` list goes on `bravebot:definitions:address`, so a
+// window that names one on `turn.send` itself, beside a bot's standing definition, still sends neither.
+test('a window’s turn reaches the agent addressed to no definition it picked, beside no definition standing', () => {
+  const forwarded = sanitised('turn.send', { session: 's1', prompt: 'look', address: 'lantern', definition: 'ada', messageId: 'm-1' })
+
+  assert.deepEqual(forwarded, { session: 's1', prompt: 'look', messageId: 'm-1', files: [] })
+})
+
 // RPCVIEW-10: the agent refuses a send without the id the window gave it.
 test('a window’s turn reaches the agent with the message id it gave', () => {
   const forwarded = sanitised('turn.send', { session: 's1', prompt: 'look', messageId: 'm-1' })
