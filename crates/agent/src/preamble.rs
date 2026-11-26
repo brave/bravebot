@@ -222,6 +222,7 @@ pub fn compose<S: Sink>(
         goal,
         attribution,
         None,
+        crate::tools::Beside::every(),
     )
 }
 
@@ -243,6 +244,7 @@ pub fn compose_in<S: Sink>(
     goal: Option<&str>,
     attribution: &Attribution,
     appended: Option<&str>,
+    beside: crate::tools::Beside,
 ) -> Preamble {
     let mut preamble = Preamble::default();
 
@@ -414,20 +416,9 @@ pub fn compose_in<S: Sink>(
     }
 
     if skills.advertises_any() {
-        let find_more = if skills.is_curated() {
-            "This is the whole set a definition named for this turn; there are no others to find."
-        } else {
-            "These are the ones built into this program; call search_skills with a word or \
-             phrase to find one of the user's own or the project's."
-        };
         preamble.add(
             Provenance::Driver,
-            format!(
-                "\n\nSkills. Each is a set of instructions for a kind of task, most of them \
-                 written by the user. When a task matches one, call load_skill with its name \
-                 before starting that work and follow what it says. A prompt naming one as \
-                 /name is the user asking for it. {find_more}\n\n"
-            ),
+            skills_intro(skills.is_curated(), beside),
         );
         preamble.add(
             Provenance::Trusted("skill list"),
@@ -743,6 +734,30 @@ fn environment(workspace: &Workspace, github_cli: bool, jenkins_cli: bool) -> St
         ));
     }
     out
+}
+
+/// Introductory text for the offered skill list, naming `load_skill` and `search_skills` only
+/// where `beside` says each tool is offered (TOOL-6).
+fn skills_intro(curated: bool, beside: crate::tools::Beside) -> String {
+    let load_sentence = if beside.holds(crate::tools::Named::LoadSkill) {
+        " When a task matches one, call load_skill with its name before starting that work and \
+         follow what it says."
+    } else {
+        ""
+    };
+    let find_more = if curated {
+        " This is the whole set a definition named for this turn; there are no others to find."
+    } else if beside.holds(crate::tools::Named::SearchSkills) {
+        " These are the ones built into this program; call search_skills with a word or phrase \
+         to find one of the user's own or the project's."
+    } else {
+        " These are the ones built into this program."
+    };
+    format!(
+        "\n\nSkills. Each is a set of instructions for a kind of task, most of them written by \
+         the user.{load_sentence} A prompt naming one as /name is the user asking for \
+         it.{find_more}\n\n"
+    )
 }
 
 /// Which road a GitHub URL takes, said only where the probe found the CLI to take it.
@@ -1875,5 +1890,23 @@ mod tests {
         assert_eq!(pointer_target("Be brief. Write tests.", "AGENTS.md"), None);
         // `.md` alone is a name of nothing.
         assert_eq!(pointer_target("Look in .md", "AGENTS.md"), None);
+    }
+
+    #[test]
+    fn skills_intro_names_load_and_search_only_where_offered() {
+        use crate::tools::{Beside, Named};
+
+        let full = skills_intro(false, Beside::every());
+        assert!(full.contains("load_skill"), "{full}");
+        assert!(full.contains("search_skills"), "{full}");
+
+        let without_both = skills_intro(
+            false,
+            Beside::every()
+                .without(Named::LoadSkill)
+                .without(Named::SearchSkills),
+        );
+        assert!(!without_both.contains("load_skill"), "{without_both}");
+        assert!(!without_both.contains("search_skills"), "{without_both}");
     }
 }

@@ -88,6 +88,7 @@ fn a_safe_session_reads_no_nested_agents_file() {
         None,
         &Attribution::default(),
         Some("COMMAND-LINE-WORDS"),
+        bravebot_agent::tools::Beside::every(),
     );
 
     assert!(
@@ -142,6 +143,7 @@ fn a_safe_session_reads_no_rule_file() {
         None,
         &Attribution::default(),
         Some("FROM-THE-COMMAND-LINE"),
+        bravebot_agent::tools::Beside::every(),
     );
 
     assert!(
