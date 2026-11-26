@@ -66315,6 +66315,306 @@ fn a_checkout_with_changes_carries_only_recorded_writes_where_the_status_is_not_
     }
 }
 
+/// TOOL-6. A checkout `spawn_agent` refuses to make, under the state directory, names `read_git`
+/// as the reader that would have opened the repository only where this turn's own list holds it,
+/// and a stand-in otherwise: the turn asking `spawn_agent` for a checkout is not the turn that
+/// would have called `read_git` itself, and may not be offered it.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_spawn_agent_state_checkout_refusal_names_the_reader_this_turn_holds() {
+    for (tag, tools_line, holds_read_git) in [
+        (
+            "without-read-git",
+            "spawn_agent, write_file, apply_checkout, ask_user",
+            false,
+        ),
+        (
+            "with-read-git",
+            "spawn_agent, write_file, apply_checkout, ask_user, read_git",
+            true,
+        ),
+    ] {
+        let scratch = Scratch::new(&format!("spawn-state-checkout-reader-{tag}"));
+        let home = Scratch::new(&format!("spawn-state-checkout-reader-{tag}-home"));
+        repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        define(
+            &home,
+            "operator",
+            &format!("kind: worker\ntools: {tools_line}\n"),
+            "ASK-FOR-A-CHECKOUT",
+        );
+
+        let (endpoint, received) = serve_by_marker(vec![(
+            "ASK-FOR-A-CHECKOUT",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"DO-SOMETHING","isolation":"checkout"}"#,
+                ),
+                reply_with("noted"),
+            ],
+        )]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        // No trust rule at all, so the repository is declined and no checkout is made.
+        let trust = bravebot_core::trust::TrustStore::new(workspace.root());
+
+        turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &addressed("ASK-FOR-A-CHECKOUT", &home, "operator"),
+            &mut RecordingConfirmer::approving(),
+            &mut sink,
+            trust,
+        )
+        .expect("turn runs");
+
+        let asked = every_request(&received);
+        assert!(
+            asked
+                .iter()
+                .any(|body| body.contains("would not open the repository")),
+            "{tag}: the checkout refusal never reached the planner: {asked:#?}"
+        );
+        match holds_read_git {
+            true => assert!(
+                asked
+                    .iter()
+                    .any(|body| body.contains("because read_git would not open the repository")),
+                "{tag}: {asked:#?}"
+            ),
+            false => {
+                assert!(
+                    !asked.iter().any(|body| body.contains("read_git")),
+                    "{tag}: named a tool the list does not hold: {asked:#?}"
+                );
+                assert!(
+                    asked.iter().any(|body| body
+                        .contains("because the repository reader would not open the repository")),
+                    "{tag}: {asked:#?}"
+                );
+            }
+        }
+    }
+}
+
+/// TOOL-6. As [`a_spawn_agent_state_checkout_refusal_names_the_reader_this_turn_holds`], for a
+/// session with no home and so no state directory: the checkout `spawn_agent` refuses to make is
+/// the one made under the system temporary directory, a different call site from the one the
+/// state directory takes.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_spawn_agent_temporary_checkout_refusal_names_the_reader_this_turn_holds() {
+    for (tag, tools_line, holds_read_git) in [
+        (
+            "without-read-git",
+            "spawn_agent, write_file, apply_checkout, ask_user",
+            false,
+        ),
+        (
+            "with-read-git",
+            "spawn_agent, write_file, apply_checkout, ask_user, read_git",
+            true,
+        ),
+    ] {
+        let scratch = Scratch::new(&format!("spawn-temporary-checkout-reader-{tag}"));
+        // No commit, so the workspace has no `.git`: the repository is declined for that reason,
+        // and never for being untrusted, so the project's own definition is still read.
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        std::fs::create_dir_all(scratch.path.join(".bravebot/agents")).unwrap();
+        std::fs::write(
+            scratch.path.join(".bravebot/agents/operator.md"),
+            format!(
+                "---\nname: operator\ndescription: Does something.\nkind: worker\ntools: \
+                 {tools_line}\n---\n\nDO-SOMETHING\n"
+            ),
+        )
+        .unwrap();
+
+        let (endpoint, received) = serve_by_marker(vec![(
+            "ASK-FOR-A-CHECKOUT-NO-HOME",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"DO-SOMETHING","isolation":"checkout"}"#,
+                ),
+                reply_with("noted"),
+            ],
+        )]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        // No home, so a checkout `spawn_agent` is refused would have been made under the system
+        // temporary directory.
+        let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+        trust.trust(".");
+
+        turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("ASK-FOR-A-CHECKOUT-NO-HOME").addressing(Some("operator".to_string())),
+            &mut RecordingConfirmer::approving(),
+            &mut sink,
+            trust,
+        )
+        .expect("turn runs");
+
+        let asked = every_request(&received);
+        assert!(
+            asked
+                .iter()
+                .any(|body| body.contains("would not open the repository")),
+            "{tag}: the checkout refusal never reached the planner: {asked:#?}"
+        );
+        match holds_read_git {
+            true => assert!(
+                asked
+                    .iter()
+                    .any(|body| body.contains("because read_git would not open the repository")),
+                "{tag}: {asked:#?}"
+            ),
+            false => {
+                assert!(
+                    !asked.iter().any(|body| body.contains("read_git")),
+                    "{tag}: named a tool the list does not hold: {asked:#?}"
+                );
+                assert!(
+                    asked.iter().any(|body| body
+                        .contains("because the repository reader would not open the repository")),
+                    "{tag}: {asked:#?}"
+                );
+            }
+        }
+    }
+}
+
+/// TOOL-6. Where a kept checkout's status cannot be read, `apply_checkout` (the `offered` helper
+/// it shares with `apply_kept_checkout`) names `read_git` as the reader that would have read it
+/// only where this turn's own list holds it, and a stand-in otherwise: the turn calling
+/// `apply_checkout` is not the turn that would have called `read_git` itself, and may not be
+/// offered it.
+#[test]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_apply_checkout_status_refusal_names_the_reader_this_turn_holds() {
+    for (tag, tools_line, holds_read_git) in [
+        (
+            "without-read-git",
+            "spawn_agent, write_file, apply_checkout, ask_user",
+            false,
+        ),
+        (
+            "with-read-git",
+            "spawn_agent, write_file, apply_checkout, ask_user, read_git",
+            true,
+        ),
+    ] {
+        let scratch = Scratch::new(&format!("apply-checkout-reader-{tag}"));
+        let home = Scratch::new(&format!("apply-checkout-reader-{tag}-home"));
+        repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        define(
+            &home,
+            "operator",
+            &format!("kind: worker\ntools: {tools_line}\n"),
+            "MAKE-A-CHECKOUT-THEN-APPLY",
+        );
+        // The checkout's own path, trusted beneath the workspace by `copy_beneath` as it is made:
+        // distrusted here, from the start, so that copy never raises it (CHECKOUT-8), and the
+        // status `apply_checkout` reads over the checkout, rather than the repository the
+        // checkout was made of, is the one declined.
+        let checkout_path = home
+            .path
+            .canonicalize()
+            .expect("home")
+            .join("checkouts")
+            .join(bravebot_agent::home::key_for(workspace.root()))
+            .join("c1");
+
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                "MAKE-A-CHECKOUT-THEN-APPLY",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"WRITE-FOR-APPLY","isolation":"checkout"}"#,
+                    ),
+                    reply_with("waiting"),
+                    tool_request("apply_checkout", r#"{"checkout":"c1"}"#),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "WRITE-FOR-APPLY",
+                vec![
+                    tool_request(
+                        "write_file",
+                        r#"{"path":"out.txt","contents":"from the worker"}"#,
+                    ),
+                    reply_with("wrote it"),
+                ],
+            ),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+        trust.trust(".");
+        trust.distrust(checkout_path.to_str().expect("utf8"));
+
+        turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &addressed("MAKE-A-CHECKOUT-THEN-APPLY", &home, "operator"),
+            &mut RecordingConfirmer::approving(),
+            &mut sink,
+            trust,
+        )
+        .expect("turn runs");
+
+        // The addressed turn's own requests, which hold its own task throughout: the nested
+        // worker's begin fresh with its own and never widen to this one, so this excludes the
+        // worker's requests without naming its task.
+        let received = every_request(&received);
+        let asked: Vec<&String> = received
+            .iter()
+            .filter(|body| body.contains("MAKE-A-CHECKOUT-THEN-APPLY"))
+            .collect();
+        assert!(
+            asked
+                .iter()
+                .any(|body| body.contains("The status could not be read")),
+            "{tag}: the status refusal never reached the planner: {asked:#?}"
+        );
+        match holds_read_git {
+            true => assert!(
+                asked
+                    .iter()
+                    .any(|body| body.contains("so read_git does not read its status")),
+                "{tag}: {asked:#?}"
+            ),
+            false => {
+                assert!(
+                    !asked.iter().any(|body| body.contains("read_git")),
+                    "{tag}: named a tool the list does not hold: {asked:#?}"
+                );
+                assert!(
+                    asked
+                        .iter()
+                        .any(|body| body
+                            .contains("so the repository reader does not read its status")),
+                    "{tag}: {asked:#?}"
+                );
+            }
+        }
+    }
+}
+
 /// CHECKOUT-13, CHECKOUT-23, LABEL-3. A file a run redirected into a directory a link in a tree
 /// nobody vouched for stands for is recorded by the directory as the planner typed it, and not by
 /// the name the link chose. The carry refuses it as one with a link in its way and names the typed

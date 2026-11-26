@@ -112,13 +112,24 @@ impl From<Declined> for Refused {
 }
 
 impl Refused {
-    /// The sentence a delegate's caller reads, for a repository it called `named`.
+    /// The sentence a delegate's caller reads, for a repository it called `named`, naming
+    /// `read_git` itself.
     pub fn describe(&self, named: &str) -> String {
+        self.describe_as(named, "read_git")
+    }
+
+    /// [`Refused::describe`], naming the reader a `Declined` names as `reader` rather than
+    /// always as `read_git`.
+    ///
+    /// The caller gives a name the reading turn can act on, such as "the repository reader",
+    /// where its tool list lacks `read_git` (TOOL-6): the turn asking for a checkout is not
+    /// always the turn that would have called `read_git` itself.
+    pub fn describe_as(&self, named: &str, reader: &str) -> String {
         let made = "No checkout was made";
         match self {
             Refused::Declined(declined) => format!(
-                "{made}, because read_git would not open the repository: {}",
-                declined.describe(named)
+                "{made}, because {reader} would not open the repository: {}",
+                declined.describe_as(named, reader)
             ),
             Refused::Converts(conversion) => {
                 let what = match conversion {
