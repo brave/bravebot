@@ -55,6 +55,8 @@ pub(super) fn listing_capped_note(
         return String::new();
     }
     let mut said = String::new();
+    // `incomplete` is a cap or a directory that could not be opened and never the clock, which has
+    // its own sentence, `listing_timed_out_note`.
     if cut.is_empty() || at_the_cap {
         said.push_str(
             " The listing stopped at that many entries and is incomplete: list a subdirectory to \
@@ -111,6 +113,21 @@ pub(super) fn listing_capped_note(
         }
     }
     said
+}
+
+/// What a result says about a listing whose walk ran out of time, written beside the reference for
+/// the reason `capped_note` is: the body that would carry it reaches nobody. `leading` is what
+/// separates it from the sentence before, which differs between the per-entry reference and the one
+/// reference of a listing that was kept back. Fixed words and no name (LIST-4).
+pub(super) fn listing_timed_out_note(timed_out: bool, leading: &str) -> String {
+    if !timed_out {
+        return String::new();
+    }
+    format!(
+        "{leading}The listing ran out of time before it had walked the whole tree and is \
+         incomplete: {}.",
+        crate::tools::LISTING_NARROWING
+    )
 }
 
 /// What a result says about the symbolic links its walk did not enter, written beside the reference
@@ -614,6 +631,30 @@ mod tests {
         assert!(
             !files_only.contains("subdirector") && !files_only.contains("names files only"),
             "a listing cut for files only spoke of subdirectories: {files_only}"
+        );
+    }
+
+    /// LIST-4: the sentence for a listing that ran out of time is fixed words with no name, is
+    /// written only for a listing that did, and is independent of the sentence about a cap: a listing
+    /// the clock alone stopped has no cap sentence (its `incomplete` is false), and one both cut
+    /// has both. The regression it rejects: the clock reported as the cap on entries, a sentence
+    /// about time on a listing that finished, or the cap sentence dropped where the clock also ran
+    /// out.
+    #[test]
+    fn a_timed_out_listing_is_told_beside_the_reference_and_not_as_a_cap() {
+        assert_eq!(listing_timed_out_note(false, " "), "");
+        assert_eq!(
+            listing_timed_out_note(true, " "),
+            " The listing ran out of time before it had walked the whole tree and is incomplete: \
+             narrow it with a directory, a pattern or a depth."
+        );
+        assert!(listing_timed_out_note(true, "\n\n").starts_with("\n\nThe listing ran out"));
+        // Only the clock stopped it, so nothing says a cap did.
+        assert_eq!(listing_capped_note(false, false, &[]), "");
+        // A cap stopped it too, so that sentence is said beside the clock's.
+        assert!(
+            listing_capped_note(true, true, &[])
+                .starts_with(" The listing stopped at that many entries")
         );
     }
 

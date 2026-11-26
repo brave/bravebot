@@ -324,7 +324,8 @@ file again is the cost of not keeping one.
 ### SEARCH-9: the caps a search runs under are configurable
 
 `search.maxFiles` and `search.maxSeconds`, in the settings files, name how many files a search may
-walk and how long it may spend opening them. Either may be raised as well as lowered, and a key
+walk and how long it may spend opening them. `search.maxSeconds` also bounds the walk of a listing
+([LIST-4](list-files.md#LIST-4)), which opens no file. Either may be raised as well as lowered, and a key
 nobody set leaves the built-in cap in force. The two are independent, so a file naming one says
 nothing about the other, in any layer.
 
@@ -343,11 +344,14 @@ Raising a cap does not unbound a search. The walk still stops at `maxFiles`, the
 stops at `maxSeconds`, and the match cap holds regardless of both, so the result is still the
 bounded, deterministic, partial answer the clauses above describe.
 
-The clock bounds the reading and not the walk, so `maxFiles` is what a very large tree is paid for
-in: a walk of a million paths on a slow filesystem is a slow search rather than a truncated one,
-and it is the number a person chose. That is the right way round, because a walk cut off by a clock
-would keep a different part of the tree on every run, which is what the determinism above rules
-out.
+The clock bounds the reading and not a search's walk, so `maxFiles` is what a very large tree is
+paid for in: a walk of a million paths on a slow filesystem is a slow search rather than a truncated
+one, and it is the number a person chose. That is the right way round, because a walk cut off by a
+clock would keep a different part of the tree on every run, which is what the determinism above
+rules out. A listing's walk is the exception, since it has no reading to bound and no cap on the
+files it meets that a narrow pattern reaches: it stops at the clock, and says so
+([LIST-4](list-files.md#LIST-4)), and the part it kept is the head of the same order on every run.
+The walk of a search and the walk of a repository map stay unclocked.
 
 The caps are handed to the workspace by the caller that read the settings, rather than read by the
 workspace itself. A workspace that consulted them would answer differently on a machine whose owner

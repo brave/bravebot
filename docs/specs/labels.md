@@ -64,7 +64,7 @@ guards:
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 4
-      - crates/agent/tests/workspace.rs: 72
+      - crates/agent/tests/workspace.rs: 73
       - crates/aichat/tests/client.rs: 14
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
@@ -1480,6 +1480,27 @@ arrives at all.
   ignored directory names, the resolved directory argument and the name order above, no name is in
   any of these conditions. A name in that sentence, or a choice of which directory to cut or how to
   word the sentence made from a name, is a violation and not covered here.
+
+- **A listing's walk is stopped by a clock and skips a directory a pattern's prefix rules out, and
+  neither is one of the eleven.** `Workspace::list` gives the walk a deadline, `search.maxSeconds`
+  from the time of the call ([LIST-4](tools/list-files.md#LIST-4)). `walk_filtered` asks the clock
+  before each file and each subdirectory it takes, and stops when it has run out. That is a
+  comparison of the time with the deadline, which no name enters, and it decides where the walk
+  stops and never which names it keeps. The walk records only that it stopped, as one flag released
+  inside the existing release in `list_files` with the cap and the unreadable-directory flag, and the
+  flag reaches the planner as one fixed sentence with no name. A search's walk and a repository
+  map's have no clock. The walk also does not open a subdirectory when the pattern cannot match
+  beneath it ([LIST-3](tools/list-files.md#LIST-3)). `Wanted::could_hold_an_admitted_path` decides
+  that from the expanded pattern and the subdirectory's relative name, both readings, by
+  `glob::could_match_beneath`: it compares the pattern's segments with the directory's segments,
+  which are the two inputs `Wanted::admits` compares for a file. It runs after the permission rules
+  and after the 200-subdirectory count and the depth stop, so which directories a bounded walk
+  takes, names and leaves out is decided as before, and it skips only the descent. The pattern is
+  the planner's argument and a directory's name is a name the walk already compares in
+  `walk_filtered`, so the one new condition is on the include pattern and the name order of the
+  directory, which the sentence above already lists. No file's bytes are read, and a name in a
+  sentence, or a choice of what the walk keeps made from a name other than the pattern's comparison
+  with it, is a violation and not covered here.
 
 - **The reason a checkout's refused filesystem entry is named is chosen from the entry's spelling,
   and is not one of the eleven.** A `run` is not started while an entry of `sandbox.filesystem.denyRead`

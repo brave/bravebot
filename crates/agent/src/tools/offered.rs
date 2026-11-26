@@ -1055,7 +1055,10 @@ fn table(
                  it. A listing does not enter a symbolic link, to a file or to a directory, and \
                  does not name it: it says how many it did not enter, so a directory made of \
                  links lists as that count and not as empty. List the directory a link points \
-                 to, by its own name, to see what is behind it. In a directory you may not \
+                 to, by its own name, to see what is behind it. A listing stops at a time \
+                 limit and says so: a directory, a depth, or a pattern that starts with the \
+                 directory it wants (src/**) narrows it, and the walk skips the directories \
+                 such a pattern cannot reach. In a directory you may not \
                  read, the names are quarantined and you get a reference for each file, and for \
                  the directories the walk stopped at a count with the first and last reference \
                  of each run, instead: use a file's as path_ref to read it, process it, and \

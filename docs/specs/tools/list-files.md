@@ -147,6 +147,25 @@ A pattern with no `/` is matched against the file name alone. One with a `/` is 
 the path from the directory the call named and against the path from the workspace root, and a
 file either reading matches is kept. `search`'s `include` is read the same way.
 
+A listing does not open a subdirectory that no file beneath it can be selected from. The test is
+made on the expanded patterns and the subdirectory's relative name alone, for each reading and each
+brace expansion: a subdirectory is skipped only where no reading of any expansion can reach it. A
+pattern whose first segment is a literal name (`.somefolder/**`, `crates/agent-*/src/**`) reaches only
+the directories that name leads to, and a segment with `*` or `?` after that first one matches the
+names it can match and no others. Pruning does nothing, and every directory is opened, for each of
+these patterns: one with no `/`; one whose first segment contains `*` or `?` (`*/profile.json`,
+`?/x/y.rs`, `agent-*/src`, and `**/*.rs`, whose first segment is `**`); one that still holds a `{`
+or `}` because an oversized expansion or an unbalanced brace left it as its literal; and no pattern
+at all. Each brace alternative is tested on its own, so a directory is kept when any alternative can
+reach it, and an alternative with no `/` keeps every directory. A pattern segment that is empty
+(`src/`, `a//b`) can never be satisfied, since a path segment is never empty, so such a pattern
+reaches nothing beneath any directory. The test runs
+after the permission rules and after the directory bounds of [LIST-5](#LIST-5), so what a rule
+withholds, which subdirectories a bounded walk takes and which it stops at or leaves out do not
+change: only the descent is skipped. A skipped directory is not opened, so it cannot set the
+unreadable-directory flag, and the links in it are not counted ([LIST-6](#LIST-6)). Only a listing
+skips directories; the walk of a search or a repository map opens each as before.
+
 **Why.** A backtracking pattern arriving through a turn is a denial-of-service vector. Expanding a
 group before the walk is what keeps that bound: each alternative is an ordinary pattern applied
 once per path, so a group costs a multiple of the work and never a power of it.
@@ -171,6 +190,21 @@ call could not have listed.
 `verified-by: bravebot_agent::tools::list_files_names_every_directory_its_walk_skips`
 `verified-by: bravebot_agent::workspace::a_listing_glob_may_be_written_from_the_directory_it_names`
 `verified-by: bravebot_agent::workspace::a_search_include_may_be_written_from_the_directory_it_names`
+`verified-by: bravebot_agent::glob::a_literal_prefix_rules_out_a_sibling_directory`
+`verified-by: bravebot_agent::glob::a_wildcard_segment_is_followed_exactly`
+`verified-by: bravebot_agent::glob::a_double_star_keeps_every_depth_below_its_prefix`
+`verified-by: bravebot_agent::glob::a_pattern_with_no_literal_directory_prefix_prunes_nothing`
+`verified-by: bravebot_agent::glob::every_brace_alternative_may_keep_a_directory`
+`verified-by: bravebot_agent::glob::a_pattern_whose_last_segment_is_a_directory_name_has_no_file_beneath_it`
+`verified-by: bravebot_agent::glob::pruning_never_hides_a_matching_file`
+`verified-by: bravebot_agent::glob::an_empty_pattern_segment_can_never_be_satisfied`
+`verified-by: bravebot_agent::glob::a_pattern_with_many_double_stars_is_answered`
+`verified-by: bravebot_agent::workspace::a_pattern_naming_one_directory_opens_only_that_directory`
+`verified-by: bravebot_agent::workspace::a_wildcard_segment_and_a_brace_group_in_the_prefix_prune_exactly`
+`verified-by: bravebot_agent::workspace::a_pattern_prunes_by_either_reading_of_it`
+`verified-by: bravebot_agent::workspace::a_pattern_with_no_slash_skips_no_directory`
+`verified-by: bravebot_agent::workspace::a_pattern_with_a_literal_prefix_does_not_change_which_directories_a_bounded_walk_takes`
+`verified-by: bravebot_agent::workspace::a_rule_still_keeps_a_directory_a_pattern_names_out_of_a_listing`
 
 <a id="LIST-4"></a>
 ### LIST-4: a truncated listing says it was truncated
@@ -185,6 +219,27 @@ subdirectories out that way is reported as truncated too.
 
 **Why.** Silence would let the planner conclude a file does not exist when the answer was cut off.
 
+A listing's walk also runs under the time budget of a search, `search.maxSeconds`
+([SEARCH-3](search.md#SEARCH-3), [SEARCH-9](search.md#SEARCH-9)), 10 seconds where the settings name
+none. A listing opens no file, so the budget bounds the walk and nothing else. The tool description tells the
+planner that a listing stops at a time limit and says so, and that a directory, a depth or a
+pattern that starts with a literal directory narrows it. The clock is asked before
+each file and each subdirectory the walk takes, so the walk stops at the next entry. What it had
+collected is the listing, in the walk's sorted order, and the result says that the listing ran out
+of time, that it is incomplete, and that a directory, a pattern or a depth narrows it. The clock is
+a fact of its own, apart from the caps: a listing both cut by a cap and stopped by the clock says
+both, whether the planner reads the names or a quarantined listing was kept back after `read: true`
+as one reference. A `list_files` step of a manifest says on its line that the list ran out of time
+and is incomplete, since the line is what the person reads of the step. A time cut is
+not deterministic, as the time cap of a search is not ([SEARCH-3](search.md#SEARCH-3)): the entries
+collected are the head of the same order on every run, and how many there are depends on how fast the
+disk was. A listing that ran out of time before it took any file is not worded `(no files)` and does
+not say the pattern matched no file, since the walk did not look at the whole tree. The sentence is
+fixed words with no name in it, and it travels beside the references when the listing is
+quarantined, as the cap does. Whether the clock ran out is a fact about the walk, released with the
+cap and the unreadable-directory flag by the release that already exists, so it adds no use of
+`declassify`. A search's walk and a repository map's have no clock ([SEARCH-9](search.md#SEARCH-9)).
+
 `verified-by: bravebot_agent::workspace::a_listing_past_the_cap_reports_truncation`
 `verified-by: bravebot_agent::workspace::a_bounded_listing_shares_its_cap_across_directories`
 `verified-by: bravebot_agent::workspace::a_bounded_listing_takes_at_most_the_cap_of_subdirectories_from_one_directory_and_goes_on`
@@ -197,6 +252,17 @@ subdirectories out that way is reported as truncated too.
 `verified-by: bravebot_agent::turn::a_quarantined_listing_says_how_many_subdirectories_a_cut_directory_left_out`
 `verified-by: bravebot_agent::turn::a_released_search_or_listing_keeps_its_cap_and_paging_notes`
 `verified-by: bravebot_agent::turn::a_search_or_listing_kept_back_after_asking_to_read_keeps_its_cap_and_paging_notes`
+`verified-by: bravebot_agent::workspace::a_listing_that_ran_out_of_time_says_so`
+`verified-by: bravebot_agent::workspace::a_search_walks_the_whole_tree_whatever_its_clock_says`
+`verified-by: bravebot_agent::tools::tests::editing::a_listing_that_ran_out_of_time_says_so_and_how_to_narrow_it`
+`verified-by: bravebot_agent::tools::tests::editing::a_listing_that_ran_out_of_time_before_finding_a_file_is_not_an_empty_directory`
+`verified-by: bravebot_agent::tools::tests::editing::a_quarantined_listing_carries_the_time_out_beside_its_references`
+`verified-by: bravebot_agent::turn::a_quarantined_listing_that_ran_out_of_time_says_so_beside_its_references`
+`verified-by: bravebot_agent::turn::sentences::a_timed_out_listing_is_told_beside_the_reference_and_not_as_a_cap`
+`verified-by: bravebot_agent::turn::a_kept_back_listing_that_ran_out_of_time_says_so`
+`verified-by: bravebot_agent::turn::a_kept_back_listing_says_both_that_it_ran_out_of_time_and_that_it_met_a_link`
+`verified-by: bravebot_agent::turn::a_kept_back_listing_cut_by_a_cap_and_by_the_clock_says_both`
+`verified-by: bravebot_agent::manifest::a_listing_step_that_ran_out_of_time_says_the_list_is_incomplete`
 
 <a id="LIST-5"></a>
 ### LIST-5: a listing walks the whole tree unless it is given a depth, and says where it stopped
@@ -320,6 +386,7 @@ placed the link, and this clause adds no reach. `repo_map` has the same walk and
 count: [repo-map.md](repo-map.md).
 
 `verified-by: bravebot_agent::workspace::a_listing_counts_every_symbolic_link_it_did_not_enter`
+`verified-by: bravebot_agent::workspace::a_directory_skipped_for_the_pattern_does_not_add_its_links_to_the_count`
 `verified-by: bravebot_agent::tools::tests::editing::a_listing_counts_the_links_it_did_not_enter_and_does_not_name_them`
 `verified-by: bravebot_agent::tools::tests::editing::a_quarantined_listing_carries_the_link_count_beside_its_references`
 `verified-by: bravebot_agent::turn::a_quarantined_listing_tells_the_model_how_many_links_it_did_not_enter`
@@ -334,7 +401,10 @@ this says nothing about whether such a file exists. The sentence also says that 
 case-sensitive and that a brace group such as `{r,R}eadme*` covers both cases. It is written when
 the result is empty and when it holds only the directories a bounded walk stopped at
 ([LIST-5](#LIST-5)), which the pattern does not apply to and which would otherwise read as a listing
-in which the pattern worked. A call with no pattern words its empty result as before.
+in which the pattern worked. A call with no pattern words its empty result as before. A listing
+that ran out of time ([LIST-4](#LIST-4)) does not say it: the walk did not look at the whole tree,
+so the pattern selecting nothing is not what the empty answer is about, and the sentence about the
+clock is said in its place.
 
 When the pattern holds a character class, an extended glob or a leading `!`, the sentence adds the
 advice `search` gives for an `include` ([SEARCH-5](search.md#SEARCH-5)), from the same function. The

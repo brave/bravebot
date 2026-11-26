@@ -201,6 +201,19 @@ A **bounded** listing names the directories it did not descend into alongside th
 comes back describes the shape of the tree. The pattern does not hide those directories: it says
 which files are wanted, and a directory is where the answer might be rather than an answer.
 
+A pattern that names a subdirectory reads only that subdirectory. `src/**` or `crates/agent-*/src/**`
+opens `src` or the `crates` directories whose names the pattern can match, and no other directory,
+so a call in a large tree finishes quickly and does not report an unreadable directory elsewhere.
+A pattern with no `/`, or one that starts with a wildcard such as `*/profile.json` or `**/*.rs`,
+can match under any directory and skips none.
+
+A listing stops at the search time budget, `search.maxSeconds` (10 seconds unless the settings name
+another), and says so: the result says that the listing ran out of time, that it is incomplete, and
+that a directory, a pattern or a depth narrows it. What it collected is the first part of the walk's
+sorted order, and how much that is depends on how fast the disk was. Where the walk ran out of time
+before it found any file, the result does not say the directory is empty or that the pattern matched
+no file. The sentence comes beside the references when the names are quarantined.
+
 A listing of a directory nobody vouched for is quarantined, because a filename is content. Where a
 mode or a check answers `vet_content` for you, the result says that repeating the call with `read: true`
 returns the listing in one call; where you answer `vet_content`, `read` changes nothing and the result
@@ -354,13 +367,15 @@ bound, and so does a list cut at its own cap of 200 files.
 ### The caps are configurable
 
 `search.maxFiles` and `search.maxSeconds` set how many files a search may walk and how long it may
-spend opening them. Either can be raised as well as lowered, and the two are independent. The built-in
+spend opening them. `search.maxSeconds` is also how long a [`list_files`](#list_files) walk may run.
+Either can be raised as well as lowered, and the two are independent. The built-in
 caps are past what an ordinary repository holds; a monorepo, a tree of generated sources, or a
 checkout on a network filesystem is where they are not, and there every search comes back partial.
 See [Configuration](../customize/configuration.md).
 
 Raising a cap does not unbound a search. The walk still stops at `search.maxFiles`, the reading still
-stops at `search.maxSeconds`, and the match cap holds regardless of both.
+stops at `search.maxSeconds`, and the match cap holds regardless of both. A search's walk is not
+stopped by the clock, and a listing's is.
 
 ## `read_git`
 

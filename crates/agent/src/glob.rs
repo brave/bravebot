@@ -47,6 +47,85 @@ pub fn matches_any(patterns: &[String], path: &str) -> bool {
     patterns.iter().any(|pattern| matches_single(pattern, path))
 }
 
+/// Whether a file beneath the directory `directory` could match any of `patterns`, as produced by
+/// [`expand`]. A walk that gets `false` need not open that directory.
+///
+/// Decided from the patterns and the directory's own relative name alone. It answers `false` only
+/// where no path that begins with `directory/` can match, so it never hides a file `matches_any`
+/// would have kept. Where it cannot tell it answers `true`:
+///
+/// - a pattern with no `/` is about the file name at any depth;
+/// - a pattern whose first segment holds a wildcard (`*`, `?` or `**`) is not anchored at a
+///   directory the walk can name, so it prunes nothing;
+/// - a pattern still holding a brace is the literal an oversized expansion falls back to;
+/// - no pattern at all is an empty pattern, which selects nothing and is left to the walk.
+///
+/// Where the first segment is literal, the segments after it are followed exactly: a segment with
+/// a `*` or `?` matches the directory names it can match and no others, and `**` matches any
+/// number of them.
+pub fn could_match_beneath(patterns: &[String], directory: &str) -> bool {
+    patterns.is_empty()
+        || patterns
+            .iter()
+            .any(|pattern| could_match_beneath_single(pattern, directory))
+}
+
+/// [`could_match_beneath`] for one already-expanded pattern.
+fn could_match_beneath_single(pattern: &str, directory: &str) -> bool {
+    if !pattern.contains('/') || pattern.contains(['{', '}']) {
+        return true;
+    }
+    let segments: Vec<&str> = pattern.split('/').collect();
+    if segments
+        .first()
+        .is_none_or(|first| first.contains(['*', '?']))
+    {
+        return true;
+    }
+
+    // The pattern positions the directory's segments so far can have reached. After a position's
+    // `**` the next segment's position is reached too, because `**` may match nothing.
+    let mut reached = vec![false; segments.len() + 1];
+    reached[0] = true;
+    close_over_double_stars(&segments, &mut reached);
+    for name in directory.split('/') {
+        let mut next = vec![false; segments.len() + 1];
+        for (at, segment) in segments.iter().enumerate() {
+            if !reached[at] {
+                continue;
+            }
+            if *segment == "**" {
+                next[at] = true;
+            } else if matches_one(segment, name) {
+                next[at + 1] = true;
+            }
+        }
+        close_over_double_stars(&segments, &mut next);
+        reached = next;
+    }
+
+    // Some position is short of the end of the pattern and has only segments a name can satisfy
+    // left, so something beneath the directory can still finish the match. A path segment is never
+    // empty, so an empty pattern segment is one nothing can satisfy. `tail_ok[at]` is whether every
+    // segment from `at` on is satisfiable, computed once from the end so the check is linear.
+    let mut tail_ok = vec![true; segments.len() + 1];
+    for at in (0..segments.len()).rev() {
+        tail_ok[at] = (segments[at] == "**" || !segments[at].is_empty()) && tail_ok[at + 1];
+    }
+    reached
+        .iter()
+        .enumerate()
+        .any(|(at, reached)| *reached && at < segments.len() && tail_ok[at])
+}
+
+fn close_over_double_stars(segments: &[&str], reached: &mut [bool]) {
+    for at in 0..segments.len() {
+        if reached[at] && segments[at] == "**" {
+            reached[at + 1] = true;
+        }
+    }
+}
+
 /// Expand brace groups into the plain patterns they stand for.
 ///
 /// An empty pattern expands to nothing, so it matches nothing. A pattern with no group, an
@@ -380,9 +459,273 @@ mod tests {
         assert!(!matches(pattern, &path));
     }
 
+    /// The directory a pattern's literal prefix names is entered and a sibling is not.
+    #[test]
+    fn a_literal_prefix_rules_out_a_sibling_directory() {
+        let patterns = expand(".somefolder/**");
+        assert!(could_match_beneath(&patterns, ".somefolder"));
+        assert!(could_match_beneath(&patterns, ".somefolder/deep/er"));
+        assert!(!could_match_beneath(&patterns, "other"));
+        assert!(!could_match_beneath(&patterns, "other/.somefolder"));
+        // A name that only starts like the prefix is another directory.
+        assert!(!could_match_beneath(&patterns, ".somefolder2"));
+    }
+
+    /// A segment holding a wildcard matches the names it can match and no others, so a directory is
+    /// pruned only when its name cannot be matched by that segment.
+    #[test]
+    fn a_wildcard_segment_is_followed_exactly() {
+        let patterns = expand("src/*/lib.rs");
+        assert!(could_match_beneath(&patterns, "src"));
+        assert!(could_match_beneath(&patterns, "src/anything"));
+        // `lib.rs` is the last segment, which names a file, and `*` takes one level only.
+        assert!(!could_match_beneath(&patterns, "src/anything/else"));
+        assert!(!could_match_beneath(&patterns, "tests"));
+
+        let patterns = expand("crates/agent-*/src/**");
+        assert!(could_match_beneath(&patterns, "crates"));
+        assert!(could_match_beneath(&patterns, "crates/agent-core"));
+        assert!(could_match_beneath(&patterns, "crates/agent-core/src/deep"));
+        assert!(!could_match_beneath(&patterns, "crates/tui"));
+        assert!(!could_match_beneath(&patterns, "crates/agent-core/tests"));
+
+        let patterns = expand("x/a?/b/**");
+        assert!(could_match_beneath(&patterns, "x/ab"));
+        assert!(!could_match_beneath(&patterns, "x/abc"));
+        // A first segment with a wildcard is not a prefix the walk can name, so nothing is pruned.
+        assert!(could_match_beneath(&expand("a?/b/**"), "abc"));
+    }
+
+    /// `**` in the middle stands for any number of directories, including none.
+    #[test]
+    fn a_double_star_keeps_every_depth_below_its_prefix() {
+        let patterns = expand("docs/**/*.md");
+        assert!(could_match_beneath(&patterns, "docs"));
+        assert!(could_match_beneath(&patterns, "docs/a/b/c"));
+        assert!(!could_match_beneath(&patterns, "src"));
+    }
+
+    /// A pattern that does not start with a literal directory can match under any directory, and
+    /// the walk is not cut for it.
+    #[test]
+    fn a_pattern_with_no_literal_directory_prefix_prunes_nothing() {
+        for pattern in [
+            "*.rs",
+            "readme*",
+            "*/profile.json",
+            "**/*.rs",
+            "?/x/y.rs",
+            "{a,b}",
+        ] {
+            assert!(
+                could_match_beneath(&expand(pattern), "anywhere/at/all"),
+                "{pattern} was used to skip a directory"
+            );
+        }
+        // Past the cap on expansions the pattern is the literal, braces included, and nothing is
+        // concluded from it.
+        let oversized = "{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}/x";
+        assert!(could_match_beneath(&expand(oversized), "z"));
+        // An empty pattern expands to nothing and decides nothing.
+        assert!(could_match_beneath(&expand(""), "z"));
+    }
+
+    /// Each brace alternative is a pattern of its own, and a directory one of them can reach is
+    /// kept.
+    #[test]
+    fn every_brace_alternative_may_keep_a_directory() {
+        let patterns = expand("{src,tests}/**/*.rs");
+        assert!(could_match_beneath(&patterns, "src/a"));
+        assert!(could_match_beneath(&patterns, "tests"));
+        assert!(!could_match_beneath(&patterns, "docs"));
+        // One alternative is bare of a directory, so it may match under any.
+        let mixed = expand("{src/**,*.rs}");
+        assert!(could_match_beneath(&mixed, "docs"));
+    }
+
+    /// A pattern that ends where the directory does leaves nothing for a file to be.
+    #[test]
+    fn a_pattern_whose_last_segment_is_a_directory_name_has_no_file_beneath_it() {
+        let patterns = expand("a/b");
+        assert!(could_match_beneath(&patterns, "a"));
+        assert!(!could_match_beneath(&patterns, "a/b"));
+    }
+
     #[test]
     fn matching_is_case_sensitive() {
         assert!(!matches("*.RS", "main.rs"));
         assert!(matches("*.rs", "main.rs"));
+    }
+
+    const SAMPLE_FILES: &[&str] = &[
+        "README.md",
+        "Cargo.toml",
+        "main.rs",
+        "lib.rs",
+        "src/lib.rs",
+        "src/main.rs",
+        "src/util/mod.rs",
+        "src/util/deep/x.rs",
+        "src/a/lib.rs",
+        "src/b/lib.rs",
+        "src/b/other.rs",
+        "crates/agent/Cargo.toml",
+        "crates/agent/src/lib.rs",
+        "crates/agent/src/glob.rs",
+        "crates/agent/src/deep/er/x.rs",
+        "crates/agent-core/src/lib.rs",
+        "crates/agent-core/src/deep/x.rs",
+        "crates/agent-core/tests/t.rs",
+        "crates/tui/Cargo.toml",
+        "crates/tui/src/lib.rs",
+        "crates/tui/src/ui/view.rs",
+        "docs/readme.md",
+        "docs/specs/labels.md",
+        "docs/specs/tools/run.md",
+        "docs/specs/tools/notes.txt",
+        "docs/guide/a/b/c/d.md",
+        "tests/a.rs",
+        "tests/Cargo.toml",
+        "tests/deep/er/b.rs",
+        "a/b",
+        "a/b/c.rs",
+        "a/x/b/c.rs",
+        "a/x/b",
+        "a/x/c.rs",
+        "a/x/y/b",
+        "a/x/y/c.rs",
+        "a/x/y/z/c.rs",
+        "a/x/y/z/b",
+        "x/ab/b/f.rs",
+        "x/ab/b/g/h.rs",
+        "x/ab/c/f.rs",
+        "x/abc/b/f.rs",
+        "x/a/b/f.rs",
+        "x/ax/b/k",
+        "x/ax/b/deep/k",
+        "other/lib.rs",
+        "other/src/lib.rs",
+        "other/docs/a.md",
+    ];
+
+    /// Patterns whose first segment is a literal directory, so a walk can prune by them.
+    const LITERAL_PREFIX_PATTERNS: &[&str] = &[
+        "src/lib.rs",
+        "src/*/lib.rs",
+        "src/**",
+        "crates/agent-*/src/**",
+        "crates/agent/src/*.rs",
+        "x/a?/b/**",
+        "docs/**/*.md",
+        "docs/specs/*",
+        "a/**/b",
+        "a/**/**/c.rs",
+        "a/**/b/*.rs",
+        "a/b",
+        "{src,tests}/**/*.rs",
+        "crates/{agent,tui}/src/*.rs",
+        "{a,docs}/**/{b,*.md}",
+    ];
+
+    /// Patterns with an empty segment, which select nothing and so keep no directory.
+    const EMPTY_SEGMENT_PATTERNS: &[&str] = &["src/", "a/", "a//b", "a/**//b"];
+
+    /// Patterns that name no literal directory first, or none at all, so a walk prunes nothing.
+    const OTHER_PATTERNS: &[&str] = &[
+        "*.rs",
+        "Cargo.toml",
+        "lib.rs",
+        "**/lib.rs",
+        "**/specs/*.md",
+        "**",
+        "*/src/lib.rs",
+        "?/b",
+    ];
+
+    /// The `(pruned, kept)` counts of `(pattern, directory)` pairs, after asserting that no file
+    /// beneath a pruned directory matches the pattern.
+    fn check_pruning_is_sound(patterns: &[&str]) -> (usize, usize) {
+        let mut directories = std::collections::BTreeSet::new();
+        for file in SAMPLE_FILES {
+            let segments: Vec<&str> = file.split('/').collect();
+            for depth in 1..segments.len() {
+                directories.insert(segments[..depth].join("/"));
+            }
+        }
+        let (mut pruned, mut kept) = (0, 0);
+        for pattern in patterns {
+            let expanded = expand(pattern);
+            for directory in &directories {
+                if could_match_beneath(&expanded, directory) {
+                    kept += 1;
+                    continue;
+                }
+                pruned += 1;
+                let beneath = format!("{directory}/");
+                for file in SAMPLE_FILES {
+                    assert!(
+                        !file.starts_with(&beneath) || !matches_any(&expanded, file),
+                        "{pattern} skipped {directory}, which holds the match {file}"
+                    );
+                }
+            }
+        }
+        (pruned, kept)
+    }
+
+    /// Pruning a directory must never hide a file the pattern selects.
+    #[test]
+    fn pruning_never_hides_a_matching_file() {
+        let (literal_pruned, literal_kept) = check_pruning_is_sound(LITERAL_PREFIX_PATTERNS);
+        let (other_pruned, other_kept) = check_pruning_is_sound(OTHER_PATTERNS);
+        assert!(
+            literal_pruned > 0,
+            "no directory was pruned for a literal prefix"
+        );
+        assert!(literal_kept > 0, "every directory was pruned");
+        assert_eq!(other_pruned, 0, "a pattern with no literal prefix pruned");
+        assert!(other_kept > 0);
+        let (empty_pruned, empty_kept) = check_pruning_is_sound(EMPTY_SEGMENT_PATTERNS);
+        assert!(empty_pruned > 0);
+        assert_eq!(
+            empty_kept, 0,
+            "a pattern with an empty segment kept a directory"
+        );
+
+        // Each literal-prefix pattern prunes something and keeps something, so each was exercised
+        // in both directions.
+        for pattern in LITERAL_PREFIX_PATTERNS {
+            let (pruned, kept) = check_pruning_is_sound(&[pattern]);
+            assert!(pruned > 0, "{pattern} pruned no directory");
+            assert!(kept > 0, "{pattern} kept no directory");
+        }
+    }
+
+    /// A path segment is never empty, so a pattern with an empty segment selects no file and no
+    /// directory has anything beneath it that could finish the match.
+    #[test]
+    fn an_empty_pattern_segment_can_never_be_satisfied() {
+        let trailing = expand("src/");
+        assert!(!could_match_beneath(&trailing, "src"));
+        assert!(!could_match_beneath(&trailing, "src/deep"));
+        let inner = expand("a//b");
+        assert!(!could_match_beneath(&inner, "a"));
+        assert!(!could_match_beneath(&inner, "a/x"));
+        // The same pattern without the empty segment keeps the directory.
+        assert!(could_match_beneath(&expand("a/b"), "a"));
+        // An empty segment after a `**` is still unsatisfiable.
+        assert!(!could_match_beneath(&expand("a/**//b"), "a/x"));
+
+        for file in SAMPLE_FILES {
+            assert!(!matches_any(&trailing, file), "src/ matched {file}");
+            assert!(!matches_any(&inner, file), "a//b matched {file}");
+        }
+    }
+
+    /// A pattern with thousands of `**` segments is answered in one pass over its segments.
+    #[test]
+    fn a_pattern_with_many_double_stars_is_answered() {
+        let pattern = format!("a/{}x", "**/".repeat(2_000));
+        assert!(could_match_beneath(&expand(&pattern), "a/b/c"));
     }
 }

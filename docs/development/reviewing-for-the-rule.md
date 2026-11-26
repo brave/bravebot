@@ -214,6 +214,22 @@ order above, no name is in any of these conditions. A change that put the direct
 sentence, or chose which directories to cut or how to word the sentence from a name, would be a
 violation of shape 1 or 3 and is not covered by this paragraph.
 
+A listing's walk is also stopped by a clock and does not open a subdirectory a pattern cannot match
+beneath, and neither is one of the eleven. `Workspace::list` gives the walk a deadline,
+`search.maxSeconds` from the time of the call (LIST-4), and `walk_filtered` asks it before each file
+and each subdirectory. That compares the time with the deadline and no name, decides where the walk
+stops and never which names it keeps, and is recorded as one flag released inside the existing
+release in `list_files`, which reaches the planner as one fixed sentence with no name. A search's walk
+and a repository map's have no clock. The prune is `Wanted::could_hold_an_admitted_path`, which
+compares the expanded pattern with the subdirectory's relative name by `glob::could_match_beneath`,
+read the two ways `Wanted::admits` reads a file's path (LIST-3). It runs after the rules and after
+the 200-subdirectory count and the depth stop, so what a bounded walk takes, names and leaves out is
+decided as before, and it only skips the descent. It reads no file's bytes and no entry the walk did
+not meet, and its one condition is on the include pattern and the directory's name, which the
+sentence above already lists. A name in a sentence, or a choice of what the walk keeps made from a
+name other than the pattern's comparison with it, would be a violation of shape 1 or 3 and is not
+covered by this paragraph.
+
 The reason in the sentence for a checkout's refused filesystem entry (SANDBOX-25) is chosen from
 the entry's spelling by `resolve` in `bravebot-sandbox`, which already decides from that spelling
 whether the entry is refused. It is a branch on bytes a checkout wrote whose result reaches the
