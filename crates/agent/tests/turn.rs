@@ -99423,7 +99423,7 @@ fn an_advisor_the_settings_name_that_nothing_serves_is_answered_per_call_and_sto
 fn an_advisor_the_settings_name_for_a_service_with_no_block_is_answered_per_call_and_stops_nothing()
 {
     let scratch = Scratch::new("advisor-setting-no-block");
-    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let workspace = Workspace::new(&scratch.path).unwrap();
     let (endpoint, received) = serve_sequence(vec![
         tool_request("advisor", AN_ADVISOR_CALL),
         tool_request(
@@ -99452,10 +99452,10 @@ fn an_advisor_the_settings_name_for_a_service_with_no_block_is_answered_per_call
         &mut RecordingSink::new(),
         trusting_the_workspace(),
     )
-    .expect("a setting naming a model with no provider block does not stop the run");
+    .unwrap();
     let requests: Vec<serde_json::Value> = every_request(&received)
         .iter()
-        .map(|body| serde_json::from_str(body).expect("a request"))
+        .map(|body| serde_json::from_str(body).unwrap())
         .collect();
 
     assert_eq!(
