@@ -1096,7 +1096,7 @@ fn a_setup_go_does_not_read_an_environment_file_in_the_home() {
     if !usability::available() {
         return;
     }
-    let planted = planted_dir("go-env-file");
+    let planted = planted_dir("go-home-env-file");
     let marker = planted.join("ran");
     let helper = planted.join("helper");
     plant_passthrough(&helper, &marker);
@@ -1110,7 +1110,7 @@ fn a_setup_go_does_not_read_an_environment_file_in_the_home() {
     let args = ["-C", "{session}", "build", "./..."];
 
     match runs_the_helper_when_given(
-        "go-env-file",
+        "go-home-env-file",
         "go",
         &args,
         &files,
@@ -1121,7 +1121,7 @@ fn a_setup_go_does_not_read_an_environment_file_in_the_home() {
         &marker,
     ) {
         None => {
-            eprintln!("skipped go-env-file: go is not installed");
+            eprintln!("skipped go-home-env-file: go is not installed");
             return;
         }
         Some(false) => return skipped("go here does not run -toolexec from a GOENV file"),
@@ -1142,7 +1142,7 @@ fn a_setup_go_does_not_read_an_environment_file_in_the_home() {
         .setup(Stage::new("sh", &["-c", &plant_files]))
         .setup(Stage::new("go", &args))
         .stage(Stage::new("true", &[]));
-    run_with_planted("go-env-file", &[], workflow, &marker);
+    run_with_planted("go-home-env-file", &[], workflow, &marker);
 }
 
 /// An executable at `path` that writes `marker` and then links as `cc` would, so that a cargo build
