@@ -6,6 +6,11 @@
 //! The editors here are ordinary programs standing in for one: `cp` saves over the file it was
 //! given, `true` leaves without saving, `false` refuses the way `vi`'s `:cq` does. What is being
 //! tested is the whole path a user takes, spawning included, which the unit tests cannot reach.
+//!
+//! The file the editor is handed is made under the account's cache directory, which is `HOME`
+//! on every platform bravebot reads it from, so every test here points `HOME` at a directory of its
+//! own. Without that the tests would make and list directories under the cache directory of whoever
+//! runs them.
 
 #![cfg(unix)]
 
@@ -24,18 +29,27 @@ fn with_editor<T>(command: &str, body: impl FnOnce() -> T) -> T {
     with_both(None, Some(command), body)
 }
 
-/// Run `body` with both variables set to whatever is given.
+/// Run `body` with both variables set to whatever is given, and with the account's home, and so its
+/// cache directory, in a directory made for the call.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn with_both<T>(visual: Option<&str>, editor: Option<&str>, body: impl FnOnce() -> T) -> T {
     let _guard = EDITOR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let home = tempfile::tempdir().expect("a directory to stand for the home");
 
     let previous = [
         ("VISUAL", std::env::var_os("VISUAL")),
         ("EDITOR", std::env::var_os("EDITOR")),
+        ("HOME", std::env::var_os("HOME")),
+        ("BRAVEBOT_HOME", std::env::var_os("BRAVEBOT_HOME")),
+        ("XDG_CACHE_HOME", std::env::var_os("XDG_CACHE_HOME")),
     ];
     // SAFETY: single-threaded within the lock, and restored before returning.
     unsafe {
         set("VISUAL", visual);
         set("EDITOR", editor);
+        std::env::set_var("HOME", home.path());
+        std::env::remove_var("BRAVEBOT_HOME");
+        std::env::remove_var("XDG_CACHE_HOME");
     }
 
     let result = body();
@@ -156,32 +170,45 @@ fn visual_is_the_one_that_runs() {
     std::fs::remove_file(&unwanted).ok();
 }
 
-/// Every scratch file this makes, sorted, so two listings can be compared.
+/// The directory the files are made in, under the cache directory the call of `with_both` made.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn scratch_directory() -> PathBuf {
+    bravebot_agent::home::cache()
+        .expect("the home a test made names a cache directory")
+        .join("bravebot")
+        .join("editor")
+}
+
+/// Every file and directory an edit left under the directory the files are made in, sorted, so two
+/// listings can be compared. Each edit makes a directory for its file and takes it away, so what
+/// is left is the directories above it, and a file or a directory of an edit is a leak.
 ///
-/// The name is generated inside the module under test, so a caller cannot know it in advance and
-/// watches the directory instead. Only this process's files count: the name carries the pid, and
-/// the temporary directory is shared with every other test process running at the same time,
-/// whose edits the editor lock here cannot hold off.
+/// A directory that is not there lists as nothing, which is also what an edit that never made one
+/// leaves, so a test that needs the edit to have gone through this directory asserts that it is
+/// there ([`edited_through_the_cache_directory`]).
 fn scratch_files() -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
-        return Vec::new();
-    };
-    let pid = std::process::id();
-    let prefixes = [
-        format!("bravebot-prompt-{pid}-"),
-        format!("bravebot-transcript-{pid}-"),
-    ];
-    let mut found: Vec<PathBuf> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| prefixes.iter().any(|prefix| name.starts_with(prefix)))
-        })
-        .collect();
+    let mut found = Vec::new();
+    let mut pending = vec![scratch_directory()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path.clone());
+            }
+            found.push(path);
+        }
+    }
     found.sort();
     found
+}
+
+/// Whether an edit went through the directory the listing above reads: the directory the files are
+/// made in is there after one, since the directories above the one made for a file are kept.
+fn edited_through_the_cache_directory() -> bool {
+    scratch_directory().is_dir()
 }
 
 /// The prompt does not outlive the edit, down any of the three ways out of one.
@@ -192,35 +219,43 @@ fn scratch_files() -> Vec<PathBuf> {
 /// Worth pinning on its own account, and named by INCOG-8, which states this hand-off as the one
 /// thing an incognito session still writes and leans on it being gone by the time the editor
 /// closes.
+///
+/// The listing is of the directory the files are made in under the home each call of `with_both`
+/// makes, and each run asserts that the edit went through that directory, so a listing of a place
+/// no file is made in cannot pass for an edit that left nothing. The regression it rejects is a
+/// removal that takes the file and leaves the directory made for it.
 #[test]
 fn the_scratch_file_does_not_outlive_the_edit() {
     with_editor("true", || {
-        let before = scratch_files();
         let _ = bravebot_tui::editor::edit("something private");
+        assert!(
+            edited_through_the_cache_directory(),
+            "the edit made nothing where the listing looks"
+        );
         assert_eq!(
             scratch_files(),
-            before,
-            "a prompt the editor did not save was left in the temporary directory"
+            Vec::<PathBuf>::new(),
+            "a prompt the editor did not save was left in the cache directory"
         );
     });
 
     with_editor("false", || {
-        let before = scratch_files();
         let _ = bravebot_tui::editor::edit("something private");
+        assert!(edited_through_the_cache_directory());
         assert_eq!(
             scratch_files(),
-            before,
+            Vec::<PathBuf>::new(),
             "a prompt was left behind when the editor refused"
         );
     });
 
     with_editor("true", || {
-        let before = scratch_files();
         let _ = bravebot_tui::editor::show("a transcript worth not keeping");
+        assert!(edited_through_the_cache_directory());
         assert_eq!(
             scratch_files(),
-            before,
-            "a transcript was left in the temporary directory"
+            Vec::<PathBuf>::new(),
+            "a transcript was left in the cache directory"
         );
     });
 }
@@ -318,9 +353,11 @@ fn what_the_editor_saves_is_the_file_and_nothing_is_read_back() {
         &format!("printf 'two\\n' >> '{}'", file.display()),
     );
     with_editor(&script.display().to_string(), || {
-        let before = scratch_files();
         bravebot_tui::editor::open_file(&file, Some(1), None).expect("the editor ran");
-        assert_eq!(scratch_files(), before, "a scratch file was made");
+        assert!(
+            !edited_through_the_cache_directory(),
+            "a directory was made for a file the editor was handed whole"
+        );
     });
     assert_eq!(
         std::fs::read_to_string(&file).expect("a file"),

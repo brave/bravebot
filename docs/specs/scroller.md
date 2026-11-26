@@ -299,9 +299,12 @@ under Known costs rather than left to be found.
 What goes is the rows as they are drawn, margins and all, so untrusted content is marked in the
 file the way it is marked on the screen. The cells the interface draws for a click, the word that
 copies a fenced block and the blanks that put it at the right of its row, are not text of the
-transcript and are left out, as they are from a copy ([MOUSE-27](mouse.md#MOUSE-27)). It goes to a
-temporary file outside the workspace, opened
-with `$VISUAL` or `$EDITOR` the same way a prompt is, and the file goes when the editor exits. It
+transcript and are left out, as they are from a copy ([MOUSE-27](mouse.md#MOUSE-27)). The file is not
+made in the system temporary directory, where a stage could replace it before the editor opens it. It
+goes to a directory of its own under the account's cache directory, outside the workspace, made as
+the prompt's file is ([INPUT-14](terminal-input.md#INPUT-14)), and is opened with `$VISUAL` or
+`$EDITOR` the same way a prompt is. The file and its directory go when the editor exits. Where that
+directory cannot be made the editor is not started and the failure is said. It
 does nothing while a turn runs, which is the answer the key that edits a prompt already gives: an
 editor needs the screen, and a running turn is drawing it.
 
@@ -318,6 +321,7 @@ side, keeping a copy, or grepping the lot, is a text editor's job, and the user 
 `verified-by: bravebot_tui::render::what_goes_to_the_editor_is_marked_the_way_the_screen_is`
 `verified-by: bravebot_tui::render::what_goes_to_the_editor_leaves_out_the_word_that_copies_a_block`
 `verified-by: bravebot_tui::editor::a_transcript_opened_in_the_editor_is_written_outside_the_workspace`
+`verified-by: bravebot_tui::editor_stage::a_stage_replacing_what_it_can_write_changes_nothing_the_editor_shows_of_the_transcript`
 `verified-by: bravebot_tui::editor::a_transcript_opened_in_the_editor_is_never_read_back`
 `verified-by: bravebot_tui::editor::showing_a_transcript_reads_no_file_back`
 `verified-by: bravebot_tui::editor::showing_a_transcript_succeeds_when_the_file_cannot_be_read_after_the_editor`

@@ -1081,7 +1081,11 @@ Where a write is offered an edit, the terminal's prompt binds `e` to it and draw
 Where the write is not offered one, `e` is unbound and the row does not draw it. The key hands the
 terminal to the editor the person set for the prompt box, on a scratch file outside the workspace that
 nobody else can read, which is removed when the editor returns and is named with the extension of the
-path so the editor treats the body as the kind of file it is.
+path so the editor treats the body as the kind of file it is. The file is made as the prompt box's is: in a
+directory of its own under the account's cache directory and never in the system temporary directory,
+so a stage of `run` cannot replace the body before the editor opens it or after it saves
+([INPUT-14](terminal-input.md#INPUT-14)). Where that directory cannot be made the editor is not
+started and the failure is said above the question.
 
 What the editor saved is returned exactly as written, with its line endings and its final newline. It
 is no answer: the turn puts the question again for the new text, and nothing is written until a key at
@@ -1111,3 +1115,5 @@ draw the write prompt without it.
 `verified-by: bravebot_tui::editor::a_body_comes_back_exactly_as_the_editor_wrote_it`
 `verified-by: bravebot_tui::editor::the_file_a_body_is_edited_in_is_private_named_for_its_kind_and_removed`
 `verified-by: bravebot_tui::editor::a_scratch_file_takes_a_plain_extension_from_the_path_and_nothing_else`
+`verified-by: bravebot_tui::editor_stage::a_stage_replacing_what_it_can_write_changes_neither_what_the_editor_shows_of_a_write_body_nor_what_comes_back`
+`verified-by: bravebot_tui::editor::with_no_directory_to_make_it_in_nothing_is_made_and_the_temporary_directory_is_not_used`

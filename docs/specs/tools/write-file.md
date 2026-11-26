@@ -230,9 +230,13 @@ nobody read, and trusting the saved text would promote them. An edit sent where 
 refuses the write.
 
 The saved text is trusted and public: a person wrote it, and it goes into their workspace as the
-body it replaces was already going to. A credential the edit adds is refused as one the planner
-wrote would be, before the question is put again. The planner is told that the contents the user changed are why, and not what
-was found.
+body it replaces was already going to. The file the editor is handed is made where no stage of `run`
+can replace it, so text a stage chose is not taken for text the person saved
+([INPUT-14](../terminal-input.md#INPUT-14), [PROMPT-14](../prompting.md#PROMPT-14)). Whatever is
+saved is put again to the person with a diff of that text before anything is written, so a body that
+did change reaches the screen the person approves from. A credential the edit adds is refused as one
+the planner wrote would be, before the question is put again. The planner is told that the contents
+the user changed are why, and not what was found.
 
 The planner is told that the user changed the contents before they were written, and nothing about
 what they now say. The text is never put in its context, and it reads the file to find out what the
@@ -251,6 +255,7 @@ person's text and reach the planner as they do for any write.
 
 `verified-by: bravebot_agent::turn::an_edited_write_lands_as_the_person_saved_it_after_being_asked_again`
 `verified-by: bravebot_agent::turn::a_second_edit_replaces_the_first_and_the_last_text_saved_is_what_lands`
+`verified-by: bravebot_tui::editor_stage::a_stage_replacing_what_it_can_write_changes_neither_what_the_editor_shows_of_a_write_body_nor_what_comes_back`
 `verified-by: bravebot_agent::turn::accepting_edits_answers_the_saved_text_as_it_answers_any_other_write`
 `verified-by: bravebot_agent::turn::declining_after_an_edit_writes_nothing`
 `verified-by: bravebot_agent::turn::the_approval_after_an_edit_covers_only_the_path_it_was_asked_about`

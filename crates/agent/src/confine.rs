@@ -7637,6 +7637,60 @@ mod tests {
         }
     }
 
+    /// INPUT-14 (#4609): the directory the editor's file is made in is under the account's cache
+    /// directory (`bravebot/editor`) and is in no row of a stage in any mode, while the session was
+    /// opened beside the home directory and not on the cache directory. A session opened on the cache
+    /// directory is the control that a row there reaches it.
+    ///
+    /// The regression it rejects is a cache row that names the cache directory itself, which would
+    /// let every stage replace the file the editor shows and the file read back into the prompt box
+    /// or a write body.
+    #[test]
+    fn no_stage_of_a_session_beside_the_home_writes_the_directory_the_editor_is_handed_a_file_in() {
+        let reaches = |policy: &SandboxPolicy, path: &Path| {
+            policy
+                .writable
+                .iter()
+                .any(|row| path.starts_with(&row.path))
+                && !policy.unwritable.iter().any(|held| path.starts_with(held))
+        };
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            for cache in [format!("{HOME}/.cache"), format!("{HOME}/Library/Caches")] {
+                let file = Path::new(&cache)
+                    .join("bravebot/editor/0123456789abcdef0123456789abcdef")
+                    .join("prompt.md");
+                for mode in [
+                    SandboxMode::Strict,
+                    SandboxMode::ReadOnly,
+                    SandboxMode::WorkspaceWrite,
+                ] {
+                    for program in ["/usr/bin/make", "/usr/bin/cargo", "/usr/bin/gh"] {
+                        let beside =
+                            reading_confinement(prelude, &["/work/project"]).with_mode(mode);
+                        let policy =
+                            beside.policy(&step(program, &[]), Path::new("/work/project"), &[]);
+                        assert!(
+                            !reaches(&policy, &file),
+                            "{prelude:?} {mode:?} {program}: a stage writes {}",
+                            file.display()
+                        );
+                    }
+                }
+                let on_the_cache = reading_confinement(prelude, &["/work/project", &cache]);
+                let policy = on_the_cache.policy(
+                    &step("/usr/bin/make", &[]),
+                    Path::new("/work/project"),
+                    &[],
+                );
+                assert!(
+                    reaches(&policy, &file),
+                    "{prelude:?}: the control does not write {}",
+                    file.display()
+                );
+            }
+        }
+    }
+
     /// SANDBOX-19, SANDBOX-22: the sentence the planner is told under `read-only` says the project
     /// cannot be written, by a program or by the file tools, and who widens that, on every
     /// platform, and the sentence under `workspace-write` does not. The regression it rejects is a

@@ -235,14 +235,18 @@ more than what it leaves behind:
   and may write whatever it likes. Confining it is [sandboxing.md](sandboxing.md)'s question, not
   this one.
 - **The editor hand-off.** Opening the input box or the transcript in `$EDITOR` writes a scratch
-  file, because there is no way to hand an editor a buffer instead of a path. It goes to the
-  system temporary directory rather than `~/.bravebot`, is created `0600` and refuses to reuse an
-  existing name, and is unlinked on every path out of the function including the failing ones.
+  file, because there is no way to hand an editor a buffer instead of a path. It goes to a directory
+  of its own under the account's cache directory rather than `~/.bravebot` or the system temporary
+  directory, which every stage of `run` may write ([SANDBOX-12](sandboxing.md#SANDBOX-12)), so a
+  stage cannot replace it. It is created `0600` and refuses to reuse an existing name, is unlinked
+  on every path out of the function including the failing ones, and is not made where the account has
+  no cache directory. A process killed with the editor open leaves the directory, and nothing removes
+  it later. [INPUT-14](terminal-input.md#INPUT-14) governs it.
 - **The session's own scratch directory.** Somewhere to put a file that is not part of the project
   is something a turn needs, and this mode does not take it away. It sits in the system temporary
-  directory beside the editor's hand-off file, on the same terms, and goes with the session. Its
-  name says which program made it and nothing about which project or which session, so an empty one
-  records that this program ran at this time. [trust-map.md](trust-map.md) governs it.
+  directory, is created at a mode that lets nobody else in, refuses to reuse a name, and goes with
+  the session. Its name says which program made it and nothing about which project or which session,
+  so an empty one records that this program ran at this time. [trust-map.md](trust-map.md) governs it.
 - **A language server's index.** A server indexes the workspace to answer anything at all, and the
   index is too large to hold in memory and rebuild per question. It is not kept, which is what this
   mode asks for: it goes to a directory of its own under the account's cache directory, not in the
@@ -253,9 +257,9 @@ more than what it leaves behind:
   outright leaves it behind, and nothing removes it later.
 - **A local MCP server's home.** A runner keeps its cache under `HOME`, and one with nowhere to
   write it does not start. It is not kept: it goes to a directory of its own in the system temporary
-  directory, on the same terms as the editor's file and the scratch directory above, and goes once
-  the server has stopped, so a runner
-  fetches its package again each session. [SERVERS-10](mcp-servers.md#SERVERS-10) governs it.
+  directory, on the same terms as the scratch directory above, and goes once the server has
+  stopped, so a runner fetches its package again each session.
+  [SERVERS-10](mcp-servers.md#SERVERS-10) governs it.
 - **A ChatGPT sign-in whose access token was replaced.** A stored sign-in is used as in any session,
   and when its access token is replaced the new tokens are written to `chatgpt-account.json` under
   `~/.bravebot`, and a sign-in that OpenAI has ended is removed from it. The refresh token is replaced
