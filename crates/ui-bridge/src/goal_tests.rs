@@ -849,8 +849,12 @@ fn a_stop_during_the_check_takes_the_goal_off_and_no_verdict_follows() {
         Value::Null
     );
     assert!(chat.settled().is_empty());
-    // The service would have answered MET after its delay. Nothing comes of it.
-    std::thread::sleep(Duration::from_millis(3500));
+    // The service answers MET after its delay, on the check's worker, which is the only place a
+    // `goal.judged` is sent from. Once that worker has ended, nothing has come of it.
+    assert!(
+        chat.bridge.workers[&chat.handle].wait_idle(Duration::from_secs(30)),
+        "the check's worker never ended"
+    );
     assert!(chat.named("goal.judged").is_empty());
     assert_eq!(chat.proceed(), json!({ "started": false }));
 }
