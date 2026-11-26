@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_NAME, heldTurns, SHOTS_DIR, untilIn } from './drive-support.mjs'
+import { COMPOSER_NAME, SHOTS_DIR, copyImage, dragFiles, heldTurns, menuPaste, picture, untilIn } from './drive-support.mjs'
 
 const theme = process.argv.includes('--theme') ? process.argv[process.argv.indexOf('--theme') + 1] : 'light'
 const BTW = 'The first is orange and the second is blue.'
@@ -37,37 +37,16 @@ try {
   await app.evaluate(async ({ clipboard }) => { globalThis.keptClipboard = await clipboard.read().catch(() => []) })
   await page.emulateMedia({ colorScheme: theme === 'dark' ? 'dark' : 'light' })
 
-  const picture = (colour) => app.evaluate(({ nativeImage }, colour) => {
-    const pixels = Buffer.alloc(48 * 48 * 4)
-    for (let i = 0; i < 48 * 48; i++) pixels.set(colour, i * 4)
-    return nativeImage.createFromBitmap(pixels, { width: 48, height: 48 }).toPNG().toString('base64')
-  }, colour)
-  const copy = (png) => app.evaluate(async ({ clipboard, ClipboardItem }, png) => {
-    await clipboard.write([new ClipboardItem({ 'image/png': new Blob([Buffer.from(png, 'base64')], { type: 'image/png' }) })])
-  }, png)
-  const menuPaste = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.paste())
   const dropped = join(desktop, 'shot.png')
-  const orange = await picture([0xd0, 0x60, 0x20, 0xff])
+  const orange = await picture(app, 48, [0xd0, 0x60, 0x20, 0xff])
   writeFileSync(dropped, Buffer.from(orange, 'base64'))
-  const blue = await picture([0x20, 0x60, 0xd0, 0xff])
+  const blue = await picture(app, 48, [0x20, 0x60, 0xd0, 0xff])
 
   await openProject(page, app, project)
   const composer = page.getByRole('textbox', { name: COMPOSER_NAME })
   const stop = page.locator('.composer .stop')
   const transcript = () => page.locator('.entries').innerText()
   const until = untilIn(page)
-  const cdp = await page.context().newCDPSession(page)
-  const drag = async (files) => {
-    const box = await page.locator('.composer textarea').first().boundingBox()
-    const x = Math.round(box.x + box.width / 2), y = Math.round(box.y + box.height / 2)
-    const data = { items: [], files, dragOperationsMask: 1 }
-    await cdp.send('Input.dispatchDragEvent', { type: 'dragEnter', x, y, data })
-    for (let i = 0; i < 3; i++) {
-      await cdp.send('Input.dispatchDragEvent', { type: 'dragOver', x, y, data })
-      await page.waitForTimeout(100)
-    }
-    await cdp.send('Input.dispatchDragEvent', { type: 'drop', x, y, data })
-  }
 
   await composer.fill('Look around')
   await composer.press('Enter')
@@ -77,13 +56,13 @@ try {
   // ---- /btw at rest, with a dropped picture and a pasted one -----------------------------------
   await composer.fill('/btw what colour are ')
   await composer.press('End')
-  await drag([dropped])
+  await dragFiles(page, [dropped])
   await page.locator('[data-test="dropped-chip"]').first().waitFor()
   await composer.press('End')
   await composer.pressSequentially('and ')
-  await copy(blue)
+  await copyImage(app, blue)
   await composer.focus()
-  await menuPaste()
+  await menuPaste(app)
   await page.locator('[data-test="pasted-chip"]').first().waitFor()
   assert.equal(await composer.inputValue(), '/btw what colour are [Image #1] and [Image #2] ')
   await page.screenshot({ path: join(output, `aside-staged-composer-${theme}.png`) })
@@ -113,7 +92,7 @@ try {
   const during = requests.length
   await composer.fill('/btw what colour is ')
   await composer.press('End')
-  await drag([dropped])
+  await dragFiles(page, [dropped])
   await page.locator('[data-test="dropped-chip"]').first().waitFor()
   await composer.press('Enter')
   // An error note folds its sentence under its details, so it is read by textContent and unfolded

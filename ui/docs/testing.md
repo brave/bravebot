@@ -309,6 +309,14 @@ The drivers that hold a model reply while they act (`drive-aside`, `drive-aside-
 `untilIn(page, tries)`, which returns `until(check, what, tries)`: a check every 50 ms, failing with
 `what` after `tries` checks (200 unless the driver passes its own).
 
+It exports the file drop and paste steps the drop, paste, `/btw` and `/manifest` drivers share:
+`dragFiles(page, files, { selector, drop })` drives a trusted drag of files over the composer's text
+box, or over `selector`, and lets go unless `drop` is false; `cancelDrag(page, files)` ends a drag
+left open that way; `picture(app, size, colour, noise)` draws a PNG in the main process;
+`copyImage(app, png, text)` puts it on the clipboard; and `menuPaste(app)` runs the Edit menu's Paste.
+`drive-drop`, `drive-manifest-drop`, `drive-aside-staged`, `drive-paste` and `drive-shown` take the drag
+from it, and all of them but `drive-shown` also take their pictures.
+
 Of those, **`drive-run`, `drive-ask` and `drive-markdown` send live model turns** against the
 real profile (and so does `drive-turn`), which spends credits from whatever backend is configured.
 `drive-bot-turn` and `drive-bot-memory` send live model turns as well, from a scratch profile. `drive-columns`, `drive-panels`, `drive-tree` and

@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_NAME, COMPOSER_SEND, approveTrust, SHOTS_DIR } from './drive-support.mjs'
+import { COMPOSER_NAME, COMPOSER_SEND, approveTrust, SHOTS_DIR, copyImage, dragFiles, menuPaste, picture } from './drive-support.mjs'
 
 // Each answer waits a moment, so a message can be queued behind a turn that is still running.
 const { service, rounds: requests } = await startModelService(async () => {
@@ -40,28 +40,12 @@ const restoreClipboard = (on) => on.evaluate(async ({ clipboard }, text) => {
 }, '')
 try {
 
-  /** A solid picture of `size` pixels, or noise, which no PNG encoder can shrink, as base64 PNG. */
-  const picture = (size, colour, noise = false) => app.evaluate(({ nativeImage }, [size, colour, noise]) => {
-    const pixels = Buffer.alloc(size * size * 4)
-    for (let i = 0; i < size * size; i++) {
-      pixels.set(noise ? [Math.random() * 256, Math.random() * 256, Math.random() * 256, 0xff] : colour, i * 4)
-    }
-    return nativeImage.createFromBitmap(pixels, { width: size, height: size }).toPNG().toString('base64')
-  }, [size, colour, noise])
-  /** Put a PNG, and optionally text beside it, on the operating system's clipboard. */
-  const copy = (png, text) => app.evaluate(async ({ clipboard, ClipboardItem }, [png, text]) => {
-    const entry = { 'image/png': new Blob([Buffer.from(png, 'base64')], { type: 'image/png' }) }
-    if (text) entry['text/plain'] = text
-    await clipboard.write([new ClipboardItem(entry)])
-  }, [png, text])
   const copyText = (text) => app.evaluate(({ clipboard }, text) => clipboard.writeText(text), text)
-  /** The menu's Paste: `webContents.paste()` on the focused window. */
-  const menuPaste = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.paste())
 
-  const blue = await picture(64, [0x20, 0x60, 0xd0, 0xff])
-  const green = await picture(64, [0x20, 0xb0, 0x60, 0xff])
+  const blue = await picture(app, 64, [0x20, 0x60, 0xd0, 0xff])
+  const green = await picture(app, 64, [0x20, 0xb0, 0x60, 0xff])
   const dropped = join(desktop, 'shot.png')
-  writeFileSync(dropped, Buffer.from(await picture(48, [0xd0, 0x60, 0x20, 0xff]), 'base64'))
+  writeFileSync(dropped, Buffer.from(await picture(app, 48, [0xd0, 0x60, 0x20, 0xff]), 'base64'))
 
   await openProject(page, app, project)
 
@@ -76,25 +60,14 @@ try {
     await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key })
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
   }
-  const drag = async (files) => {
-    const box = await page.locator('.composer textarea').first().boundingBox()
-    const x = Math.round(box.x + box.width / 2), y = Math.round(box.y + box.height / 2)
-    const data = { items: [], files, dragOperationsMask: 1 }
-    await cdp.send('Input.dispatchDragEvent', { type: 'dragEnter', x, y, data })
-    for (let i = 0; i < 3; i++) {
-      await cdp.send('Input.dispatchDragEvent', { type: 'dragOver', x, y, data })
-      await page.waitForTimeout(100)
-    }
-    await cdp.send('Input.dispatchDragEvent', { type: 'drop', x, y, data })
-  }
 
   // ---- a drop and then a paste, in one draft, share the counter -------------------------------
   await composer.fill('Compare ')
-  await drag([dropped])
+  await dragFiles(page, [dropped])
   await droppedChips.first().waitFor()
-  await copy(blue, 'https://example.com/the-page-the-picture-was-on')
+  await copyImage(app, blue, 'https://example.com/the-page-the-picture-was-on')
   await composer.focus()
-  await menuPaste()
+  await menuPaste(app)
   await pastedChips.first().waitFor()
   assert.equal(await composer.inputValue(), 'Compare [Image #1] [Image #2] ', 'the paste is numbered after the drop, at the caret, and the text beside the picture did not land')
   assert.equal(await page.locator('[data-test="pasted-chip"] img.attachment-thumb').count(), 1, 'the pasted picture has a thumbnail')
@@ -108,7 +81,7 @@ try {
   await page.emulateMedia({ colorScheme: 'light' })
 
   // ---- the keyboard's paste command takes the same path, and both come off two ways ------------
-  await copy(green)
+  await copyImage(app, green)
   await keyPaste()
   await pastedChips.nth(1).waitFor()
   assert.equal(await composer.inputValue(), 'Compare [Image #1] [Image #2] [Image #3] ')
@@ -124,7 +97,7 @@ try {
   const hiddenNote = page.locator('[data-test="status-toast"]').filter({ hasText: 'Paste cleaned' })
   await copyText('plain words')
   await composer.press('End')
-  await menuPaste()
+  await menuPaste(app)
   await page.waitForTimeout(500)
   assert.equal(await composer.inputValue(), 'Compare [Image #1] [Image #2] plain words', 'a text paste lands as text and stages nothing')
   assert.equal(await pastedChips.count(), 1)
@@ -181,7 +154,7 @@ try {
   await unclean.waitFor({ state: 'hidden' })
 
   // ---- a paste the page made up does nothing ---------------------------------------------------
-  await copy(green)
+  await copyImage(app, green)
   const forged = await page.evaluate(async () => {
     const transfer = new DataTransfer()
     transfer.items.add(new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'forged.png', { type: 'image/png' }))
@@ -198,9 +171,9 @@ try {
   assert.equal(await pastedChips.count(), 1)
 
   // ---- a picture over 10 MiB is refused with the bridge's note, its size and the limit ----------
-  await copy(await picture(2000, null, true))
+  await copyImage(app, await picture(app, 2000, null, true))
   await composer.focus()
-  await menuPaste()
+  await menuPaste(app)
   const note = page.locator('[data-test="status-toast"]').filter({ hasText: 'Too large to paste' })
   await note.waitFor()
   assert.match(await note.innerText(), /^that picture is 1\d\.\d MB, and a paste carries at most 10\.0 MB$/m)
@@ -213,9 +186,9 @@ try {
   await page.locator(COMPOSER_SEND).click()
   await stop.waitFor({ state: 'visible' })
   assert.equal(await pastedChips.count() + await droppedChips.count(), 0, 'sending clears what was staged')
-  await copy(blue)
+  await copyImage(app, blue)
   await composer.focus()
-  await menuPaste()
+  await menuPaste(app)
   await pastedChips.first().waitFor()
   assert.match(await composer.inputValue(), /^\[Image #5\] $/)
   await composer.fill('Queued look at [Image #5] ')
@@ -282,7 +255,7 @@ try {
   const textChips = page.locator('[data-test="pasted-text-chip"]')
   await copyWords('first line\nsecond line')
   await reopened.focus()
-  await menuPaste()
+  await menuPaste(app)
   // The paste resolves in the main process before the renderer has handled it: wait for the field.
   const shortBy = Date.now() + 10000
   while ((await reopened.inputValue()) !== 'first line\nsecond line' && Date.now() < shortBy) await new Promise((resolve) => setTimeout(resolve, 50))
@@ -295,7 +268,7 @@ try {
   // Clearing the two lines shrinks the box with a transition; let it end so the screenshot below
   // shows the height the fold leaves.
   await page.waitForTimeout(400)
-  await menuPaste()
+  await menuPaste(app)
   await textChips.first().waitFor()
   assert.equal(await reopened.inputValue(), '[Pasted text #1 +5 lines] ', 'a five-line paste folds to its marker')
   assert.match(await textChips.innerText(), /^\s*Pasted text #1\s*5 lines\s*$/, 'the chip names the paste and its lines once')
@@ -311,7 +284,7 @@ try {
   assert.equal(await textChips.count(), 0, 'deleting the marker takes the chip off')
   await reopened.fill('Read this: ')
   await reopened.press('End')
-  await menuPaste()
+  await menuPaste(app)
   await textChips.first().waitFor()
   assert.equal(await reopened.inputValue(), 'Read this: [Pasted text #2 +5 lines] ')
 
@@ -394,7 +367,7 @@ try {
   assert.equal(await textChips.count(), 0, 'sending clears the folded paste')
   // While the turn runs, a new paste folds and opens the same way.
   await reopened.focus()
-  await menuPaste()
+  await menuPaste(app)
   await textChips.first().waitFor()
   assert.equal(await reopened.inputValue(), '[Pasted text #3 +5 lines] ')
   await peekAndClose(3, (dialog) => dialog.getByRole('button', { name: 'Done', exact: true }).click())
@@ -412,9 +385,9 @@ try {
   assert.match(foldedRows, /Read this: line one\s+line two\s+line three\s+line four\s+line five/, 'the transcript row shows the words')
   assert.ok(!foldedRows.includes('[Pasted text #'), 'and not the marker')
   // A picture's marker is not a folded paste, so Alt-V on it opens nothing.
-  await copy(green)
+  await copyImage(app, green)
   await reopened.focus()
-  await menuPaste()
+  await menuPaste(app)
   await page.locator('[data-test="pasted-chip"]').first().waitFor()
   const pictured = await reopened.inputValue()
   assert.match(pictured, /^\[Image #\d+\] $/)
@@ -438,7 +411,7 @@ try {
   await page.waitForTimeout(400)
   const oneLine = await fieldHeight()
   await copyWords(five)
-  await menuPaste()
+  await menuPaste(app)
   await textChips.first().waitFor()
   await page.waitForTimeout(400)
   const wrapped = await fieldHeight()

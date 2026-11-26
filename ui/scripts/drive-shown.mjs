@@ -18,7 +18,7 @@ import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { agentInfo, oneModelList } from './acceptance-fixture.mjs'
 import { CASES, TRUST_CASE } from './shown-cases.mjs'
-import { APPROVE_BUTTON, COMPOSER_NAME, REJECT_BUTTON, readTrust as read } from './drive-support.mjs'
+import { APPROVE_BUTTON, COMPOSER_NAME, REJECT_BUTTON, cancelDrag, dragFiles, readTrust as read } from './drive-support.mjs'
 
 const output = process.env.SHOWN_OUTPUT || join(tmpdir(), 'bravebot-shown')
 mkdirSync(output, { recursive: true })
@@ -384,22 +384,14 @@ try {
     await toBottom(card)
     const dragged = join(directory, 'dragged.txt')
     writeFileSync(dragged, 'a file for the drag\n')
-    const cdp = await page.context().newCDPSession(page)
-    const data = { items: [], files: [dragged], dragOperationsMask: 1 }
-    const box = await page.locator('main.transcript').boundingBox()
-    const [x, y] = [Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2)]
-    await cdp.send('Input.dispatchDragEvent', { type: 'dragEnter', x, y, data })
-    for (let i = 0; i < 3; i++) {
-      await cdp.send('Input.dispatchDragEvent', { type: 'dragOver', x, y, data })
-      await page.waitForTimeout(100)
-    }
+    await dragFiles(page, [dragged], { selector: 'main.transcript', drop: false })
     await page.locator('[data-test="drop-target"]').waitFor()
     await sweep(card)
     assert.ok(await page.locator('[data-test="drop-target"]').count(), 'confirm: the drag ended during the sweep, so the overlay tested nothing')
     const covered = await states(card)
     assert.ok(covered.filter((button) => button.approve).every((button) => button.closed), `confirm: read under the drop overlay, the approval opened: ${JSON.stringify(covered)}`)
     assert.match(await card.locator('.shown-left').innerText(), /^\d+ more lines? to read before approving$/, 'confirm: the note under the drop overlay')
-    await cdp.send('Input.dispatchDragEvent', { type: 'dragCancel', x: 0, y: 0, data })
+    await cancelDrag(page, [dragged])
     // A cancelled drag sends no dragleave, so the page is told the drag is over by a drop it made
     // up, which resets the overlay and which the preload ignores for being untrusted.
     await page.evaluate(() => document.querySelector('main.transcript').dispatchEvent(new DragEvent('drop', { dataTransfer: new DataTransfer(), bubbles: true, cancelable: true })))
