@@ -42,7 +42,7 @@ use crate::processor::Chat;
 
 mod standing;
 
-pub use standing::{Asked, MAX_IDLE_ROUNDS, MAX_ROUNDS, Next, Running, parse};
+pub use standing::{Asked, MAX_IDLE_ROUNDS, MAX_ROUNDS, Next, Running, Settled, parse, settle};
 
 /// What the model is told it is doing.
 ///
@@ -655,5 +655,158 @@ mod tests {
             "an empty reason was given a heading of its own: {sent}"
         );
         assert!(sent.contains("cargo test exits 0"), "{sent}");
+    }
+
+    fn a_goal() -> Option<Running> {
+        Some(Running::begin("cargo test exits 0".to_string(), 0, false))
+    }
+
+    fn not_met(reason: &str) -> Result<Verdict, String> {
+        Ok(Verdict::NotMet {
+            reason: reason.to_string(),
+        })
+    }
+
+    /// A verdict of not-yet sends the driver's own sentence back as the next turn, with the
+    /// condition and the reason in it, and the goal stays set with one round spent (GOAL-6).
+    #[test]
+    fn settling_a_condition_not_met_yet_carries_the_work_on_and_keeps_the_goal() {
+        let mut goal = a_goal();
+        let settled = settle(&mut goal, not_met("nothing above runs the tests"), 1);
+        assert_eq!(
+            settled,
+            Settled::CarryOn {
+                prompt: carry_on("cargo test exits 0", "nothing above runs the tests"),
+                reason: "nothing above runs the tests".to_string(),
+            }
+        );
+        let goal = goal.expect("a goal sent back is still set");
+        assert_eq!(goal.rounds(), 1);
+        assert_eq!(goal.last_reason(), Some("nothing above runs the tests"));
+    }
+
+    /// Every other verdict, and a check that failed, ends the goal and says which ending it was
+    /// (GOAL-6).
+    #[test]
+    fn settling_any_other_outcome_ends_the_goal() {
+        let cases = [
+            (
+                Ok(Verdict::Met {
+                    reason: "it passed".to_string(),
+                }),
+                Settled::Met {
+                    reason: "it passed".to_string(),
+                },
+            ),
+            (
+                Ok(Verdict::Impossible {
+                    reason: "there are no tests".to_string(),
+                }),
+                Settled::Impossible {
+                    reason: "there are no tests".to_string(),
+                },
+            ),
+            (Ok(Verdict::Unreadable), Settled::Unreadable),
+            (Ok(Verdict::Quarantined), Settled::Quarantined),
+            (
+                Err("the request failed".to_string()),
+                Settled::Failed {
+                    problem: "the request failed".to_string(),
+                },
+            ),
+        ];
+        for (judged, expected) in cases {
+            let mut goal = a_goal();
+            assert_eq!(settle(&mut goal, judged.clone(), 1), expected, "{judged:?}");
+            assert!(goal.is_none(), "{judged:?} left the goal set");
+        }
+    }
+
+    /// The round after the last one ends the goal rather than sending the work back again, and the
+    /// reason it heard last is kept for the person (GOAL-9).
+    #[test]
+    fn settling_a_goal_that_has_spent_its_rounds_ends_it_with_the_last_reason() {
+        let mut goal = a_goal();
+        for _ in 0..MAX_ROUNDS {
+            assert!(matches!(
+                settle(&mut goal, not_met("still failing"), 1),
+                Settled::CarryOn { .. }
+            ));
+        }
+        assert_eq!(
+            settle(&mut goal, not_met("still failing"), 1),
+            Settled::Spent {
+                rounds: MAX_ROUNDS,
+                reason: "still failing".to_string(),
+            }
+        );
+        assert!(goal.is_none());
+    }
+
+    /// Rounds in a row that call no tool stop sending the work back, and the goal stays set for
+    /// the next prompt (GOAL-20).
+    #[test]
+    fn settling_rounds_that_call_no_tool_stalls_and_leaves_the_goal_set() {
+        let mut goal = a_goal();
+        for _ in 1..MAX_IDLE_ROUNDS {
+            assert!(matches!(
+                settle(&mut goal, not_met("nothing ran"), 0),
+                Settled::CarryOn { .. }
+            ));
+        }
+        assert_eq!(
+            settle(&mut goal, not_met("nothing ran"), 0),
+            Settled::Stalled {
+                reason: "nothing ran".to_string(),
+            }
+        );
+        let goal = goal.expect("a stalled goal is still set");
+        assert!(goal.is_stalled());
+    }
+
+    /// A verdict that arrives after the goal was taken off is neither acted on nor reported
+    /// (GOAL-10). A failed check still says it failed, since it is about the request.
+    #[test]
+    fn settling_after_the_goal_was_cleared_is_ignored() {
+        for judged in [
+            not_met("nothing above runs the tests"),
+            Ok(Verdict::Met {
+                reason: "it passed".to_string(),
+            }),
+            Ok(Verdict::Unreadable),
+        ] {
+            let mut goal = None;
+            assert_eq!(
+                settle(&mut goal, judged.clone(), 1),
+                Settled::Ignored,
+                "{judged:?}"
+            );
+            assert!(goal.is_none());
+        }
+    }
+
+    /// A verdict that arrives while the goal is paused is ignored, and even a failed check leaves
+    /// the paused goal as it was (GOAL-18).
+    #[test]
+    fn settling_while_the_goal_is_paused_is_ignored_and_keeps_the_goal() {
+        for judged in [
+            not_met("nothing above runs the tests"),
+            Ok(Verdict::Met {
+                reason: "it passed".to_string(),
+            }),
+            Err("the request failed".to_string()),
+        ] {
+            let mut goal = a_goal();
+            goal.as_mut().expect("set").pause();
+            assert_eq!(
+                settle(&mut goal, judged.clone(), 1),
+                Settled::Ignored,
+                "{judged:?}"
+            );
+            let kept = goal.expect("a paused goal is kept");
+            assert!(kept.is_paused());
+            assert_eq!(kept.rounds(), 0);
+            assert_eq!(kept.last_reason(), None);
+        }
     }
 }

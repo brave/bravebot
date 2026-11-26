@@ -221,3 +221,89 @@ impl Running {
         Next::SendBack
     }
 }
+
+/// What a verdict came to, decided once for every front end that runs a goal.
+///
+/// Each front end says the outcome in its own words. Which outcome it is, and what happens to the
+/// goal, is decided by [`settle`] alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Settled {
+    /// The goal was paused or taken off while the check was out, so the verdict is not acted on
+    /// and not reported (GOAL-10, GOAL-18).
+    Ignored,
+    /// The condition does not hold yet: send `prompt`, the driver's own sentence, as the next turn.
+    CarryOn { prompt: String, reason: String },
+    /// The condition holds. The goal is over.
+    Met { reason: String },
+    /// Nothing further would make the condition hold. The goal is over.
+    Impossible { reason: String },
+    /// The judge's answer did not begin with a verdict word. The goal is over.
+    Unreadable,
+    /// The check met something untrusted, so its answer is not read. The goal is over.
+    Quarantined,
+    /// The check's request failed. The goal is over.
+    Failed { problem: String },
+    /// The rounds are spent. The goal is over (GOAL-9).
+    Spent { rounds: usize, reason: String },
+    /// Consecutive rounds made no tool call. The goal stays set (GOAL-20).
+    Stalled { reason: String },
+}
+
+/// Act on what a check of the goal came back with (GOAL-6).
+///
+/// `judged` is `Err` for a check whose request failed, carrying what a person can be told about
+/// it. `tool_calls` is how many tool calls the judged turn made, a count the driver holds.
+///
+/// The order is fixed. A paused goal ignores the verdict, and a failed check does not end it. A
+/// failed check ends any other goal. A goal taken off ignores the verdict. Then the verdict
+/// decides.
+pub fn settle(
+    goal: &mut Option<Running>,
+    judged: Result<super::Verdict, String>,
+    tool_calls: usize,
+) -> Settled {
+    use super::Verdict;
+    if goal.as_ref().is_some_and(Running::is_paused) {
+        return Settled::Ignored;
+    }
+    let verdict = match judged {
+        Ok(verdict) => verdict,
+        Err(problem) => {
+            *goal = None;
+            return Settled::Failed { problem };
+        }
+    };
+    let Some(running) = goal.as_mut() else {
+        return Settled::Ignored;
+    };
+    match verdict {
+        Verdict::NotMet { reason } => match running.not_met(reason.clone(), tool_calls) {
+            Next::SendBack => Settled::CarryOn {
+                prompt: super::carry_on(running.condition(), &reason),
+                reason,
+            },
+            Next::Spent => {
+                let rounds = running.rounds();
+                *goal = None;
+                Settled::Spent { rounds, reason }
+            }
+            Next::Stalled => Settled::Stalled { reason },
+        },
+        Verdict::Met { reason } => {
+            *goal = None;
+            Settled::Met { reason }
+        }
+        Verdict::Impossible { reason } => {
+            *goal = None;
+            Settled::Impossible { reason }
+        }
+        Verdict::Unreadable => {
+            *goal = None;
+            Settled::Unreadable
+        }
+        Verdict::Quarantined => {
+            *goal = None;
+            Settled::Quarantined
+        }
+    }
+}
