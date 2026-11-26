@@ -2109,7 +2109,7 @@ fn a_substitutions_redirection_in_a_foreground_line_leaves_its_destination_untru
 }
 
 /// What `read_file` and `edit_file` answer for `path` in ask mode, and the file's text after
-/// the edit, in a trusted project whose `run` has already written `path` (TRUST-4, CMDLINE-5).
+/// the edit, in a trusted project whose `run` has written `path` (TRUST-4, CMDLINE-5).
 #[cfg(unix)]
 fn read_then_edit(
     policy: &mut Policy<'_, RecordingSink>,
@@ -2152,7 +2152,7 @@ fn read_then_edit(
 /// edits it. The `control.txt` variant is the control: it has no `..`. `plain.txt` is written before the
 /// run and read only to show that the project's files are trusted. Each variant
 /// writes a different file, so a name one variant left untrusted does not answer for another.
-/// `read_file` of the `..` spelling is still refused.
+/// `read_file` refuses the `..` spelling, so the entry under the plain name is the one a read meets.
 #[cfg(unix)]
 #[test]
 #[expect(clippy::expect_used, reason = "a test fails by panicking")]
@@ -2215,13 +2215,13 @@ fn a_redirection_spelled_with_dotdot_leaves_the_plain_name_untrusted() {
         assert_eq!(after, "PAYLOAD\n", "{spelled}: {file} was edited");
     }
 
-    // Confinement is unchanged: the `..` spelling is still refused by the file tools.
+    // The file tools refuse the `..` spelling, so the entry under the plain name is the one a read meets.
     let (read, edit, _) =
         read_then_edit(&mut policy, &workspace, &project, "d/../dd.txt", "dd.txt");
     for said in [&read, &edit] {
         assert!(
             said.contains("contains '..' and lands inside the workspace"),
-            "the file tools no longer refuse a `..` that lands inside the root: {said}"
+            "the file tools did not refuse a `..` that lands inside the root: {said}"
         );
     }
     let (plain, _, _) = read_then_edit(&mut policy, &workspace, &project, "plain.txt", "plain.txt");
