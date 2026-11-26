@@ -10,6 +10,7 @@ governs:
   - crates/agent/src/report.rs
   - crates/agent/src/timing.rs
   - crates/agent/src/shared.rs
+  - crates/agent/src/scratch.rs
 guards:
   - symbol: Policy::before_delegate
   - symbol: Policy::before_delegate_within
@@ -1651,6 +1652,48 @@ held at the start.
 `verified-by: bravebot_agent::turn::a_checker_is_not_offered_the_worker_and_a_worker_it_starts_anyway_is_said_to_lack_writing`
 `verified-by: bravebot_agent::turn::a_fan_out_from_a_run_that_cannot_write_says_once_that_each_was_started_without_writing`
 `verified-by: bravebot_agent::turn::a_worker_started_by_a_checker_is_offered_no_worker_and_each_depth_is_told_what_was_dropped`
+
+<a id="DELEGATE-34"></a>
+### DELEGATE-34: each delegate is given a scratch directory of its own, and it ends with the delegate
+
+Where the session has a scratch directory ([trust-map.md](trust-map.md)), the kernel makes a
+directory for each delegate inside it as the delegate starts, named from the number the kernel gave
+the delegate ([DELEGATE-14](#DELEGATE-14)), and removes it when the delegate ends, whether it
+answered, failed, was stopped by the person or reached its bound. It is removed after a panic in the
+delegate's thread too wherever panics unwind, which is every build but a release one: a release
+build aborts on a panic, so the process ends with the directory still there and it goes with the
+session's directory at the next start ([TRUST-15](trust-map.md#TRUST-15)). The delegate is told that
+directory in its own conversation, and the programs it runs are given it as `BRAVEBOT_SCRATCH_DIR`.
+A delegate that a delegate starts, and a delegate in a checkout ([checkouts.md](checkouts.md)), are
+given theirs the same way, in the session's directory and beside the others. Where a delegate's
+directory cannot be made, the delegate keeps the session's and is told that other delegates write
+there as well. A session with no scratch directory gives its delegates none.
+
+The name is the number and the path is placed in the delegate's own conversation, so no word the
+planner, a definition or a delegate wrote is part of it, and the path is not given to the planner.
+What a delegate wrote in its directory reaches the planner only as
+anything else a delegate did does ([DELEGATE-9](#DELEGATE-9)): in its report, or in a file a person
+was shown.
+
+**Why.** Delegates of one call run together. A directory shared by all of them is a directory in
+which two write one name, and a delegate that reads its file back reports the other's text as its
+own, which the planner then acts on. A planner cannot see that from a report. A directory for each
+removes the shared name, and ending with the delegate keeps one delegate's files from being found by
+the next. It does not hide a sibling's directory: reach is the session's whole directory
+([trust-map.md](trust-map.md)), and the path of a sibling is a path a delegate can write, so what
+the directory prevents is a collision of names and not a delegate that goes looking.
+
+`verified-by: bravebot_agent::turn::each_delegate_of_one_call_is_given_its_own_scratch_directory`
+`verified-by: bravebot_agent::turn::eight_delegates_of_one_call_each_read_back_the_text_they_wrote_to_body_md`
+`verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_is_given_its_own_scratch_directory_in_the_sessions`
+`verified-by: bravebot_agent::turn::a_delegate_of_a_delegate_is_given_a_scratch_directory_of_its_own`
+`verified-by: bravebot_agent::turn::a_delegate_that_failed_leaves_no_scratch_directory_behind`
+`verified-by: bravebot_agent::turn::a_delegate_a_person_stopped_leaves_no_scratch_directory_behind`
+`verified-by: bravebot_agent::turn::a_delegate_held_to_its_bound_leaves_no_scratch_directory_behind`
+`verified-by: bravebot_agent::turn::a_delegate_whose_directory_cannot_be_made_is_given_the_sessions_and_told_it_is_shared`
+`verified-by: bravebot_agent::turn::a_delegate_of_a_session_with_no_scratch_directory_is_told_nothing_of_one_and_still_starts`
+`verified-by: bravebot_agent::scratch::a_delegate_is_given_a_directory_named_for_its_number_that_goes_when_it_ends`
+`verified-by: bravebot_agent::scratch::delegates_and_a_nested_delegate_are_each_given_a_directory_of_their_own`
 
 ## Known costs
 

@@ -587,6 +587,10 @@ to a spawn that made one checkout or several. Where its list holds `run`, it is 
 itself before starting the delegates that need a fetch, and where it does not, to ask one of them
 for it. With or without `run`, it is told not to ask a delegate in a checkout to use `git stash`.
 
+The delegate's own scratch directory is made in the session's directory and not in the checkout
+([DELEGATE-34](delegation.md#DELEGATE-34)). The session's directory is reachable as above, the
+directory is not part of the checkout, and removing the checkout does not remove it.
+
 **Why reach without a person opening it.** On grounds like those the session's own directory is
 reached on ([TRUST-16](trust-map.md#TRUST-16)): it was created here and is owned by this account.
 That directory is also empty, and a checkout is not. What stands in for that is that a checkout
@@ -610,6 +614,7 @@ does the description of `isolation`.
 `verified-by: bravebot_agent::workspace::the_sessions_own_directory_is_still_reachable_from_its_delegates_checkout`
 `verified-by: bravebot_agent::workspace::the_rule_holding_the_file_tools_to_the_workspace_holds_inside_a_checkout`
 `verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_starts_its_own_delegates_in_that_checkout`
+`verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_is_given_its_own_scratch_directory_in_the_sessions`
 `verified-by: bravebot_agent::workspace::a_checkout_refusal_names_the_added_directory_that_holds_the_working_directory`
 `verified-by: bravebot_agent::workspace::a_checkout_refusal_names_the_added_directory_that_holds_the_checkouts`
 `verified-by: bravebot_agent::workspace::a_read_refusal_for_a_directory_holding_the_workspace_says_what_opening_it_costs`

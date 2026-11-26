@@ -76593,6 +76593,1046 @@ fn the_sessions_directory_is_named_once_in_the_conversation_and_not_in_the_syste
     assert_eq!(in_conversation(&restored, &second.display().to_string()), 1);
 }
 
+/// What each delegate of one call is told and what its programs are given as the session's
+/// directory: the delegates are started by `spawn_agent` with `each`, and each runs a script that
+/// records `BRAVEBOT_SCRATCH_DIR` and writes its own text to `body.md` there.
+///
+/// Returns the session's own directory, what each script recorded (`one`, `two`), what each
+/// delegate's `body.md` held while it ran (read back by the script into the record), and every
+/// request the model was sent.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn delegates_that_each_write_body_md(tag: &str, isolation: Option<&str>) -> DelegatesInScratch {
+    let project = Scratch::new(&format!("delegate-scratch-{tag}"));
+    let home = Scratch::new(&format!("delegate-scratch-{tag}-home"));
+    // Outside the project, where a session's own directory is.
+    let given = Scratch::new(&format!("delegate-scratch-{tag}-session"));
+    let session = given
+        .path
+        .canonicalize()
+        .expect("the session's own directory");
+    // The script is the program the line names, since a `$` in a line is refused. It records the
+    // variable beside the delegate's directory, writes its text, and records what it reads back.
+    let script = "printf %s \"$BRAVEBOT_SCRATCH_DIR\" > \"$BRAVEBOT_SCRATCH_DIR/../seen-$1.txt\"\n\
+                  printf %s \"text of $1\" > \"$BRAVEBOT_SCRATCH_DIR/body.md\"\n\
+                  cat \"$BRAVEBOT_SCRATCH_DIR/body.md\" > \"$BRAVEBOT_SCRATCH_DIR/../read-$1.txt\"\n";
+    let files = [("mark.sh", script), ("README", "committed\n")];
+    if isolation.is_some() {
+        repository::commit_files(&project.path, &files, "first");
+    } else {
+        for (name, contents) in files {
+            std::fs::write(project.path.join(name), contents).expect("a file");
+        }
+    }
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(session.clone()));
+
+    let mut spawn = serde_json::json!({
+        "kind": "worker",
+        "task": "WRITE-BODY-AS",
+        "each": ["LANE-ONE", "LANE-TWO"],
+    });
+    if let Some(isolation) = isolation {
+        spawn["isolation"] = isolation.into();
+    }
+    let lane = |name: &str, index: &str| {
+        vec![
+            tool_request(
+                "run",
+                &serde_json::json!({ "command": format!("sh ./mark.sh {index}") }).to_string(),
+            ),
+            reply_with(&format!("{name} done")),
+        ]
+    };
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "SPAWN-TWO-WRITERS",
+            vec![
+                tool_request("spawn_agent", &spawn.to_string()),
+                // The planner is asked again at each wake, and the two delegates end in one wake or
+                // in two, so a reply for every possible ask keeps the count of wakes out of what the
+                // test depends on.
+                reply_with("waiting"),
+                reply_with("waiting"),
+                reply_with("both done"),
+            ],
+        ),
+        ("LANE-ONE", lane("one", "one")),
+        ("LANE-TWO", lane("two", "two")),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("SPAWN-TWO-WRITERS").with_home(Some(home.path.clone())),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        &mut sink,
+        trust,
+    )
+    .expect("the turn runs");
+
+    let seen = |name: &str| std::fs::read_to_string(session.join(name)).ok();
+    DelegatesInScratch {
+        recorded: [seen("seen-one.txt"), seen("seen-two.txt")],
+        read_back: [seen("read-one.txt"), seen("read-two.txt")],
+        requests: every_request(&received),
+        left: std::fs::read_dir(&session)
+            .expect("the session's directory")
+            .flatten()
+            .filter(|entry| entry.path().is_dir())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect(),
+        session,
+        _directories: [project, home, given],
+    }
+}
+
+/// What [`delegates_that_each_write_body_md`] observed.
+struct DelegatesInScratch {
+    session: PathBuf,
+    recorded: [Option<String>; 2],
+    read_back: [Option<String>; 2],
+    requests: Vec<String>,
+    /// The directories left inside the session's once the turn ended.
+    left: Vec<String>,
+    _directories: [Scratch; 3],
+}
+
+impl DelegatesInScratch {
+    /// What the delegate that was told `marker` was sent, over all its requests.
+    fn sent_to(&self, marker: &str) -> Vec<&String> {
+        self.requests
+            .iter()
+            .filter(|body| body.contains(marker) && !body.contains("SPAWN-TWO-WRITERS"))
+            .collect()
+    }
+}
+
+/// Delegates of one call are told a directory each, and each one's programs are given that one
+/// as `BRAVEBOT_SCRATCH_DIR`: the delegate's note names a directory inside the session's, named
+/// for the delegate's number, and the script it runs records the same path. What each wrote to
+/// `body.md` is what it read back, the directories are gone when the delegates have ended, and the
+/// session's own directory and the files in it stay.
+///
+/// Rejects delegates that share the session's directory (the fault reported: each would write
+/// one `body.md`), a directory made but not named in the note, one named in the note but not given
+/// to the programs, and one left behind when the delegate ends.
+#[test]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn each_delegate_of_one_call_is_given_its_own_scratch_directory() {
+    let seen = delegates_that_each_write_body_md("each", None);
+
+    let [Some(first), Some(second)] = &seen.recorded else {
+        panic!("a delegate's script did not run: {:?}", seen.recorded);
+    };
+    assert_eq!(*first, seen.session.join("d1").display().to_string());
+    assert_eq!(*second, seen.session.join("d2").display().to_string());
+    assert_eq!(
+        seen.read_back,
+        [
+            Some("text of one".to_string()),
+            Some("text of two".to_string())
+        ],
+        "a delegate read back another's text"
+    );
+    for (marker, own, other) in [("LANE-ONE", first, second), ("LANE-TWO", second, first)] {
+        let sent = seen.sent_to(marker);
+        assert!(!sent.is_empty(), "{marker} sent no request");
+        for body in sent {
+            assert!(
+                body.contains(&format!("The scratch directory of this delegate is {own}.")),
+                "{marker} was not told its own directory: {body}"
+            );
+            assert!(
+                !body.contains(other.as_str()),
+                "{marker} was told another delegate's directory: {body}"
+            );
+            assert!(
+                !body.contains("scratch directory of this session"),
+                "{marker} was told the session's directory: {body}"
+            );
+        }
+    }
+    assert!(
+        seen.left.is_empty(),
+        "directories left after the delegates ended: {:?}",
+        seen.left
+    );
+    assert!(seen.session.join("seen-one.txt").is_file());
+}
+
+/// A delegate that has a checkout of its own is given a directory of its own as one without a
+/// checkout is, inside the session's directory and not inside the checkout (CHECKOUT-7), and the
+/// session's directory stays reachable to its programs.
+///
+/// Rejects a checkout delegate that is left with the session's directory (told the same path as its
+/// sibling), and one given a directory inside the checkout, which the checkout's removal would take
+/// and which a commit from the checkout could pick up.
+#[test]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_delegate_in_a_checkout_is_given_its_own_scratch_directory_in_the_sessions() {
+    let seen = delegates_that_each_write_body_md("checkout", Some("checkout"));
+
+    let [Some(first), Some(second)] = &seen.recorded else {
+        panic!("a delegate's script did not run: {:?}", seen.recorded);
+    };
+    assert_eq!(*first, seen.session.join("d1").display().to_string());
+    assert_eq!(*second, seen.session.join("d2").display().to_string());
+    assert_ne!(first, second);
+    for (marker, own) in [("LANE-ONE", first), ("LANE-TWO", second)] {
+        assert!(
+            seen.sent_to(marker)
+                .iter()
+                .all(|body| body
+                    .contains(&format!("The scratch directory of this delegate is {own}."))),
+            "{marker} was not told its own directory"
+        );
+    }
+    assert!(seen.left.is_empty(), "left: {:?}", seen.left);
+}
+
+/// A delegate that starts a delegate of its own gives it a directory in the session's, named for
+/// its own number (`d1.1`), beside its parent's and not inside it, so ending the parent's directory
+/// does not take the child's. The child's programs are given that one.
+///
+/// Rejects a nested delegate left with its parent's directory, which two delegates would then
+/// share, and one named only for its last position (`d1`), which would be taken by the first
+/// delegate of the turn.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_delegate_of_a_delegate_is_given_a_scratch_directory_of_its_own() {
+    let project = Scratch::new("delegate-scratch-nested");
+    let given = Scratch::new("delegate-scratch-nested-session");
+    let session = given
+        .path
+        .canonicalize()
+        .expect("the session's own directory");
+    std::fs::write(
+        project.path.join("mark.sh"),
+        "printf %s \"$BRAVEBOT_SCRATCH_DIR\" > \"$BRAVEBOT_SCRATCH_DIR/../seen-$1.txt\"\n",
+    )
+    .unwrap();
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(session.clone()));
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "NESTED-SCRATCH-ROOT",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"worker","task":"OUTER-LANE"}"#),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "OUTER-LANE",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"worker","task":"INNER-LANE"}"#),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "INNER-LANE",
+            vec![
+                tool_request("run", r#"{"command":"sh ./mark.sh inner"}"#),
+                reply_with("ran"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("NESTED-SCRATCH-ROOT"),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("the turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(session.join("seen-inner.txt")).expect("the inner script ran"),
+        session.join("d1.1").display().to_string()
+    );
+    let asked = every_request(&received);
+    let named = |directory: &std::path::Path| directory.display().to_string();
+    assert!(
+        asked.iter().any(|body| body.contains("OUTER-LANE")
+            && !body.contains("INNER-LANE")
+            && body.contains(&format!(
+                "The scratch directory of this delegate is {}.",
+                named(&session.join("d1"))
+            ))),
+        "the delegate was not told its own directory"
+    );
+    assert!(
+        asked.iter().any(|body| body.contains("INNER-LANE")
+            && body.contains(&format!(
+                "The scratch directory of this delegate is {}.",
+                named(&session.join("d1.1"))
+            ))),
+        "the delegate it started was not told its own directory"
+    );
+    let left: Vec<_> = std::fs::read_dir(&session)
+        .expect("the session's directory")
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .collect();
+    assert!(
+        left.is_empty(),
+        "directories left after both ended: {left:?}"
+    );
+}
+
+/// The directories directly inside `session`, by name.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn directories_in(session: &std::path::Path) -> Vec<String> {
+    std::fs::read_dir(session)
+        .expect("the session's directory")
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// The issue's reproduction: eight delegates of one `spawn_agent` call are each told to write their
+/// own text to `body.md` in their scratch directory, wait until all eight have written, and read it
+/// back. Each reads its own text, each was told a different directory, and its programs were given
+/// that same one as `BRAVEBOT_SCRATCH_DIR`.
+///
+/// The wait is what makes the shared directory fail every time and not by chance: a script that read
+/// `body.md` straight after writing it would usually read its own text even when seven others wrote
+/// the same file. Each script records how many of the eight had written when it read, so a run
+/// where the delegates did not overlap is not taken for a pass.
+///
+/// Rejects delegates left with the session's directory (the fault reported), a note that names the
+/// session's directory, programs given the session's directory, and a directory per delegate that
+/// two delegates are given the same name for.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
+fn eight_delegates_of_one_call_each_read_back_the_text_they_wrote_to_body_md() {
+    const LANES: [&str; 8] = [
+        "LANE-A", "LANE-B", "LANE-C", "LANE-D", "LANE-E", "LANE-F", "LANE-G", "LANE-H",
+    ];
+    let project = Scratch::new("delegate-scratch-eight");
+    let home = Scratch::new("delegate-scratch-eight-home");
+    let given = Scratch::new("delegate-scratch-eight-session");
+    let session = given
+        .path
+        .canonicalize()
+        .expect("the session's own directory");
+    let script = format!(
+        r#"s='{}'
+d="$BRAVEBOT_SCRATCH_DIR"
+printf %s "$d" > "$s/seen-$1.txt"
+printf %s "text of $1" > "$d/body.md"
+: > "$s/wrote-$1"
+waited=0
+while [ "$(ls "$s" | grep -c '^wrote-')" -lt 8 ] && [ "$waited" -lt 300 ]; do
+  sleep 0.1
+  waited=$((waited + 1))
+done
+ls "$s" | grep -c '^wrote-' > "$s/met-$1.txt"
+cat "$d/body.md" > "$s/read-$1.txt"
+"#,
+        session.display()
+    );
+    std::fs::write(project.path.join("mark.sh"), script).expect("the script");
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(session.clone()));
+
+    let spawn = serde_json::json!({
+        "kind": "worker",
+        "task": "WRITE-BODY-AS",
+        "each": LANES,
+        "wake_after": 8,
+    });
+    let lane = |name: &str| {
+        let index = name.trim_start_matches("LANE-").to_lowercase();
+        vec![
+            tool_request(
+                "run",
+                &serde_json::json!({ "command": format!("sh ./mark.sh {index}") }).to_string(),
+            ),
+            reply_with(&format!("{name} done")),
+        ]
+    };
+    let parent = (
+        "SPAWN-EIGHT-WRITERS",
+        vec![
+            tool_request("spawn_agent", &spawn.to_string()),
+            reply_with("waiting"),
+            reply_with("all done"),
+            reply_with("all done"),
+        ],
+    );
+    let (endpoint, received) = serve_by_marker(
+        std::iter::once(parent)
+            .chain(LANES.iter().map(|name| (*name, lane(name))))
+            .collect(),
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("SPAWN-EIGHT-WRITERS").with_home(Some(home.path.clone())),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("the turn runs");
+
+    let asked = every_request(&received);
+    let mut directories = std::collections::BTreeSet::new();
+    for name in LANES {
+        let index = name.trim_start_matches("LANE-").to_lowercase();
+        let read =
+            |kind: &str| std::fs::read_to_string(session.join(format!("{kind}-{index}.txt")));
+        let own = read("seen").unwrap_or_else(|_| panic!("{name}'s script did not run"));
+        assert_eq!(
+            read("met").expect("recorded").trim(),
+            "8",
+            "{name} read before all eight had written, so the delegates did not overlap"
+        );
+        assert_eq!(
+            read("read").expect("read back"),
+            format!("text of {index}"),
+            "{name} read back text another delegate wrote"
+        );
+        assert_ne!(
+            std::path::Path::new(&own),
+            session,
+            "{name}'s programs were given the session's directory"
+        );
+        assert!(
+            std::path::Path::new(&own).starts_with(&session),
+            "{name}: {own}"
+        );
+        assert!(
+            directories.insert(own.clone()),
+            "two delegates were given {own}"
+        );
+
+        let sent: Vec<&String> = asked
+            .iter()
+            .filter(|body| body.contains(name) && !body.contains("SPAWN-EIGHT-WRITERS"))
+            .collect();
+        assert!(!sent.is_empty(), "{name} sent no request");
+        for body in sent {
+            assert!(
+                body.contains(&format!("The scratch directory of this delegate is {own}.")),
+                "{name} was not told the directory its programs were given: {body}"
+            );
+            assert!(
+                !body.contains("The scratch directory of this session"),
+                "{name} was told the session's directory: {body}"
+            );
+            assert!(
+                body.contains("This delegate has a scratch directory to itself")
+                    && !body.contains("scratch directory of its own"),
+                "{name}'s system prompt does not say the directory is the delegate's alone: {body}"
+            );
+        }
+    }
+    assert_eq!(directories.len(), 8);
+    assert!(
+        directories_in(&session).is_empty(),
+        "directories left after the delegates ended: {:?}",
+        directories_in(&session)
+    );
+}
+
+/// What a delegate that ran one line in its scratch directory and then ended left behind.
+struct RanOnce {
+    session: PathBuf,
+    /// What `BRAVEBOT_SCRATCH_DIR` was for its one line, where the line ran.
+    recorded: Option<String>,
+    /// The directories inside the session's directory once the turn was over.
+    left: Vec<String>,
+    requests: Vec<String>,
+    _directories: [Scratch; 3],
+}
+
+/// A turn that starts one worker, whose first request is answered with a `run` of a script that
+/// records `BRAVEBOT_SCRATCH_DIR` and writes `body.md` there, and whose later requests are answered
+/// with `after_the_run`. With `bounded` the worker is held to one round, and with `patient` false
+/// the service gives up after three requests, which is how a delegate is made to fail.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn worker_that_runs_once_then<R: bravebot_agent::report::Reporter + Send>(
+    tag: &str,
+    bounded: bool,
+    patient: bool,
+    after_the_run: Vec<String>,
+    reporter: &mut R,
+) -> RanOnce {
+    let project = Scratch::new(&format!("delegate-ends-{tag}"));
+    let home = Scratch::new(&format!("delegate-ends-{tag}-home"));
+    let given = Scratch::new(&format!("delegate-ends-{tag}-session"));
+    let session = given
+        .path
+        .canonicalize()
+        .expect("the session's own directory");
+    std::fs::write(
+        project.path.join("mark.sh"),
+        format!(
+            "printf %s \"$BRAVEBOT_SCRATCH_DIR\" > '{}/seen.txt'\nprintf x > \"$BRAVEBOT_SCRATCH_DIR/body.md\"\n",
+            session.display()
+        ),
+    )
+    .expect("the script");
+    std::fs::create_dir_all(home.path.join("agents")).expect("the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("one-round-worker.md"),
+        "---\nname: one-round-worker\ndescription: Runs once.\nkind: worker\nrounds: 1\n---\n\nRun once.\n",
+    )
+    .expect("the definition");
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(session.clone()));
+
+    let kind = if bounded {
+        "one-round-worker"
+    } else {
+        "worker"
+    };
+    let mut delegate = vec![tool_request("run", r#"{"command":"sh ./mark.sh"}"#)];
+    delegate.extend(after_the_run);
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "ENDING-TURN",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    &serde_json::json!({ "kind": kind, "task": "ENDING-TASK" }).to_string(),
+                ),
+                reply_with("waiting"),
+                reply_with("it ended"),
+                reply_with("it ended"),
+            ],
+        ),
+        ("ENDING-TASK", delegate),
+    ]);
+    let mut config = config_for(&endpoint);
+    if !patient {
+        config = config.with_patience(three_requests_and_no_more());
+    }
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("ENDING-TURN").with_home(Some(home.path.clone())),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn survives how the delegate ended");
+
+    RanOnce {
+        recorded: std::fs::read_to_string(session.join("seen.txt")).ok(),
+        left: directories_in(&session),
+        requests: every_request(&received),
+        session,
+        _directories: [project, home, given],
+    }
+}
+
+/// A delegate that could not finish (its next request fails and its run ends with an error) has
+/// its directory removed as one that answered does.
+///
+/// Rejects removal done only when the run returns an answer, which leaves a directory behind for
+/// every delegate that fails.
+#[test]
+fn a_delegate_that_failed_leaves_no_scratch_directory_behind() {
+    let mut reporter = Watched::default();
+    let ran = worker_that_runs_once_then("failed", false, false, Vec::new(), &mut reporter);
+
+    assert!(
+        reporter
+            .position("delegate d1 finished failed=true")
+            .is_some(),
+        "the delegate answered, so this says nothing about one that failed: {:?}",
+        reporter.lines()
+    );
+    assert_eq!(
+        ran.recorded,
+        Some(ran.session.join("d1").display().to_string()),
+        "the delegate's line did not run in a directory of its own"
+    );
+    assert!(ran.left.is_empty(), "left after a failure: {:?}", ran.left);
+}
+
+/// Asks the delegate to stop once its first `run` has finished, as a person pressing the key while
+/// it works would, so the stop comes after the delegate has used its directory.
+#[derive(Default)]
+struct StopsAfterItsRun {
+    stop: Option<bravebot_core::cancel::DelegateStop>,
+}
+
+impl bravebot_agent::report::Reporter for StopsAfterItsRun {
+    fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+    fn delegate_started(&mut self, delegation: bravebot_agent::report::Delegation) {
+        self.stop = Some(delegation.stop);
+    }
+
+    fn tool_finished(&mut self, activity: bravebot_agent::report::Activity) {
+        if activity.tool == "run"
+            && let Some(stop) = &self.stop
+        {
+            stop.request();
+        }
+    }
+}
+
+/// A delegate a person stopped after it had written in its directory has the directory removed when
+/// it ends.
+///
+/// Rejects removal tied to the delegate's answer or to the turn's end, which a stop skips or
+/// delays.
+#[test]
+fn a_delegate_a_person_stopped_leaves_no_scratch_directory_behind() {
+    let mut reporter = StopsAfterItsRun::default();
+    let ran = worker_that_runs_once_then(
+        "stopped",
+        false,
+        true,
+        vec![
+            // The stop is looked at when the next round's calls arrive, so the delegate asks for one
+            // more before it answers.
+            tool_request("run", r#"{"command":"sh ./mark.sh"}"#),
+            reply_with("what the stopped one had"),
+        ],
+        &mut reporter,
+    );
+
+    assert!(
+        ran.requests
+            .iter()
+            .any(|body| body.contains("The person stopped you")),
+        "the stop never reached the delegate, so this says nothing about one that was stopped"
+    );
+    assert_eq!(
+        ran.recorded,
+        Some(ran.session.join("d1").display().to_string())
+    );
+    assert!(ran.left.is_empty(), "left after a stop: {:?}", ran.left);
+}
+
+/// A delegate held to its round bound has its directory removed when it ends.
+///
+/// Rejects removal done only at the end of a delegate that stopped of its own accord.
+#[test]
+fn a_delegate_held_to_its_bound_leaves_no_scratch_directory_behind() {
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let ran = worker_that_runs_once_then(
+        "bound",
+        true,
+        true,
+        vec![reply_with("what one round had")],
+        &mut reporter,
+    );
+
+    assert!(
+        ran.requests
+            .iter()
+            .any(|body| body.contains("It stopped at its limit of 1 round")),
+        "the delegate was not held to its bound, so this says nothing about one that was"
+    );
+    assert_eq!(
+        ran.recorded,
+        Some(ran.session.join("d1").display().to_string())
+    );
+    assert!(ran.left.is_empty(), "left at the bound: {:?}", ran.left);
+}
+
+/// Where the session's directory has the delegate's name taken already (here by a directory the
+/// session holds), the delegate is not given another delegate's or the session's own as if it were
+/// its own: it keeps the session's directory, is told so and told to put a unique id in every file
+/// name, and what was at the name is left alone.
+///
+/// Rejects adopting the directory that was there (its files would go when the delegate ended), a
+/// note that claims a directory of its own the delegate does not have, and a delegate that is left
+/// with no word that others write where it does.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_delegate_whose_directory_cannot_be_made_is_given_the_sessions_and_told_it_is_shared() {
+    let project = Scratch::new("delegate-scratch-fallback");
+    let given = Scratch::new("delegate-scratch-fallback-session");
+    let session = given
+        .path
+        .canonicalize()
+        .expect("the session's own directory");
+    std::fs::create_dir(session.join("d1")).expect("a directory at the delegate's name");
+    std::fs::write(session.join("d1").join("precious.txt"), "kept").expect("a file");
+    std::fs::write(
+        project.path.join("mark.sh"),
+        format!(
+            "printf %s \"$BRAVEBOT_SCRATCH_DIR\" > '{}/seen.txt'\n",
+            session.display()
+        ),
+    )
+    .expect("the script");
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(session.clone()));
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "FALLBACK-TURN",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"worker","task":"FALLBACK-TASK"}"#),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "FALLBACK-TASK",
+            vec![
+                tool_request("run", r#"{"command":"sh ./mark.sh"}"#),
+                reply_with("ran"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("FALLBACK-TURN"),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("the turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(session.join("seen.txt")).expect("the delegate's line ran"),
+        session.display().to_string(),
+        "the delegate's programs were given something other than the session's directory"
+    );
+    let asked = every_request(&received);
+    let delegate: Vec<&String> = asked
+        .iter()
+        .filter(|body| body.contains("FALLBACK-TASK") && !body.contains("FALLBACK-TURN"))
+        .collect();
+    assert!(!delegate.is_empty(), "the delegate sent no request");
+    for body in delegate {
+        assert!(
+            body.contains(&format!(
+                "The scratch directory of this session is {}. Other delegates of this session \
+                 write there as well, so put a unique id in every file name.",
+                session.display()
+            )),
+            "the delegate was not told its directory is shared: {body}"
+        );
+        assert!(
+            !body.contains("The scratch directory of this delegate"),
+            "the delegate was told a directory of its own it does not have: {body}"
+        );
+        assert!(
+            body.contains("that other delegates write in as well"),
+            "the system prompt does not say the directory is shared: {body}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(session.join("d1").join("precious.txt")).expect("still there"),
+        "kept",
+        "what was at the delegate's name was taken over and removed"
+    );
+}
+
+/// INSTR-9, DELEGATE-34: a session with no scratch directory gives its delegates none and tells
+/// them nothing about one, and a delegate is still started and still runs its line. The delegate's
+/// program finds `BRAVEBOT_SCRATCH_DIR` absent, and no request the delegate sends says a scratch
+/// directory exists, is shared, or is removed.
+///
+/// Rejects a delegate that is told the session's directory is shared where there is no directory,
+/// a note that names a path that is not there, and a delegate that is not started for want of a
+/// directory to make one in.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_delegate_of_a_session_with_no_scratch_directory_is_told_nothing_of_one_and_still_starts() {
+    let project = Scratch::new("delegate-no-scratch");
+    std::fs::write(
+        project.path.join("mark.sh"),
+        "printf %s \"${BRAVEBOT_SCRATCH_DIR-absent}\" > seen.txt\n",
+    )
+    .expect("the script");
+    let workspace = Workspace::new(&project.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "NO-SCRATCH-TURN",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"NO-SCRATCH-TASK"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "NO-SCRATCH-TASK",
+            vec![
+                tool_request("run", r#"{"command":"sh ./mark.sh"}"#),
+                reply_with("ran"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("NO-SCRATCH-TURN"),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("the turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(project.path.join("seen.txt")).ok(),
+        Some("absent".to_string()),
+        "the delegate did not start, or its program was given a directory"
+    );
+    let asked = every_request(&received);
+    let delegate: Vec<&String> = asked
+        .iter()
+        .filter(|body| body.contains("NO-SCRATCH-TASK") && !body.contains("NO-SCRATCH-TURN"))
+        .collect();
+    assert!(!delegate.is_empty(), "the delegate sent no request");
+    for body in delegate {
+        for said in [
+            "The scratch directory of this",
+            "has a scratch directory",
+            "BRAVEBOT_SCRATCH_DIR",
+            "unique id in every file name",
+        ] {
+            assert!(
+                !body.contains(said),
+                "a delegate of a session with no scratch directory was told of one ({said}): {body}"
+            );
+        }
+    }
+}
+
+/// SANDBOX-18 for a delegate: in a turn that confines its programs, a stage of a delegate starts and
+/// writes in its own directory, which is inside the session's directory the confinement's row
+/// names, and writes nowhere else outside the session. The turn that does not confine is the control
+/// that the same script writes `body.md` and the file beside the session at all.
+///
+/// Rejects a stage refused or given no row for the delegate's directory, and a row made wider than
+/// the session's directory.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_confined_stage_of_a_delegate_writes_in_its_own_directory_and_nowhere_else() {
+    if cannot_confine_here() {
+        return;
+    }
+    for (confining, planted_beside) in [(false, true), (true, false)] {
+        let top = scratch_root::scratch_dir(&format!("delegate-own-directory-{confining}"));
+        std::fs::remove_dir_all(&top).ok();
+        for name in ["project", "beside", "session"] {
+            std::fs::create_dir_all(top.join(name)).unwrap();
+        }
+        let project = top.join("project").canonicalize().unwrap();
+        let session = top.join("session").canonicalize().unwrap();
+        let beside = top.join("beside").canonicalize().unwrap();
+        std::fs::write(
+            project.join("mark.sh"),
+            format!(
+                "printf %s \"$BRAVEBOT_SCRATCH_DIR\" > '{session}/seen.txt'\n\
+                 printf %s 'its text' > \"$BRAVEBOT_SCRATCH_DIR/body.md\"\n\
+                 cat \"$BRAVEBOT_SCRATCH_DIR/body.md\" > '{session}/read.txt'\n\
+                 touch '{beside}/planted.txt'\n",
+                session = session.display(),
+                beside = beside.display()
+            ),
+        )
+        .unwrap();
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(session.clone()));
+
+        let (endpoint, _received) = serve_by_marker(vec![
+            (
+                "CONFINED-OWN-DIRECTORY-TURN",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"CONFINED-OWN-DIRECTORY-TASK"}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "CONFINED-OWN-DIRECTORY-TASK",
+                vec![
+                    tool_request("run", r#"{"command":"sh ./mark.sh"}"#),
+                    reply_with("tried"),
+                ],
+            ),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("CONFINED-OWN-DIRECTORY-TURN")
+                .with_permission_mode(bravebot_agent::PermissionMode::Ask)
+                .with_confined_runs(confining),
+            &mut bravebot_agent::confirm::ApproveRuns,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        assert_eq!(
+            std::fs::read_to_string(session.join("seen.txt")).ok(),
+            Some(session.join("d1").display().to_string()),
+            "confining: {confining}, the stage did not start in the delegate's directory"
+        );
+        assert_eq!(
+            std::fs::read_to_string(session.join("read.txt")).ok(),
+            Some("its text".to_string()),
+            "confining: {confining}, the stage could not write in the delegate's directory"
+        );
+        assert_eq!(
+            beside.join("planted.txt").exists(),
+            planted_beside,
+            "confining: {confining}, the stage's write beside the session"
+        );
+        assert!(directories_in(&session).is_empty());
+        std::fs::remove_dir_all(&top).ok();
+    }
+}
+
+/// COMPACT-19 for a delegate's note: a delegate that reads until its conversation is compacted twice
+/// is told its own directory once in every request, before the first cut and after each one, and
+/// is never told the session's.
+///
+/// Rejects a note a cut takes out of the request and nothing puts back, and one sent again beside
+/// the copy the cut left in place.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_delegates_own_directory_is_named_once_in_every_request_across_compactions() {
+    let project = Scratch::new("delegate-scratch-compacts");
+    let given = Scratch::new("delegate-scratch-compacts-session");
+    let session = given
+        .path
+        .canonicalize()
+        .expect("the session's own directory");
+    for n in 1..=30 {
+        std::fs::write(project.path.join(format!("f{n}.txt")), format!("value {n}")).unwrap();
+    }
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(session.clone()));
+
+    let mut parent = vec![
+        tool_request(
+            "spawn_agent",
+            r#"{"kind":"reader","task":"COMPACTING-READER"}"#,
+        ),
+        reply_with("waiting"),
+        reply_with("done"),
+        reply_with("done"),
+    ]
+    .into_iter();
+    let mut delegate = (1..=30)
+        .map(|n| {
+            tool_request_with_usage(
+                "read_file",
+                &format!(r#"{{"path":"f{n}.txt"}}"#),
+                50_000,
+                10,
+            )
+        })
+        .chain(std::iter::once(reply_with_usage("read them", 50_000, 10)));
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |body| {
+        if body.contains(A_SUMMARY_ASKING) {
+            return Some(Some(reply_with("they have started on the first item")));
+        }
+        match body.contains("COMPACTING-TURN") {
+            true => parent.next().map(Some),
+            false => delegate.next().map(Some),
+        }
+    });
+    let config = config_with_budget(&endpoint, 1_000);
+
+    turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("COMPACTING-TURN"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    let summaries = bodies
+        .iter()
+        .filter(|body| body.contains(A_SUMMARY_ASKING))
+        .count();
+    assert!(
+        summaries >= 2,
+        "the delegate compacted {summaries} times, so this says nothing about a second cut"
+    );
+    let requests: Vec<&String> = bodies
+        .iter()
+        .filter(|body| !body.contains(A_SUMMARY_ASKING) && !body.contains("COMPACTING-TURN"))
+        .collect();
+    let note = format!(
+        "The scratch directory of this delegate is {}.",
+        session.join("d1").display()
+    );
+    let first_after = requests
+        .iter()
+        .position(|body| body.contains("they have started on the first item"))
+        .expect("no delegate request followed a compaction");
+    assert!(
+        !requests[first_after].contains("f1.txt"),
+        "the first read is still in the request, so the cut did not give it up"
+    );
+    for (index, body) in requests.iter().enumerate() {
+        assert_eq!(
+            body.matches(&note).count(),
+            1,
+            "delegate request {index} (first after a cut: {first_after}) does not name the \
+             directory once"
+        );
+        assert!(
+            !body.contains("The scratch directory of this session"),
+            "delegate request {index} names the session's directory"
+        );
+    }
+}
+
 /// What a background job printed is quarantined exactly as a foreground run's output is. Vouching
 /// is what makes it readable, and nothing about being left running does.
 #[test]

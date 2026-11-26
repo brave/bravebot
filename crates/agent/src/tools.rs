@@ -12766,7 +12766,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         return match crate::exec::start_steps_within(
             steps,
             &plan.directory,
-            tools.workspace.scratch(),
+            tools.workspace.own_scratch(),
             confinement.as_ref(),
             tools.cancel,
             limit,
@@ -12854,7 +12854,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             tools.cancel,
             &handoff,
             limit,
-            tools.workspace.scratch(),
+            tools.workspace.own_scratch(),
             confinement.as_ref(),
         ) {
             Ok(crate::exec::Waited::Moved(moved)) => {
@@ -12894,7 +12894,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             &plan,
             tools.cancel,
             limit,
-            tools.workspace.scratch(),
+            tools.workspace.own_scratch(),
             supplied.as_ref().map(|(bytes, _)| bytes.as_str()),
             confinement.as_ref(),
             &mut |path| {

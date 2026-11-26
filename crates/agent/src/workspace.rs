@@ -257,6 +257,10 @@ type TextMeasured = (PathObserved, Result<Labelled<String>, WorkspaceError>);
 /// name with `/add-dir`. An added directory is reachable only by its absolute path, so the two
 /// never overlap: a relative path always means the project, whatever else is open.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate fact about the workspace, set and read on its own"
+)]
 pub struct Workspace {
     #[cfg(test)]
     after_write: Arc<Mutex<Option<WriteInterruption>>>,
@@ -295,6 +299,16 @@ pub struct Workspace {
     /// among the directories they opened, and `/cd` leaves it alone rather than closing it for
     /// overlapping the directory being moved to.
     scratch: Option<ScratchDirectory>,
+    /// The directory inside `scratch` that one delegate has to itself, where this workspace is a
+    /// delegate's and one could be made (see [`crate::scratch::DelegateScratch`]).
+    ///
+    /// What the delegate is told and what its programs are given. Reach is still `scratch`, so a
+    /// delegate reads what its parent left there. Set by the driver as the delegate starts, and
+    /// cleared when the session's directory is replaced.
+    delegate_scratch: Option<ScratchDirectory>,
+    /// Whether this is a delegate's workspace that could not be given a directory of its own, so
+    /// that it writes in the session's beside the other delegates. Set with `delegate_scratch`.
+    delegate_shares_scratch: bool,
     /// The state directory a write that leaves a definition's memory untrusted is recorded in,
     /// where the session has one ([MEMORY-5]).
     ///
@@ -566,6 +580,8 @@ impl Workspace {
             left: Vec::new(),
             added: Arc::default(),
             scratch: None,
+            delegate_scratch: None,
+            delegate_shares_scratch: false,
             memories: None,
             search_files: MAX_SEARCH_FILES,
             search_time: MAX_SEARCH_TIME,
@@ -850,6 +866,36 @@ impl Workspace {
             bravebot_sandbox::programs::keep_out(directory.path());
         }
         self.scratch = directory;
+        self.delegate_scratch = None;
+        self.delegate_shares_scratch = false;
+    }
+
+    /// This workspace for a delegate that has `directory` to itself, or the session's directory
+    /// where `None`. Made by the driver from the delegate's number as the delegate starts, so a
+    /// turn cannot choose where its programs are told the directory is.
+    #[must_use]
+    pub(crate) fn with_delegate_scratch(mut self, directory: Option<ScratchDirectory>) -> Self {
+        self.delegate_shares_scratch = directory.is_none() && self.scratch.is_some();
+        self.delegate_scratch = directory;
+        self
+    }
+
+    /// Whether this is a delegate's workspace left with the session's directory because one of its
+    /// own could not be made. Other delegates of the session write there as well.
+    pub fn shares_scratch_with_other_delegates(&self) -> bool {
+        self.delegate_shares_scratch
+    }
+
+    /// The directory this run's programs are given as `BRAVEBOT_SCRATCH_DIR` and its note names:
+    /// a delegate's own where it has one, and the session's where it does not.
+    pub fn own_scratch(&self) -> Option<&Path> {
+        self.delegate_scratch().or_else(|| self.scratch())
+    }
+
+    /// The directory a delegate has to itself inside the session's, where this is a delegate's
+    /// workspace and one was made.
+    pub fn delegate_scratch(&self) -> Option<&Path> {
+        self.delegate_scratch.as_ref().map(ScratchDirectory::path)
     }
 
     /// The session's own directory outside the project, where it has one.

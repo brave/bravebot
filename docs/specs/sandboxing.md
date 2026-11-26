@@ -1881,6 +1881,13 @@ is given in the same place. Where no identity is recorded, as on Windows, the na
 a directory and not a link, so a directory made in place of the original is given the row. The
 refusal lasts for the session, and a new session makes a new scratch directory.
 
+A directory a delegate is given inside the scratch directory ([TRUST-14](trust-map.md#TRUST-14)) is
+no row of its own. The row stays the scratch directory the session made, which holds it, so a stage
+of a delegate writes there on the terms the session's stages do, and the check above is made for it
+on the same name. The delegate's directory is made only while that name leads to the directory the
+session locked, and is removed only while its own name leads to the directory the delegate was
+given, so ending a delegate does not follow a link a stage put at its name.
+
 Each directory the session was opened on, the working directory and every directory added with
 `/add-dir`, `--add-dir` or `additionalDirectories` or reopened by a resume, is held the same way.
 The workspace records its device and inode as it is opened, added or reopened
@@ -2003,6 +2010,9 @@ and Windows `rundll32` were not checked either ([SANDBOX-30](#SANDBOX-30)).
 
 `verified-by: bravebot_agent::confine::tests::the_session_directories_are_read_and_written_and_nothing_else_of_the_persons`
 `verified-by: bravebot_agent::confine::tests::only_a_step_whose_program_is_git_writes_a_git_directory`
+`verified-by: bravebot_agent::turn::a_confined_stage_of_a_delegate_writes_in_its_own_directory_and_nowhere_else`
+`verified-by: bravebot_agent::scratch::a_delegate_directory_is_not_made_through_a_name_that_leads_elsewhere`
+`verified-by: bravebot_agent::scratch::a_directory_put_at_the_delegates_name_is_not_removed_when_the_delegate_ends`
 `verified-by: bravebot_agent::confine::tests::a_git_above_the_session_directory_in_its_checkout_writes_no_git_directory`
 `verified-by: bravebot_agent::confine::only_git_writes_a_repositorys_hooks_and_configuration_on_macos`
 `verified-by: bravebot_agent::confine::tests::a_prompt_says_a_program_other_than_git_can_write_a_git_directory_where_none_is_held_back`

@@ -325,6 +325,85 @@ impl ScratchDirectory {
     }
 }
 
+/// A directory one delegate has to itself, inside its session's scratch directory.
+///
+/// Delegates of one session run at once, and without this each would be told the session's
+/// directory and could write the same name as another. The name is the delegate's number, which the
+/// kernel minted (`d2`, `d2.1`), so no word a planner or a delegate wrote reaches a path. A number
+/// is unique among the delegates running at once, and a name already taken is refused rather than
+/// adopted, so the delegate then goes on without one of its own.
+///
+/// Removal is [`Drop`], so every way a delegate ends takes it: an answer, an error, a stop and a
+/// panic that unwinds. The session's directory stays what files are reached through
+/// ([`crate::Workspace::reaches_scratch`]); this is only the directory the delegate is told and its
+/// programs are given.
+#[derive(Debug)]
+pub(crate) struct DelegateScratch {
+    directory: ScratchDirectory,
+}
+
+impl DelegateScratch {
+    /// Make the directory named for `delegate` inside `session`'s, owner-only.
+    ///
+    /// Refused where the name `session` was made at no longer leads to the directory the session
+    /// made, so nothing is made through a name somebody has pointed elsewhere.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the directory made a moment ago is removed on a best-effort basis, and the error returned is the one that is reported"
+    )]
+    pub(crate) fn within(
+        session: &ScratchDirectory,
+        delegate: bravebot_core::delegate::DelegateId,
+    ) -> std::io::Result<Self> {
+        if !session.stands_as_made_at(session.path()) {
+            return Err(std::io::Error::other(
+                "the session's directory is not the one it made",
+            ));
+        }
+        let path = session.path().join(delegate.to_string());
+        made_private(&path)?;
+        let Some(directory) = ScratchDirectory::observed(path.clone()) else {
+            let _ = std::fs::remove_dir(&path);
+            return Err(std::io::Error::other("the delegate's directory is not one"));
+        };
+        Ok(Self { directory })
+    }
+
+    /// The directory as it was made, for a workspace to hand its programs and name in a note.
+    pub(crate) fn directory(&self) -> &ScratchDirectory {
+        &self.directory
+    }
+}
+
+impl Drop for DelegateScratch {
+    /// Take the directory and everything in it, unless the name now leads to something this did not
+    /// make, which is left for the session's own removal. A failure is not reported, as
+    /// [`SessionScratch`]'s is not.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a failed removal is not reported, and the session's own removal takes what is left"
+    )]
+    fn drop(&mut self) {
+        if self.directory.stands_as_made_at(self.directory.path()) {
+            let _ = std::fs::remove_dir_all(self.directory.path());
+        }
+    }
+}
+
+/// Make the directory at `path`, readable by nobody else, and refuse a name already taken.
+fn made_private(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    let builder = {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = std::fs::DirBuilder::new();
+        builder.mode(CLAIMED);
+        builder
+    };
+    #[cfg(not(unix))]
+    let builder = std::fs::DirBuilder::new();
+    builder.create(path)
+}
+
 /// The mode a directory is at while a session holds it, and the only one the sweep takes.
 #[cfg(unix)]
 const CLAIMED: u32 = 0o700;
@@ -1523,6 +1602,239 @@ mod tests {
         assert_eq!(during, 0o500, "mode while waiting was {during:o}");
         assert_eq!(mode_of(&path), 0o700, "mode was {:o}", mode_of(&path));
         drop(claim);
+    }
+
+    /// The directory a delegate is given is inside the session's, named for the delegate's number,
+    /// owner-only, and gone once the guard is dropped, with what the delegate wrote in it. The
+    /// session's own directory and what is in it stay.
+    ///
+    /// Rejects a delegate given the session's directory itself (the fault the issue reports), a name
+    /// that is not the kernel's number, a directory made readable by others, and one left behind
+    /// when the delegate ends.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_delegate_is_given_a_directory_named_for_its_number_that_goes_when_it_ends() {
+        let session = SessionScratch::create().expect("a scratch directory");
+        let made = session.directory().expect("the session's directory");
+        std::fs::write(session.path().join("kept.txt"), "the session's").expect("written");
+        let id = bravebot_core::delegate::DelegateId::nth(2);
+
+        let own = DelegateScratch::within(&made, id).expect("a delegate's directory");
+        let path = own.directory().path().to_path_buf();
+        std::fs::write(path.join("body.md"), "the delegate's").expect("written");
+
+        assert_eq!(path, session.path().join("d2"));
+        assert_ne!(
+            path,
+            session.path(),
+            "the delegate shares the session's directory"
+        );
+        assert!(path.is_dir(), "{}", path.display());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path)
+                .expect("its mode")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o700, "mode was {mode:o}");
+        }
+
+        drop(own);
+        assert!(
+            !path.exists(),
+            "{} was left after the delegate ended",
+            path.display()
+        );
+        assert_eq!(
+            std::fs::read_to_string(session.path().join("kept.txt")).expect("still there"),
+            "the session's",
+            "ending a delegate took something of the session's"
+        );
+    }
+
+    /// Two delegates of one session, and a delegate of a delegate, are each given a directory of
+    /// their own, so a file one writes is not the file another reads back.
+    ///
+    /// Rejects a number that does not tell them apart (the same name for every delegate, or only the
+    /// last position of a path, which gives `d1.1` and `d1` the same directory name as `d1` and `d1`).
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn delegates_and_a_nested_delegate_are_each_given_a_directory_of_their_own() {
+        use bravebot_core::delegate::DelegateId;
+        let session = SessionScratch::create().expect("a scratch directory");
+        let made = session.directory().expect("the session's directory");
+        let first = DelegateId::nth(1);
+        let nested = first.child(1).expect("within the depth");
+
+        let a = DelegateScratch::within(&made, first).expect("the first");
+        let b = DelegateScratch::within(&made, DelegateId::nth(2)).expect("the second");
+        let c = DelegateScratch::within(&made, nested).expect("the nested one");
+        std::fs::write(a.directory().path().join("body.md"), "a").expect("written");
+        std::fs::write(b.directory().path().join("body.md"), "b").expect("written");
+        std::fs::write(c.directory().path().join("body.md"), "c").expect("written");
+
+        let paths = [
+            a.directory().path(),
+            b.directory().path(),
+            c.directory().path(),
+        ];
+        assert_eq!(
+            paths
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            3,
+            "{paths:?}"
+        );
+        assert_eq!(c.directory().path(), session.path().join("d1.1"));
+        // Ending the delegate the nested one belongs to takes its own directory and not the nested
+        // one's, which is the session's to hold until the nested delegate ends.
+        drop(a);
+        assert_eq!(
+            std::fs::read_to_string(c.directory().path().join("body.md")).expect("still there"),
+            "c"
+        );
+    }
+
+    /// A name already taken inside the session's directory is refused and not adopted, and what was
+    /// there is left alone.
+    ///
+    /// Rejects an implementation that takes the existing directory (`create_dir_all`), which would
+    /// give two delegates one directory and remove the first one's files when the second ends.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_delegate_directory_that_is_already_taken_is_refused_and_left_alone() {
+        let session = SessionScratch::create().expect("a scratch directory");
+        let made = session.directory().expect("the session's directory");
+        let taken = session.path().join("d1");
+        std::fs::create_dir(&taken).expect("made");
+        std::fs::write(taken.join("body.md"), "another's").expect("written");
+
+        let refused = DelegateScratch::within(&made, bravebot_core::delegate::DelegateId::nth(1));
+
+        assert!(refused.is_err(), "a name that was taken was adopted");
+        assert_eq!(
+            std::fs::read_to_string(taken.join("body.md")).expect("still there"),
+            "another's"
+        );
+    }
+
+    /// Nothing is made through a name that no longer leads to the directory the session made
+    /// (SANDBOX-18): the delegate goes without a directory of its own and the place the name now
+    /// leads to is untouched.
+    ///
+    /// Rejects an implementation that joins the delegate's name onto the session's path without
+    /// asking whether the path is still the directory that was made.
+    #[test]
+    #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_delegate_directory_is_not_made_through_a_name_that_leads_elsewhere() {
+        let session = SessionScratch::create().expect("a scratch directory");
+        let elsewhere = SessionScratch::create().expect("another directory");
+        let given = ScratchDirectory::observed(session.path().join("inner")).or_else(|| {
+            std::fs::create_dir(session.path().join("inner")).expect("made");
+            ScratchDirectory::observed(session.path().join("inner"))
+        });
+        let given = given.expect("a directory observed");
+        let name = given.path().to_path_buf();
+        std::fs::remove_dir(&name).expect("removed");
+        std::os::unix::fs::symlink(elsewhere.path(), &name).expect("linked");
+
+        let refused = DelegateScratch::within(&given, bravebot_core::delegate::DelegateId::nth(1));
+
+        assert!(
+            refused.is_err(),
+            "a directory was made through a redirected name"
+        );
+        assert_eq!(
+            std::fs::read_dir(elsewhere.path())
+                .expect("read it")
+                .count(),
+            0,
+            "something was made where the name now leads"
+        );
+    }
+
+    /// The directory goes when the delegate's thread unwinds, which is how a delegate that panics
+    /// ends, as it does for one that returns, wherever panics unwind. A release build sets
+    /// `panic = "abort"`, where the process ends and the directory goes with the session's.
+    ///
+    /// Rejects removal done by an explicit call at the end of a run, which a panic skips.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn a_delegate_directory_is_removed_when_the_delegate_panics() {
+        let session = SessionScratch::create().expect("a scratch directory");
+        let made = session.directory().expect("the session's directory");
+        let path = session.path().join("d1");
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _own = DelegateScratch::within(&made, bravebot_core::delegate::DelegateId::nth(1))
+                .expect("a delegate's directory");
+            std::fs::write(path.join("body.md"), "x").expect("written");
+            panic!("the delegate ended badly");
+        }));
+
+        assert!(unwound.is_err());
+        assert!(!path.exists(), "{} was left after a panic", path.display());
+    }
+
+    /// A directory that the name no longer leads to is not removed by the delegate that made one at
+    /// that name: what is there now is not what the delegate made.
+    ///
+    /// Rejects removal by name alone, which follows a link a program of the delegate put there and
+    /// removes the directory it points at.
+    #[test]
+    #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_delegate_directory_replaced_by_a_link_is_not_followed_when_the_delegate_ends() {
+        let session = SessionScratch::create().expect("a scratch directory");
+        let made = session.directory().expect("the session's directory");
+        let precious = SessionScratch::create().expect("a directory somebody else owns");
+        std::fs::write(precious.path().join("keep.txt"), "kept").expect("written");
+
+        let own = DelegateScratch::within(&made, bravebot_core::delegate::DelegateId::nth(1))
+            .expect("a delegate's directory");
+        let path = own.directory().path().to_path_buf();
+        std::fs::rename(&path, session.path().join("moved")).expect("moved aside");
+        std::os::unix::fs::symlink(precious.path(), &path).expect("linked");
+
+        drop(own);
+
+        assert_eq!(
+            std::fs::read_to_string(precious.path().join("keep.txt")).expect("still there"),
+            "kept",
+            "the delegate's end removed what a link at its name led to"
+        );
+    }
+
+    /// A real directory put at the delegate's name (what a program of the delegate does with
+    /// `rm -rf` and `mkdir`) is not the directory the delegate made, so ending the delegate leaves it
+    /// and what is in it alone.
+    ///
+    /// Rejects removal by name alone, which takes whatever directory is there. The link case above
+    /// cannot tell that fault from the right one, because removing a link takes the link only.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_directory_put_at_the_delegates_name_is_not_removed_when_the_delegate_ends() {
+        let session = SessionScratch::create().expect("a scratch directory");
+        let made = session.directory().expect("the session's directory");
+        let own = DelegateScratch::within(&made, bravebot_core::delegate::DelegateId::nth(1))
+            .expect("a delegate's directory");
+        let path = own.directory().path().to_path_buf();
+        std::fs::rename(&path, session.path().join("moved")).expect("moved aside");
+        std::fs::create_dir(&path).expect("another directory at the name");
+        std::fs::write(path.join("keep.txt"), "kept").expect("written");
+
+        drop(own);
+
+        assert_eq!(
+            std::fs::read_to_string(path.join("keep.txt")).expect("still there"),
+            "kept",
+            "the delegate's end removed a directory it did not make"
+        );
     }
 
     /// TRUST-25: on Windows nothing is removed. A session opening there makes its directory in the

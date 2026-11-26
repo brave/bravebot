@@ -11654,6 +11654,40 @@ fn a_file_in_the_sessions_own_directory_is_reachable_by_its_absolute_path() {
     );
 }
 
+/// A directory inside the session's own directory, such as the one a delegate is given, is reached
+/// by its absolute path as the session's directory is. A delegate's reach is the session's whole
+/// directory, so the directory of a sibling delegate is one it can name.
+///
+/// Rejects a reach narrowed to the directory a delegate was given without the spec saying so, and a
+/// reach that stops at the top of the session's directory and leaves a directory inside it
+/// unresolved.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_file_in_a_directory_inside_the_sessions_own_directory_is_reachable_by_its_absolute_path() {
+    let project = Scratch::new("scratch-reach-inside");
+    let given = SessionScratch::create().expect("a directory of its own");
+    let inside = given.path().join("d2");
+    std::fs::create_dir(&inside).expect("a directory inside");
+    std::fs::write(inside.join("body.md"), "another's text").expect("already there");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(given.directory());
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let named = inside.join("body.md").display().to_string();
+    workspace
+        .read(&mut policy, &Labelled::trusted(named))
+        .expect("a file in a directory inside the session's own is readable");
+}
+
 /// An undo puts the project back, and a file the turn wrote for its own use is not the project.
 /// Restoring one would restore a file whose only reader was the turn being undone, and a rewind
 /// that reported it as a file it could not put back would be reporting every intermediate file a

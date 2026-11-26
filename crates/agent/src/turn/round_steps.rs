@@ -1236,6 +1236,18 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
         let stop = seeded.stop.clone();
         let stopped_by = stop.clone();
         let handle = scope.spawn(move || {
+            // Made as the delegate starts and removed as this thread ends, whichever way it ends
+            // (the guard drops on a return and on an unwind). Named from the delegate's number,
+            // which the kernel minted, and from nothing a model wrote. A delegate in a checkout
+            // and a delegate of a delegate are given one the same way, each beside the others in
+            // the session's directory. Where it cannot be made the delegate keeps the session's.
+            let parent = seeded.workspace.as_ref().unwrap_or(workspace);
+            let own = parent
+                .scratch_made()
+                .and_then(|session| crate::scratch::DelegateScratch::within(session, id).ok());
+            let delegate_workspace = parent
+                .clone()
+                .with_delegate_scratch(own.as_ref().map(|own| own.directory().clone()));
             let mut confirmer = confirming.delegate_stoppable(id, stopped_by);
             let mut reporter = reporting.delegate(id);
             let mut sink = recording.delegate(id);
@@ -1243,7 +1255,7 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
                 &seeded,
                 config,
                 egress,
-                seeded.workspace.as_ref().unwrap_or(workspace),
+                &delegate_workspace,
                 task.home.as_deref(),
                 task.profile.as_deref(),
                 spawning_model.as_deref(),
@@ -1277,6 +1289,7 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
                     .map(crate::timing::Interval::from)
                     .collect::<Vec<_>>(),
             )
+            // `own` is dropped here, after the run and its report are done with the directory.
         });
         delegates.push(Working {
             #[cfg(test)]
