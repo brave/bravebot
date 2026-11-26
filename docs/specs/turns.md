@@ -33,6 +33,7 @@ it may. What a turn does when the planner asks for the same call three times run
 round are run when the planner asks for several together. What the note under a finished turn says
 about refusals. What a turn that answers with tasks still open in the planner's list does about
 them. What the planner is told when a turn ends in a failure. What a limit a person gave a run does to it.
+What the prompt tells a person-watched turn about asking only what the request itself does not already answer.
 
 ## Clauses
 
@@ -986,3 +987,28 @@ where nothing offered to it can show the file.
 `verified-by: bravebot_agent::turn::the_planner_is_told_how_to_read_a_reference_by_the_tools_it_is_offered_and_who_can_answer`
 `verified-by: bravebot_agent::turn::a_delegate_is_not_told_to_call_vet_content_or_to_name_the_flags`
 `verified-by: bravebot_cli::running::only_a_run_nobody_answers_is_told_to_say_how_to_lift_the_quarantine`
+
+<a id="TURN-17"></a>
+### TURN-17: the paragraphs that tell a person-watched turn when to ask name the request itself as a thing read before asking
+
+`FOR_A_PERSON` in [`prompts.rs`](../../crates/agent/src/turn/prompts.rs) tells a turn a person is
+watching when to decide something itself and when to ask. Its paragraph on deciding what the planner
+can decide, and its paragraph on not asking what can be found out, now name the request itself as a
+thing the planner reads before asking, not only the workspace.
+
+**Whether to act is not asked.** The paragraph on deciding what the planner can decide says that
+whether to do what the person asked is not a question either: the request already settled it, and
+the planner starts the work instead of asking for a go-ahead it was already given.
+
+**What the request already said is not asked again.** The paragraph on not asking what can be found
+out says the same of anything the request already told the planner: asking it back costs a round and
+reads as though the request went unread.
+
+Both sentences state in the prompt's own paragraphs what
+[ASK-12](tools/ask-user.md#ASK-12) already states in the `ask_user` description's own four
+sentences, so a planner reads it once while deciding whether a question exists at all and once more
+from the tool it would call to put one. Neither names a tool, a mode or a classifier, so both are
+read unchanged by every turn a person watches, and by no delegate, which is never given
+`FOR_A_PERSON`.
+
+`verified-by: bravebot_agent::turn::the_planner_is_told_not_to_ask_what_the_request_already_answered`
