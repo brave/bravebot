@@ -280,6 +280,13 @@ pub struct RepoMap {
     pub truncated: bool,
     /// Whether a directory beneath the one named could not be opened.
     pub unreadable: bool,
+    /// How many symbolic links the walk met and did not enter.
+    ///
+    /// A number and never a name, for the same reason as `unreadable`. A directory made only of
+    /// links maps as one with no source files without it, and a planner reads that as a
+    /// directory with nothing to map (MAP, not-covered note, tracked as
+    /// [brave/bravebot#3404](https://github.com/brave/bravebot/issues/3404)).
+    pub links: usize,
 }
 
 /// The result of a content search. Reports truncation for the same reason as [`Listing`].

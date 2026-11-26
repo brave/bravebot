@@ -15865,6 +15865,33 @@ fn trusting_all_but(workspace: &Workspace, distrusted: &[&str]) -> TrustStore {
     trust
 }
 
+/// MAP, the clause replacing its not-covered note (brave/bravebot#3404): `repo_map` shares
+/// `walk_filtered` with `list_files` and `search`, so it counts the symbolic links its walk meets
+/// and does not enter, the same way and under the same release rules as LIST-6. The regression it
+/// rejects: a `repo_map` that still reports zero links regardless of how many the walk skipped,
+/// which is what `walk_filtered`'s caller did before this fix.
+#[cfg(unix)]
+#[test]
+fn a_repo_map_counts_every_symbolic_link_it_did_not_enter() {
+    let scratch = Scratch::new("map-links-counted");
+    std::fs::write(scratch.path.join("mine.rs"), "pub fn mine_function() {}\n").unwrap();
+    std::os::unix::fs::symlink(scratch.path.join("mine.rs"), scratch.path.join("to-file")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("elsewhere")).unwrap();
+    std::os::unix::fs::symlink(scratch.path.join("elsewhere"), scratch.path.join("to-dir"))
+        .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &[]);
+
+    let (map, _) = map_of(&workspace, trust, None, ".").expect("map");
+
+    assert_eq!(map.links, 2, "{}", map.body);
+    assert!(
+        map.body.contains("mine_function"),
+        "the map lost the file it could read: {}",
+        map.body
+    );
+}
+
 /// A map is read by the planner, so a file nobody vouched for must contribute neither a symbol nor
 /// its name. Mapping every file and labelling the result by the meet would be refused or, worse,
 /// pass the symbol through; mapping all and relabelling would show the planner the declaration.
