@@ -1009,9 +1009,9 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
 - **The first request of each new process writes the end of its conversation to the prompt cache.**
   The conversation's cache mark goes on the last user message, which in a new process is or follows
   the message that names the session's directory. The system prompt and the tool schemas are read
-  from the cache. A one-shot run wrote 175 tokens in this way (brave/bravebot#4513). The mark stays
-  on the last user message so that a round ending in a tool result carries the mark the first round
-  of the turn wrote.
+  from the cache. The write is the conversation after the system prompt, which is short for a
+  one-shot run. The mark stays on the last user message so that a round ending in a tool result
+  carries the mark the first round of the turn wrote.
 - **A project cannot turn off a global `AGENTS.md`.** The project's file has the last word, but
   the global one is still in front of the planner and can still be followed where the project
   says nothing that contradicts it. Deleting the global file, or narrowing it, is the only way to
