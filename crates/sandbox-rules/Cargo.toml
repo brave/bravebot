@@ -1,0 +1,11 @@
+[package]
+name = "bravebot-sandbox-rules"
+description = "What a sandbox backend decides before it is written into a platform's syntax"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
