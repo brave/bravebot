@@ -1089,4 +1089,214 @@ pub open spec fn covers_key(prefix: Seq<u8>, path: Seq<u8>) -> bool {
     }
 }
 
+/// The segments `s` splits into at each `/`, as `str::split('/')` gives them: the empty path is one
+/// empty segment, and a `/` at either end makes an empty segment there.
+pub open spec fn split_segments(s: Seq<char>) -> Seq<Seq<char>>
+    decreases s.len(),
+{
+    if s.len() == 0 {
+        seq![Seq::empty()]
+    } else if s.last() == '/' {
+        split_segments(s.drop_last()).push(Seq::empty())
+    } else {
+        let p = split_segments(s.drop_last());
+        p.update(p.len() - 1, p.last().push(s.last()))
+    }
+}
+
+/// Whether a segment names something: it is neither empty nor `.`, which both name the directory
+/// the segment is in.
+pub open spec fn names_something(segment: Seq<char>) -> bool {
+    segment.len() > 0 && segment != seq!['.']
+}
+
+/// The segments of `segments` that name something, in order.
+pub open spec fn named(segments: Seq<Seq<char>>) -> Seq<Seq<char>>
+    decreases segments.len(),
+{
+    if segments.len() == 0 {
+        Seq::empty()
+    } else if names_something(segments.last()) {
+        named(segments.drop_last()).push(segments.last())
+    } else {
+        named(segments.drop_last())
+    }
+}
+
+/// `segments` with a `/` between each two.
+pub open spec fn joined(segments: Seq<Seq<char>>) -> Seq<char>
+    decreases segments.len(),
+{
+    if segments.len() == 0 {
+        Seq::empty()
+    } else if segments.len() == 1 {
+        segments[0]
+    } else {
+        joined(segments.drop_last()) + seq!['/'] + segments.last()
+    }
+}
+
+/// The key the trust map holds a path under: the segments that name something, in the order the
+/// path has them, with one `/` between each two and one before the first where the path is
+/// absolute (TRUST-2). No segment is trimmed, folded or resolved, so `a/../b` keeps its `..` and
+/// `note.md ` keeps its space.
+pub open spec fn path_key(path: Seq<char>) -> Seq<char> {
+    let key = joined(named(split_segments(path)));
+    if path.len() > 0 && path[0] == '/' {
+        seq!['/'] + key
+    } else {
+        key
+    }
+}
+
+pub proof fn lemma_split_segments_push(s: Seq<char>, c: char)
+    ensures
+        split_segments(s.push(c)) == (if c == '/' {
+            split_segments(s).push(Seq::empty())
+        } else {
+            split_segments(s).update(
+                split_segments(s).len() - 1,
+                split_segments(s).last().push(c),
+            )
+        }),
+{
+    assert(s.push(c).drop_last() =~= s);
+}
+
+pub proof fn lemma_named_push(segments: Seq<Seq<char>>, segment: Seq<char>)
+    ensures
+        named(segments.push(segment)) == (if names_something(segment) {
+            named(segments).push(segment)
+        } else {
+            named(segments)
+        }),
+{
+    assert(segments.push(segment).drop_last() =~= segments);
+}
+
+pub proof fn lemma_joined_push(segments: Seq<Seq<char>>, segment: Seq<char>)
+    ensures
+        joined(segments.push(segment)) == (if segments.len() == 0 {
+            segment
+        } else {
+            joined(segments) + seq!['/'] + segment
+        }),
+{
+    assert(segments.push(segment).drop_last() =~= segments);
+}
+
+
+/// How many segments of `segments` are not empty.
+pub open spec fn nonempty_segments(segments: Seq<Seq<char>>) -> nat
+    decreases segments.len(),
+{
+    if segments.len() == 0 {
+        0
+    } else {
+        nonempty_segments(segments.drop_last()) + if segments.last().len() > 0 {
+            1nat
+        } else {
+            0nat
+        }
+    }
+}
+
+/// `key` without the `/`s it starts with.
+pub open spec fn without_leading_slashes(key: Seq<char>) -> Seq<char>
+    decreases key.len(),
+{
+    if key.len() > 0 && key[0] == '/' {
+        without_leading_slashes(key.drop_first())
+    } else {
+        key
+    }
+}
+
+/// What is left of `key` after its first `n` segments and the `/` after each: the empty key where
+/// it has no more than `n`.
+pub open spec fn after_segments(key: Seq<char>, n: nat) -> Seq<char>
+    decreases key.len(),
+{
+    if n == 0 {
+        key
+    } else if key.len() == 0 {
+        Seq::empty()
+    } else if key[0] == '/' {
+        after_segments(key.drop_first(), (n - 1) as nat)
+    } else {
+        after_segments(key.drop_first(), n)
+    }
+}
+
+/// What is left of `key` beneath a key `prefix` covers it under: `key`, past the `/`s it starts
+/// with, without as many of its segments as `prefix` has that are not empty. The segments are
+/// counted and not matched, so the tail is in `key`'s own spelling, whichever spelling of `prefix`
+/// covered it.
+pub open spec fn key_tail(prefix: Seq<char>, key: Seq<char>) -> Seq<char> {
+    after_segments(without_leading_slashes(key), nonempty_segments(split_segments(prefix)))
+}
+
+pub proof fn lemma_nonempty_segments_push(segments: Seq<Seq<char>>, segment: Seq<char>)
+    ensures
+        nonempty_segments(segments.push(segment)) == nonempty_segments(segments) + if segment.len()
+            > 0 {
+            1nat
+        } else {
+            0nat
+        },
+{
+    assert(segments.push(segment).drop_last() =~= segments);
+}
+
+pub proof fn lemma_nonempty_segments_update_last(segments: Seq<Seq<char>>, segment: Seq<char>)
+    requires
+        segments.len() > 0,
+    ensures
+        nonempty_segments(segments.update(segments.len() - 1, segment)) == nonempty_segments(
+            segments.drop_last(),
+        ) + if segment.len() > 0 {
+            1nat
+        } else {
+            0nat
+        },
+        nonempty_segments(segments) == nonempty_segments(segments.drop_last()) + if segments.last().len()
+            > 0 {
+            1nat
+        } else {
+            0nat
+        },
+{
+    assert(segments.update(segments.len() - 1, segment).drop_last() =~= segments.drop_last());
+}
+
+
+/// A segment that names nothing, `.` or the empty one a doubled or trailing `/` makes, leaves the
+/// key a path is held under as it was wherever it stands, so `src/./a.md`, `src//a.md` and
+/// `src/a.md` are one rule (TRUST-2).
+pub proof fn a_segment_that_names_nothing_leaves_the_key_as_it_was(
+    before: Seq<Seq<char>>,
+    segment: Seq<char>,
+    after: Seq<Seq<char>>,
+)
+    requires
+        !names_something(segment),
+    ensures
+        named(before.push(segment) + after) == named(before + after),
+    decreases after.len(),
+{
+    if after.len() == 0 {
+        assert(before.push(segment) + after =~= before.push(segment));
+        assert(before + after =~= before);
+        lemma_named_push(before, segment);
+    } else {
+        let rest = after.drop_last();
+        a_segment_that_names_nothing_leaves_the_key_as_it_was(before, segment, rest);
+        assert(before.push(segment) + after =~= (before.push(segment) + rest).push(after.last()));
+        assert(before + after =~= (before + rest).push(after.last()));
+        lemma_named_push(before.push(segment) + rest, after.last());
+        lemma_named_push(before + rest, after.last());
+    }
+}
+
+
 } // verus!

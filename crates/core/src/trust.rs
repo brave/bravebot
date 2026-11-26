@@ -772,6 +772,10 @@ pub fn is_absolute_key(key: &str) -> bool {
 /// Whitespace is kept wherever it is. At either end of a segment it is part of the name wherever a
 /// path is bytes, so `note.md ` is a file of its own, apart from `note.md`, and so is a name made
 /// only of whitespace, apart from the directory it is in.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r@ == crate::spec::path_key(path@),
+))]
 pub(crate) fn normalise(path: &str) -> String {
     let chars = chars_of(path);
     let absolute = !chars.is_empty() && chars[0] == '/';
@@ -779,55 +783,158 @@ pub(crate) fn normalise(path: &str) -> String {
     if absolute {
         key.push('/');
     }
+    #[cfg(verus_keep_ghost)]
+    proof_decl! {
+        let ghost root = key@;
+        let ghost mut read: Seq<Seq<char>> = Seq::empty();
+        let ghost mut written: Seq<Seq<char>> = Seq::empty();
+        assert(chars@.take(0) =~= Seq::<char>::empty());
+    }
     let mut segment: Vec<char> = Vec::new();
     let mut wrote = false;
     let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= chars@.len(),
+            chars@ == path@,
+            root == (if absolute { seq!['/'] } else { Seq::<char>::empty() }),
+            crate::spec::split_segments(chars@.take(at as int)) == read.push(segment@),
+            crate::spec::named(read) == written,
+            wrote == (written.len() > 0),
+            key@ == root + crate::spec::joined(written),
+        decreases chars@.len() - at,
+    ))]
     while at < chars.len() {
         let character = chars[at];
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            assert(chars@.take(at as int + 1) =~= chars@.take(at as int).push(character));
+            crate::spec::lemma_split_segments_push(chars@.take(at as int), character);
+        }
         if character == '/' {
+            #[cfg(verus_keep_ghost)]
+            proof! {
+                crate::spec::lemma_named_push(read, segment@);
+                crate::spec::lemma_joined_push(written, segment@);
+            }
             let keep = names_something(&segment);
             if keep {
-                push_segment(&mut key, &segment, wrote);
+                // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+                let after_a_segment = wrote;
+                push_segment(&mut key, &segment, after_a_segment);
                 wrote = true;
+            }
+            #[cfg(verus_keep_ghost)]
+            proof! {
+                read = read.push(segment@);
+                if keep {
+                    written = written.push(segment@);
+                }
+                assert(key@ =~= root + crate::spec::joined(written));
             }
             segment = Vec::new();
         } else {
+            #[cfg(verus_keep_ghost)]
+            proof! {
+                assert(read.push(segment@).update(read.len() as int, segment@.push(character))
+                    =~= read.push(segment@.push(character)));
+            }
             segment.push(character);
         }
         at += 1;
     }
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        assert(chars@.take(at as int) =~= chars@);
+        crate::spec::lemma_named_push(read, segment@);
+        crate::spec::lemma_joined_push(written, segment@);
+    }
     let keep = names_something(&segment);
     if keep {
         push_segment(&mut key, &segment, wrote);
+    }
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        if keep {
+            written = written.push(segment@);
+        }
+        assert(key@ =~= root + crate::spec::joined(written));
     }
     string_of(key)
 }
 
 /// Whether a segment of a path names something: an empty segment and a `.` both name the directory
 /// they are in.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::names_something(segment@),
+))]
 fn names_something(segment: &[char]) -> bool {
+    // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
     let dot = segment.len() == 1 && segment[0] == '.';
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        if segment@ == seq!['.'] {
+            assert(segment@.len() == 1 && segment@[0] == '.');
+        }
+        if dot {
+            assert(segment@ =~= seq!['.']);
+        }
+    }
     !segment.is_empty() && !dot
 }
 
 /// Write `segment` onto the end of `key`, after a `/` where `key` already holds a segment.
+#[cfg_attr(verus_keep_ghost, verus_spec(
+    ensures
+        final(key)@ == old(key)@ + (if wrote { seq!['/'] } else { Seq::empty() }) + segment@,
+))]
 fn push_segment(key: &mut Vec<char>, segment: &[char], wrote: bool) {
     if wrote {
         key.push('/');
     }
+    #[cfg(verus_keep_ghost)]
+    proof_decl! {
+        let ghost before = key@;
+    }
     let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= segment@.len(),
+            key@ == before + segment@.take(at as int),
+        decreases segment@.len() - at,
+    ))]
     while at < segment.len() {
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            assert(segment@.take(at as int + 1) =~= segment@.take(at as int).push(segment@[at as int]));
+        }
         key.push(segment[at]);
         at += 1;
+    }
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        assert(segment@.take(at as int) =~= segment@);
+        assert(final(key)@ =~= old(key)@ + (if wrote { seq!['/'] } else { Seq::empty() }) + segment@);
     }
 }
 
 /// The characters of `s`, in order.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r@ == s@,
+))]
 fn chars_of(s: &str) -> Vec<char> {
     s.chars().collect()
 }
 
 /// The string of `chars`, in order.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r@ == chars@,
+))]
 fn string_of(chars: Vec<char>) -> String {
     chars.into_iter().collect()
 }
@@ -989,22 +1096,81 @@ fn covers_by(prefix: &str, path: &str, folds_case: bool, fold: fn(&str) -> Strin
 /// Counts segments and not bytes, since a rule can be written in a spelling of a different length
 /// than the prefix it is under (`ss` under `\u{17f}\u{17f}`). `key` is a key [`covers_by`] found under
 /// `prefix`.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r@ == crate::spec::key_tail(prefix@, key@),
+))]
 fn tail_beneath(prefix: &str, key: &str) -> String {
     let skipped = segments_in(prefix);
     let key = chars_of(key);
     let mut at = 0;
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        assert(key@.subrange(0, key@.len() as int) =~= key@);
+    }
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= key@.len(),
+            crate::spec::without_leading_slashes(key@) == crate::spec::without_leading_slashes(
+                key@.subrange(at as int, key@.len() as int),
+            ),
+        decreases key@.len() - at,
+    ))]
     while at < key.len() && key[at] == '/' {
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            assert(key@.subrange(at as int, key@.len() as int).drop_first() =~= key@.subrange(
+                at as int + 1,
+                key@.len() as int,
+            ));
+        }
         at += 1;
     }
     let mut passed: usize = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= key@.len(),
+            passed <= skipped,
+            crate::spec::key_tail(prefix@, key@) == crate::spec::after_segments(
+                key@.subrange(at as int, key@.len() as int),
+                (skipped - passed) as nat,
+            ),
+        decreases key@.len() - at,
+    ))]
     while passed < skipped && at < key.len() {
-        if key[at] == '/' {
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            assert(key@.subrange(at as int, key@.len() as int).drop_first() =~= key@.subrange(
+                at as int + 1,
+                key@.len() as int,
+            ));
+        }
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let ends_a_segment = key[at] == '/';
+        if ends_a_segment {
             passed += 1;
         }
         at += 1;
     }
     let mut tail: Vec<char> = Vec::new();
+    #[cfg(verus_keep_ghost)]
+    proof_decl! {
+        let ghost start = at;
+    }
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            start <= at <= key@.len(),
+            tail@ == key@.subrange(start as int, at as int),
+        decreases key@.len() - at,
+    ))]
     while at < key.len() {
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            assert(key@.subrange(start as int, at as int + 1) =~= key@.subrange(
+                start as int,
+                at as int,
+            ).push(key@[at as int]));
+        }
         tail.push(key[at]);
         at += 1;
     }
@@ -1012,13 +1178,45 @@ fn tail_beneath(prefix: &str, key: &str) -> String {
 }
 
 /// How many segments `prefix` has that are not empty.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::nonempty_segments(crate::spec::split_segments(prefix@)),
+))]
 fn segments_in(prefix: &str) -> usize {
     let prefix = chars_of(prefix);
     let mut count: usize = 0;
     let mut in_segment = false;
     let mut at = 0;
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        let none = crate::spec::split_segments(prefix@.take(0));
+        assert(prefix@.take(0) =~= Seq::<char>::empty());
+        assert(none == seq![Seq::<char>::empty()]);
+        assert(none.drop_last() =~= Seq::<Seq<char>>::empty());
+        assert(crate::spec::nonempty_segments(none.drop_last()) == 0);
+        assert(none.last().len() == 0);
+    }
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= prefix@.len(),
+            count <= at,
+            crate::spec::split_segments(prefix@.take(at as int)).len() > 0,
+            count == crate::spec::nonempty_segments(
+                crate::spec::split_segments(prefix@.take(at as int)),
+            ),
+            in_segment == (crate::spec::split_segments(prefix@.take(at as int)).last().len() > 0),
+        decreases prefix@.len() - at,
+    ))]
     while at < prefix.len() {
         let character = prefix[at];
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            let before = crate::spec::split_segments(prefix@.take(at as int));
+            assert(prefix@.take(at as int + 1) =~= prefix@.take(at as int).push(character));
+            crate::spec::lemma_split_segments_push(prefix@.take(at as int), character);
+            crate::spec::lemma_nonempty_segments_push(before, Seq::empty());
+            crate::spec::lemma_nonempty_segments_update_last(before, before.last().push(character));
+        }
         if character == '/' {
             in_segment = false;
         } else {
@@ -1028,6 +1226,10 @@ fn segments_in(prefix: &str) -> usize {
             in_segment = true;
         }
         at += 1;
+    }
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        assert(prefix@.take(at as int) =~= prefix@);
     }
     count
 }
