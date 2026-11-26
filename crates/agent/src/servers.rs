@@ -7285,6 +7285,101 @@ mod tests {
         assert_eq!(choices_line(&asking), None);
     }
 
+    /// SERVERS-26: the arguments a row of an `apply` step may fill are drawn where the person is
+    /// asked about the server, each as `tool:argument=kind`, in the order of the declaration's
+    /// map, directly above the digest line, and a declaration that names none draws no such
+    /// line. The regressions it rejects are a question that leaves them out, which would let the
+    /// person approve a server without seeing what a row may fill, an entry that pairs an
+    /// argument with another entry's kind, an order that follows the order the entries were
+    /// written in, and a line drawn for every server.
+    #[test]
+    fn the_arguments_a_row_may_fill_are_drawn_above_the_digest_and_only_when_there_are_some()
+    -> Result<(), Problem> {
+        let plain = Declaration::stdio(words(&["/opt/srv"]), Vec::new(), None)?;
+        let applying = plain.clone().applying(
+            [
+                (
+                    "tool_b".to_string(),
+                    [("urls".to_string(), "entries".to_string())].into(),
+                ),
+                (
+                    "tool_a".to_string(),
+                    [
+                        ("title".to_string(), "new".to_string()),
+                        ("text".to_string(), "entry".to_string()),
+                    ]
+                    .into(),
+                ),
+            ]
+            .into(),
+        )?;
+
+        let said = t!(
+            mcp_declaration_apply_arguments,
+            named = "tool_a:text=entry, tool_a:title=new, tool_b:urls=entries"
+        )
+        .to_string();
+        let lines = drawn("input", &applying, "abcd1234");
+        assert_eq!(
+            lines.iter().rev().nth(1).map(|line| line.trim()),
+            Some(said.as_str()),
+            "{lines:?}"
+        );
+        assert!(
+            lines.last().is_some_and(|line| line.contains("abcd1234")),
+            "{lines:?}"
+        );
+        assert_eq!(
+            applies_line(&applying).as_deref(),
+            Some(said.as_str()),
+            "the line `list` draws is the one the question draws"
+        );
+
+        let without = drawn("input", &plain, "abcd1234");
+        assert!(
+            !without
+                .iter()
+                .any(|line| line.contains("apply step may fill")),
+            "{without:?}"
+        );
+        assert_eq!(applies_line(&plain), None);
+        Ok(())
+    }
+
+    /// SERVERS-26: a control character in what a declaration names is drawn escaped, so a
+    /// declaration cannot move the cursor or start a line of its own in the question the person
+    /// approves on. A tool or argument is a word of letters, digits, `-` and `_`, so the kind is
+    /// where one can arrive: a kind is trimmed before it is checked, and a newline around a kind
+    /// passes. The regression it rejects is a line that draws the kind as it is, which breaks the
+    /// question into two lines.
+    #[test]
+    fn a_control_character_in_what_a_row_may_fill_is_drawn_escaped() -> Result<(), Problem> {
+        let declaration = Declaration::stdio(words(&["/opt/srv"]), Vec::new(), None)?.applying(
+            [(
+                "tool_a".to_string(),
+                [("urls".to_string(), "entry\n".to_string())].into(),
+            )]
+            .into(),
+        )?;
+
+        let line = applies_line(&declaration);
+
+        assert_eq!(
+            line,
+            Some(t!(
+                mcp_declaration_apply_arguments,
+                named = r#"tool_a:urls="entry\n""#
+            ))
+        );
+        assert!(
+            drawn("input", &declaration, "abcd1234")
+                .iter()
+                .all(|line| !line.contains('\n')),
+            "every line of the question is one line"
+        );
+        Ok(())
+    }
+
     /// SERVERS-18: header names and environment variable names are drawn,
     /// and secret values are never read or shown.
     #[test]
