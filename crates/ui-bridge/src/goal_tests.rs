@@ -331,9 +331,11 @@ fn service_judging(answers: Answers, judge: Judge) -> (u16, Bodies) {
                     .push(String::from_utf8_lossy(&body).into_owned());
             }
             if answers == Answers::Refuse {
-                let _ = stream.write_all(
-                    b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                );
+                stream
+                    .write_all(
+                        b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .ok();
                 continue;
             }
             let judging = request["messages"].is_array() && request.get("tools").is_none();
@@ -363,11 +365,12 @@ fn service_judging(answers: Answers, judge: Judge) -> (u16, Bodies) {
             let chunk = json!({"model": "m",
                 "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]});
             let body = format!("data: {chunk}\n\ndata: [DONE]\n\n");
-            let _ = write!(
+            write!(
                 stream,
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
-            );
+            )
+            .ok();
         }
     });
     (port, bodies)
@@ -450,7 +453,8 @@ impl Served {
                     std::thread::sleep(Duration::from_millis(20));
                 }
                 other => {
-                    other.unwrap_or_else(|failure| panic!("turn.send: {}", failure.message));
+                    let sent = other.map_err(|failure| failure.message);
+                    assert!(sent.is_ok(), "turn.send: {sent:?}");
                     return;
                 }
             }
@@ -491,9 +495,12 @@ impl Served {
             .to_string(),
         )
         .unwrap();
-        self.bridge
+        let answer = self
+            .bridge
             .dispatch(&request)
-            .unwrap_or_else(|failure| panic!("session.goal.continue: {}", failure.message))
+            .map_err(|failure| failure.message);
+        assert!(answer.is_ok(), "session.goal.continue: {answer:?}");
+        answer.unwrap_or_default()
     }
 
     /// The events sent so far with this name.

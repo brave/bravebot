@@ -680,9 +680,11 @@ mod tests {
                 reason: "nothing above runs the tests".to_string(),
             }
         );
-        let goal = goal.expect("a goal sent back is still set");
-        assert_eq!(goal.rounds(), 1);
-        assert_eq!(goal.last_reason(), Some("nothing above runs the tests"));
+        assert_eq!(goal.as_ref().map(Running::rounds), Some(1));
+        assert_eq!(
+            goal.as_ref().and_then(Running::last_reason),
+            Some("nothing above runs the tests")
+        );
     }
 
     /// Every other verdict, and a check that failed, ends the goal and says which ending it was
@@ -760,8 +762,7 @@ mod tests {
                 reason: "nothing ran".to_string(),
             }
         );
-        let goal = goal.expect("a stalled goal is still set");
-        assert!(goal.is_stalled());
+        assert_eq!(goal.as_ref().map(Running::is_stalled), Some(true));
     }
 
     /// A verdict that arrives after the goal was taken off is neither acted on nor reported
@@ -797,16 +798,15 @@ mod tests {
             Err("the request failed".to_string()),
         ] {
             let mut goal = a_goal();
-            goal.as_mut().expect("set").pause();
+            assert!(goal.as_mut().is_some_and(Running::pause));
             assert_eq!(
                 settle(&mut goal, judged.clone(), 1),
                 Settled::Ignored,
                 "{judged:?}"
             );
-            let kept = goal.expect("a paused goal is kept");
-            assert!(kept.is_paused());
-            assert_eq!(kept.rounds(), 0);
-            assert_eq!(kept.last_reason(), None);
+            assert_eq!(goal.as_ref().map(Running::is_paused), Some(true));
+            assert_eq!(goal.as_ref().map(Running::rounds), Some(0));
+            assert_eq!(goal.as_ref().and_then(Running::last_reason), None);
         }
     }
 }

@@ -4138,7 +4138,7 @@ impl Bridge {
             self.emitter
                 .send(Event::new("goal.changed", &handle, json!({ "goal": goal })));
         }
-        Ok(crate::goal::answered(&answer, goal))
+        Ok(crate::goal::answered(&answer, &goal))
     }
 
     /// Take the goal's next step, which the window asks for once a turn has ended and the prompts

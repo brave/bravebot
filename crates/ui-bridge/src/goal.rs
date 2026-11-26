@@ -369,7 +369,7 @@ pub(crate) fn snapshot(slot: &GoalSlot, tokens: u64, now: Instant) -> Value {
 }
 
 /// What `session.goal` answers: the goal as it now stands, whether it changed, and the lines.
-pub(crate) fn answered(answer: &Answer, goal: Value) -> Value {
+pub(crate) fn answered(answer: &Answer, goal: &Value) -> Value {
     let lines: Vec<String> = answer
         .lines
         .iter()

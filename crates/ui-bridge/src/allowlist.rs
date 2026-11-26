@@ -599,18 +599,18 @@ mod tests {
     #[test]
     fn the_goal_command_is_denied_to_a_client_of_the_host() {
         assert!(DENIED.contains(&"session.goal"));
-        let failure = check(&request(
+        let refused = check(&request(
             "session.goal",
             json!({"session": "s1", "argument": "cargo test exits 0"}),
         ))
         .err()
-        .expect("refused");
-        assert_eq!(failure.code, ErrorCode::NotAllowed);
+        .map(|failure| failure.code);
+        assert_eq!(refused, Some(ErrorCode::NotAllowed));
         assert!(DENIED.contains(&"session.goal.continue"));
-        let failure = check(&request("session.goal.continue", json!({"session": "s1"})))
+        let refused = check(&request("session.goal.continue", json!({"session": "s1"})))
             .err()
-            .expect("refused");
-        assert_eq!(failure.code, ErrorCode::NotAllowed);
+            .map(|failure| failure.code);
+        assert_eq!(refused, Some(ErrorCode::NotAllowed));
     }
 
     /// Rejects `session.btw`, `session.recap` and `session.aside.cancel` for a client of the host:
