@@ -42,6 +42,8 @@ pub enum Consumer {
     TrustRead,
     /// The label both names read back with after an untrusted write through the alias.
     TrustWrite,
+    /// The label the name reads back with after a `run` line's redirection wrote through the alias.
+    RedirectionTrust,
     /// Whether a writer through the alias is refused while a writer through the name is open.
     WriterReservation,
     /// Whether a deny rule written about the name refuses a read and a write of the alias.

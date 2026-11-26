@@ -188,8 +188,8 @@ deny-rule cell that is not covered, is a defect. A change that fixes a spelling 
 a spelling with no row gets one in the same commit as its test.
 
 The rows a volume can make without a person opening another directory are `ALIASES` in
-`crates/agent/test-support/aliases.rs`. Seven tests ask the six consumers about every row (the
-deny rule is asked in `turn.rs` and in `file_preview.rs`, the others once, in `workspace.rs`), skip
+`crates/agent/test-support/aliases.rs`. Eight tests ask the seven consumers about every row (the
+deny rule is asked in `turn.rs` and in `file_preview.rs`, the redirection in `turn.rs`, the others once, in `workspace.rs`), skip
 a row the volume holds apart, and fail on a row listed as unhandled once it is handled. The fifth
 consumer is the lookup of a program bravebot starts itself ([SANDBOX-30](sandboxing.md#SANDBOX-30)), which is asked
 of the rows that spell a directory another way and leaves out an entry under every spelling of a
@@ -206,6 +206,10 @@ and resolves a file with `canonicalize` before it compares it with the directori
 which is what resolves those spellings on Windows, and no test has run that on a Windows host. A value
 that is not text is judged as the bytes it is, which a test of each start pins.
 
+A `run` redirection is asked every row by a seventh consumer, `RedirectionTrust`: after a line wrote
+through `>` or `>>` under one name of a row, from output nobody vouched for, the file reads back as
+untrusted under the other name too.
+
 | Alias | Example | Map and writer reservation | Deny rules | Pinned by, or tracked in |
 |---|---|---|---|---|
 | `.` segment | `src/./a.md` for `src/a.md` | one rule | covered | `bravebot_agent::workspace::a_second_spelling_of_a_distrusted_file_is_read_as_untrusted` |
@@ -216,8 +220,8 @@ that is not text is judged as the bytes it is, which a test of each start pins.
 | Long s | `ſrc/a.md` | one rule where the volume folds case | covered | `bravebot_core::trust::a_folding_volume_reads_a_long_s_as_the_letter_it_opens_as` |
 | Letter whose case is two letters | `claß.md` and `class.md` | a distrust, an undecided boundary and the writer reservation join the two; a trust reaches only the spelling it was written about | covered | `bravebot_core::trust::a_trust_does_not_reach_a_spelling_only_full_case_folding_joins`, `bravebot_core::trust::a_refusal_about_a_spelling_only_full_case_folding_joins_decides_the_other` |
 | NFC and NFD | `café.md` in either form | a distrust, an undecided boundary and the writer reservation join the forms; a trust reaches only the spelling it was written about | covered, whichever form the rule and the file are in | `bravebot_agent::workspace::a_canonically_equivalent_spelling_of_a_distrusted_file_is_read_as_untrusted`, `bravebot_core::permissions::a_deny_or_ask_rule_covers_every_canonical_spelling_of_a_name` |
-| Symbolic link | a link to the file, or on the way to it | the other names are found by following the link, so a read is untrusted where the map distrusts any of them, a write distrusts all of them, and a writer under one name refuses a writer under the other (TRUST-4) | covered | `bravebot_agent::workspace::each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_listed_gap`, `each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_is_a_listed_gap`, `each_alias_in_the_table_is_refused_as_a_second_writer_unless_it_is_a_listed_gap`, `bravebot_agent::workspace::a_trusted_write_does_not_read_back_as_trusted_through_a_name_in_a_distrusted_directory` |
-| Hard link | a second entry for the file | on Unix, as for a symbolic link, the other names found by device and inode; on Windows the file index is not read, so a hard link stays a Known cost there | covered on Unix, by device and inode | the three `each_alias_in_the_table_` tests above, `bravebot_agent::workspace::the_other_names_of_a_file_are_its_hard_links_landing_and_second_path` |
+| Symbolic link | a link to the file, or on the way to it | the other names are found by following the link, so a read is untrusted where the map distrusts any of them, a write, a `run` redirection included, distrusts all of them, and a writer under one name refuses a writer under the other (TRUST-4) | covered | `bravebot_agent::workspace::each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_listed_gap`, `each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_is_a_listed_gap`, `each_alias_in_the_table_is_refused_as_a_second_writer_unless_it_is_a_listed_gap`, `bravebot_agent::workspace::a_trusted_write_does_not_read_back_as_trusted_through_a_name_in_a_distrusted_directory`, `bravebot_agent::turn::a_redirection_distrusts_every_name_of_the_file_it_wrote`, `bravebot_agent::turn::a_line_naming_one_file_under_two_of_its_names_is_refused_as_a_second_writer`, `bravebot_agent::turn::each_alias_in_the_table_reads_back_a_redirection_through_it_as_untrusted_unless_it_is_a_listed_gap` |
+| Hard link | a second entry for the file | on Unix, as for a symbolic link, the other names found by device and inode; on Windows the file index is not read, so a hard link stays a Known cost there | covered on Unix, by device and inode | the `each_alias_in_the_table_` tests above, the two redirection tests of the previous row, `bravebot_agent::workspace::the_other_names_of_a_file_are_its_hard_links_landing_and_second_path` |
 | Another path to the same tree | a macOS firmlink, a Linux bind mount, once both are open | on Unix, as for a symbolic link, with the name under each open directory that is the same directory found by device and inode; `/add-dir` and every other door refuse to open a second path to a tree that is already open ([TRUST-9](#TRUST-9)), so the pair is reached only by a tree opened before the other, which the lookup covers; on Windows a Known cost | covered on Unix, by device and inode of the directory | `bravebot_agent::workspace::a_name_is_respelled_under_each_open_directory_that_is_the_same_directory`, `bravebot_agent::workspace::a_firmlink_name_of_the_working_directory_is_another_key_for_the_file`, `a_file_written_through_a_second_path_to_the_tree_reads_back_untrusted_through_the_other` and `a_second_writer_through_a_second_path_to_the_tree_is_refused` (any Unix host, identity injected), `a_file_written_through_the_firmlink_spelling_reads_back_untrusted_through_the_other` and `a_second_writer_through_the_other_firmlink_spelling_is_refused` (macOS), the "another path to the same tree" row of the alias table (macOS), `bravebot_sandbox::programs::a_path_entry_the_volume_opens_as_a_directory_a_stage_may_write_is_not_searched` for the program lookup |
 | 8.3 short name | `ENV~1` for `.env` | refused on Windows, never reaches the map | refused | `bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only` |
 | Alternate data stream | `.env::$DATA` | refused on Windows | refused | same |
@@ -637,6 +641,12 @@ as a second writer, in either order.
 `verified-by: bravebot_agent::tools::tests::confinement::a_hard_link_is_refused_when_the_walk_for_its_other_names_gives_up_under_a_write_rule`
 `verified-by: bravebot_agent::workspace::an_untrusted_write_through_a_canonically_equivalent_spelling_is_read_back_untrusted_under_either`
 `verified-by: bravebot_agent::turn::a_line_naming_one_file_under_two_equivalent_spellings_is_refused_as_a_second_writer`
+`verified-by: bravebot_agent::turn::a_redirection_distrusts_every_name_of_the_file_it_wrote`
+`verified-by: bravebot_agent::turn::a_line_naming_one_file_under_two_of_its_names_is_refused_as_a_second_writer`
+`verified-by: bravebot_agent::turn::a_redirection_enters_a_name_an_earlier_part_of_the_line_gave_the_file`
+`verified-by: bravebot_agent::turn::a_redirection_whose_other_names_were_not_all_found_leaves_the_file_untrusted`
+`verified-by: bravebot_agent::turn::a_trusted_redirection_does_not_lift_a_name_of_the_file_out_of_a_distrusted_directory`
+`verified-by: bravebot_agent::turn::each_alias_in_the_table_reads_back_a_redirection_through_it_as_untrusted_unless_it_is_a_listed_gap`
 `verified-by: bravebot_core::policy::a_vouch_for_the_version_shown_is_spent_on_it`
 `verified-by: bravebot_core::policy::a_vouch_is_not_spent_on_a_version_nobody_was_shown`
 `verified-by: bravebot_core::policy::a_vouch_is_not_spent_after_a_program_started_while_the_question_was_open`
@@ -1604,7 +1614,7 @@ taking it here asks what the workspace asks and no more.
 
 The rules recorded inside the directory still weaken the answer, because a line whose output is
 untrusted distrusts the file it redirected into, under every name the file has
-([tools/command-line.md](tools/command-line.md)). Without that a turn could read its own untrusted
+([tools/command-line.md](tools/command-line.md#CMDLINE-5)). Without that a turn could read its own untrusted
 output back as trusted through the directory around it, which is the case worth having right in a
 place intermediate files are written.
 

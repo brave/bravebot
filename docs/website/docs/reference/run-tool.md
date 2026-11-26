@@ -485,7 +485,8 @@ accepted only in the spelling of the open directory the target lands in. The mes
 `/dev/null`.
 
 **A redirection also records what it wrote.** Where the line's output is untrusted, every file the line
-opened for writing becomes untrusted, which is what stops a program's output being read back as
+opened for writing becomes untrusted under every name the file has, so a symbolic link or a hard link to it
+does not leave it trusted. That is what stops a program's output being read back as
 trusted. Where the output is trusted the map is left as it was, because `>>` keeps whatever the file
 already held and vouching for a program answers for the program rather than for one file's contents, so
 a line never raises a path's trust. What is recorded is what the line actually opened rather than the

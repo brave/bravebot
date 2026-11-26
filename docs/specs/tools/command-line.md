@@ -543,7 +543,27 @@ trust it. Failure, cancellation or an error after entry leaves explicit distrust
 branch enters no effect and changes no decision. A failed attempt to open a destination is
 conservative about its possible effects; an approval alone changes nothing.
 
+A destination is entered under every name the file has, as a `write_file` is: a symbolic link at the
+destination or on the way to it, and a hard link. Each other name is recorded untrusted before the
+open, reserved so that a second writer under any of them is refused while the line holds the first,
+read for what the map said before the line, and completed with the destination. The names are found
+at every open, so a destination that an earlier part of the line linked to another file is entered
+under the names it has then. A search for the names that does not finish reads as untrusted. A later
+part of the line that opens another name of a destination the line already holds, whether the file
+had both names when the line began or an earlier part gave it the second, is refused as a second
+writer and does not run.
+
 `verified-by: bravebot_agent::turn::foreground_redirection_quarantines_live_reads_and_all_endings`
+`verified-by: bravebot_agent::turn::a_redirection_distrusts_every_name_of_the_file_it_wrote`
+`verified-by: bravebot_agent::turn::a_line_naming_one_file_under_two_of_its_names_is_refused_as_a_second_writer`
+`verified-by: bravebot_agent::turn::a_redirection_enters_a_name_an_earlier_part_of_the_line_gave_the_file`
+`verified-by: bravebot_agent::turn::a_redirection_whose_other_names_were_not_all_found_leaves_the_file_untrusted`
+`verified-by: bravebot_agent::turn::a_later_part_of_a_line_opening_another_name_of_a_held_destination_is_refused`
+`verified-by: bravebot_agent::turn::a_trusted_redirection_does_not_lift_a_name_of_the_file_out_of_a_distrusted_directory`
+`verified-by: bravebot_agent::turn::a_trusted_redirection_that_fails_leaves_every_name_of_the_file_untrusted`
+`verified-by: bravebot_agent::turn::a_trusted_redirection_that_errors_after_entry_leaves_every_name_of_the_file_untrusted`
+`verified-by: bravebot_agent::turn::a_trusted_redirection_stopped_with_the_turn_leaves_every_name_of_the_file_untrusted`
+`verified-by: bravebot_agent::turn::each_alias_in_the_table_reads_back_a_redirection_through_it_as_untrusted_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::turn::a_trusted_line_appending_to_a_trusted_file_leaves_it_trusted`
 `verified-by: bravebot_agent::turn::a_trusted_line_appending_to_an_untrusted_file_leaves_it_untrusted`
 `verified-by: bravebot_agent::turn::a_trusted_line_that_exits_nonzero_leaves_its_destination_untrusted`
