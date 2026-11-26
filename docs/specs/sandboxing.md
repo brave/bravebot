@@ -350,6 +350,8 @@ the program string only. It is made when the stage is prepared, before a profile
 no failure path for a file that is missing or unreadable. The container still limits what the copy
 can reach.
 
+`verified-by: bravebot_sandbox_rules::spec::a_seatbelt_literal_reads_back_as_its_path`
+`verified-by: bravebot_sandbox_rules::spec::a_quoted_argument_reads_back_as_itself`
 `verified-by: bravebot_sandbox::macos::paths_cannot_inject_profile_syntax`
 `verified-by: bravebot_sandbox::macos::a_profile_containing_a_hostile_path_still_applies`
 `verified-by: bravebot_sandbox::macos::granted_paths_appear_as_subpath_rules`
