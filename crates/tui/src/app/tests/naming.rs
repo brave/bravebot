@@ -409,8 +409,8 @@ fn a_folded_paste_naming_agents_md_keeps_it_out_of_the_next_turns_system_prompt(
     );
 }
 
-/// NAME-1: the same workspace, with the name typed. Rejects a seam that drops every name, which
-/// the test above would pass.
+/// NAME-1: the README workspace of `a_name_inside_a_folded_paste_gives_the_turn_no_file`, with the
+/// name typed. Rejects a seam that drops every name, which that test would pass.
 #[test]
 fn a_name_typed_in_the_line_gives_the_turn_its_file() {
     let root = a_workspace_with_a_readme();
