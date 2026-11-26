@@ -57,6 +57,73 @@ impl SandboxMode {
         }
     }
 
+    /// Whether a stage under this mode is confined by a profile at all. Only `off` is not.
+    pub fn confines(self) -> bool {
+        self != Self::Off
+    }
+
+    /// Whether a stage under this mode reads the machine except the credential table
+    /// (SANDBOX-12), on a platform that is not Windows and in a session that names a home
+    /// directory. `strict` never does, and on Windows and without a home no mode does, since the
+    /// credential rows are rows under the home and a read of the whole machine with none to
+    /// subtract is the one grant that must not be made (SANDBOX-18).
+    pub fn reads_the_machine(self, windows: bool, has_home: bool) -> bool {
+        !windows && has_home && self != Self::Strict
+    }
+
+    /// Whether a stage under this mode writes the directories the session was opened on and its
+    /// scratch directory. `read-only` does not (SANDBOX-22).
+    pub fn writes_the_session(self) -> bool {
+        self != Self::ReadOnly
+    }
+
+    /// Whether a stage under this mode writes every toolchain's cache: only where it reads the
+    /// machine, and not under `read-only`, which writes no cache (SANDBOX-15, SANDBOX-22).
+    pub fn writes_every_cache(self, reads_the_machine: bool) -> bool {
+        reads_the_machine && self != Self::ReadOnly
+    }
+
+    /// Whether a stage under this mode is given a toolchain's cache to write as well as its list
+    /// to read. `read-only` gives the list alone (SANDBOX-22).
+    pub fn writes_a_toolchain_cache(self) -> bool {
+        self != Self::ReadOnly
+    }
+
+    /// Whether a grant for writing a path a person let programs reach gives its write as well as
+    /// its read. Under `read-only` it gives the read alone, as a new request for it would
+    /// (SANDBOX-22, SANDBOX-28).
+    pub fn writes_what_was_granted(self) -> bool {
+        self != Self::ReadOnly
+    }
+
+    /// Whether a stage under this mode is given every path a request for writing would be granted,
+    /// without the request: only under `workspace-write`, where the person allowed it and the
+    /// machine is read (SANDBOX-28). `strict` asked for less reach than the default, and `off` has
+    /// no profile.
+    pub fn writes_without_a_request(self, allowed: bool, reads_the_machine: bool) -> bool {
+        allowed && self == Self::WorkspaceWrite && reads_the_machine
+    }
+
+    /// Whether a stage under this mode may keep the network for a reason it carries where the
+    /// session closed it: a toolchain that fetches, a credential scope, or a program that talks to a
+    /// remote. `read-only` gives no stage a reason (SANDBOX-20, SANDBOX-22).
+    pub fn keeps_the_network_for_a_reason(self) -> bool {
+        self != Self::ReadOnly
+    }
+
+    /// Whether a stage under this mode may be lent the remote scope, which is how it pushes and
+    /// which writes `~/.ssh/known_hosts`. `read-only` lends it to no stage (SANDBOX-16, SANDBOX-22).
+    pub fn lends_the_remote_scope(self) -> bool {
+        self != Self::ReadOnly
+    }
+
+    /// Whether a stage under this mode must be refused on a kernel that cannot keep it from a unix
+    /// socket that has a path: `strict` and `read-only`, which promise less reach than that kernel
+    /// gives (SANDBOX-3, SANDBOX-22).
+    pub fn needs_sockets_governed(self) -> bool {
+        matches!(self, Self::Strict | Self::ReadOnly)
+    }
+
     /// The mode a word names, or `None`.
     ///
     /// Exact and lower case, as the permission modes are read: a value that is almost a mode is
