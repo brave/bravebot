@@ -12148,6 +12148,7 @@ fn a_rule_over_a_git_file_a_symlinked_repository_lands_on_keeps_it_closed() {
 }
 
 /// A policy trusting the whole of `workspace` except `distrusted`, which the map holds as untrusted.
+#[cfg(unix)]
 fn git_policy_distrusting<'a>(
     workspace: &Workspace,
     sink: &'a mut RecordingSink,
