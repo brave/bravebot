@@ -26,7 +26,7 @@ use posix as sys;
 #[cfg(windows)]
 use windows as sys;
 
-use bravebot_filetype::{SNIFF_BYTES, looks_binary};
+use bravebot_filetype::{SNIFF_BYTES, decode_text};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fs::File;
@@ -116,7 +116,7 @@ fn attachable_at(parent: &File, leaf: &str) -> io::Result<()> {
     }
     let mut head = Vec::with_capacity(SNIFF_BYTES);
     file.take(SNIFF_BYTES as u64).read_to_end(&mut head)?;
-    if looks_binary(&head) {
+    if decode_text(head).is_none() {
         return Err(invalid("Not a text file"));
     }
     Ok(())

@@ -49,11 +49,14 @@ name a file when you want it worked on.
 ### NAME-1: a named file's contents enter the turn as trusted input
 
 `@path` in a prompt and `--file` on the command line do the same thing and are trusted for the same
-reason.
+reason. The read decodes the file the way `read_file` decodes a page
+([READ-3](tools/read-file.md#READ-3)): a file in UTF-16, UTF-32 or Latin-1 becomes context as text,
+with no note of the decoding, rather than refusing the file as binary.
 
 `verified-by: bravebot_agent::turn::a_turn_includes_requested_file_contents`
 `verified-by: bravebot_agent::turn::a_turn_includes_referenced_file_contents`
 `verified-by: bravebot_agent::turn::a_referenced_file_is_trusted_though_the_workspace_is_not`
+`verified-by: bravebot_agent::turn::a_mentioned_file_in_another_encoding_becomes_context`
 
 <a id="NAME-2"></a>
 ### NAME-2: the rule is for that file, and nothing beside it

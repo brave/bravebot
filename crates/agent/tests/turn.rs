@@ -53702,6 +53702,92 @@ fn a_dropped_text_file_from_outside_the_workspace_becomes_context() {
     );
 }
 
+/// `text` as a Windows tool writes it: UTF-16 after a byte order mark.
+fn utf16_file(text: &str) -> Vec<u8> {
+    let mark: [u8; 2] = [0xFF, 0xFE];
+    let units = text.encode_utf16().flat_map(|unit| unit.to_le_bytes());
+    mark.into_iter().chain(units).collect()
+}
+
+/// READ-3 covers `read_file`'s decoding of UTF-16, UTF-32 and Latin-1. A text file dropped on the
+/// window, or named with `@`, is read the same way: it becomes context exactly as a plain UTF-8
+/// file does, rather than ending the turn on a refusal that a file this shape is not text.
+#[test]
+fn a_dropped_file_in_another_encoding_becomes_context() {
+    let elsewhere = Scratch::new("dropped-utf16-elsewhere");
+    std::fs::write(
+        elsewhere.path.join("notes.txt"),
+        utf16_file("the tail of the utf-16 note"),
+    )
+    .unwrap();
+
+    let scratch = Scratch::new("dropped-utf16-here");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("read it"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    let dropped = elsewhere
+        .path
+        .join("notes.txt")
+        .to_string_lossy()
+        .to_string();
+    let task = Task::new("what does it say").with_dropped_text(dropped);
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("a dropped file in another encoding must not fail the turn");
+
+    let body = received.recv().expect("a request was sent");
+    assert!(
+        body.contains("the tail of the utf-16 note"),
+        "the dropped UTF-16 file was not decoded into context: {body}"
+    );
+}
+
+/// The same file, named with `@` instead of dropped, inside the workspace.
+#[test]
+fn a_mentioned_file_in_another_encoding_becomes_context() {
+    let scratch = Scratch::new("mentioned-utf16");
+    std::fs::write(
+        scratch.path.join("notes.txt"),
+        utf16_file("the tail of the utf-16 note"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("read it"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("what does @notes.txt say").with_file("notes.txt");
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("a mentioned file in another encoding must not fail the turn");
+
+    let body = received.recv().expect("a request was sent");
+    assert!(
+        body.contains("the tail of the utf-16 note"),
+        "the mentioned UTF-16 file was not decoded into context: {body}"
+    );
+}
+
 /// Each tool result in a request, in the order the calls were answered.
 fn each_tool_result(request: &str) -> Vec<String> {
     let parsed: serde_json::Value = serde_json::from_str(request).expect("a request");

@@ -963,16 +963,35 @@ impl Workspace {
         policy: &mut Policy<'_, S>,
         path: &Labelled<String>,
     ) -> Result<Labelled<String>, WorkspaceError> {
-        self.read_text(policy, path, Reach::Confined)
+        self.read_text(policy, path, Reach::Confined, Decode::Exact)
     }
 
-    /// Read a text file a person dropped on the window, wherever on the disk it sits.
+    /// Read a file named with `@` as context for the turn, decoded exactly as [`read_file`] shows
+    /// it (READ-3): UTF-16 and UTF-32 under a byte order mark, and a few bytes that are not UTF-8,
+    /// read as the text they decode to.
     ///
-    /// [`Workspace::read`] in every respect but path confinement, and it gives that up for the
-    /// same reason [`Workspace::read_attachment`] does: a drop nearly always comes from
-    /// `~/Downloads` or `~/Desktop`, so confining it would refuse the case the gesture exists for.
-    /// A dropped `.md` is a dropped file exactly as a dropped `.png` is; that one becomes context
-    /// rather than bytes is a fact about its type, not about where it may live.
+    /// [`Workspace::read`] in every respect but that. This is a context-only read: what it returns
+    /// is put in the conversation and nothing writes it back, so it may take the decoding
+    /// [`Workspace::read`] refuses because *its* callers write the text back to the file or hand
+    /// it on as the file's own bytes.
+    pub fn read_mentioned_text<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+    ) -> Result<Labelled<String>, WorkspaceError> {
+        self.read_text(policy, path, Reach::Confined, Decode::Allowed)
+    }
+
+    /// Read a text file a person dropped on the window, wherever on the disk it sits, decoded
+    /// exactly as [`read_file`] shows it (READ-3).
+    ///
+    /// [`Workspace::read`] in every respect but path confinement and decoding, and it gives up
+    /// confinement for the same reason [`Workspace::read_attachment`] does: a drop nearly always
+    /// comes from `~/Downloads` or `~/Desktop`, so confining it would refuse the case the gesture
+    /// exists for. A dropped `.md` is a dropped file exactly as a dropped `.png` is; that one
+    /// becomes context rather than bytes is a fact about its type, not about where it may live.
+    /// It decodes because this, like [`Workspace::read_mentioned_text`], is a context-only read:
+    /// what it returns is put in the conversation and nothing writes it back.
     ///
     /// What makes reaching out sound is the same thing there too: the path is precommitted into
     /// routing before the turn starts, from a gesture a person made, and the routing gate refuses
@@ -987,7 +1006,7 @@ impl Workspace {
         policy: &mut Policy<'_, S>,
         path: &Labelled<String>,
     ) -> Result<Labelled<String>, WorkspaceError> {
-        self.read_text(policy, path, Reach::Dropped)
+        self.read_text(policy, path, Reach::Dropped, Decode::Allowed)
     }
 
     fn read_text<S: Sink>(
@@ -995,8 +1014,9 @@ impl Workspace {
         policy: &mut Policy<'_, S>,
         path: &Labelled<String>,
         reach: Reach,
+        decode: Decode,
     ) -> Result<Labelled<String>, WorkspaceError> {
-        self.read_text_stamped(policy, path, reach)
+        self.read_text_stamped(policy, path, reach, decode)
             .map(|(read, _)| read)
     }
 
@@ -1010,7 +1030,7 @@ impl Workspace {
         policy: &mut Policy<'_, S>,
         path: &Labelled<String>,
     ) -> Result<(Labelled<String>, Stamp), WorkspaceError> {
-        self.read_text_stamped(policy, path, Reach::Confined)
+        self.read_text_stamped(policy, path, Reach::Confined, Decode::Exact)
     }
 
     fn read_text_stamped<S: Sink>(
@@ -1018,12 +1038,13 @@ impl Workspace {
         policy: &mut Policy<'_, S>,
         path: &Labelled<String>,
         reach: Reach,
+        decode: Decode,
     ) -> Result<(Labelled<String>, Stamp), WorkspaceError> {
         // The gates read no file and decide nothing about one, so they run before the boundary is
         // taken. Inside it go the path lookup, the label lookup and the read, which have to agree.
         let relative = Self::gate_text_read(policy, path)?;
         let (measured, read, stamp) = policy.capture_files_shared(|policy| {
-            let (measured, read) = self.read_text_measured(policy, &relative, reach)?;
+            let (measured, read) = self.read_text_measured(policy, &relative, reach, decode)?;
             let stamp = policy.file_authority().stamp_of(&self.trust_key(&relative));
             Ok::<_, WorkspaceError>((measured, read, stamp))
         })?;
@@ -1039,7 +1060,7 @@ impl Workspace {
         reach: Reach,
     ) -> Result<Labelled<String>, WorkspaceError> {
         let relative = Self::gate_text_read(policy, path)?;
-        let (measured, read) = self.read_text_measured(policy, &relative, reach)?;
+        let (measured, read) = self.read_text_measured(policy, &relative, reach, Decode::Exact)?;
         policy.record_path(Capability::FileRead, measured);
         read
     }
@@ -1068,6 +1089,7 @@ impl Workspace {
         policy: &Policy<'_, S>,
         relative: &str,
         reach: Reach,
+        decode: Decode,
     ) -> Result<TextMeasured, WorkspaceError> {
         // Not a decision taken from the bytes: the caller says which of the two reads this is,
         // and it says so from the shape of the gesture that produced the path.
@@ -1086,7 +1108,19 @@ impl Workspace {
 
         let read = std::fs::read(&resolved)
             .map_err(|e| read_failure(&e, &resolved, relative, &self.root))
-            .and_then(|raw| Ok(Labelled::new(exact_text(raw, relative)?, label)));
+            .and_then(|raw| {
+                let text = match decode {
+                    Decode::Exact => exact_text(raw, relative)?,
+                    Decode::Allowed => {
+                        decode_text(raw)
+                            .ok_or_else(|| WorkspaceError::Binary {
+                                path: relative.to_string(),
+                            })?
+                            .text
+                    }
+                };
+                Ok(Labelled::new(text, label))
+            });
         Ok((measured, read))
     }
 
