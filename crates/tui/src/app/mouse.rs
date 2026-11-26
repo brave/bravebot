@@ -5,7 +5,7 @@ use super::dispatch_command;
 use super::keys::{Action, carry_out_choice};
 use crate::command_table::{
     CONTEXT_COMMAND, DIFF_COMMAND, EFFORT_COMMAND, LSP_COMMAND, MCP_COMMAND, MODEL_COMMAND,
-    is_carried_out_at_once, why_it_waits,
+    SANDBOX_COMMAND, is_carried_out_at_once, why_it_waits,
 };
 use crate::render;
 use crate::state::{Hit, Session, Status, Target};
@@ -449,6 +449,7 @@ fn click_shortcut(session: &mut Session, hit: Hit) -> Action {
     match hit {
         Hit::Footer(footer) => click_footer(session, footer),
         Hit::Panel(crate::panel::Target::Model) => click_command(session, MODEL_COMMAND),
+        Hit::Panel(crate::panel::Target::Sandbox) => click_command(session, SANDBOX_COMMAND),
         Hit::Panel(crate::panel::Target::Effort) => click_command(session, EFFORT_COMMAND),
         Hit::Panel(crate::panel::Target::Context) => click_command(session, CONTEXT_COMMAND),
         Hit::Panel(crate::panel::Target::Servers) => click_command(session, MCP_COMMAND),
