@@ -3,6 +3,7 @@ import type { Handoff } from './handoff'
 import type { RetryDue } from './retry'
 import type { FileAttachment } from '../shared/files'
 import type { AsideRow } from '../shared/aside'
+import type { GoalSnapshot } from '../shared/goal'
 import type { Staged, Staging } from './staging'
 import type {
   Checking,
@@ -101,6 +102,16 @@ export interface Live {
   notes?: SessionNote[]
   /** The `/btw` and `/recap` answers of this session, oldest first. Shown beside it, never sent. */
   asides?: AsideRow[]
+  /** The goal the chat works towards, as the bridge last sent it, or null where none is set (GOAL-1). */
+  goal?: GoalSnapshot | null
+  /**
+   * The goal has a step to ask for: a turn ended under it, or a check sent the work back. Asked
+   * with `session.goal.continue` once the chat is idle and its queue is empty, so a goal never
+   * goes before a prompt the person queued.
+   */
+  goalNext?: boolean
+  /** The goal is out to the judge. Drawn as a turn, so Stop and Escape stop the check (GOAL-10). */
+  goalChecking?: boolean
   quarantine: Shown[]
   phase: Waiting | null
   /**

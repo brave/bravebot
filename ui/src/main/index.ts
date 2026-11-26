@@ -689,6 +689,9 @@ const ALLOWED = new Set([
   'session.btw',
   'session.recap',
   'session.aside.cancel',
+  // A typed `/goal` (CMD-1, GOAL-1), and the goal's next step once the queued prompts have gone.
+  'session.goal',
+  'session.goal.continue',
   'mentions.offer',
   'mentions.named',
   'confirm.reply',

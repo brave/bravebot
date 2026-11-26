@@ -84,7 +84,7 @@ const TAKES_NO_DIRECTORY = [
   'agent.info', 'session.fork', 'session.close', 'session.mode', 'session.sandbox', 'session.limit', 'session.variant', 'session.rewind',
   'session.note', 'session.folders.list',
   'session.report.cost', 'session.report.context', 'session.report.request', 'session.report.status',
-  'turn.send', 'turn.cancel', 'turn.interject', 'session.enhance', 'session.enhance.cancel', 'session.compact', 'session.compact.cancel', 'session.handoff', 'session.handoff.cancel', 'session.background', 'session.btw', 'session.recap', 'session.aside.cancel', 'mentions.offer', 'mentions.named', 'confirm.reply', 'run.reply',
+  'turn.send', 'turn.cancel', 'turn.interject', 'session.enhance', 'session.enhance.cancel', 'session.compact', 'session.compact.cancel', 'session.handoff', 'session.handoff.cancel', 'session.background', 'session.btw', 'session.recap', 'session.aside.cancel', 'session.goal', 'session.goal.continue', 'mentions.offer', 'mentions.named', 'confirm.reply', 'run.reply',
   'output.reply', 'vouch.reply', 'vet.reply', 'fetch.reply', 'server.reply', 'manifest.run',
   'manifest.reply', 'exposure.reply', 'mcp-server.reply', 'mcp-tools.reply', 'mcp-call.reply',
   'mcp-move.reply', 'host.reply', 'ask.reply', 'trust.reply', 'rules.reply',

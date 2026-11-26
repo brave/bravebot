@@ -57,6 +57,7 @@ import { useBots } from './use-bots'
 import { useTurn } from './use-turn'
 import { useEnhance } from './use-enhance'
 import { useCompact } from './use-compact'
+import { useGoal } from './use-goal'
 import { type HandingOff, useHandoff } from './use-handoff'
 import { armed, sourceOf } from './handoff'
 import { useAppearance } from './use-appearance'
@@ -205,8 +206,13 @@ export function App(): React.JSX.Element {
   }, [live?.summary.id, live?.summary.directory, live?.model, live?.modelPicked])
   const [forks, setForks] = useState<Fork[]>([])
   const { bots, botsRef, readBots, saveBot, removeBot } = useBots({ openedLives, updateSession, setLive, setProblem })
+  // Chats whose queued prompt is on its way to the bridge. The queue waits on it, and so does the
+  // goal's next step, which never goes before a prompt the person queued.
+  const dequeuing = useRef(new Set<string>())
+  const goals = useGoal({ openedLives, updateSession, dequeuing, live, livesRevision })
   const { answerTrust, answerRules, answerFolder, send, submit, queueDraft, cancel, answer, answerQuestions, interjectDraft, plan } = useTurn({
     liveRef, handleRef, openedLives, updateSession, setLive, setProblem, setUnconfigured, refreshLives, live, livesRevision, backendReady, draft, setDraft,
+    dequeuing, goal: goals.command,
   })
   const enhancement = useEnhance({ openedLives, updateSession, setProblem })
   const compaction = useCompact({ openedLives, updateSession, setProblem })
@@ -255,8 +261,11 @@ export function App(): React.JSX.Element {
       if (message.event === 'enhance.done' && message.session) enhancement.receive(message.session, message.data)
       else if (message.event === 'compact.done' && message.session) compaction.receive(message.session, message.data)
       else if (message.event === 'handoff.done' && message.session) handoffs.receive(message.session, message.data)
+      else if ((message.event === 'goal.changed' || message.event === 'goal.checking' || message.event === 'goal.judged') && message.session) goals.receive(message.session, message)
       else if (message.event === 'agent.ready') apply(message, setLive, setBuild, refresh)
       else if (message.session) apply(message, (action) => updateSession(message.session!, action), setBuild, refresh)
+      // A turn that ended under a goal has a step to ask for, once its queue has gone.
+      if (message.event === 'turn.done' && message.session) goals.receive(message.session, message)
       // The list holds two things this window did not write — the session behind a bot and how
       // much compaction has taken from it — and a turn is when either can have changed. Read back
       // rather than assumed, since the main process is the one that saw the agent's answer. The

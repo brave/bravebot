@@ -444,6 +444,16 @@ export interface BtwParams {
 export interface RecapParams { session: string; model: string | null }
 /** `session.aside.cancel`: stops the question that is out, if any. Answered with `{}`. */
 export interface AsideCancelParams { session: string }
+/**
+ * `session.goal`: a typed `/goal` line's argument (CMD-1, GOAL-1). Answered with `GoalAnswer`.
+ * `files` are text files dropped on the line, each put back into the argument as its name (DROP-4).
+ */
+export interface GoalParams { session: string; argument: string; files?: { marker: string; name: string }[] }
+/**
+ * `session.goal.continue`: the goal's next step, asked once a turn has ended and the queued prompts
+ * have gone, or once a check sent the work back. Answered with `GoalContinued`.
+ */
+export interface GoalContinueParams { session: string }
 
 export interface OpenedSession extends SessionSettled {
   /** Absent from an older bridge, which kept no rewind points. Newest first. */
@@ -1407,6 +1417,12 @@ export interface EventMap {
   'schedule.ran': import('./schedule').ScheduleAnswer
   /** What a `session.btw` or `session.recap` came back with (CMD-8, CMD-16). Shown, never sent to the model. */
   'aside.done': import('./aside').AsideDone
+  /** The goal as it now stands after a change, or `null` once none is set. */
+  'goal.changed': { goal: import('./goal').GoalSnapshot | null }
+  /** The goal has been put to the judge, and the chat takes no turn until `goal.judged` (GOAL-3). */
+  'goal.checking': Record<string, never>
+  /** What the check came to (GOAL-6). Not sent for a check that was stopped or whose goal changed. */
+  'goal.judged': import('./goal').GoalJudged
   /** `retry` is set only on `reconnecting`, while the request waits, and `null` once its attempt is out. */
   phase: { phase: Phase; retry?: RetryEvent | null }
   composing: { call: string | null }
