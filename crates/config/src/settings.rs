@@ -1159,8 +1159,12 @@ impl RunDeadlines {
 pub struct RuleSources(Vec<RuleSource>);
 
 impl RuleSources {
-    /// The file that wrote the rule `anchored` in `list`, and the rule as that file spelled it,
-    /// as [`Settings::rule_source`] answers.
+    /// The file that wrote the rule `anchored` in `list` (`deny`, `ask` or `allow`), and the
+    /// rule as that file spelled it, or `None` where no layer wrote it.
+    ///
+    /// `anchored` is the text [`Settings::permissions`] holds, which differs from what the file
+    /// said for a `Read` or `Edit` rule written with a single leading slash. Where two layers wrote
+    /// the same rule, the weakest layer that did is named.
     pub fn source(&self, list: &str, anchored: &str) -> Option<(&Path, &str)> {
         source_of(&self.0, list, anchored)
     }
@@ -1194,7 +1198,7 @@ fn find_rule_source<'a>(
         .find(|source| source.list == list && source.anchored == anchored)
 }
 
-/// The file and spelling [`RuleSources::source`] and [`Settings::rule_source`] answer with.
+/// The file and spelling [`RuleSources::source`] answers with.
 fn source_of<'a>(
     sources: &'a [RuleSource],
     list: &str,
@@ -2645,26 +2649,16 @@ impl Settings {
             .map(|(path, rule)| (path.as_path(), rule.as_str()))
     }
 
-    /// The file that wrote the rule `anchored` in `list` (`deny`, `ask` or `allow`), and the
-    /// rule as that file spelled it, or `None` where no layer wrote it.
-    ///
-    /// `anchored` is the text [`Settings::permissions`] holds, which differs from what the file
-    /// said for a `Read` or `Edit` rule written with a single leading slash. Where two layers wrote
-    /// the same rule, the weakest layer that did is named.
-    pub fn rule_source(&self, list: &str, anchored: &str) -> Option<(&Path, &str)> {
-        source_of(&self.rule_sources, list, anchored)
-    }
-
     /// Each rule in force and the file that wrote it, for a caller that keeps them without the
-    /// rest of the settings. Its lookups answer as [`Settings::rule_source`] and
-    /// [`Settings::rule_reason`] do.
+    /// rest of the settings. Its lookups are [`RuleSources::source`] and [`RuleSources::reason`],
+    /// which answer as [`Settings::rule_reason`] does.
     pub fn rule_sources(&self) -> RuleSources {
         RuleSources(self.rule_sources.clone())
     }
 
     /// Why the person wrote the rule `anchored` in `list`, where their own file said (PERM-1).
     ///
-    /// `anchored` is keyed as [`Settings::rule_source`] keys it. `None` where the entry was a plain
+    /// `anchored` is keyed as [`RuleSources::source`] keys it. `None` where the entry was a plain
     /// line, where it carried no readable reason, and where the layer that wrote it was not the
     /// person's own file: a reason is display text and is shown as the person's own words, so a
     /// checkout's is not read at all.
@@ -5132,6 +5126,14 @@ fn home_named(named: impl IntoIterator<Item = Option<std::ffi::OsString>>) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    impl Settings {
+        /// The file that wrote the rule `anchored` in `list` and the rule as that file spelled
+        /// it, as [`RuleSources::source`] answers for the settings' own rules.
+        fn rule_source(&self, list: &str, anchored: &str) -> Option<(&Path, &str)> {
+            source_of(&self.rule_sources, list, anchored)
+        }
+    }
 
     /// A home as the environment hands one over.
     fn named(home: &str) -> Option<std::ffi::OsString> {
