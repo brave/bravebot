@@ -1328,9 +1328,18 @@ pub(crate) struct Worked {
     run_may_change_files: bool,
     /// The calls counted, for the planner, the person and a goal's judge (GROUND-1).
     pub(crate) work: crate::outcome::Work,
+    /// The write calls that landed in the session's own directory. Kept apart from `work`, which
+    /// leaves them out (GROUND-1), so the unbuilt-changes warning and a goal's judge never read it.
+    /// Said only in a finished delegate's sentence (GROUND-2).
+    pub(crate) session_writes: usize,
 }
 
 impl Worked {
+    /// Count one write call that landed in the session's own directory.
+    fn count_session_write(&mut self) {
+        self.session_writes += 1;
+    }
+
     /// Count what one call did, in the round it was made.
     fn count(&mut self, round: usize, changed_a_file: bool, ran_a_program: bool, failed: bool) {
         if changed_a_file {
@@ -1357,6 +1366,7 @@ impl Worked {
         self.ran_a_program |= delegate.ran_a_program;
         self.run_may_change_files |= delegate.run_may_change_files;
         self.work.then(delegate.work);
+        self.session_writes += delegate.session_writes;
     }
 
     /// Count a `run` line that may change files, as TURN-3 counts a write tool asked for.
@@ -1828,8 +1838,9 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 // After what limited or stopped it and before the report, so the planner reads it
                 // whether it is given the words or a reference to them (GROUND-2).
                 let (note, bound) = match work {
-                    Some((work, in_checkout)) => {
-                        let (said, told) = delegate_end::work_sentences(work, in_checkout);
+                    Some((work, session_writes, in_checkout)) => {
+                        let (said, told) =
+                            delegate_end::work_sentences(work, session_writes, in_checkout);
                         (format!("{note}; {said}"), format!("{bound}{told}"))
                     }
                     None => (note, bound),
@@ -1879,8 +1890,9 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 // A delegate that stopped or failed did what it did all the same. One whose thread
                 // died handed back nothing, so nothing is said (GROUND-2).
                 let (note, done) = match work {
-                    Some((work, in_checkout)) => {
-                        let (said, told) = delegate_end::work_sentences(work, in_checkout);
+                    Some((work, session_writes, in_checkout)) => {
+                        let (said, told) =
+                            delegate_end::work_sentences(work, session_writes, in_checkout);
                         (format!("{note}; {said}"), told)
                     }
                     None => (note, String::new()),
@@ -5996,6 +6008,16 @@ mod tests {
         came: Came,
         work: crate::outcome::Work,
     ) -> (String, String, Option<crate::report::Reported>) {
+        collected_having_written_in_the_session_directory(came, work, 0)
+    }
+
+    /// [`collected_and_drawn`] for a delegate that also made `session_writes` write calls that
+    /// landed in the session's own directory.
+    fn collected_having_written_in_the_session_directory(
+        came: Came,
+        work: crate::outcome::Work,
+        session_writes: usize,
+    ) -> (String, String, Option<crate::report::Reported>) {
         type Joined = (
             crate::delegate::Ended,
             crate::outcome::Spent,
@@ -6042,6 +6064,7 @@ mod tests {
                         took: Duration::from_millis(900),
                         worked: Worked {
                             work,
+                            session_writes,
                             ..Worked::default()
                         },
                     },
@@ -6168,8 +6191,8 @@ mod tests {
         let (told, _) = collected_with(Came::Clean, BUILT);
         assert!(
             told.contains(
-                "The one-round delegate d1 has finished. It ran 2 commands and made 1 write. \
-                 It reported:\n\nTHE-REPORT-WORDS"
+                "The one-round delegate d1 has finished. It ran 2 commands and made 1 write in \
+                 the project. It reported:\n\nTHE-REPORT-WORDS"
             ),
             "{told}"
         );
@@ -6180,7 +6203,7 @@ mod tests {
     fn a_delegate_that_ran_nothing_is_said_to_have_run_no_command() {
         let (told, _) = collected_with(Came::Clean, crate::outcome::Work::default());
         assert!(
-            told.contains("It ran 0 commands and made 0 writes."),
+            told.contains("It ran 0 commands and made 0 writes in the project."),
             "{told}"
         );
     }
@@ -6195,7 +6218,7 @@ mod tests {
             "nothing was tested: {told}"
         );
         assert!(
-            told.contains("It ran 2 commands and made 1 write."),
+            told.contains("It ran 2 commands and made 1 write in the project."),
             "{told}"
         );
     }
@@ -6206,16 +6229,49 @@ mod tests {
     fn a_delegate_that_failed_is_still_said_to_have_done_what_it_did() {
         let (told, note) = collected_with(Came::Failed, BUILT);
         assert!(
-            told.contains("It ran 2 commands and made 1 write."),
+            told.contains("It ran 2 commands and made 1 write in the project."),
             "{told}"
         );
         assert!(
-            note.contains("it ran 2 commands and made 1 write"),
+            note.contains("it ran 2 commands and made 1 write in the project"),
             "{note}"
         );
         let (told, note) = collected_with(Came::Lost, BUILT);
         assert!(!told.contains(" ran "), "{told}");
         assert!(!note.contains(" ran "), "{note}");
+    }
+
+    /// GROUND-2, GROUND-3. A delegate that wrote in the session's own directory is said to have, in
+    /// the planner's message and the person's note, whichever way it ended and whether its report is
+    /// given in words or as a reference, and the project's count does not include those writes.
+    ///
+    /// Rejects a sentence that leaves the session directory out (the contradiction of a report that
+    /// says a file was written beside "made 0 writes"), one that adds it only where the report is in
+    /// words, and one that adds it only for a delegate that answered.
+    #[test]
+    fn a_delegate_that_wrote_in_the_session_directory_is_said_to_have_done_so() {
+        let ran_one = crate::outcome::Work {
+            writes: 0,
+            commands: 1,
+            ran_after_last_write: true,
+            last_command_failed: false,
+        };
+        let said = "ran 1 command and made 0 writes in the project and 1 in the session directory";
+        for came in [Came::Clean, Came::Untrusted, Came::Failed] {
+            let (told, note, _) =
+                collected_having_written_in_the_session_directory(came, ran_one, 1);
+            assert!(told.contains(&format!(" It {said}.")), "{told}");
+            assert!(note.contains(&format!("it {said}")), "{note}");
+        }
+        let (told, note, _) =
+            collected_having_written_in_the_session_directory(Came::Clean, BUILT, 2);
+        assert!(
+            told.contains(
+                " It ran 2 commands and made 1 write in the project and 2 in the session directory."
+            ),
+            "{told}"
+        );
+        assert!(!note.contains("THE-REPORT-WORDS"), "{note}");
     }
 
     /// GROUND-3, GROUND-6. The person's note carries the same two counts, and neither it nor the
@@ -6224,7 +6280,7 @@ mod tests {
     fn the_note_for_a_finished_delegate_counts_its_commands_and_writes() {
         let (_, note) = collected_with(Came::Clean, BUILT);
         assert!(
-            note.contains("it ran 2 commands and made 1 write"),
+            note.contains("it ran 2 commands and made 1 write in the project"),
             "{note}"
         );
         assert!(!note.contains("THE-REPORT-WORDS"), "{note}");
@@ -6273,6 +6329,28 @@ mod tests {
                 last_command_failed: false,
             }
         );
+    }
+
+    /// GROUND-1, GROUND-2. The writes a delegate made in the session's own directory are kept
+    /// apart from the work record. A delegate in the turn's workspace adds them to the turn's, so a
+    /// delegate that started children says theirs too; a program-only adoption (a checkout given
+    /// the turn's changes) adds none; and the work record never holds them.
+    ///
+    /// Rejects a roll-up that drops a child's figure, one that adds it for a delegate in a checkout,
+    /// and one that folds the figure into `work.writes`.
+    #[test]
+    fn writes_in_the_session_directory_roll_up_apart_from_the_work_record() {
+        let delegate = Worked {
+            session_writes: 2,
+            ..Worked::default()
+        };
+        let mut turn = Worked::default();
+        turn.count_session_write();
+        turn.adopt(1, delegate);
+        assert_eq!(turn.session_writes, 3);
+        assert_eq!(turn.work, crate::outcome::Work::default());
+        turn.adopt_run(delegate);
+        assert_eq!(turn.session_writes, 3);
     }
 
     /// WATCH-13 and DELEGATE-8 for a report the planner was handed a reference to, at the function

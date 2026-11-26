@@ -26006,7 +26006,7 @@ fn a_delegate_that_wrote_three_files_is_reported_with_three_writes_and_its_paren
     assert!(
         asked
             .iter()
-            .any(|body| body.contains(" and made 3 writes.")),
+            .any(|body| body.contains(" and made 3 writes in the project.")),
         "the planner was not told the worker made 3 writes: {:?}",
         asked
             .iter()
@@ -26019,6 +26019,207 @@ fn a_delegate_that_wrote_three_files_is_reported_with_three_writes_and_its_paren
         work.writes, 4,
         "the turn's own count of writes is not its own one plus the worker's three"
     );
+}
+
+/// GROUND-1, GROUND-2, GROUND-3. A worker that runs one command and then writes a file in the
+/// session's own directory is said to have made no write in the project and one in the session
+/// directory, in the planner's message and the person's note, and the turn's own record counts the
+/// command and no write, so nothing is left unbuilt. A second worker that also writes in the project
+/// before its command is said to have made one write in each place.
+///
+/// The write in the session directory comes last so that a scratch write counted as a project
+/// write is a write with no command after it, which the unbuilt-changes assertion sees.
+///
+/// Rejects a sentence that counts only the project's writes (the planner reads "made 0 writes"
+/// beside a report that says a file was written), a scratch write folded into the project's count
+/// (1 write in the first case, and an unbuilt-changes loop), and a figure kept in the session
+/// directory clause that ignores a project write beside it.
+#[test]
+fn a_worker_that_wrote_in_the_session_directory_is_said_to_have_done_so_and_the_turn_counts_no_write()
+ {
+    for (name, also_in_the_project) in [("scratch-only", false), ("scratch-and-project", true)] {
+        let scratch = Scratch::new(&format!("delegate-writes-in-session-{name}"));
+        let session = Scratch::new(&format!("delegate-writes-in-session-{name}-given"));
+        let given = session.path.canonicalize().unwrap();
+        let mut workspace = Workspace::new(&scratch.path).unwrap();
+        workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(given.clone()));
+        let note_path = given.join("note.txt");
+
+        let mut worker = Vec::new();
+        if also_in_the_project {
+            worker.push(tool_request(
+                "write_file",
+                r#"{"path":"kept.txt","contents":"y"}"#,
+            ));
+        }
+        worker.push(tool_request("run", r#"{"command":"printf one"}"#));
+        worker.push(tool_request(
+            "write_file",
+            &serde_json::json!({"path": note_path.to_string_lossy(), "contents": "x"}).to_string(),
+        ));
+        worker.push(reply_with("wrote note.txt"));
+        let (endpoint, received, held) = serve_a_turn_and_its_delegate(
+            (
+                "PARENT-STARTS-THE-SESSION-WRITER",
+                writing_then_delegating(
+                    tool_request("list_files", r#"{"directory":"."}"#),
+                    r#"{"kind":"worker","task":"WRITE-IN-THE-SESSION-DIRECTORY"}"#,
+                ),
+            ),
+            ("WRITE-IN-THE-SESSION-DIRECTORY", worker),
+        );
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let completed = turn::resume(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("PARENT-STARTS-THE-SESSION-WRITER"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve())
+                .approving_writes(),
+            &mut reporter,
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        completed.outcome.as_ref().unwrap();
+
+        assert!(
+            held.load(Ordering::SeqCst),
+            "{name}: the worker was answered before its parent waited for it"
+        );
+        assert!(note_path.is_file(), "{name}: the write did not land");
+        assert!(
+            !bravebot_agent::open_loops::Loops::from_work(completed.work).unbuilt_changes,
+            "{name}: a write in the session directory left something unbuilt: {:?}",
+            completed.work
+        );
+        let project_writes = usize::from(also_in_the_project);
+        assert_eq!(
+            completed.work.writes, project_writes,
+            "{name}: a write in the session directory was counted as the turn's"
+        );
+        assert_eq!(completed.work.commands, 1, "{name}");
+        let said = format!(
+            "ran 1 command and made {} in the project and 1 in the session directory",
+            match also_in_the_project {
+                true => "1 write",
+                false => "0 writes",
+            }
+        );
+        let (_, note, _) = reporter.delegates_finished.first().unwrap();
+        assert!(note.contains(&format!("it {said}")), "{name}: {note}");
+        let asked = every_request(&received);
+        assert!(
+            asked
+                .iter()
+                .any(|body| body.contains(&format!(" It {said}."))),
+            "{name}: the planner was not told: {:?}",
+            asked
+                .iter()
+                .filter_map(|body| body
+                    .find("It ran ")
+                    .and_then(|at| body.get(at..(at + 100).min(body.len()))))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+/// GROUND-1, GROUND-2, GROUND-3. A worker whose only command is a program that writes a file in
+/// the session's own directory is said to have run one command and made no write in the project,
+/// with no session directory clause, in the planner's message and the person's note. The driver
+/// lists the workspace tree for a `run` line and cannot see what the program wrote outside it, so
+/// only write calls are tallied there.
+///
+/// Rejects a `run` line counted as a write in the session directory (a clause that says "and 1 in
+/// the session directory" for a line that wrote nothing through a write call) and a tally taken
+/// from where a program's output landed.
+#[test]
+fn a_run_line_that_wrote_in_the_session_directory_is_not_tallied_as_a_session_directory_write() {
+    let scratch = Scratch::new("delegate-run-line-writes-in-session");
+    let session = Scratch::new("delegate-run-line-writes-in-session-given");
+    let given = session.path.canonicalize().unwrap();
+    let mut workspace = Workspace::new(&scratch.path).unwrap();
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(given.clone()));
+
+    // A script rather than a line naming the variable: a `$` in a line is refused, so what reads
+    // the environment is the program the line named.
+    let script = scratch.path.join("mark");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nprintf workings > \"$BRAVEBOT_SCRATCH_DIR/note.txt\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let (endpoint, received, held) = serve_a_turn_and_its_delegate(
+        (
+            "PARENT-STARTS-THE-LINE-WRITER",
+            writing_then_delegating(
+                tool_request("list_files", r#"{"directory":"."}"#),
+                r#"{"kind":"worker","task":"RUN-THE-LINE-THAT-WRITES-IN-THE-SESSION-DIRECTORY"}"#,
+            ),
+        ),
+        (
+            "RUN-THE-LINE-THAT-WRITES-IN-THE-SESSION-DIRECTORY",
+            vec![
+                tool_request("run", r#"{"command":"./mark"}"#),
+                reply_with("ran the program"),
+            ],
+        ),
+    );
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let completed = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("PARENT-STARTS-THE-LINE-WRITER"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_writes(),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    completed.outcome.as_ref().unwrap();
+
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the worker was answered before its parent waited for it"
+    );
+    assert_eq!(
+        std::fs::read_to_string(given.join("note.txt")).unwrap(),
+        "workings",
+        "the line did not write in the session directory, so this proves nothing"
+    );
+    let (_, note, _) = reporter.delegates_finished.first().unwrap();
+    assert!(
+        note.contains("it ran 1 command and made 0 writes in the project"),
+        "{note}"
+    );
+    assert!(!note.contains("in the session directory"), "{note}");
+    let asked = every_request(&received);
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains(" It ran 1 command and made 0 writes in the project.")),
+        "the planner was not told the worker made no write: {:?}",
+        asked
+            .iter()
+            .filter_map(|body| body
+                .find("It ran ")
+                .and_then(|at| body.get(at..(at + 100).min(body.len()))))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(completed.work.writes, 0, "{:?}", completed.work);
 }
 
 /// The question waits for a delegate still working in the turn's workspace, so a turn whose checker
@@ -62344,7 +62545,7 @@ fn a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_re
     );
     assert_eq!(
         note,
-        "the delegate could not finish (refused); it ran 0 commands and made 0 writes"
+        "the delegate could not finish (refused); it ran 0 commands and made 0 writes in the project"
     );
 
     let told = received
@@ -62910,7 +63111,7 @@ fn a_delegate_that_ended_on_a_limit_an_outage_a_silence_or_a_stopped_reply_is_to
         assert_eq!(
             note,
             &format!(
-                "the delegate could not finish ({category}); it ran 0 commands and made 0 writes"
+                "the delegate could not finish ({category}); it ran 0 commands and made 0 writes in the project"
             )
         );
 
@@ -63010,7 +63211,7 @@ fn a_delegate_that_reached_its_round_limit_says_so_in_the_trail_and_the_note() {
     assert_eq!(
         note,
         "a one-round delegate reached its limit of 1 round and answered with what it had, so it \
-         may not be finished; it ran 0 commands and made 0 writes"
+         may not be finished; it ran 0 commands and made 0 writes in the project"
     );
 }
 

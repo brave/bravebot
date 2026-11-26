@@ -2213,6 +2213,9 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
             output.command_failed,
         );
     }
+    if output.wrote_in_the_session_directory {
+        state.worked.count_session_write();
+    }
     if (output.changed_a_file || output.started_a_program)
         && let Some(checkout) = workspace.checkout()
     {
