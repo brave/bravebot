@@ -49,6 +49,31 @@ fn enabled() -> bool {
     std::env::var("BRAVEBOT_OPENSHELL_TESTS").as_deref() == Ok("1")
 }
 
+/// A directory for the policy files of the sandbox `name`, in the temporary directory, which these
+/// live tests may use since no confined stage runs in them. It is removed, with anything in it,
+/// when this is dropped, so a test that declares it before its sandbox removes it after the
+/// sandbox.
+struct PolicyDirectory(std::path::PathBuf);
+
+impl PolicyDirectory {
+    fn named(name: &str) -> Self {
+        Self(std::env::temp_dir().join(format!(
+            "bravebot-openshell-policies-{}-{name}",
+            std::process::id()
+        )))
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for PolicyDirectory {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).ok();
+    }
+}
+
 fn routing() -> Routing {
     let mut r = Routing::new();
     r.insert_trusted("task", "use a tool");
@@ -78,8 +103,14 @@ fn a_server_in_an_openshell_sandbox_answers_over_stdio_and_reaches_only_its_host
         return;
     }
     let name = format!("bb-ok-{}", std::process::id());
-    let sandbox = OpenShell::new(&name, "python:3.13-slim", &["example.com".to_string()])
-        .expect("openshell is installed");
+    let policies = PolicyDirectory::named(&name);
+    let sandbox = OpenShell::new(
+        &name,
+        "python:3.13-slim",
+        &["example.com".to_string()],
+        Some(policies.path()),
+    )
+    .expect("openshell is installed");
 
     let mut server = StdioServer::launch(
         "spike",
@@ -143,8 +174,14 @@ fn a_program_missing_from_the_image_is_refused_and_the_sandbox_removed() {
         return;
     }
     let name = format!("bb-miss-{}", std::process::id());
-    let sandbox = OpenShell::new(&name, "python:3.13-slim", &["example.com".to_string()])
-        .expect("openshell is installed");
+    let policies = PolicyDirectory::named(&name);
+    let sandbox = OpenShell::new(
+        &name,
+        "python:3.13-slim",
+        &["example.com".to_string()],
+        Some(policies.path()),
+    )
+    .expect("openshell is installed");
     let refused = StdioServer::launch(
         "spike",
         "node",
@@ -169,7 +206,9 @@ fn a_long_lived_connection_carries_many_calls_a_pause_and_a_long_reply() {
         return;
     }
     let name = format!("bb-long-{}", std::process::id());
-    let sandbox = OpenShell::new(&name, "python:3.13-slim", &[]).expect("openshell is installed");
+    let policies = PolicyDirectory::named(&name);
+    let sandbox = OpenShell::new(&name, "python:3.13-slim", &[], Some(policies.path()))
+        .expect("openshell is installed");
     let mut server = StdioServer::launch(
         "spike",
         "python3",

@@ -3405,7 +3405,7 @@ fn start_under(
                 #[cfg(unix)]
                 {
                     sweep_openshell(home, notes);
-                    let ledger = openshell_ledger(home);
+                    let places = OpenShellPlaces::of(home);
                     let hosts = openshell_hosts(session, allowed_hosts.as_deref());
                     waiting.push(wait_for(&alias, timeouts));
                     std::thread::spawn(move || {
@@ -3418,7 +3418,7 @@ fn start_under(
                             &image,
                             &hosts,
                             diagnostics,
-                            ledger.as_ref(),
+                            &places,
                         )
                         .and_then(|(server, sandbox, name)| {
                             let started = t!(
@@ -3558,6 +3558,10 @@ fn wait_for(alias: &str, timeouts: Timeouts) -> (String, Instant, u64) {
 #[cfg(unix)]
 const OPENSHELL_LEDGER: &str = "openshell-sandboxes";
 
+/// The directory in the state directory that holds the policy files `openshell` is given.
+#[cfg(unix)]
+const OPENSHELL_POLICIES: &str = "openshell-policies";
+
 /// The record of the OpenShell sandboxes this machine made, in `home` where it may be written.
 /// Nowhere to write, as in an incognito session, means nothing recorded or swept.
 #[cfg(unix)]
@@ -3566,6 +3570,19 @@ fn openshell_ledger(home: &Home) -> Option<bravebot_sandbox::openshell::Ledger> 
         .as_ref()
         .filter(|_| home.writable)
         .map(|directory| bravebot_sandbox::openshell::Ledger::at(directory.join(OPENSHELL_LEDGER)))
+}
+
+/// The directory the OpenShell policy files are written in, under `home` where it may be written.
+///
+/// A directory of its own inside the state directory and not under `sessions/`, so a confined
+/// stage, which is refused the state directory except `sessions/`, cannot write it (SANDBOX-12).
+/// `None` where there is nowhere to write.
+#[cfg(unix)]
+fn openshell_policy_directory(home: &Home) -> Option<PathBuf> {
+    home.directory
+        .as_ref()
+        .filter(|_| home.writable)
+        .map(|directory| directory.join(OPENSHELL_POLICIES))
 }
 
 /// Once a process, before its first sandbox: delete the recorded sandboxes a process killed by a
@@ -3582,6 +3599,24 @@ fn sweep_openshell(home: &Home, notes: &mut Vec<String>) {
     });
 }
 
+/// What an OpenShell sandbox keeps in the state directory: the record of the sandboxes made and
+/// the directory its policy files are written in. Each is `None` where there is nowhere to write.
+#[cfg(unix)]
+struct OpenShellPlaces {
+    ledger: Option<bravebot_sandbox::openshell::Ledger>,
+    policy_directory: Option<PathBuf>,
+}
+
+#[cfg(unix)]
+impl OpenShellPlaces {
+    fn of(home: &Home) -> Self {
+        Self {
+            ledger: openshell_ledger(home),
+            policy_directory: openshell_policy_directory(home),
+        }
+    }
+}
+
 /// Start `program` in a new OpenShell sandbox made from `image`, reaching `hosts` alone, and give
 /// back the server, the sandbox it holds and the sandbox's name. Run on the server's own thread:
 /// creating a sandbox and confirming its policy take seconds, which the declaration's startup bound
@@ -3595,18 +3630,23 @@ fn start_in_openshell(
     image: &str,
     hosts: &[String],
     diagnostics: Stream,
-    ledger: Option<&bravebot_sandbox::openshell::Ledger>,
+    places: &OpenShellPlaces,
 ) -> McpResult<(StdioServer, Box<dyn std::any::Any + Send + Sync>, String)> {
     let name = bravebot_sandbox::openshell::next_name();
-    if let Some(ledger) = ledger {
+    if let Some(ledger) = &places.ledger {
         ledger.record(&name).map_err(|error| {
             bravebot_mcp::McpError::Confinement(format!(
                 "the sandbox could not be recorded: {error}"
             ))
         })?;
     }
-    let sandbox = bravebot_sandbox::openshell::OpenShell::new(&name, image, hosts)
-        .map_err(|error| bravebot_mcp::McpError::Confinement(error.to_string()))?;
+    let sandbox = bravebot_sandbox::openshell::OpenShell::new(
+        &name,
+        image,
+        hosts,
+        places.policy_directory.as_deref(),
+    )
+    .map_err(|error| bravebot_mcp::McpError::Confinement(error.to_string()))?;
     let server = StdioServer::launch(
         alias,
         program,
@@ -10952,5 +10992,66 @@ done
             seen.starts_with("http://127.0.0.1:"),
             "the server was given {seen}"
         );
+    }
+
+    /// SERVERS-24: the OpenShell policy files are written in `openshell-policies` directly under
+    /// the state directory, and nowhere else. The regression it rejects is a directory under
+    /// `sessions/`, which a confined stage may write (SANDBOX-12), the state directory itself, or
+    /// the system temporary directory.
+    #[cfg(unix)]
+    #[test]
+    fn the_openshell_policy_directory_is_openshell_policies_directly_under_the_state_directory() {
+        let state = scratch("openshell-policy-directory-under-state");
+        let home = Home {
+            directory: Some(state.clone()),
+            writable: true,
+        };
+        let found = openshell_policy_directory(&home);
+        assert_eq!(found, Some(state.join("openshell-policies")));
+        assert_eq!(
+            OpenShellPlaces::of(&home).policy_directory,
+            found,
+            "the places a start is given name another directory"
+        );
+        assert!(
+            !state.join("openshell-policies").exists(),
+            "choosing the directory made it; the sandbox crate makes it, owner-only"
+        );
+    }
+
+    /// SERVERS-24: with no state directory, or one nothing may be written in (an incognito
+    /// session), there is no policy directory, so the sandbox crate refuses the start. The
+    /// regression it rejects is a fallback to a path of some other kind, such as the system
+    /// temporary directory, or a directory named although the home is not writable.
+    #[cfg(unix)]
+    #[test]
+    fn there_is_no_openshell_policy_directory_where_the_home_has_none_or_is_not_writable() {
+        let state = scratch("openshell-policy-directory-none");
+        for (home, why) in [
+            (
+                Home {
+                    directory: None,
+                    writable: true,
+                },
+                "the platform names no state directory",
+            ),
+            (
+                Home {
+                    directory: None,
+                    writable: false,
+                },
+                "no state directory and not writable",
+            ),
+            (
+                Home {
+                    directory: Some(state.clone()),
+                    writable: false,
+                },
+                "a state directory that nothing may be written in",
+            ),
+        ] {
+            assert_eq!(openshell_policy_directory(&home), None, "{why}");
+            assert_eq!(OpenShellPlaces::of(&home).policy_directory, None, "{why}");
+        }
     }
 }

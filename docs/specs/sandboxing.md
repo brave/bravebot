@@ -7047,6 +7047,25 @@ than `PATH` and `HOME` is refused before anything is created, since nothing of t
 environment goes into the sandbox. The program's standard streams are carried by `openshell sandbox
 exec`, so a long-lived MCP connection runs over them as it does over a local child's pipes.
 
+The policy `openshell` is given with `--policy`, for the create and again for the rule set, is a file
+this process writes in a directory under the state directory, `openshell-policies`,
+which a confined stage cannot write ([SANDBOX-12](#SANDBOX-12)), so a stage cannot replace the
+file before `openshell` opens it. The directory is created with mode 0700 and narrowed to it where
+it exists, and is refused where it is a link or belongs to another account. The file is created
+new with mode 0600 and a name of 32 hexadecimal digits read from the operating system's random
+source, so no name is one a stage could plant. Each file is removed when its owner is dropped. The
+file for the create is held until the preparation of the sandbox returns, which is after the sandbox
+reports `Ready` and, where hosts are allowed, after the rule set is applied, or at the step that
+refuses the start. The file for the rule set is removed when `policy set` returns. A file
+left by a process ended by a signal stays in the directory, which
+[STATE-4](state-directory.md#STATE-4) does not sweep. The system temporary directory, which a
+stage may write, is never used in its place. Where the session has no state directory to write, as
+in an incognito session, the start is refused before the sandbox is created and nothing is run.
+
+**A known cost.** A session with no writable state directory cannot start a server in an OpenShell
+sandbox. The policy is passed as a file because nothing confirms that `openshell` takes `--policy`
+from standard input or a descriptor.
+
 OpenShell inspects the TLS of what the program sends, through a certificate authority the sandbox
 trusts by `SSL_CERT_FILE` and the variables like it. That is how its rules see the host of an HTTPS
 request. It differs from the proxy of [SANDBOX-24](#SANDBOX-24), which never decrypts, and a program
@@ -7067,6 +7086,15 @@ such as `/usr/local/bin/python3` matches nothing, since OpenShell matches the bi
 `verified-by: bravebot_sandbox::openshell::a_start_whose_sandbox_or_policy_cannot_be_confirmed_is_refused_and_the_sandbox_deleted`
 `verified-by: bravebot_sandbox::openshell::a_program_name_that_is_not_utf8_reaches_sandbox_exec_as_its_bytes`
 `verified-by: bravebot_sandbox::openshell::a_real_path_that_is_not_utf8_is_refused_before_any_rule_is_set`
+`verified-by: bravebot_sandbox::openshell::a_start_with_no_directory_for_the_policy_is_refused_and_runs_nothing`
+`verified-by: bravebot_sandbox::openshell::a_policy_file_is_never_one_a_stage_planted_under_a_name_it_could_predict`
+`verified-by: bravebot_sandbox::openshell::a_stage_overwriting_the_temporary_directory_does_not_change_the_policy_openshell_reads`
+`verified-by: bravebot_sandbox::openshell::the_policy_directory_is_made_owner_only`
+`verified-by: bravebot_sandbox::openshell::an_existing_policy_directory_with_a_wider_mode_is_narrowed`
+`verified-by: bravebot_sandbox::openshell::a_link_in_place_of_the_policy_directory_is_refused_and_nothing_is_run`
+`verified-by: bravebot_sandbox::openshell::a_policy_directory_another_account_owns_is_refused`
+`verified-by: bravebot_sandbox::openshell::a_policy_file_is_owner_only_and_holds_the_document`
+`verified-by: bravebot_sandbox::openshell::a_policy_file_is_named_from_thirty_two_lower_case_hexadecimal_digits`
 `verified-by: bravebot_mcp::openshell::a_server_in_an_openshell_sandbox_answers_over_stdio_and_reaches_only_its_host`
 `verified-by: bravebot_mcp::openshell::a_program_missing_from_the_image_is_refused_and_the_sandbox_removed`
 `verified-by: bravebot_mcp::openshell::a_long_lived_connection_carries_many_calls_a_pause_and_a_long_reply`

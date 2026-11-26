@@ -40,6 +40,10 @@ somebody asked to be kept all live here, and so does the record of the definitio
 session left untrusted, `untrusted/` ([MEMORY-5](definition-memory.md#MEMORY-5)). The rules and facts a person's sessions remember live here too, as `projects/<id>/` and `facts/` ([recall.md](recall.md)), written readable by their owner alone and refused to programs like the rest of the directory.
 The diagnostic logs, `logs/`, are written there too ([diagnostic-log.md](diagnostic-log.md)). Which Bedrock models refused the ask to show thinking is kept there as `bedrock-refusals.json`
 ([BACKEND-63](backends.md#BACKEND-63)). The directories a confined stage may write are kept there as `stage-writes`, one line each, so that a later process leaves them out of the search for programs ([sandboxing.md](sandboxing.md#SANDBOX-30)). `bravebot bug-report` writes into the working directory and adds nothing here.
+An OpenShell sandbox's policy files are written in `openshell-policies/`, a directory of its own
+that is created with mode 0700 and not under `sessions/`, so a confined stage cannot write it
+([SANDBOX-33](sandboxing.md#SANDBOX-33)); the record of the sandboxes made is kept beside it as
+`openshell-sandboxes` ([SERVERS-24](mcp-servers.md#SERVERS-24)).
 [definition-memory.md](definition-memory.md) proposes one more, which nothing yet builds: the
 definition a desktop bot is made as. [checkouts.md](checkouts.md) proposes another, which nothing
 yet builds either: the checkouts delegates are given, `checkouts/`, which hold a project's files
@@ -311,7 +315,7 @@ Left where they are at any age: the rules a person granted, the answers to the s
 past a session, the memories left untrusted, the acceptances of findings, the prompt history, the
 settings, standing instructions, skills, the premium key and the ChatGPT and xAI sign-ins, which a
 person asked to keep or wrote themselves. The record of Bedrock models that refused the ask to show thinking is left too: it
-bounds its own entries by their age ([BACKEND-63](backends.md#BACKEND-63)). The record of directories a stage may write is left too, and a person clears it by deleting the file ([sandboxing.md](sandboxing.md#SANDBOX-30)). The diagnostic logs are bounded by their own rule
+bounds its own entries by their age ([BACKEND-63](backends.md#BACKEND-63)). The record of directories a stage may write is left too, and a person clears it by deleting the file ([sandboxing.md](sandboxing.md#SANDBOX-30)). A file in `openshell-policies/`, which a process ended by a signal can leave, is left too: the sweep removes the three kinds of file above and no other, and a policy file holds a host list and a program path from an approved declaration, no secret ([SANDBOX-33](sandboxing.md#SANDBOX-33)). The diagnostic logs are bounded by their own rule
 ([diagnostic-log.md](diagnostic-log.md)).
 
 Removal stops at the state directory, and the sessions it looks in are the state directory's own: a
