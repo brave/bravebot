@@ -1748,13 +1748,19 @@ mod tests {
 
         assert_eq!(here.len(), 1, "{here:?}");
         assert_eq!(here[0], place.say_in("s", &place.first, ""), "{here:?}");
-        assert!(
-            here[0].starts_with("1. ls also reads and writes "),
-            "{here:?}"
+        let expected = t!(
+            reach_listed,
+            number = "1",
+            command = "ls",
+            access = t!(reach_access_writes),
+            entry = &named,
+            date = "2026-10-07",
+            lifetime = t!(
+                reach_lifetime_session_in,
+                workspace = place.first.display().to_string()
+            )
         );
-        assert!(here[0].contains(&named), "{here:?}");
-        assert!(here[0].contains("allowed 2026-10-07"), "{here:?}");
-        assert!(!here[0].contains("cat") && !here[0].contains("tail"));
+        assert_eq!(here[0], expected);
         let there = listed(&place.home, "s", &place.second);
         assert_eq!(there.len(), 1, "{there:?}");
         assert!(there[0].starts_with("1. cat also reads "), "{there:?}");
