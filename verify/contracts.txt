@@ -60,6 +60,12 @@ crates/core/src/permissions.rs::pipeline_decision/loop: invariant at <= each.len
 crates/core/src/policy.rs::issue: ensures final(self).pending@ == old(self).pending@.push(grant),
 crates/core/src/policy.rs::spend: spent => ensures spent == granted(old(self).pending@, tool@, field@, value@), spent ==> exists|i: int| 0 <= i < old(self).pending@.len() && grant_is_for( #[trigger] old(self).pending@[i], tool@, field@, value@, ) && final(self).pending@ == old(self).pending@.remove(i), !spent ==> final(self).pending@ == old(self).pending@,
 crates/core/src/policy.rs::spend/loop: invariant at <= self.pending.len(), self.pending@ == old(self).pending@, forall|j: int| 0 <= j < at ==> !grant_is_for( #[trigger] self.pending@[j], tool@, field@, value@, ), decreases self.pending.len() - at,
+crates/core/src/policy.rs::same_slot: r => ensures r == (*a == *b),
+crates/core/src/policy.rs::same_destination: r => ensures r == (a@ == b@),
+crates/core/src/policy.rs::contains: r => ensures r == self.spec_names(*slot),
+crates/core/src/policy.rs::contains/loop: invariant at <= self.sources.len(), forall|before: int| 0 <= before < at ==> #[trigger] self.sources@[before] != *slot, decreases self.sources.len() - at,
+crates/core/src/policy.rs::allows_into: r => ensures r == self.spec_names_into(*slot, destination@),
+crates/core/src/policy.rs::allows_into/loop: invariant at <= self.into.len(), forall|before: int| 0 <= before < at ==> !(#[trigger] self.into@[before].0 == *slot && self.into@[before].1@ == destination@), decreases self.into.len() - at,
 crates/core/src/policy.rs::fresh: r => ensures r.integrity == Integrity::Trusted, r.confidentiality == Confidentiality::Public,
 crates/core/src/policy.rs::integrity: r => ensures r == self.integrity,
 crates/core/src/policy.rs::confidentiality: r => ensures r == self.confidentiality,
@@ -78,6 +84,7 @@ crates/core/src/policy.rs::write_reason: r => ensures crate::spec::write_reason_
 crates/core/src/policy.rs::asks: r => ensures r == crate::spec::reason_asks(self),
 crates/core/src/policy.rs::run_reason: r => ensures crate::spec::run_reason_is_sound(facts, r),
 crates/core/src/policy.rs::output_label: r => ensures crate::spec::output_label_is_sound(facts, crate::spec::untrusted(opaque), r.0),
+crates/core/src/policy.rs::release_plan: r => ensures *r == spec_release_plan(*self),
 crates/core/src/policy.rs::precommitted: r => ensures r == spec_precommitted(*self, *slot),
 crates/core/src/policy.rs::precommitted_into: r => ensures r == spec_precommitted_into(*self, *slot, destination@),
 crates/core/src/policy.rs::deny: r => ensures spec_context(*final(self)) == spec_context(*old(self)),
@@ -109,11 +116,15 @@ crates/core/src/policy.rs::label_user_configuration: r => ensures crate::value::
 crates/core/src/policy.rs::label_kept_fact: r => ensures crate::value::spec_label_of(&r) == (Label { integrity: Integrity::Trusted, confidentiality, }),
 crates/core/src/policy.rs::refuse_untrusted: r => ensures r is Ok <==> label.integrity == Integrity::Trusted,
 crates/core/src/policy.rs::read_trusted_content: r => ensures r is Ok <==> crate::value::spec_label_of(value).integrity == Integrity::Trusted,
+crates/core/src/policy.rs::promote_reference_for_read: r => ensures r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
 crates/core/src/policy.rs::declassify_into_workspace: r => ensures crate::value::spec_label_of(&r) == crate::spec::released( crate::value::spec_label_of(&value), ),
 crates/core/src/policy.rs::endorsed_for_reading: r => ensures r is Ok <==> (right_kind && spec_granted( *old(self), tool@, "ref"@, spec_slot_name(*slot), )),
 crates/core/src/policy.rs::declassify_into_place: r => ensures r is Ok <==> spec_precommitted_into(*old(self), *slot, destination@),
 crates/core/src/policy.rs::declassify_written_into_workspace: r => ensures crate::value::spec_label_of(&r) == crate::spec::released( crate::value::spec_label_of(&value), ),
 crates/core/src/policy.rs::declassify_checkout_into_workspace: r => ensures crate::value::spec_label_of(&r) == crate::spec::released( crate::value::spec_label_of(&value), ),
+crates/core/src/policy.rs::record_note: ensures spec_note(*final(self)) is Some, crate::value::spec_label_of(&spec_note(*final(self))->Some_0) == crate::spec::trusted_public(),
+crates/core/src/policy.rs::allow_note: ensures spec_note(*final(self)) == spec_note(*old(self)),
+crates/core/src/policy.rs::keep_note: ensures spec_note(*final(self)) == Some(note),
 crates/core/src/policy.rs::declassify: r => ensures r is Ok <==> spec_precommitted(*old(self), *slot),
 crates/core/src/policy.rs::read_planner_argument: r => ensures r is Ok <==> crate::spec::the_planner_may_decide( crate::value::spec_label_of(value), spec_context(*old(self)), ),
 crates/core/src/policy.rs::promote_confined_read: r => ensures r is Ok <==> crate::spec::the_planner_may_decide( crate::value::spec_label_of(proposed), spec_context(*old(self)), ), r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
@@ -203,13 +214,18 @@ crates/core/src/policy.rs::authorise: assumes external_body
 crates/core/src/policy.rs::ExSink: assumes external_trait_specification
 crates/core/src/policy.rs::ExDenial: assumes external_type_specification
 crates/core/src/policy.rs::ExDenial: assumes external_body
+crates/core/src/policy.rs::clone: assumes external
+crates/core/src/policy.rs::joined: assumes external_body
+crates/core/src/policy.rs::same_slot: assumes external_body
+crates/core/src/policy.rs::same_destination: assumes external_body
+crates/core/src/policy.rs::allow: assumes external
+crates/core/src/policy.rs::allow_into: assumes external
 crates/core/src/policy.rs::no_observation: assumes external_body
 crates/core/src/policy.rs::no_label: assumes external_body
 crates/core/src/policy.rs::server_call: assumes external_body
 crates/core/src/policy.rs::describe_the_answers: assumes external_body
 crates/core/src/policy.rs::Policy: assumes external_body
-crates/core/src/policy.rs::precommitted: assumes external_body
-crates/core/src/policy.rs::precommitted_into: assumes external_body
+crates/core/src/policy.rs::release_plan: assumes external_body
 crates/core/src/policy.rs::deny: assumes external_body
 crates/core/src/policy.rs::allow: assumes external_body
 crates/core/src/policy.rs::capabilities_held: assumes external_body
@@ -228,6 +244,8 @@ crates/core/src/policy.rs::rules_for_read: assumes external_body
 crates/core/src/policy.rs::rules_for_edit: assumes external_body
 crates/core/src/policy.rs::context_integrity: assumes external_body
 crates/core/src/policy.rs::absorb: assumes external_body
+crates/core/src/policy.rs::allow_promoted_reference: assumes external_body
+crates/core/src/policy.rs::path_of_reference: assumes external_body
 crates/core/src/policy.rs::refuse_wrong_kind: assumes external_body
 crates/core/src/policy.rs::allow_a_tool_list: assumes external_body
 crates/core/src/policy.rs::refuse_unplanned_release: assumes external_body
@@ -236,6 +254,8 @@ crates/core/src/policy.rs::record_into_place: assumes external_body
 crates/core/src/policy.rs::allow_written_into_workspace: assumes external_body
 crates/core/src/policy.rs::allow_checkout_into_workspace: assumes external_body
 crates/core/src/policy.rs::record_into_workspace: assumes external_body
+crates/core/src/policy.rs::allow_note: assumes external_body
+crates/core/src/policy.rs::keep_note: assumes external_body
 crates/core/src/policy.rs::consume_grant: assumes external_body
 crates/core/src/programs.rs::TrustedPrograms: assumes external_body
 crates/core/src/programs.rs::clone: assumes external
@@ -245,6 +265,7 @@ crates/core/src/remembered.rs::clone: assumes external
 crates/core/src/slot.rs::SlotId: assumes external_body
 crates/core/src/slot.rs::clone: assumes external
 crates/core/src/slot.rs::as_str: assumes external_body
+crates/core/src/slot.rs::SlotStore: assumes external_body
 crates/core/src/spec.rs::ExPathBuf: assumes external_type_specification
 crates/core/src/spec.rs::ExPathBuf: assumes external_body
 crates/core/src/vetting.rs::Endorsed: assumes external_body

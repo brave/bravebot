@@ -765,3 +765,19 @@ replace: let differs = path[at] != prefix[at]; => let differs = false;
 mutation: covers_bytes reads any one-byte key as the root
 file: crates/core/src/trust.rs
 replace: let root = prefix.len() == 1 && prefix[0] == b'/'; => let root = prefix.len() == 1;
+
+mutation: ReleasePlan::contains names every slot releasable
+file: crates/core/src/policy.rs
+replace: let named = same_slot(&self.sources[at], slot); => let named = true;
+
+mutation: ReleasePlan::allows_into releases a slot to a destination the plan did not name with it
+file: crates/core/src/policy.rs
+replace: let to_here = same_slot(named, slot) && same_destination(to, destination); => let to_here = same_slot(named, slot);
+
+mutation: Policy::record_note keeps the note a person typed as untrusted
+file: crates/core/src/policy.rs
+replace: let label = Label::new(Integrity::Trusted, Confidentiality::Public); => let label = Label::new(Integrity::Untrusted, Confidentiality::Public);
+
+mutation: Policy::promote_reference_for_read promotes the path at the slot's own label
+file: crates/core/src/policy.rs
+replace: Ok(Labelled::trusted(path)) => Ok(Labelled::new(path, Label::new(Integrity::Untrusted, Confidentiality::Public)))

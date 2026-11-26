@@ -246,21 +246,46 @@ pub trait ExSink {
 }
 }
 
-// What a contract may say about a policy's release plan, which is fixed before any content is
-// seen: whether it names a slot, and whether it names a slot with a destination. Uninterpreted, and
-// `Policy::precommitted` and `Policy::precommitted_into` are assumed to answer them.
+// The note a person typed beside an answer, until `Policy::take_note` hands it on. `Policy` is
+// opaque to Verus, so this is uninterpreted, and `Policy::keep_note` is assumed to set it.
 #[cfg(verus_keep_ghost)]
 verus! {
-pub uninterp spec fn spec_precommitted<'sink, S: Sink>(
-    policy: Policy<'sink, S>,
-    slot: SlotId,
-) -> bool;
+pub uninterp spec fn spec_note<'sink, S: Sink>(policy: Policy<'sink, S>) -> Option<Labelled<String>>;
+}
 
-pub uninterp spec fn spec_precommitted_into<'sink, S: Sink>(
+// What a contract may say about a policy's release plan, which is fixed before any content is
+// seen. `Policy` is opaque to Verus, so which plan it holds is uninterpreted, and
+// `Policy::release_plan` is assumed to return it. Whether the plan names a slot, or a slot with a
+// destination, is proved of `ReleasePlan` itself.
+#[cfg(verus_keep_ghost)]
+verus! {
+pub uninterp spec fn spec_release_plan<'sink, S: Sink>(policy: Policy<'sink, S>) -> ReleasePlan;
+
+pub open spec fn spec_precommitted<'sink, S: Sink>(policy: Policy<'sink, S>, slot: SlotId) -> bool {
+    spec_release_plan(policy).spec_names(slot)
+}
+
+pub open spec fn spec_precommitted_into<'sink, S: Sink>(
     policy: Policy<'sink, S>,
     slot: SlotId,
     destination: Seq<char>,
-) -> bool;
+) -> bool {
+    spec_release_plan(policy).spec_names_into(slot, destination)
+}
+
+impl ReleasePlan {
+    /// The plan names `slot` as a source.
+    pub closed spec fn spec_names(self, slot: SlotId) -> bool {
+        exists|at: int| 0 <= at < self.sources@.len() && #[trigger] self.sources@[at] == slot
+    }
+
+    /// The plan names `slot` with exactly `destination`.
+    pub closed spec fn spec_names_into(self, slot: SlotId, destination: Seq<char>) -> bool {
+        exists|at: int|
+            0 <= at < self.into@.len() && #[trigger] self.into@[at].0 == slot && self.into@[at].1@
+                == destination
+    }
+}
 }
 
 // Whether a policy holds a single-use endorsement for a tool's field at an exact value, which only
@@ -588,11 +613,54 @@ impl Grants {
 }
 
 /// What a turn is allowed to release, fixed before any untrusted content is observed.
-#[derive(Debug, Default, Clone)]
+///
+/// Built only by [`ReleasePlan::allow`] and [`ReleasePlan::allow_into`], before a turn begins, and
+/// read by [`ReleasePlan::contains`] and [`ReleasePlan::allows_into`]. Nothing a turn does adds to
+/// it, so a slot content named cannot become releasable.
+#[derive(Debug, Default)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub struct ReleasePlan {
-    sources: BTreeSet<SlotId>,
+    sources: Vec<SlotId>,
     /// Slots a connector act may carry, each with the one destination it may go to.
-    into: BTreeSet<(SlotId, String)>,
+    into: Vec<(SlotId, String)>,
+}
+
+// Written out rather than derived, because Verus refuses a derived `Clone` on a type holding one
+// whose fields it does not read.
+impl Clone for ReleasePlan {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn clone(&self) -> Self {
+        Self {
+            sources: self.sources.clone(),
+            into: self.into.clone(),
+        }
+    }
+}
+
+/// `lead` followed by `note`.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+fn joined(lead: &str, note: &str) -> String {
+    format!("{lead}{note}")
+}
+
+/// Whether two slot ids name the same slot.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == (*a == *b),
+))]
+fn same_slot(a: &SlotId, b: &SlotId) -> bool {
+    a == b
+}
+
+/// Whether a destination is the one a plan named, byte for byte.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == (a@ == b@),
+))]
+fn same_destination(a: &str, b: &str) -> bool {
+    a == b
 }
 
 impl ReleasePlan {
@@ -601,23 +669,73 @@ impl ReleasePlan {
     }
 
     /// Declare a slot releasable. Only slots listed here may be declassified.
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
     pub fn allow(mut self, slot: SlotId) -> Self {
-        self.sources.insert(slot);
+        if !self.sources.contains(&slot) {
+            self.sources.push(slot);
+        }
         self
-    }
-
-    pub fn contains(&self, slot: &SlotId) -> bool {
-        self.sources.contains(slot)
     }
 
     /// Declare a slot releasable to one connector destination, and to nowhere else.
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
     pub fn allow_into(mut self, slot: SlotId, destination: impl Into<String>) -> Self {
-        self.into.insert((slot, destination.into()));
+        let named = (slot, destination.into());
+        if !self.into.contains(&named) {
+            self.into.push(named);
+        }
         self
     }
+}
 
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+impl ReleasePlan {
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == self.spec_names(*slot),
+    ))]
+    pub fn contains(&self, slot: &SlotId) -> bool {
+        let mut at = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant
+                at <= self.sources.len(),
+                forall|before: int| 0 <= before < at ==> #[trigger] self.sources@[before] != *slot,
+            decreases self.sources.len() - at,
+        ))]
+        while at < self.sources.len() {
+            // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+            let named = same_slot(&self.sources[at], slot);
+            if named {
+                return true;
+            }
+            at += 1;
+        }
+        false
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == self.spec_names_into(*slot, destination@),
+    ))]
     fn allows_into(&self, slot: &SlotId, destination: &str) -> bool {
-        self.into.contains(&(slot.clone(), destination.to_string()))
+        let mut at = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant
+                at <= self.into.len(),
+                forall|before: int| 0 <= before < at ==> !(#[trigger] self.into@[before].0 == *slot
+                    && self.into@[before].1@ == destination@),
+            decreases self.into.len() - at,
+        ))]
+        while at < self.into.len() {
+            let (named, to) = &self.into[at];
+            // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+            let to_here = same_slot(named, slot) && same_destination(to, destination);
+            if to_here {
+                return true;
+            }
+            at += 1;
+        }
+        false
     }
 }
 
@@ -1624,24 +1742,32 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         &self.routing
     }
 
-    /// Whether the release plan names `slot` as a source.
+    /// The release plan this turn began with.
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            *r == spec_release_plan(*self),
+    ))]
+    fn release_plan(&self) -> &ReleasePlan {
+        &self.release
+    }
+
+    /// Whether the release plan names `slot` as a source.
     #[cfg_attr(verus_keep_ghost, verus_spec(r =>
         ensures
             r == spec_precommitted(*self, *slot),
     ))]
     fn precommitted(&self, slot: &SlotId) -> bool {
-        self.release.contains(slot)
+        self.release_plan().contains(slot)
     }
 
     /// Whether the release plan names `slot` with `destination`.
-    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
     #[cfg_attr(verus_keep_ghost, verus_spec(r =>
         ensures
             r == spec_precommitted_into(*self, *slot, destination@),
     ))]
     fn precommitted_into(&self, slot: &SlotId, destination: &str) -> bool {
-        self.release.allows_into(slot, destination)
+        self.release_plan().allows_into(slot, destination)
     }
 
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
@@ -5201,6 +5327,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Promoted exactly as the model's own choice of file already is, and for the same reasons:
     /// the read changes nothing and cannot leave the workspace. What comes back is `(T,pub)` and
     /// may be used as a read's path and nothing else.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
+    ))]
     pub fn promote_reference_for_read(
         &mut self,
         tool: &str,
@@ -5209,11 +5339,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         slots: &crate::slot::SlotStore,
     ) -> Gated<Labelled<String>> {
         let path = self.path_of_reference(tool, field, slot, slots)?;
+        self.allow_promoted_reference(tool, field, slot, &path);
+        Ok(Labelled::trusted(path))
+    }
+
+    /// The trail line for a reference promoted for a read.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn allow_promoted_reference(&mut self, tool: &str, field: &str, slot: &SlotId, path: &str) {
         self.allow(
             "promote",
             format!("{tool}.{field}: {slot} names {path}, for a non-destructive read"),
         );
-        Ok(Labelled::trusted(path))
     }
 
     /// The file a reference names, for a person to approve as a destination.
@@ -5250,6 +5386,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Refuses a directory a listing stopped at for the same reason and one more: a write aimed at
     /// one would take the person's single-use endorsement for a file over a directory they own,
     /// and spend it on an effect that cannot succeed.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
     fn path_of_reference(
         &mut self,
         tool: &str,
@@ -9921,13 +10058,41 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// taken replaces it rather than joining it.
     ///
     /// [PROMPT-12]: ../../../docs/specs/prompting.md
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        ensures
+            spec_note(*final(self)) is Some,
+            crate::value::spec_label_of(&spec_note(*final(self))->Some_0)
+                == crate::spec::trusted_public(),
+    ))]
     pub fn record_note(&mut self, tool: &str, lead: &str, note: &str) {
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
         let label = Label::new(Integrity::Trusted, Confidentiality::Public);
+        self.allow_note(tool, label, note);
+        let text = joined(lead, note);
+        self.keep_note(Labelled::new(text, label));
+    }
+
+    /// The trail line for a note a person typed.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        ensures
+            spec_note(*final(self)) == spec_note(*old(self)),
+    ))]
+    fn allow_note(&mut self, tool: &str, label: Label, note: &str) {
         self.allow(
             "answer",
             format!("{tool}: the user added a note to their answer, recorded {label}: {note}"),
         );
-        self.told = Some(Labelled::new(format!("{lead}{note}"), label));
+    }
+
+    /// Keep `note` for [`Policy::take_note`], in place of any note kept before.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        ensures
+            spec_note(*final(self)) == Some(note),
+    ))]
+    fn keep_note(&mut self, note: Labelled<String>) {
+        self.told = Some(note);
     }
 
     /// Record that a dropped picture was scaled down and re-encoded before it was carried
