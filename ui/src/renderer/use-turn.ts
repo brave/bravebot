@@ -163,7 +163,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     const reads = [...new Set([...attachments.map((file) => file.path), ...mentionedFiles])]
     // Made here rather than inside the update so its id can be remembered: the agent says where
     // this prompt landed when the turn ends, and that answer has to find the row it belongs to.
-    const said = t.userSaid(prompt, summoned?.slug)
+    const said = t.userSaid(prompt, summoned?.slug, undefined, addressed?.via === 'address' ? addressed.definition.name : undefined)
     updateSession(handle, (old) =>
       old
         ? {

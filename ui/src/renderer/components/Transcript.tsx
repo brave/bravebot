@@ -1339,6 +1339,7 @@ const EntryList = memo(function EntryList({
   const undoing = useMemo(() => undoRow(entries, rewind), [entries, rewind])
   const undo = useMemo(() => rewind[0] && { running, onUndo: () => onRewind(rewind[0]!.steps) }, [rewind, running, onRewind])
   const answeredBy = useMemo(() => t.summonedReplies(entries), [entries])
+  const addressedBy = useMemo(() => t.addressedReplies(entries), [entries])
   // The open-loops line a reply or error card ended its turn with, by that card's id. Drawn
   // between the card and its footer so the footer stays the turn's last row (OPEN-3).
   const loopsAfter = useMemo(() => {
@@ -1355,6 +1356,7 @@ const EntryList = memo(function EntryList({
       const id = run.kind === 'run' ? run.id : run.entry.id
       const placed = cards?.before.get(id)
       const summoner = run.kind === 'one' ? answeredBy.get(run.entry.id) : undefined
+      const addressee = run.kind === 'one' && summoner === undefined ? addressedBy.get(run.entry.id) : undefined
       if (drawnUnder.has(id)) return null
       const loops = run.kind === 'one' ? loopsAfter.get(run.entry.id) : undefined
       return <Fragment key={id}>
@@ -1379,6 +1381,7 @@ const EntryList = memo(function EntryList({
           )}
         >
           {summoner !== undefined && <SummonLabel slug={summoner} faces={faces} />}
+          {addressee !== undefined && <AddressLabel name={addressee} />}
           {run.entry.kind === 'turn-start' ? <TurnNotices details={turns[run.entry.number]} onDisclosure={onTurnDisclosure} /> : <Row
             entry={run.entry}
             onRecover={onRecover}
@@ -1445,6 +1448,21 @@ function SummonLabel({ slug, faces }: { slug: string; faces: Map<string, Face> }
   return (
     <div className="summon-label">
       <BotLabel name={name} face={face} tooltip={`Answered by ${name}`} test="summon-label" />
+    </div>
+  )
+}
+
+/**
+ * The definition that answered a message alone, over its reply (ADDRESS-3). Drawn as a bot's label
+ * is, with the definition mark the `@` list gives it, since a definition has no face.
+ */
+function AddressLabel({ name }: { name: string }): React.JSX.Element {
+  return (
+    <div className="summon-label">
+      <Label color="neutral" className="bot-label" data-test="address-label" data-tooltip={`Answered by the ${name} definition`}>
+        <span slot="icon-before" className="bot-label-face"><Icon name="product-brave-leo" /></span>
+        <span className="bot-label-name">{name}</span>
+      </Label>
     </div>
   )
 }

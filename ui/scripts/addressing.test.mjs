@@ -195,3 +195,59 @@ test('addressOf is null once the marker is deleted from the draft', () => {
   assert.equal(staging.addressOf(staging.named(picked.staging, deleted)), null)
   assert.equal(staging.addressOf([]), null)
 })
+
+const transcript = load(`export { userSaid, fromSaid, addressedReplies, summonedReplies, summonedAt } from './src/renderer/transcript'`)
+
+test('a live addressed prompt labels its first reply with the definition and no reply after it', () => {
+  const said = transcript.userSaid('[@lantern] light it', undefined, undefined, 'lantern')
+  assert.equal(said.addressed, 'lantern')
+  assert.equal(transcript.userSaid('plain').addressed, undefined)
+  const entries = [
+    said,
+    { kind: 'assistant', id: 'a1', text: 'first' },
+    { kind: 'assistant', id: 'a2', text: 'second' },
+    { kind: 'user', id: 'p2', text: 'next', prompt: 1 },
+    { kind: 'assistant', id: 'a3', text: 'own' },
+  ]
+  assert.deepEqual([...transcript.addressedReplies(entries)], [['a1', 'lantern']])
+  assert.deepEqual([...transcript.summonedReplies(entries)], [])
+})
+
+test('a watch after an addressed prompt that got no reply is a turn of its own', () => {
+  const entries = [
+    transcript.userSaid('[@lantern] light it', undefined, undefined, 'lantern'),
+    { kind: 'watch', id: 'w1', text: 'File watch 1: a.txt' },
+    { kind: 'assistant', id: 'a1', text: 'own' },
+  ]
+  assert.deepEqual([...transcript.addressedReplies(entries)], [])
+})
+
+test('a reopened prompt the driver recorded as addressed for one turn is labelled with the definition', () => {
+  const entries = transcript.fromSaid([
+    { kind: 'user', text: 'light it', prompt: 0, address: { definition: 'lantern', standing: false } },
+    { kind: 'assistant', text: 'lit' },
+    { kind: 'user', text: 'and now', prompt: 1 },
+    { kind: 'assistant', text: 'planner' },
+  ])
+  assert.equal(entries[0].addressed, 'lantern')
+  assert.deepEqual([...transcript.addressedReplies(entries)], [[entries[1].id, 'lantern']])
+})
+
+test('a reopened prompt under a standing definition carries no label', () => {
+  const entries = transcript.fromSaid([
+    { kind: 'user', text: 'hi', prompt: 0, address: { definition: 'ada', standing: true } },
+    { kind: 'assistant', text: 'own' },
+  ])
+  assert.equal(entries[0].addressed, undefined)
+  assert.deepEqual([...transcript.addressedReplies(entries)], [])
+})
+
+test('a reopened prompt a summon record claims keeps its bot’s label and not the definition', () => {
+  const reopened = transcript.fromSaid([
+    { kind: 'user', text: '[@Reviewer] look', prompt: 0, address: { definition: 'reviewer-def', standing: false } },
+    { kind: 'assistant', text: 'looked' },
+  ])
+  const entries = transcript.summonedAt(reopened, new Map([[0, 'reviewer']]))
+  assert.deepEqual([...transcript.summonedReplies(entries)], [[entries[1].id, 'reviewer']])
+  assert.deepEqual([...transcript.addressedReplies(entries)], [])
+})

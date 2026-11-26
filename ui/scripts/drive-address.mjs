@@ -1,7 +1,8 @@
 // Addressing a definition for one message from the composer's `@` list (ADDRESS-2, ADDRESS-3,
 // ADDRESS-5): the definition row with its kind and description ahead of the files, Enter staging a
 // `[@name]` marker, Shift-Enter keeping it, a line holding only the marker refused with nothing
-// sent, a send running one turn under the definition, and the next message going unaddressed.
+// sent, a send running one turn under the definition with its reply labelled with the definition,
+// and the next message going unaddressed and unlabelled.
 //
 // The real app and the real bridge, against a model service this script serves itself, so nothing
 // is paid for. What the model was sent is read off that service.
@@ -93,8 +94,21 @@ try {
   await settled(2)
   assert.ok(!JSON.stringify(JSON.parse(rounds[1]).messages).includes(PURPOSE), 'the next turn is not addressed')
 
+  // ---- the addressed reply is labelled lantern, and the planner's reply after it is not -----------
+  const labels = page.locator('[data-test="address-label"]')
+  assert.equal(await labels.count(), 1, 'one reply carries the definition label')
+  assert.equal((await labels.innerText()).trim(), 'lantern')
+  const labelledReply = page.locator('.entry-hit', { has: labels }).locator(ASSISTANT_BUBBLE)
+  assert.equal(await labelledReply.count(), 1, 'the label sits over a reply')
+  await page.screenshot({ path: join(output, 'address-label-light.png') })
+  await page.evaluate(() => window.bravebot.writeTheme('dark'))
+  await page.waitForFunction(() => document.documentElement.getAttribute('data-theme') === 'dark')
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: join(output, 'address-label-dark.png') })
+  await page.evaluate(() => window.bravebot.writeTheme('system'))
+
   assert.deepEqual(errors, [])
-  console.log(`PASS: @lan listed lantern as a definition with its description ahead of the file; Enter wrote [@lantern] and Shift-Enter kept it; the marker alone was refused and nothing was sent; a task after it ran one turn under lantern without the marker; the next message was the planner's. Screenshots in ${output}/address-*.png`)
+  console.log(`PASS: @lan listed lantern as a definition with its description ahead of the file; Enter wrote [@lantern] and Shift-Enter kept it; the marker alone was refused and nothing was sent; a task after it ran one turn under lantern without the marker and its reply was labelled lantern; the next message was the planner's, unlabelled. Screenshots in ${output}/address-*.png`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'address-failure.png') }).catch(() => undefined)
   throw error
