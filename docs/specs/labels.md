@@ -1495,9 +1495,9 @@ arrives at all.
   `glob::could_match_beneath`: it compares the pattern's segments with the directory's segments,
   which are the two inputs `Wanted::admits` compares for a file. It runs after the permission rules
   and after the 200-subdirectory count and the depth stop, so which directories a bounded walk
-  takes, names and leaves out is decided as before, and it skips only the descent. The pattern is
-  the planner's argument and a directory's name is a name the walk already compares in
-  `walk_filtered`, so the one new condition is on the include pattern and the name order of the
+  takes, names and leaves out is the same as with no pattern, and it skips only the descent. The
+  pattern is the planner's argument and a directory's name is a name the walk already compares in
+  `walk_filtered`, so the condition is on the include pattern and the name order of the
   directory, which the sentence above already lists. No file's bytes are read, and a name in a
   sentence, or a choice of what the walk keeps made from a name other than the pattern's comparison
   with it, is a violation and not covered here.

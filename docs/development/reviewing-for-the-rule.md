@@ -224,7 +224,7 @@ and a repository map's have no clock. The prune is `Wanted::could_hold_an_admitt
 compares the expanded pattern with the subdirectory's relative name by `glob::could_match_beneath`,
 read the two ways `Wanted::admits` reads a file's path (LIST-3). It runs after the rules and after
 the 200-subdirectory count and the depth stop, so what a bounded walk takes, names and leaves out is
-decided as before, and it only skips the descent. It reads no file's bytes and no entry the walk did
+the same as with no pattern, and it only skips the descent. It reads no file's bytes and no entry the walk did
 not meet, and its one condition is on the include pattern and the directory's name, which the
 sentence above already lists. A name in a sentence, or a choice of what the walk keeps made from a
 name other than the pattern's comparison with it, would be a violation of shape 1 or 3 and is not

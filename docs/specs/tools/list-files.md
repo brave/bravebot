@@ -164,7 +164,7 @@ after the permission rules and after the directory bounds of [LIST-5](#LIST-5), 
 withholds, which subdirectories a bounded walk takes and which it stops at or leaves out do not
 change: only the descent is skipped. A skipped directory is not opened, so it cannot set the
 unreadable-directory flag, and the links in it are not counted ([LIST-6](#LIST-6)). Only a listing
-skips directories; the walk of a search or a repository map opens each as before.
+skips directories; the walk of a search or a repository map opens each.
 
 **Why.** A backtracking pattern arriving through a turn is a denial-of-service vector. Expanding a
 group before the walk is what keeps that bound: each alternative is an ordinary pattern applied

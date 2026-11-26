@@ -140,11 +140,12 @@ count, so a search it stops may have read more or fewer files on a slower or bus
 a second run of the same call. The planner is told the search is incomplete either way.
 
 The clock is not read until a search has tried `MIN_SEARCH_READS` files (1,000), counted in the
-walk's sorted order. Under load every file read is slower, and the same query reached a dozen files
-on one run and the whole tree on another, so the cap counts work as well as seconds: a search covers
-the first 1,000 files whatever the machine is doing, and the clock bounds what comes after. The
-count is of files tried, from the list of paths the walk made, and what a file holds does not move
-it. A tree of at most that many files is read whole whatever the time cap says. The floor is not
+walk's sorted order. Under load every file read is slower, so a clock alone lets the same query
+cover very different numbers of files from run to run. The cap therefore counts work as well as
+seconds: a search covers the first 1,000 files whatever the machine is doing, and the clock bounds
+what comes after. The count is of files tried, from the list of paths the walk made, and what a file
+holds does not move it. A tree of at most that many files is read whole whatever the time cap says.
+The floor is not
 bounded by time, so on a slow disk the first 1,000 files can take longer than `search.maxSeconds`
 before the clock is read; that is a known cost of counting work and not seconds. The floor is not a
 setting and `search.maxSeconds` does not change it ([SEARCH-9](#SEARCH-9)); `search.maxFiles` still

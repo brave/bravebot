@@ -3248,7 +3248,7 @@ struct Wanted<'a> {
     /// The walked directory as [`Workspace::relative_display`] spells it: empty for the root.
     under: &'a str,
     /// Whether the walk skips a directory no admitted path can be beneath (LIST-3). Set by a
-    /// listing alone: a search's `include` and a repository map's extensions are read as before.
+    /// listing alone: a search's `include` and a repository map's extensions skip no directory.
     skips_directories: bool,
 }
 
@@ -5030,8 +5030,8 @@ impl Workspace {
             }
             // A directory the include cannot reach anything beneath is not opened (LIST-3). Decided
             // after the rules and after the bounds above, so what a rule withholds and which
-            // directories a bounded walk takes, stops at and counts are decided as they were: only
-            // the descent is skipped, and nothing in the directory is read, counted or listed.
+            // directories a bounded walk takes, stops at and counts are the same as with no pattern:
+            // only the descent is skipped, and nothing in the directory is read, counted or listed.
             if wanted.is_some_and(|wanted| !wanted.could_hold_an_admitted_path(&relative)) {
                 continue;
             }

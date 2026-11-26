@@ -3663,7 +3663,7 @@ fn a_search_that_ran_out_of_time_says_so() {
 /// first file the floor allows.
 ///
 /// The regressions it rejects: a floor that is not applied, so the spent clock stops the search
-/// before the first file as under the old rule (`searched` 0); a floor that stops the clock for good,
+/// before the first file (`searched` 0); a floor that stops the clock for good,
 /// so the search reads the whole tree and never reports a timeout (`timed_out` false at three of
 /// five); and a floor counted past the files tried, which reads four or more.
 #[test]
@@ -3720,7 +3720,7 @@ fn a_search_tries_a_floor_of_files_before_its_clock_can_stop_it() {
 /// A cap nobody named leaves the floor at its built-in number, which holds a tree of a dozen files
 /// whole under a spent clock, and `search.maxSeconds` does not name the floor: a settings layer can
 /// move the time and not the floor (SEARCH-9). The regression it rejects: a built-in floor of zero,
-/// which is the old wall-clock-only rule.
+/// which lets the clock alone stop a search.
 #[test]
 fn the_built_in_floor_holds_a_small_tree_whole_under_a_spent_clock() {
     let (searched, timed_out) =
@@ -3796,7 +3796,7 @@ fn the_built_in_floor_is_a_thousand_files() {
 /// the walk in. A listing that fitted its clock does not set the flag.
 ///
 /// The regression it rejects: a listing with no clock, which walks a tree for as long as the tree
-/// is large (the walk of a home directory took three minutes), and one that sets the flag when it
+/// is large (a home directory), and one that sets the flag when it
 /// reached the end.
 #[test]
 fn a_listing_that_ran_out_of_time_says_so() {
@@ -3898,7 +3898,7 @@ fn listing_beside_locked_directories(
 /// locked directory is what the flag reads.
 ///
 /// The regression it rejects: a walk that filters files only and so descends into every directory
-/// (the call that took three minutes in a home directory with `.somefolder/**`).
+/// (a pattern naming one directory in a home directory still walking the whole home directory).
 #[cfg(unix)]
 #[test]
 fn a_pattern_naming_one_directory_opens_only_that_directory() {
@@ -4055,7 +4055,7 @@ fn a_pattern_with_no_slash_skips_no_directory() {
 }
 
 /// LIST-6 with LIST-3: a directory that is not opened adds nothing to the count of links the walk
-/// met, since it met none of them. The links inside the named directory are counted as before.
+/// met, since it met none of them. The links inside the named directory are counted.
 #[cfg(unix)]
 #[test]
 fn a_directory_skipped_for_the_pattern_does_not_add_its_links_to_the_count() {
