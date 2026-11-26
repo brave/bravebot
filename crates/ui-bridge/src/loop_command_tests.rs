@@ -10,21 +10,28 @@ type Bodies = Arc<Mutex<Vec<String>>>;
 
 /// What the test holds on to while a session is open: the project and the settings beside it.
 struct Held {
-    _project: tempfile::TempDir,
+    project: tempfile::TempDir,
     _settings: tempfile::TempDir,
+    /// Set, the planner holds every reply until it is cleared, so a turn stays in flight.
+    gate: Gate,
 }
+
+type Gate = Arc<std::sync::atomic::AtomicBool>;
 
 /// A planner on this machine that answers every request with a short reply and keeps the body of
 /// each request it was sent, the classifier's left out.
-fn planner() -> (String, Bodies) {
+fn planner() -> (String, Bodies, Gate) {
     use std::io::{BufRead, BufReader, Read, Write};
     let bodies: Bodies = Arc::new(Mutex::new(Vec::new()));
     let kept = Arc::clone(&bodies);
+    let gate: Gate = Arc::default();
+    let shut = Arc::clone(&gate);
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = format!("http://{}", listener.local_addr().unwrap());
     std::thread::spawn(move || {
         while let Ok((stream, _)) = listener.accept() {
             let kept = Arc::clone(&kept);
+            let shut = Arc::clone(&shut);
             std::thread::spawn(move || {
                 let mut reader = BufReader::new(stream);
                 let mut length = 0;
@@ -45,6 +52,9 @@ fn planner() -> (String, Bodies) {
                 if !body.contains("You are a prompt-injection classifier.") {
                     kept.lock().unwrap().push(body);
                 }
+                while shut.load(std::sync::atomic::Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
                 let reply = "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
@@ -55,7 +65,7 @@ fn planner() -> (String, Bodies) {
             });
         }
     });
-    (address, bodies)
+    (address, bodies, gate)
 }
 
 /// A bridge with one session open and nothing running in it, the events it sends, and the
@@ -64,7 +74,7 @@ fn opened() -> (Bridge, String, Events, Bodies, Held) {
     let project = tempfile::tempdir().unwrap();
     // Beside the project and not in it, so the file is read as the person's own (PERM-14).
     let settings = tempfile::tempdir().unwrap();
-    let (endpoint, bodies) = planner();
+    let (endpoint, bodies, gate) = planner();
     let file = settings.path().join("settings.json");
     std::fs::write(
         &file,
@@ -86,8 +96,9 @@ fn opened() -> (Bridge, String, Events, Bodies, Held) {
         false,
     ));
     let held = Held {
-        _project: project,
+        project,
         _settings: settings,
+        gate,
     };
     (bridge, handle, events, bodies, held)
 }
@@ -517,6 +528,119 @@ fn cancelling_a_turn_ends_every_loop() {
         named(&events, "loop.ended"),
         [json!({"reason": "stopped", "count": 2})]
     );
+}
+
+/// Wait until the planner has been sent `count` requests, so the turn that sent the last is in
+/// flight.
+fn asked(bodies: &Bodies, count: usize) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while bodies.lock().unwrap().len() < count {
+        assert!(Instant::now() < deadline, "the planner was never asked");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Stop the turn in flight while the planner holds its reply, let the reply go, and wait for the
+/// worker to end the turn.
+fn cancel_held(bridge: &mut Bridge, handle: &str, held: &Held) {
+    call(bridge, "turn.cancel", json!({"session": handle})).unwrap();
+    held.gate.store(false, std::sync::atomic::Ordering::SeqCst);
+    settle(bridge, handle);
+}
+
+/// LOOP-11. Rejects a tick that is stopped and leaves a loop live, or whose stop is said more than
+/// once or loop by loop, by `turn.cancel` and again by the worker that sees the turn cancelled.
+#[test]
+fn cancelling_a_tick_ends_every_loop_and_says_so_once() {
+    let (mut bridge, handle, events, bodies, held) = opened();
+    typed(&mut bridge, &handle, "5m one");
+    let before = bodies.lock().unwrap().len();
+    held.gate.store(true, std::sync::atomic::Ordering::SeqCst);
+    // The first tick of loop 2 goes at once, and the planner holds it.
+    call(
+        &mut bridge,
+        "loop.command",
+        json!({"session": handle, "argument": "5m two"}),
+    )
+    .unwrap();
+    asked(&bodies, before + 1);
+    assert!(bridge.open.get(&handle).unwrap().running.is_some());
+
+    cancel_held(&mut bridge, &handle, &held);
+    assert!(numbers(&mut bridge, &handle).is_empty());
+    assert_eq!(
+        named(&events, "loop.ended"),
+        [json!({"reason": "stopped", "count": 2})]
+    );
+}
+
+/// LOOP-11. Rejects a prompt the person typed between ticks that is stopped and leaves the loops
+/// live, because it was not a tick of any of them.
+#[test]
+fn cancelling_a_typed_prompt_ends_every_loop_and_says_so_once() {
+    let (mut bridge, handle, events, bodies, held) = opened();
+    typed(&mut bridge, &handle, "5m one");
+    typed(&mut bridge, &handle, "check the deploy");
+    let before = bodies.lock().unwrap().len();
+    held.gate.store(true, std::sync::atomic::Ordering::SeqCst);
+    call(
+        &mut bridge,
+        "turn.send",
+        crate::message_ids::with_fresh(json!({"session": handle, "prompt": "say hello"})),
+    )
+    .unwrap();
+    asked(&bodies, before + 1);
+
+    cancel_held(&mut bridge, &handle, &held);
+    assert!(numbers(&mut bridge, &handle).is_empty());
+    assert_eq!(
+        named(&events, "loop.ended"),
+        [json!({"reason": "stopped", "count": 2})]
+    );
+}
+
+/// LOOP-11. Rejects a session closed with loops live that does not say they ended, or says it
+/// loop by loop.
+#[test]
+fn closing_a_session_ends_every_loop_and_says_so() {
+    let (mut bridge, handle, events, _bodies, _held) = opened();
+    typed(&mut bridge, &handle, "5m one");
+    typed(&mut bridge, &handle, "5m two");
+
+    call(&mut bridge, "session.close", json!({"session": handle})).unwrap();
+    assert_eq!(
+        named(&events, "loop.ended"),
+        [json!({"reason": "stopped", "count": 2})]
+    );
+}
+
+/// LOOP-12. Rejects a loop that is written to the session record, or comes back when the session
+/// is opened again.
+#[test]
+fn a_reopened_session_has_no_loops() {
+    let (mut bridge, handle, _events, _bodies, held) = opened();
+    typed(&mut bridge, &handle, "5m check the deploy");
+    let id = {
+        let open = bridge.open.get(&handle).unwrap();
+        let state = open.state.lock().unwrap();
+        state.handle.as_ref().unwrap().id().to_string()
+    };
+    let saved = store::load(held.project.path(), &id).expect("the tick's turn was saved");
+    let written = serde_json::to_string(&saved).unwrap();
+    assert!(!written.contains("\"loops\""), "{written}");
+    assert!(!written.contains("\"5m\""), "{written}");
+
+    call(&mut bridge, "session.close", json!({"session": handle})).unwrap();
+    let opened = call(
+        &mut bridge,
+        "session.open",
+        json!({"directory": held.project.path().display().to_string(), "id": id}),
+    )
+    .unwrap();
+    let reopened = opened["session"].as_str().unwrap().to_string();
+    assert!(numbers(&mut bridge, &reopened).is_empty());
+    let listed = call(&mut bridge, "loops.list", json!({"session": reopened})).unwrap();
+    assert_eq!(listed["soonest"], Value::Null, "{listed}");
 }
 
 fn wakeup(after: u64, quiet: bool, stop: bool) -> Wakeup {

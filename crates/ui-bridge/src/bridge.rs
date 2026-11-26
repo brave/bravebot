@@ -2111,6 +2111,16 @@ impl Bridge {
             .remove(&handle)
             .ok_or_else(Failure::no_such_session)?;
 
+        // Leaving a session ends every loop it holds, and says how many went (LOOP-11). Said
+        // before the view goes, so the clients of the session still hear it.
+        let stopped_loops = open
+            .loops
+            .lock()
+            .map(|mut loops| loops.stop_all())
+            .unwrap_or(0);
+        for (name, data) in crate::loop_command::stopped(stopped_loops) {
+            self.emitter.send(Event::new(name, &handle, data));
+        }
         self.emitter.detach_view(&handle);
         self.answerers.remove(&handle);
         let begun = self.begun.remove(&handle);
