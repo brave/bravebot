@@ -723,6 +723,37 @@ fn an_advisor_nothing_is_configured_to_answer_is_refused_and_the_held_one_stays(
     );
 }
 
+/// BACKEND-3. An advisor written for a service bravebot knows, where no `provider` block has that
+/// id, is refused with the missing block named, and the advisor already held stays. Taken, every
+/// consult would be sent to Brave's endpoint, which holds no such model.
+#[test]
+fn an_advisor_written_for_a_service_with_no_block_is_refused_naming_it_and_the_held_one_stays() {
+    let config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some("http://unused.invalid".into()),
+        _ => None,
+    })
+    .unwrap();
+    let mut session = Session::new("none");
+    session.choose_advisor(Some("the-advisor-already-held".to_string()));
+
+    set_advisor(&mut session, &config, "ollama/some-model");
+
+    assert_eq!(
+        session.advisor(),
+        Some("the-advisor-already-held"),
+        "a model no block serves replaced the advisor in force"
+    );
+    let said = session.transcript.last().unwrap().text.clone();
+    assert!(
+        said.contains("ollama/some-model")
+            && said.contains("no provider block named ollama")
+            && said.contains("bravebot doctor"),
+        "the line did not say which block is missing: {said}"
+    );
+}
+
 /// A model whose account needs a sign-in first is not taken either, and the line says so rather
 /// than reporting a service that is not there. The advisor the session already held stays.
 #[test]

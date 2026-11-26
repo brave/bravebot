@@ -356,6 +356,9 @@ pub(crate) fn nothing_serves(config: &Config, model: &str) -> Option<String> {
         bravebot_agent::backend::Serving::Refused { file, why } => {
             Some(managed_refusal(model, file.as_deref(), why))
         }
+        bravebot_agent::backend::Serving::Unconfigured { id } => {
+            Some(unconfigured_service(model, &id))
+        }
         bravebot_agent::backend::Serving::Configured => None,
     }
 }
@@ -399,11 +402,29 @@ pub(crate) fn put_processor_model_in_force(
                     &bravebot_agent::compact::SideModelRefusal::NotServed(model),
                 ));
             }
+            bravebot_agent::backend::Serving::Unconfigured { id } => {
+                return Err(bravebot_agent::report::processor_model_refusal(
+                    &bravebot_agent::compact::SideModelRefusal::Unconfigured { model, id },
+                ));
+            }
             bravebot_agent::backend::Serving::Configured => {}
         }
     }
     config.processor_model = named;
     Ok(())
+}
+
+/// What a start or a run says where `model` is written for a service bravebot knows and no
+/// `provider` block has that id (BACKEND-3).
+///
+/// The model is a name a flag or the settings chose, so it and the id are drawn through
+/// [`printable`] (LAYER-3).
+pub(crate) fn unconfigured_service(model: &str, id: &str) -> String {
+    t!(
+        model_service_unconfigured,
+        model = printable(model),
+        id = printable(id)
+    )
 }
 
 /// What a start or a run says where the machine-level layer refuses `model` (BACKEND-48).

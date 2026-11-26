@@ -1279,7 +1279,14 @@ in, as a person's pick in `/model` is for the parent's.
 A model that needs a sign-in this machine has not made is not swapped for the turn's. The delegate
 does not run, and the person is told which definition asked for which model. A model that searches
 the web before it replies, reached over chat completions ([LABEL-8](labels.md#LABEL-8)), is refused
-the same way, and the notice says that it searches the web.
+the same way, and the notice says that it searches the web. A model written `<id>/<name>` for a
+service bravebot recognises, where no `provider` block has that id
+([BACKEND-3](backends.md#BACKEND-3)), is refused the same way before any request is sent, and the
+notice says that no provider block named `<id>` is configured, where to add one, and that
+`bravebot doctor` shows the configuration. The check runs where the definition's model is first
+resolved against a configuration: when the definition is addressed, when `/agent` names it in the
+terminal, and when a delegate is spawned from it. Reading a definition's file has no configuration
+to ask, so it does not run there.
 
 A delegate answered by a model other than the one its definition named says so, naming the
 definition and the model it asked for. It is compared the way a session's own model is: against the
@@ -1306,6 +1313,8 @@ definition could ask for one model and have every delegate it starts answered by
 `verified-by: bravebot_agent::turn::a_delegate_whose_model_searches_the_web_sends_nothing_and_says_why`
 `verified-by: bravebot_agent::turn::an_addressed_definition_whose_model_searches_the_web_sends_nothing_and_says_why`
 `verified-by: bravebot_agent::turn::a_delegate_whose_model_needs_a_sign_in_does_not_run_and_says_so`
+`verified-by: bravebot_agent::turn::a_delegate_whose_model_names_a_service_with_no_block_does_not_run_and_says_so`
+`verified-by: bravebot_agent::turn::an_addressed_definition_naming_a_service_with_no_block_sends_nothing_and_names_it`
 `verified-by: bravebot_agent::turn::a_delegate_answered_by_a_model_other_than_its_definitions_says_so`
 `verified-by: bravebot_agent::turn::a_delegate_on_an_alias_the_reply_resolves_reports_no_substitution`
 

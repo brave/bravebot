@@ -59299,6 +59299,84 @@ fn a_delegate_whose_model_needs_a_sign_in_does_not_run_and_says_so() {
     );
 }
 
+/// BACKEND-3, DELEGATE-22: a delegate whose definition names a model written for a service
+/// bravebot knows, with no `provider` block of that id, does not run and sends nothing, and the
+/// notice names the id. A delegate does not fall back to the turn's model, which would spend past
+/// the boundary the definition drew.
+#[test]
+fn a_delegate_whose_model_names_a_service_with_no_block_does_not_run_and_says_so() {
+    let scratch = Scratch::new("delegate-model-no-block");
+    let home = Scratch::new("delegate-model-no-block-home");
+    define(
+        &home,
+        "local-reader",
+        "kind: reader\nmodel: ollama/some-model\n",
+        "READ-LOCALLY",
+    );
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-TO-LOCAL-READER",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"local-reader","task":"CHECK-LOCALLY"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegate finished"),
+            ],
+        ),
+        ("CHECK-LOCALLY", vec![reply_with("clear")]),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("DELEGATE-TO-LOCAL-READER")
+            .with_home(Some(home.path.clone()))
+            .with_model(Some("custom-parent-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .unwrap();
+
+    let requests: Vec<String> = received.try_iter().collect();
+    assert!(
+        !requests.iter().any(|body| {
+            body.contains("CHECK-LOCALLY") && !body.contains("DELEGATE-TO-LOCAL-READER")
+        }),
+        "the delegate ran on some other model: {requests:?}"
+    );
+    assert!(
+        matches!(reporter.delegates_finished.as_slice(), [(_, _, true)]),
+        "the delegate was not reported as not finishing: {:?}",
+        reporter.delegates_finished
+    );
+    let said = |notice: &String| {
+        notice.contains("local-reader")
+            && notice.contains("ollama/some-model")
+            && notice.contains("no provider block named ollama")
+            && notice.contains("bravebot doctor")
+    };
+    assert!(
+        reporter.notices.iter().any(said),
+        "nobody watching was told why the delegate did not run: {:?}",
+        reporter.notices
+    );
+    assert!(
+        outcome.notices.iter().any(said),
+        "the turn's account did not say why the delegate did not run: {:?}",
+        outcome.notices
+    );
+}
+
 /// Writes one definition into a home directory's `agents/`, as a person keeps one.
 fn define(home: &Scratch, name: &str, fields: &str, body: &str) {
     std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
@@ -60196,6 +60274,93 @@ fn an_addressed_definition_whose_model_needs_a_sign_in_sends_nothing_and_says_so
         reporter.notices.iter().any(|notice| notice == said),
         "nobody watching was told why nothing ran: {:?}",
         reporter.notices
+    );
+}
+
+/// BACKEND-3, ADDRESS-11. A definition whose model is written for a service id bravebot knows, with
+/// no `provider` block of that id, is refused before any request: nothing reaches the endpoint and
+/// the notice names the id. A model with a leading segment no service owns is the control, and
+/// still reaches the endpoint, so the refusal is not made for every name that holds a slash.
+#[test]
+fn an_addressed_definition_naming_a_service_with_no_block_sends_nothing_and_names_it() {
+    let scratch = Scratch::new("address-no-block");
+    let home = Scratch::new("address-no-block-home");
+    define(
+        &home,
+        "local-worker",
+        "kind: worker\nmodel: ollama/some-model\n",
+        "WORK",
+    );
+    define(
+        &home,
+        "routed-worker",
+        "kind: worker\nmodel: z-ai/glm-4.6\n",
+        "WORK",
+    );
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (endpoint, received) =
+        serve_by_marker(vec![("ADDRESSED-TASK", vec![reply_with("worked")])]);
+    let config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+        _ => None,
+    })
+    .unwrap();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let ran = turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "local-worker"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    assert!(
+        matches!(ran, Err(bravebot_agent::turn::TurnError::Precommit(_))),
+        "the definition ran on a service nobody configured"
+    );
+    assert_eq!(
+        received.try_iter().count(),
+        0,
+        "a request was sent to the endpoint for a model no provider block serves"
+    );
+    assert!(
+        reporter.notices.iter().any(|notice| {
+            notice.contains("local-worker")
+                && notice.contains("ollama/some-model")
+                && notice.contains("no provider block named ollama")
+                && notice.contains("bravebot doctor")
+        }),
+        "the person was not told which block is missing: {:?}",
+        reporter.notices
+    );
+
+    let mut control = bravebot_agent::report::RecordingReporter::default();
+    let ran = turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "routed-worker"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut control,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    assert!(
+        !matches!(ran, Err(bravebot_agent::turn::TurnError::Precommit(_))),
+        "a name with an unrecognised leading segment was refused: {:?}",
+        control.notices
+    );
+    assert!(
+        received.try_iter().count() > 0,
+        "the control name never reached the endpoint"
     );
 }
 
@@ -97058,6 +97223,60 @@ fn a_skill_whose_model_needs_a_sign_in_keeps_the_sessions_model_and_says_so() {
     assert!(
         said.contains("on-bedrock") && said.contains("haiku") && said.contains("sign-in"),
         "nobody was told the skill's model could not be reached: {said}"
+    );
+}
+
+/// BACKEND-3. A skill naming a model written for a service bravebot knows, with no `provider` block
+/// of that id, does not move the turn onto it: the rounds after the skill loads keep the session's
+/// model, no request names the skill's model, and the person is told which block is missing.
+///
+/// Without the check the skill's name is adopted and every later round goes to Brave's endpoint,
+/// though no configured service serves that name.
+#[test]
+fn a_skill_whose_model_names_a_service_with_no_block_keeps_the_sessions_model_and_names_it() {
+    let scratch = Scratch::new("skill-model-no-block");
+    write_project_skill_declaring(&scratch.path, "on-ollama", "model: ollama/some-model\n");
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("load_skill", r#"{"name":"on-ollama"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+
+    let outcome = turns::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("do the work").with_model(Some("custom-parent-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .unwrap();
+
+    let _first = received.recv().unwrap();
+    let second = received.recv().unwrap();
+    assert!(
+        second.contains(r#""model":"custom-parent-model""#),
+        "the round after the skill loaded left the session's model: {second}"
+    );
+    assert!(
+        !second.contains("ollama/some-model"),
+        "a request named the model of a service nobody configured: {second}"
+    );
+    assert!(
+        received
+            .try_iter()
+            .all(|body| !body.contains("ollama/some-model")),
+        "a later request named the model of a service nobody configured"
+    );
+    let said = outcome.notices.join(" | ");
+    assert!(
+        said.contains("on-ollama")
+            && said.contains("ollama/some-model")
+            && said.contains("no provider block named ollama")
+            && said.contains("bravebot doctor"),
+        "nobody was told which block the skill's model needs: {said}"
     );
 }
 

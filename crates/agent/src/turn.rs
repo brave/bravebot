@@ -863,8 +863,9 @@ pub fn discover_subscription(
 /// definition named: that model is a cost limit its file set (ADDRESS-11, DELEGATE-22), and a
 /// skill loaded inside the turn does not get to raise it. `pinned_by` is that definition's name.
 ///
-/// A skill's model that needs a sign-in this machine has not made is reported and ignored, and the
-/// turn goes on. The returned lines are the notices to show. A skill that changed nothing returns
+/// A skill's model that needs a sign-in this machine has not made, or that is written for a service
+/// bravebot knows with no `provider` block of that id, is reported and ignored, and the turn goes
+/// on. The returned lines are the notices to show. A skill that changed nothing returns
 /// none.
 fn adopt(
     turn_model: &mut Option<String>,
@@ -896,6 +897,15 @@ fn adopt(
                 skill = skill,
                 model = written,
                 reason = crate::backend::refusal_reason(file, why)
+            ));
+        } else if let Some(id) = config.unconfigured_service(&resolved) {
+            // No configured service serves the name, so the rounds keep the session's own and the
+            // person is told which block is missing (BACKEND-3). The name is the skill file's.
+            said.push(t!(
+                skill_model_unconfigured,
+                skill = skill,
+                model = written,
+                id = id
             ));
         } else if crate::backend::Backend::needs_sign_in(config, &resolved) {
             said.push(t!(

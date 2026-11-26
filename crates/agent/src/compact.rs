@@ -137,6 +137,9 @@ pub fn named_model_or_session<'a>(
     // answering without the exchange reads as a verdict rather than as a failure.
     match crate::backend::serving(config, egress, &named) {
         crate::backend::Serving::Refused { .. } => Err(SideModelRefusal::Refused(named)),
+        crate::backend::Serving::Unconfigured { id } => {
+            Err(SideModelRefusal::Unconfigured { model: named, id })
+        }
         crate::backend::Serving::NothingConfigured { .. } => {
             Err(SideModelRefusal::NotServed(named))
         }
@@ -162,6 +165,14 @@ pub enum SideModelRefusal {
     /// No configured service would answer for it, so a typo degrades a side request rather than
     /// failing it.
     NotServed(String),
+    /// The model is written for a service bravebot recognises and no `provider` block has that id
+    /// ([BACKEND-3](../../../docs/specs/backends.md#BACKEND-3)), so nothing was sent.
+    Unconfigured {
+        /// The resolved model name.
+        model: String,
+        /// The id it is written with, which names the block to add.
+        id: String,
+    },
     /// This machine has made no sign-in that reaches it.
     NeedsSignIn(String),
 }
@@ -416,7 +427,8 @@ mod tests {
             Err(
                 SideModelRefusal::NeedsSignIn(model)
                 | SideModelRefusal::Refused(model)
-                | SideModelRefusal::NotServed(model),
+                | SideModelRefusal::NotServed(model)
+                | SideModelRefusal::Unconfigured { model, .. },
             ) => model,
         };
         assert_eq!(resolved, "haiku-arn", "the tier word did not resolve");
@@ -495,6 +507,35 @@ mod tests {
             )
             .expect("absent"),
             "a-session-model"
+        );
+    }
+
+    /// BACKEND-3, COMPACT-15: a summary model written for a service bravebot knows, with no block
+    /// for it, is refused with the id named, even where the endpoint is a deployment of the
+    /// person's own, which answers for a name no service claims. The message names the block to
+    /// add and not a sign-in.
+    #[test]
+    fn a_summary_model_written_for_a_service_with_no_block_is_refused_naming_it() {
+        let mut config = bravebot_config::Config::from_lookup(aichat_only).unwrap();
+        config.summary_model = Some("ollama/some-model".to_string());
+
+        let refused = side_request_model(
+            &config,
+            &bravebot_net::Egress::new(),
+            Some("a-session-model"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            refused,
+            SideModelRefusal::Unconfigured {
+                model: "ollama/some-model".to_string(),
+                id: "ollama".to_string()
+            }
+        );
+        let said = CompactError::from(refused).to_string();
+        assert!(
+            said.contains("ollama/some-model") && said.contains("no provider block named ollama"),
+            "the refusal did not name the model and the missing block: {said}"
         );
     }
 

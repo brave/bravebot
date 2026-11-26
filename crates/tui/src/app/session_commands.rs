@@ -330,6 +330,9 @@ pub(super) fn set_advisor(session: &mut Session, config: &Config, word: &str) {
         bravebot_agent::backend::Serving::NothingConfigured { .. } => {
             session.note(t!(session_advisor_nothing_serves, model = model));
         }
+        bravebot_agent::backend::Serving::Unconfigured { id } => {
+            session.note(t!(session_advisor_unconfigured, model = model, id = id));
+        }
         bravebot_agent::backend::Serving::Configured => {
             if bravebot_agent::backend::Backend::needs_sign_in(config, &model) {
                 session.note(t!(session_advisor_needs_sign_in, model = model));

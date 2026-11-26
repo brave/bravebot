@@ -139,6 +139,12 @@ pub(crate) fn before_the_session(config: &mut Config, named: Option<&str>) -> Op
                 crate::model::managed_refusal(&model, file.as_deref(), why),
             ));
         }
+        bravebot_agent::backend::Serving::Unconfigured { id } => {
+            return Some(fail(
+                Ending::Configuration,
+                crate::model::unconfigured_service(&model, &id),
+            ));
+        }
         bravebot_agent::backend::Serving::NothingConfigured {
             a_service_is_configured,
             chatgpt,
@@ -273,6 +279,10 @@ fn at_the_start(a_service_is_configured: bool, named: Option<&str>) -> Start {
         bravebot_agent::backend::Serving::Refused { file, why } => Start::Ended(fail(
             Ending::Configuration,
             crate::model::managed_refusal(&model, file.as_deref(), why),
+        )),
+        bravebot_agent::backend::Serving::Unconfigured { id } => Start::Ended(fail(
+            Ending::Configuration,
+            crate::model::unconfigured_service(&model, &id),
         )),
         bravebot_agent::backend::Serving::Configured => Start::Serving(Box::new(config)),
     }

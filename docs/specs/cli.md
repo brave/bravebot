@@ -286,7 +286,10 @@ It prints every backend this build can reach and what identifies it, which names
 which settings files are in force and which of them won a name more than one set, which names a
 machine-level file pinned and where that file is, how to configure a service where nothing
 configured will serve a turn, the model in force
-and whether it was chosen or defaulted, where the state directory is or that there is none, what a
+and whether it was chosen or defaulted, and where that model is written for a service bravebot
+recognises that has no `provider` block of its id ([BACKEND-3](backends.md#BACKEND-3)), a line
+saying that no provider block named that id is configured, with the report ending on the
+configuration failure status, where the state directory is or that there is none, what a
 TLS handshake is validated against and what a request is routed through, the
 confinement available on this platform, whether the network is closed for confined programs and
 which layer closed it ([SANDBOX-20](sandboxing.md#SANDBOX-20)), the sandbox mode in force and the file
@@ -469,6 +472,7 @@ the case a directory listing calls healthy, and it is the one the reader cannot 
 `verified-by: bravebot_cli::running::doctor_says_whether_each_aws_account_is_signed_in_and_never_the_credential`
 `verified-by: bravebot_cli::running::doctor_names_no_sign_in_for_a_missing_aws_cli_or_an_unknown_profile`
 `verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn`
+`verified-by: bravebot_cli::running::a_model_for_a_service_with_no_block_is_refused_by_a_run_and_reported_by_doctor`
 `verified-by: bravebot_cli::doctor::doctor_names_the_state_directory_it_resolved`
 `verified-by: bravebot_cli::doctor::doctor_says_when_the_files_are_left_unrestricted`
 `verified-by: bravebot_cli::doctor::a_missing_state_directory_is_reported_with_what_it_costs`

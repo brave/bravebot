@@ -2023,6 +2023,11 @@ servers-prompts-refused = { $count ->
 # person reading it cannot write the file that refused, so the file is the only actionable thing in
 # it, and a refusal at the moment of the request says nothing about where to look.
 managed-model-refused = no request is made for { $model }: { $reason }
+# The model in force, or a model a flag names, is written for a service bravebot knows and no
+# `provider` block has that id, so Brave's endpoint is not asked for it (BACKEND-3). The model is
+# from the person's own settings or command line.
+model-service-unconfigured =
+    no request is made for { $model }: no provider block named { $id } is configured. Add one under "provider" in ~/.bravebot/settings.json (https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service), or run `bravebot doctor` to see the configuration.
 managed-model-not-allowed =
     { $path }, which this machine's administrator manages, allows only the models its models.allow
     names
@@ -4395,6 +4400,8 @@ session-advisor-none = no advisor; try /advisor followed by a model name
 session-advisor-dropped = advisor dropped
 session-advisor-dropped-setting-remains = advisor dropped; the advisorModel setting still names { $model }
 session-advisor-nothing-serves = nothing is configured to answer { $model }, so it cannot advise
+# The advisor named for a service bravebot knows, where no `provider` block has that id.
+session-advisor-unconfigured = no provider block named { $id } is configured, so { $model } cannot advise. Add one under "provider" in ~/.bravebot/settings.json, or run `bravebot doctor` to see the configuration.
 session-advisor-needs-sign-in = { $model } needs a sign-in first, so it cannot advise
 session-style-set = answering in the { $style } style from the next turn
 session-style-in-force = style: { $style }; available: { $styles }
@@ -5361,6 +5368,11 @@ delegate-more-calls = { $count } calls so far
 # The definition's name and the model as its file wrote it, both from a vouched-for file.
 delegate-model-needs-sign-in =
     { $definition } asked for { $model }, which needs a sign-in first, so it did not run
+# A definition naming a model qualified with the id of a service bravebot knows, where no `provider`
+# block has that id. The definition's name, the model as its file wrote it and the id are from the
+# person's own files. Refused before any request, since no configured service serves the name.
+delegate-model-unconfigured =
+    { $definition } asked for { $model }, but no provider block named { $id } is configured, so nothing was sent. Add one under "provider" in ~/.bravebot/settings.json (https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service), or run `bravebot doctor` to see the configuration.
 # The endpoint substitutes a model it will not serve rather than refusing. The name it answered
 # with is left out, because a notice is the driver's own words.
 delegate-model-substituted = { $definition } asked for { $model } and was answered by a different model
@@ -5381,6 +5393,10 @@ summary-model-refused =
 # a judge or a summariser answering without the exchange reads as a verdict rather than a failure.
 summary-model-not-served =
     { $model } is set as the summary model and no configured service answers for it, so nothing was sent
+# The same setting naming a model written for a service bravebot knows, where no `provider` block
+# has that id. The model and the id are from the person's own settings.
+summary-model-unconfigured =
+    { $model } is set as the summary model, but no provider block named { $id } is configured, so nothing was sent. Add one under "provider" in ~/.bravebot/settings.json, or run `bravebot doctor` to see the configuration.
 # The model `processorModel` or `--processor-model` named, both the person's own. A processor call is
 # refused rather than sent to the turn's model, since the name is a cost boundary.
 processor-model-needs-sign-in =
@@ -5391,6 +5407,9 @@ processor-model-refused =
 # The same name for a model no configured service answers for.
 processor-model-not-served =
     { $model } is set as the processor model and no configured service answers for it, so nothing was sent
+# The same name written for a service bravebot knows, where no `provider` block has that id.
+processor-model-unconfigured =
+    { $model } is set as the processor model, but no provider block named { $id } is configured, so nothing was sent. Add one under "provider" in ~/.bravebot/settings.json, or run `bravebot doctor` to see the configuration.
 # The endpoint substitutes a model it will not serve rather than refusing. The name it answered
 # with is left out, because a notice is the driver's own words. The model is the one the person named.
 processor-model-substituted = A processor asked for { $model } and was answered by a different model
@@ -5562,6 +5581,10 @@ skill-model-needs-sign-in = { $skill } asks for { $model }, which needs a sign-i
 # The layer refuses the model, so the skill loads and the turn goes on as it was, for the reason the
 # sign-in line above does.
 skill-model-refused = { $skill } asks for { $model }, which this machine does not request, so its rounds keep this session's model: { $reason }
+# The skill names a model written for a service bravebot knows, where no `provider` block has that
+# id, so Brave's endpoint is not asked for it (BACKEND-3). The skill loads and the turn goes on as it
+# was, for the reason the sign-in line above does. The skill and the model are its file's own words.
+skill-model-unconfigured = { $skill } asks for { $model }, but no provider block named { $id } is configured, so its rounds keep this session's model. Add one under "provider" in ~/.bravebot/settings.json, or run `bravebot doctor` to see the configuration.
 # The turn runs on a model an addressed or delegate definition named, which a skill does not
 # replace. The definition is its name as the person or the planner wrote it.
 skill-model-kept-for-definition = { $skill } asks for { $model }, but this turn stays on the model { $definition } named

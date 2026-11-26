@@ -46,6 +46,7 @@ fr:command-plugin
 fr:command-sessions
 fr:command-unfinished
 fr:configured-start-heading
+fr:delegate-model-unconfigured
 fr:desktop-accounts-gateway-key-file-unusable
 fr:desktop-model-retrieves
 fr:doctor-dropped-search-key-no-bound-fixed-before-issue
@@ -143,6 +144,7 @@ fr:memory-standing-live
 fr:memory-standing-superseded
 fr:memory-verified-never
 fr:model-retrieves
+fr:model-service-unconfigured
 fr:named-not-a-file
 fr:named-not-text
 fr:named-not-utf8
@@ -298,6 +300,7 @@ fr:plugin-update-what-hooks
 fr:plugin-update-what-servers
 fr:plugin-update-what-skills
 fr:plugin-update-yes
+fr:processor-model-unconfigured
 fr:run-allow-and-remember-explained
 fr:run-kept-scope-not-remembered
 fr:run-not-confined-checkout-entry
@@ -335,6 +338,7 @@ fr:servers-plugin-nobody
 fr:servers-plugin-shadowed
 fr:servers-plugin-stopped-changed
 fr:servers-program-not-text
+fr:session-advisor-unconfigured
 fr:session-link-not-opened
 fr:session-path-not-a-file
 fr:session-preview-denied
@@ -510,6 +514,7 @@ fr:skill-eval-usage
 fr:skill-eval-with
 fr:skill-eval-without
 fr:skill-from-plugin
+fr:skill-model-unconfigured
 fr:status-mcp-servers-unread-manifest
 fr:status-sandbox-mode
 fr:status-server-openshell
@@ -518,6 +523,7 @@ fr:status-server-openshell-image-only
 fr:status-server-openshell-manifest-runs
 fr:status-server-openshell-offered
 fr:status-server-openshell-sandbox
+fr:summary-model-unconfigured
 fr:transcript-copy-block
 fr:trigger-added
 fr:trigger-bad-event

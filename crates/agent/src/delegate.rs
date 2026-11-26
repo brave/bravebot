@@ -732,6 +732,31 @@ pub fn run(
             worked: crate::turn::Worked::default(),
         };
     }
+    // A name qualified with a service bravebot knows and no block of that id would reach Brave's
+    // endpoint though no configured service serves it, so it is refused as the addressed route
+    // refuses it (BACKEND-3, DELEGATE-22). The name is the definition's, read from a vouched-for
+    // file.
+    if let Some((written, resolved)) = &definition_model
+        && let Some(id) = config.unconfigured_service(resolved)
+    {
+        let said = t!(
+            delegate_model_unconfigured,
+            definition = seeded.spec.definition(),
+            model = *written,
+            id = id
+        );
+        reporter.notice(said.clone());
+        return Ended {
+            delegated: Err(TurnError::Precommit(
+                "the delegate's model names a service with no provider block".to_string(),
+            )),
+            vouched: seeded.vouched.clone(),
+            notices: vec![said],
+            rounds: 0,
+            took: began.elapsed(),
+            worked: crate::turn::Worked::default(),
+        };
+    }
     // Refused rather than run on the turn's model, which would spend past a boundary the definition
     // drew, and a worker thread has nowhere to show a sign-in (DELEGATE-22).
     if let Some((written, resolved)) = &definition_model

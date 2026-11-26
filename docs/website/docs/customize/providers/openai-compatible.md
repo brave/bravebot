@@ -269,6 +269,11 @@ Ollama wants no API key, so its block names none:
 }
 ```
 
+A model written `ollama/<name>` while no `provider` block is named `ollama` is refused before any
+request is sent, with a message naming the block to add. The same holds for the other ids bravebot
+recognises: `openrouter`, `openai`, `anthropic`, `lmstudio`, `llama-server`, `google-vertex`,
+`cloudflare-workers-ai`, `cloudflare-ai-gateway` and `amazon-bedrock`.
+
 `baseURL` is written down because `ollama` is not one of the names an endpoint is
 [compiled in](#where-the-requests-go) for. `npm` names Ollama's own SDK, so bravebot speaks Ollama's
 own API at `/api` rather than its OpenAI-compatible one, and each request asks for the model's context

@@ -166,6 +166,37 @@ service and not from anything else: the account is always spoken to in the Respo
 **Note.** The name is not content. It comes from a configured default or from a person picking off a
 list they read, and a model's own output never reaches it.
 
+**A name qualified with a service that has no block is served by none.** A name written
+`<id>/<name>` where `<id>` is one of the ids bravebot recognises (`openrouter`, `openai`, `anthropic`,
+`ollama`, `lmstudio`, `llama-server`, `google-vertex`, the two Cloudflare ids and `amazon-bedrock`)
+and no `provider` entry has that id is not left to the aichat endpoint, because no configured service
+serves it. Every route that picks a model by name refuses it before a request is sent: the session's
+model, `--model`, a recorded pick (which gives way to a served default), the advisor, the summary and
+processor models, a turn the desktop window starts, and a definition's model when it is addressed and
+when it is spawned as a delegate.
+The refusal says that no provider block named `<id>` exists, where to add one, and that
+`bravebot doctor` shows the configuration. A skill's `model:` is reported and ignored with the same
+words and the turn keeps the session's model, as [SKILL-16](skills.md#SKILL-16) says for a model that
+needs a sign-in. A `fallbackModel` written that way is not used and no notice is given. An entry with
+the id that states no endpoint and is no known name counts as no block. The accounts' ids `chatgpt`
+and `xai` are not in the list, and a bare name or a leading segment that is not in it
+(`z-ai/glm-4.6`) is not refused and reaches the service that recognises it, as before. Whether
+Brave's own roster lists a name written that way is not known here, and
+[Known costs](#known-costs) records what the refusal costs if it does.
+
+`verified-by: bravebot_config::lib::a_name_qualified_with_a_known_service_that_has_no_block_is_flagged`
+`verified-by: bravebot_config::lib::the_brave_roster_names_compiled_in_are_not_flagged_without_a_block`
+`verified-by: bravebot_agent::backend::a_model_written_for_a_known_service_with_no_block_is_unconfigured_on_every_endpoint`
+`verified-by: bravebot_agent::turn::an_addressed_definition_naming_a_service_with_no_block_sends_nothing_and_names_it`
+`verified-by: bravebot_agent::turn::a_delegate_whose_model_names_a_service_with_no_block_does_not_run_and_says_so`
+`verified-by: bravebot_agent::compact::a_summary_model_written_for_a_service_with_no_block_is_refused_naming_it`
+`verified-by: bravebot_cli::running::a_model_for_a_service_with_no_block_is_refused_by_a_run_and_reported_by_doctor`
+`verified-by: bravebot_config::lib::a_fallback_written_for_a_known_service_with_no_block_is_not_used`
+`verified-by: bravebot_ui_bridge::models::the_window_refuses_a_model_for_a_known_service_that_has_no_block`
+`verified-by: bravebot_agent::turn::a_skill_whose_model_names_a_service_with_no_block_keeps_the_sessions_model_and_names_it`
+`verified-by: bravebot_tui::app::tests::instructions::an_advisor_written_for_a_service_with_no_block_is_refused_naming_it_and_the_held_one_stays`
+`verified-by: bravebot_tui::app::tests::naming::a_definition_whose_model_names_a_service_with_no_block_runs_nothing_and_says_so`
+
 `verified-by: bravebot_agent::backend::a_configured_bedrock_model_selects_the_bedrock_backend`
 `verified-by: bravebot_agent::backend::a_brave_model_still_reaches_aichat_while_bedrock_is_configured`
 `verified-by: bravebot_agent::backend::without_bedrock_configured_the_aichat_backend_is_selected`
@@ -811,6 +842,13 @@ The set of known names is compiled in: `openrouter`, reached at `https://openrou
 `https://api.anthropic.com/v1` in the protocol [BACKEND-57](#BACKEND-57) states. Nothing is fetched to
 resolve one, and no service is asked what its own endpoint is.
 
+An entry that states no endpoint and is no known name configures no service, and so does not count as
+a block for [BACKEND-3](#BACKEND-3): a model written for its id (`ollama: {}` with `ollama/x`) is refused
+with the message that no provider block named that id is configured, and is not sent to the aichat
+endpoint. An AWS account configured only through the tier variables is no `provider` entry either, so
+`amazon-bedrock/<name>` is refused the same way unless a tier variable names that exact string, since
+those variables name models by their bare id.
+
 `bravebot auth login gateway` offers a key for exactly these names where no block names them, and
 for none of them where the machine-level layer names the gateways. It shows each with the endpoint
 its entry would reach: a known name asked for alone is read as an entry that holds no field is, so
@@ -873,6 +911,8 @@ what keeps a known name usable against a proxy or a private deployment.
 `verified-by: bravebot_config::provider::an_entry_naming_the_openai_sdk_is_reached_through_the_responses_api`
 `verified-by: bravebot_config::provider::only_a_chatgpt_entry_that_states_no_endpoint_names_the_accounts_models`
 `verified-by: bravebot_config::lib::a_provider_entry_named_chatgpt_keeps_the_name_and_no_model_is_the_accounts`
+`verified-by: bravebot_config::lib::a_name_qualified_with_a_known_service_that_has_no_block_is_flagged`
+`verified-by: bravebot_config::lib::a_name_for_amazon_bedrock_is_flagged_where_only_the_tier_variables_configure_the_account`
 
 <a id="BACKEND-18"></a>
 ### BACKEND-18: a model name may say which gateway is meant, and only the rest of it is sent
@@ -880,7 +920,8 @@ what keeps a known name usable against a proxy or a private deployment.
 A name selecting a gateway model may carry the gateway's own identifier ahead of the name that
 gateway knows the model by, separated once. The identifier selects the service; only the remainder is
 sent to it, and it is also what a reply's name is compared against. A name no configured gateway
-claims reaches the service that does recognise it, as before.
+claims reaches the service that does recognise it, as before, except a name written for a service
+bravebot recognises that has no `provider` entry, which is refused ([BACKEND-3](#BACKEND-3)).
 
 The ChatGPT account of [CHATGPT-9](chatgpt-sign-in.md#CHATGPT-9) is named the same way, by the identifier
 `chatgpt`, and a `provider` entry with that id that states an endpoint keeps it: the entry's models go to its
@@ -5384,7 +5425,23 @@ cancel kills it rather than asking it to stop.
   account, the aichat endpoint is the service that would answer for it, as it is for any such name
   (BACKEND-3), so a mistyped `fallbackModel` passes BACKEND-53's same-service test. The turn moves to
   it, the endpoint refuses it, and the failure that ends the turn is that refusal rather than the
-  overload that preceded it.
+  overload that preceded it. A name written `<id>/<name>` with an `<id>` bravebot recognises and no
+  `provider` block of that id is not one of these: `Config::fallback` returns none for it, so the
+  turn stays on the model that failed.
+
+- **A name Brave's roster might list under a recognised service id is refused.** BACKEND-3 refuses
+  `<id>/<name>` for each id it lists where no `provider` block has that id, on Brave's endpoint as
+  on any other. The roster belongs to the service and this repository holds no copy of it: the
+  names compiled in are `automatic-bravebot` and the three tier names of `Tier::brave_model`, and
+  the roster fixtures in `crates/aichat/src/models.rs` use bare names, so nothing here shows a
+  qualified one. If the endpoint lists a model named `openai/<name>`, `anthropic/<name>` or
+  `openrouter/<name>`, that model cannot be requested without a block of that id, and a name
+  picked from `/model` is refused at the next start. Anyone who can reach the endpoint with the
+  `Brave-Product: bravebot` header can check, by listing `GET /v1/models` and looking for a key that
+  starts with one of the ten ids and a slash. Reversing it means removing the three ids with a
+  compiled endpoint (`provider::known_ids`) from `provider::service_ids`, which changes the tests
+  BACKEND-3 names for those ids, or asking the listing before a session opens, which BACKEND-12
+  declines for the cost of a request in front of every run.
 
 - **A Bedrock model that starts reading the ask to show thinking is not asked for up to thirty
   days.** BACKEND-63 keeps a refusal by the model's name, and nothing tells the program that a

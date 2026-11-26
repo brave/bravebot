@@ -26,6 +26,9 @@ pub fn summary_model_refusal(refusal: &crate::compact::SideModelRefusal) -> Stri
         SideModelRefusal::NotServed(model) => {
             bravebot_i18n::t!(summary_model_not_served, model = model)
         }
+        SideModelRefusal::Unconfigured { model, id } => {
+            bravebot_i18n::t!(summary_model_unconfigured, model = model, id = id)
+        }
     }
 }
 
@@ -194,6 +197,9 @@ pub fn processor_model_refusal(refusal: &crate::compact::SideModelRefusal) -> St
         }
         SideModelRefusal::NotServed(model) => {
             bravebot_i18n::t!(processor_model_not_served, model = model)
+        }
+        SideModelRefusal::Unconfigured { model, id } => {
+            bravebot_i18n::t!(processor_model_unconfigured, model = model, id = id)
         }
     }
 }

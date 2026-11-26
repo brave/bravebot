@@ -797,6 +797,64 @@ fn a_definition_whose_model_needs_a_sign_in_runs_nothing_and_says_so() {
     assert!(session.take_addressing().is_none(), "a turn started anyway");
 }
 
+/// BACKEND-3. A definition naming a model written for a service with no `provider` block does
+/// not run, and the line says which block is missing, before anything starts. Run, the turn
+/// would be sent to Brave's endpoint, which holds no such model. The definition's name is the
+/// one `a_resolved_set` gives its model, so the case is the same fixture as the sign-in refusal.
+#[test]
+fn a_definition_whose_model_names_a_service_with_no_block_runs_nothing_and_says_so() {
+    let config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some("http://unused.invalid".into()),
+        _ => None,
+    })
+    .unwrap();
+    let mut session = Session::new("none");
+
+    assert_eq!(
+        address(
+            &mut session,
+            &config,
+            &a_resolved_set(Some("ollama/some-model")),
+            "rule-reviewer review the diff",
+            Vec::new(),
+            Vec::new(),
+            crate::state::NamesFrom::nothing()
+        ),
+        Action::Redraw
+    );
+
+    let said = said_in_the_transcript(&session)
+        .last()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        said.contains("rule-reviewer")
+            && said.contains("ollama/some-model")
+            && said.contains("no provider block named ollama"),
+        "the person was not told which block the definition needs: {said}"
+    );
+    assert!(session.take_addressing().is_none(), "a turn started anyway");
+
+    let mut control = Session::new("none");
+    assert!(
+        matches!(
+            address(
+                &mut control,
+                &config,
+                &a_resolved_set(Some("z-ai/glm-4.6")),
+                "rule-reviewer review the diff",
+                Vec::new(),
+                Vec::new(),
+                crate::state::NamesFrom::nothing()
+            ),
+            Action::Submit(_)
+        ),
+        "a name with an unrecognised leading segment was refused"
+    );
+}
+
 /// A stop puts the line back to be sent again, and Enter on a bare task in this session already
 /// addresses its definition. So a turn addressed to that definition comes back as the task
 /// alone, and only a line that named another definition comes back with the name.

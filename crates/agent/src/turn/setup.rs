@@ -316,6 +316,19 @@ pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
         ));
     }
     if let (Some(addressed), Some((written, resolved))) = (addressed, &definition_model)
+        && let Some(id) = config.unconfigured_service(resolved)
+    {
+        reporter.notice(t!(
+            delegate_model_unconfigured,
+            definition = addressed.name(),
+            model = written,
+            id = id
+        ));
+        return Err(TurnError::Precommit(
+            "the addressed definition's model names a service with no provider block".to_string(),
+        ));
+    }
+    if let (Some(addressed), Some((written, resolved))) = (addressed, &definition_model)
         && crate::backend::Backend::needs_sign_in(config, resolved)
     {
         reporter.notice(t!(

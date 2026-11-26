@@ -468,7 +468,9 @@ unless its own definition names one.
 ### SKILL-16: a value that cannot be used is reported and the skill still loads
 
 An `effort` naming none of the five levels, and a `model` needing a sign-in this machine has not
-made, are each said and the skill is offered anyway, on whatever the session was already running.
+made or written for a service with no `provider` block of its id
+([BACKEND-3](backends.md#BACKEND-3)), are each said and the skill is offered anyway, on whatever the
+session was already running.
 The same holds for a word [SKILL-20](#SKILL-20) cannot read, except that the skill is then kept from
 the planner rather than offered to it.
 The notice names the file and the value as the file wrote it, both of which are the words of a source
@@ -500,6 +502,7 @@ learn that this program found the directory and left it alone.
 `verified-by: bravebot_cli::running::doctor_names_a_shared_skill_directory_it_left_alone`
 `verified-by: bravebot_cli::running::doctor_reads_a_named_shared_skill_directory_and_names_an_unread_key_in_it`
 `verified-by: bravebot_agent::turn::a_skill_whose_model_needs_a_sign_in_keeps_the_sessions_model_and_says_so`
+`verified-by: bravebot_agent::turn::a_skill_whose_model_names_a_service_with_no_block_keeps_the_sessions_model_and_names_it`
 
 <a id="SKILL-18"></a>
 ### SKILL-18: a skill of the user's own is found with `search_skills`, not listed by default
