@@ -4,6 +4,7 @@ title: Slash commands
 status: normative
 governs:
   - crates/tui/src/app.rs
+  - crates/tui/src/app/copying.rs
   - crates/tui/src/app/directories.rs
   - crates/tui/src/app/opening.rs
   - crates/tui/src/app/records.rs
