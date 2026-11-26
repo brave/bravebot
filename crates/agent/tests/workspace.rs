@@ -12147,6 +12147,272 @@ fn a_rule_over_a_git_file_a_symlinked_repository_lands_on_keeps_it_closed() {
     );
 }
 
+/// A policy trusting the whole of `workspace` except `distrusted`, which the map holds as untrusted.
+fn git_policy_distrusting<'a>(
+    workspace: &Workspace,
+    sink: &'a mut RecordingSink,
+    distrusted: &[&str],
+) -> Policy<'a, RecordingSink> {
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    for path in distrusted {
+        trust.distrust(path);
+    }
+    Policy::begin(routing(), ReleasePlan::new(), all_file_capabilities(), sink)
+        .unwrap()
+        .with_trust(trust)
+}
+
+/// A repository `real` that committed `vendor/b.js`, and `link`, a symbolic link to it, in a
+/// workspace of their own.
+#[cfg(unix)]
+fn a_repository_and_a_link_to_it(name: &str) -> (Scratch, Workspace) {
+    let scratch = Scratch::new(name);
+    let real = scratch.path.join("real");
+    std::fs::create_dir(&real).unwrap();
+    repository::commit_files(&real, &[("vendor/b.js", "theirs\n")], "vendored");
+    std::os::unix::fs::symlink(&real, scratch.path.join("link")).unwrap();
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    (scratch, workspace)
+}
+
+/// GIT-3, TRUST-4, LABEL-7. A commit that shows a file under `vendor` is untrusted where the map
+/// distrusts `real/vendor`, under the name the repository was typed with and under the name of the
+/// link that reaches it. The control is the same call with nothing distrusted, which is answered
+/// and trusted, so the untrusted answer is not an error. The regression it rejects: asking the map
+/// about each path shown under the spelling the planner typed alone, so the link's answer is
+/// trusted text about a file the map distrusts.
+#[cfg(unix)]
+#[test]
+fn a_commit_shown_through_a_link_is_untrusted_where_the_map_distrusts_the_file_it_lands_on() {
+    let (_scratch, workspace) = a_repository_and_a_link_to_it("git-link-shown-distrusted");
+    let shown = |name: &str, distrusted: &[&str]| {
+        let mut sink = RecordingSink::new();
+        let mut policy = git_policy_distrusting(&workspace, &mut sink, distrusted);
+        let repository = Labelled::trusted(name.to_string());
+        let revision = Labelled::trusted("HEAD".to_string());
+        let mut question = log_of(&repository);
+        question.query = bravebot_agent::git::Query::Show;
+        question.revision = Some(&revision);
+        workspace
+            .read_git(&mut policy, &question)
+            .map(|answer| answer.label())
+    };
+    for name in ["real", "link"] {
+        let control = shown(name, &[]);
+        assert!(
+            matches!(&control, Ok(label) if *label == Label::trusted_private()),
+            "{name}, control: nothing is distrusted: {control:?}"
+        );
+        let distrusted = shown(name, &["real/vendor"]);
+        assert!(
+            matches!(&distrusted, Ok(label) if label.integrity == Integrity::Untrusted),
+            "{name}: a commit showing a file the map distrusts was not answered as untrusted: \
+             {distrusted:?}"
+        );
+    }
+}
+
+/// GIT-3. A log of one path answers as the commit that showed it does: untrusted where the map
+/// distrusts the file under the name the link lands on. The control is the same call with nothing
+/// distrusted, which is answered and trusted, so the untrusted answer is not an error.
+#[cfg(unix)]
+#[test]
+fn a_log_of_a_path_through_a_link_is_untrusted_where_the_map_distrusts_the_file_it_lands_on() {
+    let (_scratch, workspace) = a_repository_and_a_link_to_it("git-link-log-distrusted");
+    let logged = |distrusted: &[&str]| {
+        let mut sink = RecordingSink::new();
+        let mut policy = git_policy_distrusting(&workspace, &mut sink, distrusted);
+        let repository = Labelled::trusted("link".to_string());
+        let path = Labelled::trusted("vendor/b.js".to_string());
+        let mut question = log_of(&repository);
+        question.path = Some(&path);
+        workspace
+            .read_git(&mut policy, &question)
+            .map(|answer| answer.label())
+    };
+    let control = logged(&[]);
+    assert!(
+        matches!(&control, Ok(label) if *label == Label::trusted_private()),
+        "control: nothing is distrusted: {control:?}"
+    );
+    let distrusted = logged(&["real/vendor"]);
+    assert!(
+        matches!(&distrusted, Ok(label) if label.integrity == Integrity::Untrusted),
+        "a log of a file the map distrusts was not answered as untrusted: {distrusted:?}"
+    );
+}
+
+/// GIT-2, TRUST-4. A repository whose `.git` the map distrusts anywhere under is not opened, under
+/// the name the planner typed or the name of a link that reaches it. The regression it rejects:
+/// asking the map about `link/.git` alone, which no rule covers separately from `.`, so the
+/// repository is opened and its objects decoded.
+#[cfg(unix)]
+#[test]
+fn a_repository_reached_through_a_link_is_not_opened_where_the_map_distrusts_its_git_directory() {
+    let (_scratch, workspace) = a_repository_and_a_link_to_it("git-link-git-distrusted");
+    for distrusted in ["real/.git/objects", "real/.git/refs/heads/main"] {
+        for name in ["real", "link"] {
+            let mut sink = RecordingSink::new();
+            let mut policy = git_policy_distrusting(&workspace, &mut sink, &[distrusted]);
+            let repository = Labelled::trusted(name.to_string());
+            let refused = workspace.read_git(&mut policy, &log_of(&repository));
+            assert!(
+                matches!(
+                    refused,
+                    Err(WorkspaceError::Git {
+                        declined: bravebot_agent::git::Declined::Untrusted,
+                        ..
+                    })
+                ),
+                "{name} with {distrusted} distrusted: {:?}",
+                refused.map(|answer| answer.label())
+            );
+        }
+    }
+}
+
+/// GIT-11, TRUST-4. A status in a repository reached through a link asks the map about the
+/// directory the link lands on as well, so a distrust inside it declines the status as it does
+/// under the name the repository was made with.
+#[cfg(unix)]
+#[test]
+fn a_status_through_a_link_is_declined_where_the_map_distrusts_the_tree_it_lands_on() {
+    let (scratch, workspace) = a_repository_and_a_link_to_it("git-link-status-distrusted");
+    let real = scratch.path.join("real");
+    repository::check_out(&real, &[("vendor/b.js", "theirs\n")]);
+    for name in ["real", "link"] {
+        let mut sink = RecordingSink::new();
+        let mut policy = git_policy_distrusting(&workspace, &mut sink, &["real/vendor"]);
+        let repository = Labelled::trusted(name.to_string());
+        let mut question = log_of(&repository);
+        question.query = bravebot_agent::git::Query::Status;
+        let refused = workspace.read_git(&mut policy, &question);
+        assert!(
+            matches!(
+                refused,
+                Err(WorkspaceError::Git {
+                    declined: bravebot_agent::git::Declined::UntrustedTree,
+                    ..
+                })
+            ),
+            "{name}: {:?}",
+            refused.map(|answer| answer.label())
+        );
+    }
+}
+
+/// GIT-7, TRUST-4. A sealed git run in a link to a repository names read_git exactly where a
+/// read_git call on the link opens it: not where the map distrusts something beneath `.git` under
+/// the name the link lands on, and where nothing is distrusted. The regression it rejects: a call
+/// on the link that asks the map under the typed name alone, which opens a repository
+/// `read_git_opens` (which judges the directory by the name it lands on) declines, so a run is told
+/// to use a call the map refuses or a repository is opened that a distrust under its other name
+/// closes.
+#[cfg(unix)]
+#[test]
+fn read_git_opens_a_link_to_a_repository_as_a_call_through_the_link_does() {
+    let (scratch, workspace) = a_repository_and_a_link_to_it("git-link-opens");
+    let link = scratch.path.join("link");
+    for distrusted in [
+        None,
+        Some("real/.git/objects"),
+        Some("real/.git/refs/heads/main"),
+    ] {
+        let mut sink = RecordingSink::new();
+        let rules: Vec<&str> = distrusted.into_iter().collect();
+        let mut policy = git_policy_distrusting(&workspace, &mut sink, &rules);
+        let opens = workspace.read_git_opens(&policy, &link);
+        let repository = Labelled::trusted("link".to_string());
+        let answered = workspace
+            .read_git(&mut policy, &log_of(&repository))
+            .is_ok();
+        assert_eq!(
+            opens, answered,
+            "{distrusted:?}: read_git_opens said {opens} and a call on the link answered {answered}"
+        );
+        assert_eq!(
+            opens,
+            distrusted.is_none(),
+            "{distrusted:?}: the repository was opened or closed against the map"
+        );
+    }
+}
+
+/// GIT-3, TRUST-4. A file a commit showed that has a second name the map distrusts reads as
+/// untrusted, as a read of it does. The control is the same repository with nothing distrusted.
+#[cfg(unix)]
+#[test]
+fn a_commit_showing_a_file_with_a_hard_link_the_map_distrusts_is_untrusted() {
+    let scratch = Scratch::new("git-hard-link-shown");
+    repository::commit_files(&scratch.path, &[("a.txt", "one\n")], "first");
+    repository::check_out(&scratch.path, &[("a.txt", "one\n")]);
+    std::fs::create_dir(scratch.path.join("vendor")).unwrap();
+    std::fs::hard_link(
+        scratch.path.join("a.txt"),
+        scratch.path.join("vendor/a-too.txt"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let label_of = |workspace: &Workspace, distrusted: &[&str]| {
+        let mut sink = RecordingSink::new();
+        let mut policy = git_policy_distrusting(workspace, &mut sink, distrusted);
+        let repository = Labelled::trusted(".".to_string());
+        let revision = Labelled::trusted("HEAD".to_string());
+        let mut question = log_of(&repository);
+        question.query = bravebot_agent::git::Query::Show;
+        question.revision = Some(&revision);
+        workspace.read_git(&mut policy, &question).unwrap().label()
+    };
+    assert_eq!(
+        label_of(&workspace, &[]),
+        Label::trusted_private(),
+        "control: nothing is distrusted"
+    );
+    assert_eq!(
+        label_of(&workspace, &["vendor"]),
+        Label::untrusted_private(),
+        "a file whose other name is distrusted was shown as trusted"
+    );
+}
+
+/// TRUST-4. Where the lookup of the names of a file a commit showed cannot finish, the answer is
+/// untrusted, since the name that was not found may be distrusted. The control is the same call
+/// with a lookup that finishes. The regression it rejects: reading an unfinished lookup as "no
+/// other name".
+#[cfg(unix)]
+#[test]
+fn a_commit_showing_a_file_whose_other_names_were_not_all_found_is_untrusted() {
+    let scratch = Scratch::new("git-hard-link-unfinished");
+    repository::commit_files(&scratch.path, &[("a.txt", "one\n")], "first");
+    repository::check_out(&scratch.path, &[("a.txt", "one\n")]);
+    std::fs::hard_link(scratch.path.join("a.txt"), scratch.path.join("b.txt")).unwrap();
+    let open = Workspace::new(&scratch.path).unwrap();
+    let capped = open.clone().with_search_caps(Some(1), None);
+    let label_of = |workspace: &Workspace| {
+        let mut sink = RecordingSink::new();
+        let mut policy = git_policy_distrusting(workspace, &mut sink, &[]);
+        let repository = Labelled::trusted(".".to_string());
+        let revision = Labelled::trusted("HEAD".to_string());
+        let mut question = log_of(&repository);
+        question.query = bravebot_agent::git::Query::Show;
+        question.revision = Some(&revision);
+        workspace
+            .read_git(&mut policy, &question)
+            .map(|a| a.label())
+    };
+    assert_eq!(
+        label_of(&open).unwrap(),
+        Label::trusted_private(),
+        "control: a lookup that finishes"
+    );
+    assert_eq!(
+        label_of(&capped).ok(),
+        Some(Label::untrusted_private()),
+        "a lookup that reached its cap was read as no other name"
+    );
+}
+
 /// The policy a checkout is asked under: `trusted` given to the map, `denied` as deny rules.
 fn checkout_policy<'a>(
     workspace: &Workspace,
@@ -12318,6 +12584,68 @@ fn an_attributes_file_the_map_does_not_trust_refuses_a_checkout() {
             }
             other => panic!("{name}: the checkout was not refused: {other:?}"),
         }
+        assert!(!target.exists(), "{name}: a refused checkout was written");
+    }
+}
+
+/// CHECKOUT-4, CHECKOUT-12, TRUST-4. The trust of each entry of HEAD's tree is asked under every
+/// name its file has, as a path an answer of `read_git` showed is, so a `.gitattributes` file whose
+/// only other name the map distrusts is not read as trusted: the checkout is refused with the fixed
+/// sentence and the file is not read. The control is the same tree with nothing distrusted, where
+/// the attributes file is read and its filter refuses the checkout by name. The regression it
+/// rejects: asking the map under the name HEAD's tree spells alone, which reads the file whose
+/// other name is distrusted as trusted.
+#[cfg(unix)]
+#[test]
+fn an_attributes_file_the_map_distrusts_under_another_name_refuses_a_checkout() {
+    use bravebot_agent::git::checkout::{Bound, Conversion, Refused};
+    let scratch = Scratch::new("checkout-attributes-hard-link");
+    let elsewhere = Scratch::new("checkout-attributes-hard-link-target");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", "hello\n"),
+            ("docs/.gitattributes", "* filter=x\n"),
+        ],
+        "first",
+    );
+    std::fs::create_dir(scratch.path.join("docs")).unwrap();
+    std::fs::write(scratch.path.join("docs/.gitattributes"), "* filter=x\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join("docs/.gitattributes"),
+        scratch.path.join("attributes-too"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    for (name, distrusted, expected) in [
+        ("control", None, Refused::Converts(Conversion::Filter)),
+        ("other-name", Some("attributes-too"), Refused::Distrusted),
+    ] {
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        if let Some(path) = distrusted {
+            trust.distrust(path);
+        }
+        let mut sink = RecordingSink::new();
+        let policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .unwrap()
+        .with_trust(trust);
+        let target = elsewhere.path.join(name);
+
+        let refused = match workspace.make_checkout(&policy, &target, name, Bound::FIXED) {
+            Err(WorkspaceError::Checkout { refused, .. }) => Some(refused),
+            _ => None,
+        };
+        assert_eq!(
+            refused,
+            Some(expected),
+            "{name}: the checkout was not refused as expected"
+        );
         assert!(!target.exists(), "{name}: a refused checkout was written");
     }
 }

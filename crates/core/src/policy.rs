@@ -3999,32 +3999,94 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.integrity_beneath_in_force(path) == Some(Integrity::Trusted)
     }
 
+    /// [`Policy::trusts_beneath`] for a directory that has other names than `path` (TRUST-2,
+    /// TRUST-4): the map trusts everything beneath `path`, holds no distrust beneath any of
+    /// `other_names`, and `names_complete`. A name the map has no rule for says nothing, as for
+    /// [`Policy::measure_path_under_names`], so a vouch for the name typed is not taken back by a
+    /// name that landed outside every rule (TRUST-18). The answer under another name can lower the
+    /// answer and never raise it.
+    ///
+    /// `names_complete` is false where the lookup of the directory's other names could not finish,
+    /// which reads as not trusted, since a name that was not found may carry a distrust. The names
+    /// are the file system's answer about a path the planner typed and no file's contents reach
+    /// this.
+    pub fn trusts_beneath_under_names(
+        &self,
+        path: &str,
+        other_names: &[String],
+        names_complete: bool,
+    ) -> bool {
+        names_complete && self.trusts_beneath(path) && !self.a_subtree_is_distrusted(other_names)
+    }
+
+    /// Whether the map holds a distrust at or beneath any of `names`. A name no rule covers says
+    /// nothing, but a distrust recorded beneath it still counts.
+    fn a_subtree_is_distrusted(&self, names: &[String]) -> bool {
+        names.iter().any(|name| {
+            self.trust
+                .integrity_beneath_or(&self.keyed(name), Integrity::Trusted)
+                == Integrity::Untrusted
+        })
+    }
+
     /// Record an observation of a repository's history, labelled by the whole of `git_dir` and by
     /// each working-tree path the answer showed.
     ///
     /// An answer is a function of every object it followed, not only of the files one question
     /// opened, so `git_dir` is asked about as a subtree. A path it showed answers too, since a file
     /// the map distrusts in the working tree holds the same bytes as the blob that committed it.
+    ///
+    /// Asked under one name each. A caller whose repository or paths have other names uses
+    /// [`Policy::observe_repository_under_names`].
     pub fn observe_repository<'p>(
         &mut self,
         capability: Capability,
         git_dir: &str,
         shown: impl IntoIterator<Item = &'p str>,
     ) -> Gated<Label> {
+        self.observe_repository_under_names(
+            capability,
+            (git_dir, &[], true),
+            shown.into_iter().map(|path| (path, &[][..], true)),
+        )
+    }
+
+    /// [`Policy::observe_repository`] for a repository and working-tree paths that have other
+    /// names than the ones they were asked under (TRUST-2, TRUST-4).
+    ///
+    /// `git_dir` is the key of the repository's `.git`, the keys of its other names and whether the
+    /// lookup of them finished. Each shown item is a path, its other names and the same flag. The
+    /// answer is trusted only where `git_dir` is trusted as a subtree and holds no distrust beneath
+    /// any other name, and every shown path is trusted and none of its other names is distrusted.
+    /// A lookup that did not finish reads as untrusted. Only names are added, so the label can be
+    /// lower than [`Policy::observe_repository`] gives and never higher.
+    pub fn observe_repository_under_names<'p>(
+        &mut self,
+        capability: Capability,
+        git_dir: (&str, &[String], bool),
+        shown: impl IntoIterator<Item = (&'p str, &'p [String], bool)>,
+    ) -> Gated<Label> {
         let base = capability.output_label().ok_or_else(|| Denial {
             principle: Principle::Capability,
             message: format!("'{capability}' produces no observation to label"),
         })?;
 
+        let (git_dir, git_dir_names, git_dir_complete) = git_dir;
         let mut integrity = self
             .integrity_beneath_in_force(git_dir)
             .unwrap_or(Integrity::Untrusted);
+        if !git_dir_complete || self.a_subtree_is_distrusted(git_dir_names) {
+            integrity = Integrity::Untrusted;
+        }
         let mut visited = 0usize;
-        for path in shown {
+        for (path, other_names, names_complete) in shown {
             visited += 1;
-            let this = self
+            let mut this = self
                 .integrity_in_force(path)
                 .unwrap_or(Integrity::Untrusted);
+            if !names_complete || self.a_name_is_distrusted(other_names) {
+                this = Integrity::Untrusted;
+            }
             integrity = integrity.meet(this);
         }
 
@@ -22509,6 +22571,112 @@ five
             .observe_repository(Capability::FileRead, ".git", Vec::<&str>::new())
             .expect("observes");
         assert_eq!(label, Label::untrusted_private());
+    }
+
+    /// TRUST-4. A repository and the paths an answer showed are asked about under their other
+    /// names as well, and the answer is trusted only where every name is. A name with no rule
+    /// says nothing, a distrust recorded beneath it counts, and a lookup that did not finish
+    /// reads as untrusted. With no other names it is `observe_repository`.
+    #[test]
+    fn a_repository_answer_is_asked_under_every_name_of_the_git_directory_and_each_path() {
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        store.distrust("real/vendor");
+        store.distrust("other/.git/objects");
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing_with("task", "edit"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .unwrap()
+        .with_trust(store);
+        let none: &[String] = &[];
+        let real_vendor = ["real/vendor/b.js".to_string()];
+        let outside = ["/elsewhere/a.rs".to_string()];
+        let other_git = ["other/.git".to_string()];
+        let mut observe = |git: (&str, &[String], bool), shown: Vec<(&str, &[String], bool)>| {
+            policy
+                .observe_repository_under_names(Capability::FileRead, git, shown)
+                .unwrap()
+        };
+
+        assert_eq!(
+            observe(("link/.git", none, true), vec![("link/a.rs", none, true)]),
+            Label::trusted_private(),
+            "control: no name is distrusted"
+        );
+        assert_eq!(
+            observe(
+                ("link/.git", none, true),
+                vec![("link/vendor/b.js", &real_vendor, true)]
+            ),
+            Label::untrusted_private(),
+            "a shown path whose other name is distrusted"
+        );
+        assert_eq!(
+            observe(("link/.git", &other_git, true), vec![]),
+            Label::untrusted_private(),
+            "a distrust beneath another name of .git, which no shown path reaches"
+        );
+        assert_eq!(
+            observe(
+                ("link/.git", none, true),
+                vec![("link/a.rs", &outside, true)]
+            ),
+            Label::trusted_private(),
+            "a name no rule covers says nothing"
+        );
+        assert_eq!(
+            observe(("link/.git", none, false), vec![]),
+            Label::untrusted_private(),
+            "a lookup of the names of .git that did not finish"
+        );
+        assert_eq!(
+            observe(("link/.git", none, true), vec![("link/a.rs", none, false)]),
+            Label::untrusted_private(),
+            "a lookup of the names of a shown path that did not finish"
+        );
+    }
+
+    /// TRUST-4. A directory is trusted beneath only where the map says so under the name typed
+    /// and under each other name, and a lookup that did not finish is not trusted.
+    #[test]
+    fn a_subtree_is_trusted_beneath_only_under_every_name() {
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        store.distrust("real/.git/objects");
+        let mut sink = RecordingSink::new();
+        let policy = Policy::begin(
+            routing_with("task", "edit"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .unwrap()
+        .with_trust(store);
+        let none: &[String] = &[];
+        let real = ["real/.git".to_string()];
+        let nowhere = ["/elsewhere/.git".to_string()];
+
+        assert!(policy.trusts_beneath_under_names("link/.git", none, true));
+        assert!(
+            !policy.trusts_beneath_under_names("link/.git", &real, true),
+            "a distrust beneath another name"
+        );
+        assert!(
+            policy.trusts_beneath_under_names("link/.git", &nowhere, true),
+            "a name no rule covers says nothing"
+        );
+        assert!(
+            !policy.trusts_beneath_under_names("link/.git", none, false),
+            "a lookup that did not finish"
+        );
+        assert!(
+            !policy.trusts_beneath_under_names("real/.git", none, true),
+            "the name typed is still asked"
+        );
     }
 
     /// LSP-3, the half that makes the tool useful. A language server's answer about a file nobody

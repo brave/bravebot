@@ -371,7 +371,9 @@ name, a name held twice, a name the file system takes for another or cannot hold
 directories, a size in bytes, or an object that cannot be read. An entry's name and size are content
 of its path, so saying which check failed would tell the planner something the map does not let it
 read ([GIT-3](tools/read-git.md#GIT-3)). Whether the sentence is the fixed one is decided from the
-map's answer for the entry's path, never from the name or size. A name that cannot be keyed (empty,
+map's answer for the entry's path, never from the name or size. The map is asked about the path
+under every name its file has, as a path an answer of `read_git` showed is ([GIT-3](tools/read-git.md#GIT-3)),
+and an entry whose names were not all found is read as not trusted. A name that cannot be keyed (empty,
 `.`, `..`, one holding a separator or a NUL, or one that is not UTF-8) is asked about under the path
 of the tree that holds it. A bound passed by a tree that holds trusted and distrusted entries
 together is the fixed sentence once any distrusted entry has been counted, since the trusted entries
@@ -403,6 +405,7 @@ Built, and a spawn is refused where a checkout is.
 `verified-by: bravebot_agent::git::an_attributes_file_a_deny_rule_covers_refuses_the_checkout`
 `verified-by: bravebot_agent::git::an_attributes_file_the_map_does_not_trust_refuses_the_checkout_unread`
 `verified-by: bravebot_agent::workspace::an_attributes_file_the_map_does_not_trust_refuses_a_checkout`
+`verified-by: bravebot_agent::workspace::an_attributes_file_the_map_distrusts_under_another_name_refuses_a_checkout`
 `verified-by: bravebot_agent::workspace::a_spawn_refused_for_an_entry_under_a_distrusted_path_gets_one_fixed_sentence`
 `verified-by: bravebot_agent::git::a_tree_past_the_bound_refuses_the_checkout`
 `verified-by: bravebot_agent::git::a_name_git_refuses_to_check_out_refuses_the_checkout`
@@ -767,7 +770,8 @@ An answer about the repository's history, in the working directory or in any che
 by the rule over each path it showed there and by the rule over the same path in every checkout of
 that repository the session has made ([GIT-3](tools/read-git.md#GIT-3)). A rule that distrusts a
 path in a checkout is kept for this after the checkout is removed, for as long as the session
-lasts.
+lasts. The path in a checkout is asked under the name the driver recorded it by alone: the other
+names of a file in a checkout are not looked up (see Known costs).
 
 **Why not the file.** A delegate can overwrite it, and what it names would then choose which
 repository is read.
@@ -1303,6 +1307,17 @@ Built.
 
 ## Known costs
 
+- **A path in a checkout is asked under one name, and a read_git question put through a checkout's
+  policy is asked about the checkout's `.git` under one name.** [GIT-2](tools/read-git.md#GIT-2) and
+  [GIT-3](tools/read-git.md#GIT-3) ask the map under every name a file or a repository directory has
+  in the person's working directory ([TRUST-4](trust-map.md#TRUST-4)). A delegate's policy reads a
+  relative name under its own root, so a name found in the person's workspace cannot be handed to
+  it, and [CHECKOUT-12](#CHECKOUT-12) asks the key it spells in full. A hard link or a link made
+  in a checkout, a second path to it and a link on the way to it are therefore not looked up, and a
+  rule about another name of a file in a checkout does not reach the file. The checkout is made
+  from HEAD's tree and written by the driver as plain files, so a link in it is one a program made
+  there. A checkout is made with every entry asked under every name the
+  path has in the working directory ([CHECKOUT-4](#CHECKOUT-4)).
 - **A program in a checkout can still write the person's tree.** It is unconfined, and an absolute
   path reaches the working directory. A program in the working directory, or in another checkout,
   can write into this one the same way, and a checkout the record shows nothing was done in is

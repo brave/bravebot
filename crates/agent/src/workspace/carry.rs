@@ -7,9 +7,8 @@
 //! and nothing here compares one file with another: whether a file differs from HEAD is the
 //! status's to say, and the status is git's own algorithm over a tree the map vouches for.
 
-use super::{CHECKOUT_FILE_CEILING, Workspace, in_repository, locked};
+use super::{CHECKOUT_FILE_CEILING, Workspace, locked};
 use crate::git::checkout::{Carry, carry, uncarry};
-use bravebot_core::capability::Capability;
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
 use std::collections::BTreeSet;
@@ -312,7 +311,7 @@ impl Workspace {
         policy.capture_files(|policy, _capture| {
             let deadline = Instant::now() + self.search_time;
             let query = crate::git::Query::Status;
-            let (opened, read_set) = self.open_for_git(policy, ".", &self.root, query, deadline)?;
+            let (opened, read) = self.open_for_git(policy, ".", &self.root, query, deadline)?;
             let request = crate::git::Request {
                 query,
                 revision: None,
@@ -329,17 +328,8 @@ impl Workspace {
             };
             let withheld = |inside: &str| self.denies_in_repository(policy, ".", inside);
             let answer = opened.answer(&request, &withheld)?;
-            let shown: Vec<String> = answer
-                .shown
-                .iter()
-                .map(|inside| self.trust_key(&in_repository(".", inside)))
-                .collect();
-            let label = policy
-                .observe_repository(
-                    Capability::FileRead,
-                    &read_set,
-                    shown.iter().map(String::as_str),
-                )
+            let label = self
+                .observe_git_answer(policy, ".", &read, &answer.shown, &[])
                 .map_err(|_| Declined::Untrusted)?;
             if label.integrity != bravebot_core::Integrity::Trusted {
                 return Err(Declined::UntrustedTree);
