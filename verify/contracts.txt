@@ -144,6 +144,11 @@ crates/core/src/programs.rs::expansion_vouched/loop: invariant at <= expansion.p
 crates/core/src/programs.rs::part_vouched: r => ensures r == crate::spec::part_vouched(listed@, *part, *directory), decreases *part, 0nat,
 crates/core/src/programs.rs::covers_every_step: r => ensures r == crate::spec::steps_vouched(spec_commands(*self), plan.steps, plan.directory),
 crates/core/src/programs.rs::listed: r => ensures r@ == spec_commands(*self),
+crates/core/src/punycode.rs::adapt: r => ensures r <= 287,
+crates/core/src/punycode.rs::adapt/loop: invariant k % BASE == 0, k <= 252, k >= 36 ==> delta <= 122713351, k >= 72 ==> delta <= 3506095, k >= 108 ==> delta <= 100174, k >= 144 ==> delta <= 2862, k >= 180 ==> delta <= 81, k >= 216 ==> delta <= 2, decreases delta,
+crates/core/src/punycode.rs::digit: r => ensures d < 36 ==> r is Some,
+crates/core/src/punycode.rs::digits_of/loop: invariant k % BASE == 0, k >= 36, k <= 396, bias <= 287, last ==> q < 36, k >= 72 ==> q <= 429496729, k >= 108 ==> q <= 42949672, k >= 144 ==> q <= 4294967, k >= 180 ==> q <= 429496, k >= 216 ==> q <= 42949, k >= 252 ==> q <= 4294, k >= 288 ==> q <= 429, k >= 324 ==> q <= 42, k >= 360 ==> q <= 4, k >= 396 ==> q == 0, decreases q + if last { 0u32 } else { 1u32 },
+crates/core/src/punycode.rs::push_digit: requires d < 36,
 crates/core/src/remembered.rs::admits: r => ensures r == crate::spec::arg_admits(*self, seen@),
 crates/core/src/remembered.rs::matches: r => ensures r == crate::spec::remembered_step_matches(*self, *step),
 crates/core/src/remembered.rs::every_arg_admits: r => ensures r == crate::spec::args_admit(held@, seen@),
@@ -261,6 +266,11 @@ crates/core/src/programs.rs::TrustedPrograms: assumes external_body
 crates/core/src/programs.rs::clone: assumes external
 crates/core/src/programs.rs::default: assumes external
 crates/core/src/programs.rs::listed: assumes external_body
+crates/core/src/punycode.rs::digit: assumes external_body
+crates/core/src/punycode.rs::push_digit: assumes external_body
+crates/core/src/punycode.rs::encode: assumes external
+crates/core/src/punycode.rs::to_ascii: assumes external
+crates/core/src/punycode.rs::push_digit: assumes requires
 crates/core/src/remembered.rs::clone: assumes external
 crates/core/src/slot.rs::SlotId: assumes external_body
 crates/core/src/slot.rs::clone: assumes external

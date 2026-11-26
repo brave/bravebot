@@ -781,3 +781,23 @@ replace: let label = Label::new(Integrity::Trusted, Confidentiality::Public); =>
 mutation: Policy::promote_reference_for_read promotes the path at the slot's own label
 file: crates/core/src/policy.rs
 replace: Ok(Labelled::trusted(path)) => Ok(Labelled::new(path, Label::new(Integrity::Untrusted, Confidentiality::Public)))
+
+mutation: adapt stops dividing delta, so the bias it returns is past what digits_of may be given
+file: crates/core/src/punycode.rs
+replace: delta /= BASE - T_MIN; => delta /= 1 + delta / delta;
+
+mutation: adapt skips halving delta, so adding a part of it to itself can wrap
+file: crates/core/src/punycode.rs
+replace: let mut delta = if first { delta / DAMP } else { delta / 2 }; => let mut delta = if first { delta / DAMP } else { delta };
+
+mutation: digits_of takes a bias past the largest adapt returns, so k can pass bias by more than the digits allow
+file: crates/core/src/punycode.rs
+replace: let bias = bias.min(MOST_BIAS); => let bias = bias;
+
+mutation: digits_of divides what is left by too little, so k keeps growing until it wraps
+file: crates/core/src/punycode.rs
+replace: q = (q - t) / (BASE - t); => q = (q - t) / 2;
+
+mutation: digits_of stops at a threshold of 36 or more, so the last digit it pushes can be past z9
+file: crates/core/src/punycode.rs
+replace: } else if k >= bias + T_MAX { => } else if k >= bias + T_MAX + 20 {
