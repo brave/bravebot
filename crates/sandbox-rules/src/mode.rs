@@ -1,6 +1,9 @@
 //! How much a program `run` starts is held to, as a person chose it, and whether the network is
 //! open to it (SANDBOX-20, SANDBOX-22).
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 use std::fmt;
 
 /// What `workspace-write` was called before it was renamed.
@@ -12,6 +15,7 @@ const RENAMED_WORKSPACE_WRITE: &str = "standard";
 /// directories, which `read-only` does not, so neither is the stricter of the two. A caller asks
 /// [`SandboxMode::is_looser_than`] and never compares two modes by position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(verus_keep_ghost, verus_verify, derive(Structural))]
 pub enum SandboxMode {
     /// The deny-by-default profile: the base, the list the program's binary brings, and the scope
     /// its argv names. The machine is not read.
@@ -37,6 +41,7 @@ impl SandboxMode {
     ];
 
     /// The word a person types for this mode, which is also how every report spells it.
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
     pub fn name(self) -> &'static str {
         match self {
             Self::Strict => "strict",
@@ -50,14 +55,24 @@ impl SandboxMode {
     /// closes it whatever the setting says, because it holds back what a program changes off this
     /// machine as well as on it (SANDBOX-22). The one place that rule is decided, so what the
     /// sandbox enforces and what the screens report cannot drift apart.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            self == SandboxMode::ReadOnly ==> r == Network::Closed,
+            self != SandboxMode::ReadOnly ==> r == setting,
+    ))]
     pub fn network_in_force(self, setting: Network) -> Network {
         match self {
+            // `read-only` holds back what a program changes off this machine as well as on it.
             Self::ReadOnly => Network::Closed,
             _ => setting,
         }
     }
 
     /// Whether a stage under this mode is confined by a profile at all. Only `off` is not.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == (self != SandboxMode::Off),
+    ))]
     pub fn confines(self) -> bool {
         self != Self::Off
     }
@@ -67,39 +82,83 @@ impl SandboxMode {
     /// directory. `strict` never does, and on Windows and without a home no mode does, since the
     /// credential rows are rows under the home and a read of the whole machine with none to
     /// subtract is the one grant that must not be made (SANDBOX-18).
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r ==> !windows,
+            r ==> has_home,
+            r ==> self != SandboxMode::Strict,
+            (!windows && has_home && self != SandboxMode::Strict) ==> r,
+    ))]
     pub fn reads_the_machine(self, windows: bool, has_home: bool) -> bool {
         !windows && has_home && self != Self::Strict
     }
 
     /// Whether a stage under this mode writes the directories the session was opened on and its
     /// scratch directory. `read-only` does not (SANDBOX-22).
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == (self != SandboxMode::ReadOnly),
+    ))]
     pub fn writes_the_session(self) -> bool {
-        self != Self::ReadOnly
+        match self {
+            // Under `read-only` the session's directories are read and not written.
+            Self::ReadOnly => false,
+            Self::Strict | Self::WorkspaceWrite | Self::Off => true,
+        }
     }
 
     /// Whether a stage under this mode writes every toolchain's cache: only where it reads the
     /// machine, and not under `read-only`, which writes no cache (SANDBOX-15, SANDBOX-22).
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r ==> reads_the_machine,
+            r ==> self != SandboxMode::ReadOnly,
+            (reads_the_machine && self != SandboxMode::ReadOnly) ==> r,
+    ))]
     pub fn writes_every_cache(self, reads_the_machine: bool) -> bool {
         reads_the_machine && self != Self::ReadOnly
     }
 
     /// Whether a stage under this mode is given a toolchain's cache to write as well as its list
     /// to read. `read-only` gives the list alone (SANDBOX-22).
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == (self != SandboxMode::ReadOnly),
+    ))]
     pub fn writes_a_toolchain_cache(self) -> bool {
-        self != Self::ReadOnly
+        match self {
+            // Under `read-only` a toolchain brings its list and writes no cache.
+            Self::ReadOnly => false,
+            Self::Strict | Self::WorkspaceWrite | Self::Off => true,
+        }
     }
 
     /// Whether a grant for writing a path a person let programs reach gives its write as well as
     /// its read. Under `read-only` it gives the read alone, as a new request for it would
     /// (SANDBOX-22, SANDBOX-28).
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == (self != SandboxMode::ReadOnly),
+    ))]
     pub fn writes_what_was_granted(self) -> bool {
-        self != Self::ReadOnly
+        match self {
+            // Under `read-only` a grant for writing gives its read.
+            Self::ReadOnly => false,
+            Self::Strict | Self::WorkspaceWrite | Self::Off => true,
+        }
     }
 
     /// Whether a stage under this mode is given every path a request for writing would be granted,
     /// without the request: only under `workspace-write`, where the person allowed it and the
     /// machine is read (SANDBOX-28). `strict` asked for less reach than the default, and `off` has
     /// no profile.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r ==> allowed,
+            r ==> reads_the_machine,
+            r ==> self == SandboxMode::WorkspaceWrite,
+            (allowed && reads_the_machine && self == SandboxMode::WorkspaceWrite) ==> r,
+    ))]
     pub fn writes_without_a_request(self, allowed: bool, reads_the_machine: bool) -> bool {
         allowed && self == Self::WorkspaceWrite && reads_the_machine
     }
@@ -107,19 +166,39 @@ impl SandboxMode {
     /// Whether a stage under this mode may keep the network for a reason it carries where the
     /// session closed it: a toolchain that fetches, a credential scope, or a program that talks to a
     /// remote. `read-only` gives no stage a reason (SANDBOX-20, SANDBOX-22).
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == (self != SandboxMode::ReadOnly),
+    ))]
     pub fn keeps_the_network_for_a_reason(self) -> bool {
-        self != Self::ReadOnly
+        match self {
+            // Under `read-only` no stage is given a reason to keep the network.
+            Self::ReadOnly => false,
+            Self::Strict | Self::WorkspaceWrite | Self::Off => true,
+        }
     }
 
     /// Whether a stage under this mode may be lent the remote scope, which is how it pushes and
     /// which writes `~/.ssh/known_hosts`. `read-only` lends it to no stage (SANDBOX-16, SANDBOX-22).
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == (self != SandboxMode::ReadOnly),
+    ))]
     pub fn lends_the_remote_scope(self) -> bool {
-        self != Self::ReadOnly
+        match self {
+            // Under `read-only` `git push` and `gh pr create` fail.
+            Self::ReadOnly => false,
+            Self::Strict | Self::WorkspaceWrite | Self::Off => true,
+        }
     }
 
     /// Whether a stage under this mode must be refused on a kernel that cannot keep it from a unix
     /// socket that has a path: `strict` and `read-only`, which promise less reach than that kernel
     /// gives (SANDBOX-3, SANDBOX-22).
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == (self == SandboxMode::Strict || self == SandboxMode::ReadOnly),
+    ))]
     pub fn needs_sockets_governed(self) -> bool {
         matches!(self, Self::Strict | Self::ReadOnly)
     }
@@ -130,6 +209,7 @@ impl SandboxMode {
     /// not obeyed as one, because the modes differ in what a program may reach and a guess would
     /// choose for the person. `standard`, the word `workspace-write` replaced, still names it, so a
     /// settings file or a managed pin written before the rename keeps its meaning.
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
     pub fn parse(word: &str) -> Option<Self> {
         if word == RENAMED_WORKSPACE_WRITE {
             return Some(Self::WorkspaceWrite);
@@ -143,6 +223,12 @@ impl SandboxMode {
     /// reads the machine, and `strict` writes the session's directories. A managed pin of one
     /// therefore refuses the other. On Windows no mode but `off` reads the machine, so `read-only`
     /// is no looser than `strict` and a pin of `strict` keeps it.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            self == other ==> !r,
+            other == SandboxMode::Off ==> !r,
+            (self == SandboxMode::Off && other != SandboxMode::Off) ==> r,
+    ))]
     pub fn is_looser_than(self, other: Self) -> bool {
         self.looser_than(other).is_some()
     }
@@ -152,12 +238,28 @@ impl SandboxMode {
     ///
     /// What a refusal under a managed pin gives as its reason. The modes are not a line, so
     /// "looser" alone does not tell a person under a `strict` pin why `read-only` is refused.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            self == other ==> r is None,
+            other == SandboxMode::Off ==> r is None,
+            (self == SandboxMode::Off && other != SandboxMode::Off) ==> r is Some,
+    ))]
     pub fn looser_than(self, other: Self) -> Option<Looser> {
         self.looser_than_on(other, cfg!(windows))
     }
 
     /// [`Self::looser_than`] for a named platform, so the Windows ranking is testable on a host
     /// that is not Windows.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            self == other ==> r is None,
+            (self == SandboxMode::Off && other != SandboxMode::Off) ==> r is Some,
+            other == SandboxMode::Off ==> r is None,
+            (!windows && self == SandboxMode::Strict && other == SandboxMode::ReadOnly) ==> r == Some(Looser::Writes),
+            (!windows && self == SandboxMode::ReadOnly && other == SandboxMode::Strict) ==> r == Some(Looser::Reads),
+            (windows && self == SandboxMode::ReadOnly && other == SandboxMode::Strict) ==> r is None,
+            (self == SandboxMode::ReadOnly && other != SandboxMode::ReadOnly) ==> !(r == Some(Looser::Writes) || r == Some(Looser::Both)),
+    ))]
     pub fn looser_than_on(self, other: Self, windows: bool) -> Option<Looser> {
         match (
             self.reads(windows) > other.reads(windows),
@@ -172,8 +274,13 @@ impl SandboxMode {
 
     /// How much of the machine a program can read, as a rank. On Windows only `off` reads it: the
     /// other three build a policy that grants no read of the machine.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::reach_of_reads(self, windows),
+    ))]
     fn reads(self, windows: bool) -> u8 {
         match (self, windows) {
+            // On Windows `off` is the one mode that reads the machine.
             (Self::Off, true) => 1,
             (_, true) => 0,
             (Self::Strict, false) => 0,
@@ -183,8 +290,13 @@ impl SandboxMode {
     }
 
     /// How much a program can write, as a rank.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::reach_of_writes(self),
+    ))]
     fn writes(self) -> u8 {
         match self {
+            // `read-only` writes nothing of the session's, which every other mode writes.
             Self::ReadOnly => 0,
             Self::Strict => 1,
             Self::WorkspaceWrite => 2,
@@ -195,6 +307,7 @@ impl SandboxMode {
 
 /// What one mode does more of than another ([`SandboxMode::looser_than`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify, derive(Structural))]
 pub enum Looser {
     /// It reads more of the machine and writes no more.
     Reads,
@@ -204,6 +317,7 @@ pub enum Looser {
     Both,
 }
 
+#[cfg_attr(verus_keep_ghost, verifier::external)]
 impl fmt::Display for SandboxMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())
@@ -212,6 +326,7 @@ impl fmt::Display for SandboxMode {
 
 /// What a session decided about the network for the programs it starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(verus_keep_ghost, verus_verify, derive(Structural))]
 pub enum Network {
     /// Every stage keeps the egress the base grants.
     #[default]
@@ -220,6 +335,7 @@ pub enum Network {
     Closed,
 }
 
+#[cfg_attr(verus_keep_ghost, verifier::external)]
 impl Network {
     /// The word a settings file, a flag and a report spell it with.
     pub fn name(self) -> &'static str {

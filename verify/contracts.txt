@@ -193,6 +193,22 @@ crates/core/src/value.rs::label: r => ensures r == spec_label_of(&self),
 crates/core/src/value.rs::declassify: r => ensures r == spec_value_of(&self),
 crates/core/src/value.rs::into_trusted: r => ensures r is Ok <==> spec_label_of(&self) == crate::spec::trusted_public(), r is Ok ==> r->Ok_0 == spec_value_of(&self), r is Err ==> r->Err_0 == self,
 crates/core/src/value.rs::relabel: r => ensures r is Some <==> crate::spec::degrades(spec_label_of(&self), to), r is Some ==> spec_value_of(&r->Some_0) == spec_value_of(&self), r is Some ==> spec_label_of(&r->Some_0) == to,
+crates/sandbox-rules/src/mode.rs::network_in_force: r => ensures self == SandboxMode::ReadOnly ==> r == Network::Closed, self != SandboxMode::ReadOnly ==> r == setting,
+crates/sandbox-rules/src/mode.rs::confines: r => ensures r == (self != SandboxMode::Off),
+crates/sandbox-rules/src/mode.rs::reads_the_machine: r => ensures r ==> !windows, r ==> has_home, r ==> self != SandboxMode::Strict, (!windows && has_home && self != SandboxMode::Strict) ==> r,
+crates/sandbox-rules/src/mode.rs::writes_the_session: r => ensures r == (self != SandboxMode::ReadOnly),
+crates/sandbox-rules/src/mode.rs::writes_every_cache: r => ensures r ==> reads_the_machine, r ==> self != SandboxMode::ReadOnly, (reads_the_machine && self != SandboxMode::ReadOnly) ==> r,
+crates/sandbox-rules/src/mode.rs::writes_a_toolchain_cache: r => ensures r == (self != SandboxMode::ReadOnly),
+crates/sandbox-rules/src/mode.rs::writes_what_was_granted: r => ensures r == (self != SandboxMode::ReadOnly),
+crates/sandbox-rules/src/mode.rs::writes_without_a_request: r => ensures r ==> allowed, r ==> reads_the_machine, r ==> self == SandboxMode::WorkspaceWrite, (allowed && reads_the_machine && self == SandboxMode::WorkspaceWrite) ==> r,
+crates/sandbox-rules/src/mode.rs::keeps_the_network_for_a_reason: r => ensures r == (self != SandboxMode::ReadOnly),
+crates/sandbox-rules/src/mode.rs::lends_the_remote_scope: r => ensures r == (self != SandboxMode::ReadOnly),
+crates/sandbox-rules/src/mode.rs::needs_sockets_governed: r => ensures r == (self == SandboxMode::Strict || self == SandboxMode::ReadOnly),
+crates/sandbox-rules/src/mode.rs::is_looser_than: r => ensures self == other ==> !r, other == SandboxMode::Off ==> !r, (self == SandboxMode::Off && other != SandboxMode::Off) ==> r,
+crates/sandbox-rules/src/mode.rs::looser_than: r => ensures self == other ==> r is None, other == SandboxMode::Off ==> r is None, (self == SandboxMode::Off && other != SandboxMode::Off) ==> r is Some,
+crates/sandbox-rules/src/mode.rs::looser_than_on: r => ensures self == other ==> r is None, (self == SandboxMode::Off && other != SandboxMode::Off) ==> r is Some, other == SandboxMode::Off ==> r is None, (!windows && self == SandboxMode::Strict && other == SandboxMode::ReadOnly) ==> r == Some(Looser::Writes), (!windows && self == SandboxMode::ReadOnly && other == SandboxMode::Strict) ==> r == Some(Looser::Reads), (windows && self == SandboxMode::ReadOnly && other == SandboxMode::Strict) ==> r is None, (self == SandboxMode::ReadOnly && other != SandboxMode::ReadOnly) ==> !(r == Some(Looser::Writes) || r == Some(Looser::Both)),
+crates/sandbox-rules/src/mode.rs::reads: r => ensures r == crate::spec::reach_of_reads(self, windows),
+crates/sandbox-rules/src/mode.rs::writes: r => ensures r == crate::spec::reach_of_writes(self),
 crates/sandbox-rules/src/quote.rs::chars_of: r => ensures r@ == s@,
 crates/sandbox-rules/src/quote.rs::string_of: r => ensures r@ == chars@,
 crates/sandbox-rules/src/quote.rs::push_backslashes: ensures final(out)@ == old(out)@ + backslashes(n as nat),
@@ -302,6 +318,10 @@ crates/core/src/slot.rs::SlotStore: assumes external_body
 crates/core/src/spec.rs::ExPathBuf: assumes external_type_specification
 crates/core/src/spec.rs::ExPathBuf: assumes external_body
 crates/core/src/vetting.rs::Endorsed: assumes external_body
+crates/sandbox-rules/src/mode.rs::name: assumes external
+crates/sandbox-rules/src/mode.rs::parse: assumes external
+crates/sandbox-rules/src/mode.rs::impl fmt::Display for SandboxMode: assumes external
+crates/sandbox-rules/src/mode.rs::impl Network: assumes external
 crates/sandbox-rules/src/quote.rs::chars_of: assumes external_body
 crates/sandbox-rules/src/quote.rs::string_of: assumes external_body
 crates/sandbox-rules/src/quote.rs::push_backslashes: assumes external_body

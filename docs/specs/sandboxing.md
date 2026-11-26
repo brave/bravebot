@@ -3141,6 +3141,7 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_agent::confine::tests::the_change_notice_for_a_move_to_off_says_request_path_is_refused`
 `verified-by: bravebot_agent::turn::a_mode_change_to_off_names_request_path_only_where_the_turn_was_offered_it`
 `verified-by: bravebot_agent::permission_mode::a_confirmer_follows_the_sandbox_mode_chosen_after_it_was_made`
+`verified-by: bravebot_sandbox_rules::spec::off_is_the_loosest_mode_and_read_only_writes_the_least`
 
 <a id="SANDBOX-23"></a>
 ### SANDBOX-23: reach a person remembered for a command is attached to that command's stage, and nothing else makes it

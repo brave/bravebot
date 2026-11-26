@@ -893,3 +893,67 @@ replace: push_rows(out, &parts.sockets, Operation::NetworkOutbound, parts); => p
 mutation: Stamp::still_holds ignores the count of run lines where a person was asked, so a line started while they were asked voids nothing
 file: crates/core/src/file_authority.rs
 replace: self.revision == now.revision && (!person_asked || self.programs == now.programs) => self.revision == now.revision
+
+mutation: SandboxMode::confines leaves an off stage confined and every other one unconfined
+file: crates/sandbox-rules/src/mode.rs
+replace: self != Self::Off => self == Self::Off
+
+mutation: SandboxMode::reads_the_machine reads the machine under strict, which is to read nothing else on it
+file: crates/sandbox-rules/src/mode.rs
+replace: !windows && has_home && self != Self::Strict => !windows && has_home
+
+mutation: SandboxMode::reads_the_machine reads the machine in a session that names no home, with no credential row to subtract
+file: crates/sandbox-rules/src/mode.rs
+replace: !windows && has_home && self != Self::Strict => !windows && self != Self::Strict
+
+mutation: SandboxMode::writes_the_session writes the session's directories under read-only
+file: crates/sandbox-rules/src/mode.rs
+replace: // Under `read-only` the session's directories are read and not written. => Self::ReadOnly => true,
+
+mutation: SandboxMode::writes_every_cache writes every cache under read-only
+file: crates/sandbox-rules/src/mode.rs
+replace: reads_the_machine && self != Self::ReadOnly => reads_the_machine
+
+mutation: SandboxMode::writes_a_toolchain_cache writes a toolchain's cache under read-only
+file: crates/sandbox-rules/src/mode.rs
+replace: // Under `read-only` a toolchain brings its list and writes no cache. => Self::ReadOnly => true,
+
+mutation: SandboxMode::writes_what_was_granted gives a grant for writing its write under read-only
+file: crates/sandbox-rules/src/mode.rs
+replace: // Under `read-only` a grant for writing gives its read. => Self::ReadOnly => true,
+
+mutation: SandboxMode::writes_without_a_request gives a strict stage every path a request for writing would be granted
+file: crates/sandbox-rules/src/mode.rs
+replace: allowed && self == Self::WorkspaceWrite && reads_the_machine => allowed && reads_the_machine
+
+mutation: SandboxMode::keeps_the_network_for_a_reason gives a read-only stage the network back through a reason
+file: crates/sandbox-rules/src/mode.rs
+replace: // Under `read-only` no stage is given a reason to keep the network. => Self::ReadOnly => true,
+
+mutation: SandboxMode::lends_the_remote_scope lends a read-only stage the remote scope, so it pushes
+file: crates/sandbox-rules/src/mode.rs
+replace: // Under `read-only` `git push` and `gh pr create` fail. => Self::ReadOnly => true,
+
+mutation: SandboxMode::needs_sockets_governed starts a read-only stage on a kernel that lets it reach every unix socket
+file: crates/sandbox-rules/src/mode.rs
+replace: matches!(self, Self::Strict | Self::ReadOnly) => matches!(self, Self::Strict)
+
+mutation: SandboxMode::network_in_force leaves the network open under read-only
+file: crates/sandbox-rules/src/mode.rs
+replace: // `read-only` holds back what a program changes off this machine as well as on it. => Self::ReadOnly => setting,
+
+mutation: SandboxMode::reads ranks off on Windows as reading no more of the machine than strict, so a strict pin keeps off
+file: crates/sandbox-rules/src/mode.rs
+replace: // On Windows `off` is the one mode that reads the machine. => (Self::Off, true) => 0,
+
+mutation: SandboxMode::writes ranks read-only as writing what strict does, so a read-only pin keeps strict
+file: crates/sandbox-rules/src/mode.rs
+replace: // `read-only` writes nothing of the session's, which every other mode writes. => Self::ReadOnly => 1,
+
+mutation: SandboxMode::looser_than_on reads a mode that reads less as one that reads more
+file: crates/sandbox-rules/src/mode.rs
+replace: self.reads(windows) > other.reads(windows), => self.reads(windows) < other.reads(windows),
+
+mutation: SandboxMode::is_looser_than reads a mode no looser as looser, so a managed pin refuses the mode it pins
+file: crates/sandbox-rules/src/mode.rs
+replace: self.looser_than(other).is_some() => self.looser_than(other).is_none()

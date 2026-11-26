@@ -9,6 +9,7 @@
 //! A Seatbelt profile [`crate::seatbelt::rules`] builds opens by refusing everything, and each rule
 //! after that is one [`may_hold`] allows for the parts it was built from (SANDBOX-3, SANDBOX-31).
 
+use crate::mode::SandboxMode;
 use crate::seatbelt::{Action, Hold, Operation, Parts, Row, Rule, Target, Write};
 use crate::seatbelt::{LOOPBACK, MACH_SERVICES, RESOLVER, SYSCTL_NAMES, TRUST_SERVICES};
 use vstd::prelude::*;
@@ -520,5 +521,46 @@ pub proof fn a_seatbelt_profile_refuses_first_and_grants_only_what_its_parts_all
             0 <= i < profile.len() ==> #[trigger] profile[i].operation != Operation::NetworkInbound,
 {
 }
+
+// Sandbox modes.
+
+/// How much of the machine a stage under `mode` reads, as SANDBOX-22 ranks it: on Windows only
+/// `off` reads it, and elsewhere `strict` reads none of it, `read-only` and `workspace-write` read
+/// it but for the credential table, and `off` reads all of it.
+pub open spec fn reach_of_reads(mode: SandboxMode, windows: bool) -> u8 {
+    match (mode, windows) {
+        (SandboxMode::Off, true) => 1,
+        (_, true) => 0,
+        (SandboxMode::Strict, false) => 0,
+        (SandboxMode::Off, false) => 2,
+        _ => 1,
+    }
+}
+
+/// How much a stage under `mode` writes, as SANDBOX-22 ranks it: `read-only` none of the session,
+/// `strict` the session, `workspace-write` the session and what a request would have been granted,
+/// and `off` everything.
+pub open spec fn reach_of_writes(mode: SandboxMode) -> u8 {
+    match mode {
+        SandboxMode::ReadOnly => 0,
+        SandboxMode::Strict => 1,
+        SandboxMode::WorkspaceWrite => 2,
+        SandboxMode::Off => 3,
+    }
+}
+
+/// `off` reads at least as much of the machine as every other mode and writes more than every
+/// other mode, and `read-only` writes less than every other mode. So no mode is looser than `off`,
+/// and a pin of `read-only` refuses every other mode for what it writes (SANDBOX-22).
+pub proof fn off_is_the_loosest_mode_and_read_only_writes_the_least(mode: SandboxMode, windows: bool)
+    ensures
+        reach_of_reads(mode, windows) <= reach_of_reads(SandboxMode::Off, windows),
+        mode != SandboxMode::Off ==> reach_of_writes(mode) < reach_of_writes(SandboxMode::Off),
+        mode != SandboxMode::ReadOnly ==> reach_of_writes(SandboxMode::ReadOnly) < reach_of_writes(
+            mode,
+        ),
+{
+}
+
 
 } // verus!
