@@ -676,6 +676,17 @@ enum Plan {
     },
 }
 
+impl Plan {
+    /// The program a local server runs, as the absolute path it resolved to. A sandboxed or remote
+    /// server has none, since its program is looked up elsewhere or it has no program.
+    fn program(&self) -> Option<&PathBuf> {
+        match self {
+            Plan::Stdio { program, .. } => Some(program),
+            Plan::OpenShell { .. } | Plan::Http { .. } => None,
+        }
+    }
+}
+
 /// Settle each request: resolve it, and put it to the person where nothing answers it already.
 ///
 /// Returns the servers to start. Every request that will not be is a line in `notes` saying why.
@@ -768,152 +779,188 @@ fn settle_with<A: Asker + ?Sized>(
 
     let mut plans = Vec::new();
     for (file, alias) in requested {
-        let Some(entry) = declarations.get(alias) else {
-            match carried.find(alias) {
-                Some(Listed::Server(server)) => {
-                    let mut ways = PluginWays {
-                        file,
-                        project,
-                        home,
-                        directory,
-                        managed,
-                        asking,
-                        environment,
-                        prelude,
-                    };
-                    if let Some(plan) = settle_plugin(
-                        &mut ways,
-                        server,
-                        asker,
-                        (&mut approvals, &mut projects),
-                        notes,
-                    ) {
-                        taken.push((server.alias.clone(), server.plugin.clone()));
-                        plans.push((server.alias.clone(), plan));
-                    }
-                }
-                Some(Listed::Disabled(plugin)) => notes.push(
-                    t!(
-                        servers_plugin_disabled,
-                        alias = shown(alias),
-                        plugin = plugin
-                    )
-                    .to_string(),
-                ),
-                None => notes.push(
-                    t!(
-                        servers_not_declared,
-                        file = named(file, project),
-                        alias = shown(alias)
-                    )
-                    .to_string(),
-                ),
-            }
-            continue;
+        let mut ways = PluginWays {
+            file,
+            project,
+            home,
+            directory,
+            managed,
+            asking,
+            environment,
+            prelude,
         };
-        if let Some(Listed::Server(server)) = carried.find(alias) {
+        match declarations.get(alias) {
+            None => {
+                if let Some((taken_alias, plan)) = settle_undeclared(
+                    &mut ways,
+                    alias,
+                    carried,
+                    taken,
+                    asker,
+                    (&mut approvals, &mut projects),
+                    notes,
+                ) {
+                    plans.push((taken_alias, plan));
+                }
+            }
+            Some(entry) => {
+                if let Some(plan) = settle_declared(
+                    &ways,
+                    alias,
+                    entry.declaration,
+                    carried,
+                    asker,
+                    (&declarations, &mut approvals, &mut projects),
+                    notes,
+                ) {
+                    plans.push((alias.clone(), plan));
+                }
+            }
+        }
+    }
+    plans
+}
+
+/// Settle a requested alias the person's `mcp.json` does not declare: the server a plugin carries
+/// under the name, a note that its plugin is turned off, or a note that nothing declares it.
+///
+/// Returns the alias of the server a plugin carries, and its plan, where one is to be started, and
+/// adds that alias and the plugin carrying it to `taken`.
+fn settle_undeclared<A: Asker + ?Sized>(
+    ways: &mut PluginWays<'_>,
+    alias: &str,
+    carried: &PluginServers,
+    taken: &mut Vec<(String, String)>,
+    asker: &mut A,
+    stores: (&mut Approvals, &mut Projects),
+    notes: &mut Vec<String>,
+) -> Option<(String, Plan)> {
+    match carried.find(alias) {
+        Some(Listed::Server(server)) => {
+            let plan = settle_plugin(ways, server, asker, stores, notes)?;
+            taken.push((server.alias.clone(), server.plugin.clone()));
+            Some((server.alias.clone(), plan))
+        }
+        Some(Listed::Disabled(plugin)) => {
             notes.push(
                 t!(
-                    servers_plugin_shadowed,
+                    servers_plugin_disabled,
                     alias = shown(alias),
-                    plugin = server.plugin.as_str()
+                    plugin = plugin
                 )
                 .to_string(),
             );
+            None
         }
-        let declaration = match entry.declaration {
-            Ok(declaration) => declaration,
-            Err(found) => {
-                notes.push(
-                    t!(
-                        mcp_unusable,
-                        alias = shown(alias),
-                        problem = problem(&found)
-                    )
-                    .to_string(),
-                );
-                continue;
-            }
-        };
-        let (plan, covered) = match assess(
-            alias,
-            &declaration,
-            project,
-            &approvals,
-            &projects,
-            managed,
-            environment,
-            prelude,
-        ) {
-            Ok(assessed) => assessed,
-            Err(Unstarted::Unplanned(reason)) => {
-                notes.push(t!(servers_not_reached, alias = alias, reason = reason).to_string());
-                continue;
-            }
-            Err(Unstarted::Refused(reason)) => {
-                notes.push(
-                    t!(
-                        servers_refused_by_managed,
-                        alias = shown(alias),
-                        reason = reason
-                    )
-                    .to_string(),
-                );
-                continue;
-            }
-            Err(Unstarted::Unconfined) => {
-                notes.push(t!(servers_no_confinement_here, alias = alias).to_string());
-                continue;
-            }
-        };
-
-        let changed = approvals.changed(alias, &declaration.digest());
-        if !(covered || asking == Asking::Bypass) {
-            let nobody = match asking {
-                Asking::OneShot => Some(t!(servers_nobody_in_a_one_shot, alias = alias)),
-                _ if !asker.anybody_there() => {
-                    Some(t!(servers_nobody_at_a_terminal, alias = alias))
-                }
-                _ => None,
-            };
-            if let Some(reason) = nobody {
-                notes.push(reason.to_string());
-                continue;
-            }
-            let question = Question {
-                alias,
-                file: &named(file, project),
-                declaration: &declaration,
-                program: match &plan {
-                    Plan::Stdio { program, .. } => Some(program),
-                    Plan::OpenShell { .. } | Plan::Http { .. } => None,
-                },
-                changed,
-                plugin: None,
-            };
-            match asker.ask_to_start(&question) {
-                Answer::No => {
-                    notes.push(t!(servers_declined, alias = alias).to_string());
-                    continue;
-                }
-                answer => {
-                    let kept = keep(
-                        home,
-                        directory,
-                        &declarations,
-                        &mut approvals,
-                        &mut projects,
-                        (answer == Answer::Project).then_some(project),
-                        alias,
-                        &declaration,
-                    );
-                    notes.extend(kept);
-                }
-            }
+        None => {
+            notes.push(
+                t!(
+                    servers_not_declared,
+                    file = named(ways.file, ways.project),
+                    alias = shown(alias)
+                )
+                .to_string(),
+            );
+            None
         }
-        plans.push((alias.clone(), plan));
     }
-    plans
+}
+
+/// Settle a requested alias the person's `mcp.json` declares, as `declaration` states it: the
+/// plan to start where it resolves, the managed layer allows it and a recorded answer or the
+/// person's yes covers it, and otherwise a note saying why not.
+///
+/// A plugin's server of the same name is shadowed by the declaration, and a note says so.
+fn settle_declared<A: Asker + ?Sized>(
+    ways: &PluginWays<'_>,
+    alias: &str,
+    declaration: Result<Declaration, Problem>,
+    carried: &PluginServers,
+    asker: &mut A,
+    (declarations, approvals, projects): (&Declarations, &mut Approvals, &mut Projects),
+    notes: &mut Vec<String>,
+) -> Option<Plan> {
+    if let Some(Listed::Server(server)) = carried.find(alias) {
+        notes.push(
+            t!(
+                servers_plugin_shadowed,
+                alias = shown(alias),
+                plugin = server.plugin.as_str()
+            )
+            .to_string(),
+        );
+    }
+    let declaration = match declaration {
+        Ok(declaration) => declaration,
+        Err(found) => {
+            notes.push(
+                t!(
+                    mcp_unusable,
+                    alias = shown(alias),
+                    problem = problem(&found)
+                )
+                .to_string(),
+            );
+            return None;
+        }
+    };
+    let (plan, covered) = match assess(
+        alias,
+        &declaration,
+        ways.project,
+        approvals,
+        projects,
+        ways.managed,
+        ways.environment,
+        ways.prelude,
+    ) {
+        Ok(assessed) => assessed,
+        Err(unstarted) => {
+            notes.push(unstarted_note(alias, unstarted));
+            return None;
+        }
+    };
+
+    let changed = approvals.changed(alias, &declaration.digest());
+    if !(covered || ways.asking == Asking::Bypass) {
+        let nobody = match ways.asking {
+            Asking::OneShot => Some(t!(servers_nobody_in_a_one_shot, alias = alias)),
+            _ if !asker.anybody_there() => Some(t!(servers_nobody_at_a_terminal, alias = alias)),
+            _ => None,
+        };
+        if let Some(reason) = nobody {
+            notes.push(reason.to_string());
+            return None;
+        }
+        let question = Question {
+            alias,
+            file: &named(ways.file, ways.project),
+            declaration: &declaration,
+            program: plan.program(),
+            changed,
+            plugin: None,
+        };
+        match asker.ask_to_start(&question) {
+            Answer::No => {
+                notes.push(t!(servers_declined, alias = alias).to_string());
+                return None;
+            }
+            answer => {
+                let kept = keep(
+                    ways.home,
+                    ways.directory,
+                    declarations,
+                    approvals,
+                    projects,
+                    (answer == Answer::Project).then_some(ways.project),
+                    alias,
+                    &declaration,
+                );
+                notes.extend(kept);
+            }
+        }
+    }
+    Some(plan)
 }
 
 /// Why a requested server is not started, found before anybody is asked about it.
@@ -1234,10 +1281,7 @@ fn settle_plugin<A: Asker + ?Sized>(
         alias,
         file: &named(ways.file, ways.project),
         declaration,
-        program: match &plan {
-            Plan::Stdio { program, .. } => Some(program),
-            Plan::OpenShell { .. } | Plan::Http { .. } => None,
-        },
+        program: plan.program(),
         changed: approvals.plugin_changed(plugin, &server.named, &digest),
         plugin: Some((plugin, digest)),
     };
