@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/agent/src/goal.rs
   - crates/agent/src/preamble.rs
+  - crates/agent/src/goal/standing.rs
   - crates/tui/src/goals.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/turns.rs

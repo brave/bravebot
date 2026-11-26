@@ -11,6 +11,7 @@ governs:
   - crates/agent/src/workspace/checkouts.rs
   - crates/session/src/sessions.rs
   - crates/tui/src/state/open_loops.rs
+  - crates/agent/src/goal/standing.rs
   - crates/tui/src/goals.rs
   - crates/tui/src/app/turns.rs
   - crates/ui-bridge/src/open_loops.rs

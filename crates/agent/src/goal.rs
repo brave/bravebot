@@ -40,6 +40,10 @@ use crate::conversation::Conversation;
 use crate::outcome::Work;
 use crate::processor::Chat;
 
+mod standing;
+
+pub use standing::{Asked, MAX_IDLE_ROUNDS, MAX_ROUNDS, Next, Running, parse};
+
 /// What the model is told it is doing.
 ///
 /// Addressed to a model reading a whole working session and then a condition that is not part of
