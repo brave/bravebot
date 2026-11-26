@@ -893,10 +893,53 @@ impl Bridge {
         });
         open.reads_stay_in_workspace = rules.reads_stay_in_workspace;
         let reported = rules.json();
-        if let Ok(mut state) = open.state.lock() {
-            state.answers.rules = rules;
-        }
+        held_to(open, rules);
         reported
+    }
+
+    /// The session `session.new` opens on `project` with `state`, before it is minted: with its
+    /// trust answer, the vetting its settings ask for and the mode it starts in.
+    fn opened_new(
+        &self,
+        project: &Path,
+        state: State,
+        answered_trust: bool,
+        keeping: Option<(trusted::Store, trusted::Identity)>,
+    ) -> Open {
+        Open::opened(
+            project.to_path_buf(),
+            state,
+            answered_trust,
+            keeping,
+            self.auto_vetting(project),
+        )
+        .starting_in(self.opening_mode(project))
+    }
+
+    /// The scope a session `session.new` opened on `directory` now would hold before anything is
+    /// answered in it, which is what a device is approved for when it is paired (decision 18 in
+    /// `docs/design/mobile/decisions-and-tradeoffs.md`). It is built as `session.new` builds the
+    /// session, under the rules it would open under, and nothing is minted or written. `machine` is
+    /// the state directory and the administrator's settings the session would read. `None` where the
+    /// scope cannot be read.
+    pub fn scope_of_a_new_session(
+        &self,
+        directory: &Path,
+        machine: &bravebot_agent::servers::Machine,
+    ) -> Option<bravebot_core::scope::Scope> {
+        let opening = Opening::of(directory, None);
+        let mut open = self.opened_new(
+            directory,
+            State::fresh(opening.trust),
+            opening.answered,
+            opening.keeping,
+        );
+        let settings = crate::settings::layers(Some(directory), self.settings.as_deref());
+        held_to(
+            &mut open,
+            crate::rules::SettingsRules::read(&settings, directory),
+        );
+        scope::scope_of(&open, &settings, &machine.managed, &machine.home)
     }
 
     /// Settle the questions the session opened as `handle` puts once its trust question is answered,
@@ -1333,16 +1376,8 @@ impl Bridge {
         state.spend_limit = self.spend_limit(&directory);
         state.directories = additional;
         state.handed_off_from = handed_off_from;
-        let handle = self.mint(
-            Open::opened(
-                directory.clone(),
-                state,
-                opening.answered,
-                opening.keeping,
-                auto_vetting,
-            )
-            .starting_in(self.opening_mode(&directory)),
-        );
+        let handle =
+            self.mint(self.opened_new(&directory, state, opening.answered, opening.keeping));
 
         // Nothing is written until the first turn. An opened-and-abandoned window should
         // leave no trace, which is also how `bravebot` behaves.
@@ -4275,6 +4310,14 @@ impl Bridge {
         let handle = format!("s{}", self.next_handle);
         self.open.insert(handle.clone(), session);
         handle
+    }
+}
+
+/// Hold `open` to the permission rules `rules`, and to whether they keep reads inside the workspace.
+fn held_to(open: &mut Open, rules: crate::rules::SettingsRules) {
+    open.reads_stay_in_workspace = rules.reads_stay_in_workspace;
+    if let Ok(mut state) = open.state.lock() {
+        state.answers.rules = rules;
     }
 }
 
@@ -7897,13 +7940,6 @@ mod watch_tests {
 #[path = "folders.rs"]
 mod folders;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "nothing reads a session's scope until a device is attached to one"
-    )
-)]
 #[path = "scope.rs"]
 mod scope;
 

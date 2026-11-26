@@ -101,6 +101,7 @@ fn pair(host: &Host, phone: &Phone, name: &str, grant: Grant) {
                 name: name.into(),
                 grant,
                 workspace: PathBuf::from("/work"),
+                ceiling: crate::registry::narrow_ceiling("/work"),
             },
         )
         .unwrap();
@@ -685,6 +686,7 @@ fn a_device_that_stops_reading_has_its_connection_ended_when_a_write_makes_no_pr
                 name: "kitchen-phone".into(),
                 grant: Grant::Read,
                 workspace: PathBuf::from("/work"),
+                ceiling: crate::registry::narrow_ceiling("/work"),
             },
         )
         .unwrap();

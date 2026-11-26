@@ -16,6 +16,7 @@
 use crate::allowlist::{self, Access};
 use crate::protocol::{ErrorCode, Failure, Request, Unreadable, response};
 use bravebot_core::device::Grant;
+use bravebot_core::scope::{Approvals, Confinement, Field, Reads, Scope, Writes};
 use bravebot_listener::identity::{Identity, KeyHash};
 use bravebot_listener::invitation::{self, Announcement, Invitations, Terms};
 use bravebot_listener::limits::Limits;
@@ -128,7 +129,12 @@ pub struct Link {
     invitations: Arc<Invitations>,
     workspaces: Vec<PathBuf>,
     draws_codes: bool,
+    ceiling_of: CeilingOf,
 }
+
+/// The scope a new session in a workspace would hold now, which a device paired on it is approved
+/// for, or `None` where it cannot be read. The host gives it from its own bridge.
+pub type CeilingOf = Arc<dyn Fn(&Path) -> Option<Scope> + Send + Sync>;
 
 /// Why the listener did not start.
 #[derive(Debug)]
@@ -154,12 +160,14 @@ impl std::fmt::Display for StartError {
 impl Link {
     /// Listen on `address`, which names one interface. `workspaces` are the directories a device
     /// may be given a grant on. `draws_codes` is whether the person's terminal can show a QR code.
-    /// What the host has to say about a pairing as it goes is given to `say`.
+    /// What the host has to say about a pairing as it goes is given to `say`. `ceiling_of` gives
+    /// the limits a device paired on a workspace is approved for.
     pub fn start(
         address: SocketAddr,
         workspaces: &[PathBuf],
         draws_codes: bool,
         say: Say,
+        ceiling_of: CeilingOf,
     ) -> Result<Self, StartError> {
         if address.ip().is_unspecified() {
             return Err(StartError::Unspecified);
@@ -186,6 +194,7 @@ impl Link {
                 .filter_map(|workspace| workspace.canonicalize().ok())
                 .collect(),
             draws_codes,
+            ceiling_of,
         })
     }
 
@@ -264,10 +273,18 @@ impl Link {
             Ok(workspace) => workspace,
             Err(refusal) => return line(format!("{refusal}; {USAGE}")),
         };
+        let Some(ceiling) = (self.ceiling_of)(&workspace) else {
+            return line(format!(
+                "not opened: the limits of a session on {} cannot be read now; type the pair again",
+                workspace.display()
+            ));
+        };
+        let shown = limits(&ceiling);
         let opened = match self.invitations.open(Terms {
             name: (*name).to_string(),
             grant,
             workspace: workspace.clone(),
+            ceiling,
         }) {
             Ok(opened) => opened,
             Err(error) => return line(format!("not opened: {error}")),
@@ -279,6 +296,14 @@ impl Link {
             workspace.display(),
             opened.lifetime.as_secs()
         ));
+        said.push(Said::Line(format!(
+            "typing the code also approves these limits for {name}; a session that goes past them stops reaching {name} until you approve it again:"
+        )));
+        said.extend(
+            shown
+                .into_iter()
+                .map(|limit| Said::Line(format!("  {limit}"))),
+        );
         if self.draws_codes
             && let Ok(code) = bravebot_qr::Code::encode(link.as_bytes())
         {
@@ -320,8 +345,8 @@ impl Link {
         }
         devices
             .iter()
-            .map(|(key, device)| {
-                format!(
+            .flat_map(|(key, device)| {
+                let about = format!(
                     "{} {} {} {} key {}",
                     device.name,
                     grant_word(device.grant),
@@ -332,10 +357,152 @@ impl Link {
                         "not connected"
                     },
                     invitation::spoken(key)
+                );
+                std::iter::once(about).chain(
+                    limits(&device.ceiling)
+                        .into_iter()
+                        .map(|limit| format!("  {limit}")),
                 )
             })
             .collect()
     }
+}
+
+/// The limits a ceiling sets, one line each, in plain words. A list with nothing in it is named in
+/// one line at the end.
+fn limits(scope: &Scope) -> Vec<String> {
+    // Names every field with no `..`, so a field added to `Scope` stops the build here until it is
+    // shown.
+    let Scope {
+        project,
+        directories,
+        trusted,
+        distrusted,
+        undecided,
+        programs,
+        exposed,
+        mcp_servers,
+        references,
+        skill_directories,
+        checkouts,
+        language_servers,
+        standing_answers,
+        allow,
+        ask,
+        deny,
+        confinement,
+        approvals,
+        reads_stay_in_workspace,
+        auto_vetting,
+        confined_lines,
+    } = scope;
+    let mut lines = vec![
+        format!("{}: {}", Field::Project.name(), drawn(project)),
+        format!(
+            "{}: {}",
+            Field::Confinement.name(),
+            confinement_words(*confinement)
+        ),
+        format!(
+            "{}: {}",
+            Field::Approvals.name(),
+            approvals_word(*approvals)
+        ),
+        format!(
+            "{}: {}",
+            Field::ReadsStayInWorkspace.name(),
+            yes_or_no(*reads_stay_in_workspace)
+        ),
+        format!(
+            "{}: {}",
+            Field::AutoVetting.name(),
+            on_or_off(*auto_vetting)
+        ),
+        format!(
+            "{}: {}",
+            Field::ConfinedLines.name(),
+            yes_or_no(*confined_lines)
+        ),
+    ];
+    let mut empty = Vec::new();
+    for (field, keys) in [
+        (Field::Directories, directories),
+        (Field::Trusted, trusted),
+        (Field::Distrusted, distrusted),
+        (Field::Undecided, undecided),
+        (Field::Programs, programs),
+        (Field::Exposed, exposed),
+        (Field::McpServers, mcp_servers),
+        (Field::References, references),
+        (Field::SkillDirectories, skill_directories),
+        (Field::Checkouts, checkouts),
+        (Field::LanguageServers, language_servers),
+        (Field::StandingAnswers, standing_answers),
+        (Field::Allow, allow),
+        (Field::Ask, ask),
+        (Field::Deny, deny),
+    ] {
+        if keys.is_empty() {
+            empty.push(field.name());
+        } else {
+            // A line for each key, so a key cannot be drawn to look like two.
+            for key in keys {
+                lines.push(format!("{}: {}", field.name(), drawn(key)));
+            }
+        }
+    }
+    if !empty.is_empty() {
+        lines.push(format!("none of {}", empty.join(", ")));
+    }
+    lines
+}
+
+/// A key of a ceiling as the host's terminal shows it: the characters of ASCII that print and a
+/// space, except a backslash, and every other character written as `\u{..}`. A rule or a server's
+/// name can come from a settings file in the checkout, which nobody typed on the host, so it must
+/// not be able to move the cursor, rewrite the lines around it, or spell an escape it does not hold.
+fn drawn(key: &str) -> String {
+    let mut out = String::with_capacity(key.len());
+    for character in key.chars() {
+        if (character.is_ascii_graphic() && character != '\\') || character == ' ' {
+            out.push(character);
+        } else {
+            out.push_str(&format!("\\u{{{:x}}}", u32::from(character)));
+        }
+    }
+    out
+}
+
+fn confinement_words(confinement: Confinement) -> String {
+    let reads = match confinement.reads {
+        Reads::Listed => "reads only what each program's profile lists",
+        Reads::Machine => "reads the machine except the credential table",
+        Reads::Unconfined => "reads everything",
+    };
+    let writes = match confinement.writes {
+        Writes::Nothing => "writes nothing in the session's directories",
+        Writes::Session => "writes the session's directories",
+        Writes::Unconfined => "writes anywhere",
+    };
+    format!("{reads}, {writes}")
+}
+
+fn approvals_word(approvals: Approvals) -> &'static str {
+    match approvals {
+        Approvals::Plan => "plan, which writes nothing",
+        Approvals::Ask => "ask, which asks before every effect",
+        Approvals::AcceptEdits => "accept edits, which writes without asking",
+        Approvals::Auto => "auto, which writes and runs confined programs on a classifier's word",
+        Approvals::Bypass => "bypass, which asks nothing",
+    }
+}
+
+fn yes_or_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
+fn on_or_off(value: bool) -> &'static str {
+    if value { "on" } else { "off" }
 }
 
 fn workspace_list(workspaces: &[PathBuf]) -> String {
@@ -375,6 +542,7 @@ mod tests {
             name: "kitchen-phone".into(),
             grant,
             workspace: PathBuf::from("/work"),
+            ceiling: bravebot_listener::registry::narrow_ceiling("/work"),
         }
     }
 
@@ -556,6 +724,11 @@ mod tests {
             workspaces,
             false,
             Arc::new(|_| {}),
+            Arc::new(|workspace: &Path| {
+                Some(bravebot_listener::registry::narrow_ceiling(
+                    &workspace.display().to_string(),
+                ))
+            }),
         )
         .unwrap()
     }
@@ -617,5 +790,165 @@ mod tests {
         );
         assert!(said[0].contains(&given.path().canonicalize().unwrap().display().to_string()));
         link.stop();
+    }
+
+    fn link_with(workspace: &Path, ceiling_of: CeilingOf) -> Link {
+        Link::start(
+            "127.0.0.1:0".parse().unwrap(),
+            &[workspace.to_path_buf()],
+            false,
+            Arc::new(|_| {}),
+            ceiling_of,
+        )
+        .unwrap()
+    }
+
+    /// A ceiling with something in every list, so each one is shown.
+    fn full_ceiling() -> Scope {
+        let mut ceiling = bravebot_listener::registry::narrow_ceiling("\"/work\"");
+        for (at, list) in [
+            &mut ceiling.directories,
+            &mut ceiling.trusted,
+            &mut ceiling.distrusted,
+            &mut ceiling.undecided,
+            &mut ceiling.programs,
+            &mut ceiling.exposed,
+            &mut ceiling.mcp_servers,
+            &mut ceiling.references,
+            &mut ceiling.skill_directories,
+            &mut ceiling.checkouts,
+            &mut ceiling.language_servers,
+            &mut ceiling.standing_answers,
+            &mut ceiling.allow,
+            &mut ceiling.ask,
+            &mut ceiling.deny,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            list.push(format!("key-{at}"));
+        }
+        ceiling
+    }
+
+    /// Every field of the ceiling is shown with what it holds, each under the name a suspension
+    /// gives it, so the person approves limits they have seen. A field added to `Scope` stops the
+    /// build in `limits` until it is shown, and this fails where one is shown under no name.
+    #[test]
+    fn every_field_of_a_ceiling_is_shown_under_its_name() {
+        let shown = limits(&full_ceiling()).join("\n");
+        for field in Field::ALL {
+            assert!(
+                shown.contains(field.name()),
+                "{} is not shown",
+                field.name()
+            );
+        }
+        for at in 0..15 {
+            assert!(
+                shown.contains(&format!("key-{at}")),
+                "key-{at} is not shown"
+            );
+        }
+        assert!(!shown.contains("none of"), "{shown}");
+        let narrow = limits(&bravebot_listener::registry::narrow_ceiling("\"/work\"")).join("\n");
+        assert!(
+            narrow.contains("none of the open directories, the trusted paths"),
+            "{narrow}"
+        );
+        assert!(
+            narrow.contains("the permission mode: plan, which writes nothing"),
+            "{narrow}"
+        );
+    }
+
+    /// A key that holds a control character, as a rule a checkout's settings file wrote can, is
+    /// drawn with it written out, so it cannot move the cursor or start a line of its own. A
+    /// backslash is written out too, so a key cannot spell an escape it does not hold, and a key
+    /// that holds a comma is one line, so it cannot look like two keys.
+    #[test]
+    fn a_key_in_a_ceiling_is_drawn_without_anything_that_could_rewrite_the_line() {
+        let mut ceiling = bravebot_listener::registry::narrow_ceiling("\"/work\"");
+        ceiling.allow = vec!["run(x)\u{1b}[2J\nyou approved bypass".into()];
+        let shown = limits(&ceiling);
+        assert!(
+            shown
+                .iter()
+                .all(|line| !line.contains('\u{1b}') && !line.contains('\n'))
+        );
+        assert!(
+            shown
+                .iter()
+                .any(|line| line.contains("run(x)\\u{1b}[2J\\u{a}you approved bypass"))
+        );
+        assert!(
+            shown.iter().any(|line| line.contains("\"/work\"")),
+            "{shown:?}"
+        );
+
+        ceiling.allow = vec!["x, Read(/notes/**)".into(), "a literal \\u{a}".into()];
+        let shown = limits(&ceiling);
+        let allowed: Vec<&String> = shown
+            .iter()
+            .filter(|line| line.starts_with("the allow rules: "))
+            .collect();
+        assert_eq!(allowed.len(), 2, "{shown:?}");
+        assert!(
+            allowed
+                .iter()
+                .any(|line| line.ends_with(": x, Read(/notes/**)"))
+        );
+        assert!(
+            allowed
+                .iter()
+                .any(|line| line.ends_with(": a literal \\u{5c}u{a}")),
+            "{shown:?}"
+        );
+    }
+
+    /// `pair` shows the limits a new session in the workspace would have, says that typing the code
+    /// approves them, and a device paired from that window holds them, which `devices` shows.
+    #[test]
+    fn pairing_shows_the_limits_the_code_approves_and_devices_lists_them() {
+        let workspace = tempfile::tempdir().unwrap();
+        let link = link_with(workspace.path(), Arc::new(|_: &Path| Some(full_ceiling())));
+        let said = said_lines(link.command("pair kitchen-phone read").unwrap());
+        let text = said.join("\n");
+        assert!(
+            text.contains("typing the code also approves these limits for kitchen-phone"),
+            "{text}"
+        );
+        assert!(text.contains("  the programs vouched for: key-4"), "{text}");
+        let before_link = text.split("or type this link").next().unwrap();
+        assert!(
+            before_link.contains("the sandbox mode:"),
+            "the limits come after the link: {text}"
+        );
+
+        link.registry.admit([7; 32], device(Grant::Read)).unwrap();
+        let listed = link.devices().join("\n");
+        assert!(
+            listed.contains("kitchen-phone read /work not connected"),
+            "{listed}"
+        );
+        assert!(
+            listed.contains("  the project directory: /work"),
+            "{listed}"
+        );
+    }
+
+    /// Where the limits of a session in the workspace cannot be read, no window opens, since a
+    /// device would otherwise be paired with limits nobody was shown.
+    #[test]
+    fn no_window_opens_where_the_limits_cannot_be_read() {
+        let workspace = tempfile::tempdir().unwrap();
+        let link = link_with(workspace.path(), Arc::new(|_: &Path| None));
+        let said = said_lines(link.command("pair kitchen-phone read").unwrap());
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(
+            said[0].starts_with("not opened: the limits of a session on"),
+            "{said:?}"
+        );
+        assert!(!link.invitations.is_open());
     }
 }

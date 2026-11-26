@@ -286,6 +286,19 @@ impl Host {
         Ok(ended)
     }
 
+    /// The scope a new session in `directory` would hold now, which is what a device paired on it
+    /// is approved for. `None` where it cannot be read.
+    pub fn scope_of_a_new_session(
+        &self,
+        directory: &std::path::Path,
+    ) -> Option<bravebot_core::scope::Scope> {
+        self.served
+            .lock()
+            .ok()?
+            .bridge
+            .scope_of_a_new_session(directory, &bravebot_agent::servers::Machine::current())
+    }
+
     /// Close every session and wait up to `limit` for the threads working for them, so a turn
     /// that is still writing its record is not cut off by the process ending. Returns whether
     /// they had all ended.

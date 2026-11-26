@@ -91,6 +91,7 @@ fn pair(rig: &Rig, phone: &Phone, name: &str) {
                 name: name.into(),
                 grant: Grant::Control,
                 workspace: PathBuf::from("/work"),
+                ceiling: crate::registry::narrow_ceiling("/work"),
             },
         )
         .unwrap();
@@ -220,6 +221,7 @@ fn a_revoked_device_can_be_paired_again_by_the_person() {
             name: "kitchen-phone".into(),
             grant: Grant::Read,
             workspace: PathBuf::from("/work"),
+            ceiling: crate::registry::narrow_ceiling("/work"),
         })
         .unwrap();
     let mut connection = phone
@@ -315,6 +317,7 @@ fn a_line_is_read_before_the_lock_so_revoking_does_not_wait_for_it() {
                     name: name.into(),
                     grant: Grant::Control,
                     workspace: PathBuf::from("/work"),
+                    ceiling: crate::registry::narrow_ceiling("/work"),
                 },
             )
             .unwrap();

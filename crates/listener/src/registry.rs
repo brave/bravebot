@@ -14,6 +14,7 @@
 
 use crate::identity::KeyHash;
 use bravebot_core::device::{Grant, Operation, Standing, Verdict};
+use bravebot_core::scope::Scope;
 use std::collections::{HashMap, HashSet};
 use std::net::{Shutdown, TcpStream};
 use std::path::PathBuf;
@@ -27,6 +28,42 @@ pub struct Device {
     pub grant: Grant,
     /// The one workspace the grant covers.
     pub workspace: PathBuf,
+    /// The most a session the device sees may reach, which the person approved when they paired it
+    /// (decision 18 in `docs/design/mobile/decisions-and-tradeoffs.md`).
+    pub ceiling: Scope,
+}
+
+/// A ceiling for a test: the project directory alone, under the narrowest sandbox and permission
+/// mode, so any scope a session holds is wider than it.
+#[cfg(any(test, feature = "testing"))]
+pub fn narrow_ceiling(project: &str) -> Scope {
+    use bravebot_core::scope::{Approvals, Confinement, Reads, Writes};
+    Scope {
+        project: project.to_string(),
+        directories: Vec::new(),
+        trusted: Vec::new(),
+        distrusted: Vec::new(),
+        undecided: Vec::new(),
+        programs: Vec::new(),
+        exposed: Vec::new(),
+        mcp_servers: Vec::new(),
+        references: Vec::new(),
+        skill_directories: Vec::new(),
+        checkouts: Vec::new(),
+        language_servers: Vec::new(),
+        standing_answers: Vec::new(),
+        allow: Vec::new(),
+        ask: Vec::new(),
+        deny: Vec::new(),
+        confinement: Confinement {
+            reads: Reads::Listed,
+            writes: Writes::Nothing,
+        },
+        approvals: Approvals::Plan,
+        reads_stay_in_workspace: true,
+        auto_vetting: false,
+        confined_lines: false,
+    }
 }
 
 /// Why a device was not added.
@@ -242,6 +279,7 @@ mod tests {
             name: name.into(),
             grant,
             workspace: PathBuf::from("/work"),
+            ceiling: crate::registry::narrow_ceiling("/work"),
         }
     }
 

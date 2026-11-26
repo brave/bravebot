@@ -81,12 +81,14 @@ fn main() {
     // The listener is the host's one network address. A host asked to listen where it cannot stops,
     // since a person who named an address expects to be reachable there. It starts before any
     // client does.
-    let link = listen.map(|address| start_link(address, &workspaces));
-    let host = bravebot_ui_bridge::host::Host::new(bravebot_ui_bridge::host::Setup {
-        workspaces,
-        settings,
-        inspection,
-    });
+    let host = std::sync::Arc::new(bravebot_ui_bridge::host::Host::new(
+        bravebot_ui_bridge::host::Setup {
+            workspaces: workspaces.clone(),
+            settings,
+            inspection,
+        },
+    ));
+    let link = listen.map(|address| start_link(address, &workspaces, &host));
     eprintln!("bravebot-host: instance {}", host.instance());
 
     let clients = std::sync::Arc::new(clients);
@@ -302,15 +304,20 @@ fn listen_for_commands(
 fn start_link(
     address: std::net::SocketAddr,
     workspaces: &[std::path::PathBuf],
+    host: &std::sync::Arc<bravebot_ui_bridge::host::Host>,
 ) -> std::sync::Arc<bravebot_ui_bridge::device_link::Link> {
     use std::io::IsTerminal;
     let say: bravebot_ui_bridge::device_link::Say =
         std::sync::Arc::new(|line| eprintln!("bravebot-host: {line}"));
+    let host = std::sync::Arc::clone(host);
+    let ceiling_of: bravebot_ui_bridge::device_link::CeilingOf =
+        std::sync::Arc::new(move |workspace| host.scope_of_a_new_session(workspace));
     match bravebot_ui_bridge::device_link::Link::start(
         address,
         workspaces,
         std::io::stderr().is_terminal(),
         say,
+        ceiling_of,
     ) {
         Ok(link) => {
             eprintln!("bravebot-host: {}", link.listening());

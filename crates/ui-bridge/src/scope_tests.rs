@@ -907,3 +907,55 @@ fn a_project_and_its_lossy_lookalike_are_different_projects() {
     );
     assert_eq!(ceiling.covers(&ceiling), Coverage::Covered);
 }
+
+/// What a device is approved for when it is paired is the scope of a session `session.new` opens in
+/// the workspace, before anything is answered in it, under the same settings: the sandbox mode, the
+/// rules, the references and the mode it starts in. A ceiling
+/// built some other way would differ from the session a device is then shown, and suspend it at its
+/// first turn or approve more than the person saw.
+#[test]
+fn the_scope_of_a_new_session_is_the_scope_session_new_opens_with() {
+    for text in [
+        "{}",
+        r#"{"sandbox": {"mode": "strict"}}"#,
+        r#"{"permissions": {"allow": ["Read(/notes/**)"]}}"#,
+        r#"{"references": {"notes": "/work/notes"}, "sandbox": {"mode": "read-only"}}"#,
+    ] {
+        let settings_dir = tempfile::tempdir().unwrap();
+        let file = settings_dir.path().join("settings.json");
+        std::fs::write(&file, text).unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let project = project.path().canonicalize().unwrap();
+        let mut bridge = Bridge::new(Box::new(|_| {}))
+            .with_settings(Some(file.clone()))
+            .opening_in_ask()
+            .not_putting_project_questions();
+        let machine = bravebot_agent::servers::Machine {
+            home: no_home(),
+            managed: no_managed(),
+        };
+
+        let ceiling = bridge.scope_of_a_new_session(&project, &machine).unwrap();
+        let opened = bridge
+            .dispatch(&Request {
+                id: 1,
+                method: "session.new".into(),
+                params: json!({"directory": project.display().to_string()}),
+            })
+            .unwrap();
+        let handle = opened["session"].as_str().unwrap().to_string();
+        let held = scope_of(
+            &bridge.open[&handle],
+            &crate::settings::layers(Some(&project), Some(&file)),
+            &no_managed(),
+            &no_home(),
+        )
+        .unwrap();
+
+        assert_eq!(ceiling, held, "{text}");
+        if text.contains("allow") {
+            assert_eq!(ceiling.allow.len(), 1, "the rule was not read: {text}");
+        }
+        assert!(ceiling.covers(&held).is_covered(), "{text}");
+    }
+}
