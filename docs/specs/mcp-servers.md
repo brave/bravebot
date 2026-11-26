@@ -1293,8 +1293,9 @@ the planner asks for reaches it only where [TRUST-10](trust-map.md#TRUST-10) let
 workspace holding it, and is read through the map like any other file there.
 
 **A session that keeps nothing** hands the server a directory of its own in the system temporary
-directory instead, on the terms [incognito.md](incognito.md#INCOG-8) states for it: created rather
-than adopted, readable by nobody else, and removed once the server has stopped. A runner there
+directory instead, on the terms [incognito.md](incognito.md#INCOG-8) states for a local MCP server's
+home: created rather than adopted, readable by nobody else, and removed once the server has
+stopped. A runner there
 fetches its package again each session, which is the trade incognito already makes.
 
 A platform with no confinement for this starts no stdio server and says so, and asks nobody about

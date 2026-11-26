@@ -7122,6 +7122,7 @@ such as `/usr/local/bin/python3` matches nothing, since OpenShell matches the bi
 `verified-by: bravebot_sandbox::openshell::an_existing_policy_directory_with_a_wider_mode_is_narrowed`
 `verified-by: bravebot_sandbox::openshell::a_link_in_place_of_the_policy_directory_is_refused_and_nothing_is_run`
 `verified-by: bravebot_sandbox::openshell::a_policy_directory_another_account_owns_is_refused`
+`verified-by: bravebot_sandbox::private::a_directory_another_account_owns_is_refused`
 `verified-by: bravebot_sandbox::openshell::a_policy_file_is_owner_only_and_holds_the_document`
 `verified-by: bravebot_sandbox::openshell::a_policy_file_is_named_from_thirty_two_lower_case_hexadecimal_digits`
 `verified-by: bravebot_mcp::openshell::a_server_in_an_openshell_sandbox_answers_over_stdio_and_reaches_only_its_host`

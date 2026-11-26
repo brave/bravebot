@@ -245,13 +245,16 @@ more than what it leaves behind:
   records that this program ran at this time. [trust-map.md](trust-map.md) governs it.
 - **A language server's index.** A server indexes the workspace to answer anything at all, and the
   index is too large to hold in memory and rebuild per question. It is not kept, which is what this
-  mode asks for: it goes to a directory of its own in the system temporary directory, on the same
-  terms as the two above, and goes with the session, so the next one indexes again. What it must
-  not do instead is land in the workspace, which is [LSP-10](tools/lsp.md#LSP-10)'s rule and holds
-  in this mode as in any other.
+  mode asks for: it goes to a directory of its own under the account's cache directory, not in the
+  system temporary directory, which every stage of `run` may write
+  ([SANDBOX-12](sandboxing.md#SANDBOX-12)), and it goes with the session, so the next one indexes
+  again. What it must not do instead is land in the workspace, which is
+  [LSP-10](tools/lsp.md#LSP-10)'s rule and holds in this mode as in any other. A session killed
+  outright leaves it behind, and nothing removes it later.
 - **A local MCP server's home.** A runner keeps its cache under `HOME`, and one with nowhere to
   write it does not start. It is not kept: it goes to a directory of its own in the system temporary
-  directory, on the same terms as the three above, and goes once the server has stopped, so a runner
+  directory, on the same terms as the editor's file and the scratch directory above, and goes once
+  the server has stopped, so a runner
   fetches its package again each session. [SERVERS-10](mcp-servers.md#SERVERS-10) governs it.
 - **A ChatGPT sign-in whose access token was replaced.** A stored sign-in is used as in any session,
   and when its access token is replaced the new tokens are written to `chatgpt-account.json` under
@@ -291,6 +294,7 @@ own tool.
 
 `verified-by: bravebot_tui::editor::the_scratch_file_does_not_outlive_the_edit`
 `verified-by: bravebot_lsp::server::an_index_a_session_keeps_nothing_of_goes_with_the_session`
+`verified-by: bravebot_lsp::server::a_session_that_keeps_nothing_indexes_under_the_place_it_was_given_and_not_the_temporary_directory`
 `verified-by: bravebot_agent::incognito::a_private_session_goes_on_creating_and_editing_files_in_the_project`
 `verified-by: bravebot_agent::incognito::a_memory_left_untrusted_is_still_recorded`
 `verified-by: bravebot_agent::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`

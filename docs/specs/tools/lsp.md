@@ -571,18 +571,38 @@ does: the only reader is the server, the driver never opens it, and what reaches
 and still answers; it re-indexes each session and says so under [LSP-7](#LSP-7). That is the same
 trade incognito already makes for the session record.
 
-**A session with nothing to keep still indexes somewhere, and it is not the workspace.** Incognito
-is one such session, and a machine that names no profile directory, and so has no state directory
-at all, is another ([state-directory.md](../state-directory.md)). The paragraph above rules out the
-same answer for both: dropping the variable runs the server in the workspace with no index
-location, which writes the index into the tree. So the directory is taken where the platform keeps
-what does not outlive a process, on the terms [incognito.md](../incognito.md#INCOG-8) already
-states for the two files that go there. It is created by this process rather than adopted from a
-name already taken, at the modes [state-directory.md](../state-directory.md#STATE-1) gives them,
-with nothing in its name saying which workspace is being indexed, and it is removed as the session
-ends, the servers having stopped first. Where even that cannot be created the server does not
-start, under [LSP-6](#LSP-6). The cost is the one the paragraph below names, and it is the cost
-incognito has already accepted.
+**A session with nothing to keep still indexes somewhere, and it is neither the workspace nor a
+directory a stage may write.** Incognito is one such session, and a machine that names no profile
+directory, and so has no state directory at all, is another
+([state-directory.md](../state-directory.md)). The paragraph above rules out the same answer for
+both: dropping the variable runs the server in the workspace with no index location, which writes
+the index into the tree.
+
+The directory is `bravebot/lsp-sessions/<name>` under the account's cache directory
+(`~/Library/Caches` on macOS, `$XDG_CACHE_HOME` or `~/.cache` on Linux). It is not in the system
+temporary directory, which every stage of `run` may write
+([SANDBOX-12](../sandboxing.md#SANDBOX-12)). The server runs with the person's access
+([LSP-5](#LSP-5)) and builds and loads what is in this directory (`CARGO_TARGET_DIR`, `GOCACHE`
+and `TMPDIR` name it), so a stage that replaced the directory or a file in it would choose what
+the server runs. It is not the session's scratch directory, which a stage may write
+([SANDBOX-18](../sandboxing.md#SANDBOX-18)), and it is not under the state directory, which a
+session with nothing to keep adds nothing to ([INCOG-8](../incognito.md#INCOG-8)) and which may not
+exist. No row of a stage's profile names the cache directory as a whole, only a directory in it
+per toolchain ([SANDBOX-15](../sandboxing.md#SANDBOX-15)), so no stage may write this one.
+
+Each directory this process makes above the session's own is made at the modes
+[state-directory.md](../state-directory.md#STATE-1) gives them, set to them where it already
+exists, and refused where it is a link or belongs to another account. The session's own directory
+is created by this process rather than adopted from a name already taken. Its name is 32
+hexadecimal digits read from the operating system's random source, so it is not a name a stage can
+work out and create first, and nothing in it says which workspace is being indexed. It is removed as
+the session ends, the servers having stopped first. Where the account has no cache directory, or a
+directory cannot be made or is refused, the server does not start, under [LSP-6](#LSP-6). The
+system temporary directory is never used in its place. On Windows the directory stays in the
+account's temporary directory, which a stage is not granted where the session has a scratch
+directory ([SANDBOX-12](../sandboxing.md#SANDBOX-12)); the last Known cost below says what is
+left. The cost of a session that keeps nothing is the one the paragraph above names, and it is the
+cost incognito has already accepted.
 
 `verified-by: bravebot_lsp::server::the_cache_is_outside_the_workspace`
 `verified-by: bravebot_lsp::server::the_cache_sits_directly_under_the_directory_it_is_given`
@@ -599,6 +619,17 @@ incognito has already accepted.
 `verified-by: bravebot_lsp::server::an_index_a_session_keeps_nothing_of_goes_with_the_session`
 `verified-by: bravebot_lsp::server::a_session_index_directory_is_created_never_adopted`
 `verified-by: bravebot_lsp::server::a_session_with_a_state_directory_indexes_under_it`
+`verified-by: bravebot_lsp::server::a_session_that_keeps_nothing_indexes_under_the_place_it_was_given_and_not_the_temporary_directory`
+`verified-by: bravebot_lsp::server::a_go_servers_build_cache_of_a_session_that_keeps_nothing_is_under_the_place_it_was_given`
+`verified-by: bravebot_lsp::server::a_server_that_has_no_index_variable_is_given_the_directory_made_for_a_session_that_keeps_nothing`
+`verified-by: bravebot_lsp::server::a_session_with_no_place_for_its_index_starts_no_server_and_makes_nothing_in_the_temporary_directory`
+`verified-by: bravebot_lsp::server::a_stage_rewriting_the_temporary_directory_changes_nothing_a_server_indexes_into`
+`verified-by: bravebot_lsp::server::a_link_where_a_parent_of_a_session_index_should_be_is_refused_and_leads_nowhere_new`
+`verified-by: bravebot_lsp::server::a_session_index_narrows_the_directories_above_it_that_an_earlier_run_left_open`
+`verified-by: bravebot_lsp::server::the_name_of_a_session_index_directory_is_not_one_a_stage_could_work_out`
+`verified-by: bravebot_sandbox::private::a_directory_another_account_owns_is_refused`
+`verified-by: bravebot_agent::lsp::a_session_that_keeps_no_index_gives_its_server_an_index_under_the_account_cache_directory`
+`verified-by: bravebot_agent::confine::no_stage_of_a_session_beside_the_home_writes_the_directory_a_session_that_keeps_no_index_gives_its_server`
 `verified-by: bravebot_lsp::server::the_cache_is_never_read_by_the_driver`
 `verified-by: bravebot_lsp::server::nothing_the_driver_does_with_an_index_reads_a_file_inside_it`
 `verified-by: bravebot_lsp::server::a_server_whose_index_directory_cannot_be_made_private_does_not_start`
@@ -927,13 +958,32 @@ their own merits under [READ-4](read-file.md#READ-4).
 
 - **The one a session keeps nothing of is removed as the session ends, and only then.** Removal is a
   destructor, so a session that does not unwind (a panic in a release build, where the profile
-  aborts, or a kill) leaves a directory of the same size in the system temporary directory.
-  Nothing reaps one later: the name carries the process id that made it, so a later run cannot tell
-  a live one from a dead one by the name, and the platform's own sweep of that directory is what
-  eventually takes it. The same is true of the session's scratch directory
-  ([incognito.md](../incognito.md#INCOG-8)), which is why this is stated rather than fixed here;
-  what differs is the size. The retention sweep reaches `~/.bravebot` and not the system temporary
+  aborts, or a kill) leaves its directory, which is the size of an index, in
+  `bravebot/lsp-sessions` under the account's cache directory. Nothing reaps one later: the name is
+  random and carries no process id, so a later run cannot tell a live one from a dead one, and
+  nothing sweeps the cache directory: the retention sweep reaches `~/.bravebot` and not it. A
+  person removes a left directory by deleting `bravebot/lsp-sessions` under their cache directory
+  while no session is running. The
+  session's scratch directory ([incognito.md](../incognito.md#INCOG-8)) is left in the temporary
+  directory in the same way, which is why this is stated rather than fixed here; what differs is
+  the size.
+
+- **A session opened on the home directory or on the cache directory can write the directory a
+  session that keeps nothing hands its server.** [SANDBOX-18](../sandboxing.md#SANDBOX-18) grants a
+  stage every directory the session was opened on, to read and write, and a session opened on the
+  home directory, on `~/.cache` or on `~/Library/Caches` has a row above the index. A stage of such a
+  session may replace what the server builds and loads, which is the access the placement
+  keeps from every other session. Under `read-only` the grant to write is withdrawn. A session
+  that keeps an index under `~/.bravebot` is not affected, since a stage is refused that
   directory.
+
+- **On Windows the index of a session that keeps nothing is in the account's temporary
+  directory.** The helper that makes the cache directory's subdirectories checks the owner of a
+  directory by a user id, and no Windows check of the same kind is written. A Windows stage is
+  granted a `temp` directory inside the session's scratch directory and not the account's
+  temporary directory ([SANDBOX-12](../sandboxing.md#SANDBOX-12)), so the index is out of a stage's
+  reach there. A Windows session with no scratch directory has the account's temporary directory as a
+  stage's, and the index is in it. This is not tested on Windows.
 
 - **A server's own fault at a position reads as nothing found.** [LSP-2](#LSP-2) takes a rejection
   of a position request as an empty answer, and a server numbers a fault of its own the same way

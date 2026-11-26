@@ -7562,6 +7562,81 @@ mod tests {
         }
     }
 
+    /// LSP-10, SANDBOX-12, SANDBOX-15: the directory a language server is given for a session that
+    /// keeps no index is under the account's cache directory (`~/.cache` or `~/Library/Caches`,
+    /// with `bravebot/lsp-sessions` below it) and is in no row of a stage in any mode, while the
+    /// session was opened beside the home directory and not on the cache directory. The cache rows
+    /// a toolchain brings name one directory each (`~/.cache/gh`, `~/Library/Caches/pip`) and not
+    /// the cache directory whole.
+    ///
+    /// The regression it rejects is a cache row that names the cache directory itself, which
+    /// would make every stage able to replace what a server builds and loads with the person's
+    /// access. The session opened on the cache directory is the control that a row there reaches
+    /// the directory, and that `read-only` withdraws it.
+    #[test]
+    fn no_stage_of_a_session_beside_the_home_writes_the_directory_a_session_that_keeps_no_index_gives_its_server()
+     {
+        let reaches = |policy: &SandboxPolicy, path: &Path| {
+            policy
+                .writable
+                .iter()
+                .any(|row| path.starts_with(&row.path))
+                && !policy.unwritable.iter().any(|held| path.starts_with(held))
+        };
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            for cache in [format!("{HOME}/.cache"), format!("{HOME}/Library/Caches")] {
+                let index = Path::new(&cache)
+                    .join("bravebot/lsp-sessions/0123456789abcdef0123456789abcdef")
+                    .join("lsp/0123456789abcdef");
+                for mode in [
+                    SandboxMode::Strict,
+                    SandboxMode::ReadOnly,
+                    SandboxMode::WorkspaceWrite,
+                ] {
+                    for program in [
+                        "/usr/bin/make",
+                        "/usr/bin/cargo",
+                        "/usr/bin/gh",
+                        "/usr/bin/go",
+                    ] {
+                        let beside =
+                            reading_confinement(prelude, &["/work/project"]).with_mode(mode);
+                        let policy =
+                            beside.policy(&step(program, &[]), Path::new("/work/project"), &[]);
+                        assert!(
+                            !reaches(&policy, &index),
+                            "{prelude:?} {mode:?} {program}: a stage writes {}",
+                            index.display()
+                        );
+                    }
+                }
+                // The control: opened on the cache directory, the same path is a row, and
+                // `read-only` withdraws the write and leaves the read.
+                let on_the_cache = reading_confinement(prelude, &["/work/project", &cache]);
+                let policy = on_the_cache.policy(
+                    &step("/usr/bin/make", &[]),
+                    Path::new("/work/project"),
+                    &[],
+                );
+                assert!(
+                    reaches(&policy, &index),
+                    "{prelude:?}: the control does not write {}",
+                    index.display()
+                );
+                let read_only = on_the_cache.with_mode(SandboxMode::ReadOnly).policy(
+                    &step("/usr/bin/make", &[]),
+                    Path::new("/work/project"),
+                    &[],
+                );
+                assert!(
+                    !reaches(&read_only, &index),
+                    "{prelude:?}: read-only wrote {}",
+                    index.display()
+                );
+            }
+        }
+    }
+
     /// SANDBOX-19, SANDBOX-22: the sentence the planner is told under `read-only` says the project
     /// cannot be written, by a program or by the file tools, and who widens that, on every
     /// platform, and the sentence under `workspace-write` does not. The regression it rejects is a

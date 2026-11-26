@@ -66,6 +66,79 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
         let _ = std::fs::remove_dir_all(&self.programs);
+        put_the_environment_back();
+    }
+}
+
+/// What `$HOME`, `$BRAVEBOT_HOME` and `$XDG_CACHE_HOME` held before [`redirect_the_cache_into`]
+/// changed them, kept until the test's [`Scratch`] is dropped, which puts them back.
+type Held = Vec<(&'static str, Option<std::ffi::OsString>)>;
+
+static BEFORE_THE_REDIRECT: std::sync::Mutex<Option<Held>> = std::sync::Mutex::new(None);
+
+/// Point the account's cache directory at `home`, so a server a test starts makes its index
+/// directory there and not in the cache directory of whoever runs the tests. A set built with no
+/// state directory makes `bravebot/lsp-sessions` under it at the first start, and fails to start
+/// where it cannot.
+///
+/// `$HOME` names the cache directory on macOS and `$XDG_CACHE_HOME` on other Unix systems, and
+/// `$BRAVEBOT_HOME` answers before `$HOME` for the state directory, so all three are set here. The
+/// values before the first call of a test are kept, and the test's [`Scratch`] puts them back
+/// when it is dropped, including on a panic. `home_too` is false for a test that has already
+/// pointed `$HOME` at a directory of its own, which is also the cache directory's parent on macOS.
+/// The caller holds `PATH_LOCK`.
+#[expect(
+    clippy::multiple_unsafe_ops_per_block,
+    reason = "the environment is set and restored under one lock, as the tests below do"
+)]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn redirect_the_cache_into(home: &Path, home_too: bool) {
+    std::fs::create_dir_all(home).expect("create the home");
+    let mut held = BEFORE_THE_REDIRECT
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    if held.is_none() {
+        // Not `$HOME` where the caller set it and puts it back itself.
+        let names: &[&'static str] = if home_too {
+            &["HOME", "BRAVEBOT_HOME", "XDG_CACHE_HOME"]
+        } else {
+            &["BRAVEBOT_HOME", "XDG_CACHE_HOME"]
+        };
+        *held = Some(
+            names
+                .iter()
+                .map(|name| (*name, std::env::var_os(name)))
+                .collect(),
+        );
+    }
+    // SAFETY: the caller holds PATH_LOCK, which every test in this binary takes for its whole body,
+    // so nothing else here reads or writes the environment while this runs.
+    unsafe {
+        if home_too {
+            std::env::set_var("HOME", home);
+        }
+        std::env::remove_var("BRAVEBOT_HOME");
+        std::env::remove_var("XDG_CACHE_HOME");
+    }
+}
+
+/// Undo [`redirect_the_cache_into`], if a test did it.
+#[expect(
+    clippy::multiple_unsafe_ops_per_block,
+    reason = "the environment is restored under one lock, as the tests below do"
+)]
+fn put_the_environment_back() {
+    let mut held = BEFORE_THE_REDIRECT
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    for (name, value) in held.take().into_iter().flatten() {
+        // SAFETY: the test that redirected holds PATH_LOCK until after its scratch is dropped.
+        unsafe {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
     }
 }
 
@@ -152,6 +225,12 @@ done
 /// the variables belong to this test binary, which exists for the two tests below, and each call
 /// puts its own directory in front of whatever `$PATH` already held.
 fn a_workspace_with_a_server(scratch: &Scratch) -> (Workspace, PathBuf) {
+    a_workspace_with_a_server_and_a_home(scratch, true)
+}
+
+/// [`a_workspace_with_a_server`], where `home_too` says whether `$HOME` is made a directory of the
+/// test's own as well as the cache directory: false where the caller set `$HOME` already.
+fn a_workspace_with_a_server_and_a_home(scratch: &Scratch, home_too: bool) -> (Workspace, PathBuf) {
     let source = scratch.path.join("src");
     std::fs::create_dir_all(&source).expect("create src");
     std::fs::write(source.join("a.rs"), "pub struct Held;\n").expect("write a.rs");
@@ -166,6 +245,10 @@ fn a_workspace_with_a_server(scratch: &Scratch) -> (Workspace, PathBuf) {
 
     let starts = scratch.path.join("starts");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
+    // After the workspace, which reads the home it was given when it is built. The set a turn
+    // builds for a session that keeps no index makes its directory under the cache directory, so
+    // that is a directory of the test's own and not the account's.
+    redirect_the_cache_into(&scratch.programs.join("home"), home_too);
     let path = match std::env::var_os("PATH") {
         Some(existing) => format!("{}:{}", binaries.display(), existing.to_string_lossy()),
         None => binaries.display().to_string(),
@@ -535,6 +618,119 @@ fn a_language_server_is_not_handed_a_gateways_environment_token() {
     assert!(
         !environment.contains("a-live-gateway-token"),
         "the gateway's token reached a language server"
+    );
+}
+
+/// LSP-10 and SANDBOX-12: the set a session builds hands the account's cache directory to the
+/// servers it starts, so a session that keeps no index (no state directory here) gives its server
+/// an index directory under `~/.cache` or `~/Library/Caches` and not under the system temporary
+/// directory every stage of `run` may write.
+///
+/// The regression it rejects is `LanguageServers::new` not naming the cache directory: the set
+/// then starts no server at all for such a session (the question is answered with a refusal and
+/// the stand-in never runs), and a set that fell back to the system temporary directory would hand the
+/// server a path under it. `HOME` is a scratch directory with no cache directory in it yet, so the
+/// first start also has to make the directories above the session's own.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(
+    clippy::multiple_unsafe_ops_per_block,
+    reason = "the environment is set and restored under one lock, as the tests above do"
+)]
+#[test]
+fn a_session_that_keeps_no_index_gives_its_server_an_index_under_the_account_cache_directory() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let scratch = Scratch::new("agent-lsp-index-under-the-cache");
+    let (workspace, _recorded) = a_workspace_with_a_server(&scratch);
+    let seen = scratch.path.join("environment");
+    let program = scratch.programs.join("rust-analyzer");
+    std::fs::write(
+        &program,
+        FAKE_SERVER.replacen(
+            "echo started >> \"$STARTS\"",
+            &format!("env > '{}'", seen.display()),
+            1,
+        ),
+    )
+    .expect("write the server");
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(&home).expect("create the home");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        a_question_about_a_symbol(),
+        reply_with("it is declared in src/a.rs"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: false,
+        approve_writes: false,
+    };
+    let previous = (std::env::var_os("HOME"), std::env::var_os("XDG_CACHE_HOME"));
+    // SAFETY: PATH_LOCK is held for the whole of this body, so no other test in this binary reads
+    // or writes the environment, and the variables are put back before any assertion.
+    // `BRAVEBOT_HOME` answers before `HOME`, so it is cleared as well.
+    unsafe {
+        std::env::set_var("HOME", &home);
+        std::env::remove_var("BRAVEBOT_HOME");
+        std::env::remove_var("XDG_CACHE_HOME");
+    }
+    let cache = bravebot_agent::home::cache().expect("the account has a cache directory");
+    let mut servers = LanguageServers::new(workspace.root().to_path_buf(), None);
+    let outcome = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("where is Held declared"),
+        &mut Conversation::new(),
+        &mut asking,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(&workspace),
+        TrustedPrograms::new(),
+        Some(&mut servers),
+        &Cancel::new(),
+    )
+    .outcome;
+    // SAFETY: as above.
+    unsafe {
+        match previous.0 {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+        match previous.1 {
+            Some(value) => std::env::set_var("XDG_CACHE_HOME", value),
+            None => std::env::remove_var("XDG_CACHE_HOME"),
+        }
+    }
+    outcome.expect("the turn runs");
+
+    let environment = std::fs::read_to_string(&seen)
+        .expect("a server was started for a session that keeps no index");
+    let target = environment
+        .lines()
+        .find_map(|line| line.strip_prefix("CARGO_TARGET_DIR="))
+        .expect("the server was given an index directory");
+    let cache = cache
+        .canonicalize()
+        .expect("the first start made the cache directory");
+    assert!(
+        Path::new(target).starts_with(&cache),
+        "{target} is not under the account's cache directory {}",
+        cache.display()
+    );
+    let temporary = std::env::temp_dir()
+        .canonicalize()
+        .expect("the temporary directory");
+    assert!(
+        !Path::new(target).starts_with(&temporary) || cache.starts_with(&temporary),
+        "{target} is under the system temporary directory"
+    );
+    drop(servers);
+    assert!(
+        !Path::new(target).exists(),
+        "the index outlived the set that started the server: {target}"
     );
 }
 
@@ -2660,7 +2856,8 @@ fn asking_about_reaching(
             std::env::remove_var("BRAVEBOT_HOME");
         };
     }
-    let (mut workspace, recorded) = a_workspace_with_a_server(&scratch);
+    let (mut workspace, recorded) =
+        a_workspace_with_a_server_and_a_home(&scratch, !reach.home_is_outside);
     if reach.admit_outside {
         workspace
             .add_directory(outside.to_str().expect("utf-8 path"))

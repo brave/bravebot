@@ -62,9 +62,10 @@ Ten things still reach the filesystem:
   program made it and nothing about which project or which session, so an empty one records only that
   this program ran at this time.
 - **A language server's index.** A server indexes the workspace before it can answer anything, and
-  the index is too large to hold in memory. It goes to a directory of its own in the system temporary
-  directory and goes with the session, so the next session indexes again. It is never written into the
-  project.
+  the index is too large to hold in memory. It goes to a directory of its own under your cache
+  directory, not in the system temporary directory, which every program Brave Bot confines may
+  write, and goes with the session, so the next session indexes again. It is never written into the
+  project. A session killed outright leaves it behind.
 - **A local MCP server's home.** A [server](../customize/mcp-servers.md) is given a directory of its
   own to keep its files in, such as a runner's cache. Here it sits in the system temporary directory
   on the same terms and goes once the server stops, so a runner fetches its package again each
