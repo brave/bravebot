@@ -2354,6 +2354,8 @@ function Card({
           <Icon name={GOAL_ICONS[entry.tone]} /><span><GoalSentence text={entry.text} /></span>
         </div>
       )
+    case 'loop-tick':
+      return <div className="watch-turn"><Icon name="clock" /><strong>{entry.text}</strong><span>Automatic turn · your /loop line, sent again</span></div>
     case 'error':
       return <ErrorCard category={entry.category} accountMessage={entry.accountMessage} accountCommand={entry.accountCommand} attempts={entry.attempts} status={entry.status} cutOff={entry.cutOff} detail={entry.text} onRetry={onRecover} onModel={onChooseModel} />
 

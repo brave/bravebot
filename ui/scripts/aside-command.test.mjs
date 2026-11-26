@@ -172,7 +172,7 @@ test('a /btw goes out at once while a turn runs and lines wait, and a mid-turn /
   assert.match(body, /queued: \[\.\.\.\(old\.queued \?\? \[\]\), \{ prompt: line, attachments: \[\], staged: \[\], aside: 'recap' \}\]/)
   assert.equal([...turn.matchAll(/aside: 'recap'/g)].length, 1, 'nothing else makes a queued recap')
   // The queue asks a waiting recap again rather than sending it as a prompt.
-  assert.match(turn, /message\.aside === 'recap'\s*\?\s*askAside\(handle, 'recap', '', message\.prompt, \[\], true\)\s*:\s*message\.schedule !== undefined/)
+  assert.match(turn, /message\.aside === 'recap'\s*\?\s*askAside\(handle, 'recap', '', message\.prompt, \[\], true\)\s*:\s*message\.loop !== undefined/)
   // The line typed into a running turn reaches askAside before the interject key routes it to the queue.
   const interjecting = turn.slice(turn.indexOf('const interjectDraft = '))
   assert.ok(interjecting.indexOf('askAside(') < interjecting.indexOf("route(live"), 'a /btw is not queued behind the turn')

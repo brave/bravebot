@@ -215,6 +215,7 @@ const CARDS = {
   watch: { entry: () => t.watchFired(1, FORGED_CHROME), marks: null, why: 'the watch’s own line: a number and a path' },
   'goal-turn': { entry: () => t.goalCarried(FORGED_CHROME), marks: null, why: 'the driver’s own carry-on sentence, naming the condition the person typed and the no-tools judge’s reason' },
   'goal-notice': { entry: () => t.goalNoticed(FORGED_CHROME, 'plain'), marks: null, why: 'the bridge’s own /goal answer or verdict sentence, naming the condition the person typed and the no-tools judge’s reason' },
+  'loop-tick': { entry: () => t.loopTicked({ number: 1, tick: 2, quiet: 0 }), marks: null, why: 'the loop’s number and its tick’s, with no prompt or content in it', carries: false },
   error: { entry: () => t.errored(FORGED_CHROME), marks: null, why: 'a diagnostic from the service the agent spoke to' },
   'session-message': { entry: () => ({ kind: 'session-message', id: 'm1', direction: 'from', heading: 'message from session 11111111 (planner)', kept: null, session: '11111111-aaaa', name: 'planner', label: '(T,pub)', text: FORGED_CHROME }), marks: '<blockquote>' },
   'replayed-tool': { entry: () => ({ kind: 'replayed-tool', id: 'r1', text: FORGED_CHROME, why: FORGED_CHROME }), marks: null, why: 'the line a record kept of a call and the planner’s reason for it, with no result in it' },

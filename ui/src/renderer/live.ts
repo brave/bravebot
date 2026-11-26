@@ -43,6 +43,11 @@ export interface Queued {
    */
   schedule?: string
   /**
+   * Set for a typed `/loop` line that waits for the turn: its argument. It is asked of the bridge
+   * when the turn ends and is never sent as a prompt (LOOP-6, CMD-8).
+   */
+  loop?: string
+  /**
    * Set for a typed `/recap` line that waits for the turn, which the bridge refused while it ran
    * (CMD-16). It is asked of the bridge when the turn ends and is never sent as a prompt.
    */

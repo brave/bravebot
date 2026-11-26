@@ -42,6 +42,7 @@ import type { ExportTurn } from '../shared/export'
 import type { DroppedFile } from '../shared/drops'
 import type { AsideDone } from '../shared/aside'
 import type { GoalTone } from '../shared/goal'
+import type { LoopAnswer, LoopArmed, LoopEnded, LoopTick } from '../shared/loop'
 
 /** A picture or PDF dropped onto a `/manifest` task, and the marker that stands for it there. */
 export interface DroppedOnTask {
@@ -230,6 +231,8 @@ export type Entry = (
    * marked by `tone`, which comes from the answer's fields and never from the sentence.
    */
   | { kind: 'goal-notice'; id: string; text: string; tone: GoalTone }
+  /** A loop's line sent again as a turn of its own (LOOP-13). `number` is the one `/loop stop` takes. */
+  | { kind: 'loop-tick'; id: string; text: string; number: number }
   /** A message between two background sessions, drawn apart from the prompts (MSG-11). */
   | { kind: 'session-message'; id: string; direction: 'from' | 'to'; heading: string; kept: string | null; session: string; name: string; label: string; text: string | null }
   /** A replayed tool line from a stored session: no outcome, because none was kept. */
@@ -318,7 +321,7 @@ export function summonedReplies(entries: Entry[]): Map<string, string> {
     // A line read into a running turn belongs to it, and a watch or a consolidation starts a turn
     // of its own, which no pick was made for.
     if (entry.kind === 'user') { if (!entry.interjected) waiting = entry.summoned ?? null }
-    else if (entry.kind === 'watch' || entry.kind === 'goal-turn' || entry.kind === 'consolidation') waiting = null
+    else if (entry.kind === 'watch' || entry.kind === 'goal-turn' || entry.kind === 'loop-tick' || entry.kind === 'consolidation') waiting = null
     else if (entry.kind === 'assistant' && waiting !== null) {
       found.set(entry.id, waiting)
       waiting = null
@@ -335,7 +338,7 @@ export function summonedFor(entries: Entry[]): string | undefined {
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index]!
     if (entry.kind === 'user' && !entry.interjected) return entry.summoned
-    if (entry.kind === 'watch' || entry.kind === 'goal-turn' || entry.kind === 'consolidation') return undefined
+    if (entry.kind === 'watch' || entry.kind === 'goal-turn' || entry.kind === 'loop-tick' || entry.kind === 'consolidation') return undefined
   }
   return undefined
 }
@@ -377,6 +380,53 @@ export const asideAnswered = (done: AsideDone): Entry => {
 }
 export const goalCarried = (prompt: string): Entry => ({ kind: 'goal-turn', id: nextId(), text: prompt })
 export const goalNoticed = (text: string, tone: GoalTone): Entry => ({ kind: 'goal-notice', id: nextId(), text, tone })
+/**
+ * What `/loop` answered, drawn as a narration: for the person to read and never part of the
+ * conversation. A held interval (LOOP-7) is one of the bridge's lines, said before the start.
+ */
+export const loopAnswer = (answer: LoopAnswer): Entry => ({
+  kind: 'narration',
+  id: nextId(),
+  text: answer.lines.join('\n'),
+  ...(answer.refused ? { refused: true as const } : {}),
+})
+/**
+ * The entries with `/loop`'s answer added. The bridge announces a new loop's first tick before it
+ * answers the line (LOOP-4), so where that tick's row is already drawn the answer goes just before
+ * it, and the row that says a loop started is not drawn under its first reply. Any other answer is
+ * appended.
+ */
+export function loopAnswered(entries: Entry[], answer: LoopAnswer): Entry[] {
+  const row = loopAnswer(answer)
+  const at = answer.number === null ? -1 : entries.findIndex((entry) => entry.kind === 'loop-tick' && entry.number === answer.number)
+  return at === -1 ? [...entries, row] : [...entries.slice(0, at), row, ...entries.slice(at)]
+}
+/** A loop's tick, with its loop's number, its own among that loop's ticks, and the quiet ticks in a row where there are any (LOOP-13). */
+export const loopTicked = (tick: LoopTick): Entry => ({
+  kind: 'loop-tick',
+  id: nextId(),
+  number: tick.number,
+  text: `Loop ${tick.number}, tick ${tick.tick}${tick.quiet > 0 ? ` · ${tick.quiet} quiet` : ''}`,
+})
+const ENDED: Record<LoopEnded['reason'], string> = {
+  finished: 'the turn said it was finished',
+  silent: 'two ticks in a row did not say when to run again',
+  sent: 'its line was sent',
+  stopped: 'stopped',
+  aged: 'it was seven days old',
+  failed: 'its tick could not be sent',
+}
+/** That a loop ended, with its number, or how many a stop ended (LOOP-11). */
+export const loopEnded = (ended: LoopEnded): Entry => {
+  const which = ended.number !== undefined
+    ? `Loop ${ended.number}`
+    : ended.count === 1 ? 'The loop' : `${ended.count ?? 'Every'} loops`
+  const message = ended.message ? `. ${ended.message}` : ''
+  return narrated(`${which} ended: ${ENDED[ended.reason] ?? ended.reason}${message}`)
+}
+/** That a turn asked to look again and its line became a loop (LOOP-14). */
+export const loopArmed = (armed: LoopArmed): Entry =>
+  narrated(`Loop ${armed.number} started: the turn asked to look again in ${armed.after}. /loop stop ends it.`, '/loop stop')
 export const watchFired =(number: number, path: string): Entry => ({ kind: 'watch', id: nextId(), text: `File watch ${number}: ${path}` })
 export const errored = (text: string, category?: string): Entry => ({ kind: 'error', id: nextId(), text, ...(category ? { category } : {}) })
 export const quarantined = (shown: Shown): Entry => ({ kind: 'quarantined', id: nextId(), shown })
@@ -514,7 +564,7 @@ export function beginTurn(entries: Entry[], number: number): Entry[] {
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index]!
     if (entry.kind === 'assistant' || entry.kind === 'turn-start') break
-    if (entry.kind === 'user' || entry.kind === 'consolidation' || entry.kind === 'watch' || entry.kind === 'goal-turn') { at = index + 1; break }
+    if (entry.kind === 'user' || entry.kind === 'consolidation' || entry.kind === 'watch' || entry.kind === 'goal-turn' || entry.kind === 'loop-tick') { at = index + 1; break }
   }
   return [...entries.slice(0, at), turnStarted(number), ...entries.slice(at)]
 }
@@ -702,6 +752,7 @@ export function plainText(entry: Entry): string | null {
     case 'watch':
     case 'goal-turn':
     case 'goal-notice':
+    case 'loop-tick':
     case 'error':
     case 'replayed-tool':
     case 'plan-task':

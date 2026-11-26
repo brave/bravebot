@@ -1405,6 +1405,12 @@ export interface EventMap {
   'watch.ended': { number: number; reason: string; message?: string }
   /** The result of a `/schedule run-now` the window started (SCHEDULE-8). Shown, never sent to the model. */
   'schedule.ran': import('./schedule').ScheduleAnswer
+  /** A loop's line is being sent again as a turn (LOOP-13). The turn's own events follow. */
+  'loop.tick': import('./loop').LoopTick
+  /** A loop ended, or a stop ended several (LOOP-11). Shown, never sent to the model. */
+  'loop.ended': import('./loop').LoopEnded
+  /** A turn asked to look again and its typed line became a loop (LOOP-14). */
+  'loop.armed': import('./loop').LoopArmed
   /** What a `session.btw` or `session.recap` came back with (CMD-8, CMD-16). Shown, never sent to the model. */
   'aside.done': import('./aside').AsideDone
   /** The goal as it now stands after a change, or `null` once none is set. */

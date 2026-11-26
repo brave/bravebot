@@ -29,6 +29,13 @@ export function apply(
         return { ...old, entries: [...old.entries, t.watchFired(message.data.number, message.data.path)] }
       case 'schedule.ran':
         return { ...old, entries: [...old.entries, t.scheduleAnswered(message.data)] }
+      // A loop's tick starts a turn of its own, whose events follow this row (LOOP-13).
+      case 'loop.tick':
+        return { ...old, entries: [...old.entries, t.loopTicked(message.data)] }
+      case 'loop.ended':
+        return { ...old, entries: [...old.entries, t.loopEnded(message.data)] }
+      case 'loop.armed':
+        return { ...old, entries: [...old.entries, t.loopArmed(message.data)] }
       // An answer to `/btw` or `/recap`: a row to read and an aside of the session, never a prompt
       // and never part of what a turn sends (CMD-8, CMD-16).
       case 'aside.done': {
