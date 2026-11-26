@@ -752,9 +752,20 @@ fn a_goal_not_met_sends_the_work_back_as_the_drivers_sentence_naming_no_file() {
     assert!(check.get("tools").is_none(), "{check}");
     assert!(last_user(&bodies[1]).contains(condition));
 
+    assert!(chat.named("goal.carried").is_empty());
     let started = chat.proceed();
     assert_eq!(started["started"], "turn", "{started}");
     assert_eq!(chat.ended(2), "turn.done");
+    // The window is told the prompt is the driver's before the turn it starts says anything.
+    let carried = chat.named("goal.carried");
+    assert_eq!(carried.len(), 1);
+    assert_eq!(
+        carried[0].data["prompt"],
+        bravebot_agent::goal::carry_on(condition, reason)
+    );
+    let names: Vec<&str> = chat.events.lock().unwrap().iter().map(|e| e.name).collect();
+    let at = |name: &str| names.iter().rposition(|n| *n == name).unwrap();
+    assert!(at("goal.carried") < at("turn.started"), "{names:?}");
     let bodies = chat.bodies.lock().unwrap().clone();
     assert_eq!(bodies.len(), 3);
     assert_eq!(

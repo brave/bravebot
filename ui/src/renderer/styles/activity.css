@@ -249,6 +249,16 @@
 .ask-settled-outcome { color: var(--ink-secondary); padding-inline-start: var(--leo-spacing-m); }
 .watch-turn { flex-wrap: wrap; }
 .watch-turn strong { font: var(--type-caption-strong); color: var(--ink-secondary); }
+/* The driver's sentence a goal sent as the turn's prompt: its own line under the head, lined up
+   with the head's text past the icon, with its paragraphs kept. */
+.goal-turn-prompt {
+  flex-basis: 100%;
+  margin: 0;
+  padding-inline-start: calc(var(--icon-control) + var(--leo-spacing-m));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
 
 /* A message between two background sessions: a heading, then the words quoted. Line breaks are kept. */
 .session-message {

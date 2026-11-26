@@ -261,7 +261,7 @@ export function App(): React.JSX.Element {
       if (message.event === 'enhance.done' && message.session) enhancement.receive(message.session, message.data)
       else if (message.event === 'compact.done' && message.session) compaction.receive(message.session, message.data)
       else if (message.event === 'handoff.done' && message.session) handoffs.receive(message.session, message.data)
-      else if ((message.event === 'goal.changed' || message.event === 'goal.checking' || message.event === 'goal.judged') && message.session) goals.receive(message.session, message)
+      else if ((message.event === 'goal.changed' || message.event === 'goal.checking' || message.event === 'goal.judged' || message.event === 'goal.carried') && message.session) goals.receive(message.session, message)
       else if (message.event === 'agent.ready') apply(message, setLive, setBuild, refresh)
       else if (message.session) apply(message, (action) => updateSession(message.session!, action), setBuild, refresh)
       // A turn that ended under a goal has a step to ask for, once its queue has gone.

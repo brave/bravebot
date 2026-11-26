@@ -1423,6 +1423,8 @@ export interface EventMap {
   'goal.checking': Record<string, never>
   /** What the check came to (GOAL-6). Not sent for a check that was stopped or whose goal changed. */
   'goal.judged': import('./goal').GoalJudged
+  /** The driver's sentence that starts the next turn under the goal (GOAL-7), sent before that turn's `turn.started`. Drawn as the driver's, never as the person's. */
+  'goal.carried': { prompt: string }
   /** `retry` is set only on `reconnecting`, while the request waits, and `null` once its attempt is out. */
   phase: { phase: Phase; retry?: RetryEvent | null }
   composing: { call: string | null }

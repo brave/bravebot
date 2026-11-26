@@ -2296,6 +2296,15 @@ function Card({
 
     case 'watch':
       return <div className="watch-turn"><Icon name="eye-on" /><strong>{entry.text}</strong><span>Automatic turn · file contents still follow normal read permissions</span></div>
+    case 'goal-turn':
+      // The prompt of a turn the goal started, which the person did not type: a line in the
+      // register of a watch's turn rather than their bubble. Reached only from `goal.carried`.
+      return (
+        <div className="watch-turn goal-turn" data-test="goal-turn">
+          <Icon name="flag" /><strong>Goal not met yet, so the work carries on</strong><span>Automatic turn · sent by /goal</span>
+          <p className="goal-turn-prompt">{entry.text}</p>
+        </div>
+      )
     case 'error':
       return <ErrorCard category={entry.category} accountMessage={entry.accountMessage} accountCommand={entry.accountCommand} attempts={entry.attempts} status={entry.status} cutOff={entry.cutOff} detail={entry.text} onRetry={onRecover} onModel={onChooseModel} />
 

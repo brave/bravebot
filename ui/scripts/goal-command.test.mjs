@@ -157,11 +157,88 @@ test('the stop key sends turn.cancel, which the bridge applies to a check that i
 
 test('the goal events and turn.done reach the hook', () => {
   const app = readFileSync('src/renderer/App.tsx', 'utf8')
-  assert.match(app, /message\.event === 'goal\.changed' \|\| message\.event === 'goal\.checking' \|\| message\.event === 'goal\.judged'\) && message\.session\) goals\.receive\(message\.session, message\)/)
+  assert.match(app, /message\.event === 'goal\.changed' \|\| message\.event === 'goal\.checking' \|\| message\.event === 'goal\.judged' \|\| message\.event === 'goal\.carried'\) && message\.session\) goals\.receive\(message\.session, message\)/)
   assert.match(app, /if \(message\.event === 'turn\.done' && message\.session\) goals\.receive\(message\.session, message\)/)
 })
 
 test('the bridge methods are ones the window may send', () => {
   const index = readFileSync('src/main/index.ts', 'utf8')
   assert.match(index, /'session\.goal',\s*'session\.goal\.continue',/)
+})
+
+// The carry-on prompt and the goal panel (GOAL-7, GOAL-13), drawn through `react-dom/server` as
+// aside-command.test.mjs draws the Asides panel. The faults these reject are the driver's sentence
+// drawn as the person's bubble, a turn's notices placed above the sentence that started it, and a
+// paused or stalled goal the panel does not say is paused or stalled.
+const transcript = load("export * from './src/renderer/transcript'")
+const React = require('react')
+const { renderToStaticMarkup } = require('react-dom/server')
+const withoutTree = {
+  name: 'without-tree',
+  setup(built) {
+    built.onResolve({ filter: /^\.\/FileTree$/ }, () => ({ path: 'tree', namespace: 'no-tree' }))
+    built.onLoad({ filter: /.*/, namespace: 'no-tree' }, () => ({ loader: 'js', contents: 'export const FileTree = () => null' }))
+  },
+}
+let components
+const loaded = async () => {
+  const { loadComponents } = await import('./render-support.mjs')
+  return (components ??= loadComponents({
+    contents: "export { Context } from './src/renderer/components/Context.tsx'\nexport { Row } from './src/renderer/components/Transcript.tsx'\nexport * as transcript from './src/renderer/transcript'",
+  }, [withoutTree]))
+}
+
+test('the turn goal.carried starts is placed under the driver\'s row, and no summoned bot answers it', () => {
+  const carried = transcript.goalCarried('Carry on.\n\nCondition: a.txt exists')
+  assert.equal(carried.kind, 'goal-turn')
+  assert.equal(carried.text, 'Carry on.\n\nCondition: a.txt exists')
+  const entries = transcript.beginTurn([transcript.userSaid('hi'), transcript.narrated('Checked'), carried], 2)
+  assert.equal(entries.at(-1).kind, 'turn-start', 'the turn starts below the driver\'s sentence')
+  assert.equal(transcript.summonedFor([transcript.userSaid('hi', 'bot-a'), carried]), undefined)
+  assert.equal(transcript.plainText(carried), carried.text, 'it copies as its text')
+})
+
+test('the hook adds the driver\'s row on goal.carried', () => {
+  const source = readFileSync('src/renderer/use-goal.ts', 'utf8')
+  assert.match(source, /case 'goal\.carried': return \{ \.\.\.old, entries: \[\.\.\.old\.entries, t\.goalCarried\(message\.data\.prompt\)\] \}/)
+})
+
+test('the carry-on prompt is drawn as the driver\'s row, not as a line the person typed', async () => {
+  const { Row, transcript: own } = await loaded()
+  const markup = renderToStaticMarkup(React.createElement(Row, {
+    entry: own.goalCarried('Carry on <b>now</b>'), onDecide() {}, onAnswer() {}, onFork() {}, forkable: false,
+  }))
+  assert.match(markup, /data-test="goal-turn"/)
+  assert.doesNotMatch(markup, /bubble user/, 'not the person\'s bubble')
+  assert.ok(markup.includes('Automatic turn · sent by /goal'), markup)
+  assert.ok(markup.includes('Carry on &lt;b&gt;now&lt;/b&gt;'), 'the sentence is text')
+})
+
+const goalPanel = async (goal) => {
+  const { Context } = await loaded()
+  const inspected = { handle: 's-1', summary: { directory: '/p' }, entries: [], todos: [], quarantine: [], phase: null, tokens: 0, running: false, goal }
+  const markup = renderToStaticMarkup(React.createElement(Context, { live: inspected }))
+  const start = markup.indexOf('id="panel-goal"')
+  return start < 0 ? null : markup.slice(start, markup.indexOf('</section>', start))
+}
+
+test('the goal panel shows the condition, rounds left, time set and tokens spent', async () => {
+  const panel = await goalPanel(snapshot({ rounds: 3, left: 7, elapsedSeconds: 125, spentTokens: 4200, lastReason: 'a.txt is missing' }))
+  assert.ok(panel, 'the column has a Goal panel while a goal is set')
+  assert.ok(panel.includes('a.txt exists'), panel)
+  assert.ok(panel.includes('7 of 10'), panel)
+  assert.ok(panel.includes('2m 05s'), panel)
+  assert.ok(panel.includes('4.2k tokens'), panel)
+  assert.ok(panel.includes('a.txt is missing'), panel)
+  assert.ok(panel.includes('Working towards it'), panel)
+  assert.equal(await goalPanel(null), null, 'no panel without a goal')
+})
+
+test('a paused or stalled goal says so in words', async () => {
+  const paused = await goalPanel(snapshot({ paused: true }))
+  assert.match(paused, /goal-state paused/)
+  assert.ok(paused.includes('Paused. Type /goal resume to carry on.'), paused)
+  const stalled = await goalPanel(snapshot({ stalled: true }))
+  assert.match(stalled, /goal-state stalled/)
+  assert.ok(stalled.includes('Stopped: rounds in a row made no tool call'), stalled)
 })

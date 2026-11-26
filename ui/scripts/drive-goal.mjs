@@ -22,6 +22,8 @@ const { service, rounds: requests } = await startModelService(async ({ body }) =
   // The judge is the only request sent with no tools (GOAL-3).
   if (!JSON.parse(body).tools) {
     judged += 1
+    // The second check waits, so the panel and the driver's row can be read before the goal ends.
+    if (judged === 2) await new Promise((resolve) => setTimeout(resolve, 3000))
     return { content: judged === 1 ? 'NOT MET\na.txt is not in the project yet.' : 'MET\na.txt is in the project.' }
   }
   return { content: 'I made a start on a.txt.' }
@@ -35,6 +37,9 @@ try {
   ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1200, height: 800 } }))
   await page.emulateMedia({ colorScheme: theme === 'dark' ? 'dark' : 'light' })
   await openProject(page, app, project)
+  // The inspector holds the goal panel, so it is open for the screenshots.
+  const inspector = page.locator('.fold-toggle.right')
+  if ((await inspector.getAttribute('aria-expanded')) !== 'true') await inspector.click()
 
   const composer = page.getByRole('textbox', { name: COMPOSER_NAME })
   const transcript = () => page.locator('.entries').innerText()
@@ -49,17 +54,42 @@ try {
   await until(async () => (await transcript()).includes(CONDITION), 'the goal is said to be set')
   assert.equal(requests.length, 0, 'setting a goal sends no request')
   assert.equal(await page.locator('.bubble.user', { hasText: '/goal' }).count(), 0, 'no prompt bubble for /goal')
+  const panel = page.locator('[data-test="goal-panel"]')
+  await until(async () => (await panel.count()) === 1 && (await panel.textContent()).includes(CONDITION), 'the side panel shows the goal')
+  assert.match(await panel.textContent(), /10 of 10/, 'no round used yet')
 
   await composer.fill('create a.txt')
   await composer.press('Enter')
   await until(async () => (await transcript()).includes('Checking whether the goal is met'), 'the check is drawn')
   await until(async () => (await transcript()).includes('a.txt is not in the project yet.'), 'the NOT MET verdict is drawn')
+  // The panel takes the verdict's figures: one round used, and the judge's reason.
+  await until(async () => /9 of 10/.test(await panel.textContent()), 'the panel counts the round the verdict used')
+  assert.ok((await panel.textContent()).includes('a.txt is not in the project yet.'), 'the panel shows the last reason')
+
+  // The work is sent back by itself, with the driver's sentence drawn as the driver's row and not
+  // as a line the person typed (GOAL-7).
+  const driven = page.locator('[data-test="goal-turn"]')
+  await until(async () => (await driven.count()) === 1, 'the carry-on prompt is drawn as the driver\'s row')
+  assert.ok((await driven.innerText()).includes(CONDITION), 'the row holds the driver\'s sentence')
+  assert.equal(await page.locator('.bubble.user', { hasText: 'stopping condition' }).count(), 0, 'no person\'s bubble for the carry-on prompt')
+  await driven.scrollIntoViewIfNeeded()
   await page.screenshot({ path: join(output, `goal-not-met-${theme}.png`) })
 
-  // The work is sent back by itself, and that turn is judged MET.
+  // That turn is judged MET, and the goal ends, so the panel goes.
   await until(async () => (await transcript()).includes('a.txt is in the project.'), 'the MET verdict is drawn')
+  await until(async () => (await panel.count()) === 0, 'the panel goes once the goal is met')
   await page.waitForTimeout(300)
   await page.screenshot({ path: join(output, `goal-met-${theme}.png`) })
+
+  // A paused goal says it is paused, in the panel.
+  await composer.fill('/goal b.txt exists')
+  await composer.press('Enter')
+  await until(async () => (await panel.count()) === 1 && (await panel.textContent()).includes('b.txt exists'), 'the new goal is shown')
+  await composer.fill('/goal pause')
+  await composer.press('Enter')
+  await until(async () => (await page.locator('[data-test="goal-state"]').textContent()).includes('Paused'), 'the panel says the goal is paused')
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: join(output, `goal-paused-${theme}.png`) })
 
   const turns = requests.map((body) => JSON.parse(body)).filter((body) => body.tools)
   assert.equal(judged, 2, 'two checks')

@@ -96,6 +96,7 @@ export function useGoal({ openedLives, updateSession, dequeuing, live, livesRevi
     | { event: 'goal.changed'; data: { goal: GoalSnapshot | null } }
     | { event: 'goal.checking' }
     | { event: 'goal.judged'; data: GoalJudged }
+    | { event: 'goal.carried'; data: { prompt: string } }
     | { event: 'turn.done' }) => {
     updateSession(handle, (old) => {
       if (!old) return old
@@ -103,6 +104,8 @@ export function useGoal({ openedLives, updateSession, dequeuing, live, livesRevi
         case 'goal.changed': return goalChanged(old, message.data.goal)
         case 'goal.checking': return checkBegun(old)
         case 'goal.judged': return judged(old, message.data)
+        // The turn this starts has the driver's sentence as its prompt, drawn as the driver's row.
+        case 'goal.carried': return { ...old, entries: [...old.entries, t.goalCarried(message.data.prompt)] }
         case 'turn.done': return turnEnded(old)
       }
     })

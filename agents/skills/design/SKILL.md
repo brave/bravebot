@@ -224,6 +224,14 @@ Compose from these before inventing a new pattern.
 - **Toast**: bottom-right of the conversation card. Confirmations clear themselves after four
   seconds; errors stay until dismissed and use `role="alert"`.
 - **Inspector**: one head, one row height and one empty state for every list in it.
+- **Goal section** (`Context.tsx`, `inspector.css`): heads Overview only while a `/goal` is set, so
+  it has no empty state and is not in Choose sections. The condition in meta-strong, one state line
+  with a meta icon (`flag`, or `pause-circle` / `warning-triangle-outline` in `--status-warning` for
+  paused and stalled, with words saying which), then `context-facts` rows with tabular figures.
+- **Driver's turn row** (`.watch-turn`, `activity.css`): a turn the app started rather than the
+  person (a watch firing, a goal carrying the work on) is a caption meta line with an icon, a
+  strong head and "Automatic turn · …", never a `.bubble.user`. A goal's row adds the sentence it
+  sent below the head, lined up past the icon.
 - **List rows**: `--session-row-h` rows in the sidebar, three lines of text, a hover control that
   overlays the time, sticky caption-ink group headings.
 - **Menus**: Leo menu items with a leading icon column and a check column (`menus.css`).

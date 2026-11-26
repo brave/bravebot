@@ -4166,7 +4166,18 @@ impl Bridge {
             crate::goal::Step::Nothing => Ok(json!({ "started": false })),
             crate::goal::Step::CarryOn(prompt) => {
                 // Not recall: the person did not type it, so it neither joins their history nor
-                // names the chat.
+                // names the chat. Announced before the worker starts, as `watch.fired` is, so the
+                // window draws the prompt as the driver's before the turn's own events arrive.
+                self.emitter.send(Event::new(
+                    "goal.carried",
+                    &handle,
+                    // Line by line, so its paragraphs stay paragraphs and no other control is drawn.
+                    json!({ "prompt": prompt
+                        .split('\n')
+                        .map(bravebot_agent::confirm::printable)
+                        .collect::<Vec<_>>()
+                        .join("\n") }),
+                ));
                 let request = Request {
                     id: 0,
                     method: "turn.send".into(),

@@ -170,7 +170,7 @@ export interface StatusGoal {
 }
 
 /** Whole seconds as the terminal's `/status` says them: `42s`, or `3m 05s`. */
-function elapsed(seconds: number): string {
+export function elapsed(seconds: number): string {
   if (seconds < 60) return `${seconds}s`
   return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`
 }

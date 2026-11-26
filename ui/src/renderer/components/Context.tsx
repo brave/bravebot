@@ -13,6 +13,8 @@ import { middleTruncate } from '../truncate'
 import { folderName } from '../folders'
 import { t } from '../i18n'
 import type { AsideRow } from '../../shared/aside'
+import type { GoalSnapshot } from '../../shared/goal'
+import { elapsed, tokens } from '../reports'
 
 interface Live {
   /** The session's handle. The file tree names it rather than naming a folder. */
@@ -33,6 +35,8 @@ interface Live {
   folders?: string[]
   /** What the agent said when it last refused to add or close a folder here. */
   folderProblem?: string | null
+  /** The goal the chat works towards, as the bridge last sent it (GOAL-13). */
+  goal?: GoalSnapshot | null
 }
 
 /**
@@ -187,6 +191,11 @@ export const Context = memo(function Context({ live, audit, details, hidden = NO
       {/* The column stays drawn with its head when every section is off: turning sections off
           never folds it (PANEL-20). */}
       {allOff && <div className="panel-inner context-all-off" id="context-all-off"><Empty icon="eye-off">{t.uiContextAllOff()}</Empty></div>}
+
+      {/* Only while a goal is set: it is the chat's state, not a list, so it has no empty line,
+          and it is not one of the sections a person turns off, since it says why turns keep
+          starting. Its figures are the bridge's, sent with each change and each verdict. */}
+      {live.goal && <GoalPanel goal={live.goal} off={tab !== 'overview'} />}
 
       <Section id="plan" title="Plan"count={live.todos.length} off={off.has('plan')}
         about="The steps the agent has set itself, and which it has done.">
@@ -515,6 +524,40 @@ export function Folders({ folders, running, problem, off, onAdd, onClose }: {
   )
 }
 
+/**
+ * The goal the chat works towards (GOAL-13): its condition, where it stands, how many rounds it may
+ * still send the work back for, how long it has been set and what the chat has spent since. A
+ * paused or stalled goal says so in words beside its marker, so colour is not alone.
+ */
+export function GoalPanel({ goal, off }: { goal: GoalSnapshot; off: boolean }): React.JSX.Element {
+  const state = goal.paused
+    ? { icon: 'pause-circle' as const, className: 'goal-state paused', text: 'Paused. Type /goal resume to carry on.' }
+    : goal.stalled
+      ? { icon: 'warning-triangle-outline' as const, className: 'goal-state stalled', text: 'Stopped: rounds in a row made no tool call. Send a prompt to carry on.' }
+      : { icon: 'flag' as const, className: 'goal-state', text: 'Working towards it until a check says it holds.' }
+  return (
+    <Section id="goal" title="Goal" off={off}
+      about="The condition this chat works towards. After each turn a check with no tools judges whether it holds.">
+      <div className="goal" data-test="goal-panel">
+        <p className="goal-condition">{goal.condition}</p>
+        <p className={state.className} data-test="goal-state"><Icon name={state.icon} />{state.text}</p>
+        <dl className="context-facts goal-facts">
+          <dt>Rounds left</dt>
+          <dd className="num" data-test="goal-left">{goal.left} of {goal.rounds + goal.left}</dd>
+          <dt>Set for</dt>
+          <dd className="num">{elapsed(goal.elapsedSeconds)}</dd>
+          <dt>Spent since</dt>
+          <dd className="num">{tokens(goal.spentTokens)}</dd>
+          {goal.lastReason && <>
+            <dt>Last check</dt>
+            <dd className="goal-reason">{goal.lastReason}</dd>
+          </>}
+        </dl>
+      </div>
+    </Section>
+  )
+}
+
 function Section({
   id,
   title,
@@ -524,10 +567,13 @@ function Section({
   children,
 }: {
   /** Which panel this is, so the button in the bar can point at it. The folders are part of the Files tab. */
-  id: PanelName | 'folders'
+  id: PanelName | 'folders' | 'goal'
   title: string
-  /** How many things are in it, for the count in the head. Shown at zero as well: "none" is an answer. */
-  count: number
+  /**
+   * How many things are in it, for the count in the head. Shown at zero as well: "none" is an
+   * answer. Absent for a panel that holds one thing rather than a list.
+   */
+  count?: number
   /** What the panel holds, for the tooltip on its heading. */
   about: string
   /**
@@ -544,8 +590,10 @@ function Section({
       <Collapse className="flat-collapse panel-collapse" isOpen={open} onToggle={({ open: next }) => setOpen(next)} data-test={`panel-${id}-collapse`}>
         <span slot="title" className="panel-title" data-tooltip={about}>
           {title}
-          <Label color="neutral" className="count num">{count}</Label>
-          <span className="visually-hidden">{`, ${count} ${count === 1 ? 'item' : 'items'}`}</span>
+          {count !== undefined && <>
+            <Label color="neutral" className="count num">{count}</Label>
+            <span className="visually-hidden">{`, ${count} ${count === 1 ? 'item' : 'items'}`}</span>
+          </>}
         </span>
         <div className="panel-inner">{children}</div>
       </Collapse>
