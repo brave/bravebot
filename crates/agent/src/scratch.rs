@@ -634,6 +634,28 @@ mod tests {
         assert_ne!(one.path(), other.path());
     }
 
+    /// A name is different every time it is asked for, and names the process that asked. A fixed
+    /// name would keep the prompt cache warm and let two sessions share a directory, and a name
+    /// that differed only by process would give two sessions of one process the same directory.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn two_reserved_names_for_the_same_root_and_kind_differ() {
+        let root = Path::new("/a/root");
+
+        let first = reserved_name(root, SESSION);
+        let second = reserved_name(root, SESSION);
+
+        assert_ne!(first, second);
+        for name in [&first, &second] {
+            assert!(name.starts_with(root), "{}", name.display());
+            let leaf = name.file_name().expect("a leaf").to_string_lossy();
+            assert!(
+                leaf.contains(&format!("-{}-", std::process::id())),
+                "{leaf} does not name the process that made it"
+            );
+        }
+    }
+
     /// The lifetime is the point: what a turn wrote there is gone when the session is.
     #[test]
     fn nothing_written_in_it_outlives_the_session() {

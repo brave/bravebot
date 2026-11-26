@@ -418,6 +418,9 @@ it is the planner's.
 `verified-by: bravebot_agent::preamble::an_installed_jenkins_cli_says_what_to_do_when_it_is_not_logged_in`
 `verified-by: bravebot_agent::preamble::what_the_jenkins_cli_is_for_is_not_in_the_block_a_delegate_reads`
 `verified-by: bravebot_agent::turn::the_road_for_a_jenkins_build_goes_out_with_the_fact_it_rests_on`
+`verified-by: bravebot_agent::scratch::two_reserved_names_for_the_same_root_and_kind_differ`
+`verified-by: bravebot_cli::running::two_process_starts_send_the_same_system_message_and_tools`
+`verified-by: bravebot_cli::running::a_resumed_process_sends_the_system_message_and_tools_a_new_one_does`
 
 <a id="INSTR-10"></a>
 ### INSTR-10: words from the command line have the last word on precedence, and a replacement reaches the opening alone
@@ -998,6 +1001,17 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
 - **The date is UTC, not local.** The offset is not knowable without a timezone database, and a
   dependency for one line of the prompt is the worse trade. A planner near midnight may be a day
   out, which matters to nothing that is not already asking the user.
+- **The first request after midnight UTC does not read the system prompt from the prompt cache.**
+  The date is in the system prompt and changes once a day, so the first request of each new day
+  writes the system prompt again, and with it the conversation. On the Anthropic wire the tool
+  schemas have a mark of their own in front of the system prompt and stay cached. The date stays in
+  the prompt: it is one line, and the cost is one write a day.
+- **The first request of each new process writes the end of its conversation to the prompt cache.**
+  The conversation's cache mark goes on the last user message, which in a new process is or follows
+  the message that names the session's directory. The system prompt and the tool schemas are read
+  from the cache. A one-shot run wrote 175 tokens in this way (brave/bravebot#4513). The mark stays
+  on the last user message so that a round ending in a tool result carries the mark the first round
+  of the turn wrote.
 - **A project cannot turn off a global `AGENTS.md`.** The project's file has the last word, but
   the global one is still in front of the planner and can still be followed where the project
   says nothing that contradicts it. Deleting the global file, or narrowing it, is the only way to
