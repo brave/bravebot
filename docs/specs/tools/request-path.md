@@ -123,8 +123,8 @@ beside the session's directories is refused by the operating system, and the sen
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_bypass_run_is_given_no_write_a_request_would_add`
 `verified-by: bravebot_agent::tools::tests::arguments::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
-`verified-by: bravebot_agent::confine::no_sentence_names_request_path_where_the_list_lacks_it`
-`verified-by: bravebot_agent::confine::the_profile_line_names_request_path_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::confine::tests::no_sentence_names_request_path_where_the_list_lacks_it`
+`verified-by: bravebot_agent::confine::tests::the_profile_line_names_request_path_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::turn::a_turn_not_offered_request_path_never_names_it`
 
 <a id="PATHREQ-6"></a>

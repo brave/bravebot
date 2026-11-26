@@ -328,7 +328,7 @@ use of and that only Brave's premium service revokes, which is the Held tier.
 `verified-by: bravebot_skus::store::the_file_is_not_readable_by_anyone_else`
 `verified-by: bravebot_skus::store::the_windows_list_grants_one_account_and_inherits_nothing`
 `verified-by: bravebot_sandbox::base::the_run_base_reads_the_session_records_and_no_other_file_in_the_state_directory`
-`verified-by: bravebot_agent::confine::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
+`verified-by: bravebot_agent::confine::tests::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
 `verified-by: bravebot_config::lib::a_premium_key_is_a_credential_this_configuration_holds`
 `verified-by: bravebot_cli::running::doctor_accounts_for_the_premium_key_at_the_tier_its_walk_stopped_at`
 `verified-by: bravebot_agent::key_entry::a_brave_key_is_stored_private_replacing_the_one_there`

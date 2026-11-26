@@ -1761,8 +1761,8 @@ programs left and writes entries onto files that are not the session's. A `TEMP`
 itself assigns is the line's, as `TMPDIR` is. With no directory of its own the session keeps the
 account's temporary directory.
 
-`verified-by: bravebot_agent::confine::a_windows_stage_is_given_a_temporary_directory_of_the_sessions_and_not_the_accounts`
-`verified-by: bravebot_agent::confine::a_stage_is_told_the_sessions_temporary_directory_and_the_lines_own_wins`
+`verified-by: bravebot_agent::confine::tests::a_windows_stage_is_given_a_temporary_directory_of_the_sessions_and_not_the_accounts`
+`verified-by: bravebot_agent::confine::tests::a_stage_is_told_the_sessions_temporary_directory_and_the_lines_own_wins`
 `verified-by: bravebot_agent::confine::a_stage_is_given_the_sessions_temp_and_cannot_write_the_accounts`
 `verified-by: bravebot_agent::exec::a_stage_is_told_where_the_sessions_own_directory_is`
 `verified-by: bravebot_agent::exec::a_background_stage_is_told_where_the_sessions_own_directory_is`

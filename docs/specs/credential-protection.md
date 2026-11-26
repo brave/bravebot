@@ -711,8 +711,8 @@ is owed there is the test, which scans the trail for every secret the process ho
 `verified-by: bravebot_config::scrub::a_name_from_the_settings_file_is_not_one_of_this_agents_own`
 `verified-by: bravebot_config::scrub::the_variables_a_provider_block_names_are_withheld`
 `verified-by: bravebot_agent::exec::a_gateways_environment_token_does_not_reach_a_program_it_runs`
-`verified-by: bravebot_agent::confine::a_windows_session_on_the_home_directory_is_refused_for_the_state_directory`
-`verified-by: bravebot_agent::confine::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
+`verified-by: bravebot_agent::confine::tests::a_windows_session_on_the_home_directory_is_refused_for_the_state_directory`
+`verified-by: bravebot_agent::confine::tests::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
 `verified-by: bravebot_sandbox::base::the_run_base_reads_the_session_records_and_no_other_file_in_the_state_directory`
 `verified-by: bravebot_cli::brave::a_typed_key_is_stored_private_and_never_said`
 `verified-by: bravebot_cli::running::auth_status_brave_reports_a_stored_key_without_the_key`

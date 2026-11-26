@@ -374,7 +374,7 @@ everything and asks nothing.
 `verified-by: bravebot_agent::exec::a_substitution_that_cannot_open_a_file_keeps_the_error_and_its_path`
 `verified-by: bravebot_agent::tools::a_failure_inside_a_substitution_is_respelled_under_the_directory_as_typed`
 `verified-by: bravebot_agent::tools::a_redirection_a_hook_made_inside_a_substitution_is_not_respelled_again`
-`verified-by: bravebot_agent::confine::neither_a_policy_row_nor_a_refusal_depends_on_the_directory_a_stage_starts_in`
+`verified-by: bravebot_agent::confine::tests::neither_a_policy_row_nor_a_refusal_depends_on_the_directory_a_stage_starts_in`
 `verified-by: bravebot_agent::cmdline::a_range_counts_and_keeps_the_padding_it_was_written_with`
 `verified-by: bravebot_agent::cmdline::a_leading_tilde_becomes_the_home_directory`
 `verified-by: bravebot_agent::cmdline::a_tilde_with_no_home_to_stand_for_is_refused`
@@ -450,7 +450,7 @@ step ([SANDBOX-19](../sandboxing.md#SANDBOX-19)) names none and says to write th
 `verified-by: bravebot_agent::workspace::a_redirection_climbing_above_the_top_of_the_file_system_is_offered_nothing`
 `verified-by: bravebot_agent::workspace::a_redirection_onto_a_name_that_is_not_utf8_is_offered_nothing`
 `verified-by: bravebot_agent::workspace::a_refused_redirection_is_let_through_once_the_directory_it_names_is_opened`
-`verified-by: bravebot_agent::confine::a_failed_shell_step_says_a_redirection_inside_it_is_opened_by_the_sandboxed_shell`
+`verified-by: bravebot_agent::confine::tests::a_failed_shell_step_says_a_redirection_inside_it_is_opened_by_the_sandboxed_shell`
 `verified-by: bravebot_agent::workspace::a_redirection_outside_is_offered_the_directory_the_file_tools_offer`
 `verified-by: bravebot_agent::workspace::a_redirection_into_a_directory_holding_the_root_says_it_ends_checkouts`
 `verified-by: bravebot_agent::workspace::a_redirection_into_a_credential_location_is_offered_no_directory`
@@ -1328,7 +1328,7 @@ it reaches one.)
 `verified-by: bravebot_agent::tools::a_redirection_a_hook_made_inside_a_substitution_is_not_respelled_again`
 `verified-by: bravebot_agent::turn::an_unopened_file_inside_a_substitution_is_named_under_the_directory_as_typed`
 `verified-by: bravebot_agent::turn::a_redirection_refused_inside_a_substitution_is_named_once_under_the_directory_as_typed`
-`verified-by: bravebot_agent::confine::neither_a_policy_row_nor_a_refusal_depends_on_the_directory_a_stage_starts_in`
+`verified-by: bravebot_agent::confine::tests::neither_a_policy_row_nor_a_refusal_depends_on_the_directory_a_stage_starts_in`
 `verified-by: bravebot_agent::exec::a_variable_that_is_not_unicode_is_refused_and_one_holding_the_replacement_character_is_not`
 `verified-by: bravebot_agent::exec::a_substitution_printing_bytes_that_are_not_text_reaches_the_program_byte_for_byte`
 `verified-by: bravebot_agent::exec::the_trailing_line_ends_of_a_substitution_are_cut_from_its_bytes_and_nothing_else`

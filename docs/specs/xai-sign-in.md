@@ -393,7 +393,7 @@ signed in" over a file that is there.
 `verified-by: bravebot_skus::xai::account::the_file_and_the_claim_are_this_sign_ins_own`
 `verified-by: bravebot_agent::home::a_directory_named_in_the_environment_is_the_state_directory_in_every_crate`
 `verified-by: bravebot_agent::home::a_value_that_names_no_directory_leaves_no_state_directory_to_guess`
-`verified-by: bravebot_agent::confine::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
+`verified-by: bravebot_agent::confine::tests::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
 `verified-by: bravebot_sandbox::base::the_run_base_reads_the_session_records_and_no_other_file_in_the_state_directory`
 
 <a id="XAI-6"></a>

@@ -401,8 +401,8 @@ without naming a tool to fetch them with.
 `verified-by: bravebot_agent::git::the_not_compared_heading_names_run_only_where_the_turn_holds_it`
 `verified-by: bravebot_agent::replace::the_empty_pattern_refusal_names_write_file_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::cmdline::the_refusal_of_an_editor_names_edit_file_only_where_the_list_holds_it`
-`verified-by: bravebot_agent::confine::no_sentence_names_request_path_where_the_list_lacks_it`
-`verified-by: bravebot_agent::confine::the_profile_line_names_request_path_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::confine::tests::no_sentence_names_request_path_where_the_list_lacks_it`
+`verified-by: bravebot_agent::confine::tests::the_profile_line_names_request_path_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::turn::a_quarantined_run_result_names_no_tool_the_definition_was_not_offered`
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_names_no_tool_the_definition_was_not_offered`
 `verified-by: bravebot_agent::turn::the_notes_of_a_kept_job_name_job_output_only_where_the_turn_is_offered_it`
