@@ -15,8 +15,15 @@ Type `!` on an empty prompt and the line becomes a command for your own shell.
 ```
 
 The line goes to `$SHELL -c`, so globs, `$VAR`, redirection, `&&` and `$(...)` all work exactly as
-they do in your terminal. `$SHELL` falls back to a POSIX shell when it is unset. An empty line is not
-run.
+they do in your terminal. `$SHELL` falls back to `/bin/sh` when it is unset or blank. An empty line is
+not run.
+
+A `$SHELL` that is a path, such as `/opt/homebrew/bin/fish`, is started as it is. A `$SHELL` that is a
+bare name, such as `bash`, is looked up on your `PATH` first, leaving out any directory a sandboxed
+command may write, so a `bash` a command wrote into such a directory is never the shell that runs. If
+no `bash` is found elsewhere on your `PATH`, the line is not run and you are told that `'bash' could
+not be started`. The names inside the line are looked up by your shell on your `PATH`, as in your
+terminal.
 
 The `!` is a mode rather than a character: the prompt changes colour, the hint names the shell the line
 is about to go to, Backspace or Escape leaves it, and the mode lasts one command. The hint line
