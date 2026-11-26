@@ -1735,6 +1735,10 @@ enum Order {
     /// Several of the above at once, as `(held, after, asked)`. This is how a test says that one
     /// delegate is back at the planner's third request and another only at its fourth.
     Staged(&'static [(&'static str, &'static str, usize)]),
+    /// As [`Order::Staged`], but the flag says every stage was met and not the first of them.
+    /// This is for a test whose assertion is about the last stage, where an earlier one being
+    /// met says nothing about it.
+    StagedAll(&'static [(&'static str, &'static str, usize)]),
 }
 
 /// As [`serve_by_marker`], answering in `order`. The flag says whether the order was kept, since
@@ -1753,7 +1757,7 @@ fn serve_by_marker_in(
     let (meet, kept): (&'static [&'static str], bool) = match order {
         Order::Any => (&[], true),
         Order::Meeting(meet) => (meet, meet.is_empty()),
-        Order::After { .. } | Order::Staged(_) => (&[], false),
+        Order::After { .. } | Order::Staged(_) | Order::StagedAll(_) => (&[], false),
     };
     let met = Arc::new(AtomicBool::new(kept));
     let arrived: Arc<(Mutex<BTreeSet<&'static str>>, Condvar)> =
@@ -1816,11 +1820,11 @@ fn serve_by_marker_in(
                 let hold_for_order = |marker: &str| {
                     let stages: Vec<(&str, &str, usize)> = match order {
                         Order::After { held, after, asked } => vec![(held, after, asked)],
-                        Order::Staged(stages) => stages.to_vec(),
+                        Order::Staged(stages) | Order::StagedAll(stages) => stages.to_vec(),
                         _ => Vec::new(),
                     };
-                    for (_, after, times) in stages.into_iter().filter(|(held, ..)| *held == marker)
-                    {
+                    let every_stage = matches!(order, Order::StagedAll(_));
+                    for &(_, after, times) in stages.iter().filter(|(held, ..)| *held == marker) {
                         let (counts, told) = &*asked;
                         let bound = std::time::Duration::from_secs(10);
                         let began = std::time::Instant::now();
@@ -1833,7 +1837,17 @@ fn serve_by_marker_in(
                                 .expect("not poisoned");
                             counts = woken;
                         }
-                        if counts.get(after).copied().unwrap_or(0) >= times {
+                        // With `StagedAll` the flag says the whole order was kept, so it is set
+                        // only once every stage's wait has been satisfied.
+                        let reached = |&(_, after, times): &(&str, &str, usize)| {
+                            counts.get(after).copied().unwrap_or(0) >= times
+                        };
+                        let kept = if every_stage {
+                            stages.iter().all(reached)
+                        } else {
+                            reached(&("", after, times))
+                        };
+                        if kept {
                             met.store(true, Ordering::SeqCst);
                         }
                     }
@@ -1848,11 +1862,18 @@ fn serve_by_marker_in(
                     // arguments it called with, so its own requests hold every task it handed out:
                     // the rule that answers is what says whose request this is, never the text
                     // alone.
-                    let answering = {
+                    let (answering, named) = {
                         let mut held = waiting.lock().expect("not poisoned");
-                        held.iter_mut()
+                        let answering = held
+                            .iter_mut()
                             .find(|(marker, replies)| body.contains(marker) && !replies.is_empty())
-                            .map(|(marker, replies)| (*marker, replies.pop_front()))
+                            .map(|(marker, replies)| (*marker, replies.pop_front()));
+                        // The run a rule names even when that rule has no reply left.
+                        let named = held
+                            .iter()
+                            .map(|(marker, _)| *marker)
+                            .find(|marker| body.contains(marker));
+                        (answering, named)
                     };
                     // A request no rule has a reply left for is told so, as `out_of_script` says,
                     // so a turn that makes one more request than its test scripted fails at the
@@ -1861,12 +1882,6 @@ fn serve_by_marker_in(
                         // A run whose rule has nothing left to say is still the run that rule
                         // names, and an order that holds it holds its refusal too. This is how a
                         // test says a delegate fails only once the planner has asked again.
-                        let named = waiting
-                            .lock()
-                            .expect("not poisoned")
-                            .iter()
-                            .map(|(marker, _)| *marker)
-                            .find(|marker| body.contains(marker));
                         if let Some(marker) = named {
                             hold_for_order(marker);
                         }
@@ -71721,7 +71736,7 @@ fn a_delegate_that_failed_gives_its_place_back() {
             ("NOBODY-ANSWERS-THIS", vec![]),
             ("ANSWERED-LATER", vec![reply_with("second")]),
         ],
-        Order::Staged(&[
+        Order::StagedAll(&[
             ("NOBODY-ANSWERS-THIS", "REUSE-THE-PLACE-AFTER-A-FAILURE", 2),
             ("ANSWERED-LATER", "REUSE-THE-PLACE-AFTER-A-FAILURE", 4),
         ]),
