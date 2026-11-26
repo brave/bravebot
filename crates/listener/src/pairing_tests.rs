@@ -13,7 +13,7 @@ use crate::pairing;
 use crate::phone::{Connection, Phone};
 use crate::registry::{Device, Registry};
 use crate::server::{Listener, Prepared, Service};
-use bravebot_core::device::{Grant, Standing};
+use bravebot_core::device::{Grant, Operation, Standing};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -23,7 +23,9 @@ struct Echo;
 
 impl Service for Echo {
     fn prepare<'a>(&'a self, line: &'a str) -> Prepared<'a> {
-        Box::new(move |device| vec![format!("{}:{line}", device.name)])
+        Prepared::new(Operation::Read, move |device| {
+            vec![format!("{}:{line}", device.name)]
+        })
     }
 }
 

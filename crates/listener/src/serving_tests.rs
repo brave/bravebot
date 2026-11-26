@@ -11,15 +11,16 @@ use crate::limits::Limits;
 use crate::phone::Phone;
 use crate::registry::{Device, Registry};
 use crate::server::{Listener, Prepared, Service};
-use bravebot_core::device::Grant;
+use bravebot_core::device::{Grant, Operation};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Records each line and the device it came from, and answers with the line reversed in a fixed
-/// frame, so a test sees both what the service was given and what the phone was sent.
+/// Records each line and the device it came from, and answers with the line in a fixed frame, so a
+/// test sees both what the service was given and what the phone was sent. A line that starts with
+/// `control` asks to control, and any other asks to read.
 #[derive(Default)]
 struct Recorder {
     heard: Mutex<Vec<(String, String)>>,
@@ -27,7 +28,12 @@ struct Recorder {
 
 impl Service for Recorder {
     fn prepare<'a>(&'a self, line: &'a str) -> Prepared<'a> {
-        Box::new(move |device| {
+        let operation = if line.starts_with("control") {
+            Operation::Control
+        } else {
+            Operation::Read
+        };
+        Prepared::new(operation, move |device| {
             self.heard
                 .lock()
                 .unwrap()
@@ -151,6 +157,47 @@ fn a_paired_phone_is_answered_and_the_service_is_given_its_record() {
         [
             ("kitchen-phone".to_string(), "one".to_string()),
             ("kitchen-phone".to_string(), "two".to_string())
+        ]
+    );
+}
+
+/// The gate is asked about the operation the service says a line asks for. A `read` device that asks
+/// to control has its connection ended with nothing sent, and its line is not answered, while it was
+/// answered when it asked to read. A `control` device asking the same is answered. Asking the gate
+/// about every line as a read, whatever it asks, lets the `read` device control.
+#[test]
+fn a_line_that_asks_to_control_is_answered_only_for_a_device_whose_grant_is_control() {
+    let host = host();
+    let reader = Phone::new().unwrap();
+    pair(&host, &reader, "reader", Grant::Read);
+    let controller = Phone::new().unwrap();
+    pair(&host, &controller, "controller", Grant::Control);
+
+    let mut reading = reader
+        .connect(host.listener.address(), host.listener.key_hash())
+        .unwrap();
+    reading.send("look").unwrap();
+    assert_eq!(reading.receive().unwrap().as_deref(), Some("heard:look"));
+    assert_eq!(reading.receive().unwrap().as_deref(), Some("second"));
+    reading.send("control: send a turn").unwrap();
+    assert!(
+        reading.ended(),
+        "a read device was answered when it asked to control"
+    );
+
+    let mut controlling = controller
+        .connect(host.listener.address(), host.listener.key_hash())
+        .unwrap();
+    controlling.send("control: send a turn").unwrap();
+    assert_eq!(
+        controlling.receive().unwrap().as_deref(),
+        Some("heard:control: send a turn")
+    );
+    assert_eq!(
+        host.service.heard(),
+        [
+            ("reader".to_string(), "look".to_string()),
+            ("controller".to_string(), "control: send a turn".to_string())
         ]
     );
 }
@@ -470,7 +517,7 @@ fn a_device_that_stops_reading_has_its_connection_ended_when_a_write_makes_no_pr
     struct Big;
     impl Service for Big {
         fn prepare<'a>(&'a self, _line: &'a str) -> Prepared<'a> {
-            Box::new(|_| vec!["x".repeat(48 << 20)])
+            Prepared::new(Operation::Read, |_| vec!["x".repeat(48 << 20)])
         }
     }
     let identity = Identity::generate("bravebot-host").unwrap();

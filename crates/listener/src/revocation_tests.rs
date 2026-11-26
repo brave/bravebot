@@ -12,7 +12,7 @@ use crate::limits::Limits;
 use crate::phone::Phone;
 use crate::registry::{Device, NoSuchDevice, Registry};
 use crate::server::{Listener, Prepared, Service};
-use bravebot_core::device::{Grant, Standing};
+use bravebot_core::device::{Grant, Operation, Standing};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -28,7 +28,7 @@ struct Held {
 
 impl Service for Held {
     fn prepare<'a>(&'a self, line: &'a str) -> Prepared<'a> {
-        Box::new(move |_device| {
+        Prepared::new(Operation::Read, move |_device| {
             self.heard.lock().unwrap().push(line.to_string());
             if line == "hold" {
                 self.entered.lock().unwrap().send(()).unwrap();
@@ -272,7 +272,7 @@ impl Service for Slow {
                 .unwrap();
         }
         let decided = Decided(self.decided.lock().unwrap().clone());
-        Box::new(move |_| {
+        Prepared::new(Operation::Read, move |_| {
             let _decided = &decided;
             self.answered.lock().unwrap().push(line.to_string());
             vec![format!("heard:{line}")]

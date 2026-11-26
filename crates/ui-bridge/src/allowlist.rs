@@ -24,11 +24,16 @@
 
 use crate::protocol::{ErrorCode, Failure, Request};
 use crate::turn::Kind;
+pub use bravebot_core::device::Operation as Access;
 
-/// A method the host offers, and the parameters a request for it may carry.
+/// A method the host offers, the parameters a request for it may carry, and whether it reads a
+/// session or changes one.
 pub struct Operation {
     pub method: &'static str,
     pub fields: &'static [&'static str],
+    /// What a device's grant has to cover for the device to ask it. A `read` grant covers only
+    /// [`Access::Read`].
+    pub access: Access,
 }
 
 /// The methods a client of the host may call.
@@ -36,37 +41,45 @@ pub const OFFERED: &[Operation] = &[
     Operation {
         method: "agent.info",
         fields: &["session"],
+        access: Access::Read,
     },
     Operation {
         method: "instance.info",
         fields: &[],
+        access: Access::Read,
     },
     // The release notes compiled into this program. Reads nothing and needs no session.
     Operation {
         method: "changelog.read",
         fields: &[],
+        access: Access::Read,
     },
     Operation {
         method: "session.new",
         fields: &["directory"],
+        access: Access::Control,
     },
     Operation {
         method: "session.view.start",
         fields: &["session", "version"],
+        access: Access::Read,
     },
     // A new snapshot of a session's view, for a client that missed an update.
     Operation {
         method: "session.view.resync",
         fields: &["session"],
+        access: Access::Read,
     },
     Operation {
         method: "session.close",
         fields: &["session"],
+        access: Access::Control,
     },
     // Joins a session another connection opened. The host answers it itself.
     Operation {
         method: "session.attach",
         fields: &["session"],
+        access: Access::Read,
     },
     // The one answer that widens what a session may read that a client of the host gives, and only
     // a client the person gave `trust` on the host's command line ([`Answer::Trust`]). Such a client
@@ -76,34 +89,42 @@ pub const OFFERED: &[Operation] = &[
     Operation {
         method: "trust.reply",
         fields: &["session", "trusted"],
+        access: Access::Control,
     },
     Operation {
         method: "turn.send",
         fields: &["session", "prompt", "messageId"],
+        access: Access::Control,
     },
     Operation {
         method: "turn.lookup",
         fields: &["session", "messageId"],
+        access: Access::Read,
     },
     Operation {
         method: "turn.cancel",
         fields: &["session", "target"],
+        access: Access::Control,
     },
     Operation {
         method: "confirm.reply",
         fields: &["session", "request", "decision"],
+        access: Access::Control,
     },
     Operation {
         method: "run.reply",
         fields: &["session", "request", "decision"],
+        access: Access::Control,
     },
     Operation {
         method: "fetch.reply",
         fields: &["session", "request", "decision"],
+        access: Access::Control,
     },
     Operation {
         method: "ask.reply",
         fields: &["session", "request", "answers"],
+        access: Access::Control,
     },
 ];
 
@@ -384,6 +405,15 @@ pub const DENIED: &[&str] = &[
     "folder.reply",
 ];
 
+/// What a device's grant has to cover for it to ask `method`. A method the host does not offer is
+/// [`Access::Control`], so a method nobody has classified is never taken for a read.
+pub fn access_of(method: &str) -> Access {
+    OFFERED
+        .iter()
+        .find(|operation| operation.method == method)
+        .map_or(Access::Control, |operation| operation.access)
+}
+
 fn refused(message: String) -> Failure {
     Failure::new(ErrorCode::NotAllowed, message)
 }
@@ -569,6 +599,52 @@ mod tests {
                 .err()
                 .expect("refused");
             assert_eq!(failure.code, ErrorCode::NotAllowed, "{method}");
+        }
+    }
+
+    /// Each method the host offers reads or controls as written here. Opening, closing, sending,
+    /// cancelling and every reply change a session, so a `read` device may ask none of them
+    /// (decision 16 of `docs/design/mobile/decisions-and-tradeoffs.md`). A method added to the offer
+    /// fails this until its access is written here, and a control moved to read fails it too.
+    #[test]
+    fn each_offered_method_reads_or_controls_as_written_here() {
+        let written = [
+            ("agent.info", Access::Read),
+            ("instance.info", Access::Read),
+            ("changelog.read", Access::Read),
+            ("session.new", Access::Control),
+            ("session.view.start", Access::Read),
+            ("session.view.resync", Access::Read),
+            ("session.close", Access::Control),
+            ("session.attach", Access::Read),
+            ("trust.reply", Access::Control),
+            ("turn.send", Access::Control),
+            ("turn.lookup", Access::Read),
+            ("turn.cancel", Access::Control),
+            ("confirm.reply", Access::Control),
+            ("run.reply", Access::Control),
+            ("fetch.reply", Access::Control),
+            ("ask.reply", Access::Control),
+        ];
+        let offered: Vec<_> = OFFERED
+            .iter()
+            .map(|operation| (operation.method, operation.access))
+            .collect();
+        assert_eq!(offered, written);
+        for operation in OFFERED {
+            assert_eq!(access_of(operation.method), operation.access);
+        }
+    }
+
+    /// A method the host does not offer needs a `control` grant, whether the bridge has it or not.
+    #[test]
+    fn a_method_the_host_does_not_offer_needs_control() {
+        for method in DENIED
+            .iter()
+            .copied()
+            .chain(["no.such.method", "", "pair.begin"])
+        {
+            assert_eq!(access_of(method), Access::Control, "{method}");
         }
     }
 

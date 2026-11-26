@@ -34,17 +34,34 @@ const ACCEPT_POLL: Duration = Duration::from_millis(10);
 /// whether the listener was told to stop and whether its time is up.
 const STOP_POLL: Duration = Duration::from_millis(250);
 
-/// What answers one line, once the registry has said the device may ask it: the lines to send back
-/// for the device the line came from.
-pub type Prepared<'a> = Box<dyn FnOnce(&Device) -> Vec<String> + 'a>;
+/// What answers a line for the device it came from: the lines to send back.
+pub type Answer<'a> = Box<dyn FnOnce(&Device) -> Vec<String> + 'a>;
+
+/// What a line asks for, and what answers it once the registry has said the device may ask it: the
+/// lines to send back for the device the line came from.
+pub struct Prepared<'a> {
+    /// Whether the line reads a session or changes one, which says the grant the device needs.
+    pub operation: Operation,
+    pub answer: Answer<'a>,
+}
+
+impl<'a> Prepared<'a> {
+    pub fn new(operation: Operation, answer: impl FnOnce(&Device) -> Vec<String> + 'a) -> Self {
+        Self {
+            operation,
+            answer: Box::new(answer),
+        }
+    }
+}
 
 /// What answers the lines of a device the registry allowed.
 pub trait Service: Send + Sync {
-    /// Read `line`, taking as long as that takes, with no lock held. This runs for a line of a
-    /// device before the registry has said whether the device may ask it, and the device may have
-    /// been revoked by then, so it changes nothing and decides nothing. What it returns is run only
-    /// if the registry then finds the device may ask the line, and runs under the registry's lock,
-    /// which the host's own input waits on, so it only builds the lines to send.
+    /// Read `line`, taking as long as that takes, with no lock held, and say whether it asks to read
+    /// or to control. This runs for a line of a device before the registry has said whether the
+    /// device may ask it, and the device may have been revoked by then, so it changes nothing and
+    /// decides nothing about the device. What it returns is run only if the registry then finds the
+    /// device's grant covers the operation, and runs under the registry's lock, which the host's own
+    /// input waits on, so it only builds the lines to send.
     fn prepare<'a>(&'a self, line: &'a str) -> Prepared<'a>;
 }
 
@@ -481,7 +498,9 @@ fn serve_lines(shared: &Shared, key: &KeyHash, stream: StreamOwned<ServerConnect
             continue;
         }
         let prepared = shared.service.prepare(&line);
-        let answered = shared.registry.answer(key, Operation::Read, prepared);
+        let answered = shared
+            .registry
+            .answer(key, prepared.operation, prepared.answer);
         let Ok(lines) = answered else {
             return;
         };
