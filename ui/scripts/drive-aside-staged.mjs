@@ -12,14 +12,12 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_NAME, SHOTS_DIR } from './drive-support.mjs'
+import { COMPOSER_NAME, heldTurns, SHOTS_DIR, untilIn } from './drive-support.mjs'
 
 const theme = process.argv.includes('--theme') ? process.argv[process.argv.indexOf('--theme') + 1] : 'light'
 const BTW = 'The first is orange and the second is blue.'
 
-let waiting = []
-const hold = () => new Promise((resolve) => waiting.push(resolve))
-const release = () => waiting.splice(0).forEach((resolve) => resolve())
+const { hold, release, waiting } = heldTurns()
 
 const { service, rounds: requests } = await startModelService(async ({ messages }) => {
   const last = JSON.stringify(messages.at(-1) ?? '')
@@ -57,10 +55,7 @@ try {
   const composer = page.getByRole('textbox', { name: COMPOSER_NAME })
   const stop = page.locator('.composer .stop')
   const transcript = () => page.locator('.entries').innerText()
-  const until = async (check, what) => {
-    for (let tries = 0; tries < 200; tries++) { if (await check()) return; await page.waitForTimeout(50) }
-    assert.fail(what)
-  }
+  const until = untilIn(page)
   const cdp = await page.context().newCDPSession(page)
   const drag = async (files) => {
     const box = await page.locator('.composer textarea').first().boundingBox()

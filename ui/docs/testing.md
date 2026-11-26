@@ -304,6 +304,11 @@ It also exports the steps that open the first session: `openFirstSession(app, pa
 run when the profile has no session, clicks the first one and answers its trust question, and
 `sessionsOrSkip` and `approveTrustIfAsked` are its two halves for a driver that opens sessions another way.
 
+The drivers that hold a model reply while they act (`drive-aside`, `drive-aside-staged` and
+`drive-manifest`) take `heldTurns()` from it, which returns `{ hold, release, waiting }`, and poll with
+`untilIn(page, tries)`, which returns `until(check, what, tries)`: a check every 50 ms, failing with
+`what` after `tries` checks (200 unless the driver passes its own).
+
 Of those, **`drive-run`, `drive-ask` and `drive-markdown` send live model turns** against the
 real profile (and so does `drive-turn`), which spends credits from whatever backend is configured.
 `drive-bot-turn` and `drive-bot-memory` send live model turns as well, from a scratch profile. `drive-columns`, `drive-panels`, `drive-tree` and
