@@ -659,7 +659,7 @@ impl Session {
     /// every tick, the way it is for any other prompt.
     pub(super) fn dispatch_tick_of(&mut self, number: usize) -> Option<String> {
         let running = self.looping.get_mut(number)?;
-        let (prompt, pasted, attached) = running.dispatching();
+        let (prompt, crate::loops::Carried { pasted, attached }) = running.dispatching();
         // Kept from the loop and not from the box, which this tick may come long after the line was
         // typed on. A tick reads the names of the line the person typed (NAME-12).
         let names = running.names().clone();

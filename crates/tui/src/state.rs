@@ -3595,7 +3595,7 @@ impl Session {
                 &pasted,
                 "a picture goes with the first tick of a loop, and this is a later one",
             );
-            running = running.carrying(pasted, attached, settled);
+            running = running.carrying(crate::loops::Carried { pasted, attached }, settled);
         }
         // Numbered before anything is said about it, so what is said is the number it has.
         let number = self.looping.start(running);
