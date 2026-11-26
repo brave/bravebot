@@ -12,7 +12,7 @@ import { conversationPreferences, setConversation } from './experience'
 import { Unconfigurable, METHOD, call, callBot, callSummon } from './rpc'
 import { RequestFailed } from './rewind'
 import type { ScheduleAnswer } from '../shared/schedule'
-import type { LoopAnswer, LoopKind } from '../shared/loop'
+import { LOOPS_CHANGED, type LoopAnswer, type LoopKind } from '../shared/loop'
 import type { AsideStarted } from '../shared/aside'
 import { manifestTask } from '../shared/manifest'
 import { planRun as startPlanRun } from './plan-run'
@@ -277,7 +277,8 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     }
     try {
       const answer = await call<LoopAnswer>(`${kind}.command`, { session: handle, argument, ...markersOf(staged) })
-      updateSession(handle, (old) => old ? { ...old, entries: t.loopAnswered(old.entries, answer) } : old)
+      updateSession(handle, (old) => old ? { ...old, entries: t.loopAnswered(old.entries, answer, queuedAlready) } : old)
+      window.dispatchEvent(new CustomEvent(LOOPS_CHANGED, { detail: handle }))
     } catch (error) {
       if (error instanceof RequestFailed && error.code === 'turn_in_flight' && !queuedAlready) {
         updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged, loop: argument, loopKind: kind }] } : old)

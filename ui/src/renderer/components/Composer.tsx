@@ -46,7 +46,7 @@ export const queuedRow = (message: Queued): QueuedRow => {
   return {
     text: message.prompt,
     plan: message.manifest !== undefined,
-    command: message.manifest !== undefined || message.schedule !== undefined || message.aside !== undefined,
+    command: message.manifest !== undefined || message.schedule !== undefined || message.aside !== undefined || message.loop !== undefined,
     ...(dropped.length > 0 ? { dropped } : {}),
   }
 }

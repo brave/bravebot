@@ -32,8 +32,10 @@ export function apply(
       // A loop's tick starts a turn of its own, whose events follow this row (LOOP-13).
       case 'loop.tick':
         return { ...old, entries: [...old.entries, t.loopTicked(message.data)] }
-      case 'loop.ended':
-        return { ...old, entries: [...old.entries, t.loopEnded(message.data)] }
+      case 'loop.ended': {
+        const ended = t.loopEnded(message.data)
+        return ended ? { ...old, entries: [...old.entries, ended] } : old
+      }
       case 'loop.armed':
         return { ...old, entries: [...old.entries, t.loopArmed(message.data)] }
       // An answer to `/btw` or `/recap`: a row to read and an aside of the session, never a prompt

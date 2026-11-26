@@ -60,11 +60,14 @@ try {
   // ---- the session status lists each loop ----------------------------------------------------------
   // Chat › Session Status…, the desktop's /status, by the route a menu click takes.
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:command', 'session.status', null))
-  const status = page.getByText(/Loop 2\s+tidy/)
+  const status = page.locator('.notice-grid dd', { hasText: 'tidy the notes' })
   await until(async () => (await status.count()) > 0, 'the status lists the loops')
-  const body = await page.locator('body').innerText()
-  assert.match(body, /Loop 1\s+check the deploy · every 5m/)
-  assert.match(body, /Loop 2\s+tidy the notes · every 2m/)
+  const body = await page.locator('.notice-grid').innerText()
+  assert.match(body, /Loop 1\s+every 5m · next in \d+m \d+s\s+·\s+check the deploy/)
+  assert.match(body, /Loop 2\s+every 2m · next in \d+m \d+s\s+·\s+tidy the notes/)
+  // The label and the value sit side by side, with the line in the value's column.
+  const [label, value] = await Promise.all(['dt', 'dd'].map((tag) => page.locator(`.notice-grid ${tag}`, { hasText: tag === 'dt' ? /^Loop 1$/ : 'check the deploy' }).boundingBox()))
+  assert.ok(value.x > label.x + label.width && Math.abs(value.y - label.y) < 4, 'the loop row is two columns')
   await page.screenshot({ path: join(output, `loop-status-report-${theme}.png`) })
   await page.getByRole('button', { name: 'Done', exact: true }).click()
   await status.waitFor({ state: 'hidden' })

@@ -250,6 +250,89 @@ fn stop_takes_a_number_where_several_are_live() {
     assert_eq!(none["refused"], true);
 }
 
+/// LOOP-13, LOOP-15. Rejects desktop answers that start in lower case, name the terminal's
+/// ctrl-c, or refuse a bare stop without naming the stops that would work.
+#[test]
+fn the_answers_are_worded_for_the_window() {
+    let (mut bridge, handle, _events, _bodies, _held) = opened();
+    let first = typed(&mut bridge, &handle, "5m one");
+    assert_eq!(
+        first["lines"],
+        json!([
+            "Loop 1 repeats every 5m. /loop stop 1 ends it, and so does Stop or closing the chat."
+        ])
+    );
+    typed(&mut bridge, &handle, "5m two");
+    let refused = typed(&mut bridge, &handle, "stop");
+    assert_eq!(
+        refused["lines"],
+        json!([
+            "Two loops are running. Type /loop stop 1 or /loop stop 2 to end one, or /loop to list them."
+        ])
+    );
+    typed(&mut bridge, &handle, "5m three");
+    let three = typed(&mut bridge, &handle, "stop");
+    assert!(
+        three["lines"][0]
+            .as_str()
+            .unwrap()
+            .contains("Type /loop stop 1, /loop stop 2 or /loop stop 3 to end one"),
+        "{three}"
+    );
+    let report = typed(&mut bridge, &handle, "");
+    assert!(
+        report["lines"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("Loop 1: every 5m · "),
+        "{report}"
+    );
+    assert!(report["lines"][0].as_str().unwrap().ends_with(" · one"));
+    assert_eq!(typed(&mut bridge, &handle, "stop 2")["lines"], json!(["Loop 2 stopped."]));
+    let later = call(
+        &mut bridge,
+        "after.command",
+        json!({"session": handle, "argument": "20m check"}),
+    )
+    .unwrap();
+    assert_eq!(
+        later["lines"],
+        json!([
+            "Sending once in 20m as loop 4. /loop stop 4 cancels it, and so does Stop or closing the chat."
+        ])
+    );
+    for answer in [&first, &refused, &three, &report, &later] {
+        for line in answer["lines"].as_array().unwrap() {
+            assert!(!line.as_str().unwrap().contains("ctrl-c"), "{line}");
+        }
+    }
+}
+
+/// LOOP-13. Rejects a loop's ending said before the reply of the turn that ended it, which would
+/// put the ending between the tick's row and its answer.
+#[test]
+fn an_ending_is_said_after_the_turn_it_ended() {
+    let (mut bridge, handle, events, _bodies, _held) = opened();
+    let answer = call(
+        &mut bridge,
+        "after.command",
+        json!({"session": handle, "argument": "5m check the deploy"}),
+    )
+    .unwrap();
+    let typed_at = Instant::now();
+    assert_eq!(answer["number"], 1);
+    bridge.poll_loops_at(typed_at + Duration::from_secs(300));
+    settle(&mut bridge, &handle);
+    let order: Vec<&str> = events
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|event| event.name)
+        .filter(|name| ["loop.tick", "turn.done", "loop.ended"].contains(name))
+        .collect();
+    assert_eq!(order, ["loop.tick", "turn.done", "loop.ended"]);
+}
+
 /// LOOP-15. Rejects `/loop stop the deploy` read as an ending: it is a loop over that line.
 #[test]
 fn stop_with_more_words_is_a_line_to_repeat() {
@@ -368,7 +451,7 @@ fn the_first_tick_goes_at_once() {
     .unwrap();
     assert_eq!(
         named(&events, "loop.tick"),
-        [json!({"number": 1, "tick": 1, "quiet": 0})]
+        [json!({"number": 1, "tick": 1, "quiet": 0, "once": false, "prompt": "check the deploy"})]
     );
     assert_eq!(named(&events, "turn.started").len(), 1);
     // The tick's turn is the one the session is running.
@@ -397,7 +480,10 @@ fn the_next_tick_is_an_interval_after_the_turn_ends() {
     bridge.poll_loops_at(ended + Duration::from_secs(300));
     let ticks = named(&events, "loop.tick");
     assert_eq!(ticks.len(), 2);
-    assert_eq!(ticks[1], json!({"number": 1, "tick": 2, "quiet": 0}));
+    assert_eq!(
+        ticks[1],
+        json!({"number": 1, "tick": 2, "quiet": 0, "once": false, "prompt": "check the deploy"})
+    );
     settle(&mut bridge, &handle);
     assert_eq!(named(&events, "turn.started").len(), 2);
 }
@@ -832,10 +918,9 @@ fn an_after_line_is_sent_once_after_its_delay_and_leaves_no_loop() {
     assert!(named(&events, "loop.tick").is_empty());
 
     bridge.poll_loops_at(typed + Duration::from_secs(300));
-    assert_eq!(
-        named(&events, "loop.tick"),
-        [json!({"number": 1, "tick": 1, "quiet": 0})]
-    );
+    let ticks = named(&events, "loop.tick");
+    assert_eq!(ticks.len(), 1);
+    assert_eq!((ticks[0]["number"].as_u64(), ticks[0]["once"].as_bool()), (Some(1), Some(true)));
     settle(&mut bridge, &handle);
     assert!(numbers(&mut bridge, &handle).is_empty());
     assert_eq!(

@@ -67,7 +67,7 @@ import { showToast } from './toasts'
 import { planRewind } from './rewind'
 import { call } from './rpc'
 import type { LoopList } from '../shared/loop'
-import { contextNotice, costNotice, statusNotice, type ContextReport, type CostReport, type RequestReport, type StatusReport } from './reports'
+import { contextNotice, costNotice, statusNotice, type ContextReport, type CostReport, type NoticeRow, type RequestReport, type StatusReport } from './reports'
 import { RequestDialog } from './components/RequestDialog'
 import { RewindConfirm } from './components/Rewind'
 import { PurgeProject } from './components/PurgeProject'
@@ -135,7 +135,7 @@ export function App(): React.JSX.Element {
     } catch { setBackendReady(false) }
   }, [live?.handle])
   useEffect(() => { void checkBackend() }, [checkBackend])
-  const [notice, setNotice] = useState<{ title: string; subtitle?: string; body: string } | null>(null)
+  const [notice, setNotice] = useState<{ title: string; subtitle?: string; body: string; rows?: NoticeRow[] } | null>(null)
   const [requestReport, setRequestReport] = useState<RequestReport | null>(null)
   const [aboutInfo, setAboutInfo] = useState<AboutInfo | null>(null)
   const [bugReportOpen, setBugReportOpen] = useState(false)
@@ -1432,7 +1432,7 @@ export function App(): React.JSX.Element {
         onReportBug={() => { setAboutInfo(null); setBugReportOpen(true) }} onClose={() => setAboutInfo(null)} />}
       {bugReportOpen && <BugReport onClose={() => setBugReportOpen(false)} />}
       {notice && (
-        <Notice title={notice.title} subtitle={notice.subtitle} body={notice.body} onClose={() => setNotice(null)} />
+        <Notice title={notice.title} subtitle={notice.subtitle} body={notice.body} rows={notice.rows} onClose={() => setNotice(null)} />
       )}
       {requestReport && <RequestDialog report={requestReport} onClose={() => setRequestReport(null)} />}
       {projectAction?.kind === 'purge' && (

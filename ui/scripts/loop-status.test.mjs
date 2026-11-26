@@ -72,12 +72,28 @@ test('a line /after holds is named only where no loop is live, and is not counte
   assert.equal(shared.loopStatusWords(list(later(1, 5), row(2, 300)), 0), 'Loop live · next in 5m')
 })
 
+test('a line /after holds says what it waits for, and several lead with their count', () => {
+  const later = (number, until) => row(number, until, { once: true, pace: 'once' })
+  // A moment still ahead is counted down, busy or not.
+  assert.equal(shared.loopStatusWords(list(later(1, 90)), 0, true), 'Sending in 1m 30s')
+  // Past its moment while a turn runs or lines are queued, it waits for that.
+  assert.equal(shared.loopStatusWords(list(later(1, 5)), 10, true), 'Sending after this turn')
+  assert.equal(shared.loopStatusWords(list(later(1, 5), later(2, 8)), 10, true), '2 lines · sending after this turn')
+  assert.equal(shared.loopStatusWords(list(later(1, 50), later(2, 80)), 10, false), '2 lines · sending in 40s')
+})
+
 test('the row is mounted on the composer and polls the list and redraws every second', () => {
   const component = readFileSync('src/renderer/components/LoopStatus.tsx', 'utf8')
   assert.match(component, /request<LoopList>\('loops\.list', \{ session \}\)/)
   assert.match(component, /setInterval\(\(\) => setNow\(Date\.now\(\)\), 1000\)/)
+  // Read again at once on every loop event and on every answer to /loop or /after.
+  assert.match(component, /message\.session === session && message\.event\.startsWith\('loop\.'\)\) void ask\(\)/)
+  assert.match(component, /window\.addEventListener\(LOOPS_CHANGED, answered\)/)
+  // Every figure in the row is tabular, the text's own font shorthand included.
+  assert.match(readFileSync('src/renderer/styles/composer.css', 'utf8'), /\.loop-status \.notice-text \{[^}]*font-variant-numeric: tabular-nums/)
   const transcript = readFileSync('src/renderer/components/Transcript.tsx', 'utf8')
-  assert.match(transcript, /<LoopStatus session=\{live\.handle\} \/>/)
+  assert.match(transcript, /<LoopStatus session=\{live\.handle\} busy=\{loopsBusy\} \/>/)
+  assert.match(transcript, /const loopsBusy = Boolean\(live\?\.running\) \|\| queued\.length > 0/)
   assert.match(transcript, /loops=\{loopRow\}/)
   assert.match(readFileSync('src/renderer/components/Composer.tsx', 'utf8'), /\{notice\}\s*\{loops\}/)
 })
@@ -91,10 +107,16 @@ const report = {
 test('the session status lists each loop under its number, and nothing about loops where there are none', () => {
   assert.doesNotMatch(statusNotice(report).body, /Loop/)
   assert.doesNotMatch(statusNotice(report, []).body, /Loop/)
-  const body = statusNotice(report, [row(1, 252, { prompt: 'check the deploy', when: 'next in 4m 12s' }), row(3, null, { prompt: 'tidy', pace: 'each turn sets the pace', when: 'when this turn ends' })]).body
-  assert.match(body, /\nLoop 1 +check the deploy · every 5m · next in 4m 12s\n/)
-  assert.match(body, /\nLoop 3 +tidy · each turn sets the pace · when this turn ends\n/)
+  const notice = statusNotice(report, [row(1, 252, { prompt: 'check the deploy', when: 'next in 4m 12s' }), row(3, null, { prompt: 'tidy', pace: 'each turn sets the pace', when: 'when this turn ends' }), row(4, 60, { prompt: 'say hi', once: true, pace: 'once', when: 'in 1m' })])
+  const body = notice.body
+  // The times first and the line last, so a long line is what the row cuts.
+  assert.match(body, /\nLoop 1 +every 5m · next in 4m 12s · check the deploy\n/)
+  assert.match(body, /\nLoop 3 +each turn sets the pace · when this turn ends · tidy\n/)
+  assert.match(body, /\nLoop 4 +sent once · in 1m · say hi\n/)
+  // Drawn as label and value pairs, the line apart from the times.
+  assert.deepEqual(notice.rows.find((pair) => pair.label === 'Loop 1'), { label: 'Loop 1', value: 'every 5m · next in 4m 12s', rest: 'check the deploy' })
+  assert.deepEqual(notice.rows.find((pair) => pair.label === 'Session'), { label: 'Session', value: 't' })
   // Mid-turn as well, where the rules are held.
-  assert.match(statusNotice({ ...report, rulesHeldByTurn: true, rules: null }, [row(2, 5)]).body, /\nLoop 2 +line 2/)
+  assert.match(statusNotice({ ...report, rulesHeldByTurn: true, rules: null }, [row(2, 5)]).body, /\nLoop 2 +every 5m · next in 5m · line 2\n/)
   assert.match(readFileSync('src/renderer/App.tsx', 'utf8'), /statusNotice\(report, loops\.loops\)/)
 })

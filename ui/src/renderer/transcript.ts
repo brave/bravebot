@@ -232,7 +232,12 @@ export type Entry = (
    */
   | { kind: 'goal-notice'; id: string; text: string; tone: GoalTone }
   /** A loop's line sent again as a turn of its own (LOOP-13). `number` is the one `/loop stop` takes. */
-  | { kind: 'loop-tick'; id: string; text: string; number: number }
+  /**
+   * `head` is "Loop 2, tick 5", or "Loop 2 · sent once" for a line `/after` sent; `line` is what
+   * it sends; `quiet` is how many ticks in a row found nothing, where any did. `text` is the
+   * whole row as one line, for copying and export.
+   */
+  | { kind: 'loop-tick'; id: string; text: string; number: number; head: string; line: string; quiet?: string }
   /** A message between two background sessions, drawn apart from the prompts (MSG-11). */
   | { kind: 'session-message'; id: string; direction: 'from' | 'to'; heading: string; kept: string | null; session: string; name: string; label: string; text: string | null }
   /** A replayed tool line from a stored session: no outcome, because none was kept. */
@@ -396,18 +401,37 @@ export const loopAnswer = (answer: LoopAnswer): Entry => ({
  * it, and the row that says a loop started is not drawn under its first reply. Any other answer is
  * appended.
  */
-export function loopAnswered(entries: Entry[], answer: LoopAnswer): Entry[] {
+export function loopAnswered(entries: Entry[], answer: LoopAnswer, queued = false): Entry[] {
   const row = loopAnswer(answer)
-  const at = answer.number === null ? -1 : entries.findIndex((entry) => entry.kind === 'loop-tick' && entry.number === answer.number)
+  let at = answer.number === null ? -1 : entries.findIndex((entry) => entry.kind === 'loop-tick' && entry.number === answer.number)
+  // A line that waited in the queue was typed before the tick the line ahead of it started. Its
+  // answer goes above that tick's row while the tick has not answered, so the row stays directly
+  // above its reply.
+  if (at === -1 && queued) {
+    let tick = entries.length - 1
+    while (tick >= 0 && entries[tick]!.kind !== 'loop-tick') tick--
+    if (tick !== -1 &&!entries.slice(tick).some((entry) => entry.kind === 'assistant' || entry.kind === 'user' || entry.kind === 'error')) at = tick
+  }
   return at === -1 ? [...entries, row] : [...entries.slice(0, at), row, ...entries.slice(at)]
 }
-/** A loop's tick, with its loop's number, its own among that loop's ticks, and the quiet ticks in a row where there are any (LOOP-13). */
-export const loopTicked = (tick: LoopTick): Entry => ({
-  kind: 'loop-tick',
-  id: nextId(),
-  number: tick.number,
-  text: `Loop ${tick.number}, tick ${tick.tick}${tick.quiet > 0 ? ` · ${tick.quiet} quiet` : ''}`,
-})
+/**
+ * A loop's tick, with its loop's number, its own among that loop's ticks, the line it sends, and
+ * the quiet ticks in a row where there are any (LOOP-13). The one tick of a line `/after` holds is
+ * said to be sent once (LOOP-18), and the ending that follows it draws no row of its own.
+ */
+export const loopTicked = (tick: LoopTick): Entry => {
+  const head = tick.once ? `Loop ${tick.number} · sent once` : `Loop ${tick.number}, tick ${tick.tick}`
+  const quiet = tick.quiet > 0 ? `${tick.quiet} quiet` : undefined
+  return {
+    kind: 'loop-tick',
+    id: nextId(),
+    number: tick.number,
+    head,
+    line: tick.prompt,
+    ...(quiet ? { quiet } : {}),
+    text: [head, tick.prompt, quiet].filter(Boolean).join(' · '),
+  }
+}
 const ENDED: Record<LoopEnded['reason'], string> = {
   finished: 'the turn said it was finished',
   silent: 'two ticks in a row did not say when to run again',
@@ -416,17 +440,22 @@ const ENDED: Record<LoopEnded['reason'], string> = {
   aged: 'it was seven days old',
   failed: 'its tick could not be sent',
 }
-/** That a loop ended, with its number, or how many a stop ended (LOOP-11). */
-export const loopEnded = (ended: LoopEnded): Entry => {
+/**
+ * That a loop ended, with its number, or how many a stop ended (LOOP-11), or null for a line
+ * `/after` sent, whose tick row already says it was sent once (LOOP-18).
+ */
+export const loopEnded = (ended: LoopEnded): Entry | null => {
+  if (ended.reason === 'sent') return null
   const which = ended.number !== undefined
     ? `Loop ${ended.number}`
     : ended.count === 1 ? 'The loop' : `${ended.count ?? 'Every'} loops`
-  const message = ended.message ? `. ${ended.message}` : ''
+  if (ended.reason === 'stopped') return narrated(`${which} stopped.`)
+  const message = ended.message ? `. ${ended.message}` : '.'
   return narrated(`${which} ended: ${ENDED[ended.reason] ?? ended.reason}${message}`)
 }
 /** That a turn asked to look again and its line became a loop (LOOP-14). */
 export const loopArmed = (armed: LoopArmed): Entry =>
-  narrated(`Loop ${armed.number} started: the turn asked to look again in ${armed.after}. /loop stop ends it.`, '/loop stop')
+  narrated(`Loop ${armed.number} repeats: the turn asked to look again in ${armed.after}. /loop stop ${armed.number} ends it, and so does Stop or closing the chat.`, `/loop stop ${armed.number}`)
 export const watchFired =(number: number, path: string): Entry => ({ kind: 'watch', id: nextId(), text: `File watch ${number}: ${path}` })
 export const errored = (text: string, category?: string): Entry => ({ kind: 'error', id: nextId(), text, ...(category ? { category } : {}) })
 export const quarantined = (shown: Shown): Entry => ({ kind: 'quarantined', id: nextId(), shown })

@@ -18,8 +18,9 @@ const theme = process.argv.includes('--theme') ? process.argv[process.argv.index
 const { hold, release } = heldTurns()
 
 const { service, rounds } = await startModelService(async ({ messages }) => {
-  const last = JSON.stringify(messages.at(-1) ?? '')
-  if (last.includes('Hold on')) { await hold(); return { content: 'Done holding.' } }
+  // The last two: a typed turn may carry a note after the person's line.
+  const last = JSON.stringify(messages.slice(-2))
+  if (last.includes('Hold on') && !last.includes('say hi')) { await hold(); return { content: 'Done holding.' } }
   return { content: 'Hi.' }
 })
 const prompts = () => rounds.filter((body) => !body.includes('You are a prompt-injection classifier.'))
@@ -42,8 +43,10 @@ try {
   // ---- answered at once, sent later ----------------------------------------------------------------
   await composer.fill('/after 20m check the deploy')
   await composer.press('Enter')
+  // Read again on the answer, before the next poll could have come.
+  await row.waitFor({ timeout: 1500 })
   await until(async () => (await row.count()) > 0 && /^Sending in 19m \d+s$/.test(await row.innerText()), 'the row says when the line goes')
-  assert.match(await transcript(), /in 20m, as loop 1/, 'the answer names the delay and the number')
+  assert.match(await transcript(), /Sending once in 20m as loop 1\. \/loop stop 1 cancels it, and so does Stop or closing the chat\./, 'the answer names the delay and the number')
   assert.equal(await page.locator('.bubble.user', { hasText: '/after' }).count(), 0, 'no prompt bubble for /after')
   assert.ok(!prompts().some((body) => body.includes('check the deploy')), 'nothing was sent yet')
   await page.screenshot({ path: join(output, `after-command-${theme}.png`) })
@@ -58,17 +61,20 @@ try {
   await composer.fill('/after 5s say hi')
   await composer.press('Enter')
   await until(async () => (await row.count()) > 0 && /^Sending in/.test(await row.innerText()), 'taken while the turn runs')
-  await until(async () => (await row.innerText()) === 'Sending later', 'once its delay passed, the row says it is sending later')
+  await until(async () => (await row.innerText()) === 'Sending after this turn', 'once its delay passed, the row says it waits for the turn')
   assert.ok(!prompts().some((body) => body.includes('say hi')), 'it waits for the turn')
   await page.screenshot({ path: join(output, `after-command-later-${theme}.png`) })
   release()
-  await until(async () => /Loop 2 ended: its line was sent/.test(await transcript()), 'the line was sent once and ended')
+  await until(async () => /Loop 2 · sent once\s*·\s*say hi/.test(await transcript()), 'the line was sent once, in one row')
   await until(async () => (await row.count()) === 0, 'nothing is left')
   await stop.waitFor({ state: 'hidden' })
   assert.ok(prompts().some((body) => body.includes('say hi')), 'the line reached the model')
   assert.ok(!prompts().some((body) => body.includes('/after')), 'the command word never reached the model')
   await page.waitForTimeout(2500)
-  assert.equal((await transcript()).match(/Loop 2, tick/g)?.length, 1, 'no second send')
+  const sent = await transcript()
+  assert.equal(sent.match(/Loop 2 · sent once/g)?.length, 1, 'no second send')
+  assert.ok(!/Loop 2 ended/.test(sent), 'no separate ending row for a line sent once')
+  assert.ok(!/Loop 2, tick/.test(sent), 'no tick row for a line sent once')
   await page.screenshot({ path: join(output, `after-command-sent-${theme}.png`) })
 
   assert.deepEqual(errors, [], 'the page reported no errors')

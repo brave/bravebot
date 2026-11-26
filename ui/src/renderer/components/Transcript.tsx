@@ -629,8 +629,10 @@ export function Transcript({
   }, [live?.running, entries, faces, bot])
   // A plan card waiting for its answer, during which the working row is not shown.
   const awaitingPlan = useMemo(() => entries.some((entry) => entry.kind === 'manifest' && entry.decision === null), [entries])
-  // Made once per session, so the memoised composer is not drawn again for it.
-  const loopRow = useMemo(() => live ? <LoopStatus session={live.handle} /> : null, [live?.handle])
+  // Made again only when the session or whether it is busy changes, so the memoised composer is
+  // not drawn again for it. A line `/after` holds waits for a running turn and for queued lines.
+  const loopsBusy = Boolean(live?.running) || queued.length > 0
+  const loopRow = useMemo(() => live ? <LoopStatus session={live.handle} busy={loopsBusy} /> : null, [live?.handle, loopsBusy])
   // Entered and left once per element crossed, so counted rather than toggled.
   const dragDepth = useRef(0)
   const [dragging, setDragging] = useState(false)
@@ -2289,7 +2291,7 @@ function Card({
       return <OpenLoopsLine text={entry.text} />
 
     case 'narration':
-      return <div className={entry.refused ? 'narration refused' : 'narration'}><Icon name="file-text" /><span><FailureSentence text={entry.text} command={entry.command} /></span></div>
+      return <div className={entry.refused ? 'narration refused' : 'narration'}><Icon name={entry.refused ? 'warning-triangle-outline' : 'file-text'} /><span><FailureSentence text={entry.text} command={entry.command} /></span></div>
 
     case 'ask-settled':
       // The kernel's words for each question and what became of it, in the register of the other
@@ -2359,7 +2361,17 @@ function Card({
         </div>
       )
     case 'loop-tick':
-      return <div className="watch-turn"><Icon name="clock" /><strong>{entry.text}</strong><span>Automatic turn · your /loop line, sent again</span></div>
+      // The line the tick sends, cut to one line with the whole of it in the tooltip, then how
+      // many ticks in a row found nothing.
+      return (
+        <div className="watch-turn loop-turn" data-test="loop-tick">
+          <Icon name="clock" />
+          <strong>{entry.head}</strong>
+          <span aria-hidden="true">·</span>
+          <span className="loop-turn-prompt" data-tooltip={entry.line}>{entry.line}</span>
+          {entry.quiet && <span className="loop-turn-quiet">· {entry.quiet}</span>}
+        </div>
+      )
     case 'error':
       return <ErrorCard category={entry.category} accountMessage={entry.accountMessage} accountCommand={entry.accountCommand} attempts={entry.attempts} status={entry.status} cutOff={entry.cutOff} detail={entry.text} onRetry={onRecover} onModel={onChooseModel} />
 

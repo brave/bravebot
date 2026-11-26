@@ -37,7 +37,10 @@ pub fn command(
     match repeat::parse(argument) {
         Asked::Report => Ok((report(loops, now), None)),
         Asked::Stop(which) => Ok((stop(loops, which), None)),
-        Asked::Unreadable => Ok((said(&[t!(loop_needs_a_prompt).to_string()], true), None)),
+        Asked::Unreadable => Ok((
+            said(&[t!(desktop_loop_needs_a_prompt).to_string()], true),
+            None,
+        )),
         Asked::Start(request) => {
             if turn_running {
                 return Err(Failure::new(
@@ -49,7 +52,10 @@ pub fn command(
             // Refused rather than replacing one: the person typed every loop that is live
             // (LOOP-16).
             if loops.is_full() {
-                return Ok((said(&[t!(loop_full, count = repeat::MAX_LIVE)], true), None));
+                return Ok((
+                    said(&[t!(desktop_loop_full, count = repeat::MAX_LIVE)], true),
+                    None,
+                ));
             }
             let (answer, number) = start(loops, request);
             Ok((answer, Some(number)))
@@ -67,19 +73,21 @@ pub fn command(
 pub fn after(argument: &str, loops: &mut Loops, now: Instant) -> Value {
     let request = match repeat::parse_after(argument) {
         Delayed::Start(request) => request,
-        Delayed::Unreadable => return said(&[t!(after_needs_a_delay).to_string()], true),
+        Delayed::Unreadable => {
+            return said(&[t!(desktop_after_needs_a_delay).to_string()], true);
+        }
     };
     if loops.is_full() {
-        return said(&[t!(loop_full, count = repeat::MAX_LIVE)], true);
+        return said(&[t!(desktop_loop_full, count = repeat::MAX_LIVE)], true);
     }
     let mut lines = Vec::new();
     let held = match request.adjusted {
         Some(Held::Raised(delay)) => {
-            lines.push(t!(after_delay_raised, delay = repeat::spell(delay)));
+            lines.push(t!(desktop_after_delay_raised, delay = repeat::spell(delay)));
             json!({"held": "raised", "every": repeat::spell(delay)})
         }
         Some(Held::Capped(delay)) => {
-            lines.push(t!(after_delay_capped, delay = repeat::spell(delay)));
+            lines.push(t!(desktop_after_delay_capped, delay = repeat::spell(delay)));
             json!({"held": "capped", "every": repeat::spell(delay)})
         }
         None => Value::Null,
@@ -90,7 +98,7 @@ pub fn after(argument: &str, loops: &mut Loops, now: Instant) -> Value {
     };
     let number = loops.start(Running::after(request, now));
     lines.push(t!(
-        after_started,
+        desktop_after_started,
         number = number,
         delay = repeat::spell(delay)
     ));
@@ -175,22 +183,22 @@ fn start(loops: &mut Loops, request: repeat::Request) -> (Value, usize) {
     // Said before the start, so a person who typed `1s` reads what the interval became (LOOP-7).
     let held = match adjusted {
         Some(Held::Raised(every)) => {
-            lines.push(t!(loop_interval_raised, every = repeat::spell(every)));
+            lines.push(t!(desktop_loop_interval_raised, every = repeat::spell(every)));
             json!({"held": "raised", "every": repeat::spell(every)})
         }
         Some(Held::Capped(every)) => {
-            lines.push(t!(loop_interval_capped, every = repeat::spell(every)));
+            lines.push(t!(desktop_loop_interval_capped, every = repeat::spell(every)));
             json!({"held": "capped", "every": repeat::spell(every)})
         }
         None => Value::Null,
     };
     match pacing {
         Pacing::Every(every) => lines.push(t!(
-            loop_started_every,
+            desktop_loop_started_every,
             number = number,
             every = repeat::spell(every)
         )),
-        Pacing::SelfPaced => lines.push(t!(loop_started_self_paced, number = number)),
+        Pacing::SelfPaced => lines.push(t!(desktop_loop_started_self_paced, number = number)),
         // `/loop` never reads a line sent once; that is `/after`.
         Pacing::Once(_) => {}
     }
@@ -209,19 +217,20 @@ fn start(loops: &mut Loops, request: repeat::Request) -> (Value, usize) {
 /// (LOOP-13).
 fn report(loops: &Loops, now: Instant) -> Value {
     if loops.is_empty() {
-        return said(&[t!(loop_none).to_string()], false);
+        return said(&[t!(desktop_loop_none).to_string()], false);
     }
+    // The times come before the line, so a long line is what a narrow row cuts.
     let mut lines: Vec<String> = loops
         .iter()
         .map(|running| match running.once() {
             true => t!(
-                after_active,
+                desktop_after_active,
                 number = running.number(),
                 prompt = &first_line(running.prompt()),
                 when = &running.when(now)
             ),
             false => t!(
-                loop_active,
+                desktop_loop_active,
                 number = running.number(),
                 prompt = &first_line(running.prompt()),
                 pace = &running.pace(),
@@ -229,26 +238,49 @@ fn report(loops: &Loops, now: Instant) -> Value {
             ),
         })
         .collect();
-    lines.push(t!(loop_ends_with).to_string());
+    lines.push(t!(desktop_loop_ends_with).to_string());
     said(&lines, false)
+}
+
+/// Every `/loop stop <number>` that would end one of the live loops, as one phrase, such as
+/// "/loop stop 1 or /loop stop 2".
+fn stops(loops: &Loops) -> String {
+    let mut each: Vec<String> = loops
+        .iter()
+        .map(|running| format!("/loop stop {}", running.number()))
+        .collect();
+    let last = each.pop().unwrap_or_default();
+    match each.is_empty() {
+        true => last,
+        false => t!(desktop_loop_stop_or, some = &each.join(", "), last = &last),
+    }
 }
 
 /// `/loop stop` and `/loop stop <number>` (LOOP-15). A bare `stop` with several live ends none of
 /// them and says it needs a number.
 fn stop(loops: &mut Loops, which: Option<usize>) -> Value {
     if loops.is_empty() {
-        return said(&[t!(loop_none).to_string()], true);
+        return said(&[t!(desktop_loop_none).to_string()], true);
     }
     match which {
-        None if loops.len() > 1 => said(&[t!(loop_stop_which, count = loops.len())], true),
+        None if loops.len() > 1 => said(
+            &[t!(
+                desktop_loop_stop_which,
+                count = loops.len(),
+                which = &stops(loops)
+            )],
+            true,
+        ),
+        // The only loop, named by its number as every other stop is.
         None => {
+            let number = loops.iter().map(Running::number).next().unwrap_or_default();
             loops.stop_all();
-            said(&[t!(loop_stopped).to_string()], false)
+            said(&[t!(desktop_loop_stopped_numbered, number = number)], false)
         }
         Some(number) if loops.stop(number) => {
-            said(&[t!(loop_stopped_numbered, number = number)], false)
+            said(&[t!(desktop_loop_stopped_numbered, number = number)], false)
         }
-        Some(number) => said(&[t!(loop_no_such, number = number)], true),
+        Some(number) => said(&[t!(desktop_loop_no_such, number = number)], true),
     }
 }
 
@@ -280,7 +312,7 @@ pub fn list(loops: &Loops, now: Instant) -> Value {
 
 /// A loop's line as a row shows it: its first line, pictured. The rest of a pasted line would
 /// arrive as a wall of transcript nobody asked for.
-fn first_line(prompt: &str) -> String {
+pub fn first_line(prompt: &str) -> String {
     bravebot_agent::confirm::printable(prompt.lines().next().unwrap_or_default())
 }
 

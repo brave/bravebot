@@ -1,5 +1,6 @@
 import { Modal } from './Modal'
 import { Button } from '../nala'
+import type { NoticeRow } from '../reports'
 
 /** What `changelog.read` returns. */
 export interface ReleaseNotes { version: string; running: boolean; notes: string | null }
@@ -14,11 +15,29 @@ export function releaseNotesNotice(read: ReleaseNotes): { title: string; subtitl
   }
 }
 
-export function Notice({ title, subtitle, body, onClose }: { title: string; subtitle?: string; body: string; onClose: () => void }): React.JSX.Element {
+/**
+ * A report in a dialog: plain text, or where `rows` is set, a list of labels beside their values
+ * in two columns, so a value that wraps stays in its own column.
+ */
+export function Notice({ title, subtitle, body, rows, onClose }: { title: string; subtitle?: string; body: string; rows?: NoticeRow[]; onClose: () => void }): React.JSX.Element {
   return (
     <Modal title={title} subtitle={subtitle} size="md" onClose={onClose} className="notice"
       actions={<Button kind="filled" onClick={onClose} data-test="notice-done">Done</Button>}>
-      <pre className="notice-body">{body}</pre>
+      {rows
+        ? (
+            <dl className="notice-body notice-grid">
+              {rows.map((row, at) => (
+                <div key={at}>
+                  <dt>{row.label}</dt>
+                  <dd>
+                    <span className="notice-value">{row.value}</span>
+                    {row.rest !== undefined && <><span aria-hidden="true"> · </span><span className="notice-rest" data-tooltip={row.rest}>{row.rest}</span></>}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )
+        : <pre className="notice-body">{body}</pre>}
     </Modal>
   )
 }

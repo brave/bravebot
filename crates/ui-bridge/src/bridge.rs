@@ -4590,16 +4590,24 @@ impl Bridge {
         let dispatched = open.loops.lock().ok().and_then(|mut loops| {
             let running = loops.get_mut(number)?;
             let (prompt, ()) = running.dispatching();
-            Some((prompt, running.ticks(), running.quiet()))
+            Some((prompt, running.ticks(), running.quiet(), running.once()))
         });
-        let Some((prompt, tick, quiet)) = dispatched else {
+        let Some((prompt, tick, quiet, once)) = dispatched else {
             return;
         };
-        // Announced before the worker starts, so the turn's own events follow it (LOOP-13).
+        // Announced before the worker starts, so the turn's own events follow it (LOOP-13). The
+        // row names the line it sends, its first line pictured, and whether it is sent only once
+        // (LOOP-18).
         self.emitter.send(Event::new(
             "loop.tick",
             handle,
-            json!({"number": number, "tick": tick, "quiet": quiet}),
+            json!({
+                "number": number,
+                "tick": tick,
+                "quiet": quiet,
+                "once": once,
+                "prompt": crate::loop_command::first_line(&prompt),
+            }),
         ));
         // Not recalled: the person typed `/loop`, and the tick is the program sending their line
         // again, which is not a line to scroll back to or to name the session after.
@@ -6223,14 +6231,17 @@ fn work(work: Work) {
     if let Ok(mut watches) = watches.lock() {
         watches.turn_ended(std::time::Instant::now());
     }
-    for (name, data) in loop_events {
-        emitter.send(Event::new(name, &session, data));
-    }
     // An agent does not outlive its turn (DELEGATE-17). Said before the event that ends the turn,
     // so the window has the list it is to draw when it hears the end (VIEW-35).
     reporter.turn_ended();
     drop(state);
-    emitter.finish(event, &finished);
+    // A loop that this turn ended is said after the turn's reply, so the tick's row stays directly
+    // above the answer it produced (LOOP-13).
+    let loop_events = loop_events
+        .into_iter()
+        .map(|(name, data)| Event::new(name, &session, data))
+        .collect();
+    emitter.finish_then(event, loop_events, &finished);
 }
 
 /// Fire `session-ended` for a session that has been closed, once the last of its work has ended

@@ -1,6 +1,13 @@
 /** Which command a line that takes a place among a session's loops is: `/loop`, or `/after` (LOOP-18). */
 export type LoopKind = 'loop' | 'after'
 
+/**
+ * The window event the composer sends when `/loop` or `/after` has been answered, with the
+ * session as its detail. An answer that starts or stops a loop is not a bridge event, so the row
+ * beside the composer would otherwise wait for its next read.
+ */
+export const LOOPS_CHANGED = 'bravebot:loops-changed'
+
 /** What the bridge answers for `loop.command` and `after.command`. */
 export interface LoopAnswer {
   /** Each line already has its control characters pictured by the bridge. */
@@ -41,6 +48,10 @@ export interface LoopTick {
   number: number
   tick: number
   quiet: number
+  /** True for the one tick of a line `/after` sends once (LOOP-18). */
+  once: boolean
+  /** The first line of what the tick sends, pictured by the bridge. */
+  prompt: string
 }
 
 /**
@@ -86,8 +97,12 @@ export function spell(seconds: number): string {
  * counted first, and a line `/after` holds is named only where no loop is live. The time to the
  * soonest moment is added while it is at least a second ahead. A moment already passed is a tick
  * waiting for the session to be free, and a countdown sitting at `0s` would read as a stalled loop.
+ *
+ * `busy` is whether the session has a turn running or lines queued. A line `/after` holds whose
+ * moment has passed is then waiting for that, and the row says so. Several such lines are counted
+ * first.
  */
-export function loopStatusWords(list: LoopList, elapsed: number): string | null {
+export function loopStatusWords(list: LoopList, elapsed: number, busy = false): string | null {
   const group = (once: boolean) => {
     const rows = list.loops.filter((row) => row.once === once)
     const moments = rows.flatMap((row) => row.until === null ? [] : [row.until - elapsed])
@@ -100,8 +115,9 @@ export function loopStatusWords(list: LoopList, elapsed: number): string | null 
     return looping.next ? `${live} · next in ${looping.next}` : live
   }
   const later = group(true)
-  if (later.count > 0) return later.next ? `Sending in ${later.next}` : 'Sending later'
-  return null
+  if (later.count === 0) return null
+  const when = later.next ? `in ${later.next}` : busy ? 'after this turn' : 'later'
+  return later.count === 1 ? `Sending ${when}` : `${later.count} lines · sending ${when}`
 }
 
 /**

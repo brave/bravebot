@@ -59,7 +59,11 @@ try {
     await choose(id)
     const dialog = page.getByRole('dialog', { name: title, exact: true })
     await dialog.waitFor({ timeout: 5000 })
-    const read = { body: await dialog.locator('pre.notice-body').innerText(), whole: await dialog.innerText() }
+    // A report of labels and values is drawn as a list; it is read back as the lines its text has.
+    const body = await dialog.locator('.notice-body').evaluate((element) => element.tagName === 'PRE'
+      ? element.innerText
+      : [...element.children].map((row) => `${row.children[0].textContent}  ${row.children[1].textContent}`).join('\n'))
+    const read = { body, whole: await dialog.innerText() }
     if (shot) {
       for (const scheme of ['light', 'dark']) {
         await page.emulateMedia({ colorScheme: scheme })

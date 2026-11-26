@@ -83,25 +83,31 @@ test('a /after line goes to after.command, waits only behind a waiting loop line
   assert.match(sanitiser, /method === 'loop\.command' \|\| method === 'after\.command'\) \{/)
 })
 
-test('the answer to /after is drawn as its own row, held lines first, and its tick ends as sent (LOOP-18)', () => {
+test('the answer to /after is drawn as its own row, held lines first, and its one tick is one row (LOOP-18)', () => {
   const answer = { lines: ['The delay was raised to 5s.', 'Loop 1 will send its line in 5s.'], refused: false, number: 1, pace: 'once', adjusted: { held: 'raised', every: '5s' } }
   const entries = transcript.loopAnswered(live().entries, answer)
   assert.equal(entries.at(-1).kind, 'narration')
   assert.equal(entries.at(-1).text, 'The delay was raised to 5s.\nLoop 1 will send its line in 5s.')
   const unreadable = transcript.loopAnswer({ lines: ['/after needs a delay and a line.'], refused: true, number: null, pace: null, adjusted: null })
   assert.equal(unreadable.refused, true)
-  const sent = heard(live(), { event: 'loop.ended', session: 's', data: { number: 1, reason: 'sent' } })
-  assert.equal(sent.entries.at(-1).text, 'Loop 1 ended: its line was sent')
+  const ticked = heard(live(), { event: 'loop.tick', session: 's', data: { number: 2, tick: 1, quiet: 0, once: true, prompt: 'say hi' } })
+  assert.equal(ticked.entries.at(-1).text, 'Loop 2 · sent once · say hi')
+  // Its ending draws no second row: the tick row already said it was sent once.
+  const sent = heard(ticked, { event: 'loop.ended', session: 's', data: { number: 2, reason: 'sent' } })
+  assert.equal(sent.entries.length, ticked.entries.length)
 })
 
-test('a tick row carries its loop number, its own, and the quiet ticks only where there are any (LOOP-13)', () => {
-  const first = heard(live(), { event: 'loop.tick', session: 's', data: { number: 2, tick: 1, quiet: 0 } })
+test('a tick row carries its loop number, its own, its line and the quiet ticks only where there are any (LOOP-13)', () => {
+  const first = heard(live(), { event: 'loop.tick', session: 's', data: { number: 2, tick: 1, quiet: 0, once: false, prompt: 'say hi' } })
   const row = first.entries.at(-1)
   assert.equal(row.kind, 'loop-tick')
   assert.equal(row.number, 2)
-  assert.equal(row.text, 'Loop 2, tick 1')
+  assert.equal(row.head, 'Loop 2, tick 1')
+  assert.equal(row.line, 'say hi')
+  assert.equal(row.quiet, undefined)
+  assert.equal(row.text, 'Loop 2, tick 1 · say hi')
   assert.equal(first.running, false, 'the turn is started by the bridge, and says so with turn.started')
-  assert.equal(transcript.loopTicked({ number: 2, tick: 5, quiet: 3 }).text, 'Loop 2, tick 5 · 3 quiet')
+  assert.equal(transcript.loopTicked({ number: 2, tick: 5, quiet: 3, once: false, prompt: 'say hi' }).text, 'Loop 2, tick 5 · say hi · 3 quiet')
   // The tick's turn is drawn below it, as a watch's is.
   const turned = heard(first, { event: 'turn.started', session: 's', data: { turn: 4 } })
   assert.deepEqual(turned.entries.slice(-2).map((entry) => entry.kind), ['loop-tick', 'turn-start'])
@@ -111,17 +117,29 @@ test('an ending says which loop ended, or how many a stop ended (LOOP-11)', () =
   const one = heard(live(), { event: 'loop.ended', session: 's', data: { number: 3, reason: 'finished' } })
   assert.equal(one.entries.at(-1).kind, 'narration')
   assert.match(one.entries.at(-1).text, /^Loop 3 ended: /)
-  assert.match(transcript.loopEnded({ reason: 'stopped', count: 2 }).text, /^2 loops ended: stopped/)
-  assert.match(transcript.loopEnded({ reason: 'stopped', count: 1 }).text, /^The loop ended: stopped/)
-  assert.match(transcript.loopEnded({ number: 1, reason: 'aged' }).text, /^Loop 1 ended: /)
-  assert.match(transcript.loopEnded({ number: 1, reason: 'failed', message: 'No model.' }).text, /No model\.$/)
+  assert.equal(transcript.loopEnded({ reason: 'stopped', count: 2 }).text, '2 loops stopped.')
+  assert.equal(transcript.loopEnded({ reason: 'stopped', count: 1 }).text, 'The loop stopped.')
+  assert.equal(transcript.loopEnded({ number: 1, reason: 'stopped' }).text, 'Loop 1 stopped.')
+  assert.match(transcript.loopEnded({ number: 1, reason: 'aged' }).text, /^Loop 1 ended: .*\.$/)
+  assert.match(transcript.loopEnded({ number: 1, reason: 'failed', message: 'No model.' }).text, /sent\. No model\.$/)
   const armed = heard(live(), { event: 'loop.armed', session: 's', data: { number: 1, after: '20m' } })
-  assert.match(armed.entries.at(-1).text, /^Loop 1 started: .*20m/)
+  assert.match(armed.entries.at(-1).text, /^Loop 1 repeats: .*20m\. \/loop stop 1 ends it, and so does Stop or closing the chat\.$/)
+})
+
+test('a queued line answered while the tick ahead of it has not replied goes above that tick (LOOP-13)', () => {
+  const ticked = heard(heard(live(), { event: 'loop.tick', session: 's', data: { number: 2, tick: 1, quiet: 0, once: false, prompt: 'x' } }), { event: 'turn.started', session: 's', data: { turn: 2 } })
+  const refusal = { lines: ['Two loops are running.'], refused: true, number: null, pace: null, adjusted: null }
+  const queued = transcript.loopAnswered(ticked.entries, refusal, true)
+  assert.deepEqual(queued.map((entry) => entry.kind), ['user', 'narration', 'loop-tick', 'turn-start'])
+  // Typed while the tick runs, or once it has replied, the answer is appended.
+  assert.equal(transcript.loopAnswered(ticked.entries, refusal).at(-1).kind, 'narration')
+  const replied = [...ticked.entries, transcript.replied('Hi.')]
+  assert.equal(transcript.loopAnswered(replied, refusal, true).at(-1).kind, 'narration')
 })
 
 test('the answer to a start is drawn before the first tick it sent, whichever arrived first (LOOP-4)', () => {
   // The bridge announces the first tick before it answers the line.
-  const ticked = heard(heard(live(), { event: 'loop.tick', session: 's', data: { number: 1, tick: 1, quiet: 0 } }), { event: 'turn.started', session: 's', data: { turn: 2 } })
+  const ticked = heard(heard(live(), { event: 'loop.tick', session: 's', data: { number: 1, tick: 1, quiet: 0, once: false, prompt: 'x' } }), { event: 'turn.started', session: 's', data: { turn: 2 } })
   const entries = transcript.loopAnswered(ticked.entries, started(1))
   assert.deepEqual(entries.map((entry) => entry.kind), ['user', 'narration', 'loop-tick', 'turn-start'])
   assert.equal(entries[1].text, 'Loop 1 started: every 10s.')
@@ -158,7 +176,9 @@ test('the composer asks for the command only from the typed line, and never send
   }
   const body = turn.slice(turn.indexOf('const loopCommand = '))
   assert.match(body, /call<LoopAnswer>\(`\$\{kind\}\.command`, \{ session: handle, argument, \.\.\.markersOf\(staged\) \}\)/)
-  assert.match(body, /entries: t\.loopAnswered\(old\.entries, answer\)/)
+  assert.match(body, /entries: t\.loopAnswered\(old\.entries, answer, queuedAlready\)/)
+  // The row beside the composer reads the loops again at once (LOOP-13).
+  assert.match(body, /window\.dispatchEvent\(new CustomEvent\(LOOPS_CHANGED, \{ detail: handle \}\)\)/)
 })
 
 test('a start the bridge refuses while a turn runs waits in the queue, and is asked again from it (LOOP-6, CMD-8)', () => {
@@ -182,7 +202,26 @@ test('a /loop stop typed behind a waiting /loop line waits behind it, and is not
   assert.match(body.slice(0, called), /if \(waiting\) \{.*?queued: \[\.\.\.\(old\.queued \?\? \[\]\), \{ prompt: line, attachments: \[\], staged, loop: argument, loopKind: kind \}\].*?return\s*\}/s)
 })
 
-test('the tick row is drawn as an automatic turn, in the transcript', () => {
+test('the tick row is drawn as an automatic turn, its line cut to one line with the whole of it in a tooltip', () => {
   const drawn = readFileSync('src/renderer/components/Transcript.tsx', 'utf8')
-  assert.match(drawn, /case 'loop-tick':\s*return <div className="watch-turn"><Icon name="clock" \/><strong>\{entry\.text\}<\/strong>/)
+  const row = drawn.slice(drawn.indexOf("case 'loop-tick':"), drawn.indexOf("case 'error':"))
+  assert.match(row, /className="watch-turn loop-turn"/)
+  assert.match(row, /<strong>\{entry\.head\}<\/strong>/)
+  assert.match(row, /<span className="loop-turn-prompt" data-tooltip=\{entry\.line\}>\{entry\.line\}<\/span>/)
+  assert.doesNotMatch(row, /sent again/)
+  const css = readFileSync('src/renderer/styles/activity.css', 'utf8')
+  assert.match(css, /\.loop-turn-prompt \{[^}]*text-overflow: ellipsis[^}]*color: var\(--ink-secondary\)/)
+})
+
+test('a refused narration has a warning glyph in the error colour and its text in the error ink', () => {
+  const drawn = readFileSync('src/renderer/components/Transcript.tsx', 'utf8')
+  assert.match(drawn, /<Icon name=\{entry\.refused \? 'warning-triangle-outline' : 'file-text'\} \/>/)
+  const css = readFileSync('src/renderer/styles/activity.css', 'utf8')
+  assert.match(css, /\.narration\.refused \{ color: var\(--status-error-ink\); --leo-icon-color: var\(--status-error\); \}/)
+})
+
+test('a waiting /loop or /after line is a command in the queue, so the queue does not call it a turn', () => {
+  const composer = readFileSync('src/renderer/components/Composer.tsx', 'utf8')
+  // Both kinds wait with `loop` set, so the one test covers both.
+  assert.match(composer, /command: [^\n]*\|\| message\.loop !== undefined,/)
 })
