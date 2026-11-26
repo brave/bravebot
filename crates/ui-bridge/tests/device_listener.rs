@@ -495,11 +495,11 @@ fn a_command_line_phone_pairs_with_the_real_host_and_is_answered() {
     {
         let mut written = written.clone();
         std::thread::spawn(move || {
-            let mut input = std::io::Cursor::new(
+            let input = std::io::Cursor::new(
                 "{\"id\":1,\"method\":\"instance.info\",\"params\":{}}\n\
                  {\"id\":2,\"method\":\"session.new\",\"params\":{}}\n",
             );
-            let done = bravebot_listener::phone::pair_and_talk(&link, &mut input, &mut written);
+            let done = bravebot_listener::phone::pair_and_talk(&link, input, &mut written);
             finished.send(done).ok();
         });
     }

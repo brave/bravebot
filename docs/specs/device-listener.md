@@ -193,10 +193,23 @@ The person types `revoke NAME` on the host. The host removes the device, ends it
 <a id="LISTEN-8"></a>
 ### LISTEN-8: a command-line phone pairs with a host from its link, for trying the host by hand
 
-`cargo run -p bravebot-listener --example phone --features testing -- LINK` is a phone at a terminal, for a person who wants to try a host started with `--listen` and has no phone app. It takes the link the host shows after `pair` as its one argument and refuses anything else, a link that is not one a host writes, and a host whose key is not the one the link names, each with a reason and before it shows a code. It connects, proves the secret, and writes the code the person types on the host as `confirm CODE`. It waits for them to do so for as long as the host's window lasts. Once the host has paired it, each line it is given on its standard input is sent as a request and each line the host answers with is written after `host:`. It is a client like any other: the host applies every rule above to it, and it holds no credential and no setting.
+`cargo run -p bravebot-listener --example phone --features testing -- LINK` is a phone at a terminal, for a person who wants to try a host started with `--listen` and has no phone app. It takes the link the host shows after `pair` as its one argument and refuses anything else, a link that is not one a host writes, and a host whose key is not the one the link names, each with a reason and before it shows a code. It connects, proves the secret, and writes the code the person types on the host as `confirm CODE`. It waits for them to do so for as long as the host's window lasts. Once the host has paired it, each line it is given on its standard input is sent as a request, one at a time with what the host sends read between them so that a large input does not leave both ends waiting to write, and each line the host sends is written after `host:`, except a heartbeat, which it answers with a blank line and does not write. It reads its input on a thread of its own, so a person who types nothing for a while keeps the connection ([LISTEN-9](#LISTEN-9)), and an input it cannot read, such as a line that is not text, stops it with that error once the lines before it are sent and the host's answers to them are written. It is a client like any other: the host applies every rule above to it, and it holds no credential and no setting.
 
 `verified-by: bravebot_listener::pairing_tests::a_command_line_phone_pairs_from_a_link_and_talks_to_the_host`
 `verified-by: bravebot_listener::pairing_tests::a_command_line_phone_refuses_a_link_that_is_not_the_hosts`
 `verified-by: bravebot_listener::pairing_tests::a_command_line_phone_says_when_the_host_ends_the_pairing`
 `verified-by: bravebot_listener::pairing_tests::a_command_line_phone_takes_one_argument_that_is_text`
+`verified-by: bravebot_listener::pairing_tests::a_command_line_phone_answers_heartbeats_while_its_person_types_nothing`
+`verified-by: bravebot_listener::pairing_tests::a_command_line_phone_given_a_large_input_writes_every_answer`
+`verified-by: bravebot_listener::pairing_tests::a_command_line_phone_stops_with_an_error_its_input_gives`
 `verified-by: bravebot_ui_bridge::device_listener::a_command_line_phone_pairs_with_the_real_host_and_is_answered`
+
+<a id="LISTEN-9"></a>
+### LISTEN-9: a paired device that goes quiet has its connection ended in a bounded time
+
+When the host has written nothing to a paired device for 15 seconds, it sends it the line `{"event":"heartbeat","data":{}}`. The device answers with any line, and a blank line is enough: it is skipped and reaches no service. A paired device that has sent nothing for 45 seconds has its connection ended. So a phone that lost its network, stopped or was put in the background, and a connection whose other end is gone without closing it, are ended within that time, and no longer count against the 16 connections the listener holds ([LISTEN-2](#LISTEN-2)). What came of a line before a wait is kept, so a line that arrives in parts is read whole. Only bytes the host can decrypt count as something sent, and the socket is read one read at a time with the time looked at after each, so a device that sends the bytes of a record slowly is sent its heartbeats on time and is ended when the silence is up. Ending the connection changes nothing about the device: it is still paired, and it connects again with a full handshake ([LISTEN-1](#LISTEN-1)). A heartbeat and its answer grant nothing.
+
+`verified-by: bravebot_listener::serving_tests::a_paired_device_that_sends_nothing_is_ended_once_the_silence_allowed_has_passed`
+`verified-by: bravebot_listener::serving_tests::a_device_that_answers_each_heartbeat_keeps_its_connection`
+`verified-by: bravebot_listener::serving_tests::a_line_that_arrives_across_heartbeats_is_read_whole`
+`verified-by: bravebot_listener::serving_tests::a_device_that_trickles_a_record_is_ended_when_the_silence_is_up`

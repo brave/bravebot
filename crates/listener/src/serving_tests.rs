@@ -10,7 +10,7 @@ use crate::invitation::Invitations;
 use crate::limits::Limits;
 use crate::phone::Phone;
 use crate::registry::{Device, Registry};
-use crate::server::{Listener, Prepared, Service};
+use crate::server::{HEARTBEAT, Listener, Prepared, Service};
 use bravebot_core::device::{Grant, Operation};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -199,6 +199,149 @@ fn a_line_that_asks_to_control_is_answered_only_for_a_device_whose_grant_is_cont
             ("reader".to_string(), "look".to_string()),
             ("controller".to_string(), "control: send a turn".to_string())
         ]
+    );
+}
+
+/// Short heartbeat limits, so a test sees several heartbeats and a silence run out in a moment. The
+/// silence is ten heartbeats, so a test that waits a few heartbeats is far from it on a busy machine.
+fn quick_heartbeats() -> Limits {
+    Limits {
+        heartbeat: Duration::from_millis(100),
+        silence: Duration::from_secs(1),
+        ..Limits::default()
+    }
+}
+
+/// A paired device that sends nothing is sent a heartbeat whenever the host has written nothing to it
+/// for the heartbeat's time, and its connection is ended once it has sent nothing for the silence
+/// allowed, and not before. A phone that stopped running, lost its network or was put in the
+/// background is such a device, and it would otherwise hold its connection and a place in the
+/// listener's count for ever.
+#[test]
+fn a_paired_device_that_sends_nothing_is_ended_once_the_silence_allowed_has_passed() {
+    let limits = quick_heartbeats();
+    let host = host_with(limits);
+    let phone = Phone::new().unwrap();
+    pair(&host, &phone, "kitchen-phone", Grant::Read);
+    let mut connection = phone
+        .connect(host.listener.address(), host.listener.key_hash())
+        .unwrap();
+    let started = Instant::now();
+    let mut heartbeats = 0;
+    while let Some(line) = connection.receive().unwrap() {
+        assert_eq!(line, HEARTBEAT);
+        heartbeats += 1;
+        // A host that never ends the connection keeps sending heartbeats, so the test stops waiting.
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the connection was not ended after {heartbeats} heartbeats"
+        );
+    }
+    let waited = started.elapsed();
+    assert!(waited >= limits.silence, "ended after {waited:?}");
+    assert!(waited < Duration::from_secs(5), "ended after {waited:?}");
+    assert!(heartbeats >= 2, "{heartbeats} heartbeats");
+    eventually("the device is no longer connected", || {
+        !host.registry.is_connected(&phone.key_hash())
+    });
+}
+
+/// A device that answers each heartbeat with a blank line keeps its connection for many times the
+/// silence allowed, the blank lines reach no service, and it is answered when it asks something.
+#[test]
+fn a_device_that_answers_each_heartbeat_keeps_its_connection() {
+    let limits = quick_heartbeats();
+    let host = host_with(limits);
+    let phone = Phone::new().unwrap();
+    pair(&host, &phone, "kitchen-phone", Grant::Read);
+    let mut connection = phone
+        .connect(host.listener.address(), host.listener.key_hash())
+        .unwrap();
+    let until = Instant::now() + limits.silence * 3;
+    while Instant::now() < until {
+        assert_eq!(connection.receive().unwrap().as_deref(), Some(HEARTBEAT));
+        connection.send("").unwrap();
+    }
+    connection.send("one").unwrap();
+    let answered = loop {
+        let line = connection.receive().unwrap().unwrap();
+        if line != HEARTBEAT {
+            break line;
+        }
+    };
+    assert_eq!(answered, "heard:one");
+    assert_eq!(
+        host.service.heard(),
+        [("kitchen-phone".to_string(), "one".to_string())]
+    );
+}
+
+/// A line that arrives in two parts with a pause between them, long enough that the host's wait on the
+/// socket ends and it sends heartbeats, is read whole and answered: what came of it before the wait is
+/// kept. A host that let go of it at each wait would answer only the second part.
+#[test]
+fn a_line_that_arrives_across_heartbeats_is_read_whole() {
+    let limits = quick_heartbeats();
+    let host = host_with(limits);
+    let phone = Phone::new().unwrap();
+    pair(&host, &phone, "kitchen-phone", Grant::Read);
+    let mut connection = phone
+        .connect(host.listener.address(), host.listener.key_hash())
+        .unwrap();
+    let line = "a line sent in two parts";
+    connection.send_bytes(b"a line sent").unwrap();
+    // The pause is what is under test: the host has to wait on the socket in the middle of a line.
+    // It is four heartbeats, and less than half the silence allowed.
+    std::thread::sleep(limits.heartbeat * 4);
+    connection.send_bytes(b" in two parts\n").unwrap();
+    let mut heartbeats = 0;
+    let answered = loop {
+        let heard = connection.receive().unwrap().unwrap();
+        if heard != HEARTBEAT {
+            break heard;
+        }
+        heartbeats += 1;
+    };
+    assert_eq!(answered, format!("heard:{line}"));
+    assert!(
+        heartbeats >= 2,
+        "{heartbeats} heartbeats while the line came"
+    );
+    assert!(limits.heartbeat * 8 < limits.silence);
+    assert_eq!(
+        host.service.heard(),
+        [("kitchen-phone".to_string(), line.to_string())]
+    );
+}
+
+/// A paired device that sends the bytes of one record a few at a time, so that none of it can be
+/// decrypted for longer than the silence allowed, has its connection ended when the silence is up and
+/// not when the record would have been whole, and its line reaches no service. A host that waited for
+/// the whole record on one read would wait as long as the device kept sending.
+#[test]
+fn a_device_that_trickles_a_record_is_ended_when_the_silence_is_up() {
+    let limits = Limits {
+        heartbeat: Duration::from_millis(100),
+        silence: Duration::from_millis(600),
+        ..Limits::default()
+    };
+    let host = host_with(limits);
+    let phone = Phone::new().unwrap();
+    pair(&host, &phone, "kitchen-phone", Grant::Read);
+    let mut connection = phone
+        .connect(host.listener.address(), host.listener.key_hash())
+        .unwrap();
+    let started = Instant::now();
+    // About 120 bytes of record at 20 ms each, which is about 2.4 seconds.
+    let sent = connection.send_slowly(&"x".repeat(100), Duration::from_millis(20));
+    let took = started.elapsed();
+    assert!(sent.is_err(), "the whole record was sent, in {took:?}");
+    assert!(took < Duration::from_secs(2), "ended after {took:?}");
+    assert!(took >= limits.silence, "ended after {took:?}");
+    assert!(
+        host.service.heard().is_empty(),
+        "{:?}",
+        host.service.heard()
     );
 }
 
