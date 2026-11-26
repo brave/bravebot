@@ -990,9 +990,14 @@ fn ctrl_enter_on_a_rename_mid_turn_hurries_nothing() {
 /// `/status` mid-turn is answered as it is typed, from what the session holds now. The trust map
 /// and the vouched programs are the turn's, which answers into them as it runs, so the report
 /// says so and does not state either from before the turn began: "every run is asked" is the
-/// claim that would be false by the time it was read.
+/// claim that would be false by the time it was read. The report also names an answer kept for
+/// the directory and the remembered lines, which it reads from the state directory, so the test
+/// runs in a profile of its own and the count of lines does not depend on whose machine it is.
 #[test]
 fn status_asked_mid_turn_answers_now_and_leaves_the_turns_rules_unstated() {
+    if !crate::test_profile::in_isolated_profile() {
+        return;
+    }
     let mut session = a_turn_running_on("first");
     let transcript = session.transcript.len();
     let root = std::path::Path::new("/work");
