@@ -2181,12 +2181,7 @@ impl Bridge {
             .open
             .get_mut(&handle)
             .ok_or_else(Failure::no_such_session)?;
-        let (model, config) = crate::models::chosen(
-            requested_model,
-            open.model.as_deref(),
-            &open.project,
-            self.settings.as_deref(),
-        )?;
+        let (model, config) = chosen_for_session(requested_model, open, self.settings.as_deref())?;
         let model = model.unwrap_or_else(|| config.default_model.clone());
         let choice = config.choose_variant(&model, word);
         let offered = config.variants_offered(&model);
@@ -2328,12 +2323,7 @@ impl Bridge {
 
         self.reap(&handle);
 
-        let open = self
-            .open
-            .get(&handle)
-            .ok_or_else(Failure::no_such_session)?;
-
-        open.ready_for_work()?;
+        let open = ready_session(&self.open, &handle)?;
         // The name the session was given, kept so a turn with no request behind it is addressed
         // too.
         let standing = named.or_else(|| open.definition.clone());
@@ -2366,12 +2356,7 @@ impl Bridge {
             }
         }
 
-        let (model, config) = crate::models::chosen(
-            requested_model,
-            open.model.as_deref(),
-            &open.project,
-            self.settings.as_deref(),
-        )?;
+        let (model, config) = chosen_for_session(requested_model, open, self.settings.as_deref())?;
         // Read afresh for every turn, so a level or a mode picked between turns applies to the
         // next one.
         let RunSettings {
@@ -2552,18 +2537,9 @@ impl Bridge {
 
         self.reap(&handle);
 
-        let open = self
-            .open
-            .get(&handle)
-            .ok_or_else(Failure::no_such_session)?;
-        open.ready_for_work()?;
+        let open = ready_session(&self.open, &handle)?;
 
-        let (model, config) = crate::models::chosen(
-            requested_model,
-            open.model.as_deref(),
-            &open.project,
-            self.settings.as_deref(),
-        )?;
+        let (model, config) = chosen_for_session(requested_model, open, self.settings.as_deref())?;
         let state = Arc::clone(&open.state);
         // Taken here, on the thread that holds the state, because a conversation is not `Clone`
         // and what crosses to the worker is the request and not the exchange.
@@ -2645,18 +2621,9 @@ impl Bridge {
 
         self.reap(&handle);
 
-        let open = self
-            .open
-            .get(&handle)
-            .ok_or_else(Failure::no_such_session)?;
-        open.ready_for_work()?;
+        let open = ready_session(&self.open, &handle)?;
 
-        let (model, config) = crate::models::chosen(
-            requested_model,
-            open.model.as_deref(),
-            &open.project,
-            self.settings.as_deref(),
-        )?;
+        let (model, config) = chosen_for_session(requested_model, open, self.settings.as_deref())?;
         let project = open.project.clone();
         let settings = crate::settings::layers(Some(&project), self.settings.as_deref());
         let mut workspace =
@@ -2753,11 +2720,7 @@ impl Bridge {
 
         self.reap(&handle);
 
-        let open = self
-            .open
-            .get(&handle)
-            .ok_or_else(Failure::no_such_session)?;
-        open.ready_for_work()?;
+        let open = ready_session(&self.open, &handle)?;
 
         let state = Arc::clone(&open.state);
         // Taken here, on the thread that holds the state, because a conversation is not `Clone`
@@ -2776,12 +2739,7 @@ impl Bridge {
                 state.answers.trust.clone(),
             )
         };
-        let (model, config) = crate::models::chosen(
-            requested_model,
-            open.model.as_deref(),
-            &open.project,
-            self.settings.as_deref(),
-        )?;
+        let (model, config) = chosen_for_session(requested_model, open, self.settings.as_deref())?;
         let cancel = Cancel::new();
         let emitter = self.emitter.clone();
         let session = handle.clone();
@@ -3172,18 +3130,9 @@ impl Bridge {
 
         self.reap(&handle);
 
-        let open = self
-            .open
-            .get(&handle)
-            .ok_or_else(Failure::no_such_session)?;
-        open.ready_for_work()?;
+        let open = ready_session(&self.open, &handle)?;
 
-        let (model, config) = crate::models::chosen(
-            requested_model,
-            open.model.as_deref(),
-            &open.project,
-            self.settings.as_deref(),
-        )?;
+        let (model, config) = chosen_for_session(requested_model, open, self.settings.as_deref())?;
         let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
         let RunSettings {
             attribution,
@@ -4998,6 +4947,31 @@ pub fn turn_workspace(
         .with_references(settings.references(), settings.references_unread())
         .with_shared_skill_directories(settings.shared_skill_directories())
         .with_named_settings_file(settings.named_settings_file()))
+}
+
+/// The open session for `handle`, which is ready to take a turn or a manifest run now.
+///
+/// Takes the map and not the bridge, so a handler goes on reading the bridge's other fields and
+/// taking the session mutably afterwards. `no_such_session` comes before any readiness refusal.
+fn ready_session<'a>(open: &'a HashMap<String, Open>, handle: &str) -> Result<&'a Open, Failure> {
+    let session = open.get(handle).ok_or_else(Failure::no_such_session)?;
+    session.ready_for_work()?;
+    Ok(session)
+}
+
+/// The model a request asks `session` to run on and the configuration it runs under, as
+/// [`crate::models::chosen`] answers for the session's recorded model and project.
+fn chosen_for_session(
+    requested_model: Option<String>,
+    session: &Open,
+    selected: Option<&Path>,
+) -> Result<(Option<String>, Config), Failure> {
+    crate::models::chosen(
+        requested_model,
+        session.model.as_deref(),
+        &session.project,
+        selected,
+    )
 }
 
 /// The workspace a turn in this session reads through, as the session stands now.
