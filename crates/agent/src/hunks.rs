@@ -12,6 +12,7 @@
 //! ([`Workspace::put_back`]).
 
 use crate::diff::{Diff, Hunk, put_back};
+use crate::rewind::{every_name, other_names};
 use crate::workspace::{BACKSLASH_SEPARATES, Backup, Before, Workspace, WorkspaceError, key_of};
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::Sink;
@@ -143,9 +144,62 @@ fn policy<'sink, S: Sink>(
     .with_backslash_separates(BACKSLASH_SEPARATES))
 }
 
+/// Every name a file has, as the map is asked about it (TRUST-4): the key it is held under first,
+/// then the keys of the other names found by the file system (where a link lands, its hard links
+/// and its spelling under a second path to an open tree).
+///
+/// The lookup reads directory entries and metadata and never the file's bytes, so a decision taken
+/// from it is not a decision taken from the file's content.
+struct Names {
+    /// The own key, then the other names, sorted and without repeats.
+    every: Vec<String>,
+    /// False where the lookup of the other names could not finish. The file is then read as
+    /// untrusted, since a name that was not found may be one the map distrusts.
+    complete: bool,
+}
+
+impl Names {
+    fn of(workspace: &Workspace, path: &Path) -> Self {
+        let (every, complete) = every_name(key_of(path), other_names(workspace, path));
+        Self { every, complete }
+    }
+
+    /// The key the file is held under.
+    fn own(&self) -> &str {
+        &self.every[0]
+    }
+
+    /// Whether a read of the file is quarantined under its own key, under any other name, or
+    /// because the lookup of the other names did not finish.
+    fn quarantined<S: Sink>(&self, policy: &Policy<'_, S>) -> bool {
+        policy.read_is_quarantined_under_names(self.own(), &self.every[1..], self.complete)
+    }
+
+    /// Whether `map` vouches for the file under every name it has. A name the map holds no rule
+    /// for says nothing, as it does for a read, and a lookup that did not finish says the file is
+    /// not vouched for.
+    fn vouched_by(&self, map: &TrustStore) -> bool {
+        self.complete
+            && map.is_trusted(self.own())
+            && !self.every[1..]
+                .iter()
+                .any(|name| map.integrity_of(name) == Some(Integrity::Untrusted))
+    }
+}
+
 /// What a path holds, if the map vouches for the path so that a decision may be taken from it.
-fn vouched<S: Sink>(policy: &mut Policy<'_, S>, key: &str, held: Vec<u8>) -> Result<Vec<u8>, Left> {
-    let held = Labelled::new(held, policy.label_in_force(key));
+/// The path reads as untrusted where any name of the file is distrusted (TRUST-4).
+fn vouched<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    names: &Names,
+    held: Vec<u8>,
+) -> Result<Vec<u8>, Left> {
+    let label = if names.quarantined(policy) {
+        Label::untrusted_private()
+    } else {
+        policy.label_in_force(names.own())
+    };
+    let held = Labelled::new(held, label);
     policy
         .read_trusted_content("hunks", &held)
         .map_err(|_| Left::Untrusted)
@@ -163,15 +217,26 @@ fn compared<S: Sink>(
     backup: &Backup,
     snapshot: &TrustStore,
 ) -> Result<Compared, Left> {
+    let names = Names::of(workspace, &backup.path);
+    compared_under(workspace, policy, backup, snapshot, &names)
+}
+
+/// [`compared`] for a file whose names have been looked up.
+fn compared_under<S: Sink>(
+    workspace: &Workspace,
+    policy: &mut Policy<'_, S>,
+    backup: &Backup,
+    snapshot: &TrustStore,
+    names: &Names,
+) -> Result<Compared, Left> {
     let kept = match &backup.was {
         Before::Nothing => return Err(Left::Created),
         Before::NotKept => return Err(Left::NotKept),
         Before::Bytes(kept) => kept,
     };
-    let key = key_of(&backup.path);
     if backup.captured_trust != Integrity::Trusted
-        || !snapshot.is_trusted(&key)
-        || policy.read_is_quarantined(&key)
+        || !names.vouched_by(snapshot)
+        || names.quarantined(policy)
     {
         return Err(Left::Untrusted);
     }
@@ -188,7 +253,7 @@ fn compared<S: Sink>(
     let before = policy
         .read_trusted_content("hunks", &before)
         .map_err(|_| Left::Untrusted)?;
-    let after = vouched(policy, &key, now)?;
+    let after = vouched(policy, names, now)?;
     let (Ok(before), Ok(after)) = (String::from_utf8(before), String::from_utf8(after)) else {
         return Err(Left::NotText);
     };
@@ -248,9 +313,15 @@ pub fn list<S: Sink>(
 /// more just before the write, so a file written since is refused. Between that read and the write
 /// the file is not held, as it is not for a rewind.
 ///
-/// The path is distrusted before it is written and trusted as it was after, as a rewind of it
-/// would do, and a write that fails part way leaves it distrusted. A refusal before anything is
-/// written leaves the map as it was.
+/// The path is distrusted under every name the file has before it is written and trusted as it
+/// was after, as a rewind of it would do, and a write that fails part way leaves every name
+/// distrusted and records a memory under any of them (TRUST-4, MEMORY-5). A file with a name the
+/// map distrusts is not compared, and one whose other names could not all be found is not either.
+/// A refusal before anything is written leaves the map as it was.
+///
+/// No writer reservation is taken. The line waits for a running turn to end (CMD-8), so no writer
+/// of this session is open, and the file is not held between the last read and the write
+/// (SESSION-37).
 ///
 /// The session's language servers are stopped just before the write, as they are before a
 /// restoration: a server's copy of the file is the one this changes, and what a rewind leaves them
@@ -354,7 +425,6 @@ fn reject_asking<S: Sink>(
         return Err(Refused::Changed);
     };
 
-    let key = key_of(&backup.path);
     // Before the re-read, which has to be the last look at the file before the write: a person can
     // take as long as they like to answer. Nothing has been written, so the map is as it was.
     ask(&backup.path).map_err(|error| match error {
@@ -366,17 +436,23 @@ fn reject_asking<S: Sink>(
         WorkspaceError::Escapes { .. } => Refused::Left(Left::Outside),
         _ => Refused::Changed,
     })?;
-    if vouched(&mut policy, &key, again)? != texts.after.as_bytes() {
+    // The names are looked up again, after the question and with the re-read, since a link may
+    // have been made to the file while the person answered.
+    let names = Names::of(workspace, &backup.path);
+    if vouched(&mut policy, &names, again)? != texts.after.as_bytes() {
         return Err(Refused::Changed);
     }
 
     let folds = trust.case_folding().restricts();
     let previous = trust.clone();
-    trust.distrust(&key);
+    // Every name the file has, so a write that does not return leaves each of them distrusted.
+    for name in &names.every {
+        trust.distrust(name);
+    }
     match write(&backup.path, text.into_bytes()) {
         Ok(()) => {
             *trust = previous;
-            crate::memory::after_rewind(home, trust, &[key], folds);
+            crate::memory::after_rewind(home, trust, &names.every, folds);
             Ok(())
         }
         // Nothing was written, so the map is as it was.
@@ -392,7 +468,7 @@ fn reject_asking<S: Sink>(
         // memory it holds is recorded as one the next session must not trust, as a rewind that
         // failed on it records it.
         Err(failed) => {
-            crate::memory::after_rewind(home, trust, &[key], folds);
+            crate::memory::after_rewind(home, trust, &names.every, folds);
             Err(Refused::Io(match failed {
                 WorkspaceError::Io { detail, .. } => detail,
                 other => other.to_string(),
@@ -987,6 +1063,230 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
+    /// A file's other name as a person makes it: a hard link to it, or the file itself moved to
+    /// `other` and the name left as a symbolic link to it. Returns the backup of the file's own
+    /// name, which holds the text before the turn, and the key of `other`.
+    #[cfg(unix)]
+    #[derive(Clone, Copy, Debug)]
+    enum Alias {
+        HardLink,
+        SymbolicLink,
+    }
+
+    #[cfg(unix)]
+    fn also_named(project: &Project, alias: Alias, other: &str) -> (Backup, String) {
+        let other_path = project.workspace.root().join(other);
+        std::fs::create_dir_all(other_path.parent().unwrap()).unwrap();
+        match alias {
+            Alias::HardLink => std::fs::hard_link(&project.path, &other_path).unwrap(),
+            Alias::SymbolicLink => {
+                std::fs::rename(&project.path, &other_path).unwrap();
+                std::os::unix::fs::symlink(&other_path, &project.path).unwrap();
+            }
+        }
+        (project.kept_text(), key_of(&other_path))
+    }
+
+    /// TRUST-4. A file the map distrusts under another name only (its hard link, or the file its
+    /// link leads to) is not one the map vouches for, so it is not compared and not written, now
+    /// or as the session stood before the turn. The fault this rejects is asking the map under the
+    /// name the backup was taken under alone, which hands the bytes over for a decision. A file
+    /// with no such name stays listed.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_distrusted_only_under_another_name_is_not_compared_and_not_written() {
+        type Spoil = fn(&mut Project);
+        let spoils: [(&str, Spoil); 2] = [
+            ("the map now", |project| project.trust.distrust("other.txt")),
+            ("the map before the turn", |project| {
+                project.snapshot.distrust("other.txt");
+            }),
+        ];
+        for alias in [Alias::HardLink, Alias::SymbolicLink] {
+            for (what, spoil) in spoils {
+                let mut project = Project::new("hunks-other-name", AFTER);
+                let (backup, _) = also_named(&project, alias, "other.txt");
+                let control_path = project.workspace.root().join("control.txt");
+                std::fs::write(&control_path, AFTER).unwrap();
+                let control = Backup {
+                    kept: false,
+                    path: control_path.clone(),
+                    was: Before::Bytes(BEFORE.as_bytes().to_vec()),
+                    captured_trust: Integrity::Trusted,
+                };
+                let hunks = project.listed(&backup).files.remove(0).hunks;
+                spoil(&mut project);
+
+                let listing = list(
+                    &project.workspace,
+                    &[backup.clone(), control],
+                    &project.snapshot,
+                    &project.trust,
+                    &mut NullSink,
+                )
+                .unwrap();
+
+                assert_eq!(
+                    listing.left,
+                    [(project.path.clone(), Left::Untrusted)],
+                    "{alias:?}, {what}"
+                );
+                assert_eq!(
+                    listing
+                        .files
+                        .iter()
+                        .map(|file| file.path.clone())
+                        .collect::<Vec<_>>(),
+                    [control_path],
+                    "{alias:?}, {what}"
+                );
+                assert_eq!(
+                    project.reject(&backup, &hunks[0]),
+                    Err(Refused::Left(Left::Untrusted)),
+                    "{alias:?}, {what}"
+                );
+                assert_eq!(project.text(), AFTER, "{alias:?}, {what}");
+            }
+        }
+    }
+
+    /// A lookup of a file's other names that did not finish may have missed the one the map
+    /// distrusts, so the file is read as untrusted and is not compared. The fault this rejects is
+    /// reading a file whose lookup did not finish as one with no other name.
+    #[test]
+    fn a_file_whose_other_names_were_not_all_found_is_not_compared() {
+        let project = Project::new("hunks-lookup-unfinished", AFTER);
+        let backup = project.kept_text();
+        let compare = |complete| {
+            let mut sink = NullSink;
+            let mut policy = policy(&project.workspace, &project.trust, &mut sink).unwrap();
+            let names = Names {
+                every: vec![project.key()],
+                complete,
+            };
+            compared_under(
+                &project.workspace,
+                &mut policy,
+                &backup,
+                &project.snapshot,
+                &names,
+            )
+            .err()
+        };
+
+        assert_eq!(compare(true), None);
+        assert_eq!(compare(false), Some(Left::Untrusted));
+    }
+
+    /// TRUST-4, MEMORY-5. A hunk put back into a file that is also a definition's memory under
+    /// another name (its hard link, or the file its link leads to) is a write to that memory. A
+    /// write that fails may have left it half written, so the map distrusts it and it is recorded
+    /// for the next session. One that succeeds settles it: the record no longer names a memory the
+    /// map trusts. The fault this rejects is distrusting and settling the name the backup was
+    /// taken under alone.
+    #[cfg(unix)]
+    #[test]
+    fn a_hunk_put_back_into_a_file_that_is_also_a_memory_distrusts_and_settles_the_memory() {
+        let home = crate::testutil::scratch_dir("hunks-memory-alias-home");
+        for alias in [Alias::HardLink, Alias::SymbolicLink] {
+            for fails in [true, false] {
+                std::fs::remove_dir_all(&home).ok();
+                let mut project = Project::new("hunks-memory-alias", AFTER);
+                let (backup, memory) =
+                    also_named(&project, alias, ".bravebot/memory/notes-keeper.md");
+                let hunks = project.listed(&backup).files.remove(0).hunks;
+                let workspace = project.workspace.clone();
+                let record = crate::memory::Record::new(&home, &workspace.root().to_string_lossy());
+                if !fails {
+                    // Put back whole, the write takes the memory out of a record it was in.
+                    crate::memory::record_before_write(Some(&home), &memory, false).unwrap();
+                }
+                let before = project.trust.clone();
+
+                let result = reject_with(
+                    &workspace,
+                    &backup,
+                    &hunks[0],
+                    &project.snapshot,
+                    &mut project.trust,
+                    Some(&home),
+                    &mut NullSink,
+                    |path| workspace.read_back(path),
+                    |path, text| {
+                        if fails {
+                            return Err(WorkspaceError::Io {
+                                path: path.display().to_string(),
+                                detail: "disk full".into(),
+                            });
+                        }
+                        workspace.put_back(
+                            path,
+                            &Before::Bytes(text),
+                            &mut crate::confirm::ApproveWrites,
+                        )
+                    },
+                );
+
+                let case = format!("{alias:?}, fails: {fails}");
+                assert_eq!(result.is_err(), fails, "{case}");
+                if fails {
+                    assert_eq!(record.paths(), std::slice::from_ref(&memory), "{case}");
+                    assert!(!project.trust.is_trusted(&memory), "{case}");
+                    assert!(!project.trust.is_trusted(&project.key()), "{case}");
+                } else {
+                    assert_eq!(
+                        record.paths(),
+                        Vec::<String>::new(),
+                        "the memory the file is under another name stayed in the record: {case}"
+                    );
+                    assert_eq!(project.trust, before, "{case}");
+                }
+            }
+        }
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// Unwinding out of the write cannot leave the earlier grant over bytes that changed under any
+    /// name of the file. The fault this rejects is distrusting the name the backup was taken under
+    /// alone, which leaves the other name read as trusted while the file is half written.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::panic, reason = "the write panics to stand for an unwind")]
+    fn every_name_of_the_file_is_distrusted_before_the_write_is_entered() {
+        for alias in [Alias::HardLink, Alias::SymbolicLink] {
+            let mut project = Project::new("hunks-unwinds-every-name", AFTER);
+            let (backup, other) = also_named(&project, alias, "other.txt");
+            let hunks = project.listed(&backup).files.remove(0).hunks;
+            let workspace = project.workspace.clone();
+
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                reject_with(
+                    &workspace,
+                    &backup,
+                    &hunks[0],
+                    &project.snapshot,
+                    &mut project.trust,
+                    None,
+                    &mut NullSink,
+                    |path| workspace.read_back(path),
+                    |_, _| panic!("entered"),
+                )
+            }));
+
+            assert!(result.is_err(), "{alias:?}");
+            assert_eq!(
+                project.trust.integrity_of(&project.key()),
+                Some(Integrity::Untrusted),
+                "{alias:?}"
+            );
+            assert_eq!(
+                project.trust.integrity_of(&other),
+                Some(Integrity::Untrusted),
+                "the other name of the file stayed trusted while it was written: {alias:?}"
+            );
+        }
+    }
+
     /// Files that were written in different turns of a line are not mixed: a path is taken from
     /// the backup it was kept under.
     #[test]
@@ -1304,13 +1604,17 @@ mod tests {
     fn bytes_are_handed_over_only_for_a_path_the_map_vouches_for() {
         let project = Project::new("hunks-vouched", AFTER);
         let key = key_of(&project.path);
+        let names = Names {
+            every: vec![key],
+            complete: true,
+        };
         let mut distrusting = project.trust.clone();
         distrusting.distrust("a.txt");
 
         let handed = |trust: &TrustStore| {
             let mut sink = NullSink;
             let mut policy = policy(&project.workspace, trust, &mut sink).unwrap();
-            vouched(&mut policy, &key, AFTER.as_bytes().to_vec())
+            vouched(&mut policy, &names, AFTER.as_bytes().to_vec())
         };
 
         assert_eq!(handed(&project.trust), Ok(AFTER.as_bytes().to_vec()));

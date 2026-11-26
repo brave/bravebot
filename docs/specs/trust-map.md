@@ -17,6 +17,7 @@ governs:
   - crates/agent/src/workspace/resolve.rs
   - crates/agent/src/workspace/volume.rs
   - crates/agent/src/rewind.rs
+  - crates/agent/src/hunks.rs
   - crates/agent/src/scratch.rs
   - crates/agent/src/trusted.rs
   - crates/cli/src/main.rs
@@ -220,9 +221,10 @@ untrusted under the other name too.
 | Long s | `ſrc/a.md` | one rule where the volume folds case | covered | `bravebot_core::trust::a_folding_volume_reads_a_long_s_as_the_letter_it_opens_as` |
 | Letter whose case is two letters | `claß.md` and `class.md` | a distrust, an undecided boundary and the writer reservation join the two; a trust reaches only the spelling it was written about | covered | `bravebot_core::trust::a_trust_does_not_reach_a_spelling_only_full_case_folding_joins`, `bravebot_core::trust::a_refusal_about_a_spelling_only_full_case_folding_joins_decides_the_other` |
 | NFC and NFD | `café.md` in either form | a distrust, an undecided boundary and the writer reservation join the forms; a trust reaches only the spelling it was written about | covered, whichever form the rule and the file are in | `bravebot_agent::workspace::a_canonically_equivalent_spelling_of_a_distrusted_file_is_read_as_untrusted`, `bravebot_core::permissions::a_deny_or_ask_rule_covers_every_canonical_spelling_of_a_name` |
-| Symbolic link | a link to the file, or on the way to it | the other names are found by following the link, so a read is untrusted where the map distrusts any of them, a write, a `run` redirection included, distrusts all of them, and a writer under one name refuses a writer under the other (TRUST-4) | covered | `bravebot_agent::workspace::each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_listed_gap`, `each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_is_a_listed_gap`, `each_alias_in_the_table_is_refused_as_a_second_writer_unless_it_is_a_listed_gap`, `bravebot_agent::workspace::a_trusted_write_does_not_read_back_as_trusted_through_a_name_in_a_distrusted_directory`, `bravebot_agent::turn::a_redirection_distrusts_every_name_of_the_file_it_wrote`, `bravebot_agent::turn::a_line_naming_one_file_under_two_of_its_names_is_refused_as_a_second_writer`, `bravebot_agent::turn::each_alias_in_the_table_reads_back_a_redirection_through_it_as_untrusted_unless_it_is_a_listed_gap` |
-| Hard link | a second entry for the file | on Unix, as for a symbolic link, the other names found by device and inode; on Windows the file index is not read, so a hard link stays a Known cost there | covered on Unix, by device and inode | the `each_alias_in_the_table_` tests above, the two redirection tests of the previous row, `bravebot_agent::workspace::the_other_names_of_a_file_are_its_hard_links_landing_and_second_path` |
+| Symbolic link | a link to the file, or on the way to it | the other names are found by following the link, so a read is untrusted where the map distrusts any of them, a write, a `run` redirection, a rewind and a `/hunks` put back included, distrusts all of them, and a writer under one name refuses a writer under the other (TRUST-4) | covered | `bravebot_agent::workspace::each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_listed_gap`, `each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_is_a_listed_gap`, `each_alias_in_the_table_is_refused_as_a_second_writer_unless_it_is_a_listed_gap`, `bravebot_agent::workspace::a_trusted_write_does_not_read_back_as_trusted_through_a_name_in_a_distrusted_directory`, `bravebot_agent::turn::a_redirection_distrusts_every_name_of_the_file_it_wrote`, `bravebot_agent::turn::a_line_naming_one_file_under_two_of_its_names_is_refused_as_a_second_writer`, `bravebot_agent::turn::each_alias_in_the_table_reads_back_a_redirection_through_it_as_untrusted_unless_it_is_a_listed_gap` |
+| Hard link | a second entry for the file | on Unix, as for a symbolic link, the other names found by device and inode; on Windows the file index is not read, so a hard link stays a Known cost there | covered on Unix, by device and inode | the `each_alias_in_the_table_` tests above, the two redirection tests of the previous row, `bravebot_agent::workspace::the_other_names_of_a_file_are_its_hard_links_landing_and_second_path`, `bravebot_agent::rewind::a_rewind_into_a_file_hard_linked_as_a_memory_records_the_memory`, `bravebot_agent::hunks::a_file_distrusted_only_under_another_name_is_not_compared_and_not_written` |
 | Another path to the same tree | a macOS firmlink, a Linux bind mount, once both are open | on Unix, as for a symbolic link, with the name under each open directory that is the same directory found by device and inode; `/add-dir` and every other door refuse to open a second path to a tree that is already open ([TRUST-9](#TRUST-9)), so the pair is reached only by a tree opened before the other, which the lookup covers; on Windows a Known cost | covered on Unix, by device and inode of the directory | `bravebot_agent::workspace::a_name_is_respelled_under_each_open_directory_that_is_the_same_directory`, `bravebot_agent::workspace::a_firmlink_name_of_the_working_directory_is_another_key_for_the_file`, `a_file_written_through_a_second_path_to_the_tree_reads_back_untrusted_through_the_other` and `a_second_writer_through_a_second_path_to_the_tree_is_refused` (any Unix host, identity injected), `a_file_written_through_the_firmlink_spelling_reads_back_untrusted_through_the_other` and `a_second_writer_through_the_other_firmlink_spelling_is_refused` (macOS), the "another path to the same tree" row of the alias table (macOS), `bravebot_sandbox::programs::a_path_entry_the_volume_opens_as_a_directory_a_stage_may_write_is_not_searched` for the program lookup |
+| Directory junction | `junction\a.md`, where a directory junction made with `mklink /J` leads to the directory holding `a.md` | Windows only. The other-names lookup has no arm that finds the names of a file under a junction, and what `Workspace::landing` makes of a name that goes through one has not been observed on a Windows host, so a junction is two names and a rule about one does not reach the other. A write through one, a `run` redirection, a rewind and a `/hunks` put back included, distrusts the name typed and is not relied on for any other. Known cost | a rule about one name does not reach the other (Known cost) | none: no Windows host has run a test of a junction. The gap is the Known cost "A rule is keyed on the name, and a file's other names are found when it is read or written" (Windows has no hard link or second-path lookup) |
 | 8.3 short name | `ENV~1` for `.env` | refused on Windows, never reaches the map | refused | `bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only` |
 | Alternate data stream | `.env::$DATA` | refused on Windows | refused | same |
 | Trailing dot or space | `.env.` | refused on Windows | refused | same |
@@ -244,6 +246,7 @@ accepted, since it names that one directory.
 | Symbolic link | `Workspace::landing` has no `cfg`, so the landing of a link is found on Windows as on other hosts; no test creates a link on Windows, which needs a privilege there |
 | Hard link | not found. The file index is not in the standard library, so a hard link is two names and a rule about one does not reach the other (Known cost) |
 | Another path to the same tree | not found, for the same reason (Known cost) |
+| Directory junction | not found, and what a name that goes through one lands on has not been observed. A test of it needs a Windows host (Known cost) |
 | 8.3 short name, alternate data stream, trailing dot or space | refused before a key is made |
 | Leading or trailing whitespace | a trailing space is refused (previous row); leading and other trailing whitespace is part of the name |
 
@@ -251,8 +254,8 @@ The unix-only tests of the hard link and second path rows carry `#[cfg(unix)]`. 
 is checked by `cargo clippy --target x86_64-pc-windows-gnu -p bravebot-agent -p bravebot-core
 --all-targets -- -D warnings`, which compiles it on any host, with `CC_x86_64_pc_windows_gnu=true`
 and `AR_x86_64_pc_windows_gnu=true` where no Windows C compiler is installed, since only the
-`ring` build script uses them. No test of the hard link or second path rows runs on Windows,
-which is a Known cost.
+`ring` build script uses them. No test of the hard link, second path or junction rows runs on
+Windows, and none of a rewind or a `/hunks` put back through them does, which is a Known cost.
 
 **Whitespace is out of scope for the identity lookup.** The identity lookup finds names that are
 one file by device and inode. A volume that folds `note.md ` and `note.md` into one file
@@ -584,6 +587,26 @@ each `..` taken out where no link is on the way, and the place the path lands. A
 one file under two spellings (`> d/../dd.txt` and then `> dd.txt`) is refused at the second open
 as a second writer, in either order.
 
+A rewind and a `/hunks` put back are writes entered under every name as well. The other names of the
+file are looked up as a write looks them up, from the names and metadata of the file system and never
+from bytes, and every name is distrusted in the session's map before the bytes go back. A name that is
+a definition's memory is recorded first ([MEMORY-5](definition-memory.md#MEMORY-5)), and a put back
+that cannot be recorded is refused. A write that fails leaves every name distrusted. After a complete
+write, a rewind of bytes the map trusted at the rewind point gives each name the decision it had there,
+and `/hunks` gives the map back as it was before the write, and each settles the record for every name.
+Where the lookup of the other names did not finish, a rewind does not trust the file again. A `/hunks`
+comparison and its re-read before the write ask under every name and take the weakest answer, so a file
+distrusted under another name, or whose other names were not all found, is not compared and is not
+written, and the names are looked up again after the question about a protected name, so a link made
+while a person answers is covered. Neither takes the writer reservation. The reservation is held in the
+live file authority by the effects of a turn, and neither enters that authority under any name, the one
+typed included. A rewind runs after the turn's delegates and background jobs have finished cleanup and
+the language servers have stopped ([SESSION-19](sessions.md#SESSION-19)), and `/hunks` waits for the
+turn to end ([CMD-8](commands.md#CMD-8)), so no effect of the turn is open on a name the put back
+enters. A program that something other than the turn started is not tracked or coordinated
+([SESSION-19](sessions.md#SESSION-19)), which is the cost of a file another process writes
+(Known costs).
+
 `verified-by: bravebot_core::policy::a_lookup_of_other_names_that_did_not_finish_reads_as_untrusted`
 `verified-by: bravebot_core::policy::a_trusted_write_leaves_an_exact_distrust_on_another_name_of_the_file`
 `verified-by: bravebot_core::file_authority::an_exact_distrust_on_another_name_survives_completion_and_a_drop_distrusts_every_name`
@@ -627,6 +650,13 @@ as a second writer, in either order.
 `verified-by: bravebot_agent::turn::a_redirection_through_a_symbolic_link_distrusts_the_file_the_link_leads_to`
 `verified-by: bravebot_agent::turn::a_redirection_through_a_hard_link_distrusts_the_other_name_of_the_file`
 `verified-by: bravebot_agent::turn::a_line_naming_a_file_and_a_symbolic_link_to_it_is_refused_as_a_second_writer`
+`verified-by: bravebot_agent::rewind::a_rewind_into_a_file_that_is_also_a_memory_records_the_memory_too`
+`verified-by: bravebot_agent::rewind::a_rewind_into_a_file_hard_linked_as_a_memory_records_the_memory`
+`verified-by: bravebot_agent::rewind::a_rewind_that_ends_trusted_settles_every_name_of_the_file`
+`verified-by: bravebot_agent::hunks::a_file_distrusted_only_under_another_name_is_not_compared_and_not_written`
+`verified-by: bravebot_agent::hunks::a_file_whose_other_names_were_not_all_found_is_not_compared`
+`verified-by: bravebot_agent::hunks::a_hunk_put_back_into_a_file_that_is_also_a_memory_distrusts_and_settles_the_memory`
+`verified-by: bravebot_agent::hunks::every_name_of_the_file_is_distrusted_before_the_write_is_entered`
 `verified-by: bravebot_agent::turn::a_redirection_through_a_link_to_a_memory_records_the_memory`
 `verified-by: bravebot_agent::turn::a_redirection_reopened_through_a_link_an_earlier_part_made_distrusts_the_file_it_reaches`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_is_a_listed_gap`
@@ -1239,6 +1269,8 @@ so and names the call, and elsewhere it names `/add-dir` alone
 
 Putting a file back is a write, and where it lands is decided when it is put back rather than when
 it was written. That holds for a rewind and for a file a command line wrote being put back as it was.
+Its trust is decided under every name the file has ([TRUST-4](#TRUST-4)), and it takes no writer
+reservation.
 A file of a directory opened beside the working directory has to land in one, and any other file in
 the working directory, so a directory on the path that has since become a link elsewhere gets the
 path refused and named, whether putting it back would write the file or remove it. Removing a file
@@ -2349,6 +2381,12 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   spelling leaves the file untrusted under every name it was entered under, which costs the person a
   vouch to trust it again. A file the program opens on its own, which
   is `cmd -o notes.txt` or anything a build writes, is not.
+
+  A line started with `background: true`, and a line a person moved to the background, has no
+  redirection ([RUN-15](tools/run.md#RUN-15), [RUN-25](tools/run.md#RUN-25)), so the harness opens no
+  destination for it and enters no name of one. What such a line's programs write is the file a
+  program opens on its own, which is the cost of the previous sentence and is not looked at under any
+  name.
 
   `/export` is the other file this process opens itself. It is not recorded, because a rule recorded
   here is gone in a fresh session while the file stays. It is kept free of what a screen alone was

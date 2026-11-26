@@ -1354,6 +1354,15 @@ Built.
 - **The open race is closed on Unix alone.** On Windows the file a carry opens is not compared with
   the one the walk examined, so a link a program puts in its place during the copy is followed
   ([CHECKOUT-23](#CHECKOUT-23)).
+- **A carried file is labelled under the name it is carried by, and its other names are not looked
+  up.** The carry copies the rules held under the working directory to the checkout and does not ask
+  [TRUST-4](trust-map.md#TRUST-4)'s lookup for the other names of a file. A file reached through a
+  link in the working directory is not carried at all, since `walk_plain` refuses a link in its place
+  or on the way to it ([CHECKOUT-23](#CHECKOUT-23)), so the lookup would only matter for a hard link,
+  which is carried as a plain file under its own name. A hard link whose other name alone the map
+  distrusts is carried under the rules the map holds for its own name, and in the checkout it reads as
+  those rules say. The other names are not looked up there, as a rewind and a `/hunks` put back look
+  them up for the file they write ([TRUST-4](trust-map.md#TRUST-4)).
 - **The person is not shown what was carried.** The delegate and the planner are told, and the trail
   holds the checkout's path, so the person's own screen does not list the files
   ([CHECKOUT-23](#CHECKOUT-23)).
