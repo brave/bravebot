@@ -494,6 +494,26 @@ fn the_loop_due_soonest_goes_first() {
     settle(&mut bridge, &handle);
 }
 
+/// LOOP-13. Rejects a list whose rows do not say how long each loop has left, which the window's
+/// row needs to count loops and lines `/after` holds apart.
+#[test]
+fn each_listed_loop_says_how_long_it_has_left() {
+    let (mut bridge, handle, _events, _bodies, _held) = opened();
+    typed(&mut bridge, &handle, "10m slow");
+    typed(&mut bridge, &handle, "5m fast");
+
+    let listed = call(&mut bridge, "loops.list", json!({"session": handle})).unwrap();
+    let left: Vec<u64> = listed["loops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["until"].as_u64().unwrap())
+        .collect();
+    assert!((590..=600).contains(&left[0]), "{listed}");
+    assert!((290..=300).contains(&left[1]), "{listed}");
+    assert_eq!(listed["soonest"].as_u64(), Some(left[1]), "{listed}");
+}
+
 /// LOOP-11. Rejects a loop that outlives seven days, or one that ends without saying so.
 #[test]
 fn a_loop_ends_after_seven_days() {

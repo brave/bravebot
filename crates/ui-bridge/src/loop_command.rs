@@ -205,7 +205,9 @@ fn stop(loops: &mut Loops, which: Option<usize>) -> Value {
 }
 
 /// `loops.list`: every loop the session holds, for the window's row beside the composer and its
-/// status view, with the seconds until the soonest tick where one is armed.
+/// status view, with the seconds until the soonest tick where one is armed. Each row also carries
+/// its own seconds as `until`, so the window can count loops and the lines `/after` holds apart, as
+/// the terminal's row does.
 pub fn list(loops: &Loops, now: Instant) -> Value {
     let rows: Vec<Value> = loops
         .iter()
@@ -218,6 +220,7 @@ pub fn list(loops: &Loops, now: Instant) -> Value {
                 "ticks": running.ticks(),
                 "quiet": running.quiet(),
                 "once": running.once(),
+                "until": running.until(now).map(|left| left.as_secs()),
             })
         })
         .collect();
