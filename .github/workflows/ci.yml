@@ -836,13 +836,19 @@ jobs:
           mkdir -p "$archives"
           set -- "$archives"/*.deb
           if [ -e "$1" ]; then
-            if sudo timeout 180 dpkg -i "$@"; then
+            # The cache holds the packages the image lacked. When the image has an older libasound2t64
+            # and libasound2-data, those are both new, the data package Breaks the old library, and
+            # dpkg stops at the Breaks and leaves the new library unconfigured (#4676).
+            # --force-breaks lets it unpack both before it configures either.
+            if sudo timeout 180 dpkg -i --force-breaks "$@"; then
               exit 0
             fi
             echo "installing the cached packages failed, falling back to apt" >&2
           fi
           for attempt in 1 2 3 4; do
-            if sudo timeout 180 sh -c "apt-get update && apt-get install -y -o Dir::Cache::archives=$archives xvfb libgtk-3-0 libnss3 libasound2t64"; then
+            # --fix-broken: a dpkg run that failed part way leaves a package unpacked and not
+            # configured, and apt refuses to install anything until that is repaired.
+            if sudo timeout 180 sh -c "apt-get update && apt-get install -y --fix-broken -o Dir::Cache::archives=$archives xvfb libgtk-3-0 libnss3 libasound2t64"; then
               exit 0
             fi
             echo "apt attempt $attempt failed or timed out" >&2
