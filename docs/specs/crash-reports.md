@@ -400,9 +400,9 @@ the next start, the cost the desktop switch has too.
 `verified-by: bravebot_tui::crash_reports_command::the_command_refuses_exactly_where_the_shared_rule_says_the_person_does_not_decide`
 `verified-by: bravebot_tui::crash_reports_command::the_command_writes_the_persons_key_and_refuses_where_the_environment_decides`
 `verified-by: bravebot_tui::crash_reports_incognito::an_incognito_session_is_refused_and_leaves_no_settings_file`
-`verified-by: bravebot_tui::app::the_crash_reports_command_carries_its_word`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_crash_reports_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::tests::commands_words::the_crash_reports_command_carries_its_word`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_crash_reports_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 `verified-by: bravebot_backtrace::lib::saving_writes_the_one_key_and_keeps_the_rest_of_the_file`
 `verified-by: bravebot_backtrace::lib::saving_leaves_a_file_that_is_not_a_document_and_makes_a_missing_one`
 `verified-by: by-construction (no test covers the line on whether this session sends: it reads bravebot_backtrace::notice_due and notice_recorded, and one of them is true only in a launch that bravebot_backtrace::start started reporting in, as bravebot_backtrace::lib::with_nothing_started_no_notice_is_recorded pins)`

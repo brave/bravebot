@@ -224,13 +224,13 @@ than necessary, which is a mistake this project made before measuring the endpoi
 `verified-by: bravebot_config::lib::adopting_the_budget_already_in_use_reports_no_change`
 `verified-by: bravebot_config::lib::a_window_nobody_advertised_puts_the_default_back_in_place_of_an_adopted_budget`
 `verified-by: bravebot_config::lib::a_window_nobody_advertised_leaves_a_budget_set_by_hand_alone`
-`verified-by: bravebot_tui::app::the_window_of_a_model_chosen_earlier_is_found_in_the_listing`
-`verified-by: bravebot_tui::app::nothing_chosen_has_no_advertised_window`
-`verified-by: bravebot_tui::app::a_model_the_listing_no_longer_offers_has_no_window`
-`verified-by: bravebot_tui::app::a_model_that_advertises_nothing_has_no_window`
-`verified-by: bravebot_tui::app::a_run_with_no_session_adopts_the_window_of_the_model_in_force`
-`verified-by: bravebot_tui::app::a_run_whose_model_no_roster_describes_keeps_the_default`
-`verified-by: bravebot_tui::app::a_start_adopts_an_advertised_window_without_a_note_and_a_pick_says_it`
+`verified-by: bravebot_tui::app::tests::backends_models::the_window_of_a_model_chosen_earlier_is_found_in_the_listing`
+`verified-by: bravebot_tui::app::tests::remainder::nothing_chosen_has_no_advertised_window`
+`verified-by: bravebot_tui::app::tests::remainder::a_model_the_listing_no_longer_offers_has_no_window`
+`verified-by: bravebot_tui::app::tests::remainder::a_model_that_advertises_nothing_has_no_window`
+`verified-by: bravebot_tui::app::tests::remainder::a_run_with_no_session_adopts_the_window_of_the_model_in_force`
+`verified-by: bravebot_tui::app::tests::remainder::a_run_whose_model_no_roster_describes_keeps_the_default`
+`verified-by: bravebot_tui::app::tests::backends_models::a_start_adopts_an_advertised_window_without_a_note_and_a_pick_says_it`
 
 <a id="COMPACT-10"></a>
 ### COMPACT-10: every compaction is recorded, with what it gave up and where it happened
@@ -329,8 +329,8 @@ the summariser does not. Without the argument they find out what was dropped on 
 
 `verified-by: bravebot_agent::turn::a_focus_typed_after_compact_reaches_the_summariser_after_the_exchange`
 `verified-by: bravebot_agent::turn::the_trail_records_that_a_focus_was_given_and_never_its_words`
-`verified-by: bravebot_tui::app::the_compact_command_carries_its_focus_verbatim`
-`verified-by: bravebot_tui::app::a_word_longer_than_compact_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::commands_words::the_compact_command_carries_its_focus_verbatim`
+`verified-by: bravebot_tui::app::tests::commands_words::a_word_longer_than_compact_is_still_a_prompt`
 `verified-by: bravebot_tui::render::the_compact_command_offers_a_focus_after_its_word`
 
 <a id="COMPACT-14"></a>

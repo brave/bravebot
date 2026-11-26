@@ -306,7 +306,7 @@ they did not open, and they would need a second press to reach the conversation.
 `verified-by: bravebot_tui::app::tests::watching::q_closes_outright_where_there_is_no_list_to_go_back_to`
 `verified-by: bravebot_tui::app::tests::watching::the_way_back_from_an_answer_the_view_opened_by_itself_closes_it`
 `verified-by: bravebot_tui::app::tests::watching::an_answer_over_a_row_opened_from_the_list_closes_on_the_way_back`
-`verified-by: bravebot_tui::app::escape_from_a_clicked_delegate_returns_to_where_the_click_was`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::escape_from_a_clicked_delegate_returns_to_where_the_click_was`
 `verified-by: bravebot_tui::render::the_footer_says_q_closes_a_row_the_list_did_not_open`
 `verified-by: bravebot_tui::app::tests::watching::escape_leaves_the_view_the_way_q_does`
 `verified-by: bravebot_tui::app::tests::watching::the_view_answers_the_stop_keys_before_a_single_request_does`
@@ -594,8 +594,8 @@ sends, so neither half reaches the planner from it.
 `verified-by: bravebot_tui::state::an_aside_keeps_its_place_when_a_delegate_is_spawned_after_it`
 `verified-by: bravebot_tui::state::neither_half_of_an_aside_reaches_the_transcript`
 `verified-by: bravebot_tui::state::opening_an_aside_does_not_draw_a_delegates_lines`
-`verified-by: bravebot_tui::app::answering_a_question_beside_the_work_leaves_the_transcript_alone`
-`verified-by: bravebot_tui::app::an_answer_being_written_beside_the_work_is_not_drawn_over_the_turn`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::answering_a_question_beside_the_work_leaves_the_transcript_alone`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::an_answer_being_written_beside_the_work_is_not_drawn_over_the_turn`
 `verified-by: bravebot_tui::render::the_list_names_an_aside_row_as_an_aside`
 `verified-by: bravebot_tui::render::the_list_row_of_an_aside_says_whether_the_record_keeps_its_answer`
 `verified-by: bravebot_tui::render::stepping_from_one_kind_of_row_to_another_changes_the_header_and_the_footer`
@@ -658,10 +658,10 @@ says the question was stopped or why it failed, and a stopped or failed question
 panel. A `/btw` asked beside a turn adds one more line when it goes out, naming the Asides panel and
 saying the turn goes on. Neither line moves the running turn or the lines queued behind it.
 
-`verified-by: bravebot_tui::app::a_btw_answered_beside_a_turn_is_a_row_and_does_not_open_the_view`
-`verified-by: bravebot_tui::app::btw_typed_mid_turn_goes_out_beside_the_turn_and_is_not_queued`
-`verified-by: bravebot_tui::app::a_btw_answered_after_the_turn_ended_is_a_row_and_a_line_and_leaves_the_view`
-`verified-by: bravebot_tui::app::a_btw_that_failed_after_the_turn_ended_says_why`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_btw_answered_beside_a_turn_is_a_row_and_does_not_open_the_view`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::btw_typed_mid_turn_goes_out_beside_the_turn_and_is_not_queued`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_btw_answered_after_the_turn_ended_is_a_row_and_a_line_and_leaves_the_view`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_btw_that_failed_after_the_turn_ended_says_why`
 `verified-by: bravebot_tui::state::a_question_asked_at_rest_is_named_on_the_indicator_until_it_ends`
 `verified-by: bravebot_tui::state::answering_a_question_beside_the_work_opens_the_view_on_it`
 `verified-by: bravebot_tui::state::answering_a_question_while_the_view_is_open_keeps_the_turns_own_view`
@@ -841,7 +841,7 @@ has to spend a turn asking whether the session is still working.
 `verified-by: bravebot_tui::render::the_still_active_row_is_not_drawn_while_a_turn_is_running`
 `verified-by: bravebot_tui::render::a_failed_turn_keeps_its_reason_and_gains_the_still_active_row`
 `verified-by: bravebot_tui::render::a_narrow_terminal_gives_up_the_pointer_then_the_parts_whole`
-`verified-by: bravebot_tui::app::a_session_is_owed_a_frame_once_a_second_and_only_while_something_is_active`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_session_is_owed_a_frame_once_a_second_and_only_while_something_is_active`
 `verified-by: bravebot_tui::indicator::the_standing_light_changes_every_second`
 `verified-by: bravebot_tui::indicator::the_standing_light_stays_on_where_no_motion_is_asked_for`
 

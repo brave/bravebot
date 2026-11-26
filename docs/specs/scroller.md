@@ -110,7 +110,7 @@ the person opened with a key and closes with any of four.
 `verified-by: bravebot_tui::app::tests::scroller::enter_sends_nothing_from_inside_the_scroller`
 `verified-by: bravebot_tui::app::tests::scroller::a_key_the_scroller_does_not_take_does_nothing`
 `verified-by: bravebot_tui::app::tests::scroller::a_chord_the_scroller_does_not_name_does_nothing`
-`verified-by: bravebot_tui::app::the_watch_key_opens_the_delegates_from_the_scroller_and_closing_returns_to_it`
+`verified-by: bravebot_tui::app::tests::mouse_transcript_clicks::the_watch_key_opens_the_delegates_from_the_scroller_and_closing_returns_to_it`
 `verified-by: bravebot_tui::render::the_help_names_the_watch_chord_as_it_is_bound`
 `verified-by: bravebot_tui::app::tests::scroller::the_line_comes_back_untouched_when_the_scroller_closes`
 `verified-by: bravebot_tui::app::tests::scroller::a_paste_and_a_drop_do_not_reach_the_line_while_the_scroller_is_open`

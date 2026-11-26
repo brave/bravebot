@@ -52,8 +52,8 @@ The tool is offered only to a turn whose front end keeps the link: the terminal,
 `verified-by: bravebot_agent::turn::an_address_the_person_typed_reaches_set_link_and_leaves_the_turn`
 `verified-by: bravebot_agent::turn::an_address_the_person_did_not_type_leaves_nothing_in_links`
 `verified-by: bravebot_agent::turn::a_link_recorded_in_a_turn_that_then_fails_still_leaves_the_turn`
-`verified-by: bravebot_tui::app::a_link_set_by_a_turn_that_failed_reaches_the_record_and_the_panel`
-`verified-by: bravebot_tui::app::a_turn_that_set_no_link_leaves_the_links_it_found`
+`verified-by: bravebot_tui::app::tests::remainder::a_link_set_by_a_turn_that_failed_reaches_the_record_and_the_panel`
+`verified-by: bravebot_tui::app::tests::remainder::a_turn_that_set_no_link_leaves_the_links_it_found`
 `verified-by: bravebot_ui_bridge::link_tests::a_link_set_by_a_turn_that_failed_reaches_the_record_and_leaves_the_rewind_points`
 `verified-by: bravebot_ui_bridge::link_tests::a_turn_that_set_no_link_opens_no_record`
 `verified-by: bravebot_agent::turn::a_turn_whose_front_end_keeps_no_link_is_not_offered_set_link`

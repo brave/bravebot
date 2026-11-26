@@ -75,16 +75,16 @@ send the same byte for Enter whichever modifier was held. Both work while a turn
 mode. A newline lands at the caret, does not arm shell mode, and Enter still sends a paragraph
 written this way. Enter on an empty line does nothing.
 
-`verified-by: bravebot_tui::app::shift_enter_starts_a_line_instead_of_sending`
-`verified-by: bravebot_tui::app::ctrl_j_starts_a_line_too`
-`verified-by: bravebot_tui::app::ctrl_j_is_not_swallowed_while_a_turn_runs`
-`verified-by: bravebot_tui::app::shift_enter_works_in_shell_mode`
-`verified-by: bravebot_tui::app::shift_enter_works_while_a_turn_runs`
-`verified-by: bravebot_tui::app::a_newline_lands_at_the_caret`
-`verified-by: bravebot_tui::app::a_newline_does_not_arm_shell_mode`
-`verified-by: bravebot_tui::app::enter_still_sends_a_paragraph_written_with_shift_enter`
-`verified-by: bravebot_tui::app::enter_submits_the_prompt`
-`verified-by: bravebot_tui::app::enter_on_empty_input_does_nothing`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::shift_enter_starts_a_line_instead_of_sending`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::ctrl_j_starts_a_line_too`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::ctrl_j_is_not_swallowed_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::shift_enter_works_in_shell_mode`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::shift_enter_works_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::a_newline_lands_at_the_caret`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::a_newline_does_not_arm_shell_mode`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::enter_still_sends_a_paragraph_written_with_shift_enter`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::enter_submits_the_prompt`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::enter_on_empty_input_does_nothing`
 
 
 <a id="INPUT-3"></a>
@@ -269,38 +269,38 @@ was in the box: the key for abandoning a thought ended the session as soon as th
 short enough, and pressing it twice in a row meant two different things, the second of which was
 the exit. One way out, and it is the one people already reach for.
 
-`verified-by: bravebot_tui::app::escape_clears_a_typed_line_without_quitting`
-`verified-by: bravebot_tui::app::escape_on_an_empty_line_does_not_quit`
-`verified-by: bravebot_tui::app::escape_twice_clears_and_stays`
-`verified-by: bravebot_tui::app::ctrl_c_quits_on_the_second_press`
-`verified-by: bravebot_tui::app::one_interrupt_another_program_wrote_does_not_end_the_session`
-`verified-by: bravebot_tui::app::any_other_key_withdraws_the_offer_to_leave`
-`verified-by: bravebot_tui::app::input_that_is_not_a_key_withdraws_the_offer_to_leave`
-`verified-by: bravebot_tui::app::two_interrupts_that_arrived_together_do_not_end_the_session`
-`verified-by: bravebot_tui::app::two_end_of_transmissions_that_arrived_together_do_not_end_the_session`
-`verified-by: bravebot_tui::app::a_refused_way_out_says_so`
-`verified-by: bravebot_tui::app::letting_go_of_the_keys_in_either_order_still_leaves`
-`verified-by: bravebot_tui::app::a_press_on_its_own_after_a_run_still_leaves`
-`verified-by: bravebot_tui::app::an_interrupt_still_stops_a_turn_on_the_first_press`
-`verified-by: bravebot_tui::app::ctrl_c_stops_a_turn_rather_than_leaving`
-`verified-by: bravebot_tui::app::ctrl_c_clears_the_line_before_it_leaves`
-`verified-by: bravebot_tui::app::ctrl_c_leaves_once_there_is_nothing_left_to_stop`
-`verified-by: bravebot_tui::app::a_taken_line_is_not_claimed_where_the_box_was_empty`
-`verified-by: bravebot_tui::app::the_way_out_stops_being_offered_at_the_next_press`
+`verified-by: bravebot_tui::app::tests::input_keys::escape_clears_a_typed_line_without_quitting`
+`verified-by: bravebot_tui::app::tests::input_keys::escape_on_an_empty_line_does_not_quit`
+`verified-by: bravebot_tui::app::tests::input_keys::escape_twice_clears_and_stays`
+`verified-by: bravebot_tui::app::tests::input_keys::ctrl_c_quits_on_the_second_press`
+`verified-by: bravebot_tui::app::tests::input_keys::one_interrupt_another_program_wrote_does_not_end_the_session`
+`verified-by: bravebot_tui::app::tests::input_keys::any_other_key_withdraws_the_offer_to_leave`
+`verified-by: bravebot_tui::app::tests::input_keys::input_that_is_not_a_key_withdraws_the_offer_to_leave`
+`verified-by: bravebot_tui::app::tests::input_keys::two_interrupts_that_arrived_together_do_not_end_the_session`
+`verified-by: bravebot_tui::app::tests::input_keys::two_end_of_transmissions_that_arrived_together_do_not_end_the_session`
+`verified-by: bravebot_tui::app::tests::input_keys::a_refused_way_out_says_so`
+`verified-by: bravebot_tui::app::tests::input_keys::letting_go_of_the_keys_in_either_order_still_leaves`
+`verified-by: bravebot_tui::app::tests::input_keys::a_press_on_its_own_after_a_run_still_leaves`
+`verified-by: bravebot_tui::app::tests::input_keys::an_interrupt_still_stops_a_turn_on_the_first_press`
+`verified-by: bravebot_tui::app::tests::input_keys::ctrl_c_stops_a_turn_rather_than_leaving`
+`verified-by: bravebot_tui::app::tests::input_keys::ctrl_c_clears_the_line_before_it_leaves`
+`verified-by: bravebot_tui::app::tests::input_keys::ctrl_c_leaves_once_there_is_nothing_left_to_stop`
+`verified-by: bravebot_tui::app::tests::input_keys::a_taken_line_is_not_claimed_where_the_box_was_empty`
+`verified-by: bravebot_tui::app::tests::input_keys::the_way_out_stops_being_offered_at_the_next_press`
 `verified-by: bravebot_tui::render::the_way_out_is_offered_where_the_line_went`
-`verified-by: bravebot_tui::app::escape_only_stops_and_ctrl_c_is_read_against_what_is_happening`
-`verified-by: bravebot_tui::app::a_stop_key_stops_a_summary_or_an_aside_and_never_leaves`
-`verified-by: bravebot_tui::app::a_stopped_summary_question_or_brief_says_so_and_is_not_reported_as_a_failure`
-`verified-by: bravebot_tui::app::a_summary_that_came_back_is_kept_though_a_stop_landed_with_it`
+`verified-by: bravebot_tui::app::tests::input_keys::escape_only_stops_and_ctrl_c_is_read_against_what_is_happening`
+`verified-by: bravebot_tui::app::tests::input_keys::a_stop_key_stops_a_summary_or_an_aside_and_never_leaves`
+`verified-by: bravebot_tui::app::tests::input_keys::a_stopped_summary_question_or_brief_says_so_and_is_not_reported_as_a_failure`
+`verified-by: bravebot_tui::app::tests::input_keys::a_summary_that_came_back_is_kept_though_a_stop_landed_with_it`
 `verified-by: bravebot_agent::turn::a_stop_pressed_during_a_summary_reaches_the_request_and_leaves_the_conversation_whole`
 `verified-by: bravebot_agent::turn::a_stop_pressed_during_a_question_reaches_the_request_and_nothing_is_answered`
-`verified-by: bravebot_tui::app::a_stop_key_takes_the_goal_off_and_stops_the_check`
-`verified-by: bravebot_tui::app::a_stopped_goal_check_is_not_reported_as_a_failure`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_stop_key_takes_the_goal_off_and_stops_the_check`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_stopped_goal_check_is_not_reported_as_a_failure`
 `verified-by: bravebot_agent::turn::a_stop_pressed_while_a_summary_is_out_walks_away_from_the_request`
 `verified-by: bravebot_agent::turn::a_stop_pressed_during_a_goal_check_reaches_the_request_and_no_verdict_comes_back`
-`verified-by: bravebot_tui::app::stopping_the_work_takes_the_offer_to_leave_down_with_it`
-`verified-by: bravebot_tui::app::stopping_a_single_request_takes_the_offer_to_leave_down`
-`verified-by: bravebot_tui::app::stopping_a_goal_check_takes_the_offer_to_leave_down`
+`verified-by: bravebot_tui::app::tests::input_keys::stopping_the_work_takes_the_offer_to_leave_down_with_it`
+`verified-by: bravebot_tui::app::tests::input_keys::stopping_a_single_request_takes_the_offer_to_leave_down`
+`verified-by: bravebot_tui::app::tests::input_keys::stopping_a_goal_check_takes_the_offer_to_leave_down`
 `verified-by: bravebot_aichat::client::a_stopped_stream_stops_before_the_reply_is_over`
 `verified-by: bravebot_aichat::client::a_stream_stopped_before_it_starts_reports_nothing`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_out_the_pause_between_attempts`
@@ -318,17 +318,17 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_agent::conversation::a_turn_taken_back_keeps_the_note_a_resume_added`
 `verified-by: bravebot_agent::conversation::a_turn_that_put_in_no_opening_takes_back_nothing`
 `verified-by: bravebot_agent::conversation::a_turn_that_compacted_is_not_taken_back`
-`verified-by: bravebot_tui::app::a_prompt_taken_out_of_the_conversation_is_recorded_without_an_offset`
+`verified-by: bravebot_tui::app::tests::input_keys::a_prompt_taken_out_of_the_conversation_is_recorded_without_an_offset`
 `verified-by: bravebot_tui::sessions::cancelled_attachments_return_to_the_editor_and_the_next_request`
 `verified-by: bravebot_tui::sessions::cancelled_attachments_preserve_a_stashed_draft`
 `verified-by: bravebot_tui::sessions::cancellation_keeps_attachment_ownership_when_the_prompt_stays_sent`
 `verified-by: bravebot_tui::state::a_turn_stopped_over_a_typed_line_keeps_the_line_and_the_prompt`
-`verified-by: bravebot_tui::app::a_key_that_would_stop_a_turn_is_answered_during_a_summary`
-`verified-by: bravebot_tui::app::escape_stops_the_turn_without_ending_the_session`
-`verified-by: bravebot_tui::app::ctrl_g_asks_for_the_editor`
-`verified-by: bravebot_tui::app::a_question_queued_behind_a_stop_is_declined_and_never_drawn`
-`verified-by: bravebot_tui::app::a_question_is_drawn_while_nothing_has_been_stopped`
-`verified-by: bravebot_tui::app::a_withdrawn_question_is_declined_in_the_shape_of_its_own_kind`
+`verified-by: bravebot_tui::app::tests::input_keys::a_key_that_would_stop_a_turn_is_answered_during_a_summary`
+`verified-by: bravebot_tui::app::tests::input_keys::escape_stops_the_turn_without_ending_the_session`
+`verified-by: bravebot_tui::app::tests::input_keys::ctrl_g_asks_for_the_editor`
+`verified-by: bravebot_tui::app::tests::input_keys::a_question_queued_behind_a_stop_is_declined_and_never_drawn`
+`verified-by: bravebot_tui::app::tests::input_keys::a_question_is_drawn_while_nothing_has_been_stopped`
+`verified-by: bravebot_tui::app::tests::input_keys::a_withdrawn_question_is_declined_in_the_shape_of_its_own_kind`
 `verified-by: bravebot_tui::render::a_turn_asked_to_stop_says_so_until_it_ends`
 `verified-by: bravebot_tui::state::the_stopping_mark_ends_with_the_turn`
 `verified-by: bravebot_tui::state::a_stopping_turn_says_how_many_delegates_it_waits_on`
@@ -449,23 +449,23 @@ Worst of the three was a key whose flag was set and whose answer was refused a p
 The press did nothing a person could see, and the list came up when the turn ended, unasked and
 attached to no press.
 
-`verified-by: bravebot_tui::app::the_two_paths_answer_the_same_set_of_keys`
-`verified-by: bravebot_tui::app::the_way_out_stops_being_offered_at_the_next_press_while_a_turn_runs`
-`verified-by: bravebot_tui::app::a_question_mark_lists_the_keys_while_a_turn_runs`
-`verified-by: bravebot_tui::app::a_slash_offers_every_command_and_no_skill_while_a_turn_runs`
-`verified-by: bravebot_tui::app::nothing_is_offered_while_a_turn_runs_for_a_prompt_an_unknown_word_or_a_file`
-`verified-by: bravebot_tui::app::nothing_is_offered_in_shell_mode_while_work_runs`
-`verified-by: bravebot_tui::app::tab_completes_a_half_typed_command_while_a_turn_runs`
-`verified-by: bravebot_tui::app::enter_completes_a_half_typed_command_instead_of_queueing_it_while_a_turn_runs`
-`verified-by: bravebot_tui::app::the_arrows_choose_the_row_while_a_turn_runs`
-`verified-by: bravebot_tui::app::the_trail_can_be_asked_for_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::input_turn::the_two_paths_answer_the_same_set_of_keys`
+`verified-by: bravebot_tui::app::tests::input_turn::the_way_out_stops_being_offered_at_the_next_press_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::input_turn::a_question_mark_lists_the_keys_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_slash_offers_every_command_and_no_skill_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::commands_words::nothing_is_offered_while_a_turn_runs_for_a_prompt_an_unknown_word_or_a_file`
+`verified-by: bravebot_tui::app::tests::commands_words::nothing_is_offered_in_shell_mode_while_work_runs`
+`verified-by: bravebot_tui::app::tests::input_turn::tab_completes_a_half_typed_command_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::enter_completes_a_half_typed_command_instead_of_queueing_it_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::input_turn::the_arrows_choose_the_row_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::input_turn::the_trail_can_be_asked_for_while_a_turn_runs`
 `verified-by: bravebot_tui::render::a_question_mark_lists_every_shortcut_while_a_turn_runs`
-`verified-by: bravebot_tui::app::up_recalls_a_previous_prompt_while_a_turn_is_running`
+`verified-by: bravebot_tui::app::tests::input_turn::up_recalls_a_previous_prompt_while_a_turn_is_running`
 `verified-by: bravebot_tui::state::recall_works_while_a_turn_is_running`
 `verified-by: bravebot_tui::state::a_recalled_prompt_still_cannot_be_sent_while_a_turn_is_running`
-`verified-by: bravebot_tui::app::a_long_paste_folds_while_a_turn_is_running`
-`verified-by: bravebot_tui::app::a_file_dropped_while_a_turn_is_running_is_attached`
-`verified-by: bravebot_tui::app::ctrl_j_is_not_swallowed_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::remainder::a_long_paste_folds_while_a_turn_is_running`
+`verified-by: bravebot_tui::app::tests::input_turn::a_file_dropped_while_a_turn_is_running_is_attached`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::ctrl_j_is_not_swallowed_while_a_turn_runs`
 `verified-by: bravebot_tui::app::tests::pasting::ctrl_v_reads_the_clipboard_during_a_turn_too`
 
 <a id="INPUT-10"></a>
@@ -688,14 +688,14 @@ noticed the turn had ended and pressed it again, which is indistinguishable from
 was ignored. This does not weaken what a running turn refuses: a second turn still cannot begin
 while the first is in flight, and the queue is what makes that refusal visible instead of silent.
 
-`verified-by: bravebot_tui::app::enter_queues_a_prompt_while_a_turn_is_running`
-`verified-by: bravebot_tui::app::a_command_typed_while_a_turn_runs_is_not_sent_as_a_prompt`
-`verified-by: bravebot_tui::app::starting_a_line_mid_turn_does_not_queue_it`
-`verified-by: bravebot_tui::app::a_prompt_queued_mid_turn_is_within_the_running_turns_reach`
-`verified-by: bravebot_tui::app::a_queued_prompt_joins_the_transcript_when_the_planner_is_given_it`
-`verified-by: bravebot_tui::app::a_prompt_that_outlived_the_turn_is_sent_once`
-`verified-by: bravebot_tui::app::a_prompt_queued_behind_a_command_is_sent_once_the_command_has_run`
-`verified-by: bravebot_tui::app::what_is_still_waiting_stays_in_step_with_what_is_drawn`
+`verified-by: bravebot_tui::app::tests::input_turn::enter_queues_a_prompt_while_a_turn_is_running`
+`verified-by: bravebot_tui::app::tests::commands_words::a_command_typed_while_a_turn_runs_is_not_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::tests::input_turn::starting_a_line_mid_turn_does_not_queue_it`
+`verified-by: bravebot_tui::app::tests::input_turn::a_prompt_queued_mid_turn_is_within_the_running_turns_reach`
+`verified-by: bravebot_tui::app::tests::input_turn::a_queued_prompt_joins_the_transcript_when_the_planner_is_given_it`
+`verified-by: bravebot_tui::app::tests::input_turn::a_prompt_that_outlived_the_turn_is_sent_once`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_prompt_queued_behind_a_command_is_sent_once_the_command_has_run`
+`verified-by: bravebot_tui::app::tests::input_turn::what_is_still_waiting_stays_in_step_with_what_is_drawn`
 `verified-by: bravebot_tui::render::a_queue_too_long_for_the_rows_beneath_the_box_says_how_many_more_wait`
 `verified-by: bravebot_tui::render::a_long_queue_leaves_the_transcript_its_rows`
 `verified-by: bravebot_tui::render::the_count_of_prompts_left_out_is_the_prompts_not_drawn_at_every_size`
@@ -716,7 +716,7 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_tui::state::a_stopped_prompt_comes_back_where_nothing_is_waiting`
 `verified-by: bravebot_tui::state::a_stopped_turn_that_took_an_interjection_leaves_both_prompts_where_they_are`
 `verified-by: bravebot_tui::sessions::accepted_corrections_survive_cancellation_storage_export_and_the_next_turn`
-`verified-by: bravebot_tui::app::stopping_a_turn_that_took_a_prompt_mid_turn_hands_nothing_back`
+`verified-by: bravebot_tui::app::tests::input_turn::stopping_a_turn_that_took_a_prompt_mid_turn_hands_nothing_back`
 `verified-by: bravebot_tui::state::a_waiting_prompt_is_in_the_history_already`
 `verified-by: bravebot_tui::state::there_is_nothing_to_queue_when_the_line_is_blank_or_nothing_is_running`
 `verified-by: bravebot_tui::render::a_waiting_prompt_is_shown_as_waiting`
@@ -732,7 +732,7 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_tui::render::the_prompts_behind_the_one_that_starts_a_turn_are_said_to_go_into_it`
 `verified-by: bravebot_tui::render::the_offer_to_send_now_fits_beside_where_the_last_line_goes`
 `verified-by: bravebot_tui::render::the_offer_to_send_now_is_kept_over_where_the_last_line_goes`
-`verified-by: bravebot_tui::app::a_stop_is_recorded_at_the_press_that_asks_for_it`
+`verified-by: bravebot_tui::app::tests::input_turn::a_stop_is_recorded_at_the_press_that_asks_for_it`
 `verified-by: bravebot_agent::turn::a_prompt_typed_before_a_stop_is_left_for_the_next_turn`
 `verified-by: bravebot_agent::interjections::lines_are_taken_in_the_order_they_were_pushed`
 `verified-by: bravebot_agent::interjections::a_clone_shares_the_buffer`
@@ -916,14 +916,14 @@ The mode outranks all of it because it is the one thing here that changes what t
 does. A person who cannot see that writes are going through unasked is the case this line exists to
 prevent, and a mode read off `/status` after the write is a mode read too late.
 
-`verified-by: bravebot_tui::app::a_question_mark_on_an_empty_line_toggles_the_list_without_being_typed`
-`verified-by: bravebot_tui::app::a_question_mark_inside_a_sentence_is_punctuation`
-`verified-by: bravebot_tui::app::a_question_mark_in_shell_mode_is_a_glob`
-`verified-by: bravebot_tui::app::typing_takes_the_list_down`
-`verified-by: bravebot_tui::app::escape_takes_the_list_down`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::a_question_mark_on_an_empty_line_toggles_the_list_without_being_typed`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::a_question_mark_inside_a_sentence_is_punctuation`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::a_question_mark_in_shell_mode_is_a_glob`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::typing_takes_the_list_down`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::escape_takes_the_list_down`
 `verified-by: bravebot_tui::state::a_line_that_arrives_under_the_list_takes_the_list_down`
-`verified-by: bravebot_tui::app::escape_takes_the_list_down_in_vis_editing_style`
-`verified-by: bravebot_tui::app::a_paste_or_a_newline_takes_the_list_down`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::escape_takes_the_list_down_in_vis_editing_style`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::a_paste_or_a_newline_takes_the_list_down`
 `verified-by: bravebot_tui::render::the_shell_hint_line_drops_whole_parts_rather_than_cutting_one`
 `verified-by: bravebot_tui::render::a_question_mark_lists_every_shortcut`
 `verified-by: bravebot_tui::render::the_list_names_the_chord_that_opens_the_scroller`
@@ -969,8 +969,8 @@ reflow with. The failure that matters is the one that blanks a paragraph somebod
 every path that does not end in a save ends in the line untouched. Handing the terminal to an
 editor mid-turn would take the screen from the turn drawing on it.
 
-`verified-by: bravebot_tui::app::ctrl_g_asks_for_the_editor`
-`verified-by: bravebot_tui::app::the_editor_key_does_nothing_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::input_keys::ctrl_g_asks_for_the_editor`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::the_editor_key_does_nothing_while_a_turn_runs`
 `verified-by: bravebot_tui::state::a_line_from_the_editor_replaces_what_was_typed`
 `verified-by: bravebot_tui::editor::the_editor_opens_on_what_was_already_typed`
 `verified-by: bravebot_tui::editor::what_the_editor_saved_becomes_the_line`
@@ -1071,8 +1071,8 @@ into a place a thought is being kept.
 The caret is not carried. It belongs to an edit that has finished, and restoring it would put a
 person back in the middle of a sentence they have not looked at since.
 
-`verified-by: bravebot_tui::app::ctrl_s_puts_the_line_away_and_brings_it_back`
-`verified-by: bravebot_tui::app::the_stash_key_works_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::ctrl_s_puts_the_line_away_and_brings_it_back`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::the_stash_key_works_while_a_turn_runs`
 `verified-by: bravebot_tui::state::a_stashed_line_comes_back_as_it_was`
 `verified-by: bravebot_tui::state::the_caret_lands_at_the_end_of_a_line_brought_back`
 `verified-by: bravebot_tui::state::stashing_again_replaces_what_was_put_away`
@@ -1122,11 +1122,11 @@ moment it is queued (INPUT-10), so the key handed back a copy: the person rewrot
 the original went as well. The only way to take a queued prompt back was to stop the turn in
 flight, which is aimed at something else entirely and costs the answer being written.
 
-`verified-by: bravebot_tui::app::up_takes_back_everything_waiting_rather_than_a_copy_of_it`
-`verified-by: bravebot_tui::app::up_walks_the_history_again_once_nothing_is_waiting`
-`verified-by: bravebot_tui::app::up_reaches_the_queue_only_from_the_top_row_of_a_paragraph`
-`verified-by: bravebot_tui::app::taking_the_queue_back_takes_it_out_of_the_turns_reach`
-`verified-by: bravebot_tui::app::a_prompt_the_turn_has_taken_cannot_be_taken_back`
+`verified-by: bravebot_tui::app::tests::input_turn::up_takes_back_everything_waiting_rather_than_a_copy_of_it`
+`verified-by: bravebot_tui::app::tests::input_turn::up_walks_the_history_again_once_nothing_is_waiting`
+`verified-by: bravebot_tui::app::tests::input_turn::up_reaches_the_queue_only_from_the_top_row_of_a_paragraph`
+`verified-by: bravebot_tui::app::tests::input_turn::taking_the_queue_back_takes_it_out_of_the_turns_reach`
+`verified-by: bravebot_tui::app::tests::input_turn::a_prompt_the_turn_has_taken_cannot_be_taken_back`
 `verified-by: bravebot_tui::state::taking_the_queue_back_puts_every_waiting_prompt_in_the_box`
 `verified-by: bravebot_tui::state::a_half_typed_line_stays_below_what_comes_back`
 `verified-by: bravebot_tui::state::what_a_waiting_prompt_named_is_named_again_when_it_comes_back`
@@ -1155,12 +1155,12 @@ nothing, and Alt-D does nothing.
 possible; Claude Code and Codex keep it and paste it with Ctrl-Y. One buffer for removed text keeps vi
 and readline from disagreeing about what was last taken.
 
-`verified-by: bravebot_tui::app::ctrl_y_puts_back_what_ctrl_k_took_somewhere_else`
-`verified-by: bravebot_tui::app::every_delete_key_keeps_what_it_took`
-`verified-by: bravebot_tui::app::consecutive_kills_join_in_the_direction_they_went`
-`verified-by: bravebot_tui::app::ctrl_y_with_nothing_killed_does_nothing`
-`verified-by: bravebot_tui::app::alt_d_at_the_end_of_the_line_keeps_nothing`
-`verified-by: bravebot_tui::app::a_chord_on_ctrl_y_takes_precedence_over_the_yank`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::ctrl_y_puts_back_what_ctrl_k_took_somewhere_else`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::every_delete_key_keeps_what_it_took`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::consecutive_kills_join_in_the_direction_they_went`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::ctrl_y_with_nothing_killed_does_nothing`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::alt_d_at_the_end_of_the_line_keeps_nothing`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::a_chord_on_ctrl_y_takes_precedence_over_the_yank`
 `verified-by: bravebot_tui::state::a_killed_marker_yanked_back_names_its_picture_again`
 `verified-by: bravebot_tui::state::vi_put_reads_what_a_kill_took`
 `verified-by: bravebot_tui::state::yank_reads_what_vi_deleted`
@@ -1302,22 +1302,22 @@ press that stops the turn is the next one. A turn is not the only thing they rea
 summary, the aside and the goal check each hold a request of their own, and the search is open over
 those the same way.
 
-`verified-by: bravebot_tui::app::ctrl_r_searches_the_prompts_already_sent`
-`verified-by: bravebot_tui::app::the_search_starts_from_what_was_already_typed`
-`verified-by: bravebot_tui::app::the_search_does_not_start_from_a_prompt_walked_back_to`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::ctrl_r_searches_the_prompts_already_sent`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::the_search_starts_from_what_was_already_typed`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::the_search_does_not_start_from_a_prompt_walked_back_to`
 `verified-by: bravebot_tui::render::how_to_search_the_prompts_is_said_where_somebody_would_look`
-`verified-by: bravebot_tui::app::the_prompts_can_be_searched_while_a_turn_is_running`
-`verified-by: bravebot_tui::app::the_search_answers_the_stop_keys_before_the_turn_does`
-`verified-by: bravebot_tui::app::the_search_answers_the_stop_keys_before_a_single_request_does`
-`verified-by: bravebot_tui::app::the_search_answers_the_stop_keys_before_the_goal_check_does`
-`verified-by: bravebot_tui::app::ctrl_r_with_nothing_sent_yet_opens_nothing`
-`verified-by: bravebot_tui::app::the_search_starts_from_what_was_already_typed`
-`verified-by: bravebot_tui::app::a_letter_narrows_the_search_rather_than_reaching_the_box`
-`verified-by: bravebot_tui::app::enter_puts_the_chosen_prompt_in_the_box_without_sending_it`
-`verified-by: bravebot_tui::app::escape_closes_the_search_and_leaves_the_box_as_it_was`
-`verified-by: bravebot_tui::app::a_paste_and_a_drop_do_not_reach_the_line_while_the_search_is_open`
-`verified-by: bravebot_tui::app::backspacing_past_the_start_of_the_search_closes_it`
-`verified-by: bravebot_tui::app::the_arrows_walk_the_matches_while_the_search_is_open`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::the_prompts_can_be_searched_while_a_turn_is_running`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::the_search_answers_the_stop_keys_before_the_turn_does`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::the_search_answers_the_stop_keys_before_a_single_request_does`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_search_answers_the_stop_keys_before_the_goal_check_does`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::ctrl_r_with_nothing_sent_yet_opens_nothing`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::the_search_starts_from_what_was_already_typed`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::a_letter_narrows_the_search_rather_than_reaching_the_box`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::enter_puts_the_chosen_prompt_in_the_box_without_sending_it`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::escape_closes_the_search_and_leaves_the_box_as_it_was`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::a_paste_and_a_drop_do_not_reach_the_line_while_the_search_is_open`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::backspacing_past_the_start_of_the_search_closes_it`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::the_arrows_walk_the_matches_while_the_search_is_open`
 `verified-by: bravebot_tui::history_search::typing_narrows_the_list_to_the_prompts_that_match`
 `verified-by: bravebot_tui::history_search::every_word_typed_has_to_match`
 `verified-by: bravebot_tui::history_search::narrowing_puts_the_cursor_on_the_newest_match`
@@ -1330,7 +1330,7 @@ those the same way.
 `verified-by: bravebot_tui::history_search::the_session_scope_holds_this_sessions_prompts_and_nothing_else`
 `verified-by: bravebot_tui::history_search::an_empty_scope_is_skipped_and_one_scope_left_does_nothing`
 `verified-by: bravebot_tui::history_search::changing_the_scope_puts_the_cursor_on_the_newest_match`
-`verified-by: bravebot_tui::app::a_moved_chord_is_read_inside_the_search_it_opened`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::a_moved_chord_is_read_inside_the_search_it_opened`
 
 <a id="INPUT-20"></a>
 ### INPUT-20: the list says which prompt each row is
@@ -1388,10 +1388,10 @@ as a terminal difference.
 Shift-Tab because it is the chord Claude Code uses for this, and somebody who has used one of these
 reaches for it before reading anything.
 
-`verified-by: bravebot_tui::app::shift_tab_cycles_the_permission_mode`
-`verified-by: bravebot_tui::app::either_spelling_of_shift_tab_cycles_the_mode`
-`verified-by: bravebot_tui::app::the_mode_key_leaves_the_line_alone`
-`verified-by: bravebot_tui::app::the_mode_can_be_changed_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::shift_tab_cycles_the_permission_mode`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::either_spelling_of_shift_tab_cycles_the_mode`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::the_mode_key_leaves_the_line_alone`
+`verified-by: bravebot_tui::app::tests::permissions::the_mode_can_be_changed_while_a_turn_runs`
 `verified-by: bravebot_agent::permission_mode::the_key_cycles_four_modes_where_bypass_is_unreachable`
 `verified-by: bravebot_agent::permission_mode::a_session_started_in_bypass_can_cycle_out_of_it`
 
@@ -1457,13 +1457,13 @@ answer is to set the budget rather than to compact.
 `verified-by: bravebot_tui::state::a_compaction_that_won_no_room_back_states_no_figure`
 `verified-by: bravebot_tui::state::room_won_back_with_no_budget_to_state_it_against_is_no_figure`
 `verified-by: bravebot_tui::state::a_budget_adopted_after_a_compaction_leaves_what_it_won_back_alone`
-`verified-by: bravebot_tui::app::the_room_a_compaction_won_back_is_what_it_read_less_what_it_wrote`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::the_room_a_compaction_won_back_is_what_it_read_less_what_it_wrote`
 `verified-by: bravebot_tui::state::updating_budget_retains_token_count_with_new_capacity`
 `verified-by: bravebot_tui::state::a_budget_that_did_not_move_can_still_stop_being_one_anybody_advertised`
 `verified-by: bravebot_tui::state::clearing_a_session_forgets_how_full_the_old_one_was`
-`verified-by: bravebot_tui::app::a_turn_in_flight_reads_how_full_the_context_is_after_its_first_round`
-`verified-by: bravebot_tui::app::each_round_of_a_turn_replaces_the_reading_with_what_its_request_came_to`
-`verified-by: bravebot_tui::app::a_round_that_reports_no_request_leaves_the_reading_where_it_was`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::a_turn_in_flight_reads_how_full_the_context_is_after_its_first_round`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::each_round_of_a_turn_replaces_the_reading_with_what_its_request_came_to`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::a_round_that_reports_no_request_leaves_the_reading_where_it_was`
 `verified-by: bravebot_agent::turn::a_compaction_reports_no_context_figure_for_the_conversation_it_replaced`
 `verified-by: bravebot_tui::render::the_hint_line_says_how_full_the_context_is`
 `verified-by: bravebot_tui::render::the_hint_line_marks_a_guessed_budget`
@@ -1472,11 +1472,11 @@ answer is to set the budget rather than to compact.
 `verified-by: bravebot_tui::render::a_compaction_with_no_figure_to_give_still_says_the_conversation_was_compacted`
 `verified-by: bravebot_tui::render::the_hint_line_says_an_unmeasured_context_has_not_been_measured`
 `verified-by: bravebot_tui::render::a_measurement_with_no_budget_to_state_it_against_reads_as_unmeasured`
-`verified-by: bravebot_tui::app::a_failed_turn_measures_context_if_requests_were_sent`
-`verified-by: bravebot_tui::app::a_failed_turn_with_no_requests_sent_remains_unmeasured`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::a_failed_turn_measures_context_if_requests_were_sent`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::a_failed_turn_with_no_requests_sent_remains_unmeasured`
 `verified-by: bravebot_agent::conversation::a_restored_conversation_remembers_what_its_last_request_came_to`
-`verified-by: bravebot_tui::app::a_resumed_session_reads_the_context_from_the_request_its_record_measured`
-`verified-by: bravebot_tui::app::a_finished_compaction_reads_what_it_won_back_and_an_unfinished_one_keeps_the_measured_reading`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::a_resumed_session_reads_the_context_from_the_request_its_record_measured`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::a_finished_compaction_reads_what_it_won_back_and_an_unfinished_one_keeps_the_measured_reading`
 `verified-by: bravebot_agent::conversation::compacting_forgets_a_measurement_of_the_conversation_it_replaced`
 `verified-by: bravebot_config::lib::a_default_budget_is_marked_as_guessed`
 `verified-by: bravebot_config::lib::an_advertised_budget_is_not_marked_as_guessed`
@@ -1570,8 +1570,8 @@ vi gives `m` no key, and a box that waited for one would swallow the instruction
 `verified-by: bravebot_tui::sidebar_prompt::the_arrows_and_j_and_k_walk_the_list_and_stop_at_both_ends`
 `verified-by: bravebot_tui::sidebar_prompt::escape_and_ctrl_c_close_the_list_and_keep_what_was_changed`
 `verified-by: bravebot_tui::sidebar_prompt::a_space_with_a_modifier_toggles_nothing`
-`verified-by: bravebot_tui::app::a_style_chosen_in_the_config_panel_is_kept_and_said_in_the_transcript`
-`verified-by: bravebot_tui::app::the_config_panel_opened_at_rest_keeps_the_style_taken_and_escape_changes_nothing`
+`verified-by: bravebot_tui::app::tests::input_vi::a_style_chosen_in_the_config_panel_is_kept_and_said_in_the_transcript`
+`verified-by: bravebot_tui::app::tests::input_vi::the_config_panel_opened_at_rest_keeps_the_style_taken_and_escape_changes_nothing`
 `verified-by: bravebot_tui::config_prompt::every_row_says_what_it_means`
 
 <a id="INPUT-24"></a>
@@ -1628,24 +1628,24 @@ that survived an arrow would delete from wherever the arrow had put the caret. v
 after `d` as the motion it names; here the arrows belong to the line, so the arrow moves the caret
 alone.
 
-`verified-by: bravebot_tui::app::escape_enters_normal_mode_without_discarding_the_line`
-`verified-by: bravebot_tui::app::either_spelling_of_escape_enters_normal_mode`
-`verified-by: bravebot_tui::app::escape_abandons_an_instruction_still_waiting_for_a_key`
-`verified-by: bravebot_tui::app::a_press_that_is_not_a_character_abandons_an_instruction_still_waiting_for_a_key`
-`verified-by: bravebot_tui::app::sending_the_line_abandons_an_instruction_still_waiting_for_a_key`
-`verified-by: bravebot_tui::app::a_press_while_a_turn_runs_abandons_an_instruction_still_waiting_for_a_key`
-`verified-by: bravebot_tui::app::stopping_a_goal_check_abandons_an_instruction_still_waiting_for_a_key`
+`verified-by: bravebot_tui::app::tests::input_vi::escape_enters_normal_mode_without_discarding_the_line`
+`verified-by: bravebot_tui::app::tests::input_vi::either_spelling_of_escape_enters_normal_mode`
+`verified-by: bravebot_tui::app::tests::input_vi::escape_abandons_an_instruction_still_waiting_for_a_key`
+`verified-by: bravebot_tui::app::tests::input_vi::a_press_that_is_not_a_character_abandons_an_instruction_still_waiting_for_a_key`
+`verified-by: bravebot_tui::app::tests::input_vi::sending_the_line_abandons_an_instruction_still_waiting_for_a_key`
+`verified-by: bravebot_tui::app::tests::input_vi::a_press_while_a_turn_runs_abandons_an_instruction_still_waiting_for_a_key`
+`verified-by: bravebot_tui::app::tests::input_vi::stopping_a_goal_check_abandons_an_instruction_still_waiting_for_a_key`
 `verified-by: bravebot_tui::render::the_hint_line_draws_an_instruction_still_waiting_beside_the_mode`
-`verified-by: bravebot_tui::app::the_chord_that_enters_normal_mode_does_nothing_to_the_ordinary_box`
-`verified-by: bravebot_tui::app::escape_from_insert_mode_mid_turn_enters_normal_mode_and_the_turn_keeps_running`
-`verified-by: bravebot_tui::app::a_second_escape_mid_turn_stops_the_turn`
-`verified-by: bravebot_tui::app::escape_mid_turn_abandons_a_waiting_instruction_rather_than_stopping_the_turn`
-`verified-by: bravebot_tui::app::escape_mid_turn_leaves_visual_and_replace_modes_rather_than_stopping_the_turn`
-`verified-by: bravebot_tui::app::ctrl_c_stops_a_turn_on_the_first_press_from_every_vi_mode`
-`verified-by: bravebot_tui::app::the_ordinary_box_stops_a_turn_on_the_first_escape`
-`verified-by: bravebot_tui::app::the_idle_ladder_enters_normal_mode_before_escape_stops_a_turn`
-`verified-by: bravebot_tui::app::escape_stops_a_command_from_every_vi_mode`
-`verified-by: bravebot_tui::app::escape_from_insert_mode_reaches_the_box_during_a_single_request`
+`verified-by: bravebot_tui::app::tests::input_vi::the_chord_that_enters_normal_mode_does_nothing_to_the_ordinary_box`
+`verified-by: bravebot_tui::app::tests::input_vi::escape_from_insert_mode_mid_turn_enters_normal_mode_and_the_turn_keeps_running`
+`verified-by: bravebot_tui::app::tests::input_vi::a_second_escape_mid_turn_stops_the_turn`
+`verified-by: bravebot_tui::app::tests::input_vi::escape_mid_turn_abandons_a_waiting_instruction_rather_than_stopping_the_turn`
+`verified-by: bravebot_tui::app::tests::input_vi::escape_mid_turn_leaves_visual_and_replace_modes_rather_than_stopping_the_turn`
+`verified-by: bravebot_tui::app::tests::input_vi::ctrl_c_stops_a_turn_on_the_first_press_from_every_vi_mode`
+`verified-by: bravebot_tui::app::tests::input_vi::the_ordinary_box_stops_a_turn_on_the_first_escape`
+`verified-by: bravebot_tui::app::tests::input_vi::the_idle_ladder_enters_normal_mode_before_escape_stops_a_turn`
+`verified-by: bravebot_tui::app::tests::input_vi::escape_stops_a_command_from_every_vi_mode`
+`verified-by: bravebot_tui::app::tests::input_vi::escape_from_insert_mode_reaches_the_box_during_a_single_request`
 `verified-by: bravebot_tui::state::leaving_insert_mode_puts_the_caret_on_a_character`
 `verified-by: bravebot_tui::render::the_hint_line_says_which_vi_mode_the_box_is_in`
 `verified-by: bravebot_tui::render::the_hint_line_says_nothing_about_a_box_that_edits_the_ordinary_way`
@@ -1817,12 +1817,12 @@ cannot see scroll away above it.
 
 `verified-by: bravebot_tui::state::the_letters_that_spell_other_keys_are_named_rather_than_acted_on`
 `verified-by: bravebot_tui::state::a_key_waiting_for_its_character_claims_the_letters_that_spell_other_keys`
-`verified-by: bravebot_tui::app::the_row_keys_walk_a_paragraph`
-`verified-by: bravebot_tui::app::the_row_keys_reach_the_prompt_history_at_the_ends_of_the_input`
-`verified-by: bravebot_tui::app::a_slash_opens_the_search_over_earlier_prompts`
-`verified-by: bravebot_tui::app::the_letters_that_spell_keys_reach_the_history_and_the_search_mid_turn`
-`verified-by: bravebot_tui::app::the_letters_that_spell_keys_are_typed_in_insert_mode`
-`verified-by: bravebot_tui::app::an_operator_takes_the_row_keys_rather_than_walking_the_ladder`
+`verified-by: bravebot_tui::app::tests::input_vi::the_row_keys_walk_a_paragraph`
+`verified-by: bravebot_tui::app::tests::input_vi::the_row_keys_reach_the_prompt_history_at_the_ends_of_the_input`
+`verified-by: bravebot_tui::app::tests::input_vi::a_slash_opens_the_search_over_earlier_prompts`
+`verified-by: bravebot_tui::app::tests::input_vi::the_letters_that_spell_keys_reach_the_history_and_the_search_mid_turn`
+`verified-by: bravebot_tui::app::tests::input_vi::the_letters_that_spell_keys_are_typed_in_insert_mode`
+`verified-by: bravebot_tui::app::tests::input_vi::an_operator_takes_the_row_keys_rather_than_walking_the_ladder`
 
 <a id="INPUT-28"></a>
 ### INPUT-28: an operator and an extent, and a marker is taken whole or not at all
@@ -2246,7 +2246,7 @@ scope goes before the search it narrows because that search is the one also writ
 list. A title drawn anyway lands on top of the position and cuts it mid-word, which reads as a
 rendering fault rather than as a border with no room for all of it.
 
-`verified-by: bravebot_tui::app::ctrl_s_searches_this_workspace_while_an_older_prompt_is_shown`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::ctrl_s_searches_this_workspace_while_an_older_prompt_is_shown`
 `verified-by: bravebot_tui::render::how_to_search_the_prompts_is_said_where_somebody_would_look`
 `verified-by: bravebot_tui::render::a_border_gives_up_the_ways_in_one_at_a_time`
 
@@ -2305,7 +2305,7 @@ macOS) and never arrive. It is one chord that cycles because a pair of direction
 to remember, and the search answers to the same three scopes so that what a person learns in
 one carries to the other.
 
-`verified-by: bravebot_tui::app::the_scope_chord_narrows_the_walk_to_this_sessions_prompts_and_widens_it_again`
+`verified-by: bravebot_tui::app::tests::input_turn::the_scope_chord_narrows_the_walk_to_this_sessions_prompts_and_widens_it_again`
 `verified-by: bravebot_tui::app::tests::command_history::up_and_down_walk_past_a_recalled_command_while_the_list_is_open`
 `verified-by: bravebot_tui::app::tests::command_history::up_walks_past_a_recalled_command_while_a_turn_runs`
 `verified-by: bravebot_tui::app::tests::command_history::up_walks_past_a_recalled_prompt_while_the_file_list_is_open`
@@ -2318,17 +2318,17 @@ one carries to the other.
 `verified-by: bravebot_tui::history::the_project_scope_holds_across_the_walk_and_clearing_puts_it_back`
 `verified-by: bravebot_tui::history::withdrawing_the_last_prompt_of_this_project_puts_the_scope_back_on_everywhere`
 `verified-by: bravebot_tui::render::the_border_names_all_three_scopes_and_the_one_the_chord_moves_to`
-`verified-by: bravebot_tui::app::the_scope_chosen_holds_after_the_walk_ends_and_after_sending`
-`verified-by: bravebot_tui::app::switching_scope_keeps_a_prompt_that_is_in_both`
-`verified-by: bravebot_tui::app::ctrl_and_alt_arrows_on_a_recalled_prompt_move_the_caret_and_leave_the_scope`
-`verified-by: bravebot_tui::app::the_scope_chord_does_nothing_in_a_line_being_typed`
-`verified-by: bravebot_tui::app::a_moved_scope_chord_switches_and_the_old_one_does_not`
-`verified-by: bravebot_tui::app::a_moved_scope_chord_is_not_typed_and_keeps_the_edit_it_landed_on`
-`verified-by: bravebot_tui::app::the_word_keys_still_move_the_caret_outside_a_recalled_prompt`
-`verified-by: bravebot_tui::app::up_in_a_new_session_walks_the_stored_prompts_and_offers_no_switch`
-`verified-by: bravebot_tui::app::the_scope_chord_works_while_a_turn_runs`
-`verified-by: bravebot_tui::app::a_prompt_queued_during_a_turn_is_one_this_session_sent`
-`verified-by: bravebot_tui::app::clearing_the_session_empties_the_scope_the_chord_narrows_to`
+`verified-by: bravebot_tui::app::tests::input_turn::the_scope_chosen_holds_after_the_walk_ends_and_after_sending`
+`verified-by: bravebot_tui::app::tests::input_turn::switching_scope_keeps_a_prompt_that_is_in_both`
+`verified-by: bravebot_tui::app::tests::input_turn::ctrl_and_alt_arrows_on_a_recalled_prompt_move_the_caret_and_leave_the_scope`
+`verified-by: bravebot_tui::app::tests::input_turn::the_scope_chord_does_nothing_in_a_line_being_typed`
+`verified-by: bravebot_tui::app::tests::input_turn::a_moved_scope_chord_switches_and_the_old_one_does_not`
+`verified-by: bravebot_tui::app::tests::input_turn::a_moved_scope_chord_is_not_typed_and_keeps_the_edit_it_landed_on`
+`verified-by: bravebot_tui::app::tests::input_turn::the_word_keys_still_move_the_caret_outside_a_recalled_prompt`
+`verified-by: bravebot_tui::app::tests::input_turn::up_in_a_new_session_walks_the_stored_prompts_and_offers_no_switch`
+`verified-by: bravebot_tui::app::tests::input_turn::the_scope_chord_works_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::input_turn::a_prompt_queued_during_a_turn_is_one_this_session_sent`
+`verified-by: bravebot_tui::app::tests::input_turn::clearing_the_session_empties_the_scope_the_chord_narrows_to`
 `verified-by: bravebot_tui::render::the_border_names_the_scope_and_offers_the_switch_only_where_it_works`
 `verified-by: bravebot_tui::render::the_border_names_the_scope_chord_a_settings_file_moved`
 `verified-by: bravebot_tui::state::a_resumed_sessions_own_prompts_are_in_its_session_scope`
@@ -2465,7 +2465,7 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::keybindings::reserved_keys_are_rejected`
 `verified-by: bravebot_tui::keybindings::a_key_the_box_already_answers_is_not_on_offer`
 `verified-by: bravebot_tui::keybindings::a_chord_carrying_ctrl_or_alt_is_on_offer`
-`verified-by: bravebot_tui::app::a_settings_file_cannot_take_a_letter_away_from_typing`
+`verified-by: bravebot_tui::app::tests::input_keys::a_settings_file_cannot_take_a_letter_away_from_typing`
 `verified-by: bravebot_tui::keybindings::invalid_chord_falls_back_to_default`
 `verified-by: bravebot_tui::keybindings::conflicting_chords_fall_back_to_defaults`
 `verified-by: bravebot_tui::keybindings::no_two_actions_are_left_on_one_chord`
@@ -2473,12 +2473,12 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::keybindings::a_chord_on_escape_is_given_up_where_the_terminal_cannot_send_it`
 `verified-by: bravebot_tui::keybindings::a_terminal_that_cannot_disambiguate_keeps_every_chord_but_one_on_escape`
 `verified-by: bravebot_tui::keybindings::the_chord_a_terminal_cannot_send_is_said_with_the_key_it_stayed_on`
-`verified-by: bravebot_tui::app::a_chord_on_escape_is_dropped_and_said_where_the_terminal_cannot_send_it`
-`verified-by: bravebot_tui::app::two_chords_the_terminal_cannot_send_are_said_in_one_line_with_a_count`
-`verified-by: bravebot_tui::app::a_chord_on_escape_stands_unsaid_where_the_terminal_sends_it`
-`verified-by: bravebot_tui::app::stash_moved_onto_alt_escape_stashes_instead_of_clearing_the_box`
-`verified-by: bravebot_tui::app::undo_moved_onto_ctrl_escape_fires_instead_of_clearing_the_box`
-`verified-by: bravebot_tui::app::stash_moved_onto_alt_escape_stashes_the_enhancement_instead_of_restoring_the_draft`
+`verified-by: bravebot_tui::app::tests::input_keys::a_chord_on_escape_is_dropped_and_said_where_the_terminal_cannot_send_it`
+`verified-by: bravebot_tui::app::tests::input_keys::two_chords_the_terminal_cannot_send_are_said_in_one_line_with_a_count`
+`verified-by: bravebot_tui::app::tests::input_keys::a_chord_on_escape_stands_unsaid_where_the_terminal_sends_it`
+`verified-by: bravebot_tui::app::tests::input_keys::stash_moved_onto_alt_escape_stashes_instead_of_clearing_the_box`
+`verified-by: bravebot_tui::app::tests::input_keys::undo_moved_onto_ctrl_escape_fires_instead_of_clearing_the_box`
+`verified-by: bravebot_tui::app::tests::input_keys::stash_moved_onto_alt_escape_stashes_the_enhancement_instead_of_restoring_the_draft`
 `verified-by: bravebot_tui::keybindings::unknown_actions_in_map_are_ignored`
 `verified-by: bravebot_tui::keybindings::custom_chords_override_defaults`
 `verified-by: bravebot_tui::keybindings::the_background_chord_is_ctrl_b_and_can_be_moved`
@@ -2493,9 +2493,9 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::keybindings::another_action_cannot_take_the_peek_chord_and_the_peek_action_cannot_take_another`
 `verified-by: bravebot_tui::app::tests::peeking::the_key_opens_the_viewer_with_the_caret_on_a_marker`
 `verified-by: bravebot_tui::app::tests::peeking::the_key_does_nothing_with_the_caret_off_a_marker`
-`verified-by: bravebot_tui::app::the_todos_key_prints_the_plan_as_the_command_does`
-`verified-by: bravebot_tui::app::the_todos_key_prints_nothing_in_the_files_state`
-`verified-by: bravebot_tui::app::a_mode_that_types_letters_reads_the_todos_key_as_the_letter`
+`verified-by: bravebot_tui::app::tests::commands_other::the_todos_key_prints_the_plan_as_the_command_does`
+`verified-by: bravebot_tui::app::tests::input_keys::the_todos_key_prints_nothing_in_the_files_state`
+`verified-by: bravebot_tui::app::tests::input_keys::a_mode_that_types_letters_reads_the_todos_key_as_the_letter`
 `verified-by: bravebot_tui::model_prompt::an_alt_chord_narrows_the_list_as_the_letter_it_carries`
 `verified-by: bravebot_config::settings::a_keybindings_block_is_read_from_settings`
 `verified-by: bravebot_config::settings::a_keybindings_entry_that_is_not_a_chord_is_dropped`
@@ -2511,17 +2511,17 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::history_search::the_keys_under_the_search_name_the_chord_that_narrows_it`
 `verified-by: bravebot_tui::render::the_row_that_says_what_the_turn_is_doing_leaves_the_key_to_the_hint_line`
 `verified-by: bravebot_tui::render::a_picture_on_the_clipboard_says_which_key_carries_it`
-`verified-by: bravebot_tui::app::a_moved_chord_is_read_inside_the_search_it_opened`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::a_moved_chord_is_read_inside_the_search_it_opened`
 `verified-by: bravebot_tui::app::tests::watching::a_moved_chord_leaves_the_view_it_opened`
 `verified-by: bravebot_tui::app::tests::watching::the_chord_an_action_was_moved_off_does_nothing_inside_the_view`
 `verified-by: bravebot_tui::app::tests::watching::a_chord_moved_onto_a_key_the_view_reads_is_not_that_key`
 `verified-by: bravebot_tui::app::tests::watching::a_letter_held_with_any_other_modifier_is_not_that_letter`
 `verified-by: bravebot_tui::app::tests::watching::the_keys_the_view_reads_with_a_modifier_held_still_answer`
-`verified-by: bravebot_tui::app::custom_keybindings_route_actions_and_old_chords_are_ignored`
-`verified-by: bravebot_tui::app::custom_keybindings_work_while_a_turn_runs`
-`verified-by: bravebot_tui::app::vi_mode_search_prompts_uses_configured_history_chord`
-`verified-by: bravebot_tui::app::configured_keybinding_overrides_readline_editing`
-`verified-by: bravebot_tui::app::ctrl_alt_c_and_ctrl_alt_d_are_not_the_chords_that_stop_and_leave`
+`verified-by: bravebot_tui::app::tests::input_keys::custom_keybindings_route_actions_and_old_chords_are_ignored`
+`verified-by: bravebot_tui::app::tests::input_keys::custom_keybindings_work_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::input_keys::vi_mode_search_prompts_uses_configured_history_chord`
+`verified-by: bravebot_tui::app::tests::input_keys::configured_keybinding_overrides_readline_editing`
+`verified-by: bravebot_tui::app::tests::input_keys::ctrl_alt_c_and_ctrl_alt_d_are_not_the_chords_that_stop_and_leave`
 
 <a id="INPUT-33"></a>
 ### INPUT-33: a session takes the terminal for its length, and gives every part of it back
@@ -2569,15 +2569,15 @@ stack the terminal keeps for every program after this one. The failing exit is t
 matters most, since a terminal left in raw mode on a screen that is not its own is worse for the
 person than whatever error put it there.
 
-`verified-by: bravebot_tui::app::a_session_draws_on_a_screen_of_its_own`
-`verified-by: bravebot_tui::app::every_mode_a_session_asks_for_is_given_back`
-`verified-by: bravebot_tui::app::a_pushed_keyboard_mode_is_popped_and_an_unpushed_one_is_not`
-`verified-by: bravebot_tui::app::every_terminal_is_asked_to_report_the_pointer_and_ends_in_the_mode_that_reports_all_of_it`
-`verified-by: bravebot_tui::app::the_terminal_is_asked_for_sgr_with_the_tracking_modes_and_given_all_of_it_back_in_order`
-`verified-by: bravebot_tui::app::what_every_way_out_of_the_interface_writes_includes_every_mode_asked_for`
-`verified-by: bravebot_tui::app::the_modes_are_given_back_before_raw_mode_is_left_and_it_is_left_whatever_they_do`
-`verified-by: bravebot_tui::app::disambiguated_keys_are_asked_for_only_where_the_terminal_says_it_understands_them`
-`verified-by: bravebot_tui::app::raw_mode_is_entered_before_anything_is_written_and_the_takeover_ends_where_it_cannot_be`
+`verified-by: bravebot_tui::app::tests::input_terminal::a_session_draws_on_a_screen_of_its_own`
+`verified-by: bravebot_tui::app::tests::input_terminal::every_mode_a_session_asks_for_is_given_back`
+`verified-by: bravebot_tui::app::tests::input_terminal::a_pushed_keyboard_mode_is_popped_and_an_unpushed_one_is_not`
+`verified-by: bravebot_tui::app::tests::mouse_controls::every_terminal_is_asked_to_report_the_pointer_and_ends_in_the_mode_that_reports_all_of_it`
+`verified-by: bravebot_tui::app::tests::input_terminal::the_terminal_is_asked_for_sgr_with_the_tracking_modes_and_given_all_of_it_back_in_order`
+`verified-by: bravebot_tui::app::tests::input_terminal::what_every_way_out_of_the_interface_writes_includes_every_mode_asked_for`
+`verified-by: bravebot_tui::app::tests::input_terminal::the_modes_are_given_back_before_raw_mode_is_left_and_it_is_left_whatever_they_do`
+`verified-by: bravebot_tui::app::tests::input_terminal::disambiguated_keys_are_asked_for_only_where_the_terminal_says_it_understands_them`
+`verified-by: bravebot_tui::app::tests::input_terminal::raw_mode_is_entered_before_anything_is_written_and_the_takeover_ends_where_it_cannot_be`
 `verified-by: bravebot_tui::app::tests::hangup::a_session_that_ends_by_failing_has_handed_the_terminal_back_and_says_how_it_failed`
 `verified-by: bravebot_tui::app::tests::hangup::a_session_that_is_left_has_handed_the_terminal_back_and_returns_what_it_ended_with`
 `verified-by: bravebot_tui::app::tests::hangup::where_the_session_failed_and_the_terminal_cannot_be_handed_back_that_failure_is_returned`
@@ -2655,16 +2655,16 @@ available, spent in the one place where a second press is the whole of what is b
 `verified-by: bravebot_tui::input_alone::the_shipped_reader_says_whether_an_event_arrived_alone`
 `verified-by: bravebot_tui::input::a_report_of_the_mouse_in_the_read_of_a_key_is_not_another_arrival`
 `verified-by: bravebot_tui::input::keys_with_reports_of_the_mouse_among_them_are_still_a_run`
-`verified-by: bravebot_tui::app::what_the_reader_says_arrived_together_reaches_the_rung_that_leaves`
-`verified-by: bravebot_tui::app::two_interrupts_that_arrived_together_do_not_end_the_session`
-`verified-by: bravebot_tui::app::two_end_of_transmissions_that_arrived_together_do_not_end_the_session`
-`verified-by: bravebot_tui::app::a_press_on_its_own_after_a_run_still_leaves`
-`verified-by: bravebot_tui::app::a_return_that_arrived_with_other_keys_does_not_send`
-`verified-by: bravebot_tui::app::every_refused_return_is_said_and_not_just_the_first`
-`verified-by: bravebot_tui::app::a_return_that_arrived_with_other_keys_is_not_queued_while_a_turn_runs`
-`verified-by: bravebot_tui::app::a_refused_way_out_says_so`
-`verified-by: bravebot_tui::app::a_return_of_its_own_still_sends`
-`verified-by: bravebot_tui::app::a_program_cannot_send_its_own_line_with_an_arrow_and_a_return`
+`verified-by: bravebot_tui::app::tests::input_terminal::what_the_reader_says_arrived_together_reaches_the_rung_that_leaves`
+`verified-by: bravebot_tui::app::tests::input_keys::two_interrupts_that_arrived_together_do_not_end_the_session`
+`verified-by: bravebot_tui::app::tests::input_keys::two_end_of_transmissions_that_arrived_together_do_not_end_the_session`
+`verified-by: bravebot_tui::app::tests::input_keys::a_press_on_its_own_after_a_run_still_leaves`
+`verified-by: bravebot_tui::app::tests::input_terminal::a_return_that_arrived_with_other_keys_does_not_send`
+`verified-by: bravebot_tui::app::tests::input_terminal::every_refused_return_is_said_and_not_just_the_first`
+`verified-by: bravebot_tui::app::tests::input_terminal::a_return_that_arrived_with_other_keys_is_not_queued_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::input_keys::a_refused_way_out_says_so`
+`verified-by: bravebot_tui::app::tests::input_terminal::a_return_of_its_own_still_sends`
+`verified-by: bravebot_tui::app::tests::input_terminal::a_program_cannot_send_its_own_line_with_an_arrow_and_a_return`
 `verified-by: bravebot_tui::suspend_tests::a_ctrl_z_that_arrived_with_other_keys_does_not_suspend`
 
 <a id="INPUT-35"></a>
@@ -2794,12 +2794,12 @@ knowledge that Up takes the queue back. A stop that sent the prompts one at a ti
 for the first that the second was written to correct, so they go as one, which is what the person
 would have typed had they known in advance.
 
-`verified-by: bravebot_tui::app::ctrl_enter_queues_the_line_and_stops_the_turn_where_enter_only_queues`
-`verified-by: bravebot_tui::app::ctrl_enter_stops_the_turn_in_flight_and_enter_does_not`
-`verified-by: bravebot_tui::app::ctrl_enter_over_an_empty_box_sends_what_is_already_waiting`
-`verified-by: bravebot_tui::app::ctrl_enter_with_nothing_to_send_leaves_the_turn_running`
-`verified-by: bravebot_tui::app::ctrl_enter_during_a_single_request_only_queues`
-`verified-by: bravebot_tui::app::what_ctrl_enter_hurried_goes_as_one_turn_once_the_turn_stops`
+`verified-by: bravebot_tui::app::tests::input_turn::ctrl_enter_queues_the_line_and_stops_the_turn_where_enter_only_queues`
+`verified-by: bravebot_tui::app::tests::input_turn::ctrl_enter_stops_the_turn_in_flight_and_enter_does_not`
+`verified-by: bravebot_tui::app::tests::input_turn::ctrl_enter_over_an_empty_box_sends_what_is_already_waiting`
+`verified-by: bravebot_tui::app::tests::input_turn::ctrl_enter_with_nothing_to_send_leaves_the_turn_running`
+`verified-by: bravebot_tui::app::tests::input_turn::ctrl_enter_during_a_single_request_only_queues`
+`verified-by: bravebot_tui::app::tests::input_turn::what_ctrl_enter_hurried_goes_as_one_turn_once_the_turn_stops`
 `verified-by: bravebot_tui::state::hurried_prompts_go_as_one_turn_carrying_what_each_of_them_named`
 `verified-by: bravebot_tui::state::a_prompt_queued_after_the_hurry_waits_for_a_turn_of_its_own`
 `verified-by: bravebot_tui::state::a_command_between_hurried_prompts_keeps_its_place`
@@ -2818,7 +2818,7 @@ would have typed had they known in advance.
 `verified-by: bravebot_tui::state::an_instruction_spends_the_count_typed_in_front_of_it`
 `verified-by: bravebot_tui::state::escape_abandons_a_count`
 `verified-by: bravebot_tui::state::the_count_is_part_of_what_the_hint_line_draws`
-`verified-by: bravebot_tui::app::a_counted_row_key_never_reaches_the_prompt_history`
+`verified-by: bravebot_tui::app::tests::input_turn::a_counted_row_key_never_reaches_the_prompt_history`
 `verified-by: bravebot_tui::render::the_hint_line_draws_the_count_in_front_of_an_instruction`
 
 <a id="INPUT-37"></a>
@@ -2869,7 +2869,7 @@ mode typed is not an instruction the session keeps; both are known costs.
 `verified-by: bravebot_tui::state::a_count_in_front_of_capital_r_is_spent`
 `verified-by: bravebot_tui::state::the_keys_that_delete_backwards_take_back_what_was_typed_over`
 `verified-by: bravebot_tui::render::the_hint_line_says_which_vi_mode_the_box_is_in`
-`verified-by: bravebot_tui::app::the_two_paths_answer_the_same_set_of_keys`
+`verified-by: bravebot_tui::app::tests::input_turn::the_two_paths_answer_the_same_set_of_keys`
 
 <a id="INPUT-39"></a>
 ### INPUT-39: a line cleared with Escape or Ctrl-C comes back with Up
@@ -2900,14 +2900,14 @@ press stays here, and recovery costs no press on the clear itself. Dropping the 
 what keeps it from outliving the thought it belonged to. The stash is a separate slot because it is
 a line put away on purpose ([INPUT-17](#INPUT-17)).
 
-`verified-by: bravebot_tui::app::escape_keeps_the_cleared_line_for_up`
-`verified-by: bravebot_tui::app::ctrl_c_keeps_the_cleared_line_for_up`
-`verified-by: bravebot_tui::app::a_second_clear_replaces_the_kept_draft`
-`verified-by: bravebot_tui::app::sending_a_prompt_drops_the_kept_draft`
-`verified-by: bravebot_tui::app::clearing_a_recalled_prompt_does_not_replace_the_draft`
-`verified-by: bravebot_tui::app::clearing_an_empty_or_blank_line_keeps_no_draft`
-`verified-by: bravebot_tui::app::the_kept_draft_is_not_a_candidate_for_the_search`
-`verified-by: bravebot_tui::app::ctrl_s_on_the_recalled_draft_puts_it_away`
+`verified-by: bravebot_tui::app::tests::input_turn::escape_keeps_the_cleared_line_for_up`
+`verified-by: bravebot_tui::app::tests::input_turn::ctrl_c_keeps_the_cleared_line_for_up`
+`verified-by: bravebot_tui::app::tests::input_turn::a_second_clear_replaces_the_kept_draft`
+`verified-by: bravebot_tui::app::tests::input_turn::sending_a_prompt_drops_the_kept_draft`
+`verified-by: bravebot_tui::app::tests::input_turn::clearing_a_recalled_prompt_does_not_replace_the_draft`
+`verified-by: bravebot_tui::app::tests::input_turn::clearing_an_empty_or_blank_line_keeps_no_draft`
+`verified-by: bravebot_tui::app::tests::input_turn::the_kept_draft_is_not_a_candidate_for_the_search`
+`verified-by: bravebot_tui::app::tests::input_turn::ctrl_s_on_the_recalled_draft_puts_it_away`
 `verified-by: bravebot_tui::state::what_a_cleared_line_named_is_named_again_when_the_draft_comes_back`
 `verified-by: bravebot_tui::state::the_caret_lands_at_the_end_of_a_recalled_draft`
 `verified-by: bravebot_tui::state::a_cleared_command_comes_back_as_words_and_not_as_a_command`
@@ -2931,7 +2931,7 @@ edge is coalesced into frames like any other burst of input, not drawn once per 
 screen keeps the old size's layout, and the bottom row suffers most. Every other loop draws on each
 pass, so only the idle loop needs this event.
 
-`verified-by: bravebot_tui::app::a_resize_while_the_box_is_idle_asks_for_a_frame`
+`verified-by: bravebot_tui::app::tests::input_terminal::a_resize_while_the_box_is_idle_asks_for_a_frame`
 `verified-by: bravebot_tui::render::a_frame_drawn_after_a_resize_is_the_frame_of_a_terminal_that_size_from_the_start`
 
 <a id="INPUT-43"></a>
@@ -2977,21 +2977,21 @@ nobody asked for on each turn is the cost this setting exists to let a person ch
 `verified-by: bravebot_config::settings::a_checkout_may_turn_suggestions_off_and_not_on`
 `verified-by: bravebot_cli::doctor::a_checkout_suggestions_that_turns_them_on_is_reported_with_the_file`
 `verified-by: bravebot_ui_bridge::settings::a_checkout_suggestions_turned_on_is_listed_as_ignored`
-`verified-by: bravebot_tui::app::a_checkouts_suggestions_do_not_turn_the_session_on`
-`verified-by: bravebot_tui::app::tab_and_right_move_the_suggestion_into_the_box_and_send_nothing`
-`verified-by: bravebot_tui::app::a_suggestion_that_begins_with_a_slash_is_text_until_enter`
-`verified-by: bravebot_tui::app::any_other_key_removes_the_suggestion_and_still_types`
-`verified-by: bravebot_tui::app::a_modifier_on_its_own_leaves_the_suggestion_standing`
-`verified-by: bravebot_tui::app::a_suggestion_is_offered_only_to_an_idle_empty_box_with_the_setting_on`
-`verified-by: bravebot_tui::app::a_suggestion_is_asked_for_only_after_a_turn_that_answered`
-`verified-by: bravebot_tui::app::a_suggestions_cost_is_charged_to_the_session`
-`verified-by: bravebot_tui::app::a_suggestion_from_an_exchange_that_met_something_untrusted_is_not_offered`
-`verified-by: bravebot_tui::app::an_answered_request_is_charged_recorded_and_offered`
-`verified-by: bravebot_tui::app::an_answer_that_is_not_usable_is_still_charged_and_recorded`
-`verified-by: bravebot_tui::app::a_request_not_yet_answered_is_waited_on`
-`verified-by: bravebot_tui::app::a_worker_that_ends_without_answering_is_forgotten`
-`verified-by: bravebot_tui::app::an_answer_that_arrives_after_typing_is_charged_and_not_offered`
-`verified-by: bravebot_tui::app::no_request_is_made_where_the_setting_is_off_or_no_turn_answered`
+`verified-by: bravebot_tui::app::tests::backends_models::a_checkouts_suggestions_do_not_turn_the_session_on`
+`verified-by: bravebot_tui::app::tests::input_turn::tab_and_right_move_the_suggestion_into_the_box_and_send_nothing`
+`verified-by: bravebot_tui::app::tests::input_turn::a_suggestion_that_begins_with_a_slash_is_text_until_enter`
+`verified-by: bravebot_tui::app::tests::input_turn::any_other_key_removes_the_suggestion_and_still_types`
+`verified-by: bravebot_tui::app::tests::input_turn::a_modifier_on_its_own_leaves_the_suggestion_standing`
+`verified-by: bravebot_tui::app::tests::input_turn::a_suggestion_is_offered_only_to_an_idle_empty_box_with_the_setting_on`
+`verified-by: bravebot_tui::app::tests::input_turn::a_suggestion_is_asked_for_only_after_a_turn_that_answered`
+`verified-by: bravebot_tui::app::tests::input_turn::a_suggestions_cost_is_charged_to_the_session`
+`verified-by: bravebot_tui::app::tests::input_turn::a_suggestion_from_an_exchange_that_met_something_untrusted_is_not_offered`
+`verified-by: bravebot_tui::app::tests::input_turn::an_answered_request_is_charged_recorded_and_offered`
+`verified-by: bravebot_tui::app::tests::input_turn::an_answer_that_is_not_usable_is_still_charged_and_recorded`
+`verified-by: bravebot_tui::app::tests::input_turn::a_request_not_yet_answered_is_waited_on`
+`verified-by: bravebot_tui::app::tests::input_turn::a_worker_that_ends_without_answering_is_forgotten`
+`verified-by: bravebot_tui::app::tests::input_turn::an_answer_that_arrives_after_typing_is_charged_and_not_offered`
+`verified-by: bravebot_tui::app::tests::input_turn::no_request_is_made_where_the_setting_is_off_or_no_turn_answered`
 `verified-by: bravebot_tui::render::a_suggestion_is_drawn_in_the_empty_box_in_place_of_the_invitation`
 `verified-by: bravebot_tui::render::a_suggestion_is_dimmed_as_the_invitation_is`
 
@@ -3047,11 +3047,11 @@ has otherwise finished typing.
 `verified-by: bravebot_tui::state::ctrl_u_then_undo_restores_the_line_and_caret_in_the_ordinary_box`
 `verified-by: bravebot_tui::state::undo_after_a_send_has_nothing_to_restore_in_the_ordinary_box`
 `verified-by: bravebot_tui::state::undo_brings_back_a_deleted_marker_with_its_attachment`
-`verified-by: bravebot_tui::app::the_undo_chord_puts_back_what_a_delete_took`
-`verified-by: bravebot_tui::app::the_undo_chord_takes_back_a_whole_typing_run`
-`verified-by: bravebot_tui::app::the_undo_chord_leaves_the_next_run_able_to_open_its_own_step`
-`verified-by: bravebot_tui::app::the_undo_chord_works_in_vi_insert_mode_without_leaving_it`
-`verified-by: bravebot_tui::app::the_undo_chord_works_while_a_turn_is_running`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::the_undo_chord_puts_back_what_a_delete_took`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::the_undo_chord_takes_back_a_whole_typing_run`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::the_undo_chord_leaves_the_next_run_able_to_open_its_own_step`
+`verified-by: bravebot_tui::app::tests::input_vi::the_undo_chord_works_in_vi_insert_mode_without_leaving_it`
+`verified-by: bravebot_tui::app::tests::input_history_and_box::the_undo_chord_works_while_a_turn_is_running`
 `verified-by: bravebot_tui::state::a_second_typing_run_after_undo_opens_its_own_step`
 `verified-by: bravebot_tui::state::typing_after_a_yank_opens_its_own_run`
 `verified-by: bravebot_tui::state::undo_after_clearing_has_nothing_to_restore_in_the_ordinary_box`
@@ -3196,7 +3196,7 @@ has, since one byte another program writes should not take the terminal from the
 `verified-by: bravebot_tui::suspend_tests::a_ctrl_z_that_arrived_with_other_keys_does_not_suspend`
 `verified-by: bravebot_tui::suspend_tests::a_mode_over_the_box_reads_ctrl_z_itself_and_does_not_suspend`
 `verified-by: bravebot_tui::suspend_tests::a_working_loop_hands_the_stop_back_to_the_pump_that_holds_the_terminal`
-`verified-by: bravebot_tui::app::the_turns_key_reader_hands_ctrl_z_back_and_leaves_the_turn_running`
+`verified-by: bravebot_tui::app::tests::input_terminal::the_turns_key_reader_hands_ctrl_z_back_and_leaves_the_turn_running`
 `verified-by: bravebot_tui::suspend_tests::the_offer_to_leave_does_not_survive_a_stop`
 `verified-by: bravebot_tui::suspend_tests::stopping_reaches_the_group_and_returns_only_once_continued`
 `verified-by: bravebot_tui::suspend_tests::the_terminal_is_given_back_before_the_stop_and_taken_again_after_it`
@@ -3211,7 +3211,7 @@ has, since one byte another program writes should not take the terminal from the
 `verified-by: bravebot_tui::keybindings::suspend_moved_onto_an_undo_spelling_takes_it_from_undo`
 `verified-by: bravebot_tui::keybindings::where_nothing_suspends_ctrl_z_is_free_for_another_action`
 `verified-by: bravebot_tui::render::the_shortcut_list_names_the_suspend_chord`
-`verified-by: bravebot_tui::app::every_mode_a_session_asks_for_is_given_back`
+`verified-by: bravebot_tui::app::tests::input_terminal::every_mode_a_session_asks_for_is_given_back`
 
 <a id="INPUT-48"></a>
 ### INPUT-48: a key rewrites the line to be more specific, and the rewrite waits in the box for the person to edit
@@ -3273,30 +3273,30 @@ reaches for it with the line half written, where a command word would have to be
 `verified-by: bravebot_agent::turn::an_enhancement_asks_for_the_draft_over_the_exchange_and_leaves_the_conversation_alone`
 `verified-by: bravebot_agent::turn::an_enhancement_over_an_untrusted_exchange_is_not_offered_for_the_box`
 `verified-by: bravebot_tui::keybindings::the_enhance_chord_is_ctrl_p_and_can_be_moved`
-`verified-by: bravebot_tui::app::the_enhance_chord_asks_for_the_line_and_sends_nothing`
-`verified-by: bravebot_tui::app::the_enhance_chord_has_nothing_to_rewrite_in_an_empty_box_or_a_shell_line`
-`verified-by: bravebot_tui::app::a_line_written_like_a_command_or_a_skill_is_left_as_written_and_says_so`
-`verified-by: bravebot_tui::app::a_prompt_that_starts_with_a_path_is_rewritten_like_any_other`
-`verified-by: bravebot_tui::app::a_line_too_long_to_be_rewritten_is_left_as_written_and_says_so`
-`verified-by: bravebot_tui::app::a_line_holding_a_picture_is_left_as_written_and_says_so`
-`verified-by: bravebot_tui::app::a_folded_paste_goes_to_the_request_as_its_words`
-`verified-by: bravebot_tui::app::a_moved_enhance_chord_enhances_and_the_old_one_does_not`
-`verified-by: bravebot_tui::app::the_enhance_chord_answers_in_every_mode_of_vi_s_style`
-`verified-by: bravebot_tui::app::the_enhance_chord_does_nothing_while_a_turn_runs`
-`verified-by: bravebot_tui::app::an_enhancement_is_placed_in_the_box_and_nothing_is_sent`
-`verified-by: bravebot_tui::app::escape_puts_back_what_was_written_and_the_next_escape_clears_it`
-`verified-by: bravebot_tui::app::ctrl_c_puts_back_what_was_written_in_either_style`
-`verified-by: bravebot_tui::app::enter_on_an_enhancement_sends_it_as_a_prompt_whatever_it_begins_with`
-`verified-by: bravebot_tui::app::enter_on_an_enhancement_mid_turn_queues_it_as_a_prompt_and_never_as_a_command`
-`verified-by: bravebot_tui::app::a_line_typed_after_the_enhancement_was_wiped_out_is_a_new_line`
-`verified-by: bravebot_tui::app::enhancing_an_enhancement_still_puts_back_the_line_the_person_wrote`
-`verified-by: bravebot_tui::app::an_enhancement_from_an_exchange_that_met_something_untrusted_is_not_offered`
-`verified-by: bravebot_tui::app::an_enhancement_that_is_empty_or_too_long_is_not_offered_and_says_so`
-`verified-by: bravebot_tui::app::an_enhancement_is_not_written_over_a_line_typed_since_the_request_went`
-`verified-by: bravebot_tui::app::a_stopped_or_failed_request_leaves_the_line_and_says_so`
-`verified-by: bravebot_tui::app::the_note_names_the_key_that_puts_the_line_back_in_each_style`
-`verified-by: bravebot_tui::app::an_enhancements_cost_is_charged_to_the_session`
-`verified-by: bravebot_tui::app::characters_that_draw_as_nothing_are_taken_out_of_an_enhancement_and_counted`
+`verified-by: bravebot_tui::app::tests::input_keys::the_enhance_chord_asks_for_the_line_and_sends_nothing`
+`verified-by: bravebot_tui::app::tests::input_keys::the_enhance_chord_has_nothing_to_rewrite_in_an_empty_box_or_a_shell_line`
+`verified-by: bravebot_tui::app::tests::input_keys::a_line_written_like_a_command_or_a_skill_is_left_as_written_and_says_so`
+`verified-by: bravebot_tui::app::tests::input_keys::a_prompt_that_starts_with_a_path_is_rewritten_like_any_other`
+`verified-by: bravebot_tui::app::tests::input_keys::a_line_too_long_to_be_rewritten_is_left_as_written_and_says_so`
+`verified-by: bravebot_tui::app::tests::input_keys::a_line_holding_a_picture_is_left_as_written_and_says_so`
+`verified-by: bravebot_tui::app::tests::input_keys::a_folded_paste_goes_to_the_request_as_its_words`
+`verified-by: bravebot_tui::app::tests::input_keys::a_moved_enhance_chord_enhances_and_the_old_one_does_not`
+`verified-by: bravebot_tui::app::tests::input_keys::the_enhance_chord_answers_in_every_mode_of_vi_s_style`
+`verified-by: bravebot_tui::app::tests::input_turn::the_enhance_chord_does_nothing_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::input_keys::an_enhancement_is_placed_in_the_box_and_nothing_is_sent`
+`verified-by: bravebot_tui::app::tests::input_keys::escape_puts_back_what_was_written_and_the_next_escape_clears_it`
+`verified-by: bravebot_tui::app::tests::input_keys::ctrl_c_puts_back_what_was_written_in_either_style`
+`verified-by: bravebot_tui::app::tests::input_keys::enter_on_an_enhancement_sends_it_as_a_prompt_whatever_it_begins_with`
+`verified-by: bravebot_tui::app::tests::input_keys::enter_on_an_enhancement_mid_turn_queues_it_as_a_prompt_and_never_as_a_command`
+`verified-by: bravebot_tui::app::tests::input_keys::a_line_typed_after_the_enhancement_was_wiped_out_is_a_new_line`
+`verified-by: bravebot_tui::app::tests::input_keys::enhancing_an_enhancement_still_puts_back_the_line_the_person_wrote`
+`verified-by: bravebot_tui::app::tests::input_keys::an_enhancement_from_an_exchange_that_met_something_untrusted_is_not_offered`
+`verified-by: bravebot_tui::app::tests::input_keys::an_enhancement_that_is_empty_or_too_long_is_not_offered_and_says_so`
+`verified-by: bravebot_tui::app::tests::input_keys::an_enhancement_is_not_written_over_a_line_typed_since_the_request_went`
+`verified-by: bravebot_tui::app::tests::input_keys::a_stopped_or_failed_request_leaves_the_line_and_says_so`
+`verified-by: bravebot_tui::app::tests::input_keys::the_note_names_the_key_that_puts_the_line_back_in_each_style`
+`verified-by: bravebot_tui::app::tests::input_keys::an_enhancements_cost_is_charged_to_the_session`
+`verified-by: bravebot_tui::app::tests::input_keys::characters_that_draw_as_nothing_are_taken_out_of_an_enhancement_and_counted`
 `verified-by: bravebot_tui::render::the_shortcuts_name_the_enhance_chord_in_force`
 
 <a id="INPUT-49"></a>

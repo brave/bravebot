@@ -731,7 +731,7 @@ another turn; a pre-turn copy cannot replace it. A record is written by one proc
 ([SESSION-38](sessions.md#SESSION-38)), so the map one process recorded is not replaced by a copy
 another process made before it.
 
-`verified-by: bravebot_tui::app::a_resume_without_the_flag_asks_where_bypass_answered_for_the_record`
+`verified-by: bravebot_tui::app::tests::permissions::a_resume_without_the_flag_asks_where_bypass_answered_for_the_record`
 `verified-by: bravebot_tui::sessions::a_record_written_under_bypass_restores_no_trust_and_no_directory`
 `verified-by: bravebot_cli::plain_retention_tests::failed_plain_turn_excludes_replacement_from_the_next_request`
 `verified-by: bravebot_agent::turn::retention::early_loading_errors_return_current_decisions`
@@ -785,17 +785,17 @@ that vouches for the whole tree at once.
 who has already decided to vouch for the tree, on a screen that names what a yes keeps either way.
 
 `verified-by: bravebot_session::sessions::a_record_resumes_its_rules_under_the_directory_it_is_read_in`
-`verified-by: bravebot_tui::app::a_fresh_session_is_asked_rather_than_inheriting_a_map`
-`verified-by: bravebot_tui::app::a_remembered_answer_settles_a_fresh_session`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_fresh_session_is_asked_rather_than_inheriting_a_map`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_remembered_answer_settles_a_fresh_session`
 `verified-by: bravebot_ui_bridge::remembered_trust::a_remembered_yes_settles_the_next_session_started_there`
-`verified-by: bravebot_tui::app::a_resume_starts_with_the_map_its_own_record_kept`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_resume_starts_with_the_map_its_own_record_kept`
 `verified-by: bravebot_ui_bridge::remembered_trust::a_resume_takes_its_own_map_before_a_kept_answer`
 `verified-by: bravebot_tui::sessions::a_resume_keeps_the_answer_about_confined_lines_for_its_own_directory_only`
 `verified-by: bravebot_ui_bridge::remembered_trust::a_yes_from_a_window_that_showed_the_sentence_is_kept_saying_so`
 `verified-by: bravebot_ui_bridge::remembered_trust::a_yes_from_a_client_that_did_not_show_the_sentence_is_kept_without_it`
 `verified-by: bravebot_ui_bridge::opening_tests::a_kept_answer_settles_a_window_with_what_its_entry_says`
 `verified-by: bravebot_ui_bridge::opening_tests::an_answer_allows_confined_lines_only_for_a_yes_to_a_question_that_said_so`
-`verified-by: bravebot_tui::app::a_record_from_before_maps_were_kept_is_asked_about`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_record_from_before_maps_were_kept_is_asked_about`
 `verified-by: bravebot_session::sessions::a_record_that_predates_the_map_has_none_rather_than_an_empty_one`
 `verified-by: bravebot_session::sessions::a_distrusted_path_inside_a_trusted_tree_survives_the_record`
 `verified-by: bravebot_session::sessions::two_recorded_spellings_of_one_path_resume_as_untrusted`
@@ -844,8 +844,8 @@ every permission says the flag answered, which is what is in force, and never wr
 `verified-by: bravebot_tui::trust_prompt::two_interrupts_that_arrived_together_close_nothing`
 `verified-by: bravebot_tui::trust_prompt::bypassing_trusts_the_workspace_instead_of_asking`
 `verified-by: bravebot_tui::trust_prompt::every_other_mode_leaves_the_question_to_the_person`
-`verified-by: bravebot_tui::app::a_resume_keeps_its_own_map_even_where_the_mode_would_answer`
-`verified-by: bravebot_tui::app::bypass_answers_before_a_remembered_answer_is_read`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_resume_keeps_its_own_map_even_where_the_mode_would_answer`
+`verified-by: bravebot_tui::app::tests::permissions::bypass_answers_before_a_remembered_answer_is_read`
 `verified-by: bravebot_tui::trust_prompt::r_answers_nothing`
 `verified-by: bravebot_tui::trust_prompt::the_prompt_that_cannot_keep_a_yes_says_so`
 `verified-by: bravebot_tui::trust_prompt::a_question_that_cannot_keep_a_yes_takes_y_at_every_scroll`
@@ -1045,29 +1045,29 @@ outlive the answer that allowed it. Closing one takes both halves for the same r
 `verified-by: bravebot_agent::workspace::another_spelling_of_an_ancestor_of_the_root_is_refused_and_the_plain_ancestor_is_not`
 `verified-by: bravebot_agent::workspace::moving_the_root_onto_a_second_path_of_an_added_directory_closes_it`
 `verified-by: bravebot_agent::tools::a_request_path_grant_to_another_path_to_the_working_directory_is_refused`
-`verified-by: bravebot_tui::app::add_dir_refuses_another_path_to_the_working_directory`
+`verified-by: bravebot_tui::app::tests::trust_paths::add_dir_refuses_another_path_to_the_working_directory`
 `verified-by: bravebot_tui::sessions::a_second_path_to_a_tree_is_reported_on_resume_and_not_reopened`
 `verified-by: bravebot_core::trust::withdrawing_trust_keeps_every_rule_that_lowers_a_path`
 `verified-by: bravebot_core::trust::withdrawing_trust_beneath_a_trusted_rule_leaves_the_path_undecided`
 `verified-by: bravebot_core::trust::withdrawing_trust_reaches_every_spelling_a_folding_volume_reads_as_one`
 `verified-by: bravebot_core::trust::withdrawing_trust_reaches_every_canonically_equivalent_spelling`
-`verified-by: bravebot_tui::app::add_dir_close_withdraws_the_reach_and_the_rule_together`
-`verified-by: bravebot_tui::app::add_dir_opens_a_relative_name_as_it_opens_the_absolute_one`
-`verified-by: bravebot_tui::app::add_dir_records_trust_under_the_directory_a_relative_name_resolves_to`
-`verified-by: bravebot_tui::app::add_dir_of_the_parent_opens_and_trusts_the_directory_holding_the_project`
-`verified-by: bravebot_tui::app::a_relative_name_means_the_working_directory_after_a_cd`
-`verified-by: bravebot_tui::app::add_dir_refuses_a_relative_name_as_it_refuses_the_absolute_one`
-`verified-by: bravebot_tui::app::add_dir_refuses_a_relative_name_that_reaches_a_credential_location`
-`verified-by: bravebot_tui::app::add_dir_close_takes_a_relative_name_as_it_takes_the_absolute_one`
-`verified-by: bravebot_tui::app::add_dir_close_by_a_relative_name_is_not_redirected_by_a_link_put_where_the_directory_was`
-`verified-by: bravebot_tui::app::a_climbing_relative_name_opens_and_closes_the_directory_it_names`
-`verified-by: bravebot_tui::app::a_relative_name_is_cleaned_of_its_leading_dots_and_of_nothing_after_a_name`
-`verified-by: bravebot_tui::app::a_relative_name_is_refused_against_a_working_directory_whose_name_is_not_text`
-`verified-by: bravebot_tui::app::add_dir_reads_a_leading_tilde_as_the_home_before_a_name_under_the_project`
-`verified-by: bravebot_tui::app::add_dir_refuses_a_relative_name_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_tui::app::tests::trust_paths::add_dir_close_withdraws_the_reach_and_the_rule_together`
+`verified-by: bravebot_tui::app::tests::trust_paths::add_dir_opens_a_relative_name_as_it_opens_the_absolute_one`
+`verified-by: bravebot_tui::app::tests::trust_paths::add_dir_records_trust_under_the_directory_a_relative_name_resolves_to`
+`verified-by: bravebot_tui::app::tests::trust_paths::add_dir_of_the_parent_opens_and_trusts_the_directory_holding_the_project`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_relative_name_means_the_working_directory_after_a_cd`
+`verified-by: bravebot_tui::app::tests::trust_paths::add_dir_refuses_a_relative_name_as_it_refuses_the_absolute_one`
+`verified-by: bravebot_tui::app::tests::trust_paths::add_dir_refuses_a_relative_name_that_reaches_a_credential_location`
+`verified-by: bravebot_tui::app::tests::trust_paths::add_dir_close_takes_a_relative_name_as_it_takes_the_absolute_one`
+`verified-by: bravebot_tui::app::tests::trust_paths::add_dir_close_by_a_relative_name_is_not_redirected_by_a_link_put_where_the_directory_was`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_climbing_relative_name_opens_and_closes_the_directory_it_names`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_relative_name_is_cleaned_of_its_leading_dots_and_of_nothing_after_a_name`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_relative_name_is_refused_against_a_working_directory_whose_name_is_not_text`
+`verified-by: bravebot_tui::app::tests::trust_paths::add_dir_reads_a_leading_tilde_as_the_home_before_a_name_under_the_project`
+`verified-by: bravebot_tui::app::tests::trust_paths::add_dir_refuses_a_relative_name_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::opening_and_moving_to_a_directory_refuse_a_bad_name_the_same_way`
 `verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
-`verified-by: bravebot_tui::app::add_dir_of_a_directory_holding_the_project_says_it_ends_checkouts`
+`verified-by: bravebot_tui::app::tests::remainder::add_dir_of_a_directory_holding_the_project_says_it_ends_checkouts`
 `verified-by: bravebot_cli::main::a_directory_holding_the_working_directory_is_said_to_end_checkouts`
 `verified-by: bravebot_agent::workspace::a_new_file_can_be_created_in_an_added_directory`
 `verified-by: bravebot_agent::turn::a_turn_can_read_a_file_in_an_added_directory`
@@ -1416,13 +1416,13 @@ them.
 `verified-by: bravebot_agent::workspace::moving_closes_the_directory_left_behind`
 `verified-by: bravebot_agent::workspace::moving_closes_an_added_directory_that_overlaps_the_new_one`
 `verified-by: bravebot_agent::workspace::moving_leaves_an_unrelated_added_directory_open`
-`verified-by: bravebot_tui::app::changing_directory_moves_the_workspace_and_vouches_for_where_it_moved`
-`verified-by: bravebot_tui::app::changing_directory_leaves_the_previous_answer_where_it_was_given`
-`verified-by: bravebot_tui::app::moving_keeps_the_programs_vouched_for_and_the_prompts_already_drawn`
-`verified-by: bravebot_tui::app::moving_into_a_directory_keeps_the_answers_given_inside_it`
-`verified-by: bravebot_tui::app::a_rule_granted_in_one_checkout_is_not_in_force_after_moving_to_another`
-`verified-by: bravebot_tui::app::an_answer_to_show_a_file_does_not_cover_the_file_by_that_name_after_moving`
-`verified-by: bravebot_tui::app::a_relative_name_is_refused_against_a_working_directory_whose_name_is_not_text`
+`verified-by: bravebot_tui::app::tests::trust_paths::changing_directory_moves_the_workspace_and_vouches_for_where_it_moved`
+`verified-by: bravebot_tui::app::tests::trust_paths::changing_directory_leaves_the_previous_answer_where_it_was_given`
+`verified-by: bravebot_tui::app::tests::trust_paths::moving_keeps_the_programs_vouched_for_and_the_prompts_already_drawn`
+`verified-by: bravebot_tui::app::tests::trust_paths::moving_into_a_directory_keeps_the_answers_given_inside_it`
+`verified-by: bravebot_tui::app::tests::permissions::a_rule_granted_in_one_checkout_is_not_in_force_after_moving_to_another`
+`verified-by: bravebot_tui::app::tests::permissions::an_answer_to_show_a_file_does_not_cover_the_file_by_that_name_after_moving`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_relative_name_is_refused_against_a_working_directory_whose_name_is_not_text`
 
 ## A scratch directory outside the workspace
 
@@ -1572,9 +1572,9 @@ behind, and there is no ordering to get right between removing it and still bein
 `verified-by: bravebot_agent::scratch::leaving_waits_for_a_directory_that_goes_quickly`
 `verified-by: bravebot_agent::scratch::a_directory_being_removed_stays_held_until_it_is_gone`
 `verified-by: bravebot_agent::scratch::no_two_sessions_are_given_the_same_directory`
-`verified-by: bravebot_tui::app::branching_replaces_the_sessions_directory_only_where_a_copy_was_made`
-`verified-by: bravebot_tui::app::clearing_and_a_handoff_each_replace_the_sessions_directory`
-`verified-by: bravebot_tui::app::a_session_begun_from_a_record_is_given_a_directory_of_its_own`
+`verified-by: bravebot_tui::app::tests::trust_paths::branching_replaces_the_sessions_directory_only_where_a_copy_was_made`
+`verified-by: bravebot_tui::app::tests::trust_paths::clearing_and_a_handoff_each_replace_the_sessions_directory`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_session_begun_from_a_record_is_given_a_directory_of_its_own`
 
 <a id="TRUST-16"></a>
 ### TRUST-16: the session's directory is reachable, and its reach grants no trust
@@ -2144,9 +2144,9 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_ui_bridge::remembered_trust::a_resume_takes_its_own_map_before_a_kept_answer`
 `verified-by: bravebot_agent::incognito::no_trusted_directory_is_written_down`
 `verified-by: bravebot_agent::incognito::a_directory_an_earlier_session_kept_is_still_trusted`
-`verified-by: bravebot_tui::app::a_remembered_answer_settles_a_fresh_session`
-`verified-by: bravebot_tui::app::bypass_answers_before_a_remembered_answer_is_read`
-`verified-by: bravebot_tui::app::a_resume_starts_with_the_map_its_own_record_kept`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_remembered_answer_settles_a_fresh_session`
+`verified-by: bravebot_tui::app::tests::permissions::bypass_answers_before_a_remembered_answer_is_read`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_resume_starts_with_the_map_its_own_record_kept`
 `verified-by: bravebot_cli::plain::a_remembered_answer_settles_a_session_in_lines_without_asking`
 `verified-by: bravebot_cli::plain::a_yes_in_lines_is_kept_and_settles_the_next_session_without_asking`
 `verified-by: bravebot_cli::plain::a_no_or_the_end_of_the_input_in_lines_keeps_nothing`
@@ -2158,9 +2158,9 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_cli::main::a_kept_answer_about_another_directory_trusts_a_one_shot_run_nowhere`
 `verified-by: bravebot_cli::main::a_kept_answer_about_the_repository_root_trusts_a_one_shot_run_in_a_package`
 `verified-by: bravebot_cli::running::a_one_shot_run_in_a_directory_with_a_kept_answer_reads_a_project_file_as_trusted`
-`verified-by: bravebot_tui::app::a_yes_is_kept_and_the_next_session_there_is_not_asked`
-`verified-by: bravebot_tui::app::a_no_is_not_kept_and_the_next_session_there_is_asked`
-`verified-by: bravebot_tui::app::a_yes_the_record_refuses_says_so_and_a_yes_with_no_record_says_nothing`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_yes_is_kept_and_the_next_session_there_is_not_asked`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_no_is_not_kept_and_the_next_session_there_is_asked`
+`verified-by: bravebot_tui::app::tests::trust_paths::a_yes_the_record_refuses_says_so_and_a_yes_with_no_record_says_nothing`
 `verified-by: bravebot_agent::trusted::a_yes_is_written_and_read_back_by_the_next_session_there`
 `verified-by: bravebot_agent::trusted::a_no_and_a_yes_with_no_record_write_nothing`
 `verified-by: bravebot_agent::trusted::a_yes_that_cannot_be_written_says_so`
@@ -2198,9 +2198,9 @@ the name. A line left about an earlier directory at the path would be read by no
 the file would still say they had vouched for it.
 
 `verified-by: bravebot_tui::status::the_report_says_a_directory_is_trusted_by_a_remembered_answer`
-`verified-by: bravebot_tui::app::forgetting_trust_makes_the_next_session_here_ask`
-`verified-by: bravebot_tui::app::forgetting_trust_where_nothing_is_kept_says_so`
-`verified-by: bravebot_tui::app::forgetting_trust_below_a_remembered_root_takes_the_roots_answer_back`
+`verified-by: bravebot_tui::app::tests::trust_paths::forgetting_trust_makes_the_next_session_here_ask`
+`verified-by: bravebot_tui::app::tests::trust_paths::forgetting_trust_where_nothing_is_kept_says_so`
+`verified-by: bravebot_tui::app::tests::trust_paths::forgetting_trust_below_a_remembered_root_takes_the_roots_answer_back`
 `verified-by: bravebot_tui::status::the_report_names_the_root_whose_remembered_answer_settles_the_directory`
 `verified-by: bravebot_ui_bridge::remembered_trust::a_remembered_worktree_root_answers_for_a_directory_below_it`
 `verified-by: bravebot_ui_bridge::remembered_trust::forgetting_a_remembered_answer_makes_the_next_session_there_ask`

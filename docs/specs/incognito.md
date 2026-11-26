@@ -70,7 +70,7 @@ made deliberately.
 `verified-by: bravebot_tui::incognito::a_choice_applies_to_the_session_and_is_not_recorded`
 `verified-by: bravebot_tui::incognito::a_choice_takes_effect_for_the_session_and_the_startup_reads_the_recorded_one`
 `verified-by: bravebot_tui::incognito::the_startup_opens_an_incognito_session_on_the_recorded_theme`
-`verified-by: bravebot_tui::app::a_theme_chosen_in_an_incognito_session_takes_effect_and_is_not_recorded`
+`verified-by: bravebot_tui::app::tests::remainder::a_theme_chosen_in_an_incognito_session_takes_effect_and_is_not_recorded`
 `verified-by: bravebot_tui::incognito::a_language_chosen_is_not_saved_and_the_command_says_so`
 `verified-by: bravebot_cli::running::an_incognito_start_opens_in_the_language_the_person_recorded`
 

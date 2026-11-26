@@ -192,11 +192,11 @@ clause describes.
 offering exactly one model and no way back to the ones every build has. Reaching more models is not
 a reason to stop reaching the existing ones.
 
-`verified-by: bravebot_tui::app::configured_tiers_are_offered_alongside_the_brave_roster`
-`verified-by: bravebot_tui::app::gateway_models_are_offered_alongside_the_other_rosters`
+`verified-by: bravebot_tui::app::tests::backends_models::configured_tiers_are_offered_alongside_the_brave_roster`
+`verified-by: bravebot_tui::app::tests::backends_models::gateway_models_are_offered_alongside_the_other_rosters`
 `verified-by: bravebot_agent::backend::a_gateway_does_not_take_the_other_rosters_away`
 `verified-by: bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_adds_the_compiled_list_and_a_warning`
-`verified-by: bravebot_tui::app::the_accounts_rows_are_met_in_reading_order_listed_or_compiled_and_nothing_else_adds_one`
+`verified-by: bravebot_tui::app::tests::backends_accounts::the_accounts_rows_are_met_in_reading_order_listed_or_compiled_and_nothing_else_adds_one`
 
 <a id="BACKEND-5"></a>
 ### BACKEND-5: only models that can actually be reached are offered
@@ -214,14 +214,14 @@ model name, so an entry guessed for an unnamed tier is a choice that fails remot
 pointed only at AWS has no Brave credentials, so offering that roster would list models whose every
 request fails unsigned.
 
-`verified-by: bravebot_tui::app::a_tier_with_no_model_configured_is_not_offered`
+`verified-by: bravebot_tui::app::tests::backends_models::a_tier_with_no_model_configured_is_not_offered`
 `verified-by: bravebot_config::lib::without_brave_credentials_the_default_is_the_strongest_bedrock_tier`
-`verified-by: bravebot_tui::app::only_the_gateway_models_the_file_named_are_offered`
+`verified-by: bravebot_tui::app::tests::backends_models::only_the_gateway_models_the_file_named_are_offered`
 `verified-by: bravebot_config::provider::a_provider_may_offer_no_models`
 `verified-by: bravebot_config::provider::a_provider_without_a_base_url_is_not_offered`
-`verified-by: bravebot_tui::app::the_brave_roster_is_offered_only_where_this_build_can_sign_for_it`
-`verified-by: bravebot_tui::app::a_gateway_whose_credential_nothing_holds_is_not_asked_for_its_models`
-`verified-by: bravebot_tui::app::an_aws_provider_entrys_models_are_offered_under_names_bedrock_answers_to`
+`verified-by: bravebot_tui::app::tests::backends_models::the_brave_roster_is_offered_only_where_this_build_can_sign_for_it`
+`verified-by: bravebot_tui::app::tests::backends_models::a_gateway_whose_credential_nothing_holds_is_not_asked_for_its_models`
+`verified-by: bravebot_tui::app::tests::backends_models::an_aws_provider_entrys_models_are_offered_under_names_bedrock_answers_to`
 `verified-by: bravebot_ui_bridge::models::the_window_asks_for_no_brave_roster_this_build_cannot_sign_for`
 `verified-by: bravebot_ui_bridge::models::the_window_asks_no_gateway_whose_credential_nothing_holds`
 `verified-by: bravebot_ui_bridge::models::the_window_offers_an_aws_provider_entry_under_its_bare_id`
@@ -248,10 +248,10 @@ list and distinguished nothing. Carried beside the name rather than composed int
 roster of several services is read as sections, and a service composed into every name is that name
 repeated down a hundred rows.
 
-`verified-by: bravebot_tui::app::a_configured_tier_is_not_confusable_with_a_brave_model_served_through_bedrock`
-`verified-by: bravebot_tui::app::a_tier_with_no_profile_configured_still_names_the_account`
-`verified-by: bravebot_tui::app::a_gateway_row_says_which_service_answers_it`
-`verified-by: bravebot_tui::app::the_note_left_on_choosing_a_model_names_its_service`
+`verified-by: bravebot_tui::app::tests::backends_models::a_configured_tier_is_not_confusable_with_a_brave_model_served_through_bedrock`
+`verified-by: bravebot_tui::app::tests::backends_models::a_tier_with_no_profile_configured_still_names_the_account`
+`verified-by: bravebot_tui::app::tests::backends_models::a_gateway_row_says_which_service_answers_it`
+`verified-by: bravebot_tui::app::tests::backends_models::the_note_left_on_choosing_a_model_names_its_service`
 `verified-by: bravebot_aichat::models::a_fetched_row_carries_the_gateway_that_serves_it`
 `verified-by: bravebot_aichat::models::only_a_row_the_account_lists_and_takes_in_the_api_is_offered_under_the_accounts_identifier`
 `verified-by: bravebot_aichat::models::the_models_an_entry_names_are_rows_under_the_accounts_identifier_with_the_window_it_states`
@@ -267,9 +267,9 @@ answer it, at the moment that model is chosen.
 at all, silently: every round asks, no round qualifies, and the session runs to exhaustion looking
 like one with nothing to summarise.
 
-`verified-by: bravebot_tui::app::a_bedrock_entry_carries_the_window_the_budget_is_taken_from`
-`verified-by: bravebot_tui::app::the_window_of_a_model_chosen_earlier_is_found_in_the_listing`
-`verified-by: bravebot_tui::app::a_gateway_entry_carries_the_window_the_budget_is_taken_from`
+`verified-by: bravebot_tui::app::tests::backends_models::a_bedrock_entry_carries_the_window_the_budget_is_taken_from`
+`verified-by: bravebot_tui::app::tests::backends_models::the_window_of_a_model_chosen_earlier_is_found_in_the_listing`
+`verified-by: bravebot_tui::app::tests::backends_models::a_gateway_entry_carries_the_window_the_budget_is_taken_from`
 
 <a id="BACKEND-8"></a>
 ### BACKEND-8: an unreachable listing costs only what it described
@@ -281,9 +281,9 @@ choice is refused only when there is nothing left that could be chosen.
 unreachable would leave the only models this configuration can definitely reach unpickable, which is
 the position somebody offline is most likely to be in.
 
-`verified-by: bravebot_tui::app::an_unreachable_listing_still_offers_the_configured_tiers`
-`verified-by: bravebot_tui::app::an_unreachable_listing_with_no_tiers_configured_is_still_a_failure`
-`verified-by: bravebot_tui::app::an_unreachable_listing_still_offers_the_gateway_models`
+`verified-by: bravebot_tui::app::tests::backends_models::an_unreachable_listing_still_offers_the_configured_tiers`
+`verified-by: bravebot_tui::app::tests::backends_models::an_unreachable_listing_with_no_tiers_configured_is_still_a_failure`
+`verified-by: bravebot_tui::app::tests::backends_models::an_unreachable_listing_still_offers_the_gateway_models`
 
 <a id="BACKEND-9"></a>
 ### BACKEND-9: a sign-in is asked for before work starts, by the model about to answer
@@ -430,15 +430,15 @@ and the pick is the later of the two.
 `verified-by: bravebot_tui::persist::a_recorded_model_answers_over_a_checkouts_file_and_the_persons_own`
 `verified-by: bravebot_cli::running::a_run_asks_for_the_recorded_model_ignoring_a_checkouts`
 `verified-by: bravebot_cli::running::a_run_asks_for_the_settings_model_over_an_exported_default`
-`verified-by: bravebot_tui::app::a_session_only_pick_is_asked_for_over_every_other_source_and_the_next_session_ignores_it`
-`verified-by: bravebot_tui::app::a_session_only_pick_is_outranked_by_the_plan_model_and_a_definitions_as_a_recorded_one_is`
-`verified-by: bravebot_tui::app::a_resume_after_a_session_only_pick_opens_on_the_recorded_pick`
+`verified-by: bravebot_tui::app::tests::backends_models::a_session_only_pick_is_asked_for_over_every_other_source_and_the_next_session_ignores_it`
+`verified-by: bravebot_tui::app::tests::backends_models::a_session_only_pick_is_outranked_by_the_plan_model_and_a_definitions_as_a_recorded_one_is`
+`verified-by: bravebot_tui::app::tests::backends_models::a_resume_after_a_session_only_pick_opens_on_the_recorded_pick`
 `verified-by: bravebot_cli::running::a_run_asks_for_an_exported_default_where_no_file_names_a_model`
 `verified-by: bravebot_cli::running::doctor_names_the_pick_a_checkouts_model_cannot_displace`
-`verified-by: bravebot_tui::app::the_picker_marks_the_model_in_force_which_is_the_default_where_nothing_is_picked`
-`verified-by: bravebot_tui::app::the_list_the_model_command_opens_marks_the_model_in_force_and_a_row_picked_is_put_in_force`
-`verified-by: bravebot_tui::app::the_refusal_of_a_level_is_asked_of_the_model_in_force_and_its_answer_is_returned`
-`verified-by: bravebot_tui::app::the_inputs_the_roster_lists_are_those_of_the_model_in_force_which_is_the_default_unpicked`
+`verified-by: bravebot_tui::app::tests::backends_accounts::the_picker_marks_the_model_in_force_which_is_the_default_where_nothing_is_picked`
+`verified-by: bravebot_tui::app::tests::backends_models::the_list_the_model_command_opens_marks_the_model_in_force_and_a_row_picked_is_put_in_force`
+`verified-by: bravebot_tui::app::tests::backends_effort::the_refusal_of_a_level_is_asked_of_the_model_in_force_and_its_answer_is_returned`
+`verified-by: bravebot_tui::app::tests::backends_models::the_inputs_the_roster_lists_are_those_of_the_model_in_force_which_is_the_default_unpicked`
 
 <a id="BACKEND-12"></a>
 ### BACKEND-12: a tier word names a model some reachable service serves
@@ -550,8 +550,8 @@ a window the roster reports. A value that is not a whole number above zero state
 `verified-by: bravebot_aichat::models::a_provider_window_is_taken_for_fetched_models`
 `verified-by: bravebot_config::provider::a_model_without_a_stated_window_gets_the_assumed_one`
 `verified-by: bravebot_config::provider::a_stated_window_is_read`
-`verified-by: bravebot_tui::app::a_gateway_entry_carries_the_window_the_budget_is_taken_from`
-`verified-by: bravebot_tui::app::a_gateway_model_with_no_stated_window_still_carries_one`
+`verified-by: bravebot_tui::app::tests::backends_models::a_gateway_entry_carries_the_window_the_budget_is_taken_from`
+`verified-by: bravebot_tui::app::tests::backends_models::a_gateway_model_with_no_stated_window_still_carries_one`
 
 <a id="BACKEND-15"></a>
 ### BACKEND-15: what a gateway block adds to a request is carried, never interpreted
@@ -654,8 +654,8 @@ a file from deciding what was asked, and keeping the choice a person's is what k
 `verified-by: bravebot_aichat::client::options_and_a_variant_cannot_supply_the_google_express_tool_keys`
 `verified-by: bravebot_aichat::client::options_and_a_variant_cannot_supply_the_ollama_tool_keys`
 `verified-by: bravebot_agent::turn::a_chosen_variant_is_merged_into_the_planners_request`
-`verified-by: bravebot_tui::app::a_variant_the_model_offers_is_picked_and_reaches_the_next_turn`
-`verified-by: bravebot_tui::app::a_model_offering_no_variants_takes_no_pick`
+`verified-by: bravebot_tui::app::tests::backends_effort::a_variant_the_model_offers_is_picked_and_reaches_the_next_turn`
+`verified-by: bravebot_tui::app::tests::backends_effort::a_model_offering_no_variants_takes_no_pick`
 `verified-by: bravebot_ui_bridge::variant::session_variant_lists_picks_refuses_and_drops`
 `verified-by: bravebot_ui_bridge::variant::a_picked_variant_reaches_the_next_turns_request_and_none_adds_nothing`
 `verified-by: bravebot_ui_bridge::variant::a_new_or_forked_session_starts_with_no_variant`
@@ -1147,11 +1147,11 @@ token is not renewed for it.
 `verified-by: bravebot_aichat::client::a_gateway_needing_no_credential_is_asked_for_its_roster_unauthenticated`
 `verified-by: bravebot_aichat::client::a_gateway_that_cannot_answer_the_account_question_is_asked_for_its_whole_roster`
 `verified-by: bravebot_aichat::client::a_responses_entry_is_asked_what_its_key_may_reach_before_its_whole_roster`
-`verified-by: bravebot_tui::app::a_fetched_roster_leads_with_the_model_in_force`
-`verified-by: bravebot_tui::app::a_fetched_roster_nobody_has_chosen_from_is_still_sorted`
+`verified-by: bravebot_tui::app::tests::backends_models::a_fetched_roster_leads_with_the_model_in_force`
+`verified-by: bravebot_tui::app::tests::backends_models::a_fetched_roster_nobody_has_chosen_from_is_still_sorted`
 `verified-by: bravebot_agent::chatgpt::a_signed_in_account_is_offered_what_the_service_lists_under_its_own_identifier`
-`verified-by: bravebot_tui::app::the_accounts_rows_are_met_in_reading_order_listed_or_compiled_and_nothing_else_adds_one`
-`verified-by: bravebot_tui::app::the_picker_says_which_gateway_could_not_be_listed_and_says_nothing_of_the_rest`
+`verified-by: bravebot_tui::app::tests::backends_accounts::the_accounts_rows_are_met_in_reading_order_listed_or_compiled_and_nothing_else_adds_one`
+`verified-by: bravebot_tui::app::tests::backends_models::the_picker_says_which_gateway_could_not_be_listed_and_says_nothing_of_the_rest`
 `verified-by: bravebot_ui_bridge::models::the_window_says_which_gateway_could_not_be_listed`
 `verified-by: bravebot_ui_bridge::models::the_window_lists_an_openai_entry_with_its_key_and_offers_every_row_under_openai`
 `verified-by: bravebot_agent::chatgpt::an_unreadable_listing_is_told_apart_from_an_empty_one`
@@ -1189,7 +1189,7 @@ began with, and no later request carries a level to that model.
 `verified-by: bravebot_bedrock::protocol::a_request_nobody_asked_a_level_of_carries_no_output_config`
 `verified-by: bravebot_agent::turn::without_a_chosen_effort_no_level_is_requested`
 `verified-by: bravebot_aichat::client::a_session_held_to_the_level_it_began_with_sends_that_level_whatever_a_request_asks_for`
-`verified-by: bravebot_tui::app::a_chatgpt_session_keeps_the_level_it_began_with_and_says_so_when_another_is_chosen`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_chatgpt_session_keeps_the_level_it_began_with_and_says_so_when_another_is_chosen`
 `verified-by: bravebot_aichat::client::an_account_request_carries_the_level_it_was_given_as_reasoning_effort_and_none_it_was_not`
 
 
@@ -1411,13 +1411,13 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_agent::backend::a_model_bedrock_serves_is_asked_of_bedrock_and_not_of_a_gateway_with_the_same_name`
 `verified-by: bravebot_agent::backend::a_level_the_account_refused_is_reported_for_its_model_only`
 `verified-by: bravebot_agent::backend::a_level_a_bedrock_model_refused_is_reported_for_that_model_only`
-`verified-by: bravebot_tui::app::a_level_is_withheld_from_a_model_that_reads_none`
-`verified-by: bravebot_tui::app::a_level_a_model_cannot_use_is_kept_rather_than_forgotten`
-`verified-by: bravebot_tui::app::asking_for_a_level_a_model_cannot_use_says_so`
-`verified-by: bravebot_tui::app::a_model_the_listing_did_not_describe_still_takes_a_level`
-`verified-by: bravebot_tui::app::a_default_model_the_roster_says_reads_no_level_is_withheld_one_when_nothing_is_picked`
-`verified-by: bravebot_tui::app::a_level_the_service_refused_stops_being_reported_as_in_force`
-`verified-by: bravebot_tui::app::a_turn_that_refused_nothing_does_not_restore_a_level_the_roster_says_is_unread`
+`verified-by: bravebot_tui::app::tests::backends_effort::a_level_is_withheld_from_a_model_that_reads_none`
+`verified-by: bravebot_tui::app::tests::backends_effort::a_level_a_model_cannot_use_is_kept_rather_than_forgotten`
+`verified-by: bravebot_tui::app::tests::backends_effort::asking_for_a_level_a_model_cannot_use_says_so`
+`verified-by: bravebot_tui::app::tests::backends_effort::a_model_the_listing_did_not_describe_still_takes_a_level`
+`verified-by: bravebot_tui::app::tests::backends_effort::a_default_model_the_roster_says_reads_no_level_is_withheld_one_when_nothing_is_picked`
+`verified-by: bravebot_tui::app::tests::backends_effort::a_level_the_service_refused_stops_being_reported_as_in_force`
+`verified-by: bravebot_tui::app::tests::backends_effort::a_turn_that_refused_nothing_does_not_restore_a_level_the_roster_says_is_unread`
 `verified-by: bravebot_tui::status::a_level_the_model_does_not_read_is_reported_as_unread`
 `verified-by: bravebot_agent::backend::the_xai_account_reads_no_level_is_one_service_and_is_asked_for_the_name_after_its_identifier`
 `verified-by: bravebot_tui::app::models::a_model_that_refused_a_level_is_listed_as_reading_none`
@@ -2022,8 +2022,8 @@ reads, which is why this is worth stating rather than left to fall out of the id
 `verified-by: bravebot_config::lib::a_model_an_aws_block_named_reaches_bedrock_rather_than_a_gateway`
 `verified-by: bravebot_config::lib::a_name_qualified_by_the_aws_id_is_not_a_gateway_either`
 `verified-by: bravebot_agent::backend::a_model_an_aws_block_named_selects_the_bedrock_backend`
-`verified-by: bravebot_tui::app::a_bedrock_model_a_block_named_is_shown_under_that_name`
-`verified-by: bravebot_tui::app::an_aws_provider_entrys_models_are_offered_under_names_bedrock_answers_to`
+`verified-by: bravebot_tui::app::tests::backends_models::a_bedrock_model_a_block_named_is_shown_under_that_name`
+`verified-by: bravebot_tui::app::tests::backends_models::an_aws_provider_entrys_models_are_offered_under_names_bedrock_answers_to`
 `verified-by: bravebot_ui_bridge::models::the_window_offers_an_aws_provider_entry_under_its_bare_id`
 `verified-by: bravebot_config::lib::a_refused_region_in_the_provider_entry_is_recorded_as_the_entry`
 `verified-by: bravebot_config::lib::a_provider_entry_the_machine_replaced_is_not_reported_as_refused`
@@ -2711,9 +2711,9 @@ servers are reached ([mcp-servers.md](mcp-servers.md)).
 `verified-by: bravebot_cli::plain::the_opening_names_each_dropped_key_once_in_doctors_sentences_and_no_value`
 `verified-by: bravebot_cli::plain::the_opening_says_nothing_about_dropped_keys_where_every_key_was_read`
 `verified-by: bravebot_cli::plain::the_opening_draws_a_dropped_key_with_an_escape_in_it_as_pictures`
-`verified-by: bravebot_tui::app::the_startup_notes_name_each_dropped_key_once_in_doctors_sentences_and_no_value`
-`verified-by: bravebot_tui::app::the_startup_notes_say_nothing_about_dropped_keys_where_every_key_was_read`
-`verified-by: bravebot_tui::app::a_session_begun_says_what_its_managed_layer_dropped`
+`verified-by: bravebot_tui::app::tests::backends_models::the_startup_notes_name_each_dropped_key_once_in_doctors_sentences_and_no_value`
+`verified-by: bravebot_tui::app::tests::backends_models::the_startup_notes_say_nothing_about_dropped_keys_where_every_key_was_read`
+`verified-by: bravebot_tui::app::tests::backends_models::a_session_begun_says_what_its_managed_layer_dropped`
 `verified-by: bravebot_cli::plain::a_hosted_start_says_what_its_managed_layer_dropped`
 `verified-by: bravebot_cli::finish::a_one_shot_run_says_what_its_managed_layer_dropped`
 `verified-by: bravebot_cli::running::a_one_shot_run_names_the_keys_its_settings_dropped_on_stderr`
@@ -2916,7 +2916,7 @@ planner.
 `verified-by: bravebot_session::sessions::an_unrecognised_failure_is_said_in_its_own_sentence_with_the_refused_next_step`
 `verified-by: bravebot_aichat::client::an_unlisted_failure_in_a_responses_stream_is_written_once_and_not_asked_for_again`
 `verified-by: bravebot_tui::sessions::a_rejected_turn_names_the_configured_model_and_none_of_the_services_words`
-`verified-by: bravebot_tui::app::a_rejected_request_is_said_with_the_configured_model_in_the_transcript`
+`verified-by: bravebot_tui::app::tests::backends_models::a_rejected_request_is_said_with_the_configured_model_in_the_transcript`
 `verified-by: bravebot_ui_bridge::history::a_rejected_turn_is_recorded_with_the_configured_model_and_none_of_the_services_words`
 `verified-by: bravebot_bedrock::lib::the_client_reports_the_fields_the_last_call_gave_up`
 `verified-by: bravebot_aichat::call::the_fields_a_call_gave_up_are_kept_in_order_and_start_afresh`
@@ -2931,7 +2931,7 @@ planner.
 `verified-by: bravebot_agent::backend::a_failure_with_no_account_in_it_carries_no_account_value`
 `verified-by: bravebot_agent::chatgpt_compaction::a_summary_that_failed_on_the_account_is_narrated_in_the_accounts_sentence`
 `verified-by: bravebot_agent::report::a_failed_summary_says_the_accounts_sentence_where_it_was_the_account_and_the_category_otherwise`
-`verified-by: bravebot_tui::app::a_compact_that_failed_on_the_chatgpt_account_says_its_own_sentence`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_compact_that_failed_on_the_chatgpt_account_says_its_own_sentence`
 `verified-by: bravebot_agent::backend::a_refusal_that_names_the_account_keeps_its_status_and_wait_in_the_diagnosis`
 `verified-by: bravebot_aichat::client::a_refusal_that_names_the_account_keeps_the_status_and_the_wait_it_came_with`
 `verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_holds_the_category_and_request_count_and_nothing_else`
@@ -3288,7 +3288,7 @@ refusal exists because one does not.
 `verified-by: bravebot_cli::model::an_xai_sign_in_that_cannot_be_read_configures_nothing_and_the_routes_stay`
 `verified-by: bravebot_cli::model::a_start_asks_the_accounts_that_are_stored_and_nothing_else`
 `verified-by: bravebot_cli::model::an_xai_listing_that_gave_no_row_says_which_way_and_the_heading_names_the_accounts_that_offered`
-`verified-by: bravebot_tui::app::a_start_is_offered_what_the_xai_account_listed_in_the_pickers_order_and_nothing_else`
+`verified-by: bravebot_tui::app::tests::backends_models::a_start_is_offered_what_the_xai_account_listed_in_the_pickers_order_and_nothing_else`
 `verified-by: bravebot_cli::xai_sign_in::a_start_with_only_an_xai_sign_in_asks_which_model_and_the_pick_is_what_the_session_and_the_next_start_open_on`
 `verified-by: bravebot_cli::xai_sign_in::the_interface_that_draws_asks_the_same_question_for_an_xai_sign_in_and_draws_once_a_row_is_picked`
 `verified-by: bravebot_cli::xai_sign_in::a_start_with_both_accounts_signed_in_asks_over_both_lists_and_records_the_pick_of_either`
@@ -3303,9 +3303,9 @@ refusal exists because one does not.
 `verified-by: bravebot_cli::xai_sign_in::every_command_the_xai_refusal_names_works_as_typed`
 `verified-by: bravebot_cli::xai_sign_in::doctor_says_an_xai_sign_in_is_stored_where_a_start_would_and_asks_the_account_nothing`
 `verified-by: bravebot_cli::xai_sign_in::an_xai_sign_in_that_cannot_be_read_is_said_before_the_routes_and_the_report_says_it_once`
-`verified-by: bravebot_tui::app::a_start_is_offered_what_the_account_listed_in_the_pickers_order_and_nothing_else`
-`verified-by: bravebot_tui::app::a_start_is_not_offered_a_model_the_machine_level_layer_refuses`
-`verified-by: bravebot_tui::app::a_start_is_not_offered_an_xai_model_the_machine_level_layer_refuses`
+`verified-by: bravebot_tui::app::tests::backends_models::a_start_is_offered_what_the_account_listed_in_the_pickers_order_and_nothing_else`
+`verified-by: bravebot_tui::app::tests::backends_models::a_start_is_not_offered_a_model_the_machine_level_layer_refuses`
+`verified-by: bravebot_tui::app::tests::backends_models::a_start_is_not_offered_an_xai_model_the_machine_level_layer_refuses`
 
 <a id="BACKEND-40"></a>
 ### BACKEND-40: completed replies keep reported usage even when their content is unusable
@@ -3557,13 +3557,13 @@ what drifting costs is a word no service defines in a request field.
 `verified-by: bravebot_session::store::a_settings_file_naming_no_level_asks_for_none`
 `verified-by: bravebot_tui::persist::a_recorded_level_answers_between_a_checkouts_file_and_the_persons_own`
 `verified-by: bravebot_tui::persist::a_level_chosen_for_this_session_is_recorded_nowhere_and_the_next_session_ignores_it`
-`verified-by: bravebot_tui::app::a_session_only_level_is_asked_for_over_the_record_and_the_files_and_the_next_session_ignores_it`
-`verified-by: bravebot_tui::app::a_resume_after_a_session_only_level_opens_on_the_recorded_level`
-`verified-by: bravebot_tui::app::a_turn_begun_after_effort_session_is_asked_for_that_level`
-`verified-by: bravebot_tui::app::a_session_only_level_survives_a_clear_and_a_handoff`
-`verified-by: bravebot_tui::app::a_branch_keeps_a_session_only_level_chosen_after_the_last_turn_and_records_it_nowhere`
-`verified-by: bravebot_tui::app::the_record_and_a_branch_hold_the_level_in_force_when_the_last_turn_finished`
-`verified-by: bravebot_tui::app::an_incognito_session_takes_a_session_only_level_and_writes_nothing`
+`verified-by: bravebot_tui::app::tests::backends_effort::a_session_only_level_is_asked_for_over_the_record_and_the_files_and_the_next_session_ignores_it`
+`verified-by: bravebot_tui::app::tests::backends_effort::a_resume_after_a_session_only_level_opens_on_the_recorded_level`
+`verified-by: bravebot_tui::app::tests::commands_effort::a_turn_begun_after_effort_session_is_asked_for_that_level`
+`verified-by: bravebot_tui::app::tests::backends_effort::a_session_only_level_survives_a_clear_and_a_handoff`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_branch_keeps_a_session_only_level_chosen_after_the_last_turn_and_records_it_nowhere`
+`verified-by: bravebot_tui::app::tests::sessions_records::the_record_and_a_branch_hold_the_level_in_force_when_the_last_turn_finished`
+`verified-by: bravebot_tui::app::tests::backends_effort::an_incognito_session_takes_a_session_only_level_and_writes_nothing`
 `verified-by: bravebot_cli::running::a_run_sends_the_level_a_settings_file_named_where_nothing_is_recorded`
 `verified-by: bravebot_cli::running::a_run_sends_a_checkouts_level_over_the_recorded_one`
 `verified-by: bravebot_cli::running::a_run_sends_the_level_the_command_line_named_over_every_other`
@@ -3807,8 +3807,8 @@ models, and the goal judge.
 `verified-by: bravebot_cli::import::a_start_on_a_model_the_managed_layer_refuses_is_ended`
 `verified-by: bravebot_cli::plain::a_hosted_start_on_a_model_the_managed_layer_refuses_is_ended`
 `verified-by: bravebot_cli::plain::a_hosted_start_in_a_managed_layer_that_refuses_the_model_ends_before_any_question`
-`verified-by: bravebot_tui::app::the_picker_does_not_offer_a_model_this_machine_may_not_request`
-`verified-by: bravebot_tui::app::a_definition_naming_a_model_this_machine_may_not_request_is_refused`
+`verified-by: bravebot_tui::app::tests::backends_models::the_picker_does_not_offer_a_model_this_machine_may_not_request`
+`verified-by: bravebot_tui::app::tests::backends_models::a_definition_naming_a_model_this_machine_may_not_request_is_refused`
 `verified-by: bravebot_tui::persist::a_pick_the_managed_layer_refuses_is_set_aside_and_names_the_file`
 `verified-by: bravebot_ui_bridge::models::the_window_neither_offers_nor_requests_a_model_this_machine_refuses`
 `verified-by: bravebot_ui_bridge::models::the_window_refuses_a_model_that_searches_the_web_without_naming_a_file`
@@ -3883,8 +3883,8 @@ exactly what is offered, as for any other gateway.
 `verified-by: bravebot_config::provider::a_project_and_location_holding_only_allowed_characters_are_accepted`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_google_vertex_host`
 `verified-by: bravebot_aichat::client::a_google_vertex_entry_offers_the_compiled_models_without_asking`
-`verified-by: bravebot_tui::app::the_picker_offers_the_compiled_models_for_a_google_vertex_service_naming_none`
-`verified-by: bravebot_tui::app::a_google_vertex_block_naming_models_is_offered_those_alone`
+`verified-by: bravebot_tui::app::tests::backends_models::the_picker_offers_the_compiled_models_for_a_google_vertex_service_naming_none`
+`verified-by: bravebot_tui::app::tests::backends_models::a_google_vertex_block_naming_models_is_offered_those_alone`
 `verified-by: bravebot_ui_bridge::models::the_window_offers_the_compiled_models_for_a_google_vertex_service_naming_none`
 `verified-by: bravebot_ui_bridge::models::the_window_offers_a_google_vertex_block_its_own_models_alone`
 `verified-by: bravebot_cli::doctor::doctor_names_the_compiled_models_a_google_vertex_service_is_offered`
@@ -4281,9 +4281,9 @@ the service that serves it, as the `model` key is.
 `verified-by: bravebot_agent::turn::a_turn_begins_in_the_mode_it_was_told_and_not_the_one_held_when_it_opens`
 `verified-by: bravebot_agent::turn::the_model_answering_is_the_model_the_turn_is_sent_to`
 `verified-by: bravebot_agent::turn::a_more_specific_model_outranks_the_plan_model_in_every_mode`
-`verified-by: bravebot_tui::app::a_plan_turn_takes_the_plan_models_window_and_no_other_turn_does`
-`verified-by: bravebot_tui::app::a_mode_pressed_after_a_turn_is_settled_leaves_it_in_the_mode_its_window_was_sized_for`
-`verified-by: bravebot_tui::app::the_model_a_window_is_read_for_follows_the_order_the_agent_settles`
+`verified-by: bravebot_tui::app::tests::backends_models::a_plan_turn_takes_the_plan_models_window_and_no_other_turn_does`
+`verified-by: bravebot_tui::app::tests::backends_models::a_mode_pressed_after_a_turn_is_settled_leaves_it_in_the_mode_its_window_was_sized_for`
+`verified-by: bravebot_tui::app::tests::backends_models::the_model_a_window_is_read_for_follows_the_order_the_agent_settles`
 `verified-by: bravebot_cli::running::doctor_says_a_checkouts_plan_model_is_not_obeyed`
 
 <a id="BACKEND-57"></a>
@@ -5005,12 +5005,12 @@ service ([BACKEND-3](#BACKEND-3)), so a lookup about one model has no use for th
 others.
 
 `verified-by: bravebot_config::lib::a_roster_for_a_model_asks_the_service_that_answers_it_and_no_other`
-`verified-by: bravebot_tui::app::a_lookup_for_one_models_row_asks_only_the_gateway_that_serves_it`
-`verified-by: bravebot_tui::app::a_lookup_asks_brave_only_for_a_model_brave_answers`
+`verified-by: bravebot_tui::app::tests::backends_models::a_lookup_for_one_models_row_asks_only_the_gateway_that_serves_it`
+`verified-by: bravebot_tui::app::tests::backends_models::a_lookup_asks_brave_only_for_a_model_brave_answers`
 `verified-by: bravebot_ui_bridge::models::a_turn_in_the_window_asks_only_the_gateway_that_serves_its_model`
 `verified-by: bravebot_aichat::models::the_asks_of_a_roster_are_in_flight_together_and_answered_in_the_order_given`
 `verified-by: bravebot_aichat::models::a_panic_in_an_ask_is_raised_to_the_caller`
-`verified-by: bravebot_tui::app::the_picker_asks_every_gateway_at_once_and_lists_them_in_the_configurations_order`
+`verified-by: bravebot_tui::app::tests::backends_models::the_picker_asks_every_gateway_at_once_and_lists_them_in_the_configurations_order`
 `verified-by: bravebot_ui_bridge::models::the_window_asks_every_gateway_at_once_and_lists_them_in_the_configurations_order`
 `verified-by: bravebot_aichat::models::a_request_for_a_roster_is_given_up_on_in_seconds_and_not_minutes`
 `verified-by: bravebot_aichat::roster::a_roster_gives_up_on_a_gateway_that_takes_the_connection_and_never_answers`
@@ -5018,12 +5018,12 @@ others.
 `verified-by: bravebot_aichat::roster::a_key_file_that_gives_no_key_sends_no_credential_and_shows_no_key_text`
 `verified-by: bravebot_cli::window_lookup::a_session_draws_while_its_window_is_asked_for_and_takes_it_when_it_comes`
 `verified-by: bravebot_cli::window_lookup::a_turn_sent_before_the_window_arrives_waits_for_it`
-`verified-by: bravebot_tui::app::asking_for_the_window_at_start_adopts_it_only_when_the_answer_is_taken`
-`verified-by: bravebot_tui::app::a_start_adopts_an_advertised_window_without_a_note_and_a_pick_says_it`
-`verified-by: bravebot_tui::app::a_pass_of_the_loop_takes_an_arrived_window_once_and_does_not_wait_for_one_that_has_not`
-`verified-by: bravebot_tui::app::a_lookup_about_a_model_that_is_no_longer_in_force_is_dropped_and_not_waited_for`
-`verified-by: bravebot_tui::app::a_turn_waits_for_a_lookup_once_and_the_loop_still_takes_its_late_answer`
-`verified-by: bravebot_tui::app::a_turn_waits_for_the_window_it_is_sized_against_for_a_bounded_time`
+`verified-by: bravebot_tui::app::tests::backends_models::asking_for_the_window_at_start_adopts_it_only_when_the_answer_is_taken`
+`verified-by: bravebot_tui::app::tests::backends_models::a_start_adopts_an_advertised_window_without_a_note_and_a_pick_says_it`
+`verified-by: bravebot_tui::app::tests::backends_models::a_pass_of_the_loop_takes_an_arrived_window_once_and_does_not_wait_for_one_that_has_not`
+`verified-by: bravebot_tui::app::tests::backends_models::a_lookup_about_a_model_that_is_no_longer_in_force_is_dropped_and_not_waited_for`
+`verified-by: bravebot_tui::app::tests::backends_models::a_turn_waits_for_a_lookup_once_and_the_loop_still_takes_its_late_answer`
+`verified-by: bravebot_tui::app::tests::backends_models::a_turn_waits_for_the_window_it_is_sized_against_for_a_bounded_time`
 
 <a id="BACKEND-65"></a>
 ### BACKEND-65: a Vertex AI project with no key is signed in by the Google Cloud CLI
@@ -5209,7 +5209,7 @@ with a window this machine cannot hold, and the block's own figures outrank it s
 `verified-by: bravebot_aichat::models::an_ollama_model_that_cannot_call_tools_is_not_offered`
 `verified-by: bravebot_aichat::client::an_ollama_roster_reads_each_models_window_from_show`
 `verified-by: bravebot_config::provider::a_model_an_ollama_entry_lists_without_a_window_is_held_to_ollamas_own_assumed_one`
-`verified-by: bravebot_tui::app::a_run_adopts_the_window_a_provider_block_states_for_its_models`
+`verified-by: bravebot_tui::app::tests::remainder::a_run_adopts_the_window_a_provider_block_states_for_its_models`
 `verified-by: bravebot_ui_bridge::models::a_turn_in_the_window_takes_the_window_a_provider_block_states`
 
 <a id="BACKEND-72"></a>

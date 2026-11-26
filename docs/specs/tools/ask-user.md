@@ -227,7 +227,7 @@ was answered already.
 `verified-by: bravebot_core::ask::a_question_closed_on_the_clock_is_not_remembered_and_the_one_beside_it_is`
 `verified-by: bravebot_tui::ask::a_question_closed_on_the_clock_is_asked_again_and_the_one_beside_it_is_remembered`
 `verified-by: bravebot_tui::state::clearing_the_conversation_forgets_the_answers_to_the_planners_questions`
-`verified-by: bravebot_tui::app::undoing_a_turn_forgets_the_answers_to_the_planners_questions`
+`verified-by: bravebot_tui::app::tests::remainder::undoing_a_turn_forgets_the_answers_to_the_planners_questions`
 `verified-by: bravebot_cli::plain::a_question_asked_again_in_a_session_in_lines_is_answered_from_memory`
 `verified-by: bravebot_cli::plain::a_series_with_some_questions_settled_puts_only_the_rest`
 `verified-by: bravebot_ui_bridge::answering_tests::a_question_the_person_answered_is_not_put_to_the_window_again`
@@ -284,7 +284,7 @@ person's file alone as well.
 `verified-by: bravebot_core::ask::a_question_closed_on_the_clock_is_not_remembered_and_the_one_beside_it_is`
 `verified-by: bravebot_core::ask::what_is_left_to_put_keeps_the_flag_that_lets_it_close_on_the_clock`
 `verified-by: bravebot_tui::ask::a_question_closed_on_the_clock_is_asked_again_and_the_one_beside_it_is_remembered`
-`verified-by: bravebot_tui::app::adopting_settings_puts_the_question_idle_time_in_force`
+`verified-by: bravebot_tui::app::tests::remainder::adopting_settings_puts_the_question_idle_time_in_force`
 `verified-by: bravebot_tui::state::only_the_planners_own_questions_are_closed_on_the_clock`
 `verified-by: bravebot_config::settings::a_settings_file_names_how_long_a_question_waits`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_set_how_long_a_question_waits`

@@ -382,7 +382,7 @@ everything and asks nothing.
 `verified-by: bravebot_agent::home::an_absent_home_names_no_profile_directory_for_a_tilde`
 `verified-by: bravebot_agent::turn::a_tilde_in_a_command_line_stands_for_the_home_directory_and_not_the_state_directory`
 `verified-by: bravebot_agent::turn::a_delegate_resolves_a_tilde_against_the_home_its_parent_did`
-`verified-by: bravebot_tui::app::a_typed_tilde_and_a_compiled_one_stand_for_the_same_directory`
+`verified-by: bravebot_tui::app::tests::shell_mode::a_typed_tilde_and_a_compiled_one_stand_for_the_same_directory`
 `verified-by: bravebot_ui_bridge::retention::worker::a_tilde_in_a_desktop_run_line_stands_for_the_home_directory`
 `verified-by: bravebot_agent::cmdline::each_argument_records_whether_a_pattern_matched_it`
 `verified-by: bravebot_agent::cmdline::brace_alternatives_are_marked_one_by_one`

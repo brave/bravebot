@@ -159,14 +159,14 @@ likely to notice first when a request did not carry the key.
 `verified-by: bravebot_tui::status::picking_a_model_after_a_turn_reports_the_turn_that_ran`
 `verified-by: bravebot_tui::state::picking_automatic_and_being_answered_by_a_model_is_not_a_substitution`
 `verified-by: bravebot_tui::status::the_opening_screen_draws_the_tier_the_configuration_settles`
-`verified-by: bravebot_tui::app::a_model_the_configuration_named_is_reported_as_substituted_too`
-`verified-by: bravebot_tui::app::a_substitution_that_carries_on_is_said_once`
-`verified-by: bravebot_tui::app::the_configured_automatic_entry_resolving_to_a_model_says_nothing`
-`verified-by: bravebot_tui::app::a_turn_on_a_definitions_model_records_its_tier_and_model`
-`verified-by: bravebot_tui::app::a_turn_on_a_skills_model_replaces_an_earlier_turns_tier`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_model_the_configuration_named_is_reported_as_substituted_too`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_substitution_that_carries_on_is_said_once`
+`verified-by: bravebot_tui::app::tests::backends_accounts::the_configured_automatic_entry_resolving_to_a_model_says_nothing`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_turn_on_a_definitions_model_records_its_tier_and_model`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_turn_on_a_skills_model_replaces_an_earlier_turns_tier`
 `verified-by: bravebot_agent::turn::a_turn_reports_premium_when_it_was_handed_a_key_to_present_and_not_otherwise`
-`verified-by: bravebot_tui::app::the_session_the_startup_builds_carries_the_tier_its_configuration_settles`
-`verified-by: bravebot_tui::app::status_reports_the_tier_the_last_turn_ran_on_once_the_turn_is_folded_in`
+`verified-by: bravebot_tui::app::tests::backends_accounts::the_session_the_startup_builds_carries_the_tier_its_configuration_settles`
+`verified-by: bravebot_tui::app::tests::backends_accounts::status_reports_the_tier_the_last_turn_ran_on_once_the_turn_is_folded_in`
 `verified-by: bravebot_tui::render::transcript::the_opening_screen_the_transcript_draws_names_the_tier_the_session_was_given`
 
 <a id="PREM-10"></a>

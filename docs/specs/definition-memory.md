@@ -823,8 +823,8 @@ run, so a person has to read `.bravebot/memory/` and `~/.bravebot/untrusted/` by
 definitions keep one, where it is, or that it is withheld.
 
 `verified-by: bravebot_agent::memory::a_listed_memory_is_withheld_when_the_map_does_not_trust_it_whatever_is_on_disk`
-`verified-by: bravebot_tui::app::the_memory_command_lists_and_takes_no_argument`
-`verified-by: bravebot_tui::app::the_memory_listing_says_each_standing_with_its_path`
+`verified-by: bravebot_tui::app::tests::instructions::the_memory_command_lists_and_takes_no_argument`
+`verified-by: bravebot_tui::app::tests::instructions::the_memory_listing_says_each_standing_with_its_path`
 
 ## Open questions
 

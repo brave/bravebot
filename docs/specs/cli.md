@@ -1093,10 +1093,10 @@ person's own file or by `--agent`.
 `verified-by: bravebot_cli::running::a_run_under_a_definition_is_checked_for_a_service_that_serves_the_definitions_model`
 `verified-by: bravebot_agent::turn::a_model_the_command_line_named_outranks_the_definitions_and_the_turn_says_so`
 `verified-by: bravebot_agent::turn::an_addressed_turn_arranges_no_later_look_and_arms_no_watch`
-`verified-by: bravebot_tui::app::a_session_started_under_a_definition_addresses_every_turn_a_loop_tick_included`
-`verified-by: bravebot_tui::app::a_definition_named_on_the_line_lasts_one_turn_under_the_one_the_session_works_under`
-`verified-by: bravebot_tui::app::a_name_from_the_command_line_is_worked_under_where_it_was_written_and_refused_where_not`
-`verified-by: bravebot_tui::app::a_session_under_a_definition_naming_a_model_works_on_it_and_refuses_the_picker`
+`verified-by: bravebot_tui::app::tests::remainder::a_session_started_under_a_definition_addresses_every_turn_a_loop_tick_included`
+`verified-by: bravebot_tui::app::tests::remainder::a_definition_named_on_the_line_lasts_one_turn_under_the_one_the_session_works_under`
+`verified-by: bravebot_tui::app::tests::remainder::a_name_from_the_command_line_is_worked_under_where_it_was_written_and_refused_where_not`
+`verified-by: bravebot_tui::app::tests::remainder::a_session_under_a_definition_naming_a_model_works_on_it_and_refuses_the_picker`
 `verified-by: bravebot_tui::status::the_report_names_the_definition_every_turn_is_addressed_to`
 
 <a id="CLI-18"></a>
@@ -1469,7 +1469,7 @@ because no part of `auth` would use them.
 `verified-by: bravebot_cli::running::a_command_that_runs_no_turn_is_refused_the_system_prompt_flags`
 `verified-by: bravebot_agent::turn::a_replaced_opening_takes_the_place_of_the_opening_alone`
 `verified-by: bravebot_agent::turn::words_that_allow_writes_allow_none`
-`verified-by: bravebot_tui::app::a_session_keeps_the_system_prompt_words_it_started_with_through_every_turn`
+`verified-by: bravebot_tui::app::tests::remainder::a_session_keeps_the_system_prompt_words_it_started_with_through_every_turn`
 
 <a id="CLI-20"></a>
 ### CLI-20: `completion <shell>` prints a completion script and does nothing else
@@ -1870,7 +1870,7 @@ a regular-expression `pattern` would need one the dependency policy bans.
 `verified-by: bravebot_agent::turn::an_output_schema_is_requested_with_the_planners_request`
 `verified-by: bravebot_agent::turn::without_an_output_schema_no_response_format_is_requested`
 `verified-by: bravebot_aichat::protocol::a_schema_is_sent_as_the_response_format_this_protocol_names`
-`verified-by: bravebot_tui::app::a_schema_is_refused_only_where_the_roster_states_parameters_without_it`
+`verified-by: bravebot_tui::app::tests::remainder::a_schema_is_refused_only_where_the_roster_states_parameters_without_it`
 `verified-by: bravebot_cli::main::an_output_schema_flag_naming_no_file_is_refused`
 `verified-by: bravebot_cli::json::a_structured_reply_is_a_value_and_not_a_string`
 `verified-by: bravebot_cli::running::a_reply_matching_the_output_schema_is_returned_as_a_value`
@@ -2064,8 +2064,8 @@ record nothing. Only `-i` takes them from the line.
 `verified-by: bravebot_cli::main::a_session_flag_behind_a_tasks_options_is_refused_rather_than_run_as_the_task`
 `verified-by: bravebot_cli::main::a_session_flag_beside_another_way_of_starting_is_refused`
 `verified-by: bravebot_cli::running::a_session_on_a_prompt_is_refused_where_there_is_no_terminal_and_sends_nothing`
-`verified-by: bravebot_tui::app::a_prompt_from_the_command_line_loses_what_a_paste_loses_and_is_sent_once`
-`verified-by: bravebot_tui::app::a_brief_over_a_typed_line_keeps_the_line_and_the_new_session_sends_the_brief`
+`verified-by: bravebot_tui::app::tests::remainder::a_prompt_from_the_command_line_loses_what_a_paste_loses_and_is_sent_once`
+`verified-by: bravebot_tui::app::tests::remainder::a_brief_over_a_typed_line_keeps_the_line_and_the_new_session_sends_the_brief`
 
 <a id="CLI-32"></a>
 ### CLI-32: `sessions list` lists the sessions recorded for this directory

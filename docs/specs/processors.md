@@ -389,7 +389,7 @@ charge usage for nothing and would need a scan of bytes the driver may not branc
 `verified-by: bravebot_agent::commit_message::an_unvouched_diff_gives_no_draft_and_no_request_whatever_its_text_holds`
 `verified-by: bravebot_agent::commit_message::a_repository_the_map_does_not_trust_is_not_read_or_sent`
 `verified-by: bravebot_agent::commit_message::an_answer_with_no_marker_is_no_draft`
-`verified-by: bravebot_tui::app::a_draft_answered_by_another_model_than_the_configured_one_says_so`
+`verified-by: bravebot_tui::app::tests::remainder::a_draft_answered_by_another_model_than_the_configured_one_says_so`
 
 <a id="PROC-15"></a>
 ### PROC-15: a picture is given to a processor as a picture, and what it answers is text

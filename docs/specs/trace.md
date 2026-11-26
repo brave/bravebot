@@ -316,7 +316,7 @@ run ends, so a run that is slow or stuck shows what it had decided so far. The t
 written a second time at the end. The sink writes the gate names, labels, paths and slot ids the
 event carries and branches on none of them, and a failed write to stderr is dropped.
 
-`verified-by: bravebot_tui::app::ctrl_t_toggles_the_trail`
+`verified-by: bravebot_tui::app::tests::remainder::ctrl_t_toggles_the_trail`
 `verified-by: bravebot_tui::render::the_trail_is_hidden_by_default`
 `verified-by: bravebot_tui::render::a_blocked_gate_is_shown_in_the_trail`
 `verified-by: bravebot_cli::main::the_trail_renders_a_line_for_every_event`
@@ -502,7 +502,7 @@ label is a claim about authority, so it comes from where the text was composed.
 `verified-by: bravebot_tui::render::the_request_view_names_the_instruction_files_loaded_with_their_lengths`
 `verified-by: bravebot_tui::render::the_request_view_says_so_when_no_instruction_file_loaded`
 `verified-by: bravebot_tui::state::the_request_view_opens_on_the_last_request_and_closing_restores_the_transcript`
-`verified-by: bravebot_tui::app::the_key_that_writes_the_transcript_out_does_nothing_in_the_request_view`
+`verified-by: bravebot_tui::app::tests::remainder::the_key_that_writes_the_transcript_out_does_nothing_in_the_request_view`
 `verified-by: bravebot_ui_bridge::reports_tests::the_request_report_names_the_instruction_files_and_labels_each_span`
 `verified-by: bravebot_ui_bridge::reports_tests::the_request_report_pictures_the_control_characters_in_a_span`
 `verified-by: bravebot_ui_bridge::reports_tests::a_reporter_keeps_the_turns_request_and_not_a_delegates`

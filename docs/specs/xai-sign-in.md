@@ -848,7 +848,7 @@ sentence and send a person to sign in to the wrong service. A card titled for on
 `verified-by: bravebot_ui_bridge::account_words::the_windows_sentence_is_one_sentence_in_sentence_case_and_names_its_command_once`
 `verified-by: bravebot_ui_bridge::failure_tests::a_failure_of_the_xai_account_is_sent_as_its_own_name_with_xais_sentence_and_command`
 `verified-by: bravebot_ui_bridge::xai_secrets::what_the_bridge_sends_and_keeps_of_a_failed_xai_turn_holds_none_of_the_values_of_the_run`
-`verified-by: bravebot_tui::app::a_compact_that_failed_on_the_xai_account_says_its_own_sentence`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_compact_that_failed_on_the_xai_account_says_its_own_sentence`
 `verified-by: bravebot_ui_bridge::acp::a_turn_that_failed_on_the_xai_account_tells_the_editor_which_command_signs_in`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/marking.test.mjs draws the card for a failure of the xAI account and holds that its title names neither service, that the sentence is one paragraph with the command drawn as code, and that the category's advice about settings is not said beside it; make check-ui runs it)`
 
@@ -907,7 +907,7 @@ a request that carries a conversation and a credential from being sent to a plac
 `verified-by: bravebot_agent::backend::an_xai_alias_is_not_expected_to_be_the_name_that_comes_back`
 `verified-by: bravebot_cli::xai_sign_in::a_run_on_an_alias_answered_under_its_canonical_id_is_not_a_failed_run`
 `verified-by: bravebot_cli::xai_sign_in::a_level_chosen_for_a_run_on_any_name_of_the_account_is_said_to_be_unread_and_is_not_sent`
-`verified-by: bravebot_tui::app::a_run_on_any_name_of_the_xai_account_is_told_the_model_reads_no_level`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_run_on_any_name_of_the_xai_account_is_told_the_model_reads_no_level`
 `verified-by: bravebot_agent::backend::a_stop_reaches_a_request_on_the_xai_account_and_does_not_wait_for_the_host`
 `verified-by: bravebot_agent::backend::the_stop_a_backend_is_given_is_held_by_the_xai_account_variant`
 
@@ -1099,10 +1099,10 @@ a turn on one of the account's models, which is the one place a person has agree
 `verified-by: bravebot_agent::xai::a_listing_that_cannot_be_had_offers_nothing_and_is_told_apart_from_an_empty_one`
 `verified-by: bravebot_agent::xai::a_gateway_entry_named_xai_keeps_the_name_and_the_account_is_not_asked_about`
 `verified-by: bravebot_config::lib::a_roster_asks_the_account_a_turn_runs_on_and_no_other_and_a_picker_asks_both`
-`verified-by: bravebot_tui::app::the_picker_asks_the_xai_account_whatever_model_is_in_force_and_lists_what_it_offers`
-`verified-by: bravebot_tui::app::a_caller_asks_the_xai_account_only_for_one_of_its_own_models_and_takes_the_window_it_lists`
-`verified-by: bravebot_tui::app::the_picker_says_why_the_xai_accounts_models_are_missing_and_says_nothing_otherwise`
-`verified-by: bravebot_tui::app::a_start_is_offered_what_the_xai_account_listed_in_the_pickers_order_and_nothing_else`
+`verified-by: bravebot_tui::app::tests::backends_accounts::the_picker_asks_the_xai_account_whatever_model_is_in_force_and_lists_what_it_offers`
+`verified-by: bravebot_tui::app::tests::backends_accounts::a_caller_asks_the_xai_account_only_for_one_of_its_own_models_and_takes_the_window_it_lists`
+`verified-by: bravebot_tui::app::tests::backends_accounts::the_picker_says_why_the_xai_accounts_models_are_missing_and_says_nothing_otherwise`
+`verified-by: bravebot_tui::app::tests::backends_models::a_start_is_offered_what_the_xai_account_listed_in_the_pickers_order_and_nothing_else`
 `verified-by: bravebot_ui_bridge::models::the_xai_accounts_models_join_the_roster_and_a_failed_listing_adds_none_and_a_warning`
 `verified-by: bravebot_ui_bridge::models::a_turn_in_the_window_asks_the_xai_account_only_for_one_of_its_own_models`
 `verified-by: bravebot_ui_bridge::models::the_models_list_asks_the_xai_account_whatever_model_is_configured`

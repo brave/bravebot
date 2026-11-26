@@ -177,7 +177,7 @@ names the kind settles.
 `verified-by: bravebot_session::sessions::a_link_is_written_at_once_and_a_resume_and_a_fork_keep_it`
 `verified-by: bravebot_session::sessions::a_record_from_before_the_links_reads_as_having_none`
 `verified-by: bravebot_session::sessions::setting_a_link_neither_makes_nor_gives_up_a_rewind_point`
-`verified-by: bravebot_tui::app::a_cleared_session_has_neither_link`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_cleared_session_has_neither_link`
 `verified-by: bravebot_session::sessions::the_list_carries_the_links_and_lists_a_record_without_them`
 `verified-by: bravebot_tui::sessions_screen::typing_part_of_a_branch_finds_the_session_that_ran_on_it`
 `verified-by: bravebot_tui::sessions_screen::typing_part_of_an_issue_link_finds_the_session_given_it`
@@ -193,8 +193,8 @@ names the kind settles.
 `verified-by: bravebot_session::sessions::the_references_are_written_with_the_save_and_a_resume_and_a_fork_keep_them`
 `verified-by: bravebot_session::sessions::an_entry_that_does_not_read_is_dropped_and_the_record_and_the_other_entries_are_kept`
 `verified-by: bravebot_session::sessions::a_reference_the_record_holds_that_is_not_valid_is_dropped_on_reading`
-`verified-by: bravebot_tui::app::a_cleared_session_has_met_nothing`
-`verified-by: bravebot_tui::app::a_resumed_or_forked_session_has_met_what_its_record_says`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_cleared_session_has_met_nothing`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_resumed_or_forked_session_has_met_what_its_record_says`
 `verified-by: bravebot_session::sessions::the_names_the_file_tools_reached_are_written_and_read_back`
 `verified-by: bravebot_session::sessions::a_record_from_before_touched_names_were_kept_reads_as_having_none`
 
@@ -209,7 +209,7 @@ it still has a title.
 `verified-by: bravebot_session::sessions::a_title_is_cut_after_sixty_characters_rather_than_bytes`
 `verified-by: bravebot_session::sessions::a_prompt_with_nothing_in_it_still_has_a_title`
 `verified-by: bravebot_session::sessions::a_save_with_nothing_asked_titles_the_record_and_leaves_the_name_to_the_first_prompt`
-`verified-by: bravebot_tui::app::compacting_before_the_first_prompt_writes_nothing_and_the_first_prompt_names_the_session`
+`verified-by: bravebot_tui::app::tests::sessions_records::compacting_before_the_first_prompt_writes_nothing_and_the_first_prompt_names_the_session`
 
 <a id="SESSION-5"></a>
 ### SESSION-5: everything here degrades to doing nothing
@@ -551,13 +551,13 @@ than the one in force at the time.
 `verified-by: bravebot_tui::state::each_turn_records_what_it_cost_on_its_own`
 `verified-by: bravebot_tui::state::an_aside_is_charged_to_the_turn_it_interrupted`
 `verified-by: bravebot_tui::state::an_aside_before_the_first_turn_is_charged_to_a_leading_entry`
-`verified-by: bravebot_tui::app::a_btw_answered_after_the_turn_ended_is_a_row_and_a_line_and_leaves_the_view`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_btw_answered_after_the_turn_ended_is_a_row_and_a_line_and_leaves_the_view`
 `verified-by: bravebot_tui::state::a_run_before_the_first_turn_is_charged_to_a_leading_entry`
 `verified-by: bravebot_tui::state::clearing_forgets_what_each_turn_cost`
 `verified-by: bravebot_tui::sessions::completed_failed_and_stopped_usage_survives_session_storage`
-`verified-by: bravebot_tui::app::a_failed_outcome_charges_only_the_latest_progress`
-`verified-by: bravebot_tui::app::the_cancellation_path_charges_progress_before_restoring_or_quitting`
-`verified-by: bravebot_tui::app::successful_outcomes_replace_progress_and_empty_following_turns_cost_nothing`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_failed_outcome_charges_only_the_latest_progress`
+`verified-by: bravebot_tui::app::tests::sessions_records::the_cancellation_path_charges_progress_before_restoring_or_quitting`
+`verified-by: bravebot_tui::app::tests::sessions_records::successful_outcomes_replace_progress_and_empty_following_turns_cost_nothing`
 `verified-by: bravebot_tui::remote_confirm::cumulative_usage_reaches_the_main_thread_unchanged`
 `verified-by: bravebot_tui::state::a_resumed_session_keeps_the_recorded_model_until_a_turn_replaces_it`
 `verified-by: bravebot_session::sessions::a_failed_turn_is_charged_once_and_a_turn_with_no_request_not_at_all`
@@ -568,19 +568,19 @@ than the one in force at the time.
 `verified-by: bravebot_session::sessions::a_failed_manifest_record_keeps_the_split_of_what_it_spent`
 `verified-by: bravebot_tui::state::a_charge_with_a_split_adds_what_was_read_and_written_beside_the_total`
 `verified-by: bravebot_session::sessions::a_session_records_the_effort_of_its_last_turn_and_a_resume_and_a_fork_keep_it`
-`verified-by: bravebot_tui::app::the_effort_a_turn_was_sent_with_is_what_the_record_is_given`
-`verified-by: bravebot_tui::app::a_resume_after_a_session_only_level_opens_on_the_recorded_level`
-`verified-by: bravebot_tui::app::the_record_and_a_branch_hold_the_level_in_force_when_the_last_turn_finished`
-`verified-by: bravebot_tui::app::a_branch_keeps_a_session_only_level_chosen_after_the_last_turn_and_records_it_nowhere`
+`verified-by: bravebot_tui::app::tests::sessions_records::the_effort_a_turn_was_sent_with_is_what_the_record_is_given`
+`verified-by: bravebot_tui::app::tests::backends_effort::a_resume_after_a_session_only_level_opens_on_the_recorded_level`
+`verified-by: bravebot_tui::app::tests::sessions_records::the_record_and_a_branch_hold_the_level_in_force_when_the_last_turn_finished`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_branch_keeps_a_session_only_level_chosen_after_the_last_turn_and_records_it_nowhere`
 `verified-by: bravebot_session::listing::a_record_lists_its_effort_its_work_and_its_cache_and_an_older_one_lists_none`
 `verified-by: bravebot_tui::state::an_aside_that_reports_its_usage_is_charged_with_its_split`
 `verified-by: bravebot_tui::state::a_question_answered_beside_a_turn_is_charged_to_that_turn_with_its_split`
 `verified-by: bravebot_tui::state::clearing_forgets_the_split`
 `verified-by: bravebot_tui::state::restoring_the_spend_leaves_no_split_from_before_it`
 `verified-by: bravebot_tui::state::a_resumed_session_carries_on_counting_the_split_it_was_written_with`
-`verified-by: bravebot_tui::app::a_finished_turn_is_charged_with_what_it_read_and_wrote`
-`verified-by: bravebot_tui::app::every_request_beside_the_work_is_charged_with_what_it_read_and_wrote`
-`verified-by: bravebot_tui::app::a_record_built_from_the_session_holds_the_split_it_has_counted`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_finished_turn_is_charged_with_what_it_read_and_wrote`
+`verified-by: bravebot_tui::app::tests::sessions_records::every_request_beside_the_work_is_charged_with_what_it_read_and_wrote`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_record_built_from_the_session_holds_the_split_it_has_counted`
 `verified-by: bravebot_tui::undo_tests::undoing_a_turn_takes_its_split_back_with_its_tokens`
 `verified-by: bravebot_tui::manifest_run::a_stopped_run_is_charged_with_the_split_of_its_latest_report`
 `verified-by: bravebot_ui_bridge::history::a_turn_records_its_split_and_a_resumed_one_adds_to_it`
@@ -735,8 +735,8 @@ what keeps an edited file from putting an unrecognised level into a request fiel
 `verified-by: bravebot_tui::persist::a_chosen_effort_is_read_back_next_session`
 `verified-by: bravebot_tui::persist::asking_for_no_effort_is_read_back_as_no_choice`
 `verified-by: bravebot_tui::persist::a_level_chosen_for_this_session_is_recorded_nowhere_and_the_next_session_ignores_it`
-`verified-by: bravebot_tui::app::a_level_named_with_effort_session_is_in_force_and_recorded_nowhere`
-`verified-by: bravebot_tui::app::a_level_picked_in_the_this_session_scope_is_not_recorded`
+`verified-by: bravebot_tui::app::tests::commands_effort::a_level_named_with_effort_session_is_in_force_and_recorded_nowhere`
+`verified-by: bravebot_tui::app::tests::commands_effort::a_level_picked_in_the_this_session_scope_is_not_recorded`
 `verified-by: bravebot_session::store::a_stored_effort_is_read_back_without_its_newline`
 `verified-by: bravebot_session::store::a_file_naming_no_level_is_not_a_choice`
 `verified-by: bravebot_session::store::only_the_first_effort_line_is_read`
@@ -814,9 +814,9 @@ and how the turn ended rather than in place of any of them.
 `verified-by: bravebot_tui::sessions::accepted_corrections_survive_cancellation_storage_export_and_the_next_turn`
 `verified-by: bravebot_tui::sessions::exporting_while_a_turn_runs_marks_the_running_prompt_and_no_other`
 `verified-by: bravebot_tui::sessions::exporting_a_turn_with_no_recorded_ending_does_not_call_it_running`
-`verified-by: bravebot_tui::app::export_at_rest_says_where_it_wrote_and_refuses_a_name_that_is_taken`
-`verified-by: bravebot_tui::app::export_at_rest_leaves_out_what_was_released_for_the_screen_alone`
-`verified-by: bravebot_tui::app::a_manifest_runs_reply_is_exported_as_its_length_and_not_its_words`
+`verified-by: bravebot_tui::app::tests::sessions_records::export_at_rest_says_where_it_wrote_and_refuses_a_name_that_is_taken`
+`verified-by: bravebot_tui::app::tests::sessions_records::export_at_rest_leaves_out_what_was_released_for_the_screen_alone`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_manifest_runs_reply_is_exported_as_its_length_and_not_its_words`
 `verified-by: bravebot_tui::manifest_answer_tests::an_untrusted_answer_is_not_written_to_an_export`
 `verified-by: bravebot_tui::sessions::a_resumed_task_list_is_exported_as_the_model_wrote_it`
 `verified-by: bravebot_tui::render::export::an_answer_released_for_the_screen_is_exported_as_its_length_and_a_reply_whole`
@@ -824,7 +824,7 @@ and how the turn ended rather than in place of any of them.
 `verified-by: bravebot_tui::render::export::a_call_and_a_block_with_nothing_to_substitute_are_exported_as_drawn`
 `verified-by: bravebot_tui::render::export::a_task_is_exported_as_the_model_wrote_it_and_not_as_the_person_read_it`
 `verified-by: bravebot_tui::render::export::a_waiting_task_is_exported_unticked_with_its_status_word`
-`verified-by: bravebot_tui::app::an_export_leaves_out_what_a_private_or_stopped_command_printed`
+`verified-by: bravebot_tui::app::tests::sessions_records::an_export_leaves_out_what_a_private_or_stopped_command_printed`
 `verified-by: bravebot_tui::undo_tests::an_export_writes_a_hunk_by_its_number_and_not_by_its_file`
 `verified-by: bravebot_agent::tools::tests::todos::a_task_list_is_named_inside_the_reshape_that_builds_it`
 
@@ -892,8 +892,8 @@ composer: a line typed since the turn was sent is what the person is looking at,
 prompt written over it would cost them that line.
 
 `verified-by: bravebot_tui::sessions::reopened_history_stays_rewound_after_another_save_and_new_turn`
-`verified-by: bravebot_tui::app::rewinding_reopened_history_removes_outcomes_plans_and_audit_before_reuse`
-`verified-by: bravebot_tui::app::undoing_a_turn_puts_its_prompt_back_in_the_box`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::rewinding_reopened_history_removes_outcomes_plans_and_audit_before_reuse`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::undoing_a_turn_puts_its_prompt_back_in_the_box`
 `verified-by: bravebot_tui::state::a_returned_prompt_lands_in_the_box_as_a_prompt`
 `verified-by: bravebot_tui::state::a_returned_prompt_does_not_overwrite_a_line_being_typed`
 `verified-by: bravebot_tui::state::a_returned_prompt_is_refused_while_a_turn_is_running`
@@ -1016,7 +1016,7 @@ whether or not it is ever read.
 `verified-by: bravebot_session::sessions::truncating_an_audit_log_removes_events_from_undone_turns`
 `verified-by: bravebot_session::sessions::discarding_a_record_leaves_nothing_to_resume`
 `verified-by: bravebot_session::sessions::discarding_keeps_a_name_chosen_before_the_turn`
-`verified-by: bravebot_tui::app::a_rewind_point_excludes_the_turn_it_undoes`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::a_rewind_point_excludes_the_turn_it_undoes`
 `verified-by: bravebot_tui::state::clearing_drops_the_transcript_and_what_it_spent`
 `verified-by: bravebot_session::rewind::closing_the_rewind_window_leaves_nothing_to_rewind_to`
 `verified-by: bravebot_session::rewind::a_rewind_reaches_past_the_turn_that_just_ended`
@@ -1025,7 +1025,7 @@ whether or not it is ever read.
 `verified-by: bravebot_session::rewind::a_session_keeps_no_more_points_than_it_may`
 `verified-by: bravebot_session::rewind::one_turns_writes_can_cost_the_session_the_turns_behind_it`
 `verified-by: bravebot_session::rewind::backups_with_no_point_to_hang_them_on_are_dropped`
-`verified-by: bravebot_tui::app::a_session_renamed_mid_turn_gives_up_the_running_turns_rewind_point`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::a_session_renamed_mid_turn_gives_up_the_running_turns_rewind_point`
 
 `verified-by: bravebot_tui::undo_tests::oversized_original_preserves_unrelated_grants_after_live_and_resumed_successful_undo`
 `verified-by: bravebot_tui::undo_tests::oversized_original_preserves_unrelated_grants_after_failed_undo`
@@ -1075,11 +1075,11 @@ run to arrive.
 `verified-by: bravebot_tui::state::a_resumed_session_brings_its_asides_back`
 `verified-by: bravebot_agent::turn::an_answer_over_a_trusted_exchange_may_be_written_down`
 `verified-by: bravebot_agent::turn::an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down`
-`verified-by: bravebot_tui::app::a_btw_over_an_untrusted_exchange_reaches_the_record_as_a_question_alone`
-`verified-by: bravebot_tui::app::a_btw_asked_beside_a_turn_over_an_untrusted_exchange_reaches_the_record_as_a_question_alone`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_btw_over_an_untrusted_exchange_reaches_the_record_as_a_question_alone`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_btw_asked_beside_a_turn_over_an_untrusted_exchange_reaches_the_record_as_a_question_alone`
 `verified-by: bravebot_tui::sessions::a_record_from_before_asides_were_kept_reads_as_a_session_with_no_questions`
 `verified-by: bravebot_tui::state::a_resume_puts_the_asides_in_the_view_and_neither_half_in_the_transcript`
-`verified-by: bravebot_tui::app::an_aside_answered_before_any_turn_writes_no_record_and_one_after_a_turn_does`
+`verified-by: bravebot_tui::app::tests::sessions_records::an_aside_answered_before_any_turn_writes_no_record_and_one_after_a_turn_does`
 `verified-by: bravebot_ui_bridge::asking_aside::an_aside_answered_before_any_turn_writes_no_record_and_one_after_a_turn_does`
 
 
@@ -1109,14 +1109,14 @@ only ever the bare word, which is what keeps `/undo the last thing I asked for` 
 of a command with a six word argument; [commands.md](commands.md) owns that rule. A surface that
 takes a number cannot also have it, so the number is on a word that has one.
 
-`verified-by: bravebot_tui::app::the_bare_rewind_command_asks_for_the_list`
-`verified-by: bravebot_tui::app::the_rewind_command_carries_how_far_back_to_go`
-`verified-by: bravebot_tui::app::a_longer_word_starting_with_rewind_is_a_prompt`
-`verified-by: bravebot_tui::app::undo_with_something_after_it_is_still_a_prompt`
-`verified-by: bravebot_tui::app::the_list_names_what_each_point_would_put_back`
-`verified-by: bravebot_tui::app::the_list_of_a_session_with_no_points_says_there_is_nothing`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::the_bare_rewind_command_asks_for_the_list`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::the_rewind_command_carries_how_far_back_to_go`
+`verified-by: bravebot_tui::app::tests::commands_words::a_longer_word_starting_with_rewind_is_a_prompt`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::undo_with_something_after_it_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::the_list_names_what_each_point_would_put_back`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::the_list_of_a_session_with_no_points_says_there_is_nothing`
 `verified-by: bravebot_session::rewind::going_back_further_than_the_session_remembers_rewinds_nothing`
-`verified-by: bravebot_tui::app::the_rewind_command_goes_back_the_number_it_was_given_and_nowhere_for_anything_else`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::the_rewind_command_goes_back_the_number_it_was_given_and_nowhere_for_anything_else`
 
 
 <a id="SESSION-22"></a>
@@ -1187,7 +1187,7 @@ names it on the line that reports the rewind.
 
 `verified-by: bravebot_tui::sessions::a_rewind_point_survives_being_written_and_read_back`
 `verified-by: bravebot_tui::sessions::a_rename_takes_the_points_it_gave_up_out_of_the_record`
-`verified-by: bravebot_tui::app::a_resumed_session_whose_record_was_renamed_has_nothing_to_undo`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::a_resumed_session_whose_record_was_renamed_has_nothing_to_undo`
 `verified-by: bravebot_session::sessions::a_kept_file_this_build_cannot_read_will_not_go_back_rather_than_being_deleted`
 `verified-by: bravebot_tui::state::a_restored_point_finds_its_place_in_the_transcript_it_comes_back_into`
 
@@ -1297,8 +1297,8 @@ compares nothing.
 `verified-by: bravebot_agent::hunks::a_pipe_where_the_file_was_is_refused_and_not_waited_on`
 `verified-by: bravebot_tui::hunks_command::the_bare_word_lists_and_a_number_names_a_hunk`
 `verified-by: bravebot_tui::hunks_command::anything_but_one_number_is_unreadable`
-`verified-by: bravebot_tui::app::the_hunks_command_carries_the_number_it_was_given`
-`verified-by: bravebot_tui::app::a_longer_word_starting_with_hunks_is_a_prompt`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::the_hunks_command_carries_the_number_it_was_given`
+`verified-by: bravebot_tui::app::tests::commands_words::a_longer_word_starting_with_hunks_is_a_prompt`
 `verified-by: bravebot_tui::undo_tests::the_hunks_of_the_last_turn_are_listed_with_their_lines`
 `verified-by: bravebot_tui::undo_tests::a_hunk_is_put_back_by_its_number_and_the_turn_can_still_be_undone`
 `verified-by: bravebot_tui::undo_tests::a_number_from_before_the_list_was_redrawn_names_no_other_hunk`
@@ -1448,8 +1448,8 @@ what makes the second one visible without the reader dividing each row by the to
 `verified-by: bravebot_tui::state::what_was_spent_before_the_first_turn_is_not_reported_as_a_turn`
 `verified-by: bravebot_tui::state::a_total_with_no_breakdown_does_not_read_as_a_session_that_spent_nothing`
 `verified-by: bravebot_tui::state::a_session_that_has_spent_nothing_says_so`
-`verified-by: bravebot_tui::app::typing_the_cost_command_reports_rather_than_prompting`
-`verified-by: bravebot_tui::app::cost_asked_mid_turn_counts_what_the_running_turn_has_spent`
+`verified-by: bravebot_tui::app::tests::commands_words::typing_the_cost_command_reports_rather_than_prompting`
+`verified-by: bravebot_tui::app::tests::sessions_records::cost_asked_mid_turn_counts_what_the_running_turn_has_spent`
 
 <a id="SESSION-28"></a>
 ### SESSION-28: a second front end reads and writes the same store, and adds only the question of which projects exist
@@ -1622,15 +1622,15 @@ into a conversation it was not started in.
 `verified-by: bravebot_session::sessions::branching_before_anything_is_written_refuses_and_stays_put`
 `verified-by: bravebot_session::sessions::branching_where_records_cannot_be_written_refuses_and_writes_no_copy`
 `verified-by: bravebot_session::sessions::branching_a_manifest_run_is_refused`
-`verified-by: bravebot_tui::app::branching_a_session_moves_onto_the_copy_and_leaves_the_original`
-`verified-by: bravebot_tui::app::branching_a_session_with_no_turn_says_so_and_stays_put`
-`verified-by: bravebot_tui::app::the_branch_command_waits_for_the_turn_in_flight`
-`verified-by: bravebot_tui::app::branching_a_session_with_a_goal_takes_the_goal_off`
-`verified-by: bravebot_tui::app::branching_a_session_with_a_watch_ends_it_and_says_so`
-`verified-by: bravebot_tui::app::a_branch_keeps_what_the_record_holds_and_forgets_the_rest`
-`verified-by: bravebot_tui::app::branching_is_refused_while_the_session_keeps_a_checkout`
-`verified-by: bravebot_tui::app::the_branch_command_carries_its_name`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_branch_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::branching_a_session_moves_onto_the_copy_and_leaves_the_original`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::branching_a_session_with_no_turn_says_so_and_stays_put`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::the_branch_command_waits_for_the_turn_in_flight`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::branching_a_session_with_a_goal_takes_the_goal_off`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::branching_a_session_with_a_watch_ends_it_and_says_so`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::a_branch_keeps_what_the_record_holds_and_forgets_the_rest`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::branching_is_refused_while_the_session_keeps_a_checkout`
+`verified-by: bravebot_tui::app::tests::commands_words::the_branch_command_carries_its_name`
+`verified-by: bravebot_tui::app::tests::commands_words::a_prompt_containing_the_branch_command_is_still_a_prompt`
 
 <a id="SESSION-32"></a>
 ### SESSION-32: another program's session is copied as words to read, and never as a request
@@ -1816,14 +1816,14 @@ stay behind because they were given for work that the brief describes only in wo
 
 `verified-by: bravebot_agent::aside::a_handoff_asks_for_a_brief_for_the_goal_over_the_exchange`
 `verified-by: bravebot_agent::aside::the_handed_off_prompt_holds_the_brief_the_notice_and_the_goal_in_that_order`
-`verified-by: bravebot_tui::app::the_handoff_command_carries_its_goal_and_is_not_sent_as_a_prompt`
-`verified-by: bravebot_tui::app::enter_on_a_proposed_brief_starts_a_session_from_the_edited_text`
-`verified-by: bravebot_tui::app::a_prompt_typed_after_the_brief_was_wiped_out_is_sent_as_a_prompt`
-`verified-by: bravebot_tui::app::a_brief_over_a_typed_line_keeps_the_line_and_the_new_session_sends_the_brief`
-`verified-by: bravebot_tui::app::a_handoff_with_no_goal_or_no_ended_turn_is_refused_with_a_line_saying_why`
-`verified-by: bravebot_tui::app::a_brief_from_an_exchange_that_met_something_untrusted_is_not_offered`
-`verified-by: bravebot_tui::app::a_brief_the_planner_could_have_held_is_offered_and_a_failed_request_offers_nothing`
-`verified-by: bravebot_tui::app::a_handoff_links_the_new_record_to_the_session_it_came_from_and_a_clear_does_not`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::the_handoff_command_carries_its_goal_and_is_not_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::enter_on_a_proposed_brief_starts_a_session_from_the_edited_text`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::a_prompt_typed_after_the_brief_was_wiped_out_is_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::tests::remainder::a_brief_over_a_typed_line_keeps_the_line_and_the_new_session_sends_the_brief`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::a_handoff_with_no_goal_or_no_ended_turn_is_refused_with_a_line_saying_why`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::a_brief_from_an_exchange_that_met_something_untrusted_is_not_offered`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::a_brief_the_planner_could_have_held_is_offered_and_a_failed_request_offers_nothing`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::a_handoff_links_the_new_record_to_the_session_it_came_from_and_a_clear_does_not`
 `verified-by: bravebot_session::sessions::the_list_carries_the_session_a_handoff_came_from_and_only_where_it_is_an_id`
 `verified-by: bravebot_session::sessions::a_handed_off_session_keeps_its_source_across_a_resume`
 `verified-by: bravebot_tui::render::sessions_screen::the_details_give_the_id_size_agent_links_and_where_it_was_handed_off_from`
@@ -1836,11 +1836,11 @@ stay behind because they were given for work that the brief describes only in wo
 `verified-by: bravebot_agent::aside::a_handoff_is_refused_without_a_goal_an_ended_turn_or_a_record`
 `verified-by: bravebot_ui_bridge::handoff::a_brief_is_offered_only_where_the_exchange_kept_it`
 `verified-by: bravebot_agent::turn::a_handoff_brief_past_four_thousand_characters_is_cut_to_four_thousand`
-`verified-by: bravebot_tui::app::the_brief_is_sent_as_a_line_the_person_typed_and_is_recalled_as_one`
-`verified-by: bravebot_tui::app::the_record_a_handoff_came_from_is_untouched_by_the_new_one_and_still_resumes`
-`verified-by: bravebot_tui::app::a_handoff_through_held_clear_carries_only_the_brief`
-`verified-by: bravebot_tui::app::a_handoff_through_held_clear_leaves_the_source_record_as_it_was`
-`verified-by: bravebot_tui::app::a_handoff_through_held_clear_carries_no_standing_rule`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::the_brief_is_sent_as_a_line_the_person_typed_and_is_recalled_as_one`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::the_record_a_handoff_came_from_is_untouched_by_the_new_one_and_still_resumes`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::a_handoff_through_held_clear_carries_only_the_brief`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::a_handoff_through_held_clear_leaves_the_source_record_as_it_was`
+`verified-by: bravebot_tui::app::tests::sessions_rewinding::a_handoff_through_held_clear_carries_no_standing_rule`
 `verified-by: bravebot_ui_bridge::permission_mode::a_chat_opened_from_a_handoff_holds_none_of_the_source_chats_vouched_commands_or_trust`
 `verified-by: bravebot_ui_bridge::bridge::a_chat_opened_from_a_handoff_starts_with_an_empty_quarantine`
 `verified-by: bravebot_ui_bridge::handing_off::a_chat_started_from_a_handoff_carries_only_the_brief_and_leaves_the_source_record_alone`
@@ -2096,15 +2096,15 @@ as data.
 `verified-by: bravebot_session::sessions::a_whole_record_save_writes_the_notes_the_handle_holds`
 `verified-by: bravebot_session::sessions::a_fork_carries_the_notes`
 `verified-by: bravebot_session::sessions::a_record_from_before_notes_reads_as_having_none`
-`verified-by: bravebot_tui::app::the_note_command_carries_the_whole_note`
+`verified-by: bravebot_tui::app::tests::sessions_records::the_note_command_carries_the_whole_note`
 `verified-by: bravebot_ui_bridge::bridge::a_desktop_note_is_kept_on_the_record_and_not_in_the_conversation`
 `verified-by: bravebot_ui_bridge::bridge::an_empty_desktop_note_records_nothing`
 `verified-by: bravebot_ui_bridge::bridge::a_desktop_note_is_refused_while_a_turn_runs_and_before_the_first`
-`verified-by: bravebot_tui::app::a_prompt_containing_the_note_command_is_still_a_prompt`
-`verified-by: bravebot_tui::app::a_note_typed_mid_turn_is_recorded_on_that_turn_and_given_to_no_one`
-`verified-by: bravebot_tui::app::a_note_with_no_text_mid_turn_records_nothing`
-`verified-by: bravebot_tui::app::a_note_typed_at_an_idle_prompt_is_recorded_on_the_last_finished_turn`
-`verified-by: bravebot_tui::app::a_note_with_no_text_lists_the_notes_the_session_holds`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_prompt_containing_the_note_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_note_typed_mid_turn_is_recorded_on_that_turn_and_given_to_no_one`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_note_with_no_text_mid_turn_records_nothing`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_note_typed_at_an_idle_prompt_is_recorded_on_the_last_finished_turn`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_note_with_no_text_lists_the_notes_the_session_holds`
 `verified-by: bravebot_session::sessions::a_note_where_no_record_can_be_written_says_it_reached_none`
 `verified-by: by-construction (the session-review skill reads a record's notes into a file beside the copy of the record, names that file to the analyzer and verifier prompts, and writes the number of notes shown into the marker; make check-scripts runs agents/skills/session-review/selftest.py, whose test_a_session_is_reviewed_once_for_its_notes_and_again_only_when_a_new_one_is_added pins that a session whose notes were all considered is not offered again, that a new note offers it again for the new note alone, and that a session with notes and no problems still gets its marker; test_a_session_with_a_new_note_and_no_summary_is_left_undecided_for_the_next_run pins that a session with a new note and an empty summary is undecided while one with no new note is not)`
 
@@ -2157,7 +2157,7 @@ from fetched bytes ([TRUST-4](trust-map.md#TRUST-4)), after which the file reads
 `verified-by: bravebot_session::sessions::deleting_a_session_removes_its_lock_unless_a_process_holds_it`
 `verified-by: bravebot_session::retention::a_lock_with_no_record_goes_by_its_own_age_and_a_held_one_stays`
 `verified-by: bravebot_tui::sessions_screen_tests::a_task_another_terminal_has_open_is_refused_and_the_sessions_screen_stays`
-`verified-by: bravebot_tui::app::a_resume_of_a_record_another_process_holds_restores_nothing`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_resume_of_a_record_another_process_holds_restores_nothing`
 `verified-by: bravebot_ui_bridge::attaching::a_record_another_window_holds_is_not_opened`
 `verified-by: bravebot_ui_bridge::attaching::a_session_opened_again_waits_for_what_is_still_writing_its_record`
 `verified-by: bravebot_tui::sessions::resume_refuses_a_record_another_process_holds`
@@ -2193,7 +2193,7 @@ its own that a rewind, a delete or a fork would leave out of date.
 
 `verified-by: bravebot_session::sessions::the_turns_addressed_to_a_definition_for_one_turn_are_listed_and_a_forks_copies_are_not`
 `verified-by: bravebot_ui_bridge::addressing::the_turns_addressed_to_a_definition_for_one_turn_are_listed_with_their_reply`
-`verified-by: bravebot_tui::app::a_session_opened_under_a_definition_notes_the_turns_addressed_to_it_elsewhere`
+`verified-by: bravebot_tui::app::tests::sessions_records::a_session_opened_under_a_definition_notes_the_turns_addressed_to_it_elsewhere`
 `verified-by: bravebot_agent::turn::the_record_keeps_which_definition_each_prompt_was_addressed_to`
 
 <a id="SESSION-40"></a>
