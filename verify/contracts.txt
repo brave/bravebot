@@ -291,3 +291,5 @@ crates/sandbox-rules/src/quote.rs::string_of: assumes external_body
 crates/sandbox-rules/src/quote.rs::push_backslashes: assumes external_body
 crates/sandbox-rules/src/quote.rs::command_line: assumes external
 crates/sandbox-rules/src/quote.rs::is_written_quoted: assumes external
+crates/sandbox-rules/src/seatbelt.rs::line: assumes external
+crates/sandbox-rules/src/seatbelt.rs::write: assumes external
