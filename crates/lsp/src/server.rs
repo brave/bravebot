@@ -4644,8 +4644,8 @@ done
      {
         let (_launching, scratch, workspace, file) =
             a_workspace_with_a_reporting_server(NO_PLACE_FOR_THE_INDEX);
-        // The directory the layout of a session index would use in the temporary directory, and
-        // the names an earlier layout gave there. Only read, to see that nothing is made in it.
+        // The directory an implementation that put the session index in the temporary directory
+        // would use. Only read, to see that nothing is made in it.
         // shared-temp-name: read and never written, to show a refused start makes nothing there
         // nosemgrep: rust.lang.security.temp-dir.temp-dir
         let temporary = std::env::temp_dir();
@@ -4774,16 +4774,17 @@ done
     /// there.
     ///
     /// The stand-in for the stage is a thread that runs from before the server starts until after
-    /// it has been asked a question. It removes every entry the earlier layout would have made
-    /// there (`bravebot-lsp-` and this process's id) and puts a link to a directory of its own in
-    /// its place, which is all a stage of the same account may do to that directory. The test
+    /// it has been asked a question. It removes every entry named `bravebot-lsp-<this process's
+    /// id>-`, the name an implementation that put the session index in the temporary directory
+    /// would use, and puts a link to a directory of its own in its place, which is all a stage of
+    /// the same account may do to that directory. The test
     /// rejects an index directory made in the temporary directory under that name: the stage would
     /// replace the directory the server builds and loads from, and the session directory would be
     /// a link or gone.
     ///
-    /// Nothing in the current layout is made under that name, so the stage would find nothing to
-    /// replace and the test would pass whatever it did. A control entry with the name is planted
-    /// first, and the test asserts that the stage replaced it, which shows that the stage ran
+    /// The session index is never made under that name, so the stage would find nothing to
+    /// replace and the test would pass whatever it did. A control entry is planted under that
+    /// name first, and the test asserts that the stage replaced it, which shows that the stage ran
     /// against this directory while the server started and answered.
     #[cfg(unix)]
     #[expect(clippy::expect_used, reason = "a test fails by panicking")]

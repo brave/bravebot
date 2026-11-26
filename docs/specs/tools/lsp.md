@@ -600,9 +600,10 @@ the session ends, the servers having stopped first. Where the account has no cac
 directory cannot be made or is refused, the server does not start, under [LSP-6](#LSP-6). The
 system temporary directory is never used in its place. On Windows the directory stays in the
 account's temporary directory, which a stage is not granted where the session has a scratch
-directory ([SANDBOX-12](../sandboxing.md#SANDBOX-12)); the last Known cost below says what is
-left. The cost of a session that keeps nothing is the one the paragraph above names, and it is the
-cost incognito has already accepted.
+directory ([SANDBOX-12](../sandboxing.md#SANDBOX-12)); the Known cost "On Windows the index of a
+session that keeps nothing is in the account's temporary directory" says what is left. The cost
+of a session that keeps nothing is the one the paragraph above names, and it is the cost
+incognito has already accepted.
 
 `verified-by: bravebot_lsp::server::the_cache_is_outside_the_workspace`
 `verified-by: bravebot_lsp::server::the_cache_sits_directly_under_the_directory_it_is_given`

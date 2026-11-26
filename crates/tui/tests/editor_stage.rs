@@ -239,8 +239,8 @@ fn a_stage_replacing_what_it_can_write_changes_nothing_the_editor_shows_of_the_t
 /// home and of the temporary directory, which is where the file may have been put, so a file left in
 /// either is found without the test naming the directory.
 ///
-/// The regression it rejects is a removal that still names the old directory: a listing of the
-/// temporary directory alone passes once the file has moved.
+/// The regression it rejects is a removal that looks only in the temporary directory and leaves a
+/// file made under the home: a listing of the temporary directory alone would pass.
 #[test]
 fn the_file_does_not_outlive_the_edit_wherever_it_was_made() {
     for (editor, what) in [
