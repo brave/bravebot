@@ -28,6 +28,7 @@ governs:
   - crates/sandbox/src/programs.rs
   - crates/agent/src/stage_record.rs
   - crates/sandbox/src/openshell.rs
+  - crates/sandbox/src/private.rs
   - crates/tui/src/status.rs
   - crates/tui/src/opener.rs
   - crates/ui-bridge/src/opener_names.rs

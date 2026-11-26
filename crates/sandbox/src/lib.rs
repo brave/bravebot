@@ -55,6 +55,8 @@ pub mod network;
 #[cfg(unix)]
 pub mod openshell;
 pub mod policy;
+#[cfg(unix)]
+pub mod private;
 pub mod process;
 pub mod programs;
 pub mod proxy;
