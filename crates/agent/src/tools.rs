@@ -19824,6 +19824,64 @@ mod tests {
         );
     }
 
+    /// `web_search` hands back a reference and says what to do with it, in its own words about
+    /// "the results". Each of `spawn_processor`, `write_file` and `vet_content` is named only where
+    /// the list holds it, and every combination reads exactly as written here. The regression it
+    /// rejects is `web_search` borrowing the wording of `fetch_url` ("the page") or a sentence for
+    /// one combination of the neighbours being sent for another.
+    #[test]
+    fn the_web_search_description_names_only_the_tools_the_list_holds() {
+        let head = "Search the web with the Brave Search API. 'service' picks what is asked: web, \
+                    news, videos, images, llm_context (pre-extracted page text for grounding), \
+                    suggest, spellcheck or places. What comes back is quarantined, like a file \
+                    nobody vouched for: you get a reference rather than the results, and you \
+                    cannot read it or be told what it says.";
+        let tail = " The user is asked before the query leaves the machine, and it is sent to the \
+                    Brave Search API and nowhere else.";
+        let reading = " Where you have to read the results yourself, vet_content is the question \
+                       to ask.";
+        for (spawn, write, moves) in [
+            (
+                true,
+                true,
+                " Hand the reference to spawn_processor to have a question answered about it, or \
+                 to write_file as contents_ref to save it.",
+            ),
+            (
+                true,
+                false,
+                " Hand the reference to spawn_processor to have a question answered about it.",
+            ),
+            (
+                false,
+                true,
+                " Hand the reference to write_file as contents_ref to save it.",
+            ),
+            (false, false, ""),
+        ] {
+            for vet in [true, false] {
+                let mut gone = Vec::new();
+                if !spawn {
+                    gone.push("spawn_processor");
+                }
+                if !write {
+                    gone.push("write_file");
+                }
+                if !vet {
+                    gone.push("vet_content");
+                }
+                let mut offered = the_table_without(&gone);
+                offer_web_search(&mut offered);
+                let expected = format!("{head}{moves}{}{tail}", if vet { reading } else { "" });
+                assert_eq!(
+                    description_of(&offered, "web_search"),
+                    expected,
+                    "without {gone:?}"
+                );
+            }
+        }
+    }
+
     /// `job_output` says what a job's output is passed to when it comes back as a reference. Each of
     /// the three tools is named only where the list holds it, and a list with none still says that
     /// the output comes back as a reference.
