@@ -115,6 +115,23 @@ impl Attached {
 }
 
 /// Every connection being served, by its number.
+///
+/// # The order locks are taken in
+///
+/// A thread that holds more than one of these takes them in this order, and holds none of the
+/// later ones while it takes an earlier one:
+///
+/// 1. [`Served`], the lock a request is answered under;
+/// 2. the bridge's emitter lock, which every event and snapshot is sent under;
+/// 3. a session's answerers, which [`crate::answerers::Answerers::set_by`] holds while it calls
+///    the scope watch;
+/// 4. [`Owners`], which [`on_widening`] holds from start to end and a join's hand-over takes;
+/// 5. [`Latest`], then this sink, then [`Viewed`], each taken under the owners and let go quickly.
+///
+/// A turn's thread never takes [`Served`], and the scope watch never takes the emitter, the
+/// answerers or a session's pending question. A new path that holds the owners, this sink, the
+/// latest scopes or the viewed sessions and then takes the emitter or the answerers would make a
+/// cycle, and so would one that calls the scope watch while it holds the emitter.
 type Sink = Arc<Mutex<HashMap<u64, Attached>>>;
 
 /// The connection whose request is being answered, or 0 for none. An event that names no session,
@@ -2238,5 +2255,28 @@ mod tests {
         host.settle_kinds(&handle, seen);
         assert!(!host.bridge.can_be_asked(&handle, Kind::Run));
         assert!(host.bridge.can_be_asked(&handle, Kind::Fetch));
+    }
+
+    /// Every kind of question a client of the host can answer has been decided for the ceiling:
+    /// what a yes to it does to a session's reach, and so what the scope watch is told. A kind the
+    /// host comes to offer fails this until it is decided here and, where a yes to it reaches past
+    /// the scope's fields, told to the watch as a [`Grant`] (HOST-15).
+    #[test]
+    fn every_kind_a_host_client_can_answer_is_decided_for_the_ceiling() {
+        // What a yes to each kind does to the session's reach.
+        let decided = [
+            // A write's path is inside the session's workspace, which the scope's project and
+            // directories already hold.
+            (Kind::Write, "inside the scope"),
+            // A confined line runs under the sandbox the scope names; one with no sandbox is a
+            // `Grant::UnconfinedRun`.
+            (Kind::Run, "inside the scope, or Grant::UnconfinedRun"),
+            // No ceiling holds a web host.
+            (Kind::Fetch, "Grant::Fetch"),
+            // An answer to the planner's question gives the session nothing to reach.
+            (Kind::Ask, "nothing"),
+        ];
+        let kinds: Vec<Kind> = decided.iter().map(|(kind, _)| *kind).collect();
+        assert_eq!(allowlist::answerable(&Answer::ALL), kinds);
     }
 }

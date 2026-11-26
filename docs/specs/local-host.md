@@ -328,6 +328,7 @@ The person approves a stopped connection for a session on the host, through `Hos
 `verified-by: bravebot_ui_bridge::host::a_held_connection_joins_no_session_a_grant_for_one_turn_widened`
 `verified-by: bravebot_ui_bridge::host::a_join_is_checked_again_for_a_grant_where_it_is_handed_over`
 `verified-by: bravebot_ui_bridge::host::kinds_set_from_before_a_stop_are_settled_to_leave_the_stopped_connection_out`
+`verified-by: bravebot_ui_bridge::host::every_kind_a_host_client_can_answer_is_decided_for_the_ceiling`
 `verified-by: bravebot_ui_bridge::host::approving_is_refused_while_the_sessions_scope_cannot_be_read`
 `verified-by: bravebot_ui_bridge::answerers::a_change_made_while_kinds_are_worked_out_lands_after_them`
 `verified-by: bravebot_ui_bridge::answering_tests::an_approved_fetch_tells_the_scope_watch_before_the_yes_is_acted_on`
