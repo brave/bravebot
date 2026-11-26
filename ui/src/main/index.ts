@@ -57,7 +57,7 @@ import { botFolders, isBotModel, isServerSelection, type Bot } from '../shared/b
 import { isSessionId, parseForkResult } from '../shared/forks'
 import { conversationKey } from '../shared/experience'
 import { rootForSession, forgetRoot, list, noteRoot, noteAnsweredFolders, open as openInApp, preview, search, chooseAttachments, chooseFolder, attachmentPaths } from './files'
-import { sanitised } from './sanitise'
+import { heldSessions, sanitised } from './sanitise'
 import { SIGN_IN_ORIGINS, SignIn, opensExternally } from './sign-in'
 import {
   closeSignInWindow, handleSignInWindow, showSignInWindow, updateSignInWindow,
@@ -168,6 +168,9 @@ let selectedSettings: string | null = null
 let diagnosticLogLevel: LogLevel = 'error'
 let watchClock: ReturnType<typeof setInterval> | null = null
 let pollingWatches = false
+// The sessions whose window has lines waiting in its queue. The bridge cannot see that queue, so a
+// loop's tick in one of them is held here until the window says the queue is empty (LOOP-6).
+let queuedSessions: string[] = []
 let modelListingGeneration = 0
 let modelListingDirectory: string | undefined
 let modelListing: Promise<unknown> | null = null
@@ -586,10 +589,16 @@ function createWindow(): void {
   useOpenerJudge((method, params) => (bridge ? bridge.request(method, params) : Promise.reject(new Error('The agent is not running, so the opener cannot be judged.'))))
 
   if (watchClock) clearInterval(watchClock)
+  // One clock for the watches and the loops. A loop's tick is sent from here and never by the
+  // window, so a loop ticks whether or not the window does anything, and the window cannot send
+  // one early: `loops.poll` is not in [`ALLOWED`].
   watchClock = setInterval(() => {
     if (!bridge || !window || pollingWatches) return
     pollingWatches = true
-    void bridge.request('watches.poll').catch(() => {}).finally(() => { pollingWatches = false })
+    const asking = bridge
+    void asking.request('watches.poll').catch(() => {})
+      .then(() => asking.request('loops.poll', { held: queuedSessions })).catch(() => {})
+      .finally(() => { pollingWatches = false })
   }, 1000)
   window.on('closed', () => {
     if (window !== created) return
@@ -616,6 +625,7 @@ function createWindow(): void {
     bridge?.dispose()
     bridge = null
     runningHandles.clear()
+    queuedSessions = []
     caffeinate?.windowClosed()
     botHandles.clear()
     owedCarryOver.clear()
@@ -720,6 +730,10 @@ const ALLOWED = new Set([
   'doctor',
   'changelog.read',
   'schedule.command',
+  // A typed `/loop` line (LOOP-3), and the loops a session holds, for the row under the composer
+  // (LOOP-13). Sending a due tick is `loops.poll`, which only the clock in this process calls.
+  'loop.command',
+  'loops.list',
   // The text of the window's own title, for the name and state the window gives (PANEL-19).
   'window.title',
   'hooks.inspect',
@@ -1436,6 +1450,14 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('bravebot:caffeinate:confirm', async () => {
     await bridge?.request('caffeinate.confirm')
     caffeinate?.confirm()
+  })
+
+  // Which sessions have lines waiting in the window's queue, for the loop clock to hold back
+  // (LOOP-6). Only the current window's own top frame is heard.
+  ipcMain.on('bravebot:loops:held', (event, value: unknown) => {
+    if (!window || event.senderFrame !== window.webContents.mainFrame) return
+    const held = heldSessions(value)
+    if (held) queuedSessions = held
   })
 
   // A right-click on something in the window. The reference is validated rather than

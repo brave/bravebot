@@ -703,7 +703,7 @@ impl Bridge {
             "loop.command" => self.loop_command(request),
             "loops.list" => self.loops_list(request),
             "loops.poll" => {
-                self.poll_loops();
+                self.poll_loops(request)?;
                 Ok(json!({}))
             }
             "caffeinate.confirmed" => {
@@ -4483,18 +4483,33 @@ impl Bridge {
     }
 
     /// Called by the desktop's clock: send the tick of every idle session's loop that is due.
-    fn poll_loops(&mut self) {
-        self.poll_loops_at(std::time::Instant::now());
+    ///
+    /// `held` names the sessions whose window has lines queued. The main process sends it, since
+    /// this crate cannot see that queue, and a tick waits behind what the person queued (LOOP-6).
+    fn poll_loops(&mut self, request: &Request) -> Result<(), Failure> {
+        let held = if request.param("held").is_null() {
+            Vec::new()
+        } else {
+            strings(request, "held")?
+        };
+        self.poll_loops_holding(std::time::Instant::now(), &held);
+        Ok(())
+    }
+
+    /// The loop clock, read at `now`, with no session held for a queue.
+    #[cfg(test)]
+    fn poll_loops_at(&mut self, now: std::time::Instant) {
+        self.poll_loops_holding(now, &[]);
     }
 
     /// The loop clock, read at `now`.
     ///
     /// A session is passed over while a turn runs, while it is being compacted, before its trust
-    /// question is answered, while a question about its settings waits, and while a worker still
-    /// holds its state: a tick waits for an idle session and never interrupts (LOOP-6). What the
-    /// person queued in the window is the main process's to hold back, since this crate cannot see
-    /// that queue. Loops past their age end first, whether or not the session is idle (LOOP-11).
-    fn poll_loops_at(&mut self, now: std::time::Instant) {
+    /// question is answered, while a question about its settings waits, while a worker still
+    /// holds its state, and while it is in `held`, the sessions the main process says have lines
+    /// queued in the window: a tick waits for an idle session and never interrupts (LOOP-6). Loops
+    /// past their age end first, whether or not the session is idle (LOOP-11).
+    fn poll_loops_holding(&mut self, now: std::time::Instant, held: &[String]) {
         let handles: Vec<_> = self.open.keys().cloned().collect();
         for handle in handles {
             self.reap(&handle);
@@ -4521,6 +4536,7 @@ impl Bridge {
                 || open.compacting.is_some()
                 || !open.answered_trust
                 || open.questions.reply_method().is_some()
+                || held.contains(&handle)
             {
                 continue;
             }

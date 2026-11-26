@@ -583,6 +583,16 @@ const api = {
   },
 
   /**
+   * Tell the main process which sessions have lines waiting in the queue.
+   *
+   * The loop clock in the main process holds a due tick back in those sessions, so a tick never
+   * goes ahead of what the person queued (LOOP-6). Unanswered, like `publishState`.
+   */
+  publishQueued(sessions: string[]): void {
+    ipcRenderer.send('bravebot:loops:held', sessions)
+  },
+
+  /**
    * Listen for turns the main process sent on a bot's behalf, rather than a person.
    *
    * Two announcements over one channel pair: `consolidating` when such a turn goes out, and

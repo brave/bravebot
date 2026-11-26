@@ -121,3 +121,38 @@ test('a schedule line forwards its argument with the names and markers, and no f
     pictures: ['[Image #2]'],
   })
 })
+
+test('a loop line forwards its argument with the names and markers, and no file or grant under any key', () => {
+  const forwarded = sanitised('loop.command', {
+    session: 's1',
+    argument: '5m look at [Image #1] and [Image #2]',
+    files: [{ marker: '[Image #1]', name: 'shot.png', path: '/Users/me/.ssh/id_rsa', grant: 'g-1' }],
+    pictures: ['[Image #2]'],
+    drops: [{ marker: '[Image #1]', grant: 'g-1' }],
+    pastes: [{ marker: '[Image #2]', grant: 'p-1' }],
+    dropped: ['/Users/me/.ssh/id_rsa'],
+    images: [picture],
+    attachments: ['a-1'],
+    recall: true,
+  })
+  assert.deepEqual(forwarded, {
+    session: 's1',
+    argument: '5m look at [Image #1] and [Image #2]',
+    files: [{ marker: '[Image #1]', name: 'shot.png' }],
+    pictures: ['[Image #2]'],
+  })
+})
+
+test('a loop list forwards the session and nothing else', () => {
+  assert.deepEqual(sanitised('loops.list', { session: 's1', held: ['s2'], now: 5 }), { session: 's1' })
+})
+
+test('the sessions a window says have a queue are a list of strings or nothing', () => {
+  const { heldSessions } = module.exports
+  assert.deepEqual(heldSessions(['s1', 's2']), ['s1', 's2'])
+  assert.deepEqual(heldSessions([]), [])
+  assert.equal(heldSessions('s1'), null)
+  assert.equal(heldSessions(['s1', 2]), null)
+  assert.equal(heldSessions(null), null)
+  assert.equal(heldSessions(Array.from({ length: 1000 }, (_, at) => `s${at}`)).length, 256)
+})

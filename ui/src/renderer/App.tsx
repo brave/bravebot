@@ -41,7 +41,7 @@ import { bannerShown, parseUpdateStatus, type UpdateStatus } from '../shared/upd
 import { pickModel, pickedModel, rememberPickedModel, reopenedModel } from './models'
 import { canSend, canStart } from './can-send'
 import { planPrefill } from '../shared/manifest'
-import { useCommandRouter, usePublishedState } from './commands'
+import { useCommandRouter, usePublishedQueue, usePublishedState } from './commands'
 import { useWindowTitle } from './window-title'
 import { type Fork, forkedSessions } from '../shared/forks'
 import { activeBots, type Bot } from '../shared/bots'
@@ -1189,6 +1189,8 @@ export function App(): React.JSX.Element {
     [live, draft, collapsed, canExport, includeTools, backendReady, caffeinated],
   )
   usePublishedState(menuState)
+  // Read on every render: a line joins or leaves a queue through `updateSession`, which renders.
+  usePublishedQueue([...openedLives.current.values()].filter((item) => (item.queued?.length ?? 0) > 0).map((item) => item.handle).sort())
   useWindowTitle(live)
 
   // Stable, so the memoised columns either side of the transcript are not re-drawn by typing.

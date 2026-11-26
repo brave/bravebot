@@ -427,6 +427,27 @@ fn nothing_fires_while_the_session_is_busy() {
     settle(&mut bridge, &handle);
 }
 
+/// LOOP-6. Rejects a due tick sent while the window has lines queued for the session, a tick held
+/// back for another session's queue, and a `held` that is not a list of sessions.
+#[test]
+fn nothing_fires_while_the_window_holds_a_queue() {
+    let (mut bridge, handle, events, _bodies, _held) = opened();
+    typed(&mut bridge, &handle, "5s x");
+    let later = Instant::now() + Duration::from_secs(60);
+
+    bridge.poll_loops_holding(later, std::slice::from_ref(&handle));
+    assert_eq!(named(&events, "loop.tick").len(), 1);
+
+    bridge.poll_loops_holding(later, &["another".to_string()]);
+    assert_eq!(named(&events, "loop.tick").len(), 2);
+    settle(&mut bridge, &handle);
+
+    let refused = call(&mut bridge, "loops.poll", json!({"held": handle})).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::BadRequest);
+    assert!(call(&mut bridge, "loops.poll", json!({"held": [handle]})).is_ok());
+    assert!(call(&mut bridge, "loops.poll", json!({})).is_ok());
+}
+
 /// LOOP-9. Rejects a self-paced loop that ends on the first silent turn, or one that goes on after
 /// the second.
 #[test]

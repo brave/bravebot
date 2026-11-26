@@ -44,6 +44,18 @@ import { withPastes } from './pastes'
  * Stripped silently. There is no legitimate caller to warn, and a message saying which key was
  * removed would be a message telling a compromised renderer what to try next.
  */
+/**
+ * The sessions a window says have lines waiting in its queue, which the loop clock holds back
+ * (LOOP-6). Read from the window and only ever used to send fewer ticks: a window that named
+ * every session could stop its own loops ticking and do nothing else. Anything but a list of
+ * strings is no list, and a list is cut to a size no window has open.
+ */
+export function heldSessions(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null
+  if (!value.every((entry: unknown) => typeof entry === 'string')) return null
+  return value.slice(0, 256) as string[]
+}
+
 export function sanitised(method: string, params: unknown): Record<string, unknown> {
   const held = (params ?? {}) as Record<string, unknown>
   // A manifest run carries the pictures and PDFs dropped on its `/manifest` line (DROP-4), named by
@@ -93,6 +105,8 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
   }
   // The folders are listed for a session and one is closed by the name the agent listed it under.
   if (method === 'session.folders.list') return { session: held.session }
+  // A session's loops are listed by its handle, and nothing else crosses.
+  if (method === 'loops.list') return { session: held.session }
   if (method === 'session.folders.close') return { session: held.session, path: held.path }
   // Words typed into a turn that is running. The turn is already running with the reach it began
   // with, so a line carries no file under any key. What is forwarded is the line and the names
@@ -106,7 +120,9 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
   // A `/schedule` line is carried out by the driver, which has no request for a file to travel
   // in. What is forwarded is the argument and the names and markers the bridge puts into words
   // (DROP-4): a name is only text, never a path it opens, and no drop or paste grant crosses.
-  if (method === 'schedule.command') {
+  // A `/loop` line is the same: the driver keeps the line and sends it as each tick's prompt, so a
+  // file on it goes as its name and a picture as the sentence that it cannot join (DROP-4).
+  if (method === 'schedule.command' || method === 'loop.command') {
     const files = Array.isArray(held.files)
       ? held.files.map((file: { marker?: unknown; name?: unknown }) => ({ marker: file?.marker, name: file?.name }))
       : undefined
