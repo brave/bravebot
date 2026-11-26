@@ -4864,8 +4864,10 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     let note = note_for(policy, "read_file", &page, |p| {
         tally(p.lines.len(), "line", "lines")
     });
-    let rendered =
-        policy.render_in_place("read_file", &page, |p| render_page(&p, ChangeToken::Shown));
+    let edit_offered = tools.beside.holds(Named::EditFile);
+    let rendered = policy.render_in_place("read_file", &page, |p| {
+        render_page(&p, ChangeToken::Shown, edit_offered)
+    });
     // Without the paging and change token after it, which are the driver's words: a glimpse that
     // counted them would say a file had two more lines than it has, and draw them for a short one.
     let glimpsed = policy.render_in_place("read_file", &page, |p| p.lines.join("\n"));
@@ -4964,7 +4966,7 @@ pub(crate) fn read_into_slot(
         // The note about a decoding is for the planner reading a page. It is not part of the file.
         let decoded = std::mem::replace(&mut page.decoding, bravebot_filetype::Decoding::Utf8)
             != bravebot_filetype::Decoding::Utf8;
-        let mut text = render_page(&page, ChangeToken::Withheld);
+        let mut text = render_page(&page, ChangeToken::Withheld, false);
         // A file that went through a slot used to come back a byte shorter than it went in,
         // because the lines are joined with newlines between them and none after. Every
         // processed file lost its last newline, which the next diff anybody reads calls
@@ -5059,7 +5061,8 @@ fn materialise_held<S: Sink>(
                         None => read_into_slot(workspace, path),
                     }
                     .map_err(|e| {
-                        let (said, remedy) = describe_for(&e, &slot.to_string(), nobody_to_ask);
+                        let (said, remedy) =
+                            describe_for(&e, &slot.to_string(), nobody_to_ask, Beside::every());
                         escaped = remedy;
                         said
                     })
@@ -5353,7 +5356,18 @@ fn workspace_failure<S: Sink>(
     e: &crate::workspace::WorkspaceError,
     named: &str,
 ) -> String {
-    let (said, remedy) = describe_for(e, named, policy.nobody_to_ask());
+    workspace_failure_beside(policy, tool, field, e, named, Beside::every())
+}
+
+fn workspace_failure_beside<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tool: &str,
+    field: &str,
+    e: &crate::workspace::WorkspaceError,
+    named: &str,
+    beside: Beside,
+) -> String {
+    let (said, remedy) = describe_for(e, named, policy.nobody_to_ask(), beside);
     if let Some(remedy) = remedy {
         record_confinement_refusal(policy, &format!("{tool}.{field}"), named, remedy);
     }
@@ -5383,10 +5397,11 @@ fn describe_for(
     e: &crate::workspace::WorkspaceError,
     named: &str,
     nobody_to_ask: bool,
+    beside: Beside,
 ) -> (String, Option<crate::workspace::Remedy>) {
     use crate::workspace::WorkspaceError;
     let WorkspaceError::Escapes { path, remedy } = e else {
-        return (e.describe(named), None);
+        return (e.describe_beside(named, beside), None);
     };
     match nobody_to_ask
         .then(|| remedy.when_nobody_can_be_asked())
@@ -5397,10 +5412,10 @@ fn describe_for(
                 path: path.clone(),
                 remedy: instead,
             }
-            .describe(named);
+            .describe_beside(named, beside);
             (format!("{said}{NOBODY_TO_ASK}"), Some(instead))
         }
-        None => (e.describe(named), Some(*remedy)),
+        None => (e.describe_beside(named, beside), Some(*remedy)),
     }
 }
 
@@ -5616,7 +5631,14 @@ fn write_refused<S: Sink>(
     };
     Produced::problem(format!(
         "error: {}{way_out}",
-        workspace_failure(policy, tool, path_field(destination), e, shown_path)
+        workspace_failure_beside(
+            policy,
+            tool,
+            path_field(destination),
+            e,
+            shown_path,
+            tools.beside
+        )
     ))
 }
 
@@ -5881,7 +5903,7 @@ fn put_references_through(
 ///
 /// The counts matter more than they look: a model handed a silent window of a large file
 /// will answer as though it read the whole thing.
-fn render_page(page: &Page, token: ChangeToken) -> String {
+fn render_page(page: &Page, token: ChangeToken, edit_offered: bool) -> String {
     let mut notes = Vec::new();
 
     if !page.lines.is_empty() && (page.first_line > 1 || page.next_line().is_some()) {
@@ -5900,8 +5922,13 @@ fn render_page(page: &Page, token: ChangeToken) -> String {
     }
     // A reading of the file and not its bytes, said so the planner does not take an edit of it to
     // be possible: a read that is written back is of the file's own text only (READ-3).
+    // `edit_file` is named only where the turn's list holds it (TOOL-6).
     if let Some(how) = decoding_note(page.decoding) {
-        notes.push(format!("{how}, so edit_file cannot change this file"));
+        if edit_offered {
+            notes.push(format!("{how}, so edit_file cannot change this file"));
+        } else {
+            notes.push(how.to_string());
+        }
     }
     if token == ChangeToken::Shown {
         notes.push(format!("change token {}", page.change_token));
@@ -10903,14 +10930,9 @@ fn request_path<S: Sink, C: Confirmer>(
             let access = if write { "read and write" } else { "read" };
             let file_tools = match opened {
                 None => String::new(),
-                Some((_, Ok(true))) => " The file tools (read_file, write_file, edit_file, \
-                     list_files, search) reach it too, and no delegate is given a checkout while \
-                     it is open, so do not ask the person to run /add-dir for it."
-                    .to_string(),
-                Some((_, Ok(false))) => " The file tools (read_file, write_file, edit_file, \
-                     list_files, search) reach it too, so do not ask the person to run /add-dir \
-                     for it."
-                    .to_string(),
+                Some((_, Ok(checkout_blocked))) => {
+                    request_path_file_tools_note(tools.beside, checkout_blocked)
+                }
                 Some((_, Err(reason))) => format!(
                     " The file tools do not reach it: /add-dir would refuse it, because it {reason}."
                 ),
@@ -10929,6 +10951,45 @@ fn request_path<S: Sink, C: Confirmer>(
         crate::confirm::Decision::Reject => Produced::problem(
             "refused: the person declined, or nobody was there to ask. Nothing was granted.",
         ),
+    }
+}
+
+/// What `request_path` says about the offered file tools after a grant opens the directory for them
+/// (TOOL-6). Names only the file tools on `beside`, so a turn without some or all of them is not
+/// pointed at tools it cannot call.
+fn request_path_file_tools_note(beside: Beside, checkout_blocked: bool) -> String {
+    let held: Vec<&str> = [
+        (Named::ReadFile, "read_file"),
+        (Named::WriteFile, "write_file"),
+        (Named::EditFile, "edit_file"),
+        (Named::ListFiles, "list_files"),
+        (Named::Search, "search"),
+    ]
+    .into_iter()
+    .filter_map(|(named, label)| beside.holds(named).then_some(label))
+    .collect();
+
+    if held.is_empty() {
+        return if checkout_blocked {
+            " No delegate is given a checkout while it is open, so do not ask the person to run \
+             /add-dir for it."
+                .to_string()
+        } else {
+            " Do not ask the person to run /add-dir for it.".to_string()
+        };
+    }
+
+    let names = held.join(", ");
+    if checkout_blocked {
+        format!(
+            " The file tools ({names}) reach it too, and no delegate is given a checkout while it \
+             is open, so do not ask the person to run /add-dir for it."
+        )
+    } else {
+        format!(
+            " The file tools ({names}) reach it too, so do not ask the person to run /add-dir for \
+             it."
+        )
     }
 }
 
@@ -11004,10 +11065,12 @@ fn unconfined_accepted<S: Sink>(
     }
 }
 
-/// Whether the planner may be pointed at `'unconfined': true`: where [`unconfined_accepted`] holds
-/// and the front end can ask about the line.
+/// Whether the planner may be pointed at `'unconfined': true`: where `run` is offered,
+/// [`unconfined_accepted`] holds, and the front end can ask about the line.
 fn unconfined_is_offered<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> bool {
-    tools.asks_about_unconfined && unconfined_accepted(policy, tools).is_ok()
+    tools.beside.holds(Named::Run)
+        && tools.asks_about_unconfined
+        && unconfined_accepted(policy, tools).is_ok()
 }
 
 /// What a planner whose write was refused for leaving the workspace is told it can do instead, or
@@ -16016,7 +16079,7 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
     };
 
     let answer = crate::lsp::without_denied(answer, &root, tools.workspace, policy);
-    let described = crate::lsp::describe(operation, &answer, &root);
+    let described = crate::lsp::describe_beside(operation, &answer, &root, tools.beside);
     let found = answer.locations.len();
 
     // The text is the half that is content, and nothing here labels it by the path this call

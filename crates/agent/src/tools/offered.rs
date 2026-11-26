@@ -118,13 +118,14 @@ pub enum Named {
     VetContent,
     RequestPath,
     Search,
+    ListFiles,
     SpawnAgent,
     Lsp,
     ApplyCheckout,
 }
 
 impl Named {
-    const ALL: [Named; 14] = [
+    const ALL: [Named; 15] = [
         Named::Run,
         Named::ReadOutput,
         Named::ReadFile,
@@ -136,6 +137,7 @@ impl Named {
         Named::VetContent,
         Named::RequestPath,
         Named::Search,
+        Named::ListFiles,
         Named::SpawnAgent,
         Named::Lsp,
         Named::ApplyCheckout,
@@ -156,6 +158,7 @@ impl Named {
             Named::VetContent => Some("vet_content"),
             Named::RequestPath => Some("request_path"),
             Named::Search => Some("search"),
+            Named::ListFiles => Some("list_files"),
             Named::SpawnAgent => Some("spawn_agent"),
             Named::Lsp => Some("lsp"),
             Named::ApplyCheckout => Some("apply_checkout"),

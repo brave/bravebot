@@ -15,9 +15,9 @@ fn a_slot_is_filled_with_the_file_and_a_read_also_carries_its_token() {
         decoding: bravebot_filetype::Decoding::Utf8,
     };
 
-    assert_eq!(render_page(&page, ChangeToken::Withheld), "alpha");
+    assert_eq!(render_page(&page, ChangeToken::Withheld, true), "alpha");
     assert_eq!(
-        render_page(&page, ChangeToken::Shown),
+        render_page(&page, ChangeToken::Shown, true),
         "alpha\n\n(change token 0123456789abcdef)"
     );
 }
@@ -42,7 +42,7 @@ fn a_decoded_page_says_how_it_was_decoded() {
     let consequence = "so edit_file cannot change this file";
 
     assert_eq!(
-        render_page(&page_of(Decoding::Utf8), ChangeToken::Withheld),
+        render_page(&page_of(Decoding::Utf8), ChangeToken::Withheld, true),
         "alpha"
     );
     for (decoding, how) in [
@@ -56,11 +56,58 @@ fn a_decoded_page_says_how_it_was_decoded() {
         (Decoding::Utf32Be, "decoded from UTF-32 big-endian"),
     ] {
         assert_eq!(
-            render_page(&page_of(decoding), ChangeToken::Withheld),
+            render_page(&page_of(decoding), ChangeToken::Withheld, true),
             format!("alpha\n\n({how}, {consequence})"),
             "{decoding:?}"
         );
+        assert_eq!(
+            render_page(&page_of(decoding), ChangeToken::Withheld, false),
+            format!("alpha\n\n({how})"),
+            "{decoding:?} without edit_file"
+        );
     }
+}
+
+/// TOOL-6: `request_path` names only the file tools on `Beside` after a grant opens the
+/// directory, and `Beside::every()` keeps the full five-tool list.
+#[test]
+fn request_path_approval_names_only_offered_file_tools() {
+    let full = request_path_file_tools_note(Beside::every(), false);
+    assert!(
+        full.contains("(read_file, write_file, edit_file, list_files, search)"),
+        "{full}"
+    );
+    let partial = request_path_file_tools_note(
+        Beside::every()
+            .without(Named::EditFile)
+            .without(Named::Search),
+        true,
+    );
+    assert!(
+        partial.contains("(read_file, write_file, list_files)")
+            && !partial.contains("edit_file")
+            && !partial.contains("search")
+            && partial.contains("no delegate is given a checkout"),
+        "{partial}"
+    );
+    let none = request_path_file_tools_note(
+        Beside::every()
+            .without(Named::ReadFile)
+            .without(Named::WriteFile)
+            .without(Named::EditFile)
+            .without(Named::ListFiles)
+            .without(Named::Search),
+        false,
+    );
+    assert!(
+        !none.contains("read_file")
+            && !none.contains("write_file")
+            && !none.contains("edit_file")
+            && !none.contains("list_files")
+            && !none.contains("search")
+            && none.contains("/add-dir"),
+        "{none}"
+    );
 }
 
 /// A slot is filled with the text a file in another encoding decodes to, marked as a decoding,

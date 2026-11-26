@@ -367,6 +367,12 @@ pub struct Rendered {
 impl Rendered {
     /// One line naming where this is.
     pub fn line(&self) -> String {
+        self.line_beside(crate::tools::Beside::every())
+    }
+
+    /// One line naming where this is, naming `read_file` on an outside path only where `beside`
+    /// says that tool is offered (TOOL-6).
+    pub fn line_beside(&self, beside: crate::tools::Beside) -> String {
         let kind = match self.kind {
             Some(kind) => format!(" ({kind})"),
             None => String::new(),
@@ -381,10 +387,17 @@ impl Rendered {
         // of what goToDefinition finds in a real workspace is in a dependency and a planner that
         // tries to read one spends a round earning a refusal.
         if self.outside {
-            format!(
-                "{}:{}:{}{kind} — outside the workspace, so read_file will not open it",
-                self.shown, self.line, self.character
-            )
+            if beside.holds(crate::tools::Named::ReadFile) {
+                format!(
+                    "{}:{}:{}{kind} — outside the workspace, so read_file will not open it",
+                    self.shown, self.line, self.character
+                )
+            } else {
+                format!(
+                    "{}:{}:{}{kind} — outside the workspace",
+                    self.shown, self.line, self.character
+                )
+            }
         } else {
             format!("{}:{}:{}{kind}", self.shown, self.line, self.character)
         }
@@ -483,6 +496,17 @@ pub(crate) fn without_denied<S: Sink>(
 /// still labelled so the kernel decides whether the planner sees it: this function does not, and
 /// deliberately cannot, since it never holds the bytes.
 pub fn describe(operation: Operation, answer: &Answer, root: &Path) -> String {
+    describe_beside(operation, answer, root, crate::tools::Beside::every())
+}
+
+/// As [`describe`], naming `read_file` on an outside location only where `beside` says that tool
+/// is offered (TOOL-6).
+pub fn describe_beside(
+    operation: Operation,
+    answer: &Answer,
+    root: &Path,
+    beside: crate::tools::Beside,
+) -> String {
     // LSP-13: severities and lines in the driver's own words, with the server's messages left for
     // the reference that travels beside this sentence.
     if let Some(found) = &answer.diagnostics {
@@ -511,7 +535,7 @@ pub fn describe(operation: Operation, answer: &Answer, root: &Path) -> String {
             .locations
             .iter()
             .take(MAX_LOCATIONS)
-            .map(|location| render(location, root).line())
+            .map(|location| render(location, root).line_beside(beside))
             .collect::<Vec<_>>()
             .join("\n");
         if answer.locations.len() > MAX_LOCATIONS {
@@ -2004,5 +2028,22 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    /// TOOL-6: an outside location names `read_file` only where the turn's list holds it.
+    #[test]
+    fn outside_location_names_read_file_only_where_offered() {
+        let rendered = render(&location("/etc/hosts", 1), root());
+        let with_read = rendered.line_beside(crate::tools::Beside::every());
+        let without_read = rendered
+            .line_beside(crate::tools::Beside::every().without(crate::tools::Named::ReadFile));
+        assert!(
+            with_read.contains("read_file will not open it"),
+            "{with_read}"
+        );
+        assert!(
+            without_read.contains("outside the workspace") && !without_read.contains("read_file"),
+            "{without_read}"
+        );
     }
 }
