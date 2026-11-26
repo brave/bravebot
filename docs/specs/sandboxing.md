@@ -1730,8 +1730,8 @@ stage the reach Linux gives every stage.
 `verified-by: bravebot_agent::confine::a_program_left_running_is_confined_as_well`
 `verified-by: bravebot_agent::confine::tests::a_stage_that_cannot_be_confined_is_refused_with_no_stage_left_running`
 `verified-by: bravebot_agent::confine::tests::a_job_with_a_stage_that_cannot_be_confined_is_refused_with_no_stage_left_running`
-`verified-by: bravebot_agent::tools::a_program_that_could_not_be_confined_is_told_as_not_started_with_the_routes_that_exist`
-`verified-by: bravebot_agent::tools::a_failed_line_says_it_may_have_run_in_part_only_where_a_stage_had_started`
+`verified-by: bravebot_agent::tools::tests::failed_run_lines::a_program_that_could_not_be_confined_is_told_as_not_started_with_the_routes_that_exist`
+`verified-by: bravebot_agent::tools::tests::failed_run_lines::a_failed_line_says_it_may_have_run_in_part_only_where_a_stage_had_started`
 `verified-by: bravebot_agent::tools::tests::confinement::a_refused_line_names_the_unconfined_route_only_where_the_session_accepts_it`
 `verified-by: bravebot_agent::exec::a_program_that_could_not_be_started_says_what_of_the_line_had_started`
 `verified-by: bravebot_agent::exec::a_repointed_link_after_an_earlier_part_records_that_the_part_had_started`
@@ -2493,7 +2493,7 @@ reach, but can ask for less of it.
 `verified-by: bravebot_agent::confine::tests::a_closed_network_is_not_reopened_by_what_a_stage_is_started_with`
 `verified-by: bravebot_agent::confine::tests::a_closed_network_is_told_to_the_planner_and_an_open_one_is_not`
 `verified-by: bravebot_agent::confine::tests::a_backend_that_cannot_deny_the_network_refuses_a_closed_stage`
-`verified-by: bravebot_agent::tools::a_program_that_could_not_be_confined_is_told_as_not_started_with_the_routes_that_exist`
+`verified-by: bravebot_agent::tools::tests::failed_run_lines::a_program_that_could_not_be_confined_is_told_as_not_started_with_the_routes_that_exist`
 `verified-by: bravebot_sandbox::linux::a_stage_with_no_network_cannot_connect_to_anything`
 `verified-by: bravebot_agent::confine::tests::the_trail_names_the_stages_that_kept_a_closed_network_by_place_and_reason`
 `verified-by: bravebot_agent::confine::tests::the_agent_socket_goes_to_a_remote_step_and_to_no_other`
@@ -3962,7 +3962,7 @@ connect, and that it is not asked for from a line that has network access
 `verified-by: bravebot_agent::confine::a_strict_stage_that_asked_for_a_scope_reads_that_credential_only`
 `verified-by: bravebot_agent::confine::tests::a_stage_that_asked_for_signing_is_lent_the_key_and_the_agent`
 `verified-by: bravebot_agent::confine::tests::a_request_for_signing_over_a_key_no_scope_reads_is_explained`
-`verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
+`verified-by: bravebot_agent::tools::tests::run_arguments::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::turn::scopes_are_asked_about_on_a_vouched_line`
 `verified-by: bravebot_agent::turn::a_request_on_an_audited_line_quarantines_what_it_prints_and_the_trail_says_so`
 `verified-by: bravebot_core::policy::a_line_that_asked_for_a_request_is_untrusted_by_every_road_and_the_trail_says_so`
@@ -4207,7 +4207,7 @@ back.
 `verified-by: bravebot_agent::confine::tests::a_path_let_reach_does_not_reach_its_parent_or_a_sibling`
 `verified-by: bravebot_agent::confine::tests::a_write_grant_held_before_read_only_writes_nothing_until_the_mode_returns`
 `verified-by: bravebot_agent::reach::reach_paths_lists_ends_and_leaves_other_words_alone`
-`verified-by: bravebot_agent::tools::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
 `verified-by: bravebot_agent::tools::tests::confinement::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not`
 `verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
@@ -4352,24 +4352,24 @@ the file, and would leave a person who asks for `../hello.txt` with no route tha
 The planner is pointed at the argument because it has no other way to learn it when the file tools
 refuse the path.
 
-`verified-by: bravebot_agent::tools::an_unconfined_request_is_accepted_only_where_every_condition_holds`
+`verified-by: bravebot_agent::tools::tests::run_arguments::an_unconfined_request_is_accepted_only_where_every_condition_holds`
 `verified-by: bravebot_agent::tools::tests::confinement::a_refused_unconfined_request_is_recorded_with_each_cause_that_held`
 `verified-by: bravebot_agent::tools::tests::confinement::a_request_for_no_sandbox_is_accepted_only_after_a_confined_line_failed`
 `verified-by: bravebot_agent::tools::tests::confinement::each_confined_failure_earns_one_request_for_no_sandbox`
 `verified-by: bravebot_agent::tools::tests::confinement::a_program_that_could_not_be_confined_earns_one_request_for_no_sandbox`
 `verified-by: bravebot_agent::tools::tests::confinement::a_background_line_that_could_not_be_confined_is_told_as_the_foreground_one_is`
-`verified-by: bravebot_agent::tools::a_refused_closed_network_says_a_line_with_no_sandbox_has_the_network_open`
+`verified-by: bravebot_agent::tools::tests::failed_run_lines::a_refused_closed_network_says_a_line_with_no_sandbox_has_the_network_open`
 `verified-by: bravebot_agent::tools::tests::confinement::a_request_for_no_sandbox_the_person_did_not_accept_leaves_the_earned_one`
 `verified-by: bravebot_agent::tools::tests::confinement::a_redirection_out_of_the_workspace_is_accepted_with_no_failure_counted`
 `verified-by: bravebot_agent::turn::a_line_stopped_at_its_deadline_earns_no_request_for_no_sandbox`
 `verified-by: bravebot_agent::turn::a_request_for_no_sandbox_before_a_confined_line_failed_is_refused_unasked`
-`verified-by: bravebot_agent::tools::only_a_managed_closed_network_refuses_an_unconfined_request`
-`verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
+`verified-by: bravebot_agent::tools::tests::run_arguments::only_a_managed_closed_network_refuses_an_unconfined_request`
+`verified-by: bravebot_agent::tools::tests::run_arguments::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::confine::tests::a_failed_step_on_macos_names_the_unconfined_line_for_git_only_where_it_is_accepted`
 `verified-by: bravebot_agent::confine::tests::a_failed_open_or_osascript_step_on_macos_names_the_unconfined_line_only_where_it_is_accepted`
 `verified-by: bravebot_agent::confine::tests::each_failed_step_sentence_naming_unconfined_makes_it_the_second_attempt`
 `verified-by: bravebot_agent::confine::tests::a_failed_git_step_in_a_linked_worktree_is_told_its_git_directory_is_outside_the_session`
-`verified-by: bravebot_agent::tools::a_redirection_may_leave_the_workspace_only_where_the_line_has_no_profile`
+`verified-by: bravebot_agent::tools::tests::run_arguments::a_redirection_may_leave_the_workspace_only_where_the_line_has_no_profile`
 `verified-by: bravebot_agent::turn::an_approved_unconfined_line_may_redirect_into_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::turn::a_line_under_off_may_redirect_into_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::turn::a_refused_write_outside_the_workspace_names_the_unconfined_line_only_where_it_is_accepted`
@@ -4380,7 +4380,7 @@ refuse the path.
 `verified-by: bravebot_agent::turn::a_request_on_an_audited_line_quarantines_what_it_prints_and_the_trail_says_so`
 `verified-by: bravebot_core::policy::a_line_that_asked_for_a_request_is_untrusted_by_every_road_and_the_trail_says_so`
 `verified-by: bravebot_agent::confine::tests::each_failed_step_sentence_naming_unconfined_makes_it_the_second_attempt`
-`verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
+`verified-by: bravebot_agent::tools::tests::run_arguments::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::turn::the_mode_that_asks_nothing_does_not_approve_an_unconfined_line`
 `verified-by: bravebot_agent::turn::an_unconfined_line_is_refused_where_the_session_does_not_accept_it`
 `verified-by: bravebot_agent::turn::an_unconfined_value_that_is_not_a_boolean_is_an_error`

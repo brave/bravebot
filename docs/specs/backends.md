@@ -1962,7 +1962,7 @@ for one that does not.
 `verified-by: bravebot_tui::panel::the_panel_says_when_the_breakpoints_were_given_up`
 `verified-by: bravebot_bedrock::lib::a_streamed_answer_that_carried_the_breakpoints_clears_the_doubt`
 `verified-by: bravebot_agent::backend::breakpoints_given_up_is_true_for_a_recorded_bedrock_model_only`
-`verified-by: bravebot_agent::tools::the_wait_refusal_quotes_the_bound_of_the_lifetime_in_force`
+`verified-by: bravebot_agent::tools::tests::job_output_waits::the_wait_refusal_quotes_the_bound_of_the_lifetime_in_force`
 `verified-by: bravebot_bedrock::protocol::a_cached_round_is_told_apart_from_one_that_read_the_whole_prompt`
 `verified-by: bravebot_config::settings::only_five_minutes_or_an_hour_names_a_cache_lifetime`
 `verified-by: bravebot_config::lib::the_cache_lifetime_setting_reaches_every_account`

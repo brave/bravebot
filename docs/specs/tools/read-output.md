@@ -114,7 +114,7 @@ are given the reach a call of `read_file` for the path has
 `verified-by: bravebot_agent::tools::tests::arguments::a_refused_read_of_a_non_output_reference_names_vet_content_where_it_is_offered`
 `verified-by: bravebot_agent::tools::tests::arguments::a_slot_that_holds_a_file_keeps_the_vet_content_refusal`
 `verified-by: bravebot_agent::turn::under_bypass_read_output_of_a_reference_to_a_listed_file_opens_nothing`
-`verified-by: bravebot_agent::tools::the_tools_that_open_a_reference_are_given_a_read_reach_only_under_bypass`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::the_tools_that_open_a_reference_are_given_a_read_reach_only_under_bypass`
 
 <a id="OUTPUT-3"></a>
 ### OUTPUT-3: the person is told what a check made of the output before they answer
@@ -172,7 +172,7 @@ added.
 `verified-by: bravebot_ui_bridge::wire::approval_evidence_is_kept_beside_the_decision`
 `verified-by: bravebot_agent::turn::with_auto_vetting_the_row_says_a_check_released_the_output_unasked`
 `verified-by: bravebot_agent::turn::the_row_for_output_a_person_read_names_no_check`
-`verified-by: bravebot_agent::tools::no_description_says_that_private_content_closes_processors`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::no_description_says_that_private_content_closes_processors`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_says_on_the_row_that_nothing_checked_the_output`
 `verified-by: bravebot_tui::confirm::vet::the_output_prompt_says_what_a_check_found`
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_releases_command_output_unasked`
@@ -232,7 +232,7 @@ it, and paging hands over the part it names without running anything again.
 `verified-by: bravebot_core::reference::kept_output_made_for_a_run_without_read_output_names_no_read_output_and_keeps_the_other_moves`
 `verified-by: bravebot_agent::turn::a_reference_to_the_whole_of_a_long_output_names_read_output_only_if_offered`
 `verified-by: bravebot_core::policy::content_the_planner_saw_a_sample_of_is_kept_whole`
-`verified-by: bravebot_agent::tools::a_page_starts_and_stops_on_a_character_and_names_the_next`
+`verified-by: bravebot_agent::tools::tests::output_caps::a_page_starts_and_stops_on_a_character_and_names_the_next`
 `verified-by: bravebot_agent::turn::output_too_long_for_its_result_is_read_page_by_page_with_nobody_asked`
 `verified-by: bravebot_agent::turn::an_offset_into_output_nobody_vouched_for_is_refused_and_nobody_is_asked`
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept`
@@ -278,8 +278,8 @@ a page would not.
 `verified-by: bravebot_agent::turn::an_empty_pattern_is_refused_before_the_slot_is_opened`
 `verified-by: bravebot_agent::turn::a_pattern_that_will_not_compile_is_refused_before_the_slot_is_opened`
 `verified-by: bravebot_agent::turn::a_pattern_list_holding_one_that_will_not_compile_is_refused_before_the_slot_is_opened`
-`verified-by: bravebot_agent::tools::matching_lines_carry_the_byte_each_starts_at`
-`verified-by: bravebot_agent::tools::a_match_whose_context_is_long_is_still_held_to_the_cap`
+`verified-by: bravebot_agent::tools::tests::output_caps::matching_lines_carry_the_byte_each_starts_at`
+`verified-by: bravebot_agent::tools::tests::output_caps::a_match_whose_context_is_long_is_still_held_to_the_cap`
 `verified-by: bravebot_agent::turn::colour_codes_are_taken_out_of_a_sample_a_page_and_matching_lines_by_the_raw_slots_offsets`
 
 <a id="OUTPUT-6"></a>

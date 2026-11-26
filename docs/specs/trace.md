@@ -169,8 +169,8 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::tools::tests::confinement::a_refused_scope_request_is_recorded_with_each_cause_that_held`
 `verified-by: bravebot_agent::tools::tests::confinement::an_accepted_request_for_reach_leaves_no_sandbox_refusal`
 `verified-by: bravebot_agent::tools::tests::confinement::pointing_a_refused_write_at_the_unconfined_line_records_no_refusal_of_it`
-`verified-by: bravebot_agent::tools::an_unconfined_request_is_accepted_only_where_every_condition_holds`
-`verified-by: bravebot_agent::tools::a_scope_request_is_accepted_only_where_the_session_confines_and_trusts`
+`verified-by: bravebot_agent::tools::tests::run_arguments::an_unconfined_request_is_accepted_only_where_every_condition_holds`
+`verified-by: bravebot_agent::tools::tests::run_arguments::a_scope_request_is_accepted_only_where_the_session_confines_and_trusts`
 `verified-by: bravebot_agent::turn::a_refused_request_for_no_sandbox_or_for_scopes_is_recorded_with_its_cause`
 `verified-by: bravebot_core::policy::a_line_that_asked_for_a_request_is_untrusted_by_every_road_and_the_trail_says_so`
 `verified-by: bravebot_agent::turn::scopes_are_asked_about_on_a_vouched_line`

@@ -75,4 +75,4 @@ query, not a list of what the query already found too much of.
 catalogue in a single call, which is the cost this tool exists to avoid paying by default.
 
 `verified-by: bravebot_agent::skills::search_matches_every_word_case_insensitively_and_caps_the_result`
-`verified-by: bravebot_agent::tools::search_skills_says_how_many_more_matched_past_the_cap`
+`verified-by: bravebot_agent::tools::tests::loading_skills::search_skills_says_how_many_more_matched_past_the_cap`

@@ -73,7 +73,7 @@ A write into the session's own directory is not a written file for this rule. Wh
 
 `verified-by: bravebot_agent::open_loops::a_write_after_the_last_command_is_unbuilt_changes`
 `verified-by: bravebot_agent::turn::a_change_made_by_a_run_line_is_an_unbuilt_change_until_a_command_runs_after_it`
-`verified-by: bravebot_agent::tools::a_write_into_the_session_directory_is_not_a_changed_file`
+`verified-by: bravebot_agent::tools::tests::loading_skills::a_write_into_the_session_directory_is_not_a_changed_file`
 `verified-by: bravebot_agent::turn::a_turn_that_only_writes_in_the_session_directory_leaves_nothing_unbuilt`
 `verified-by: bravebot_agent::turn::an_edit_a_download_and_a_picture_landing_in_the_session_directory_count_no_write`
 `verified-by: bravebot_tui::state::open_loops::unfinished_does_not_list_a_file_in_the_session_directory_as_unbuilt`

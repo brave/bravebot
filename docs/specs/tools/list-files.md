@@ -186,8 +186,8 @@ call could not have listed.
 `verified-by: bravebot_agent::glob::a_pathological_pattern_does_not_blow_up`
 `verified-by: bravebot_agent::workspace::the_original_noise_directories_are_still_skipped`
 `verified-by: bravebot_agent::workspace::noise_directories_from_other_ecosystems_are_skipped`
-`verified-by: bravebot_agent::tools::both_glob_arguments_describe_the_matcher_the_same_way`
-`verified-by: bravebot_agent::tools::list_files_names_every_directory_its_walk_skips`
+`verified-by: bravebot_agent::tools::tests::glob_arguments::both_glob_arguments_describe_the_matcher_the_same_way`
+`verified-by: bravebot_agent::tools::tests::glob_arguments::list_files_names_every_directory_its_walk_skips`
 `verified-by: bravebot_agent::workspace::a_listing_glob_may_be_written_from_the_directory_it_names`
 `verified-by: bravebot_agent::workspace::a_search_include_may_be_written_from_the_directory_it_names`
 `verified-by: bravebot_agent::glob::a_literal_prefix_rules_out_a_sibling_directory`
@@ -391,7 +391,7 @@ count: [repo-map.md](repo-map.md).
 `verified-by: bravebot_agent::tools::tests::editing::a_quarantined_listing_carries_the_link_count_beside_its_references`
 `verified-by: bravebot_agent::turn::a_quarantined_listing_tells_the_model_how_many_links_it_did_not_enter`
 `verified-by: bravebot_agent::turn::sentences::links_not_entered_are_counted_beside_the_reference_and_no_note_means_none`
-`verified-by: bravebot_agent::tools::list_files_names_every_directory_its_walk_skips`
+`verified-by: bravebot_agent::tools::tests::glob_arguments::list_files_names_every_directory_its_walk_skips`
 
 <a id="LIST-7"></a>
 ### LIST-7: a listing whose pattern selected no file says so, and names syntax the matcher lacks

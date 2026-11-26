@@ -79,7 +79,7 @@ relative path has no workspace on the desktop and is refused.
 provenance. Whether that happens is a decision about where bytes land and what runs afterwards, and
 only a person's own keystrokes are a source for it that no content can author.
 
-`verified-by: bravebot_agent::tools::no_tool_offered_installs_or_changes_a_plugin`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::no_tool_offered_installs_or_changes_a_plugin`
 `verified-by: bravebot_tui::app::tests::commands_words::the_plugin_command_carries_its_words_unparsed`
 `verified-by: bravebot_tui::app::tests::remainder::a_pasted_plugin_line_is_text_in_the_box_and_not_the_command`
 `verified-by: bravebot_cli::running::a_one_shot_task_opening_with_slash_plugin_add_installs_nothing`

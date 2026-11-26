@@ -59,12 +59,12 @@ A delegate in the turn's workspace adds its whole record. One in a checkout give
 **Why count calls.** The record is already kept per call, and each call is something you approved. Two writes to one file are two approvals.
 
 `verified-by: bravebot_agent::outcome::each_write_that_changed_a_file_is_counted`
-`verified-by: bravebot_agent::tools::a_write_into_the_session_directory_is_not_a_changed_file`
+`verified-by: bravebot_agent::tools::tests::loading_skills::a_write_into_the_session_directory_is_not_a_changed_file`
 `verified-by: bravebot_agent::turn::writes_in_the_session_directory_roll_up_apart_from_the_work_record`
 `verified-by: bravebot_agent::turn::a_run_line_that_wrote_in_the_session_directory_is_not_tallied_as_a_session_directory_write`
 `verified-by: bravebot_agent::turn::a_turn_that_only_writes_in_the_session_directory_leaves_nothing_unbuilt`
 `verified-by: bravebot_agent::turn::an_edit_a_download_and_a_picture_landing_in_the_session_directory_count_no_write`
-`verified-by: bravebot_agent::tools::an_edit_a_download_and_a_picture_in_the_session_directory_are_marked_as_session_writes`
+`verified-by: bravebot_agent::tools::tests::loading_skills::an_edit_a_download_and_a_picture_in_the_session_directory_are_marked_as_session_writes`
 `verified-by: bravebot_agent::outcome::a_command_after_the_last_write_is_recorded_as_after_it`
 `verified-by: bravebot_agent::outcome::a_command_in_a_later_turn_is_after_a_write_in_an_earlier_one`
 `verified-by: bravebot_agent::turn::a_delegates_counts_are_added_to_the_turns_where_it_worked_on_the_turns_files`

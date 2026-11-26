@@ -118,13 +118,13 @@ it writes that to somebody who then believes a watch exists that nothing is keep
 `verified-by: bravebot_agent::tools::tests::scheduling::a_turn_nothing_will_ask_again_is_offered_no_way_to_schedule_one`
 `verified-by: bravebot_agent::tools::tests::scheduling::a_turn_outside_a_loop_is_told_the_next_look_is_already_arranged`
 `verified-by: bravebot_agent::tools::tests::scheduling::a_call_from_a_turn_this_was_withheld_from_is_answered_as_an_unknown_name`
-`verified-by: bravebot_agent::tools::what_a_watch_request_is_told_about_the_next_look_matches_what_this_turn_can_arrange`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::what_a_watch_request_is_told_about_the_next_look_matches_what_this_turn_can_arrange`
 `verified-by: bravebot_agent::turn::a_turn_that_is_not_a_tick_can_arrange_the_next_look`
 `verified-by: bravebot_agent::turn::a_turn_nothing_will_ask_again_cannot_arrange_a_later_look`
 `verified-by: bravebot_agent::turn::a_tick_the_person_timed_cannot_reschedule_itself`
 `verified-by: bravebot_agent::turn::a_tick_of_a_self_paced_loop_says_when_to_run_again`
-`verified-by: bravebot_agent::tools::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
-`verified-by: bravebot_agent::tools::a_delegates_descriptions_do_not_name_schedule_next`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_delegates_descriptions_do_not_name_schedule_next`
 `verified-by: bravebot_cli::running::a_one_shot_run_offers_no_way_to_arrange_a_later_look`
 `verified-by: bravebot_tui::app::tests::loops_and_goals::only_a_turn_whose_wait_would_be_kept_is_offered_a_later_look`
 `verified-by: bravebot_agent::turn::stop_from_a_turn_arranging_a_look_is_not_read_in_a_whole_turn`

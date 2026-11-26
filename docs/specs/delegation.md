@@ -61,7 +61,7 @@ The planner is told this where it would otherwise delegate to get past a quarant
 as the planner is, so delegating a run whose output the planner may not read does not make that
 output readable ([AGENT-1](tools/spawn-agent.md#AGENT-1), [RUN-14](tools/run.md#RUN-14)).
 
-`verified-by: bravebot_agent::tools::a_delegate_is_offered_only_the_tools_its_capabilities_reach`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_delegate_is_offered_only_the_tools_its_capabilities_reach`
 `verified-by: bravebot_agent::turn::what_a_delegate_could_not_read_is_quarantined_from_it_too`
 
 <a id="DELEGATE-2"></a>
@@ -112,7 +112,7 @@ to it and not only to the selection.
 `verified-by: bravebot_core::delegate::the_three_kinds_are_in_every_set`
 `verified-by: bravebot_core::policy::a_kind_nobody_enumerated_is_refused`
 `verified-by: bravebot_core::policy::a_refusal_names_the_definitions_this_session_resolved`
-`verified-by: bravebot_agent::tools::the_kinds_the_planner_is_offered_are_the_ones_this_session_resolved`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::the_kinds_the_planner_is_offered_are_the_ones_this_session_resolved`
 
 <a id="DELEGATE-4"></a>
 ### DELEGATE-4: a delegate holds its kind's capabilities, narrowed by its parent's
@@ -162,10 +162,10 @@ it is answered as for any unknown name ([WEBSEARCH-8](tools/web-search.md#WEBSEA
 `verified-by: bravebot_core::delegate::naming_lsp_without_run_holds_no_language_server`
 `verified-by: bravebot_agent::lsp::a_checker_and_a_worker_are_offered_lsp_and_a_reader_is_not`
 `verified-by: bravebot_core::delegate::every_kind_can_reach_the_endpoint_and_nothing_else_remote`
-`verified-by: bravebot_agent::tools::no_kind_is_offered_a_tool_that_reaches_the_network`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::no_kind_is_offered_a_tool_that_reaches_the_network`
 `verified-by: bravebot_agent::turn::a_delegate_naming_fetch_url_reaches_no_host`
 `verified-by: bravebot_agent::web_search::a_delegate_naming_web_search_is_answered_as_an_unknown_name_and_sends_nothing`
-`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
 `verified-by: bravebot_agent::turn::a_delegate_naming_download_url_is_answered_as_an_unknown_name_and_writes_nothing`
 `verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_reach_the_network`
 `verified-by: bravebot_core::delegate::only_a_worker_holds_the_servers_of_the_run_it_is_carved_from`
@@ -589,9 +589,9 @@ delegates those start.
 the tools its parent's file named. A definition naming `read_file` alone would otherwise start a
 reader holding every tool a reader has, and the narrowing a person wrote would last one level.
 
-`verified-by: bravebot_agent::tools::a_delegate_is_offered_a_way_to_delegate_only_above_the_bottom_of_the_tree`
-`verified-by: bravebot_agent::tools::the_way_to_delegate_is_described_without_the_numbers_that_bound_it`
-`verified-by: bravebot_agent::tools::each_kind_the_planner_may_pick_names_the_rounds_it_allows`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_delegate_is_offered_a_way_to_delegate_only_above_the_bottom_of_the_tree`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::the_way_to_delegate_is_described_without_the_numbers_that_bound_it`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::each_kind_the_planner_may_pick_names_the_rounds_it_allows`
 `verified-by: bravebot_core::policy::a_definition_that_names_its_tools_without_spawn_agent_cannot_delegate`
 `verified-by: bravebot_core::policy::a_delegate_refused_at_the_ceiling_is_recorded_only_as_refused`
 `verified-by: bravebot_agent::delegate::a_delegate_is_told_whether_it_may_delegate_by_where_it_sits`
@@ -647,7 +647,7 @@ processors where its list holds the tool, and what it writes is private, so the 
 `verified-by: bravebot_core::policy::a_delegate_starts_out_holding_what_its_parent_held`
 `verified-by: bravebot_agent::delegate::a_delegate_is_told_it_may_use_processors_only_where_it_may`
 `verified-by: bravebot_agent::delegate::the_processors_state_follows_the_tool_list`
-`verified-by: bravebot_agent::tools::no_description_says_that_private_content_closes_processors`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::no_description_says_that_private_content_closes_processors`
 `verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_offered_processors_like_any_other`
 `verified-by: bravebot_agent::turn::what_a_delegate_reported_reaches_the_person_watching`
 `verified-by: bravebot_agent::turn::a_report_the_planner_was_handed_a_reference_to_is_kept_from_it_and_drawn_marked`
@@ -787,10 +787,10 @@ request would be granted ([SANDBOX-28](sandboxing.md#SANDBOX-28)), within the re
 started with ([MODE-9](permission-modes.md#MODE-9)). Under `strict` and on Windows, where programs
 ask for each path, a delegate's program that writes outside the session's directories still fails.
 
-`verified-by: bravebot_agent::tools::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
 `verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_ask_a_person`
 `verified-by: bravebot_agent::turn::a_delegate_naming_ask_user_or_todo_write_reaches_neither_the_person_nor_the_screen`
-`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
 
 <a id="DELEGATE-13"></a>
 ### DELEGATE-13: one trail records both runs
@@ -974,7 +974,7 @@ front of them for a turn they were told had finished.
 `verified-by: bravebot_agent::turn::a_call_asking_to_wake_after_two_of_three_is_asked_again_at_the_second_end_and_not_the_first`
 `verified-by: bravebot_agent::turn::a_wait_for_all_of_a_calls_delegates_is_not_a_round_against_the_rounds_limit`
 `verified-by: bravebot_agent::turn::a_turn_out_of_tool_calls_waits_for_a_whole_batch_and_is_not_asked_again`
-`verified-by: bravebot_agent::tools::the_start_message_says_when_the_planner_is_asked_again_from_the_calls_count`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::the_start_message_says_when_the_planner_is_asked_again_from_the_calls_count`
 `verified-by: bravebot_agent::turn::a_typed_line_wakes_a_turn_waiting_for_all_of_a_calls_delegates`
 `verified-by: bravebot_agent::turn::a_call_waiting_for_all_of_its_delegates_counts_each_end_whatever_its_label`
 `verified-by: bravebot_agent::turn::a_typed_line_wakes_a_persons_wait_once_and_a_delegates_never`
@@ -1134,8 +1134,8 @@ or write files.
 `verified-by: bravebot_core::policy::a_definition_is_delegated_as_the_kind_it_names`
 `verified-by: bravebot_core::policy::a_definition_naming_a_tool_its_kind_lacks_is_delegated_without_it`
 `verified-by: bravebot_core::policy::a_definition_cannot_widen_past_the_run_that_spawned_it`
-`verified-by: bravebot_agent::tools::a_definition_confines_a_delegate_to_the_tools_it_named`
-`verified-by: bravebot_agent::tools::the_capability_that_gates_a_tool_here_is_the_one_the_kernel_reads`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_definition_confines_a_delegate_to_the_tools_it_named`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::the_capability_that_gates_a_tool_here_is_the_one_the_kernel_reads`
 
 <a id="DELEGATE-20"></a>
 ### DELEGATE-20: a definition is resolved from trusted sources before the turn, or it is dropped
@@ -1613,7 +1613,7 @@ name. Both are driver state, so no decision is taken from untrusted bytes
 
 `verified-by: bravebot_core::delegate::a_run_is_offered_the_kinds_its_own_capabilities_reach`
 `verified-by: bravebot_core::policy::a_delegate_records_what_it_was_started_without`
-`verified-by: bravebot_agent::tools::a_delegate_is_offered_a_way_to_delegate_only_above_the_bottom_of_the_tree`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_delegate_is_offered_a_way_to_delegate_only_above_the_bottom_of_the_tree`
 `verified-by: bravebot_agent::turn::a_turn_whose_run_cannot_write_is_not_offered_the_worker`
 `verified-by: bravebot_agent::turn::a_spawns_list_is_intersected_with_the_kinds_the_run_reaches`
 `verified-by: bravebot_agent::turn::a_worker_started_by_a_checker_is_offered_no_worker_and_each_depth_is_told_what_was_dropped`
@@ -1645,7 +1645,7 @@ are refused in the plain words.
 planner to learn it from a refused `write_file` spends a delegate and a round on a fact the driver
 held at the start.
 
-`verified-by: bravebot_agent::tools::the_start_message_names_what_a_delegate_was_started_without`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::the_start_message_names_what_a_delegate_was_started_without`
 `verified-by: bravebot_core::policy::a_delegate_records_what_it_was_started_without`
 `verified-by: bravebot_core::policy::a_refusal_names_why_a_delegate_was_started_without_the_capability`
 `verified-by: bravebot_agent::turn::a_checker_is_not_offered_the_worker_and_a_worker_it_starts_anyway_is_said_to_lack_writing`

@@ -118,7 +118,7 @@ An argument that survives compilation is final. `; rm -rf /` inside quotes is on
 arrives as one argument, because the only thing that ever split the line was the compiler, and it
 already ran.
 
-`verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
+`verified-by: bravebot_agent::tools::tests::run_arguments::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::turn::a_line_with_a_pipe_is_compiled_into_its_steps`
 `verified-by: bravebot_agent::exec::a_command_line_runs_as_the_plan_it_compiled_to`
 `verified-by: bravebot_agent::exec::a_command_line_chains_its_steps`
@@ -203,7 +203,7 @@ tables above is refused exactly as written.
 `verified-by: bravebot_agent::cmdline::the_exit_status_refusal_says_the_run_result_reports_each_steps_status`
 `verified-by: bravebot_agent::cmdline::the_special_parameter_refusal_says_no_parameters_are_kept_and_single_quotes_pass_the_text`
 `verified-by: bravebot_agent::cmdline::the_dollar_quote_refusal_says_escapes_are_not_read_and_a_newline_comes_from_a_file`
-`verified-by: bravebot_agent::tools::the_run_description_names_the_special_parameters_and_the_dollar_quote_as_refused`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::the_run_description_names_the_special_parameters_and_the_dollar_quote_as_refused`
 `verified-by: bravebot_agent::cmdline::the_variable_refusal_names_the_quoting_that_works`
 `verified-by: bravebot_agent::cmdline::the_substitution_and_arithmetic_refusals_name_single_quotes`
 `verified-by: bravebot_agent::cmdline::arithmetic_is_refused`
@@ -343,7 +343,7 @@ everything and asks nothing.
 `verified-by: bravebot_agent::cmdline::an_option_value_pattern_is_not_replaced_by_a_file_named_like_it`
 `verified-by: bravebot_agent::cmdline::an_option_value_with_braces_is_passed_through_for_each_spelling`
 `verified-by: bravebot_agent::cmdline::only_an_option_carrying_a_value_is_passed_through`
-`verified-by: bravebot_agent::tools::the_run_description_says_when_a_pattern_for_the_program_is_quoted`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::the_run_description_says_when_a_pattern_for_the_program_is_quoted`
 `verified-by: bravebot_agent::cmdline::a_brace_count_past_the_bound_is_refused_with_the_count`
 `verified-by: bravebot_agent::cmdline::names_past_the_bound_are_refused_without_a_count`
 `verified-by: bravebot_agent::cmdline::names_up_to_the_bound_still_expand`
@@ -372,8 +372,8 @@ everything and asks nothing.
 `verified-by: bravebot_agent::turn::an_unopened_file_inside_a_substitution_is_named_under_the_directory_as_typed`
 `verified-by: bravebot_agent::turn::a_redirection_refused_inside_a_substitution_is_named_once_under_the_directory_as_typed`
 `verified-by: bravebot_agent::exec::a_substitution_that_cannot_open_a_file_keeps_the_error_and_its_path`
-`verified-by: bravebot_agent::tools::a_failure_inside_a_substitution_is_respelled_under_the_directory_as_typed`
-`verified-by: bravebot_agent::tools::a_redirection_a_hook_made_inside_a_substitution_is_not_respelled_again`
+`verified-by: bravebot_agent::tools::tests::failed_run_lines::a_failure_inside_a_substitution_is_respelled_under_the_directory_as_typed`
+`verified-by: bravebot_agent::tools::tests::failed_run_lines::a_redirection_a_hook_made_inside_a_substitution_is_not_respelled_again`
 `verified-by: bravebot_agent::confine::tests::neither_a_policy_row_nor_a_refusal_depends_on_the_directory_a_stage_starts_in`
 `verified-by: bravebot_agent::cmdline::a_range_counts_and_keeps_the_padding_it_was_written_with`
 `verified-by: bravebot_agent::cmdline::a_leading_tilde_becomes_the_home_directory`
@@ -472,7 +472,7 @@ destination is held to its definition's `writes:` limit as a tool's write is
 `verified-by: bravebot_agent::turn::a_limited_delegate_of_a_bypass_turn_is_refused_a_sibling_directory_its_patterns_do_not_cover`
 `verified-by: bravebot_agent::turn::an_approved_unconfined_line_may_redirect_into_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::turn::a_line_under_off_may_redirect_into_a_file_outside_the_workspace`
-`verified-by: bravebot_agent::tools::a_redirection_may_leave_the_workspace_only_where_the_line_has_no_profile`
+`verified-by: bravebot_agent::tools::tests::run_arguments::a_redirection_may_leave_the_workspace_only_where_the_line_has_no_profile`
 
 `verified-by: bravebot_agent::turn::a_redirection_an_earlier_part_of_its_line_linked_out_of_the_workspace_is_refused_when_opened`
 `verified-by: bravebot_agent::turn::a_destination_reopened_after_an_earlier_part_linked_it_out_of_the_workspace_is_refused`
@@ -963,9 +963,9 @@ to a file without running the command again.
 The cap is a context-budget decision and belongs beside the other ones: a single tool result must
 never be able to spend a large fraction of the conversation.
 
-`verified-by: bravebot_agent::tools::a_capped_output_keeps_its_head_and_its_tail`
-`verified-by: bravebot_agent::tools::an_output_inside_the_cap_is_left_alone`
-`verified-by: bravebot_agent::tools::a_capped_output_says_how_many_bytes_and_lines_went`
+`verified-by: bravebot_agent::tools::tests::output_caps::a_capped_output_keeps_its_head_and_its_tail`
+`verified-by: bravebot_agent::tools::tests::output_caps::an_output_inside_the_cap_is_left_alone`
+`verified-by: bravebot_agent::tools::tests::output_caps::a_capped_output_says_how_many_bytes_and_lines_went`
 `verified-by: bravebot_core::policy::content_the_planner_saw_a_sample_of_is_kept_whole`
 `verified-by: bravebot_agent::turn::the_middle_of_a_capped_output_stays_reachable`
 `verified-by: bravebot_agent::turn::the_middle_of_a_capped_job_output_stays_reachable`
@@ -1105,10 +1105,10 @@ ceiling starts in the background.
 `verified-by: bravebot_agent::turn::a_run_is_stopped_at_the_deadline_its_call_named`
 `verified-by: bravebot_agent::turn::a_run_stopped_at_the_ceiling_in_force_is_told_so_and_one_below_it_is_not`
 `verified-by: bravebot_agent::report::a_run_stopped_at_the_ceiling_is_sent_to_the_background_and_one_below_it_is_not`
-`verified-by: bravebot_agent::tools::the_run_tool_says_a_gate_that_may_outlast_the_ceiling_starts_in_the_background`
+`verified-by: bravebot_agent::tools::tests::run_arguments::the_run_tool_says_a_gate_that_may_outlast_the_ceiling_starts_in_the_background`
 `verified-by: bravebot_agent::turn::a_null_deadline_takes_the_default`
 `verified-by: bravebot_agent::turn::a_negative_deadline_is_clamped_to_floor`
-`verified-by: bravebot_agent::tools::run_deadline_is_held_to_bounds_and_defaults_cleanly`
+`verified-by: bravebot_agent::tools::tests::run_arguments::run_deadline_is_held_to_bounds_and_defaults_cleanly`
 
 <a id="CMDLINE-14"></a>
 ### CMDLINE-14: a call may run in the background, and its finish wakes the turn
@@ -1145,7 +1145,7 @@ call, visible in the prompt, and impossible to hide inside an argument.
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_is_quarantined_where_nobody_vouched_for_the_line`
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept`
 `verified-by: bravebot_agent::turn::the_account_of_an_ended_job_after_an_earlier_look_names_its_range_and_that_look`
-`verified-by: bravebot_agent::tools::the_account_of_an_ended_job_continues_the_count_of_the_looks_before_it`
+`verified-by: bravebot_agent::tools::tests::job_looks::the_account_of_an_ended_job_continues_the_count_of_the_looks_before_it`
 
 <a id="CMDLINE-15"></a>
 ### CMDLINE-15: a program that wants a terminal is refused before it starts
@@ -1219,11 +1219,11 @@ whole line as `sh -c '... ulimit ...'`, which is approved as one line.
 reads, and an instruction to reach for the structured tools instead measurably steers a session
 into the expensive path. Wording that changes behaviour is behaviour.
 
-`verified-by: bravebot_agent::tools::the_run_description_tells_the_planner_to_filter_at_the_source`
-`verified-by: bravebot_agent::tools::the_run_description_does_not_send_the_planner_to_the_other_tools_instead`
-`verified-by: bravebot_agent::tools::only_run_takes_a_command_line`
-`verified-by: bravebot_agent::tools::the_run_description_says_cd_moves_nothing_and_directory_is_how_a_line_runs_elsewhere`
-`verified-by: bravebot_agent::tools::the_run_description_says_a_limit_or_mask_step_is_refused_and_goes_inside_sh_c`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::the_run_description_tells_the_planner_to_filter_at_the_source`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::the_run_description_does_not_send_the_planner_to_the_other_tools_instead`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::only_run_takes_a_command_line`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::the_run_description_says_cd_moves_nothing_and_directory_is_how_a_line_runs_elsewhere`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::the_run_description_says_a_limit_or_mask_step_is_refused_and_goes_inside_sh_c`
 
 <a id="CMDLINE-17"></a>
 ### CMDLINE-17: under bypass, an assignment in front of a program may take a variable or a command
@@ -1324,8 +1324,8 @@ it reaches one.)
 `verified-by: bravebot_agent::exec::a_failing_substitution_is_refused_naming_its_source_and_status_but_not_its_output`
 `verified-by: bravebot_agent::exec::a_substitution_printing_a_nul_byte_fails_the_start_naming_the_program_and_not_the_value`
 `verified-by: bravebot_agent::exec::a_substitution_that_cannot_open_a_file_keeps_the_error_and_its_path`
-`verified-by: bravebot_agent::tools::a_failure_inside_a_substitution_is_respelled_under_the_directory_as_typed`
-`verified-by: bravebot_agent::tools::a_redirection_a_hook_made_inside_a_substitution_is_not_respelled_again`
+`verified-by: bravebot_agent::tools::tests::failed_run_lines::a_failure_inside_a_substitution_is_respelled_under_the_directory_as_typed`
+`verified-by: bravebot_agent::tools::tests::failed_run_lines::a_redirection_a_hook_made_inside_a_substitution_is_not_respelled_again`
 `verified-by: bravebot_agent::turn::an_unopened_file_inside_a_substitution_is_named_under_the_directory_as_typed`
 `verified-by: bravebot_agent::turn::a_redirection_refused_inside_a_substitution_is_named_once_under_the_directory_as_typed`
 `verified-by: bravebot_agent::confine::tests::neither_a_policy_row_nor_a_refusal_depends_on_the_directory_a_stage_starts_in`

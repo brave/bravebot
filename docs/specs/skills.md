@@ -358,7 +358,7 @@ wording of a rule is answered from its heading, and the program holds the clause
 `verified-by: bravebot_agent::help::every_long_page_has_sections_to_load_it_by`
 `verified-by: bravebot_agent::help::a_section_is_found_by_its_exact_name_and_nothing_else`
 `verified-by: bravebot_agent::help::the_index_gives_the_size_of_every_page_and_says_which_load_by_section`
-`verified-by: bravebot_agent::tools::a_long_documentation_page_loads_by_section_through_the_tool`
+`verified-by: bravebot_agent::tools::tests::loading_skills::a_long_documentation_page_loads_by_section_through_the_tool`
 `verified-by: bravebot_agent::help::a_spec_page_holds_the_heading_of_a_clause_and_names_its_file`
 `verified-by: bravebot_agent::help::a_spec_page_is_found_by_its_exact_name_and_nothing_else`
 `verified-by: bravebot_agent::help::the_list_of_specs_names_a_page_that_loads_for_each_spec`
@@ -366,9 +366,9 @@ wording of a rule is answered from its heading, and the program holds the clause
 `verified-by: bravebot_agent::spec_headings::only_a_clause_heading_outside_a_code_fence_is_a_heading`
 `verified-by: bravebot_agent::spec_headings::a_fence_is_closed_only_by_the_same_mark_at_least_as_long`
 `verified-by: bravebot_agent::spec_headings::a_page_names_its_file_and_says_when_the_spec_is_only_proposed`
-`verified-by: bravebot_agent::tools::a_spec_page_loads_by_the_name_the_list_gives_it`
-`verified-by: bravebot_agent::tools::a_documentation_page_loads_by_the_name_the_index_gives_it`
-`verified-by: bravebot_agent::tools::a_users_skill_of_the_help_name_takes_the_pages_with_it`
+`verified-by: bravebot_agent::tools::tests::loading_skills::a_spec_page_loads_by_the_name_the_list_gives_it`
+`verified-by: bravebot_agent::tools::tests::loading_skills::a_documentation_page_loads_by_the_name_the_index_gives_it`
+`verified-by: bravebot_agent::tools::tests::loading_skills::a_users_skill_of_the_help_name_takes_the_pages_with_it`
 `verified-by: bravebot_agent::help::every_index_size_counts_the_loaded_body_in_characters`
 `verified-by: bravebot_agent::help::headings_list_only_real_headings_and_address_repeated_text_exactly`
 `verified-by: bravebot_agent::help::headings_respect_tilde_fences_indentation_and_closing_marks`
@@ -379,11 +379,11 @@ wording of a rule is answered from its heading, and the program holds the clause
 `verified-by: bravebot_agent::help::the_outline_and_the_heading_list_agree_on_which_lines_are_inside_a_fence`
 `verified-by: bravebot_agent::help::every_long_pages_outline_is_small_and_each_name_loads_exactly_its_section`
 `verified-by: bravebot_agent::help::spec_pages_carry_only_their_source_headings_in_file_order`
-`verified-by: bravebot_agent::tools::compiled_help_dispatch_loads_every_advertised_page_and_rejects_near_misses`
-`verified-by: bravebot_agent::tools::compiled_help_dispatch_is_trusted_and_opens_no_files_or_directories`
-`verified-by: bravebot_agent::tools::custom_help_dispatch_shadows_pages_headings_sections_and_specs`
-`verified-by: bravebot_agent::tools::excluded_help_catalogues_refuse_every_compiled_route_and_ordinary_skill_selectors`
-`verified-by: bravebot_agent::tools::the_files_view_answer_loads_through_headings_and_one_small_section`
+`verified-by: bravebot_agent::tools::tests::loading_skills::compiled_help_dispatch_loads_every_advertised_page_and_rejects_near_misses`
+`verified-by: bravebot_agent::tools::tests::loading_skills::compiled_help_dispatch_is_trusted_and_opens_no_files_or_directories`
+`verified-by: bravebot_agent::tools::tests::loading_skills::custom_help_dispatch_shadows_pages_headings_sections_and_specs`
+`verified-by: bravebot_agent::tools::tests::loading_skills::excluded_help_catalogues_refuse_every_compiled_route_and_ordinary_skill_selectors`
+`verified-by: bravebot_agent::tools::tests::loading_skills::the_files_view_answer_loads_through_headings_and_one_small_section`
 
 <a id="SKILL-14"></a>
 ### SKILL-14: an interface listing skills is shown the set a turn would advertise, read the same way

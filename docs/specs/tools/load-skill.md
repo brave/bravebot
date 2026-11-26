@@ -36,7 +36,7 @@ nothing.
 `verified-by: bravebot_agent::turn::loading_a_skill_that_does_not_exist_is_refused_rather_than_guessed`
 `verified-by: bravebot_agent::turn::a_skill_kept_from_the_planner_is_unreachable_in_a_turn_that_does_not_name_it`
 `verified-by: bravebot_agent::turn::a_skill_the_person_named_cannot_also_be_loaded_by_the_planner`
-`verified-by: bravebot_agent::tools::excluded_help_catalogues_refuse_every_compiled_route_and_ordinary_skill_selectors`
+`verified-by: bravebot_agent::tools::tests::loading_skills::excluded_help_catalogues_refuse_every_compiled_route_and_ordinary_skill_selectors`
 
 <a id="LOAD-2"></a>
 ### LOAD-2: a name close to a real one is refused, not guessed at
@@ -47,7 +47,7 @@ prefix, a case-insensitive comparison or a nearest match.
 **Why.** Guessing would load instructions nobody asked for.
 
 `verified-by: bravebot_agent::skills::a_name_one_character_off_selects_no_skill`
-`verified-by: bravebot_agent::tools::compiled_help_dispatch_loads_every_advertised_page_and_rejects_near_misses`
+`verified-by: bravebot_agent::tools::tests::loading_skills::compiled_help_dispatch_loads_every_advertised_page_and_rejects_near_misses`
 `verified-by: bravebot_agent::turn::loading_a_skill_that_does_not_exist_is_refused_rather_than_guessed`
 
 <a id="LOAD-3"></a>
@@ -94,17 +94,17 @@ directory and the files by name, with no instruction to read them.
 author has to fold every reference into the one body, which defeats loading it only when asked.
 Running a bundled script is not part of this: `run` keeps its own gate.
 
-`verified-by: bravebot_agent::tools::a_home_skills_sibling_file_is_readable_after_it_is_loaded_and_not_before`
-`verified-by: bravebot_agent::tools::the_listing_names_regular_files_inside_the_directory_and_nothing_a_rule_covers`
-`verified-by: bravebot_agent::tools::the_listing_leaves_out_generated_directories_and_compiled_files`
-`verified-by: bravebot_agent::tools::a_project_skill_lists_only_the_files_the_trust_map_vouches_for`
-`verified-by: bravebot_agent::tools::the_listing_leaves_out_a_name_holding_a_control_character`
-`verified-by: bravebot_agent::tools::the_listing_stops_at_two_hundred_files`
-`verified-by: bravebot_agent::tools::the_listing_searches_six_directories_down_and_no_further`
-`verified-by: bravebot_agent::tools::a_project_skill_reached_through_a_link_names_where_it_lands_inside_the_workspace_only`
-`verified-by: bravebot_agent::tools::a_file_of_a_linked_skill_is_judged_under_both_the_link_name_and_the_landed_name`
-`verified-by: bravebot_agent::tools::a_landing_a_rule_denies_or_the_trust_map_distrusts_is_not_named`
-`verified-by: bravebot_agent::tools::the_files_beside_a_skill_name_read_file_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::loading_skills::a_home_skills_sibling_file_is_readable_after_it_is_loaded_and_not_before`
+`verified-by: bravebot_agent::tools::tests::loading_skills::the_listing_names_regular_files_inside_the_directory_and_nothing_a_rule_covers`
+`verified-by: bravebot_agent::tools::tests::loading_skills::the_listing_leaves_out_generated_directories_and_compiled_files`
+`verified-by: bravebot_agent::tools::tests::loading_skills::a_project_skill_lists_only_the_files_the_trust_map_vouches_for`
+`verified-by: bravebot_agent::tools::tests::loading_skills::the_listing_leaves_out_a_name_holding_a_control_character`
+`verified-by: bravebot_agent::tools::tests::loading_skills::the_listing_stops_at_two_hundred_files`
+`verified-by: bravebot_agent::tools::tests::loading_skills::the_listing_searches_six_directories_down_and_no_further`
+`verified-by: bravebot_agent::tools::tests::loading_skills::a_project_skill_reached_through_a_link_names_where_it_lands_inside_the_workspace_only`
+`verified-by: bravebot_agent::tools::tests::loading_skills::a_file_of_a_linked_skill_is_judged_under_both_the_link_name_and_the_landed_name`
+`verified-by: bravebot_agent::tools::tests::loading_skills::a_landing_a_rule_denies_or_the_trust_map_distrusts_is_not_named`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_files_beside_a_skill_name_read_file_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::turn::the_files_beside_a_named_skill_name_read_file_only_where_the_turn_was_offered_it`
 
 <a id="LOAD-5"></a>
@@ -131,9 +131,9 @@ found before the turn and named by a load that already happened, so nothing a fi
 widens it, and a skill the user put there is trusted on the footing [SKILL-3](../skills.md#SKILL-3)
 gives its body.
 
-`verified-by: bravebot_agent::tools::a_home_skills_sibling_file_is_readable_after_it_is_loaded_and_not_before`
-`verified-by: bravebot_agent::tools::reaching_a_loaded_skills_files_is_for_reading_inside_the_directory_only`
-`verified-by: bravebot_agent::tools::a_link_from_a_loaded_skill_into_an_opened_directory_is_refused`
-`verified-by: bravebot_agent::tools::a_load_does_not_widen_a_session_kept_inside_its_project`
-`verified-by: bravebot_agent::tools::a_project_skill_lists_only_the_files_the_trust_map_vouches_for`
+`verified-by: bravebot_agent::tools::tests::loading_skills::a_home_skills_sibling_file_is_readable_after_it_is_loaded_and_not_before`
+`verified-by: bravebot_agent::tools::tests::loading_skills::reaching_a_loaded_skills_files_is_for_reading_inside_the_directory_only`
+`verified-by: bravebot_agent::tools::tests::loading_skills::a_link_from_a_loaded_skill_into_an_opened_directory_is_refused`
+`verified-by: bravebot_agent::tools::tests::loading_skills::a_load_does_not_widen_a_session_kept_inside_its_project`
+`verified-by: bravebot_agent::tools::tests::loading_skills::a_project_skill_lists_only_the_files_the_trust_map_vouches_for`
 `verified-by: bravebot_agent::turn::supplying_a_named_skill_of_the_users_own_opens_its_directory_for_reading`

@@ -186,7 +186,7 @@ Built.
 `verified-by: bravebot_agent::turn::a_definition_asking_for_a_checkout_inside_one_is_refused`
 `verified-by: bravebot_agent::turn::a_definition_asking_for_a_checkout_with_no_state_directory_is_given_a_temporary_one`
 `verified-by: bravebot_agent::turn::a_definition_asking_for_a_checkout_outside_a_repository_is_refused_by_name`
-`verified-by: bravebot_agent::tools::a_definition_asking_for_a_checkout_is_offered_as_working_in_one`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_definition_asking_for_a_checkout_is_offered_as_working_in_one`
 `verified-by: bravebot_agent::turn::an_addressed_turn_works_in_the_working_directory_and_says_its_checkout_is_not_applied`
 `verified-by: bravebot_agent::agents::a_definition_keeping_a_memory_in_a_checkout_is_told_only_an_addressed_turn_keeps_it`
 `verified-by: bravebot_agent::agents::a_definition_keeping_a_memory_and_asking_for_a_checkout_says_so_when_it_loads`
@@ -321,7 +321,7 @@ each checkout, and the carry holds one capture across copying the rules and the 
 `verified-by: bravebot_agent::git::a_carried_file_that_fails_part_way_leaves_what_the_checkout_had`
 `verified-by: bravebot_agent::git::an_uncarried_file_goes_with_the_directories_only_it_held`
 `verified-by: bravebot_agent::delegate::a_carried_summary_names_plain_paths_and_counts_the_rest`
-`verified-by: bravebot_agent::tools::the_isolation_field_offers_a_checkout_with_the_working_directorys_changes`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::the_isolation_field_offers_a_checkout_with_the_working_directorys_changes`
 
 ## Making one
 
@@ -619,7 +619,7 @@ does the description of `isolation`.
 `verified-by: bravebot_tui::app::tests::remainder::add_dir_of_a_directory_holding_the_project_says_it_ends_checkouts`
 `verified-by: bravebot_cli::main::a_directory_holding_the_working_directory_is_said_to_end_checkouts`
 `verified-by: bravebot_agent::turn::the_answer_to_a_spawn_in_a_checkout_says_the_checkouts_share_the_repositorys_refs`
-`verified-by: bravebot_agent::tools::the_isolation_field_says_checkouts_share_refs_and_who_fetches_once`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::the_isolation_field_says_checkouts_share_refs_and_who_fetches_once`
 `verified-by: bravebot_agent::workspace::a_delegate_in_a_checkout_is_not_reached_into_the_working_directory_or_another_checkout`
 `verified-by: bravebot_agent::confine::tests::a_bypass_stage_of_a_delegate_in_a_checkout_is_given_no_row_for_the_working_directory`
 

@@ -112,7 +112,7 @@ exist when the map was cut off.
 `verified-by: bravebot_agent::workspace::a_repo_map_does_not_charge_files_nobody_vouched_for_to_the_file_cap`
 `verified-by: bravebot_agent::workspace::a_repo_map_of_a_file_is_refused`
 `verified-by: bravebot_agent::repo_map::a_budget_outside_the_range_gives_the_map_of_the_nearest_end`
-`verified-by: bravebot_agent::tools::a_map_says_each_way_it_fell_short_and_a_whole_one_says_nothing`
+`verified-by: bravebot_agent::tools::tests::job_output_waits::a_map_says_each_way_it_fell_short_and_a_whole_one_says_nothing`
 `verified-by: bravebot_agent::workspace::a_repo_map_says_when_a_directory_could_not_be_opened`
 
 ## Known costs
