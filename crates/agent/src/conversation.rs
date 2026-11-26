@@ -2563,9 +2563,11 @@ fn kept_skill(
         (true, false, false) => {
             "\n\nThe rest of this skill was left out to keep the request short.".to_string()
         }
-        (true, true, _) => "\n\nThe rest of this skill was left out to keep the request short. Only \
+        (true, true, _) => {
+            "\n\nThe rest of this skill was left out to keep the request short. Only \
              the user can have it loaded again, by naming it in a line they type."
-            .to_string(),
+                .to_string()
+        }
     };
     match named {
         false => format!(
