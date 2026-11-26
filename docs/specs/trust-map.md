@@ -210,7 +210,7 @@ that is not text is judged as the bytes it is, which a test of each start pins.
 |---|---|---|---|---|
 | `.` segment | `src/./a.md` for `src/a.md` | one rule | covered | `bravebot_agent::workspace::a_second_spelling_of_a_distrusted_file_is_read_as_untrusted` |
 | Doubled or trailing separator | `src//a.md`, a rule about `src/` | one rule | covered | `bravebot_core::trust::equivalent_path_spellings_are_the_same_rule` |
-| `..`, `~` and absolute spellings | `src/../a.md`, `~/n/a.md`, `/work/src/a.md` | refused unless a directory a person opened holds the file, then one rule under that directory's name (TRUST-10, TRUST-18) | covered | `bravebot_agent::workspace::a_leading_tilde_and_the_home_it_stands_for_give_the_same_trust_key` |
+| `..`, `~` and absolute spellings | `src/../a.md`, `~/n/a.md`, `/work/src/a.md` | refused unless a directory a person opened holds the file, then one rule under that directory's name (TRUST-10, TRUST-18); a `run` redirection is not refused, and is recorded under the key of the spelling and under each name `Workspace::names_reached` gives: the spelling with each `..` taken out, where no link is on the way, and the place the path lands | covered | `bravebot_agent::workspace::a_leading_tilde_and_the_home_it_stands_for_give_the_same_trust_key`, `bravebot_agent::tools::tests::arguments::a_redirection_spelled_with_dotdot_leaves_the_plain_name_untrusted`, `bravebot_agent::tools::tests::arguments::an_absolute_redirection_spelled_with_dotdot_leaves_the_plain_name_untrusted`, `bravebot_agent::tools::tests::arguments::a_redirection_through_a_link_and_a_dotdot_leaves_the_file_it_lands_on_untrusted` |
 | Drive letter, `\` and `\\?\` prefix | `C:\work\a.md` | one key where the host separates with `\` (TRUST-18) | covered | `bravebot_core::spelling::a_name_rooted_at_a_drive_letter_is_keyed_from_slash_where_a_backslash_separates` |
 | Letter case | `SRC/a.md` | one rule where the volume folds case | covered, in either case the file is stored in | `bravebot_agent::workspace::a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted` |
 | Long s | `ſrc/a.md` | one rule where the volume folds case | covered | `bravebot_core::trust::a_folding_volume_reads_a_long_s_as_the_letter_it_opens_as` |
@@ -573,7 +573,12 @@ where it is one, and completed under every one of them. The line is refused as a
 any name is held by another effect, including a destination of the same line. A name a destination
 gains after its first open, because an earlier part of the line left a link at it, is entered when
 that open happens and is left untrusted when the line ends, since the yes to the line was about
-the destination as it stood.
+the destination as it stood. The names are those of the lookup above and each name
+`Workspace::names_reached` gives for the typed path, which are the names a file tool would ask
+under: the spelling with
+each `..` taken out where no link is on the way, and the place the path lands. A line that opens
+one file under two spellings (`> d/../dd.txt` and then `> dd.txt`) is refused at the second open
+as a second writer, in either order.
 
 `verified-by: bravebot_core::policy::a_lookup_of_other_names_that_did_not_finish_reads_as_untrusted`
 `verified-by: bravebot_core::policy::a_trusted_write_leaves_an_exact_distrust_on_another_name_of_the_file`
@@ -585,6 +590,12 @@ the destination as it stood.
 `verified-by: bravebot_ui_bridge::manifest::ordinary_manifest_endings_keep_file_trust_in_the_bridge`
 `verified-by: bravebot_agent::turn::overlapping_delegate_writes_follow_effect_order_in_both_collection_orders`
 `verified-by: bravebot_agent::workspace::reads_before_write_publication_and_failed_replacements_remain_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::a_redirection_spelled_with_dotdot_leaves_the_plain_name_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::an_absolute_redirection_spelled_with_dotdot_leaves_the_plain_name_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::a_redirection_through_a_link_and_a_dotdot_leaves_the_file_it_lands_on_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::two_spellings_of_one_redirection_destination_in_a_line_are_refused_as_a_second_writer`
+`verified-by: bravebot_agent::tools::tests::arguments::a_redirection_spelled_with_dotdot_does_not_relabel_the_lines_own_output`
+`verified-by: bravebot_agent::tools::tests::arguments::a_vouched_append_through_a_dotdot_spelling_keeps_its_output_trusted_and_leaves_the_file_untrusted`
 `verified-by: bravebot_agent::workspace::shared_file_authority_preserves_aliases_scratch_added_paths_and_independent_writes`
 `verified-by: bravebot_core::file_authority::path_revisions_follow_whole_segment_ancestors`
 `verified-by: bravebot_core::file_authority::completion_observes_ancestor_decisions_but_not_sibling_decisions`
@@ -1761,7 +1772,13 @@ spelling under a recorded name, and nothing covers either.
 
 A `..` component keeps the name it was given. Confinement refuses such a path rather than resolving
 it (TRUST-10), so it is refused before anything reads it, and reducing it here would be guessing at
-which file it named.
+which file it named. A redirection in a `run` line is the one path that reaches the key without
+that refusal, because the line is confined by where the destination lands, so `> d/../dd.txt`
+writes `dd.txt` and is keyed as typed, a name no file tool reads. The line therefore records the
+destination under the typed key and under each name `Workspace::names_reached` gives: the spelling
+with each `..` taken out where no link is on the way (`dd.txt`), and the place the path lands. All
+of them are entered in one reservation
+([TRUST-4](#TRUST-4), [CMDLINE-5](tools/command-line.md#CMDLINE-5)).
 
 Where the path lands decides which directory's name it takes and the spelling decides the rest, and
 each half answers a different question. A name spelled inside the project that lands out of it
@@ -2316,7 +2333,11 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   A redirection is the one exception: the harness opens that file itself, so what a line writes
   through `>` or `>>` is recorded
   ([tools/command-line.md](tools/command-line.md#CMDLINE-5)), under every name the destination has
-  ([TRUST-4](#TRUST-4)) and with the keying cost every other write has (below). A file the program opens on its own, which
+  ([TRUST-4](#TRUST-4)), which includes each name `Workspace::names_reached` gives (the spelling
+  with each `..` taken out where no link is on the way, and the place the path lands), and with the
+  keying cost every other write has (below). A trusted line that appends with `>>` through a `..`
+  spelling leaves the file untrusted under every name it was entered under, which costs the person a
+  vouch to trust it again. A file the program opens on its own, which
   is `cmd -o notes.txt` or anything a build writes, is not.
 
   `/export` is the other file this process opens itself. It is not recorded, because a rule recorded

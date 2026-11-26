@@ -527,11 +527,21 @@ it untrusted and reserves that path until the process has stopped. Reads during 
 use the old grant. Other paths remain available, and no lock spans the process wait. Every early
 exit stops already-started stages before releasing their reservations.
 
-An untrusted line leaves its opened destinations untrusted. A complete successful trusted line
-may retain a destination's prior trust, but cannot raise it: `>>` can retain untrusted bytes.
-Failure, cancellation or an error after entry leaves explicit distrust. An untaken branch enters
-no effect and changes no decision. A failed attempt to open a destination is conservative about
-its possible effects; an approval alone changes nothing.
+An untrusted line leaves its opened destinations untrusted under every name the file has
+([TRUST-4](../trust-map.md#TRUST-4)), which includes the name the line spelled and each name
+`Workspace::names_reached` gives for it: the spelling with each `..` taken out, where no
+link is on the way, and the place the path lands. A destination spelled with a `..` that lands inside
+the workspace is therefore untrusted under the plain name a file tool asks under, which the file tools
+never read under the `..` spelling ([TRUST-10](../trust-map.md#TRUST-10)). The
+names are entered in one reservation, so a second open of the same file under another spelling in one
+line is refused as a second writer ([TRUST-4](../trust-map.md#TRUST-4)). A complete
+successful trusted line may retain a destination's prior trust, but cannot raise it: `>>` can retain
+untrusted bytes. A trusted line that appends with `>>` through a `..` spelling leaves the file
+untrusted under every name it was entered under, since the policy reads a name holding a `..` as
+untrusted and so finds no prior trust to keep, and the person has to vouch for the file again to
+trust it. Failure, cancellation or an error after entry leaves explicit distrust. An untaken
+branch enters no effect and changes no decision. A failed attempt to open a destination is
+conservative about its possible effects; an approval alone changes nothing.
 
 `verified-by: bravebot_agent::turn::foreground_redirection_quarantines_live_reads_and_all_endings`
 `verified-by: bravebot_agent::turn::a_trusted_line_appending_to_a_trusted_file_leaves_it_trusted`
@@ -540,6 +550,12 @@ its possible effects; an approval alone changes nothing.
 `verified-by: bravebot_agent::tools::tests::arguments::a_foreground_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`
 `verified-by: bravebot_agent::tools::tests::arguments::a_foreground_line_whose_substitution_redirects_a_script_s_output_leaves_it_untrusted`
 `verified-by: bravebot_agent::tools::tests::arguments::a_substitutions_redirection_in_a_foreground_line_leaves_its_destination_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::a_redirection_spelled_with_dotdot_leaves_the_plain_name_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::an_absolute_redirection_spelled_with_dotdot_leaves_the_plain_name_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::a_redirection_through_a_link_and_a_dotdot_leaves_the_file_it_lands_on_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::two_spellings_of_one_redirection_destination_in_a_line_are_refused_as_a_second_writer`
+`verified-by: bravebot_agent::tools::tests::arguments::a_redirection_spelled_with_dotdot_does_not_relabel_the_lines_own_output`
+`verified-by: bravebot_agent::tools::tests::arguments::a_vouched_append_through_a_dotdot_spelling_keeps_its_output_trusted_and_leaves_the_file_untrusted`
 `verified-by: bravebot_agent::tools::tests::arguments::a_foreground_line_whose_substitution_writes_into_an_opened_directory_still_writes_it`
 `verified-by: bravebot_agent::tools::tests::arguments::a_line_naming_the_stores_directly_or_through_an_existing_link_is_refused_before_it_runs`
 `verified-by: bravebot_agent::tools::tests::arguments::a_background_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`
