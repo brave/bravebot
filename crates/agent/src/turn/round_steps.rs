@@ -736,6 +736,22 @@ impl Reminded {
     }
 }
 
+/// What a turn whose files changed and nothing has been run is told, naming `spawn_agent` only
+/// where offered (TOOL-6).
+fn nothing_run_nudge(spawn_agent_offered: bool) -> String {
+    let checker = if spawn_agent_offered {
+        " Where the log is long and what you want from it is which test failed, hand it to a \
+         checker with spawn_agent instead."
+    } else {
+        ""
+    };
+    format!(
+        "{TOOL_BUDGET_SPENT} Files have changed this turn and nothing has been run. A change \
+         that has not been built is a guess about whether it builds, so find how this project \
+         builds and tests, and run that.{checker} If there is nothing here to build, carry on."
+    )
+}
+
 /// The three reminders put to the planner after a round's results and any interjection.
 #[expect(
     clippy::too_many_arguments,
@@ -821,12 +837,8 @@ pub(super) fn nudges<S: Sink>(
     {
         reminded.nothing_run = true;
         conversation.push_composed_from(
-            Message::user(format!(
-                "{TOOL_BUDGET_SPENT} Files have changed this turn and nothing has been run. \
-     A change that has not been built is a guess about whether it builds, so find \
-     how this project builds and tests, and run that. Where the log is long and \
-     what you want from it is which test failed, hand it to a checker with \
-     spawn_agent instead. If there is nothing here to build, carry on."
+            Message::user(nothing_run_nudge(
+                tools::Beside::on(offered).holds(tools::Named::SpawnAgent),
             )),
             Composed::Notice,
             Provenance::Driver,
@@ -2527,5 +2539,17 @@ mod tests {
         assert_eq!(excerpt_budget(16_000, 2_000), 4_000);
         assert_eq!(excerpt_budget(16_000, 12_000), 2_000);
         assert_eq!(excerpt_budget(16_000, 20_000), 0);
+    }
+
+    #[test]
+    fn nothing_run_nudge_names_spawn_agent_only_where_offered() {
+        let with_agent = nothing_run_nudge(true);
+        let without_agent = nothing_run_nudge(false);
+        assert!(with_agent.contains("spawn_agent"), "{with_agent}");
+        assert!(!without_agent.contains("spawn_agent"), "{without_agent}");
+        assert!(
+            without_agent.contains("find how this project builds and tests"),
+            "{without_agent}"
+        );
     }
 }

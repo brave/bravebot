@@ -48,8 +48,8 @@ mod task;
 pub use hooked::Hooked;
 pub(crate) use hooked::trouble_sentences;
 use hooked::{fire_checkout_made, fire_hooks, say_prompt_notices, say_stopped_plugins};
-pub(crate) use prompts::PLANNING;
-use prompts::{FOR_A_PERSON, KEPT_FACTS, KEPT_FACTS_END, OPENING};
+use prompts::{KEPT_FACTS, KEPT_FACTS_END, OPENING, for_a_person};
+pub(crate) use prompts::{PLANNING, planning};
 pub use result::*;
 pub use task::*;
 
@@ -3285,6 +3285,7 @@ where
         &kept_facts,
         offers_vet_content,
         processors,
+        tools::Beside::on(&offered),
         memory,
     );
     let system_text = system.text();

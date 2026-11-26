@@ -13,7 +13,7 @@ use bravebot_core::policy::{Denial, Policy, Routing};
 use bravebot_i18n::t;
 
 use super::prompts::reading_a_reference;
-use super::{FOR_A_PERSON, Inputs, OPENING, PLANNING, ReadOutputIs, Task, TurnError, held};
+use super::{Inputs, OPENING, ReadOutputIs, Task, TurnError, for_a_person, held, planning};
 use crate::confirm::Confirmer;
 use crate::report::Reporter;
 use crate::request_view::{Prompt, Provenance};
@@ -411,6 +411,7 @@ pub(super) fn system_prompt(
     kept_facts: &str,
     vetting_offered: bool,
     processors: crate::delegate::Processors,
+    beside: crate::tools::Beside,
     memory: impl Fn(bool, &str) -> String,
 ) -> Prompt {
     let mode = started_in.instruction().unwrap_or_default();
@@ -423,13 +424,14 @@ pub(super) fn system_prompt(
         Some(spec) => {
             system.push(
                 Provenance::Driver,
-                crate::delegate::prompt_for(
+                crate::delegate::prompt_for_beside(
                     spec.capabilities(),
                     spec.prompt(),
                     &memory(spec.keeps_memory(), spec.definition()),
                     delegate_may_delegate(spec, delegates),
                     processors,
                     spec.budget().is_some(),
+                    beside,
                 ),
             );
             system.push(Provenance::Driver, checkout_notice);
@@ -463,8 +465,8 @@ pub(super) fn system_prompt(
                 (None, Some(style)) => system.push(Provenance::Driver, style.words.as_ref()),
                 (None, None) => system.push(Provenance::Driver, OPENING),
             }
-            system.push(Provenance::Driver, PLANNING);
-            system.push(Provenance::Driver, FOR_A_PERSON);
+            system.push(Provenance::Driver, planning(beside));
+            system.push(Provenance::Driver, for_a_person(beside));
             let reading =
                 reading_a_reference(vetting_offered, task.auto_vetting, task.nobody_answers);
             if !reading.is_empty() {
