@@ -46,7 +46,7 @@ import { reconnectingWords, type RetryDue } from '../retry'
 import { pointForPrompt, undoRow } from '../rewind'
 import { Answers, Approve } from './Approval'
 import { showToast } from '../toasts'
-import { EMPTY_STAGING, named, pasteText, stageDrop, stagePaste, stageSummon, stageText, withoutMarker, type Staging, type SummonedBot } from '../staging'
+import { EMPTY_STAGING, named, pasteText, stageDefinition, stageDrop, stagePaste, stageSummon, stageText, withoutMarker, type AddressedDefinition, type Staging, type SummonedBot } from '../staging'
 import { placeCards, summonedIn, summonMarker, type Placement, type Summon } from '../../shared/summons'
 import type { Drop } from '../../shared/drops'
 import { GOAL_COMMANDS, type GoalTone } from '../../shared/goal'
@@ -604,6 +604,12 @@ export function Transcript({
     const next = stageSummon(live.staging ?? EMPTY_STAGING, picked, draft, word)
     if (next) restage(live.handle, next)
   })
+  /** Stage a definition picked from the `@` list to answer this message alone (ADDRESS-2). */
+  const address = useEvent((picked: AddressedDefinition, word: string | null) => {
+    if (!live) return
+    const next = stageDefinition(live.staging ?? EMPTY_STAGING, picked, draft, word)
+    if (next) restage(live.handle, next)
+  })
   // The bots a message here may summon: every one in use but the one whose conversation this is.
   const summonable = useMemo(() => bots
     .filter((each) => each.retired === 0 && each.slug !== bot?.slug)
@@ -1028,6 +1034,7 @@ export function Transcript({
           onPasteText={pastedText}
           summonable={summonable}
           onSummon={summon}
+          onAddress={address}
           onPreview={preview}
           onPeek={peek}
           queued={queued}

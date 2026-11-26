@@ -273,6 +273,29 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.mention-definition-name {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  font: var(--type-body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-description {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font: var(--type-meta);
+  color: var(--ink-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-kind {
+  flex: none;
+  margin-inline-start: auto;
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+}
 .mention-foot.summon { --leo-icon-color: var(--ink-tertiary); }
 .mention-foot {
   display: flex;

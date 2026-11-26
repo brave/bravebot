@@ -32,6 +32,18 @@ export interface MentionOffer {
   completes: boolean
 }
 
+/** The bridge's answer to `mentions.offer`, or nothing offered when it is out of shape. Each row is kept as the bridge sent it, its `kind` and `description` with it. */
+export function offerOf(answer: Partial<MentionOffer> | undefined): MentionOffer {
+  return typeof answer?.typed === 'string' && Array.isArray(answer.entries)
+    ? { typed: answer.typed, word: typeof answer.word === 'string' ? answer.word : null, entries: answer.entries, completes: answer.completes === true }
+    : { typed: null, word: null, entries: [], completes: false }
+}
+
+/** The definition a row addresses when it is picked, or `null` for a row that is written as an `@` name (ADDRESS-2). */
+export function definitionOf(entry: MentionEntry): { name: string; description: string | null } | null {
+  return entry.kind === 'definition' ? { name: entry.path, description: entry.description ?? null } : null
+}
+
 /**
  * The draft with its last word replaced by the chosen entry. The rest of the sentence is kept,
  * a file gets a trailing space so the list closes, and a directory does not, so typing continues

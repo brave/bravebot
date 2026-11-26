@@ -41,7 +41,9 @@ try {
 
   const field = page.getByRole('textbox', { name: COMPOSER_NAME })
   const list = page.locator('[data-test="mention-list"]')
-  const options = list.getByRole('option')
+  // The file rows. The definitions this session resolves are listed ahead of them (ADDRESS-2), and
+  // drive-address.mjs covers those.
+  const options = list.locator('[data-test="mention-option"]')
   const offered = async () => (await options.allInnerTexts()).map((text) => text.trim())
   const selected = (text) => page.waitForFunction((want) => document.querySelector('[data-test="mention-option"][aria-selected="true"]')?.textContent?.trim() === want, text, { timeout: 5000 })
   const value = () => field.inputValue()
