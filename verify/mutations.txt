@@ -749,3 +749,19 @@ replace: Verdict::NotPaired => Verdict::Allowed
 mutation: Standing::authorizes allows a grant that is too narrow
 file: crates/core/src/device.rs
 replace: Verdict::GrantTooNarrow => Verdict::Allowed
+
+mutation: covers_bytes reads a plain string prefix as a segment, so src covers srcfoo
+file: crates/core/src/trust.rs
+replace: path[prefix.len()] == b'/' => true
+
+mutation: covers_bytes lets the empty key cover a full path
+file: crates/core/src/trust.rs
+replace: return path.is_empty() || path[0] != b'/'; => return true;
+
+mutation: covers_bytes skips comparing the bytes of the prefix
+file: crates/core/src/trust.rs
+replace: let differs = path[at] != prefix[at]; => let differs = false;
+
+mutation: covers_bytes reads any one-byte key as the root
+file: crates/core/src/trust.rs
+replace: let root = prefix.len() == 1 && prefix[0] == b'/'; => let root = prefix.len() == 1;

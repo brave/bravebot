@@ -1074,4 +1074,19 @@ pub proof fn a_request_is_allowed_only_for_a_paired_device_whose_grant_covers_it
 {
 }
 
+/// Whether a trust-map key `prefix` covers the key `path`, segment by segment: the root `/` covers
+/// every key, the empty key covers every key that is not a full path, and any other key covers
+/// itself and every key beneath it after a `/`. So `src` covers `src` and `src/a`, and not
+/// `srcfoo`.
+pub open spec fn covers_key(prefix: Seq<u8>, path: Seq<u8>) -> bool {
+    if prefix == seq![b'/'] {
+        true
+    } else if prefix.len() == 0 {
+        path.len() == 0 || path[0] != b'/'
+    } else {
+        path == prefix || (path.len() > prefix.len() && path.subrange(0, prefix.len() as int)
+            == prefix && path[prefix.len() as int] == b'/')
+    }
+}
+
 } // verus!
