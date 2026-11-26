@@ -57,7 +57,9 @@ import concurrent.futures
 import hashlib
 import importlib.util
 import json
+import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -162,6 +164,11 @@ def lock_path(here):
     It is in the temp directory because on macOS the sandbox refuses a write under .git from any
     program but git. It only has to serialise these scripts, and every worktree of one clone has the
     same common git directory.
+
+    A confined stage may write the temp directory, so it can plant anything at this name. `acquire`
+    opens it without following a link, without truncating it and without waiting on a fifo, and
+    refuses what is not a regular file. A private subdirectory would not help: a stage runs as the
+    same account and can replace that directory too.
     """
     common = Path(here, git("rev-parse", "--git-common-dir", cwd=here)).resolve()
     digest = hashlib.sha256(str(common).encode()).hexdigest()[:16]
@@ -177,7 +184,25 @@ class SharedRepo:
     def acquire(self, here):
         if fcntl is None or self.handle:
             return
-        self.handle = open(lock_path(here), "w")
+        path = lock_path(here)
+        # O_NOFOLLOW refuses a link at the final component, and with no O_TRUNC an existing file keeps its
+        # bytes, which matters for a hard link. O_NONBLOCK makes a fifo with no reader fail here instead of
+        # waiting for one. The mode applies only where this call creates the file.
+        flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+        try:
+            descriptor = os.open(path, flags, 0o600)
+        except OSError as error:
+            die(f"cannot take the lock {path}: {error.strerror}; a plain file is expected there, "
+                f"so remove what is there and run the step again")
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            os.close(descriptor)
+            die(f"cannot take the lock {path}: it is not a plain file; remove it and run the step again")
+        try:
+            self.handle = os.fdopen(descriptor, "w")
+        except BaseException:
+            # fdopen takes over the descriptor only once it has returned.
+            os.close(descriptor)
+            raise
         fcntl.flock(self.handle, fcntl.LOCK_EX)
 
     def release(self):

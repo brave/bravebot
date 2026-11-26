@@ -4,8 +4,10 @@
 import contextlib
 import importlib.util
 import json
+import os
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1215,6 +1217,150 @@ def test_only_one_process_changes_the_shared_repo_at_a_time():
         assert got.wait(10), "the second proceeds once the first lets go"
         waiter.join()
         second.release()
+
+
+@contextlib.contextmanager
+def a_clone_with_its_lock_path():
+    """A clone, and the lock path it gets in a temporary directory of its own that the test may plant in."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        clone, scratch, outside = root / "clone", root / "tmp", root / "outside"
+        for directory in (scratch, outside):
+            directory.mkdir()
+        git("init", "-q", str(clone), cwd=root)
+        with mock.patch.object(tempfile, "tempdir", str(scratch)):
+            yield clone, pr_fix.lock_path(clone), outside
+
+
+def acquire_refused(clone):
+    """What `acquire` does with the lock path planted: (exit code, message, whether it took a lock).
+
+    `die` is replaced, not its output captured, because a thread blocked inside a captured call would leave
+    the process's output redirected and hide the failure of the test waiting on it.
+    """
+    shared = pr_fix.SharedRepo()
+    said = []
+
+    def refuse(message):
+        said.append(message)
+        sys.exit(1)
+
+    code = None
+    with mock.patch.object(pr_fix, "die", refuse):
+        try:
+            shared.acquire(clone)
+        except SystemExit as exit:
+            code = exit.code
+    took = shared.handle is not None
+    shared.release()
+    return code, " ".join(said), took
+
+
+def test_a_link_planted_at_the_lock_path_is_refused_and_its_target_keeps_its_bytes():
+    with a_clone_with_its_lock_path() as (clone, lock, outside):
+        victim = outside / "victim"
+        victim.write_text("keep")
+        lock.symlink_to(victim)
+        code, out, took = acquire_refused(clone)
+        assert code == 1 and "cannot take the lock" in out and str(lock) in out, (code, out)
+        assert not took, "no lock is held on the target of the link"
+        assert victim.read_text() == "keep", "the target of the link is not truncated"
+        lock.unlink()
+        absent = outside / "absent"
+        lock.symlink_to(absent)
+        code, out, took = acquire_refused(clone)
+        assert code == 1 and not took, (code, out)
+        assert not absent.exists(), "a link to a missing file is not followed to create it"
+
+
+def test_a_hard_link_to_the_lock_path_and_a_lock_left_by_an_earlier_run_are_not_emptied():
+    with a_clone_with_its_lock_path() as (clone, lock, outside):
+        victim = outside / "victim"
+        victim.write_text("keep")
+        os.link(victim, lock)
+        shared = pr_fix.SharedRepo()
+        shared.acquire(clone)
+        try:
+            assert shared.handle is not None, "a regular file at the lock path is used"
+        finally:
+            shared.release()
+        assert victim.read_text() == "keep", "a file the lock path is a name of is not truncated"
+        lock.unlink()
+        lock.write_text("left over")
+        for _ in range(2):
+            shared.acquire(clone)
+            assert shared.handle is not None, "the lock of an earlier run is taken again"
+            shared.release()
+        assert lock.read_text() == "left over"
+
+
+def test_the_lock_is_created_readable_and_writable_by_its_owner_only():
+    with a_clone_with_its_lock_path() as (clone, lock, outside):
+        previous = os.umask(0)
+        try:
+            shared = pr_fix.SharedRepo()
+            shared.acquire(clone)
+            shared.release()
+        finally:
+            os.umask(previous)
+        assert stat.S_IMODE(lock.stat().st_mode) == 0o600, oct(lock.stat().st_mode)
+
+
+def test_a_fifo_planted_at_the_lock_path_is_refused_with_or_without_a_reader_and_does_not_hang():
+    with a_clone_with_its_lock_path() as (clone, lock, outside):
+        os.mkfifo(lock)
+        for reader in (False, True):
+            descriptor = os.open(lock, os.O_RDONLY | os.O_NONBLOCK) if reader else None
+            answer = []
+
+            def attempt():
+                try:
+                    answer.append(acquire_refused(clone))
+                except Exception as error:
+                    answer.append((f"raised {error!r}", "", False))
+
+            # A daemon thread, so an acquire that waits for a reader fails the deadline below instead of the run.
+            thread = threading.Thread(target=attempt, daemon=True)
+            thread.start()
+            thread.join(10)
+            try:
+                assert not thread.is_alive(), f"acquire waits on a fifo (reader: {reader})"
+                code, out, took = answer[0]
+                assert code == 1 and "cannot take the lock" in out and not took, (reader, code, out)
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+
+
+def test_a_descriptor_is_closed_when_it_cannot_be_made_a_file_object():
+    with a_clone_with_its_lock_path() as (clone, lock, outside):
+        opened = []
+        real_open = os.open
+
+        def recording_open(*args, **kwargs):
+            descriptor = real_open(*args, **kwargs)
+            opened.append(descriptor)
+            return descriptor
+
+        def failing_fdopen(descriptor, *args, **kwargs):
+            raise OSError(24, "too many open files")
+
+        shared = pr_fix.SharedRepo()
+        with mock.patch.object(os, "open", recording_open), mock.patch.object(os, "fdopen", failing_fdopen):
+            try:
+                shared.acquire(clone)
+                raised = False
+            except OSError:
+                raised = True
+        assert raised and shared.handle is None, "the failure of fdopen is not hidden"
+        assert opened, "the lock was opened"
+        for descriptor in opened:
+            try:
+                os.fstat(descriptor)
+            except OSError:
+                continue
+            os.close(descriptor)
+            raise AssertionError(f"descriptor {descriptor} was leaked by acquire")
 
 
 ISSUE_REMOTES = lambda root: {

@@ -97,7 +97,9 @@ give a remote credential to, and `start` and `continue` sign the commits they re
   opens its log in the worktree's git directory from Python, so a confined call fails with
   `Operation not permitted`. A scope does not lift that, `run` rejects `unconfined` and `scopes`
   together, and a line with no sandbox needs no scope to reach the remote credential, the signing key
-  or a local port. The lock the script takes is in the temporary directory and does not need it.
+  or a local port. The lock the script takes is in the temporary directory and does not need it. A
+  link or another file that is not plain at the lock's name stops the step with `cannot take the
+  lock`; tell the person, who removes it, and do not remove it yourself.
 - On macOS, `ci`, `comments`, `reply`, `review` and `rerun`: `scopes: ["remote"]`. They write
   nothing under `.git`.
 - Where nothing holds `.git` back (Linux and Windows): `scopes: ["remote", "signing"]` on `start` and
