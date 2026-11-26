@@ -308,6 +308,36 @@ verus! {
 pub uninterp spec fn spec_context<'sink, S: Sink>(policy: Policy<'sink, S>) -> Integrity;
 }
 
+// What the settings file's rules say about each action a gate refuses on a `deny` rule.
+// `Permissions` matches patterns against paths, hosts and words, which Verus does not read, so
+// each is uninterpreted: `Policy::rules_for_*` are assumed to return them, and a contract says
+// what a gate does with the answer.
+#[cfg(verus_keep_ghost)]
+verus! {
+pub uninterp spec fn spec_rules_for_host<'sink, S: Sink>(policy: Policy<'sink, S>, host: Seq<char>)
+    -> crate::permissions::Decision;
+pub uninterp spec fn spec_rules_for_search<'sink, S: Sink>(policy: Policy<'sink, S>)
+    -> crate::permissions::Decision;
+pub uninterp spec fn spec_rules_for_mcp<'sink, S: Sink>(
+    policy: Policy<'sink, S>,
+    alias: Seq<char>,
+    tool: Seq<char>,
+) -> crate::permissions::Decision;
+pub uninterp spec fn spec_rules_for_read<'sink, S: Sink>(policy: Policy<'sink, S>, path: Seq<char>)
+    -> crate::permissions::Decision;
+pub uninterp spec fn spec_rules_for_edit<'sink, S: Sink>(policy: Policy<'sink, S>, path: Seq<char>)
+    -> crate::permissions::Decision;
+}
+
+// The capabilities a run holds. `Policy` is opaque to Verus, so this is uninterpreted:
+// `Policy::capabilities_held` is assumed to return it, and `CapabilitySet`'s own functions are
+// proved.
+#[cfg(verus_keep_ghost)]
+verus! {
+pub uninterp spec fn spec_capabilities<'sink, S: Sink>(policy: Policy<'sink, S>)
+    -> crate::capability::CapabilitySet;
+}
+
 // A refusal's message is a `String` built by `format!`, which Verus does not read, so a contract
 // says only whether a gate refused. Opaque to Verus, and unchanged in a build.
 #[cfg(verus_keep_ghost)]
@@ -785,6 +815,30 @@ impl Context {
 fn shown_to_the_planner(label: Label, picture: bool) -> bool {
     let trusted = label.integrity == Integrity::Trusted;
     trusted && !picture
+}
+
+/// The refusal for a capability that produces no observation to label.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+fn no_observation(capability: &Capability) -> Denial {
+    Denial {
+        principle: Principle::Capability,
+        message: format!("'{capability}' produces no observation to label"),
+    }
+}
+
+/// The refusal for an observation that has no label, saying `message`.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+fn no_label(message: &'static str) -> Denial {
+    Denial {
+        principle: Principle::Capability,
+        message: message.to_string(),
+    }
+}
+
+/// How a refusal names a call to `tool` of the server declared as `alias`.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+fn server_call(alias: &str, tool: &str) -> String {
+    format!("{alias}:{tool}")
 }
 
 /// Which question decided whether a fetch is put to a person.
@@ -1683,25 +1737,52 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     /// Check that a capability was granted before it is exercised.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> spec_capabilities(*old(self)).spec_holds(capability),
+    ))]
     pub fn before_capability(&mut self, capability: Capability) -> Gated<()> {
-        if !self.capabilities.contains(&capability) {
-            // A delegate started without a capability its definition asked for says why, from the
-            // list the kernel built when it approved the delegate (DELEGATE-33).
-            let why = match self.started_without.contains(&capability) {
-                true => {
-                    ", because this delegate was started without it: the run that started it \
-                         does not hold it"
-                }
-                false => "",
-            };
-            return Err(self.deny(
-                "capability",
-                Principle::Capability,
-                format!("capability '{capability}' was not granted for this turn{why}"),
-            ));
+        let granted = self.capabilities_held().contains(&capability);
+        if !granted {
+            return Err(self.refuse_ungranted(&capability));
         }
-        self.allow("capability", format!("{capability} granted"));
+        self.allow_granted(&capability);
         Ok(())
+    }
+
+    /// The capabilities this run holds, for a contract to read.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            *r == spec_capabilities(*self),
+    ))]
+    fn capabilities_held(&self) -> &crate::capability::CapabilitySet {
+        &self.capabilities
+    }
+
+    /// The refusal for a capability this run was not granted.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn refuse_ungranted(&mut self, capability: &Capability) -> Denial {
+        // A delegate started without a capability its definition asked for says why, from the
+        // list the kernel built when it approved the delegate (DELEGATE-33).
+        let why = match self.started_without.contains(capability) {
+            true => {
+                ", because this delegate was started without it: the run that started it does \
+                 not hold it"
+            }
+            false => "",
+        };
+        self.deny(
+            "capability",
+            Principle::Capability,
+            format!("capability '{capability}' was not granted for this turn{why}"),
+        )
+    }
+
+    /// The trail line for a capability this run was granted.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn allow_granted(&mut self, capability: &Capability) {
+        self.allow("capability", format!("{capability} granted"));
     }
 
     /// Withdraw the grant to call tools on one MCP server, for the rest of this run.
@@ -1849,8 +1930,28 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let Some(host) = crate::url::host_of(url) else {
             return Ok(());
         };
-        let decision = self.permissions.for_host(&host);
-        self.refuse_if_denied("fetch", decision, &host)
+        self.refuse_a_denied_host(&host)
+    }
+
+    /// Refuse a fetch from `host` a `deny` rule covers.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Err <==> spec_rules_for_host(*old(self), host@) == crate::permissions::Decision::Ruled(
+                crate::permissions::Ruling::Deny,
+            ),
+    ))]
+    fn refuse_a_denied_host(&mut self, host: &str) -> Gated<()> {
+        let decision = self.rules_for_host(host);
+        self.refuse_if_denied("fetch", decision, host)
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_rules_for_host(*self, host@),
+    ))]
+    fn rules_for_host(&self, host: &str) -> crate::permissions::Decision {
+        self.permissions.for_host(host)
     }
 
     /// Whether a person has to approve fetching `url`.
@@ -1900,19 +2001,33 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// this is the one place the two could be confused. That is the difference from
     /// [`Policy::before_plan`], where vouching for a command does trust its output because a
     /// person can read one command and answer for both.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok ==> crate::spec::output_label_is_untrusted(Capability::WebFetch, Some(r->Ok_0)),
+    ))]
     pub fn before_fetch(&mut self, url: &str) -> Gated<Label> {
         self.before_capability(Capability::WebFetch)?;
         self.consume_grant("fetch_url", "url", url)?;
+        self.hold_to_the_host_of(url);
 
-        // What the egress gate checks each hop against, until the call reports back.
+        let Some(label) = Capability::WebFetch.output_label() else {
+            return Err(no_label("a fetched body must have a label"));
+        };
+        self.allow_fetched_body(label);
+        Ok(label)
+    }
+
+    /// What the egress gate checks each hop of a fetch against, until the call reports back.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn hold_to_the_host_of(&mut self, url: &str) {
         self.fetching = Some(crate::url::host_of(url).unwrap_or_default());
         self.fetch_hop = None;
         self.fetching_via = None;
+    }
 
-        let label = Capability::WebFetch.output_label().ok_or_else(|| Denial {
-            principle: Principle::Capability,
-            message: "a fetched body must have a label".to_string(),
-        })?;
+    /// The trail line for the label [`Policy::before_fetch`] gives a body.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn allow_fetched_body(&mut self, label: Label) {
         self.allow(
             "provenance",
             format!(
@@ -1920,7 +2035,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                  approving a host says nothing about what it returns"
             ),
         );
-        Ok(label)
     }
 
     /// Say that the fetch has finished, however it went.
@@ -1976,9 +2090,24 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// [`Policy::before_fetch_rules`] refuses a fetch: a rule that refuses is a statement that the
     /// search does not happen, so a prompt would put a question to somebody that their settings file
     /// has already closed.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Err <==> spec_rules_for_search(*old(self)) == crate::permissions::Decision::Ruled(
+                crate::permissions::Ruling::Deny,
+            ),
+    ))]
     pub fn before_search_rules(&mut self) -> Gated<()> {
-        let decision = self.permissions.for_search();
+        let decision = self.rules_for_search();
         self.refuse_if_denied("search", decision, "a web search")
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_rules_for_search(*self),
+    ))]
+    fn rules_for_search(&self) -> crate::permissions::Decision {
+        self.permissions.for_search()
     }
 
     /// Whether a person has to approve this search.
@@ -2023,14 +2152,30 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// Always `(U,pub)`, from [`Capability::WebSearch`] (WEBSEARCH-1). While the call is in flight the
     /// egress gate also holds every hop to the host of `url`.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok ==> crate::spec::output_label_is_untrusted(Capability::WebSearch, Some(r->Ok_0)),
+    ))]
     pub fn before_search(&mut self, url: &str) -> Gated<Label> {
         self.before_capability(Capability::WebSearch)?;
         self.consume_grant("web_search", "url", url)?;
+        self.hold_search_to_the_host_of(url);
+        let Some(label) = Capability::WebSearch.output_label() else {
+            return Err(no_label("search results must have a label"));
+        };
+        self.allow_search_results(label);
+        Ok(label)
+    }
+
+    /// What the egress gate checks each hop of a search against, while it is in flight.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn hold_search_to_the_host_of(&mut self, url: &str) {
         self.searching = Some(crate::url::host_of(url).unwrap_or_default());
-        let label = Capability::WebSearch.output_label().ok_or_else(|| Denial {
-            principle: Principle::Capability,
-            message: "search results must have a label".to_string(),
-        })?;
+    }
+
+    /// The trail line for the label [`Policy::before_search`] gives results.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn allow_search_results(&mut self, label: Label) {
         self.allow(
             "provenance",
             format!(
@@ -2038,7 +2183,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                  approving a query says nothing about what comes back"
             ),
         );
-        Ok(label)
     }
 
     /// Say that the search has finished, however it went, so a failed request does not leave the
@@ -2146,9 +2290,24 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// Matched on the alias and the tool and never on the arguments, which are what the planner
     /// wrote (SERVERS-7). In the same position as [`Policy::before_fetch_rules`], for its reason.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Err <==> spec_rules_for_mcp(*old(self), alias@, tool@)
+                == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Deny),
+    ))]
     pub fn before_mcp_call_rules(&mut self, alias: &str, tool: &str) -> Gated<()> {
-        let decision = self.permissions.for_mcp(alias, tool);
-        self.refuse_if_denied("mcp_call", decision, &format!("{alias}:{tool}"))
+        let decision = self.rules_for_mcp(alias, tool);
+        let call = server_call(alias, tool);
+        self.refuse_if_denied("mcp_call", decision, &call)
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_rules_for_mcp(*self, alias@, tool@),
+    ))]
+    fn rules_for_mcp(&self, alias: &str, tool: &str) -> crate::permissions::Decision {
+        self.permissions.for_mcp(alias, tool)
     }
 
     /// Whether a person has to approve calling `tool` of the server declared as `alias`.
@@ -2462,13 +2621,23 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     /// Record that a capability produced an observation, returning the label it must
     /// carry. The label comes from the capability, never from the data.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok ==> crate::spec::output_label_is_untrusted(capability, Some(r->Ok_0)),
+            r is Err ==> crate::spec::output_label_is_untrusted(capability, None),
+    ))]
     pub fn observe(&mut self, capability: Capability) -> Gated<Label> {
-        let label = capability.output_label().ok_or_else(|| Denial {
-            principle: Principle::Capability,
-            message: format!("'{capability}' produces no observation to label"),
-        })?;
-        self.sink.emit(Event::Observed { capability, label });
+        let Some(label) = capability.output_label() else {
+            return Err(no_observation(&capability));
+        };
+        self.record_observed(capability, label);
         Ok(label)
+    }
+
+    /// The event for [`Policy::observe`].
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn record_observed(&mut self, capability: Capability, label: Label) {
+        self.sink.emit(Event::Observed { capability, label });
     }
 
     /// Install the user's trust decisions, before the turn runs.
@@ -3025,20 +3194,34 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// whether there is anything to prompt about.
     ///
     /// `what` is a routing value: a path, or a stage's argv. Never content.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Err <==> decision == crate::permissions::Decision::Ruled(
+                crate::permissions::Ruling::Deny,
+            ),
+    ))]
     fn refuse_if_denied(
         &mut self,
         gate: &'static str,
         decision: crate::permissions::Decision,
         what: &str,
     ) -> Gated<()> {
-        if decision == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Deny) {
-            return Err(self.deny(
-                gate,
-                Principle::Capability,
-                format!("a deny rule in the settings file covers {what}"),
-            ));
+        let denied =
+            decision == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Deny);
+        if denied {
+            return Err(self.refuse_a_deny_rule(gate, what));
         }
         Ok(())
+    }
+
+    /// The refusal for an action a `deny` rule covers, naming `what`.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn refuse_a_deny_rule(&mut self, gate: &'static str, what: &str) -> Denial {
+        self.deny(
+            gate,
+            Principle::Capability,
+            format!("a deny rule in the settings file covers {what}"),
+        )
     }
 
     /// Refuse a read a `deny` rule covers.
@@ -3046,11 +3229,35 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Reads are otherwise ungated, since a read changes nothing and stays inside the workspace.
     /// A deny rule is the one thing that stops one, which is what makes it able to say a file is
     /// off limits rather than merely unvouched for.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Err <==> spec_rules_for_read(*old(self), path@) == crate::permissions::Decision::Ruled(
+                crate::permissions::Ruling::Deny,
+            ),
+    ))]
     pub fn before_read(&mut self, path: &str) -> Gated<()> {
-        let decision = self
-            .permissions
-            .for_path(crate::permissions::Subject::Read, path);
+        let decision = self.rules_for_read(path);
         self.refuse_if_denied("read", decision, path)
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_rules_for_read(*self, path@),
+    ))]
+    fn rules_for_read(&self, path: &str) -> crate::permissions::Decision {
+        self.permissions
+            .for_path(crate::permissions::Subject::Read, path)
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_rules_for_edit(*self, path@),
+    ))]
+    fn rules_for_edit(&self, path: &str) -> crate::permissions::Decision {
+        self.permissions
+            .for_path(crate::permissions::Subject::Edit, path)
     }
 
     /// Whether a `deny` rule covers reading `path`, asked without refusing anything.
@@ -3089,15 +3296,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Both families of rule are consulted: a path nothing may read is a path nothing may replace
     /// either, so a `Read` deny rule stops a write to it. Claude Code does the same, and the reason
     /// is that a file whose contents are off limits is not protected if it can be overwritten.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Err <==> spec_rules_for_edit(*old(self), path@) == crate::permissions::Decision::Ruled(
+                crate::permissions::Ruling::Deny,
+            ) || spec_rules_for_read(*old(self), path@) == crate::permissions::Decision::Ruled(
+                crate::permissions::Ruling::Deny,
+            ),
+    ))]
     pub fn refuse_denied_write(&mut self, path: &str) -> Gated<()> {
-        for subject in [
-            crate::permissions::Subject::Edit,
-            crate::permissions::Subject::Read,
-        ] {
-            let decision = self.permissions.for_path(subject, path);
-            self.refuse_if_denied("write", decision, path)?;
-        }
-        Ok(())
+        // Both asked before either refusal is recorded, so each answer is the rules as they were.
+        let edited = self.rules_for_edit(path);
+        let read = self.rules_for_read(path);
+        self.refuse_if_denied("write", edited, path)?;
+        self.refuse_if_denied("write", read, path)
     }
 
     /// Refuse a write to `path` when a limit this run's definition, or one above it, put on the
@@ -6044,7 +6256,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                         ),
                     );
                 }
-                held.into_iter().collect()
+                // What the call keeps is still only what this run holds.
+                held.into_iter()
+                    .collect::<crate::capability::CapabilitySet>()
+                    .within(&self.capabilities)
             }
         };
 
@@ -15186,6 +15401,25 @@ five
         assert!(
             policy.before_plan_rules(&line).is_err(),
             "a redirection wrote to a path a rule denied"
+        );
+    }
+
+    /// A path nothing may read is a path nothing may replace, so a `Read` deny rule refuses a
+    /// redirection into it as well as a read of it, with no `Edit` rule about it at all.
+    #[test]
+    fn a_rule_denying_reads_of_a_path_denies_a_redirection_to_it() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &["Read(//work/secret.txt)"],
+            &[],
+            &[],
+        ));
+
+        let mut line = plan_of(vec![step_named("echo", &["x"])]);
+        line.writes = vec![std::path::PathBuf::from("/work/secret.txt")];
+        assert!(
+            policy.before_plan_rules(&line).is_err(),
+            "a redirection replaced a path a rule says nothing may read"
         );
     }
 

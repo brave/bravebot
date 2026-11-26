@@ -70,6 +70,8 @@ export function installAcceptanceBridge({ ipcMain, BrowserWindow, dialog }, { di
   globalThis.ux = {
     emit,
     sent: [],
+    // Every `*.reply` the window sent, in order, as `{ method, params }`.
+    replies: [],
     // The folder of each session the app asked for, in order.
     created: [],
     configured: true,
@@ -102,7 +104,14 @@ export function installAcceptanceBridge({ ipcMain, BrowserWindow, dialog }, { di
   }
   replace('bravebot:request', async (_, method, p = {}) => {
     const ux = globalThis.ux
+    if (method.endsWith('.reply')) {
+      ux.replies.push({ method, params: p })
+      return { ok: {} }
+    }
     if (method === 'agent.info') return { ok: { configured: ux.configured, build: 'acceptance fixture', version: '1' } }
+    // The composer's spend-limit and variant controls read these when a conversation opens.
+    if (method === 'session.limit') return { ok: { limit: null, spent: 0 } }
+    if (method === 'session.variant') return { ok: { model: p.model ?? null, offered: [], variant: null } }
     if (settings && method === 'settings.inspect') {
       return {
         ok: {

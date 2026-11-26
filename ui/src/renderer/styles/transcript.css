@@ -13,6 +13,22 @@
   overflow: hidden;
 }
 
+/* What a turn left open (OPEN-3): a narration row under the reply or error card and above the
+   turn's footer, on the reply's left edge. Wrapped between words rather than cut, because each kind
+   it names counts. */
+.open-loops {
+  display: flex;
+  align-items: baseline;
+  gap: var(--leo-spacing-m);
+  min-width: 0;
+  font: var(--type-meta);
+  color: var(--ink-secondary);
+  overflow-wrap: break-word;
+  --leo-icon-size: var(--icon-control);
+  --leo-icon-color: var(--ink-secondary);
+}
+.open-loops leo-icon { flex: none; align-self: center; }
+
 /* ---- a file being dragged over the conversation
 
    Over the whole column, and inert: the drop itself is taken by the preload wherever it lands in
@@ -321,6 +337,25 @@
   white-space: nowrap;
 }
 .session-notice.divider strong { font-weight: 600; color: var(--ink-primary); }
+
+/* What a resumed session left open stays in view at the top of the scroll area while the chat
+   opens at its end. It covers the scroll area's top padding as well, on the panel's own surface
+   and above a hairline, so no row shows above or through it. */
+.session-notices.pinned {
+  position: sticky;
+  top: calc(-1 * var(--leo-spacing-2xl));
+  z-index: 1;
+  margin-block: calc(-1 * var(--leo-spacing-2xl)) 0;
+  padding-top: var(--leo-spacing-2xl);
+  border-bottom: 1px solid var(--border-hairline);
+  background: var(--surface-panel);
+}
+/* Its sentence can wrap, so the icon sits on the first line and the padding keeps one line
+   centred in the hit height as the other notices are. */
+.session-notice.open-loops {
+  align-items: flex-start;
+  padding-block: calc((var(--hit) - var(--icon-control)) / 2);
+}
 
 /* ---- messages */
 

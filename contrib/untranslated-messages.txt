@@ -151,6 +151,8 @@ fr:open-loops-checkouts
 fr:open-loops-failed
 fr:open-loops-goal
 fr:open-loops-jobs
+fr:open-loops-left-open
+fr:open-loops-left-open-person
 fr:open-loops-line
 fr:open-loops-nothing
 fr:open-loops-person

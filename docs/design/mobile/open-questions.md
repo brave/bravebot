@@ -43,13 +43,6 @@ Status: proposal. This file lists only what is unanswered or waiting for evidenc
 - **Before:** the first target used with real data, which is the stage-7 remote adapter.
 - **Issue:** [#2770](https://github.com/brave/bravebot/issues/2770), "Release the sessions the mobile app opens when it switches, changes target or exits".
 
-### Q10. What can the phone pin and sign?
-
-- **Status:** awaiting validation.
-- **Question and reason:** can the phone's platform pin a key learned at pairing, present a client certificate, read the TLS exporter value, and keep a P-256 key in the Secure Enclave or StrongBox, from native code or from JavaScript? Decision 20 depends on the answer. These are claims about the platform that this repository does not check.
-- **Evidence needed:** a one-day spike on one phone platform that connects to a Rust host over TLS, pins the host key, and produces a proof from a hardware-held key. Record the platform and the result, and whether a rustls module is needed on the phone.
-- **Before:** the listener and pairing PR of stage 6.
-
 ## Keeping this record current
 
 Update an entry when its assumption, evidence, or required checkpoint changes. When an entry is answered, record the decision in the decision record, the requirement in the architecture or contract, the work in the plan and the behavior in a spec with the change that makes it true, then delete the entry. Identifiers are not reused, so a gap in the numbering is a deleted entry.

@@ -172,7 +172,8 @@ leo-icon { flex: none; }
   .composer-box { border: 1px solid CanvasText; }
   .session-row.current,
   .bot-open { outline: 1px solid Highlight; }
-  .confirm.run.releases { border: 3px double Mark; }
+  .confirm.run.releases,
+  .confirm.run.unconfined { border: 3px double Mark; }
   .diff .line.added { border-left: 2px solid CanvasText; }
   .diff .line.removed { border-left: 2px dashed CanvasText; }
   .diff .changed { text-decoration: underline; }

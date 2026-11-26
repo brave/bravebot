@@ -6,6 +6,7 @@ import { Permissions } from './Permissions'
 import { Fragment, memo, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
 import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
+import { DroppedChip } from './DroppedChip'
 import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
 import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SandboxMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type Hook, type KeptTrust, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
@@ -93,6 +94,8 @@ interface Live {
   handoff?: Handoff | null
   /** The chat this one was handed off from (SESSION-34). */
   handedOffFrom?: { id: string; title: string } | null
+  /** What a resumed session left open (OPEN-6). */
+  openLoops?: string | null
 }
 
 /**
@@ -620,6 +623,8 @@ export function Transcript({
     const slug = live?.running ? t.summonedFor(entries) : undefined
     return slug ? faces.get(slug) ?? null : bot
   }, [live?.running, entries, faces, bot])
+  // A plan card waiting for its answer, during which the working row is not shown.
+  const awaitingPlan = useMemo(() => entries.some((entry) => entry.kind === 'manifest' && entry.decision === null), [entries])
   // Entered and left once per element crossed, so counted rather than toggled.
   const dragDepth = useRef(0)
   const [dragging, setDragging] = useState(false)
@@ -910,6 +915,7 @@ export function Transcript({
         <SessionNotices
           forkedFrom={live.forkedFrom}
           handedOffFrom={live.handedOffFrom ?? null}
+          openLoops={live.openLoops ?? null}
           kept={live.trustRemembered ?? null}
           vetting={live.autoVetting === true}
           rules={live.rules ?? null}
@@ -938,7 +944,8 @@ export function Transcript({
           onOpenSummon={openSummon}
         />
 
-        {live.running && (
+        {/* Not while a plan card waits for its answer: nothing is under way until it is given. */}
+        {live.running && !awaitingPlan && (
           <WorkingRow
             key={live.handle}
             bot={answering}
@@ -1287,11 +1294,24 @@ const EntryList = memo(function EntryList({
   const undoing = useMemo(() => undoRow(entries, rewind), [entries, rewind])
   const undo = useMemo(() => rewind[0] && { running, onUndo: () => onRewind(rewind[0]!.steps) }, [rewind, running, onRewind])
   const answeredBy = useMemo(() => t.summonedReplies(entries), [entries])
+  // The open-loops line a reply or error card ended its turn with, by that card's id. Drawn
+  // between the card and its footer so the footer stays the turn's last row (OPEN-3).
+  const loopsAfter = useMemo(() => {
+    const after = new Map<string, t.Entry & { kind: 'open-loops' }>()
+    entries.forEach((entry, at) => {
+      const before = entries[at - 1]
+      if (entry.kind === 'open-loops' && (before?.kind === 'assistant' || before?.kind === 'error')) after.set(before.id, entry)
+    })
+    return after
+  }, [entries])
+  const drawnUnder = useMemo(() => new Set([...loopsAfter.values()].map((entry) => entry.id)), [loopsAfter])
   return <>
     {grouped.map((run) => {
       const id = run.kind === 'run' ? run.id : run.entry.id
       const placed = cards?.before.get(id)
       const summoner = run.kind === 'one' ? answeredBy.get(run.entry.id) : undefined
+      if (drawnUnder.has(id)) return null
+      const loops = run.kind === 'one' ? loopsAfter.get(run.entry.id) : undefined
       return <Fragment key={id}>
       {placed?.map((summon) => <RepliedCard key={`${summon.session.id}#${summon.prompt}`} summon={summon} faces={faces} onOpen={onOpenSummon} />)}
       {run.kind === 'run' ? (
@@ -1329,6 +1349,17 @@ const EntryList = memo(function EntryList({
             face={run.entry.kind === 'user' && run.entry.summoned !== undefined ? faces.get(run.entry.summoned) : undefined}
             revealed={run.entry.id === focused || run.entry.id === matched}
           />}
+          {loops &&
+            // Its own entry for search, focus and the context menu, inside the card's wrapper so
+            // it sits between the card and the footer.
+            <div
+              data-entry-id={loops.id}
+              className={`entry-hit${loops.id === focused || loops.id === matched ? ' focused' : ''}`}
+              ref={loops.id === focused ? marked : undefined}
+              onContextMenu={(event) => { event.stopPropagation(); contextMenu('entry', loops.id)(event) }}
+            >
+              <OpenLoopsLine text={loops.text} />
+            </div>}
           {(run.entry.kind === 'assistant' || (run.entry.kind === 'error' && run.entry.turn !== undefined)) &&
             <TurnFooter details={run.entry.turn === undefined ? undefined : turns[run.entry.turn]} onAudit={onAudit}
               copy={run.entry.kind === 'assistant' ? run.entry.text : undefined}
@@ -1710,10 +1741,12 @@ function Questions({
  * of every export: a note this window wrote about a session is not something the session said.
  * The fork link is a button and not a link, because nothing in this window navigates.
  */
-export function SessionNotices({ forkedFrom, handedOffFrom = null, kept, vetting, rules, refused = [], onOpenParent, onManage }: {
+export function SessionNotices({ forkedFrom, handedOffFrom = null, openLoops = null, kept, vetting, rules, refused = [], onOpenParent, onManage }: {
   forkedFrom: { title: string; prompt: number } | null
   /** The chat this one was started from with Hand Off to New Chat… (SESSION-34). */
   handedOffFrom?: { id: string; title: string } | null
+  /** What a resumed session left open, as the bridge's translated sentence says it (OPEN-6). */
+  openLoops?: string | null
   kept: KeptTrust | null
   vetting: boolean
   rules: SettingsRules | null
@@ -1723,8 +1756,19 @@ export function SessionNotices({ forkedFrom, handedOffFrom = null, kept, vetting
   onManage: () => void
 }): React.JSX.Element | null {
   const unheld = t.notInForce(rules, refused) || t.grantedRules(rules)
-  if (!forkedFrom && !handedOffFrom && !kept && !vetting && !unheld) return null
-  return (
+  // What a resumed session left open stays at the top of the scroll area, since the chat opens
+  // at its end and the note is about where it stood (OPEN-6).
+  const pinned = openLoops && (
+    <div className="session-notices pinned">
+      <p className="session-banner session-notice open-loops" role="note" data-test="open-loops">
+        <Icon name="list-checks" />
+        <span className="notice-text">{openLoops}</span>
+      </p>
+    </div>
+  )
+  if (!forkedFrom && !handedOffFrom && !kept && !vetting && !unheld) return pinned || null
+  return (<>
+    {pinned}
     <div className="session-notices">
       {handedOffFrom && (
         <p className="session-banner session-notice" role="note" data-test="handed-off-from" data-tooltip={`Record ${handedOffFrom.id}`}>
@@ -1761,7 +1805,7 @@ export function SessionNotices({ forkedFrom, handedOffFrom = null, kept, vetting
       )}
       {unheld && rules && <RulesBanner rules={rules} refused={refused} />}
     </div>
-  )
+  </>)
 }
 
 /**
@@ -2055,7 +2099,7 @@ function PlanEnded({ ended }: { ended: ManifestError }): React.JSX.Element {
 function AmbientNotice({ ambient, deciding = false }: { ambient?: Ambient[]; deciding?: boolean }): React.JSX.Element | null {
   if (!ambient?.length) return null
   const notice = (
-    <Alert type="warning" className="card-alert warn">
+    <Alert type="warning" size="small" className="card-alert warn">
       <Icon name="shield-alert" slot="icon" />
       This spends access that is yours elsewhere. Nobody is asked for it at the moment it
       is used, and nothing here takes it back afterwards.
@@ -2110,6 +2154,11 @@ type RowProps = {
  * are shown inside a container of their own is decided here rather than in the components below,
  * so `scripts/marking.test.mjs` renders this to assert it.
  */
+/** The bridge's open-loops line (OPEN-3) as a narration row, drawn as sent: nothing here reads its words. */
+function OpenLoopsLine({ text }: { text: string }): React.JSX.Element {
+  return <div className="open-loops" data-test="open-loops"><Icon name="list-checks" /><span>{text}</span></div>
+}
+
 export const Row = memo(function Row({
   entry,
   onRecover,
@@ -2193,6 +2242,9 @@ function Card({
           <Markdown text={entry.text} />
         </div>
       )
+
+    case 'open-loops':
+      return <OpenLoopsLine text={entry.text} />
 
     case 'narration':
       return <div className={entry.refused ? 'narration refused' : 'narration'}><Icon name="file-text" /><span><FailureSentence text={entry.text} command={entry.command} /></span></div>
@@ -2364,7 +2416,7 @@ function Card({
           )}
           {request.lineEndings && <p className="permission-scope" data-test="line-endings" data-deciding="all">{request.lineEndings}</p>}
           <HiddenCharacters note={request.hiddenNote} />
-          {request.credentials && request.credentials.length > 0 && <Alert type="warning" className="card-alert credential-finding">
+          {request.credentials && request.credentials.length > 0 && <Alert type="warning" size="small" className="card-alert credential-finding">
             <Icon name="shield-alert" slot="icon" />
             <span slot="title" data-deciding="all">This looks like it would put a secret in the tree</span>
             <ul data-deciding="all">{request.credentials.map((found) => <li key={found}>{found}</li>)}</ul>
@@ -2386,7 +2438,7 @@ function Card({
       const lent = request.requestedScopes ?? []
       return (
         <DecisionCard
-          className={`confirm run ${request.releasesPrivate ? 'releases' : ''}`}
+          className={`confirm run ${request.releasesPrivate ? 'releases' : ''} ${request.unconfined ? 'unconfined' : ''}`}
           answerable={answerable}
           subject={request.stages.map((stage) => stage.display).join(' | ')}
           decided={decision === null ? null : {
@@ -2439,6 +2491,18 @@ function Card({
               </li>
             ))}
           </ol>
+          {/* A line the planner asked to run with no sandbox (SANDBOX-29), said straight under the
+              command it is about. Both sentences are the bridge's, drawn as sent; the stylesheet
+              capitalises their first letter. No standing answer is offered for such a line, and the
+              Trust button stays gated on `canBeRemembered`, which the bridge sends false for it. */}
+          {request.unconfined && !!request.unconfinedNote && (
+            <div data-deciding="all" data-test="unconfined">
+              <Alert type="warning" size="small" className="card-alert warn">
+                <Icon name="shield-alert" slot="icon" />
+                <p>{request.unconfinedNote}</p>
+              </Alert>
+            </div>
+          )}
 
           {/* Said every time, as the terminal says it: what the programs are held to, or that they
               are held to nothing. Only `null` is "not sandboxed"; a bridge that sent no field says
@@ -2450,13 +2514,22 @@ function Card({
               {request.confinement.sentences.map((sentence, index) => <p key={index}>{sentence}</p>)}
             </div>
           )}
-          {request.confinement === null && !!request.notSandboxed && (
-            <p className="permission-scope" data-test="not-sandboxed" data-deciding="all">{request.notSandboxed}</p>
+          {/* The details under the warning, kept together: what the programs may reach, and why no
+              lasting answer is offered. */}
+          {((request.confinement === null && !!request.notSandboxed) || (request.unconfined && !!request.notRememberedNote)) && (
+            <div className="scope-notes">
+              {request.confinement === null && !!request.notSandboxed && (
+                <p className="permission-scope" data-test="not-sandboxed" data-deciding="all">{request.notSandboxed}</p>
+              )}
+              {request.unconfined && !!request.notRememberedNote && (
+                <p className="permission-scope" data-test="not-remembered" data-deciding="all">{request.notRememberedNote}</p>
+              )}
+            </div>
           )}
           <AmbientNotice ambient={request.ambient} deciding />
           {!!lent.length && (
             <div data-deciding="all">
-              <Alert type="warning" className="card-alert warn">
+              <Alert type="warning" size="small" className="card-alert warn">
                 <Icon name="shield-alert" slot="icon" />
                 The model asked for <strong>{lent.join(', ')}</strong> to be added to every
                 command in this line. Each lets a program use credentials or caches it would
@@ -2466,7 +2539,7 @@ function Card({
           )}
           {request.releasesPrivate && (
             <div data-deciding="all">
-              <Alert type="warning" className="card-alert warn">
+              <Alert type="warning" size="small" className="card-alert warn">
                 <Icon name="shield-alert" slot="icon" />
                 This hands your own data to the program. Whatever it does with those bytes
                 happens somewhere the agent stops governing them.
@@ -2667,7 +2740,8 @@ function Card({
         <DecisionCard
           className="confirm manifest"
           answerable={answerable}
-          subject={request.task}
+          // Folded, the task names each dropped file, in the bridge's title the run's record has.
+          subject={request.title ?? request.task}
           decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You approved this plan' : 'You declined this plan' }}
           head={<CardHead icon="list" intent="Run plan" deciding
             counts={<span className="counts">{request.steps.length} step{request.steps.length === 1 ? '' : 's'}</span>} />}
@@ -2677,6 +2751,11 @@ function Card({
           <p className="permission-scope" data-deciding="all">
             <strong>You asked:</strong> {request.task}
           </p>
+          {!!entry.dropped?.length && (
+            <div className="manifest-dropped" data-deciding="all">
+              {entry.dropped.map((item) => <DroppedChip key={item.marker} marker={item.marker} file={item.file} />)}
+            </div>
+          )}
 
           {/* Every step, in order and unshortened. The answer covers the whole plan. The agent
               numbers each line, so the list draws no numbers of its own. */}

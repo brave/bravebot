@@ -49,6 +49,12 @@ pub(crate) struct Walk {
     pub mcp_requested: Vec<(std::path::PathBuf, String)>,
     pub workspace: Workspace,
     pub task: String,
+    /// The pictures and PDFs dropped onto the task, each checked as `turn.send` checks one
+    /// (DROP-10). The agent's runner reads them before the planner's policy exists (DROP-4).
+    pub attachments: Vec<bravebot_agent::turn::Attachment>,
+    /// The marker each attachment stands for in the task, in the same order: `[Image #1]` for the
+    /// first picture dropped. Empty where the client sent none, and the title keeps the markers.
+    pub markers: Vec<String>,
     pub run: usize,
     pub cancel: Cancel,
     pub pending: crate::turn::Pending,
@@ -70,6 +76,30 @@ fn attempt_json(attempt: &Attempt) -> Value {
     })
 }
 
+/// The words a run is titled by, on its plan question and its record: the task, with the marker of
+/// each picture and PDF dropped onto it, such as `[Image #1]`, replaced by that file's name.
+///
+/// `markers` pairs with `attachments` by position, as the window sends them, so each file names
+/// only the marker it was staged under, and a bracket that is no drop's marker stays as typed. The
+/// planner is still shown the task with its markers, each of which answers a `Dropped file:` part
+/// (DROP-11).
+pub(crate) fn titled(
+    task: &str,
+    markers: &[String],
+    attachments: &[bravebot_agent::turn::Attachment],
+) -> String {
+    markers
+        .iter()
+        .zip(attachments)
+        .fold(task.to_string(), |title, (marker, dropped)| {
+            let name = std::path::Path::new(&dropped.path).file_name().map_or_else(
+                || dropped.path.clone(),
+                |name| name.to_string_lossy().into_owned(),
+            );
+            title.replace(marker.as_str(), &name)
+        })
+}
+
 /// Run one task as a manifest to its end, record it, and say what happened.
 pub(crate) fn walk(walk: Walk) {
     let Walk {
@@ -88,6 +118,8 @@ pub(crate) fn walk(walk: Walk) {
         mcp_requested,
         workspace,
         task: asked,
+        attachments,
+        markers,
         run,
         cancel,
         pending,
@@ -95,6 +127,7 @@ pub(crate) fn walk(walk: Walk) {
         answers,
         finished,
     } = walk;
+    let title = titled(&asked, &markers, &attachments);
 
     // Held for the length of the run, as a turn holds it. The session refuses a turn and a
     // second run while one is in flight, so nothing else contends for it.
@@ -113,7 +146,8 @@ pub(crate) fn walk(walk: Walk) {
         Arc::clone(&state.question_ids),
         cancel.clone(),
     )
-    .answerable_by(answerers);
+    .answerable_by(answerers)
+    .titling_plans(title.clone());
 
     // The servers the session started, so a plan may call a tool of a list that was vouched for.
     // Started here when no turn has, by the function the first turn starts them with, so the
@@ -130,8 +164,10 @@ pub(crate) fn walk(walk: Walk) {
         &cancel,
     );
 
-    // No files and no conversation: the planner may be shown the task and nothing else
-    // (MANIFEST-1). No auto-vetting either, since nothing is read before the plan is fixed.
+    // No project files and no conversation: the planner is shown the task and the pictures and
+    // PDFs dropped onto it, and nothing else (MANIFEST-1, DROP-4). The runner reads each drop under
+    // a policy holding only that read, before the planner's policy exists. No auto-vetting either,
+    // since nothing the plan could look at is read before the plan is fixed.
     let task = Task::new(&asked)
         .with_home(bravebot_agent::home::directory())
         .with_cache(bravebot_agent::home::cache())
@@ -149,6 +185,9 @@ pub(crate) fn walk(walk: Walk) {
         .with_permissions(state.answers.rules.permissions.clone())
         .with_permission_mode(permission_mode.clone())
         .with_mcp(mcp);
+    let task = attachments.into_iter().fold(task, |task, dropped| {
+        task.with_attachment(dropped.path, dropped.media)
+    });
 
     // Screening off the task, which asks for none: nothing fills in a verdict before the plan is
     // fixed, so a confirmer told to screen would refuse on a word nobody made.
@@ -182,7 +221,7 @@ pub(crate) fn walk(walk: Walk) {
         true => None,
         false => bravebot_session::sessions::record_manifest_run(
             &project,
-            &asked,
+            &title,
             &outcome,
             reporter.spent(),
             crate::FRONT,
@@ -313,4 +352,49 @@ pub(crate) fn read(request: &Request) -> Result<Value, Failure> {
             "failure": run.failure,
         },
     }))
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::titled;
+    use bravebot_agent::turn::Attachment;
+
+    fn dropped(path: &str, media: &str) -> Attachment {
+        Attachment {
+            path: path.to_string(),
+            media: media.to_string(),
+        }
+    }
+
+    fn markers(markers: &[&str]) -> Vec<String> {
+        markers.iter().map(|marker| (*marker).to_string()).collect()
+    }
+
+    #[test]
+    fn each_marker_takes_its_own_files_name_wherever_it_stands() {
+        let attachments = [
+            dropped("/d/a.png", "image/png"),
+            dropped("/d/b.pdf", "application/pdf"),
+        ];
+        assert_eq!(
+            titled(
+                "compare [PDF #3] with [Image #1] [x]",
+                &markers(&["[Image #1]", "[PDF #3]"]),
+                &attachments
+            ),
+            "compare b.pdf with a.png [x]"
+        );
+    }
+
+    #[test]
+    fn a_bracket_that_is_no_drops_marker_stays_as_typed() {
+        assert_eq!(
+            titled(
+                "do [Step #1] from [Image #2] and [Image #3]",
+                &markers(&["[Image #2]"]),
+                &[dropped("/d/sketch.png", "image/png")]
+            ),
+            "do [Step #1] from sketch.png and [Image #3]"
+        );
+    }
 }

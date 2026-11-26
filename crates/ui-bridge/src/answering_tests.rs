@@ -649,3 +649,58 @@ fn an_actor_note_is_recorded_for_the_turn_and_not_for_the_delegate_recording() {
     assert_eq!(noted.from, None, "the note was credited to the delegate");
     assert_eq!(events.last().unwrap().from, Some(delegate));
 }
+
+/// SANDBOX-29: a host client named to answer runs may draw no line that says a run is unconfined,
+/// so a line asked to run with no sandbox is refused with nothing shown and no question number
+/// used. The control is the same line confined, which is put to that client.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_host_client_answering_runs_is_not_asked_about_an_unconfined_run() {
+    use bravebot_core::command::{Pipeline, Stage};
+    let a_run = || {
+        RunRequest::from_pipeline(
+            &Pipeline::new(vec![Stage::new("git", vec!["status".into()])]),
+            &["/usr/bin/git".into()],
+            "/tmp",
+        )
+    };
+    let answerers = Answerers::default();
+    answerers.only(&[Kind::Run]).unwrap();
+    let mut turn = a_turn(&answerers);
+
+    let mut confirmer = turn.confirmer.take().expect("the confirmer is free");
+    let (done, decided) = mpsc::channel();
+    std::thread::spawn(move || {
+        let decision = confirmer.confirm_run(&RunRequest {
+            unconfined: true,
+            confined: None,
+            key_choice: None,
+            ..a_run()
+        });
+        done.send((confirmer, decision)).ok();
+    });
+    let (confirmer, decision) = decided
+        .recv_timeout(PATIENCE)
+        .expect("the unconfined run was left waiting");
+    turn.confirmer = Some(confirmer);
+    assert_eq!(decision, RunDecision::reject());
+    assert!(turn.nothing_was_published(), "the unconfined run was shown");
+    assert!(turn.waiting().is_none());
+    assert_eq!(
+        turn.ids.load(Ordering::SeqCst),
+        0,
+        "a question number was used for a question never asked"
+    );
+
+    let mut confirmer = turn.confirmer.take().expect("the confirmer is free");
+    std::thread::spawn(move || {
+        let _ = confirmer.confirm_run(&a_run());
+    });
+    let shown = turn.the_question_shown_as("run.request");
+    assert_eq!(shown["unconfined"], false);
+    let request = shown["request"].as_u64().expect("a number");
+    assert!(
+        turn.running
+            .answer(request, Reply::Run(RunDecision::reject()))
+    );
+}

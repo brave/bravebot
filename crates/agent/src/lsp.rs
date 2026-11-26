@@ -178,6 +178,15 @@ impl LanguageServers {
         &self.root
     }
 
+    /// The programs of the servers the session has started, or `None` while a question holds the
+    /// set.
+    pub fn started_programs(&self) -> Option<Vec<String>> {
+        self.servers
+            .try_lock()
+            .ok()
+            .map(|servers| servers.programs())
+    }
+
     /// Ask one question, starting a server for the file's language if none is running.
     ///
     /// The person is asked before a server starts, once per language per session, through the

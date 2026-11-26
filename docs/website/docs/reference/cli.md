@@ -392,6 +392,15 @@ that file: carrying on under whatever the directory happened to hold would be th
 configuration used in silence. A mistyped path and a variable that expanded to nothing look the same
 from here.
 
+The named file can grant allow rules, `sandbox.mode` and `run.network`, so it is protected as `.bravebot` is: a
+write to it through a tool asks, even in accepting-edits mode, a `run` redirection into it asks, and on
+macOS a command cannot rewrite it. On Linux and Windows nothing holds one file back from a command that
+may write the directory it sits in, so a named file inside the working directory or a directory opened
+with `--add-dir`, `/add-dir` or `--sandbox-allow-write` is read as a checkout's file is: it grants no
+allow rule, no `sandbox.mode` and no `run.network`, and `bravebot doctor` and the opening of the session
+say so. Name a file outside those directories for its rules to apply there. Its `deny` and `ask` rules
+apply wherever it is.
+
 What is checked is that the file is there. What is in it is read by the rule every layer gets, where
 a file that is oversized or unparseable leaves the others in force, and `bravebot doctor` lists the
 layers it read, so a named file that did not parse shows up by its absence from that list.
@@ -970,7 +979,8 @@ local files belong to whoever made the checkout. It reports:
 - any key in a settings file that this build does not read, at the top level or inside `permissions`,
   `sandbox.filesystem` or `run`, by name and file, never its value: the file still applies and the
   report still passes. A key a file wrote twice and a managed `retrieval` value that pins nothing
-  are named the same way. A session names all of these as it opens;
+  are named the same way, even where the configuration cannot be used. A session names all of these as it
+  opens, and a one-shot run names them on stderr before its task starts;
 - any project or local settings file whose `provider` block or `model` key was ignored, since those two
   are read from your own file and the one `--settings` names;
 - whether a gateway key is stored by `bravebot auth login gateway`, without printing it;

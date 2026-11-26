@@ -1048,10 +1048,9 @@ pub struct Session {
     /// The files a resumed session's record says it wrote, whose calls replay without what they
     /// wrote (OPEN-6).
     written_before: Vec<std::path::PathBuf>,
-    /// The open loops when the person was last shown them, and when the planner was last told
-    /// (OPEN-3, OPEN-4).
-    loops_shown: bravebot_agent::open_loops::Loops,
-    loops_told: bravebot_agent::open_loops::Loops,
+    /// The open loops the last turn ended with, which the person was shown, and those the planner
+    /// was last told of (OPEN-3, OPEN-4).
+    open_loops: bravebot_agent::open_loops::Told,
     /// The definition the turn about to start was addressed to, from a `/agent` line a person typed.
     ///
     /// Taken by the one turn it was set for, so the next line is the session's own planner again
@@ -1580,8 +1579,7 @@ impl Session {
             goal: None,
             work: bravebot_agent::Work::default(),
             written_before: Vec::new(),
-            loops_shown: Default::default(),
-            loops_told: Default::default(),
+            open_loops: Default::default(),
             addressing: None,
             system_prompts: bravebot_agent::turn::SystemPrompts::default(),
             standing: None,
@@ -12760,6 +12758,8 @@ mod tests {
             transcript_len: turns,
             title: "a session".to_string(),
             was_wrote: true,
+            work: None,
+            written: None,
         }
     }
 

@@ -27,6 +27,7 @@ pub mod env_var {
     include!("env_var.rs");
 }
 
+pub mod background_idle;
 pub mod brave_key;
 pub mod connectors;
 pub mod crash_reports;

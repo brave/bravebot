@@ -6,7 +6,7 @@
 import type { EventMap, TodoRow } from '../src/shared/protocol'
 import {
   ALL_ENTRIES_REPLY, ASK, EXPOSURE, FAILURES, FETCH, FETCH_TRICKY, HOST, MANIFEST, MCP_CALL, MCP_MOVE, MCP_SERVER, MCP_SERVER_REMOTE, MCP_TOOLS,
-  NO_MODEL, OUTPUT, OUTPUT_UNSAFE, PLAN_DECLINED, PLAN_FAILED, PLAN_STOPPED, QUARANTINE, RUN_ONE, RUN_PIPE, SERVER, SERVER_DECLARED, TODOS, VET,
+  NO_MODEL, OUTPUT, OUTPUT_UNSAFE, PLAN_DECLINED, PLAN_FAILED, PLAN_STOPPED, QUARANTINE, RUN_ONE, RUN_PIPE, RUN_UNCONFINED, SERVER, SERVER_DECLARED, TODOS, VET,
   VET_PICTURE, VOUCH, WRITE_CREATE, WRITE_EDIT, WRITE_OVERWRITE, WRITE_UNTRUSTED, tool,
 } from './fixtures'
 import type { Described, Kind, Scenario, Script, Want } from './script'
@@ -216,6 +216,7 @@ const CARDS: CardCase[] = [
   { id: 'write-untrusted', title: 'Write: untrusted source', detail: 'Credential finding, processor remark, hidden characters.', card: CONFIRM(WRITE_UNTRUSTED) },
   { id: 'run-one', title: 'Run: one command', detail: 'Confined, can be trusted.', card: card('run.request', 'run', withId(RUN_ONE)), want: 'always' },
   { id: 'run-pipe', title: 'Run: pipeline', detail: 'Three stages, a write, lent scopes, ambient access, releases private data, not confined.', card: card('run.request', 'run', withId(RUN_PIPE)) },
+  { id: 'run-unconfined', title: 'Run: no sandbox', detail: 'The planner asked for this line to run with no sandbox; nothing is remembered.', card: card('run.request', 'run', withId(RUN_UNCONFINED)) },
   { id: 'output', title: 'Output: safe to read', detail: 'Whether the model may read what a command printed.', card: card('output.request', 'output', withId(OUTPUT)) },
   { id: 'output-unsafe', title: 'Output: flagged', detail: 'The check found an instruction in it.', card: card('output.request', 'output', withId(OUTPUT_UNSAFE)), want: 'reject' },
   { id: 'vouch', title: 'Vouch for a file', detail: 'A confined file the model would like to read.', card: card('vouch.request', 'vouch', withId(VOUCH)), want: 'reject' },

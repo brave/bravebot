@@ -4,7 +4,9 @@
 //! specifies, so a contract holds the code to the meaning. docs/development/verification.md says
 //! how a contract is written and run.
 
+use crate::capability::Capability;
 use crate::command::{Asked, Expansion, Plan, Route, Step, Steps, ValuePart};
+use crate::device::{Grant, Operation, Standing, Verdict};
 use crate::label::{Confidentiality, Integrity, Label};
 use crate::permissions::{Decision, Ruling};
 use crate::policy::{
@@ -13,6 +15,7 @@ use crate::policy::{
 };
 use crate::programs::Command;
 use crate::remembered::{Remembered, RememberedArg, RememberedLine, RememberedStep, Shape};
+use crate::scope::{Approvals, Confinement, Field, Reads, Scope, Writes};
 use std::path::PathBuf;
 use vstd::prelude::*;
 
@@ -784,6 +787,291 @@ pub(crate) open spec fn search_reason_is_sound(
 /// Whether a byte is one of `0-9`, `a-f` or `A-F`.
 pub open spec fn is_hex_digit(byte: u8) -> bool {
     (b'0' <= byte <= b'9') || (b'a' <= byte <= b'f') || (b'A' <= byte <= b'F')
+}
+
+/// What a capability's output arrives labelled with. Every capability that observes anything
+/// labels it untrusted, since a file, a server, a page or a program's output may hold anything,
+/// and only a capability that observes nothing has no label. A file read, a git read, a language
+/// server, a server call, a connector and a command are private, as content of the person's or
+/// from their account, and only a fetch and a search are public.
+pub open spec fn output_label_is_untrusted(capability: Capability, label: Option<Label>) -> bool {
+    match capability {
+        Capability::FileWrite | Capability::GitWrite => label is None,
+        Capability::WebFetch | Capability::WebSearch => label == Some(
+            Label { integrity: Integrity::Untrusted, confidentiality: Confidentiality::Public },
+        ),
+        _ => label == Some(
+            Label { integrity: Integrity::Untrusted, confidentiality: Confidentiality::Private },
+        ),
+    }
+}
+
+/// Whether a key is in a list of keys.
+pub open spec fn holds(have: Seq<String>, key: Seq<char>) -> bool {
+    exists|i: int| 0 <= i < have.len() && (#[trigger] have[i])@ == key
+}
+
+/// Whether every key of `wanted` is in `have`.
+#[verifier::opaque]
+pub open spec fn holds_all(have: Seq<String>, wanted: Seq<String>) -> bool {
+    forall|j: int| 0 <= j < wanted.len() ==> holds(have, (#[trigger] wanted[j])@)
+}
+
+/// Whether every key of `wanted` is in `first` or in `second`.
+#[verifier::opaque]
+pub open spec fn holds_all_between(
+    first: Seq<String>,
+    second: Seq<String>,
+    wanted: Seq<String>,
+) -> bool {
+    forall|j: int|
+        0 <= j < wanted.len() ==> holds(first, (#[trigger] wanted[j])@) || holds(
+            second,
+            wanted[j]@,
+        )
+}
+
+/// How much of the machine a program reads, from the least to the most.
+pub open spec fn reads_rank(reads: Reads) -> int {
+    match reads {
+        Reads::Listed => 0,
+        Reads::Machine => 1,
+        Reads::Unconfined => 2,
+    }
+}
+
+/// What a program writes, from the least to the most.
+pub open spec fn writes_rank(writes: Writes) -> int {
+    match writes {
+        Writes::Nothing => 0,
+        Writes::Session => 1,
+        Writes::Unconfined => 2,
+    }
+}
+
+/// How much a session does unasked, from the least to the most.
+pub open spec fn approvals_rank(approvals: Approvals) -> int {
+    match approvals {
+        Approvals::Plan => 0,
+        Approvals::Ask => 1,
+        Approvals::AcceptEdits => 2,
+        Approvals::Auto => 3,
+        Approvals::Bypass => 4,
+    }
+}
+
+/// A program under `current` reads no more and writes no more than one under `ceiling`.
+pub open spec fn confinement_within(current: Confinement, ceiling: Confinement) -> bool {
+    reads_rank(current.reads) <= reads_rank(ceiling.reads) && writes_rank(current.writes)
+        <= writes_rank(ceiling.writes)
+}
+
+/// `field` of `current` is past what the ceiling allows. Written from what each field is: a list
+/// that grants holds nothing the ceiling's did not, a list that restricts holds all of the
+/// ceiling's, an undecided path of the ceiling's may be replaced by a distrust and no other path is
+/// undecided (it would lift a broader distrust), an `ask` rule may be replaced by a `deny`, and an
+/// ordered field is no further along its order.
+pub open spec fn field_widened(ceiling: Scope, current: Scope, field: Field) -> bool {
+    match field {
+        Field::Project => ceiling.project@ != current.project@,
+        Field::Directories => !holds_all(ceiling.directories@, current.directories@),
+        Field::Trusted => !holds_all(ceiling.trusted@, current.trusted@),
+        Field::Distrusted => !holds_all(current.distrusted@, ceiling.distrusted@),
+        Field::Undecided => !holds_all_between(
+            current.undecided@,
+            current.distrusted@,
+            ceiling.undecided@,
+        ) || !holds_all(ceiling.undecided@, current.undecided@),
+        Field::Programs => !holds_all(ceiling.programs@, current.programs@),
+        Field::Exposed => !holds_all(ceiling.exposed@, current.exposed@),
+        Field::McpServers => !holds_all(ceiling.mcp_servers@, current.mcp_servers@),
+        Field::References => !holds_all(ceiling.references@, current.references@),
+        Field::SkillDirectories => !holds_all(
+            ceiling.skill_directories@,
+            current.skill_directories@,
+        ),
+        Field::Checkouts => !holds_all(ceiling.checkouts@, current.checkouts@),
+        Field::LanguageServers => !holds_all(ceiling.language_servers@, current.language_servers@),
+        Field::StandingAnswers => !holds_all(ceiling.standing_answers@, current.standing_answers@),
+        Field::Allow => !holds_all(ceiling.allow@, current.allow@),
+        Field::Ask => !holds_all_between(current.ask@, current.deny@, ceiling.ask@),
+        Field::Deny => !holds_all(current.deny@, ceiling.deny@),
+        Field::Confinement => !confinement_within(current.confinement, ceiling.confinement),
+        Field::Approvals => approvals_rank(current.approvals) > approvals_rank(ceiling.approvals),
+        Field::ReadsStayInWorkspace => ceiling.reads_stay_in_workspace
+            && !current.reads_stay_in_workspace,
+        Field::AutoVetting => current.auto_vetting != ceiling.auto_vetting,
+        Field::ConfinedLines => current.confined_lines && !ceiling.confined_lines,
+    }
+}
+
+/// Nothing of `current` is past the ceiling. Every field of the scope is named, so a field added
+/// to `Scope` stops the build here, which is the place to give it a `Field` and a rule in
+/// `field_widened`.
+pub open spec fn scope_covered(ceiling: Scope, current: Scope) -> bool {
+    let Scope {
+        project: _,
+        directories: _,
+        trusted: _,
+        distrusted: _,
+        undecided: _,
+        programs: _,
+        exposed: _,
+        mcp_servers: _,
+        references: _,
+        skill_directories: _,
+        checkouts: _,
+        language_servers: _,
+        standing_answers: _,
+        allow: _,
+        ask: _,
+        deny: _,
+        confinement: _,
+        approvals: _,
+        reads_stay_in_workspace: _,
+        auto_vetting: _,
+        confined_lines: _,
+    } = ceiling;
+    forall|field: Field|
+        #![trigger field_widened(ceiling, current, field)]
+        !field_widened(ceiling, current, field)
+}
+
+/// A scope is inside the ceiling it is, whatever it holds.
+pub proof fn a_scope_covers_itself(scope: Scope)
+    ensures
+        scope_covered(scope, scope),
+{
+    reveal(holds_all);
+    reveal(holds_all_between);
+    assert forall|field: Field| !field_widened(scope, scope, field) by {
+        assert forall|keys: Seq<String>| holds_all(keys, keys) by {
+            assert forall|j: int| 0 <= j < keys.len() implies holds(keys, (#[trigger] keys[j])@) by {
+                assert(keys[j]@ == keys[j]@);
+            }
+        }
+        assert forall|first: Seq<String>, second: Seq<String>|
+            holds_all_between(first, second, first) by {
+            assert forall|j: int| 0 <= j < first.len() implies holds(first, (#[trigger] first[j])@) by {
+                assert(first[j]@ == first[j]@);
+            }
+        }
+    }
+}
+
+/// A scope is inside the ceiling exactly where none of the twenty-one fields is past it.
+pub proof fn a_scope_is_covered_where_no_field_is_widened(ceiling: Scope, current: Scope)
+    ensures
+        scope_covered(ceiling, current) == (
+            !field_widened(ceiling, current, Field::Project) &&
+            !field_widened(ceiling, current, Field::Directories) &&
+            !field_widened(ceiling, current, Field::Trusted) &&
+            !field_widened(ceiling, current, Field::Distrusted) &&
+            !field_widened(ceiling, current, Field::Undecided) &&
+            !field_widened(ceiling, current, Field::Programs) &&
+            !field_widened(ceiling, current, Field::Exposed) &&
+            !field_widened(ceiling, current, Field::McpServers) &&
+            !field_widened(ceiling, current, Field::References) &&
+            !field_widened(ceiling, current, Field::SkillDirectories) &&
+            !field_widened(ceiling, current, Field::Checkouts) &&
+            !field_widened(ceiling, current, Field::LanguageServers) &&
+            !field_widened(ceiling, current, Field::StandingAnswers) &&
+            !field_widened(ceiling, current, Field::Allow) &&
+            !field_widened(ceiling, current, Field::Ask) &&
+            !field_widened(ceiling, current, Field::Deny) &&
+            !field_widened(ceiling, current, Field::Confinement) &&
+            !field_widened(ceiling, current, Field::Approvals) &&
+            !field_widened(ceiling, current, Field::ReadsStayInWorkspace) &&
+            !field_widened(ceiling, current, Field::AutoVetting) &&
+            !field_widened(ceiling, current, Field::ConfinedLines)
+        ),
+{
+    if (
+        !field_widened(ceiling, current, Field::Project) &&
+        !field_widened(ceiling, current, Field::Directories) &&
+        !field_widened(ceiling, current, Field::Trusted) &&
+        !field_widened(ceiling, current, Field::Distrusted) &&
+        !field_widened(ceiling, current, Field::Undecided) &&
+        !field_widened(ceiling, current, Field::Programs) &&
+        !field_widened(ceiling, current, Field::Exposed) &&
+        !field_widened(ceiling, current, Field::McpServers) &&
+        !field_widened(ceiling, current, Field::References) &&
+        !field_widened(ceiling, current, Field::SkillDirectories) &&
+        !field_widened(ceiling, current, Field::Checkouts) &&
+        !field_widened(ceiling, current, Field::LanguageServers) &&
+        !field_widened(ceiling, current, Field::StandingAnswers) &&
+        !field_widened(ceiling, current, Field::Allow) &&
+        !field_widened(ceiling, current, Field::Ask) &&
+        !field_widened(ceiling, current, Field::Deny) &&
+        !field_widened(ceiling, current, Field::Confinement) &&
+        !field_widened(ceiling, current, Field::Approvals) &&
+        !field_widened(ceiling, current, Field::ReadsStayInWorkspace) &&
+        !field_widened(ceiling, current, Field::AutoVetting) &&
+        !field_widened(ceiling, current, Field::ConfinedLines)
+    ) {
+        assert forall|field: Field| !field_widened(ceiling, current, field) by {
+            match field {
+                Field::Project => {},
+                Field::Directories => {},
+                Field::Trusted => {},
+                Field::Distrusted => {},
+                Field::Undecided => {},
+                Field::Programs => {},
+                Field::Exposed => {},
+                Field::McpServers => {},
+                Field::References => {},
+                Field::SkillDirectories => {},
+                Field::Checkouts => {},
+                Field::LanguageServers => {},
+                Field::StandingAnswers => {},
+                Field::Allow => {},
+                Field::Ask => {},
+                Field::Deny => {},
+                Field::Confinement => {},
+                Field::Approvals => {},
+                Field::ReadsStayInWorkspace => {},
+                Field::AutoVetting => {},
+                Field::ConfinedLines => {},
+            }
+        }
+    }
+}
+
+/// A grant covers an operation: `read` covers reading and `control` covers both.
+pub open spec fn grant_allows(grant: Grant, operation: Operation) -> bool {
+    operation == Operation::Read || grant == Grant::Control
+}
+
+/// What the host answers a request, from what it holds about the device and nothing in the request.
+pub open spec fn device_verdict(standing: Standing, operation: Operation) -> Verdict {
+    match standing {
+        Standing::Unknown => Verdict::NotPaired,
+        Standing::Revoked => Verdict::Revoked,
+        Standing::Paired(grant) => {
+            if grant_allows(grant, operation) {
+                Verdict::Allowed
+            } else {
+                Verdict::GrantTooNarrow
+            }
+        },
+    }
+}
+
+/// A request is allowed only for a device that is paired with a grant that covers it. A device with
+/// no record, and one that was revoked, are never allowed, and nor is a control request on a read
+/// grant.
+pub proof fn a_request_is_allowed_only_for_a_paired_device_whose_grant_covers_it(
+    standing: Standing,
+    operation: Operation,
+)
+    ensures
+        device_verdict(standing, operation) == Verdict::Allowed <==> (exists|grant: Grant|
+            standing == Standing::Paired(grant) && grant_allows(grant, operation)),
+        standing == Standing::Unknown ==> device_verdict(standing, operation) != Verdict::Allowed,
+        standing == Standing::Revoked ==> device_verdict(standing, operation) != Verdict::Allowed,
+        standing == Standing::Paired(Grant::Read) && operation == Operation::Control
+            ==> device_verdict(standing, operation) != Verdict::Allowed,
+{
 }
 
 } // verus!

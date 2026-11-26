@@ -59,7 +59,8 @@ name still reaches the pinned account and is billed to it. A name here is the mo
 carries it, an inference-profile ARN or a gateway slug such as `z-ai/glm-4.6`, compared exactly, and a
 tier word is checked as the model that tier names. A gateway model has two spellings, such as
 `openrouter/z-ai/glm-4.6` and the `z-ai/glm-4.6` the gateway is sent, and an entry naming either one
-answers for the model however it was asked for. Without an `allow` list every model not denied is
+answers for the model however it was asked for. A ChatGPT or xAI account model has two spellings in the
+same way, `chatgpt/gpt-5` and the `gpt-5` the account is sent, or `xai/grok-4.5` and `grok-4.5`. Without an `allow` list every model not denied is
 requested as before; with one, a model no entry names is refused, and `"allow": []` refuses every
 model. A deny entry wins over an allow entry naming the same model.
 

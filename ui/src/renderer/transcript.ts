@@ -39,7 +39,14 @@ import type {
   VetRequest,
 } from '../shared/protocol'
 import type { ExportTurn } from '../shared/export'
+import type { DroppedFile } from '../shared/drops'
 import type { AsideDone } from '../shared/aside'
+
+/** A picture or PDF dropped onto a `/manifest` task, and the marker that stands for it there. */
+export interface DroppedOnTask {
+  marker: string
+  file: DroppedFile
+}
 
 export type Entry = (
   | { kind: 'turn-start'; id: string; number: number }
@@ -59,6 +66,8 @@ export type Entry = (
    */
   | { kind: 'user'; id: string; text: string; prompt?: number; summoned?: string; interjected?: true }
   | { kind: 'assistant'; id: string; text: string }
+  /** The bridge's line naming what a turn left open (OPEN-3), drawn as sent under that turn. */
+  | { kind: 'open-loops'; id: string; text: string; turn: number }
   /** `command` is the words of `text` that are a command to run, where a notice names one. */
   | { kind: 'narration'; id: string; text: string; command?: string | null; refused?: true }
   /**
@@ -163,6 +172,8 @@ export type Entry = (
        * plan is not held to.
        */
       unheld?: string[]
+      /** The pictures and PDFs dropped onto the task, shown beside it as the composer showed them. */
+      dropped?: DroppedOnTask[]
     }
   /**
    * A file holding a credential, awaiting a decision about whether the model may read it, or
@@ -384,7 +395,8 @@ export const askedOutput = (request: OutputRequest): Entry => ({
 export const askedVet = (request: VetRequest): Entry => ({ kind: 'vet', id: nextId(), request, decision: null })
 export const askedFetch = (request: FetchRequest): Entry => ({ kind: 'fetch', id: nextId(), request, decision: null })
 export const askedServer = (request: ServerRequest): Entry => ({ kind: 'server', id: nextId(), request, decision: null })
-export const askedManifest = (request: ManifestRequest, unheld: string[] = []): Entry => ({ kind: 'manifest', id: nextId(), request, decision: null, unheld })
+export const askedManifest = (request: ManifestRequest, unheld: string[] = [], dropped: DroppedOnTask[] = []): Entry =>
+  ({ kind: 'manifest', id: nextId(), request, decision: null, unheld, ...(dropped.length > 0 ? { dropped } : {}) })
 
 /**
  * The entries without the agent's narration of a plan's steps, once the plan's card lists them.
@@ -460,6 +472,12 @@ export const askedQuestions = (request: AskRequest): Entry => ({
   answers: null,
 })
 export const replied = (text: string, turn?: number): Entry => ({ kind: 'assistant', id: nextId(), text, turn })
+export const openLoops = (text: string, turn: number): Entry => ({ kind: 'open-loops', id: nextId(), text, turn })
+/** The last entry that is not an open-loops line, so a turn that failed reads as failed with its line after the error. */
+export function lastTurnEntry(entries: Entry[]): Entry | undefined {
+  for (let at = entries.length - 1; at >= 0; at--) if (entries[at]!.kind !== 'open-loops') return entries[at]
+  return undefined
+}
 export const turnStarted = (number: number): Entry => ({ kind: 'turn-start', id: nextId(), number })
 
 /**
@@ -673,6 +691,7 @@ export function plainText(entry: Entry): string | null {
     case 'replayed-tool':
     case 'plan-task':
     case 'plan-reply':
+    case 'open-loops':
       return entry.text
     case 'quarantined':
       // The preview, which is all the interface ever had: the kernel trimmed it before it
@@ -737,7 +756,7 @@ export function searchableText(entry: Entry): string {
     case 'tool': return [entry.activity.verb, entry.activity.shownTarget, entry.activity.why, entry.activity.note, ...entry.activity.changes.map((change) => 'text' in change ? change.text : '')].join(' ')
     case 'quarantined': return [entry.shown.origin, entry.shown.label, ...entry.shown.preview].join(' ')
     case 'confirm': return [entry.request.path, entry.request.intent, ...entry.request.changes.map((change) => 'text' in change ? change.text : '')].join(' ')
-    case 'run': return [entry.request.summary, entry.request.directory, entry.request.line ?? '', ...entry.request.stages.map((stage) => stage.display)].join(' ')
+    case 'run': return [entry.request.summary, entry.request.directory, entry.request.line ?? '', entry.request.unconfinedNote ?? '', ...entry.request.stages.map((stage) => stage.display)].join(' ')
     case 'output': return [entry.request.command, entry.request.summary, entry.request.output].join(' ')
     case 'vet': return [entry.request.origin, entry.request.expects, entry.request.content].join(' ')
     case 'fetch': return [entry.request.url, entry.request.host].join(' ')

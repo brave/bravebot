@@ -38,6 +38,7 @@ pub mod command;
 mod compare;
 pub mod credentials;
 pub mod delegate;
+pub mod device;
 pub mod event;
 pub mod fence;
 pub mod file_authority;
@@ -56,6 +57,7 @@ pub mod pure;
 pub mod reference;
 pub mod remembered;
 pub mod safe;
+pub mod scope;
 pub mod selector;
 #[path = "../../ui-files/src/short_name.rs"]
 mod short_name;

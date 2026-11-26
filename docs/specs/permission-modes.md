@@ -610,7 +610,8 @@ would be granted ([SANDBOX-28](sandboxing.md#SANDBOX-28)), and a `checker` or `w
 `lsp` is answered as the lead session is. It is offered no `request_path` and no way to ask
 ([DELEGATE-12](delegation.md#DELEGATE-12)), and needs none. A delegate started restricted keeps every
 restriction it was started with: its kind (a `reader` holds no `run` and writes nothing), a `tools:`
-line, a `writes:` limit ([DELEGATE-28](delegation.md#DELEGATE-28)) that refuses a file its patterns do
+line (a call to a tool the line leaves out is answered `error: no such tool '<name>'`, as
+[DELEGATE-19](delegation.md#DELEGATE-19) says), a `writes:` limit ([DELEGATE-28](delegation.md#DELEGATE-28)) that refuses a file its patterns do
 not cover wherever the file is, a checkout that keeps it out of the working directory and every other
 checkout ([CHECKOUT-7](checkouts.md#CHECKOUT-7)), the sandbox mode, and any `denyRead`, `denyWrite` or
 `permissions.readsStayInWorkspace` the person wrote.
@@ -628,6 +629,12 @@ said.
 `verified-by: bravebot_agent::turn::a_worker_of_a_bypass_turn_reaches_a_sibling_directory_and_one_of_an_asking_turn_does_not`
 `verified-by: bravebot_agent::turn::a_limited_delegate_of_a_bypass_turn_is_refused_a_sibling_directory_its_patterns_do_not_cover`
 `verified-by: bravebot_agent::workspace::a_delegate_in_a_checkout_is_not_reached_into_the_working_directory_or_another_checkout`
+`verified-by: bravebot_agent::delegate_sandbox_lists::a_bypass_worker_is_refused_the_paths_the_persons_deny_lists_cover`
+`verified-by: bravebot_agent::delegate_sandbox_lists::a_bypass_worker_is_kept_inside_the_workspace_where_the_person_asked`
+`verified-by: bravebot_agent::delegate_sandbox_lists::a_delegate_whose_definition_leaves_out_write_file_cannot_call_it`
+`verified-by: bravebot_agent::delegate_sandbox_lists::a_delegate_cannot_call_a_tool_its_tools_line_leaves_out_though_one_it_shares_a_capability_with_is_named`
+`verified-by: bravebot_agent::turn::a_definition_names_the_delegate_a_turn_runs_and_says_what_it_is_for`
+`verified-by: bravebot_agent::turn::a_delegate_runs_its_programs_under_the_mode_of_the_turn_that_spawned_it`
 
 <a id="MODE-10"></a>
 ### MODE-10: a mode belongs to the sitting it was chosen in

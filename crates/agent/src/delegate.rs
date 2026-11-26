@@ -545,6 +545,13 @@ pub struct Seeded {
     /// What a person sets to stop this delegate alone (DELEGATE-25). Minted with the delegate and
     /// handed to the interface in the announcement that it started.
     pub stop: bravebot_core::cancel::DelegateStop,
+    /// What the delegate's own context has met before its first round.
+    ///
+    /// `Trusted` for every delegate a turn starts, since a delegate begins from an empty
+    /// conversation. The turn that starts it may lower it with
+    /// [`Task::with_delegates_that_have_met`]. It is a constant the caller chose and no byte of
+    /// anything a delegate read, so nothing about it is decided from untrusted content.
+    pub context: bravebot_core::label::Integrity,
 }
 
 /// Names what it holds and never the task.
@@ -616,6 +623,7 @@ pub fn seed<S: Sink>(
         remembering: remembering.map(str::to_string),
         workspace: None,
         stop: bravebot_core::cancel::DelegateStop::new(),
+        context: bravebot_core::label::Integrity::Trusted,
     }
 }
 
@@ -794,6 +802,13 @@ pub fn run(
     // gone, which is what makes "nothing but the report crosses back" a fact about the data rather
     // than a promise about the prose.
     let mut conversation = Conversation::new();
+    // What it has met before it starts: nothing, unless the caller said otherwise. Met into the
+    // conversation, which only lowers, so a delegate cannot start from more than the caller
+    // allowed and the turn below labels its answer from what this leaves.
+    conversation.observed(bravebot_core::label::Label::new(
+        seeded.context,
+        bravebot_core::label::Confidentiality::Public,
+    ));
 
     // Where the run gets to, and the one place the parent reads it from. It starts as the copy
     // the delegate was seeded with, which is what a run that fails before its first round hands

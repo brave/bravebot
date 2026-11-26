@@ -15,7 +15,7 @@ export function sessionStatus(current: Live): SessionStatus | undefined {
   const outstanding = t.outstanding(current.entries)
   return outstanding ? (outstanding.kind === 'ask' ? 'answer' : 'approval')
     : current.running ? 'working'
-      : current.entries.at(-1)?.kind === 'error' ? 'failed'
+      : t.lastTurnEntry(current.entries)?.kind === 'error' ? 'failed'
         : undefined
 }
 

@@ -19727,8 +19727,58 @@ mod tests {
             "no key held, whatever the turn reported"
         );
 
-        // What `fold_outcome` hands on for a turn whose requests carried the key.
-        record_what_the_turn_ran_on(&mut session, asked(), "test-model", true, true);
+        // A second turn, folded in as the terminal folds one, whose requests carried the key. What
+        // the agent sets in `premium` is pinned by the agent's own test; this pins what the
+        // terminal does with it, so a fold that records a key as never sent is caught here.
+        let (mut config_two, _requests_two, server_two) =
+            undo_tests::endpoint::endpoint(vec![undo_tests::endpoint::answer()], None);
+        config_two.premium_key = config.premium_key.clone();
+        config_two.premium_endpoint = config.premium_endpoint.clone();
+        session.paste("look it up again");
+        session.submit().unwrap();
+        let mut sink_two = Trail::new();
+        let completed_two = turn::resume(
+            &config_two,
+            &Egress::new(),
+            &workspace,
+            &Task::new("look it up again"),
+            &mut Conversation::new(),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink_two,
+            TrustStore::new(&root),
+            TrustedPrograms::new(),
+            None,
+            &Cancel::new(),
+        );
+        server_two.join().expect("the model finished");
+        let mut outcome_two = completed_two.outcome;
+        if let Ok(done) = outcome_two.as_mut() {
+            done.premium = true;
+        }
+        fold_outcome(
+            &mut session,
+            outcome_two,
+            sink_two,
+            Carried {
+                trust: TrustStore::new(&root),
+                programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
+            },
+            Occupied {
+                budget: 100_000,
+                guessed: false,
+                last_request_tokens: 0,
+            },
+            asked(),
+            Line {
+                text: "look it up again",
+                addressed: None,
+                offered_a_later_look: false,
+            },
+            &workspace,
+        );
         assert_eq!(
             tier(&session, &config),
             said(t!(status_premium_in_use)),
@@ -43563,7 +43613,23 @@ mod tests {
         let run_settings = RunSettings::from_settings(&settings);
         let mut servers = crate::state::Servers::default();
 
-        for typed in ["ghost-7f3c91e2", "ghost-\u{1b}[31m7f3c91e2"] {
+        // The id of the session being run is refused too, in its own words and without being
+        // repeated, whichever of the two refusals it is.
+        let typed_ids = [
+            (
+                "ghost-7f3c91e2".to_string(),
+                "no session with that id in this directory",
+            ),
+            (
+                "ghost-\u{1b}[31m7f3c91e2".to_string(),
+                "no session with that id in this directory",
+            ),
+            (current_id.clone(), "that is the session already open"),
+        ];
+        for (typed, expected) in typed_ids
+            .iter()
+            .map(|(typed, said)| (typed.as_str(), *said))
+        {
             let mut switch = None;
             let said_before = session.transcript.len();
 
@@ -43588,16 +43654,11 @@ mod tests {
             );
             let said = &session.transcript.last().expect("a note").text;
             assert_eq!(
-                said,
-                &crate::resume::Refusal::NoSuchSession.note(),
-                "the refusal for a directory with no other session said something else"
-            );
-            assert_eq!(
-                said, "no session with that id in this directory",
-                "the refusal is not the one line CMD-14 words"
+                said, expected,
+                "the refusal for {typed:?} is not the line CMD-14 words"
             );
             assert!(
-                !said.contains("7f3c91e2") && !said.contains('\u{1b}'),
+                !said.contains(typed) && !said.contains('\u{1b}'),
                 "the refusal repeated the id typed: {said:?}"
             );
         }
@@ -43784,7 +43845,10 @@ mod tests {
     /// made with `/style` in the session before is not stored, so it does not come back.
     ///
     /// Rejects: a resume that skips the style the settings name, one that restores the earlier
-    /// session's pick over it, and one that stores the pick in the record.
+    /// session's pick over it, and one that stores the pick in the record. The switch the next
+    /// session begins from is the one `Held::resume` leaves, from a session that holds a pick, so a
+    /// resume that carries the pick across in what it hands on is caught as well as a start that
+    /// reads it from the record.
     #[test]
     #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_resumed_session_starts_in_the_style_the_settings_name_and_not_the_earlier_pick() {
@@ -43793,15 +43857,35 @@ mod tests {
         }
         let root = crate::test_profile::project("bravebot-app-resume-style");
         std::fs::create_dir_all(&root).expect("create");
-        let (workspace, mut session, stored, _conversation, _answers) = a_session_to_branch(&root);
+        let (_, _, earlier, _, _) = a_session_to_branch(&root);
+        let earlier_id = earlier.id().to_string();
+        drop(earlier);
+        let (mut workspace, mut session, mut stored, mut conversation, mut answers) =
+            a_session_to_branch(&root);
         set_style(&mut session, &workspace, "concise");
         assert_eq!(
             session.style().map(|style| style.name.as_ref()),
             Some("concise"),
-            "the earlier session did not pick the style"
+            "the session left did not pick the style"
         );
-        let id = stored.id().to_string();
-        drop(stored);
+        let mut scratch = None;
+        let settings = bravebot_config::Settings::default();
+        let run_settings = RunSettings::from_settings(&settings);
+        let mut servers = crate::state::Servers::default();
+        let mut switch = None;
+        let ended = Held {
+            session: &mut session,
+            conversation: &mut conversation,
+            stored: &mut stored,
+            answers: &mut answers,
+            workspace: &mut workspace,
+            scratch: &mut scratch,
+            settings: &settings,
+            run_settings: &run_settings,
+        }
+        .resume(&mut servers, &mut switch, &earlier_id);
+        assert!(matches!(ended, Some(Ended::Left(Some(_)))), "{ended:?}");
+        let switch = switch.expect("no record was left for the next session");
         let file = bravebot_agent::home::directory()
             .expect("a state directory")
             .join("settings.json");
@@ -43816,11 +43900,10 @@ mod tests {
                     std::fs::remove_file(&file).ok();
                 }
             }
-            let record = bravebot_session::sessions::load(&root, &id).expect("the record");
             let begun = begun_from_a_switch(Switch {
-                record: Box::new(record),
-                workspace: workspace.clone(),
-                sandbox: crate::sandbox_command::Sandboxed::at_start(),
+                record: switch.record.clone(),
+                workspace: switch.workspace.clone(),
+                sandbox: switch.sandbox.clone(),
             });
 
             assert_eq!(
@@ -44462,6 +44545,150 @@ mod tests {
                 "the opening screen of the session {how} says something its configuration does not: {opening}"
             );
         }
+    }
+
+    /// PERM-17: the session the terminal client opens on reads `permissions.bypassUnreachable` from
+    /// the settings it was started with, so the rung is off the ladder the key walks and the flag
+    /// that opened the session in bypass is put back to asking. The named tests call
+    /// `open_in_the_mode_asked_for` themselves, so a startup that handed it other settings would
+    /// leave every one passing. The control opens the same session under settings that say nothing
+    /// and reaches bypass on the ladder, so the walk cannot pass by never reaching it. Rejects:
+    /// `new_session` reading something other than the settings it was given for the key.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_session_the_startup_builds_keeps_bypass_off_the_ladder_where_the_settings_say_it_is_unreachable()
+     {
+        use bravebot_agent::PermissionMode;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-opening-bypass-unreachable");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        // The machine's own managed file is not the layer under test.
+        let _machine = bravebot_config::managed_file_on_this_thread(std::path::Path::new(
+            "no-managed-file-is-here.json",
+        ));
+
+        let opened_under = |settings: &bravebot_config::Settings| {
+            new_session(
+                &mut a_config_needing_no_sign_in(),
+                settings,
+                &workspace,
+                &AskedFor::default(),
+                crate::state::Servers::default(),
+                SessionBasis {
+                    confinement: String::new(),
+                    sockets_with_a_path_reachable: false,
+                    sandbox: crate::sandbox_command::Sandboxed::at_start(),
+                    skip_permissions: true,
+                    asked_for_auto: false,
+                    from_link: false,
+                    prompts: bravebot_agent::turn::SystemPrompts::default(),
+                },
+            )
+        };
+        let modes_the_key_walks = |session: &mut Session| {
+            (0..12)
+                .map(|_| {
+                    session.cycle_permission_mode();
+                    session.permission_mode()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mut unconstrained = opened_under(&bravebot_config::Settings::default());
+        assert_eq!(
+            unconstrained.permission_mode(),
+            PermissionMode::Bypass,
+            "the flag did not open the control session in bypass"
+        );
+        assert!(
+            modes_the_key_walks(&mut unconstrained).contains(&PermissionMode::Bypass),
+            "bypass is not on the ladder of a session whose settings say nothing"
+        );
+
+        let mut refused = opened_under(&bravebot_config::Settings::parse(
+            r#"{"permissions": {"bypassUnreachable": true}}"#,
+        ));
+        assert_eq!(
+            refused.permission_mode(),
+            PermissionMode::Ask,
+            "the flag left the session in bypass where the settings made it unreachable"
+        );
+        let walked = modes_the_key_walks(&mut refused);
+        assert!(
+            !walked.contains(&PermissionMode::Bypass),
+            "the key reached bypass where the settings made it unreachable: {walked:?}"
+        );
+    }
+
+    /// PERM-17: the file an administrator pinned makes bypass unreachable for a session that opens
+    /// with settings saying nothing, since the startup takes the strictest of the settings and that
+    /// file. `Settings::under` does not carry the key, so a read of the settings alone leaves the
+    /// rung on the ladder. The control opens the same session with no managed file and one press
+    /// of the key reaches bypass from auto, where the managed file puts it back to asking.
+    /// Rejects: a startup that reads the settings layers for the key and not the managed file.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_managed_file_that_makes_bypass_unreachable_keeps_it_off_the_ladder_of_a_new_session() {
+        use bravebot_agent::PermissionMode;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-opening-managed-bypass");
+        std::fs::create_dir_all(&root).expect("create");
+        let managed_file = root.join("managed.json");
+        std::fs::write(
+            &managed_file,
+            r#"{"permissions": {"bypassUnreachable": true}}"#,
+        )
+        .expect("write the managed file");
+        let settings = bravebot_config::Settings::default();
+        let after_one_press_from_auto = || {
+            let mut session = open_in_the_mode_asked_for(
+                Session::new("none"),
+                false,
+                true,
+                false,
+                &bravebot_config::Settings::default(),
+            );
+            assert_eq!(
+                session.permission_mode(),
+                PermissionMode::Auto,
+                "the line did not open the session in auto"
+            );
+            session.cycle_permission_mode();
+            session.permission_mode()
+        };
+
+        {
+            let _machine = bravebot_config::managed_file_on_this_thread(std::path::Path::new(
+                "no-managed-file-is-here.json",
+            ));
+            assert!(
+                !bypass_is_unreachable(&settings),
+                "the control has a layer that makes bypass unreachable"
+            );
+            assert_eq!(
+                after_one_press_from_auto(),
+                PermissionMode::Bypass,
+                "bypass is not the rung after auto where nothing makes it unreachable"
+            );
+        }
+
+        let _machine = bravebot_config::managed_file_on_this_thread(&managed_file);
+        assert!(
+            bypass_is_unreachable(&settings),
+            "the managed file's bypassUnreachable was not read"
+        );
+        assert_eq!(
+            after_one_press_from_auto(),
+            PermissionMode::Ask,
+            "a session opened under the managed file reached bypass by the key"
+        );
     }
 
     /// TRUST-15: a session begun from a record, resumed or forked, is given a directory of its own
@@ -46104,6 +46331,8 @@ mod tests {
             transcript_len: turns,
             title: "a session".to_string(),
             was_wrote: true,
+            work: None,
+            written: None,
         }
     }
 
@@ -47996,6 +48225,49 @@ mod tests {
             goal_to_work_towards(&session),
             Some("cargo test exits 0".to_string()),
             "a resumed goal was not told to the turn"
+        );
+    }
+
+    /// GOAL-14: the task a turn is built with carries the condition of the goal in force, and
+    /// nothing for a paused goal. The test above reads `goal_to_work_towards` alone, so a task
+    /// builder that read the goal that is set, or passed no condition, would leave it passing.
+    /// Rejects: `the_turn_task` reading `session.goal()` where it should read the goal in force,
+    /// and one that leaves the condition off the task.
+    #[test]
+    fn the_task_a_turn_is_built_with_carries_the_goal_only_while_it_is_in_force() {
+        let root = a_workspace_with_a_readme();
+        let mut session = Session::new("none").in_workspace(root.path());
+        let said_to = |session: &mut Session| {
+            a_task_built_for(session, root.path(), "go")
+                .working_towards
+                .clone()
+        };
+        assert_eq!(
+            said_to(&mut session),
+            None,
+            "a turn with no goal was built with a condition"
+        );
+
+        session.start_goal("cargo test exits 0".to_string());
+        assert_eq!(
+            said_to(&mut session),
+            Some("cargo test exits 0".to_string()),
+            "a turn under a goal was built without its condition"
+        );
+
+        session.pause_goal();
+        assert!(session.goal().is_some(), "pausing ended the goal");
+        assert_eq!(
+            said_to(&mut session),
+            None,
+            "a turn under a paused goal was built with its condition"
+        );
+
+        session.resume_goal();
+        assert_eq!(
+            said_to(&mut session),
+            Some("cargo test exits 0".to_string()),
+            "a resumed goal was not carried on the task"
         );
     }
 

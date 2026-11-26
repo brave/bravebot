@@ -377,9 +377,10 @@ pub struct Task {
     pub sandbox: crate::LiveSandbox,
     /// Whether the front end can put a line that starts with no sandbox to a person (SANDBOX-29).
     ///
-    /// Off unless the caller turns it on. The terminal interface and a session in lines draw the
-    /// question; a window refuses the request without asking, and a run with nobody to ask refuses
-    /// every question. A refusal names the `unconfined` argument only where this is on, so a planner
+    /// Off unless the caller turns it on. The terminal interface, a session in lines and the desktop
+    /// window draw the question and turn it on. A host client of the bridge refuses the request
+    /// without asking and a run with nobody to ask refuses every question, so both leave it off. A
+    /// refusal names the `unconfined` argument only where this is on, so a planner
     /// is not pointed at a request its front end would turn down. A delegate is never pointed at it.
     pub asks_about_unconfined: bool,
     /// Rules the user wrote in advance about which actions to ask them about.
@@ -488,6 +489,14 @@ pub struct Task {
     /// and a settings key, and which of them won is the caller's business.
     /// `bravebot_core::vetting::auto` is the rule they resolve it with.
     pub auto_vetting: bool,
+    /// What the context of each delegate this turn starts has met before its first round.
+    ///
+    /// `Trusted`, since a delegate begins from an empty conversation and a run whose own context
+    /// has met something untrusted cannot delegate at all (DELEGATE-2). It is here so a test can
+    /// start a delegate whose context has met something untrusted and follow its report through
+    /// the real turn to the person's screen (WATCH-13). A caller can only lower it, and it is a
+    /// value the caller chose, never one read from anything a delegate saw.
+    pub delegates_have_met: bravebot_core::label::Integrity,
     /// What this turn is a delegate of, where it is one rather than a person's.
     ///
     /// `None` for every turn somebody typed the prompt for. Where it is set, four things come
@@ -670,6 +679,7 @@ impl Task {
             began_in: None,
             // Asking too: nobody has said a check's word may stand in for an answer.
             auto_vetting: false,
+            delegates_have_met: bravebot_core::label::Integrity::Trusted,
             // Nothing said about either destination, which is a caller that read no settings
             // file. Empty is a value the block can carry and this is not it.
             attribution: bravebot_config::Attribution::default(),
@@ -737,6 +747,14 @@ impl Task {
     pub fn with_open_loops(mut self, said: Option<String>) -> Self {
         self.open_loops = said;
         self.shows_open_loops = true;
+        self
+    }
+
+    /// Give the planner `said` about the open loops at the start of the turn (OPEN-4), for a caller
+    /// that does not show them to the person itself. The turn still ends with its own line about
+    /// changes left unbuilt (TURN-4).
+    pub fn telling_open_loops(mut self, said: Option<String>) -> Self {
+        self.open_loops = said;
         self
     }
 
@@ -905,6 +923,23 @@ impl Task {
     pub fn addressing(mut self, name: Option<String>) -> Self {
         self.addressing = name;
         self
+    }
+
+    /// The tool names a call is dispatched under, where the turn was confined to some: the
+    /// definition a person addressed, or the `tools:` line a delegate was started with. `None`
+    /// where neither narrowed the turn. A name outside it is answered as any unknown name is
+    /// (DELEGATE-19, MODE-9), so the offer is not all that holds a narrowing.
+    pub(crate) fn confined_to<'a>(
+        &'a self,
+        addressed: Option<&'a bravebot_core::delegate::Addressed>,
+    ) -> Option<&'a [String]> {
+        addressed
+            .map(bravebot_core::delegate::Addressed::tools)
+            .or_else(|| {
+                self.delegate
+                    .as_ref()
+                    .and_then(bravebot_core::delegate::DelegateSpec::tools)
+            })
     }
 
     /// Say that the definition [`Task::addressing`] names is the one the session stands under,
@@ -1161,6 +1196,20 @@ impl Task {
     /// reason nothing here reads `$HOME`.
     pub fn with_auto_vetting(mut self, auto: bool) -> Self {
         self.auto_vetting = auto;
+        self
+    }
+
+    /// Say what the context of each delegate this turn starts has met before its first round.
+    ///
+    /// Only a test has a reason to pass anything but [`Integrity::Trusted`]: no delegate a person's
+    /// turn starts has met anything (DELEGATE-8). A delegate started this way answers from a
+    /// context that has met something untrusted, so its report is quarantined from the turn that
+    /// started it and drawn for the person as kept from the planner (WATCH-13). The value is met
+    /// with what each delegate starts from, so it can only lower.
+    ///
+    /// [`Integrity::Trusted`]: bravebot_core::label::Integrity::Trusted
+    pub fn with_delegates_that_have_met(mut self, met: bravebot_core::label::Integrity) -> Self {
+        self.delegates_have_met = met;
         self
     }
 

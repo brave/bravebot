@@ -28,6 +28,7 @@ use bravebot_core::event::Sink;
 use bravebot_core::file_authority::FileAuthority;
 use bravebot_core::todo::Row;
 use serde_json::{Value, json};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
@@ -299,6 +300,8 @@ pub struct BridgeReporter {
     prompt_at: Option<usize>,
     /// The task list as the turn last wrote it, kept for the record (SESSION-23).
     task_list: Vec<Row>,
+    /// The files the turn's successful writes landed on. See [`BridgeReporter::written`].
+    written: Vec<PathBuf>,
     /// The agents the conversation has started, which the rules for are
     /// [`bravebot_agent::roster::Roster`]'s and the terminal uses as well. Shared with the session
     /// so the list lasts across turns (VIEW-35).
@@ -322,6 +325,7 @@ impl BridgeReporter {
             reporting_for: None,
             prompt_at: None,
             task_list: Vec::new(),
+            written: Vec::new(),
             roster: Arc::default(),
             reports: None,
             published: None,
@@ -397,6 +401,13 @@ impl BridgeReporter {
     /// The task list the turn last wrote, whichever way it ended. Empty where it wrote none.
     pub fn task_list(&self) -> &[Row] {
         &self.task_list
+    }
+
+    /// The files the turn's writes landed on, each once, in the order first written, whichever
+    /// way the turn ended. A write that failed is left out. The session keeps these to ask git
+    /// which are still uncommitted (OPEN-1).
+    pub fn written(&self) -> &[PathBuf] {
+        &self.written
     }
 
     /// Where the turn's prompt landed in the recounted conversation, if it got that far.
@@ -666,6 +677,14 @@ impl Reporter for BridgeReporter {
 
     fn tool_finished(&mut self, activity: Activity) {
         self.say("tool.finished", wire::activity(&activity));
+        // The turn's own writes only, as `composing` and `thinking` keep to the turn's own. What a
+        // delegate wrote in a checkout is counted as a kept checkout instead.
+        if self.reporting_for.is_none()
+            && let Some(written) = activity.written.filter(|_| !activity.failed)
+            && !self.written.contains(&written.landed)
+        {
+            self.written.push(written.landed);
+        }
     }
 }
 
@@ -834,6 +853,8 @@ pub struct BridgeConfirmer {
     answered: Arc<Mutex<AnswerMemo>>,
     /// A line for each question this turn did not put because the person had answered it already.
     reused: Vec<String>,
+    /// The words a plan question names its task by. See [`Self::titling_plans`].
+    plan_title: Option<String>,
 }
 
 impl BridgeConfirmer {
@@ -857,7 +878,16 @@ impl BridgeConfirmer {
             interjections: crate::running::Interjections::default(),
             answered: Arc::default(),
             reused: Vec::new(),
+            plan_title: None,
         }
+    }
+
+    /// Send `title` with each plan question as the task's `title`: the task with each dropped
+    /// file's marker replaced by its name, which the run's record is also titled by. Without it a
+    /// plan question's `title` is its task.
+    pub(crate) fn titling_plans(mut self, title: String) -> Self {
+        self.plan_title = Some(title);
+        self
     }
 
     /// Answer a question the person already answered in this session from `answered`, and keep
@@ -1120,8 +1150,12 @@ impl Confirmer for BridgeConfirmer {
     /// remembered. It does not approve the plan's writes: each write is still asked about when
     /// its step is reached.
     fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+        let title = self
+            .plan_title
+            .clone()
+            .unwrap_or_else(|| request.task.clone());
         let decision = self.yes_or_no(Kind::Manifest, "manifest.request", |id| {
-            wire::manifest_request(id, request)
+            wire::manifest_request(id, request, &title)
         });
         self.declined_a_plan = decision == Decision::Reject;
         decision
@@ -1163,15 +1197,30 @@ impl Confirmer for BridgeConfirmer {
     /// a single unanswered "no" costs one command, where a remembered one would vouch for
     /// a program on the strength of a question nobody saw. `RunDecision::reject()` is that
     /// pair, and it is what every failure here resolves to.
+    ///
+    /// A line asked to run with no sandbox (SANDBOX-29) is put only to a client that draws it as
+    /// unconfined, and refused unasked where the client may not. A yes to it is a yes to that line
+    /// once: an answer that names a standing one is not acted on.
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
-        // A window has no line that shows a program is unconfined, and reads the mode `off` as
-        // `workspace-write` for that reason (SANDBOX-22), so it draws no card for the request and refuses.
-        if request.unconfined {
+        if request.unconfined && !self.answerers.draws_unconfined_runs() {
             return RunDecision::reject();
         }
         match self.ask(Kind::Run, "run.request", |id| {
             wire::run_request(id, request)
         }) {
+            // Rebuilt from whether it approved, so no standing answer survives and a no stays a no.
+            // A note is kept where the answer could carry one.
+            Some(Reply::Run(decision)) if request.unconfined => {
+                let once = if decision.approved() {
+                    RunDecision::approve()
+                } else {
+                    RunDecision::reject()
+                };
+                match decision.note() {
+                    Some(note) => once.with_note(note),
+                    None => once,
+                }
+            }
             Some(Reply::Run(decision)) => decision,
             _ => RunDecision::reject(),
         }
@@ -1303,3 +1352,7 @@ mod answering_tests;
 #[cfg(test)]
 #[path = "notice_tests.rs"]
 mod notice_tests;
+
+#[cfg(test)]
+#[path = "written_tests.rs"]
+mod written_tests;

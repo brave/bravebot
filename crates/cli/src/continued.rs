@@ -122,6 +122,8 @@ pub fn rewind_points(
             transcript_len: 0,
             title: record.title.clone(),
             was_wrote: true,
+            work: None,
+            written: None,
         },
         prompt.to_string(),
     );

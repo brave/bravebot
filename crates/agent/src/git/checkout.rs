@@ -420,7 +420,7 @@ fn plan(
         for entry in listed.entries {
             let name: &[u8] = entry.filename;
             let keyed = keyed_path(&prefix, name);
-            check_name(name, cfg!(windows))
+            check_name(name, settings.windows)
                 .map_err(|why| refusal_at(trusted, &keyed, Refused::Name(why)))?;
             if !names.insert(name) {
                 return Err(refusal_at(trusted, &keyed, Refused::Name(Name::Folded)));

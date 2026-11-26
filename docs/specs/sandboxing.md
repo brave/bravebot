@@ -1067,6 +1067,8 @@ The auto mode's classifier is kept from a line with a git stage for the same rea
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_the_other_protected_names_beneath_it`
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_change_rename_into_or_remove_an_entry_of_a_git_directory`
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_change_the_owner_or_the_access_list_of_a_git_directory_or_a_protected_name`
+`verified-by: bravebot_sandbox::linux::a_write_row_reaches_a_git_directory_and_the_other_protected_names_beneath_it`
+`verified-by: bravebot_sandbox::windows::a_write_row_is_applied_whole_and_withholds_no_protected_name`
 `verified-by: bravebot_sandbox::macos::a_write_row_inside_a_protected_directory_is_writable_under_itself`
 `verified-by: bravebot_sandbox::macos::every_name_in_the_shared_list_is_in_the_profile`
 `verified-by: bravebot_agent::protected_names::the_sandbox_and_the_file_tools_hold_back_the_same_names`
@@ -2892,7 +2894,7 @@ says and sign in.
 The desktop and the bridge have no flag, and read the mode from the settings and the pin at the start
 of every turn, so a settings edit made while a session is open applies from its next turn, unless a
 window has chosen a mode for the session with `session.sandbox`, which replaces the settings mode
-from the next turn. `off` is read there as `workspace-write`, because a window has no line that shows its programs are unconfined. A
+from the next turn. `off` is read there as `workspace-write`, because a window says a program is unconfined only on the card for one line asked to run with no sandbox ([SANDBOX-29](#SANDBOX-29)), and nothing it draws says that every program of a session is. A
 subagent's programs run under the mode of the session that started it, and the mode is not in the
 session record, so a resumed session takes the mode its start-up chose and not the one it was
 saved under. `/sandbox` alone says the mode in force and the flag or file that chose it, in the words `doctor`
@@ -4278,9 +4280,9 @@ none to add to.
   redirection names it after whatever remedy it is given, `/add-dir` or none, a credential
   location's included ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). They name
   it only where the request would be accepted and the front end can ask about it, which the
-  terminal interface and a session in lines can, and the desktop and a run with nobody to ask
-  cannot. So a mode that keeps the profile, or a window that refuses the line, is never pointed at
-  an argument it would turn down. A `request_path` refusal also says why the path cannot be lent.
+  terminal interface, a session in lines and the desktop window can, and a host client of the
+  desktop bridge and a run with nobody to ask cannot. So a mode that keeps the profile, or a front
+  end that refuses the line, is never pointed at an argument it would turn down. A `request_path` refusal also says why the path cannot be lent.
   The `run` description of the argument makes it a second attempt: every line starts without it, and
   the planner asks for it only after the same line failed because the sandbox refused it access, not
   after a failure of another kind, saying in `why` what was refused. It also says that the person is
@@ -4316,8 +4318,10 @@ none to add to.
   run can fail at it.
 - **Recorded.** The `sandbox` gate's detail names `unconfined` for that run, where it names the
   session's mode for every other ([TRACE-1](trace.md#TRACE-1)).
-- The desktop draws no card for it and refuses, since a window reads `off` as `workspace-write` and has
-  no line showing that a program is unconfined ([SANDBOX-22](#SANDBOX-22)).
+- The desktop window draws a card for it that says the line runs with no sandbox and that no answer
+  to it is remembered, and offers only no and yes to this line once. A yes the window sends with a
+  standing answer is taken as a yes to the line once. A host client named to answer runs may draw no
+  such sentence, so the bridge refuses the request unasked where its answerers are host clients.
 
 **Why.** Without it the only way to run `docker login` or `aws sso login` from a session is to start
 it with `--sandbox off`, which removes the profile from every program for the whole session. The
@@ -4364,7 +4368,15 @@ refuse the path.
 `verified-by: bravebot_agent::turn::an_unconfined_line_is_refused_where_the_session_does_not_accept_it`
 `verified-by: bravebot_agent::turn::an_unconfined_value_that_is_not_a_boolean_is_an_error`
 `verified-by: bravebot_tui::confirm::run::a_run_asking_to_be_unconfined_says_so_and_binds_no_lasting_key`
-`verified-by: bravebot_ui_bridge::refusal::the_window_refuses_an_unconfined_run_without_asking`
+`verified-by: bravebot_ui_bridge::refusal::the_window_is_asked_about_an_unconfined_run_and_a_remembering_yes_remembers_nothing`
+`verified-by: bravebot_ui_bridge::answering_tests::a_host_client_answering_runs_is_not_asked_about_an_unconfined_run`
+`verified-by: bravebot_ui_bridge::answerers::only_the_default_set_draws_unconfined_runs`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_failed_confined_line_in_a_window_names_the_unconfined_argument`
+`verified-by: bravebot_ui_bridge::host_process::a_host_client_answering_only_runs_is_not_pointed_at_the_unconfined_argument`
+`verified-by: bravebot_approval::lib::a_run_asking_to_be_unconfined_says_so_and_why_it_is_not_remembered_only_then`
+`verified-by: bravebot_cli::plain::a_run_asking_to_be_unconfined_is_asked_about_as_unconfined`
+`verified-by: bravebot_ui_bridge::wire::a_run_request_says_when_the_line_was_asked_to_run_with_no_sandbox`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/unconfined-run.test.mjs renders a run card for a line asked to run with no sandbox and holds that it draws the bridge's unconfinedNote verbatim in a warning the approval waits on, draws the not-sandboxed and not-remembered sentences, and offers no Trust command and output button, and that a card without the flag draws none of these; make check-ui runs it)`
 
 <a id="SANDBOX-32"></a>
 ### SANDBOX-32: a person may remember a reviewed prefix for an unconfined line, for programs on a hand-written list only
@@ -4405,7 +4417,7 @@ condition below holds, and in no other case it is asked about as [SANDBOX-29](#S
 - **Every condition [SANDBOX-29](#SANDBOX-29) puts on accepting `unconfined` still holds.** The mode
   is not `strict`, `read-only` or `off`, the workspace is trusted, a managed `run.network` is not
   `closed`, and the caller is not a delegate. A rule that says ask, or deny, decides first
-  ([PERM-14](permissions.md#PERM-14)). A front end that cannot ask refuses the request, so a prefix on file is never read by a run with nobody to ask or by the desktop. The mode that
+  ([PERM-14](permissions.md#PERM-14)). A front end that cannot ask refuses the request, so a prefix on file is never read by a run with nobody to ask or by a host client of the desktop bridge. The mode that
   asks nothing does not accept the request either.
 - **The answer is for one tree.** A prefix remembered for the session is forgotten by `/cd`, `/clear`
   and `/branch`. A prefix remembered past the session is written to the record of that directory, in a

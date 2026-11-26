@@ -33,6 +33,10 @@ import { withPastes } from './pastes'
  * turns them into the agent's `dropped` and `attachments` after everything the window said under
  * those names is gone, so the only paths in either are ones a drop put there.
  *
+ * A `manifest.run` gets the same composition for the pictures and PDFs dropped on a `/manifest`
+ * line: its `attachments` come only from `drops`, and its `files` only names text files by marker
+ * and name. It takes no pasted picture, so its `pastes` are not forwarded.
+ *
  * `pastes` is the window's list of pictures a person pasted, as ids `pastes.ts` minted for bytes
  * this process read off the clipboard itself. They become the agent's `images` the same way, after
  * whatever the window sent as `images` is gone, so the only bytes there are ones a paste put there.
@@ -42,11 +46,25 @@ import { withPastes } from './pastes'
  */
 export function sanitised(method: string, params: unknown): Record<string, unknown> {
   const held = (params ?? {}) as Record<string, unknown>
-  // A manifest run takes a task and no files. Only the three fields it reads are forwarded, so
-  // a window cannot name a file to it under any key. A name written with `@` stays a word of the
-  // task, as it does for `/manifest` in the terminal: a plan is fixed before anything is read.
+  // A manifest run carries the pictures and PDFs dropped on its `/manifest` line (DROP-4), named by
+  // the ids this process minted and composed here into `attachments`, after whatever the window
+  // sent as `attachments`, `dropped`, `images` or `pastes` is gone. A granted text file is composed
+  // into `dropped`, which the bridge refuses, because a text file on the line goes as its name:
+  // `files` is only marker and name pairs the bridge puts back into the task as words. A project
+  // path the window puts in `files` is not forwarded (MANIFEST-9), and a name written with `@`
+  // stays a word of the task, as it does for `/manifest` in the terminal.
   if (method === 'manifest.run') {
-    return { session: held.session, task: held.task, model: held.model }
+    const files = Array.isArray(held.files)
+      ? held.files
+          .filter((file: unknown) => typeof file === 'object' && file !== null)
+          .map((file: { marker?: unknown; name?: unknown }) => ({ marker: file.marker, name: file.name }))
+      : undefined
+    const session = typeof held.session === 'string' ? held.session : ''
+    const forwarded: Record<string, unknown> = { session: held.session, task: held.task, model: held.model }
+    if (files) forwarded.files = files
+    // Words of the task, one for each of `drops`, which the bridge titles the run by. Never a path.
+    if (Array.isArray(held.markers)) forwarded.markers = held.markers.filter((marker: unknown) => typeof marker === 'string')
+    return withDrops(session, held.drops, forwarded)
   }
   // A list is the one thing the window asks for that the agent answers with directories, and the
   // main process offers those as folders a session may be opened in (TRUST-20). A `directory`

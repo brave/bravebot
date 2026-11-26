@@ -835,8 +835,17 @@ impl Bridge {
             let settings = crate::settings::layers(Some(&directory), self.settings.as_deref());
             take_back_checkouts(open, &record, &settings);
         }
+        let loops = self
+            .open
+            .get(&handle)
+            .and_then(|open| resumed_loops(open, &directory, self.settings.as_deref()));
 
         let mut opened = self.recount(&handle, &directory, &record, auto_vetting);
+        // The sentence is the person's, in their language (OPEN-7). Null where nothing is open,
+        // so the window shows nothing (OPEN-6).
+        opened["openLoops"] = loops
+            .and_then(|loops| loops.left_open())
+            .map_or(Value::Null, |said| json!(said));
         opened["settingsRules"] = rules;
         opened["scratch"] = self.scratch_report(&handle);
         if let Some(open) = self.open.get(&handle)
@@ -1452,6 +1461,8 @@ impl Bridge {
             inherited,
             touched,
             by_mode,
+            work,
+            written,
         ) = {
             let state = open
                 .state
@@ -1482,6 +1493,10 @@ impl Bridge {
                     .as_ref()
                     .map(bravebot_agent::workspace::KeptBetweenTurns::touched_record),
                 state.answered_by_mode,
+                // What the parent did and wrote is on disk whatever the cut, so the child carries
+                // it as a resume does (OPEN-6).
+                state.work,
+                state.written.clone(),
             )
         };
 
@@ -1552,6 +1567,14 @@ impl Bridge {
                     );
                     // The map is the parent's, so what the mode answered in it is still the mode's.
                     forked.answered_by_mode = by_mode;
+                    forked.work = work;
+                    forked.written = written;
+                    // Taken as the last turn's, as a resume takes it (OPEN-3, OPEN-6). The child
+                    // keeps no checkouts.
+                    if let Ok(workspace) = Workspace::new(&project) {
+                        let loops = crate::open_loops::of(&forked, &workspace);
+                        forked.open_loops.ended_with(loops);
+                    }
                     forked.account = self.account_session(&project);
                     forked.spend_limit = self.spend_limit(&project);
                     forked
@@ -2040,9 +2063,11 @@ impl Bridge {
 
     /// Choose the sandbox mode the session's next turn runs its programs under.
     ///
-    /// `strict` or `workspace-write`: a window has no way to show that nothing confines a program, so
-    /// `off` is refused here whatever the settings say (SANDBOX-22). The managed file is a floor, and
-    /// is read again when the turn starts. A turn already running keeps the mode it began with.
+    /// `strict` or `workspace-write`: a window says a program is unconfined only on the card for one
+    /// line asked to run with no sandbox (SANDBOX-29), and nothing it draws says that every program of
+    /// a session is, so `off` is refused here whatever the settings say (SANDBOX-22). The managed
+    /// file is a floor, and is read again when the turn starts. A turn already running keeps the
+    /// mode it began with.
     fn set_sandbox_mode(&mut self, request: &Request) -> Result<Value, Failure> {
         self.set_sandbox_mode_under(request, &bravebot_config::Managed::load())
     }
@@ -2903,6 +2928,11 @@ impl Bridge {
     /// turn: the session's conversation is neither sent nor changed, and the run is saved as its
     /// own record. The session is busy until the run ends, so a turn or a second run is refused.
     ///
+    /// Pictures and PDFs dropped onto the task arrive as `attachments` and go to the planner with
+    /// it, and `markers` names the marker each stands for in the task, which the run's title puts
+    /// the file's name in place of. A text file dropped onto it arrives in `files` as its marker
+    /// and name, and the name is put into the task in the marker's place (DROP-4).
+    ///
     /// `turn.cancel` stops a run, and the reply methods answer its questions, as for a turn.
     fn start_manifest(&mut self, request: &Request) -> Result<Value, Failure> {
         if self.emitter.has_view(&request.string("session")?) {
@@ -2911,25 +2941,72 @@ impl Bridge {
             ));
         }
         let handle = request.string("session")?;
-        let task = request.string("task")?;
-        if task.trim().is_empty() {
-            return Err(Failure::bad_request("a manifest run needs a task to plan"));
+        // A project file named for context is read by a turn before it decides. A run fixes its
+        // plan before anything the plan could look at is read (MANIFEST-9), so the file would be
+        // dropped. Refuse instead. `files` carries a dropped text file's marker and name, as on
+        // `session.btw`, so only a bare path is refused here.
+        let named_by_path = request
+            .params
+            .get("files")
+            .and_then(Value::as_array)
+            .is_some_and(|files| files.iter().any(Value::is_string));
+        if named_by_path {
+            return Err(Failure::bad_request(
+                "a manifest run takes no project file in `files`: its plan is fixed before \
+                 anything is read. Name the file in the task instead",
+            ));
         }
-        // A named file is context a turn reads before it decides. A run fixes its plan before
-        // anything is read (MANIFEST-9), so the file would be dropped. Refuse instead.
-        for named in ["files", "dropped", "attachments", "images"] {
-            let given = request
+        let given = |named: &str| {
+            request
                 .params
                 .get(named)
                 .and_then(Value::as_array)
-                .is_some_and(|entries| !entries.is_empty());
-            if given {
-                return Err(Failure::bad_request(format!(
-                    "a manifest run takes no `{named}`: its plan is fixed before anything is \
-                     read. Name the file in the task instead"
-                )));
-            }
+                .is_some_and(|entries| !entries.is_empty())
+        };
+        // Pasted pictures are not taken on a run from the window.
+        if given("images") {
+            return Err(Failure::bad_request(
+                "a manifest run takes no `images`: drop the picture onto the task instead",
+            ));
         }
+        // A text file dropped on the line is its name (DROP-4), put back by its marker below.
+        if given("dropped") {
+            return Err(Failure::bad_request(
+                crate::aside::TEXT_FILE_IS_ITS_NAME_ON_A_MANIFEST,
+            ));
+        }
+        let task = crate::attached::in_words(request, &request.string("task")?)?;
+        if task.trim().is_empty() {
+            return Err(Failure::bad_request("a manifest run needs a task to plan"));
+        }
+        // Dropped pictures and PDFs go with the task, checked as `turn.send` checks them
+        // (DROP-10). The agent's runner reads them before the planner's policy exists (DROP-4).
+        let attachments: Vec<bravebot_agent::turn::Attachment> = crate::attached::dropped(request)?
+            .into_iter()
+            .map(|(path, media)| bravebot_agent::turn::Attachment {
+                path,
+                media: media.to_string(),
+            })
+            .collect();
+        // The marker each of them stands for in the task, by position, so the run's title names
+        // each file where its own marker stands.
+        let markers: Vec<String> = match request.params.get("markers") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(given) => given
+                .as_array()
+                .filter(|markers| markers.len() == attachments.len())
+                .and_then(|markers| {
+                    markers
+                        .iter()
+                        .map(|marker| marker.as_str().map(str::to_string))
+                        .collect::<Option<Vec<_>>>()
+                })
+                .ok_or_else(|| {
+                    Failure::bad_request(
+                        "`markers` must be a list of strings, one for each of `attachments`",
+                    )
+                })?,
+        };
         let requested_model = crate::models::selection(request.params.get("model"))?;
 
         self.reap(&handle);
@@ -3023,6 +3100,8 @@ impl Bridge {
                 mcp_requested,
                 workspace,
                 task,
+                attachments,
+                markers,
                 run,
                 cancel,
                 pending,
@@ -3176,16 +3255,48 @@ impl Bridge {
             && refused.is_empty()
             && gaps.is_empty()
             && state.answers.trust == snapshot.trust;
+        // What the session had done and written before the turns undone, so their writes leave the
+        // open loops with them (OPEN-1). A point a record kept without them leaves the session's.
+        if discard {
+            state.work = bravebot_agent::Work::default();
+            state.written.clear();
+        } else {
+            if let Some(work) = snapshot.work {
+                state.work = work;
+            }
+            if let Some(written) = snapshot.written {
+                state.written = written;
+            }
+        }
+        let (work, written) = (state.work, state.written.clone());
         if let Some(stored) = state.handle.as_mut() {
             stored.truncate_audit(snapshot.turns + 1);
+            stored.set_work(work);
+            stored.set_written(&written);
             if discard {
                 stored.discard_unwritten(&snapshot.title);
             }
         }
         if discard {
-            // The record is gone, so the next prompt names the session again.
+            // The record is gone, so the next prompt names the session again, and nothing it did
+            // is open any longer.
             state.first_prompt = None;
-        } else if state.handle.is_some() {
+            state.work = Default::default();
+            state.written.clear();
+            state.open_loops = Default::default();
+        } else {
+            // The rewound conversation may no longer hold what the planner was told, so the loops
+            // the session now leaves open are told again on the next turn (OPEN-4). They are taken
+            // as the last turn's, so the next turn says the line only if it changes from where the
+            // undo left it (OPEN-3).
+            if let Some(kept) = &state.kept {
+                workspace = workspace.with_kept_between_turns(kept);
+            }
+            state.open_loops = Default::default();
+            let loops = crate::open_loops::of(state, &workspace);
+            state.open_loops.ended_with(loops);
+        }
+        if !discard && state.handle.is_some() {
             save(
                 &project,
                 state,
@@ -4656,7 +4767,32 @@ fn take_back_checkouts(open: &Open, record: &Record, settings: &Settings) {
         }
         workspace.restore_touched(&record.touched);
         state.kept = Some(workspace.kept_between_turns());
+        // The placed checkouts are open loops of the session's too, part of the set the resume
+        // took as the last turn's (OPEN-3, OPEN-6).
+        let loops = crate::open_loops::of(&state, &workspace);
+        state.open_loops.ended_with(loops);
     }
+}
+
+/// The line a turn ends with where the open loops changed since the last turn ended, or `None`
+/// where they are the same, so a loop the person left open is not said every turn (OPEN-3).
+fn say_open_loops(state: &mut State, workspace: &Workspace) -> Option<String> {
+    let loops = crate::open_loops::of(state, workspace);
+    let line = loops.to_the_person();
+    state.open_loops.ended_with(loops).then_some(line)
+}
+
+/// The open loops the session `open` resumed with, worked out again from its record and from disk
+/// (OPEN-6). `None` where the session's workspace cannot be made.
+fn resumed_loops(
+    open: &Open,
+    directory: &Path,
+    settings: Option<&Path>,
+) -> Option<bravebot_agent::open_loops::Loops> {
+    let settings = crate::settings::layers(Some(directory), settings);
+    let workspace = with_session_checkouts(open, session_workspace(open, &settings).ok()?);
+    let state = open.state.lock().ok()?;
+    Some(crate::open_loops::of(&state, &workspace))
 }
 
 /// As a session is forked, place the names the parent's file tools reached as the child's, so the
@@ -4912,6 +5048,9 @@ fn work(work: Work) {
             }
             bravebot_agent::hooks::Watch::Over => reporter.hook_finished(),
         });
+    // Whether this session's answerers can draw a line asked to run with no sandbox, which decides
+    // whether the planner is pointed at the `unconfined` argument (SANDBOX-29).
+    let asks_about_unconfined = answerers.draws_unconfined_runs();
     let mut confirmer = BridgeConfirmer::new(
         emitter.clone(),
         &session,
@@ -4966,6 +5105,7 @@ fn work(work: Work) {
         .with_deadlines(deadlines)
         .with_confined_runs(true)
         .with_sandbox_mode(sandbox)
+        .asking_about_unconfined(asks_about_unconfined)
         .with_auto_vetting(auto_vetting)
         .with_permission_mode(permission_mode.clone())
         // The rules the session opened under, and not the files as they are now (PERM-12).
@@ -4975,7 +5115,10 @@ fn work(work: Work) {
         // it (MEMORY-10). The name is the session's, set from the bot's row, so nothing the turn
         // produced chooses it; the kernel compares it against the set this session resolved.
         .addressing(addressing)
-        .addressing_standing(addressing_standing);
+        .addressing_standing(addressing_standing)
+        // The open loops that changed since the planner was last told (OPEN-4). The turn ends
+        // with OPEN-3's line, sent on `turn.done`/`turn.error`, in place of TURN-4's narration.
+        .with_open_loops(state.open_loops.for_the_planner());
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }
@@ -5057,6 +5200,14 @@ fn work(work: Work) {
     state.answers.servers = Some(servers);
     // Kept whatever the outcome: a failed or cancelled turn may still have written.
     state.rewind.keep_backups(workspace.take_backups());
+    // Kept whatever the outcome (GROUND-4): a failed or cancelled turn may still have written or
+    // run something, and the session's open loops are worked out from all of it (OPEN-1).
+    state.work.then(completed.work);
+    for path in reporter.written() {
+        if !state.written.contains(path) {
+            state.written.push(path.clone());
+        }
+    }
 
     // Cleanup has finished on every return, including cancellation and request errors.
     // Whatever the turn's ending: what the planner was shown on a failed turn is not shown again.
@@ -5107,6 +5258,10 @@ fn work(work: Work) {
     if !reporter.task_list().is_empty() {
         state.todos.insert(turn, reporter.task_list().to_vec());
     }
+    // The loops this turn left open, whatever its ending, after its work and todos are the
+    // session's: said to the person where they changed (OPEN-3), and told to the planner on the
+    // next turn (OPEN-4).
+    let open_line = say_open_loops(&mut state, &workspace);
 
     let event = match outcome {
         Ok(outcome) => {
@@ -5184,6 +5339,8 @@ fn work(work: Work) {
                     "outputTokens": outcome.output_tokens,
                     "contextTokens": outcome.context_tokens,
                     "notices": notices,
+                    // The open loops, where they changed since the last turn ended (OPEN-3).
+                    "openLoops": open_line,
                     "trust": { "rules": rules },
                     // The session's durable name, which is real from here and was not before:
                     // `save` above is what wrote the record, and until a record exists there is
@@ -5242,6 +5399,8 @@ fn work(work: Work) {
                     // turn that answered. There is no outcome here to take them from, and a hook
                     // that could not be started is the person's own to hear about (HOOK-7).
                     "notices": notices,
+                    // As on `turn.done`: a failed turn's writes still count (GROUND-4).
+                    "openLoops": open_line,
                     // As on `turn.done`. A turn that failed still said what it was asked, so the
                     // prompt is in the conversation and is still a place a fork can be cut at.
                     "prompt": prompt_ordinal(&state.conversation, &prompt),
@@ -5465,6 +5624,9 @@ fn open_rewind_point(state: &mut State, workspace: &Workspace, prompt: &str) {
             .handle
             .as_ref()
             .is_some_and(|handle| handle.resumable().is_some()),
+        // So undoing the turn takes its writes and commands out of the open loops (OPEN-1).
+        work: Some(state.work),
+        written: Some(state.written.clone()),
     };
     state.rewind.open(snapshot, prompt.to_string());
     state.rewind.bind_coverage(workspace);
@@ -5517,6 +5679,10 @@ pub(crate) fn save(
     let handle = state
         .handle
         .get_or_insert_with(|| crate::running::begin_named(named, handed_off_from, project));
+    // What every turn did and the files it wrote, so a resume in either front end can say what was
+    // left open (OPEN-6).
+    handle.set_work(state.work);
+    handle.set_written(&state.written);
 
     let checkouts = state
         .kept
@@ -6527,6 +6693,86 @@ mod coverage_tests {
         assert!(loaded.rewind.is_empty());
         assert!(loaded.server_children_may_run());
         state.handle.as_mut().unwrap().discard_unwritten("");
+    }
+
+    /// SESSION-34, R84b: a chat a handoff opens starts with an empty quarantine. The source chat's
+    /// planner held a reference to content it may not read and had met something untrusted; the new
+    /// chat, made by `session.new` with `handedOffFrom`, has no slot under that reference, a
+    /// reference counter at its start, and a context that has met nothing. The quarantine has no
+    /// surface on the wire, so this reads the new chat's state in this crate.
+    ///
+    /// Rejects a `session.new` that begins the new chat on the source chat's conversation or
+    /// quarantine, which would let the new chat's planner name content its person never saw there.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_chat_opened_from_a_handoff_starts_with_an_empty_quarantine() {
+        use bravebot_core::label::{Confidentiality, Integrity, Label};
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("handoff-quarantine");
+        std::fs::create_dir_all(&directory).unwrap();
+        let root = directory.as_path();
+        let record: Record = serde_json::from_value(json!({
+            "id": "handoff-source", "directory": root, "title": "work",
+            "started": 1, "updated": 1,
+            "conversation": bravebot_agent::Conversation::new().snapshot()
+        }))
+        .unwrap();
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let source = bridge.mint(Open::opened(
+            root.to_path_buf(),
+            State::resumed(root, &record, TrustStore::new(root)).expect("the record is free"),
+            true,
+            None,
+            false,
+        ));
+        let slot = {
+            let open = bridge.open.get(&source).unwrap();
+            let mut state = open.state.lock().unwrap();
+            let slot = state.conversation.next_reference();
+            state
+                .conversation
+                .quarantine()
+                .writer_for(slot.clone(), Label::untrusted_private())
+                .expect("a writer")
+                .write("what nobody may read")
+                .expect("written");
+            state.conversation.observed(Label::untrusted_private());
+            assert!(
+                state
+                    .conversation
+                    .quarantine()
+                    .take_for_effect(&slot)
+                    .is_ok(),
+                "setup: the source's slot is not held"
+            );
+            slot
+        };
+
+        let line = json!({"id": 1, "method": "session.new", "params": {
+            "directory": root, "handedOffFrom": source
+        }})
+        .to_string();
+        let made = bridge.dispatch(&Request::parse(&line).unwrap()).unwrap();
+        let next = bridge.open.get(made["session"].as_str().unwrap()).unwrap();
+        let mut state = next.state.lock().unwrap();
+
+        assert!(
+            state
+                .conversation
+                .quarantine()
+                .take_for_effect(&slot)
+                .is_err(),
+            "the new chat holds the content the source chat's reference named"
+        );
+        assert_eq!(
+            state.conversation.next_reference(),
+            slot,
+            "the new chat did not start its references over"
+        );
+        assert_eq!(state.conversation.context(), Integrity::Trusted);
+        assert_eq!(state.conversation.holds(), Confidentiality::Public);
     }
 
     /// Switching front ends must not drop the warning once undo has consumed every checkpoint.
@@ -7567,6 +7813,20 @@ mod watch_tests {
 #[path = "folders.rs"]
 mod folders;
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "nothing reads a session's scope until a device is attached to one"
+    )
+)]
+#[path = "scope.rs"]
+mod scope;
+
+#[cfg(test)]
+#[path = "scope_tests.rs"]
+mod scope_tests;
+
 #[cfg(test)]
 #[path = "folders_tests.rs"]
 mod folders_tests;
@@ -7574,6 +7834,10 @@ mod folders_tests;
 #[cfg(test)]
 #[path = "completion_tests.rs"]
 mod completion_tests;
+
+#[cfg(test)]
+#[path = "open_loops_tests.rs"]
+mod open_loops_tests;
 
 // Beside the turn worker rather than the store, because one of them runs a turn.
 #[cfg(test)]

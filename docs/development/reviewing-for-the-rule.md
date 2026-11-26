@@ -74,16 +74,17 @@ data, so it is used everywhere legitimately, and only a reader can say which is 
 that count and `make check-spec` fails until somebody records it, which puts the question in front
 of a reviewer without answering it.
 
-Ten places do branch on untrusted bytes, deliberately. Three are in the kernel, the fourth is
+Eleven places do branch on untrusted bytes, deliberately. Three are in the kernel, the fourth is
 the search in `bravebot-agent`, the fifth is the wording of the `lsp` diagnostics sentence from
 the counts a server computed, in `crates/agent/src/lsp.rs`, the sixth is `read_git`, also in
 `bravebot-agent`, the seventh is the text-or-binary sniff and decoding of a read of an unvouched
 file, in `Workspace::survey`, `Workspace::read` and `Workspace::page`, the eighth is the
 choice of which parts of a tool result are taken, in `ToolResult::output` and `ContentBlock::picture`
 in `crates/mcp/src/protocol.rs`, the ninth is the read of a processor's answer for one number or
-for an `apply` step's rows, in `crates/choice/src/number.rs` and `rows.rs`, and the tenth is the trigger
+for an `apply` step's rows, in `crates/choice/src/number.rs` and `rows.rs`, the tenth is the trigger
 listener's reading of a request's framing, path, signature and body length, in
-`crates/cli/src/trigger.rs`. All ten are named under
+`crates/cli/src/trigger.rs`, and the eleventh is the device listener's reading of a connection
+before it is a device, in `crates/listener/`. All eleven are named under
 Known costs in [specs/labels.md](../specs/labels.md), because an unlisted exception is
 indistinguishable from a violation. A further one that mints a witness of its own moves a pinned count and so cannot arrive
 quietly. One added inside a function that already holds a counted `declassify` moves nothing: the
@@ -147,7 +148,16 @@ signature against the person's secret. The body is carried to the run's standard
 nothing, so a branch on any byte of the body, or a header or path suffix that selects a trigger, an
 event, a flag, a directory or a limit, is a violation of shape 1.
 
-A count that comes from file-type metadata is not one of the ten. A listing or a search tells the
+The eleventh is the device listener in `crates/listener/`, which is not the driver and holds no
+`declassify`. It decides from the key a connection showed, its first line, and a proof and a code:
+`public_key_hash` reads the one place a P-256 key is in a certificate, `first_line` and `begin_of`
+read at most 4,096 bytes as a request to pair, and the proof and the code are checked by the
+library's equal-time comparison. The label a phone gives itself is carried to the person's screen
+escaped and compared with nothing. A paired device's lines reach a service that holds no way to a
+session, so a branch on any other byte of a connection, or a way from that service to a session
+before the scope check and the destination policy exist, is a violation of shape 1.
+
+A count that comes from file-type metadata is not one of the eleven. A listing or a search tells the
 planner how many symbolic links its walk did not enter. The walk reads each directory entry's file
 type, which is not file content, and counts the links. The planner is given a number with no name
 and nothing to branch on, and nothing in the driver branches on it: the count is released beside
@@ -205,7 +215,7 @@ the entry's spelling by `resolve` in `bravebot-sandbox`, which already decides f
 whether the entry is refused. It is a branch on bytes a checkout wrote whose result reaches the
 planner. It is one of five sentences the driver wrote, it carries no byte of the entry, and it
 changes no effect, so it is recorded under Known costs in
-[specs/labels.md](../specs/labels.md) and is not counted among the ten. A sentence that put any part of the
+[specs/labels.md](../specs/labels.md) and is not counted among the eleven. A sentence that put any part of the
 spelling in it, a reason outside the closed set, or a choice made from the spelling for another
 purpose is a violation of shape 1.
 

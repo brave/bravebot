@@ -266,6 +266,80 @@ fn a_diff_holding_a_credential_is_not_sent() {
     );
 }
 
+/// CRED-11, CRED-16: the diff of what is staged is the tree's half of a commit, the part the message
+/// does not hold, and it is scanned as a range is. A credential a person is about to commit is
+/// found in the staged lines and nothing is sent, whether the line is the key written out or a
+/// header that encodes it, which authenticates as the key does.
+///
+/// Rejects a draft that scans only a range, or only the ids and messages around the diff and not
+/// the lines of the files it prints. The control stages the same file without the key and is sent,
+/// so the refusal is of what the lines hold.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_staged_diff_holding_a_credential_is_not_sent() {
+    let key = format!("AKIA{}", "QWERTYUIOPASDFGH");
+    let encoded = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(format!("{key}:x"))
+    };
+    for (name, added) in [
+        ("commit-message-staged-plain", format!("key = {key}")),
+        (
+            "commit-message-staged-encoded",
+            format!("Authorization: Basic {encoded}"),
+        ),
+    ] {
+        let scratch = two_commits(name);
+        stage(
+            &scratch.path,
+            &[(
+                "src/lib.rs",
+                &format!("pub fn renamed() {{}}\n// {added}\n"),
+            )],
+        );
+        let (done, received) = draft(
+            &scratch,
+            |w| trust_of(w, false),
+            &Source::Staged,
+            None,
+            vec![the_model_says("unused")],
+        );
+
+        assert!(
+            matches!(done, Err(DraftError::Credential)),
+            "{name}: {:?}",
+            done.as_ref().err()
+        );
+        assert!(
+            received.try_recv().is_err(),
+            "{name}: a staged credential was sent to a model"
+        );
+    }
+
+    let scratch = two_commits("commit-message-staged-control");
+    stage(
+        &scratch.path,
+        &[(
+            "src/lib.rs",
+            "pub fn renamed() {}\n// Authorization: Basic dXNlcjpwYXNz\n",
+        )],
+    );
+    let (done, _received) = draft(
+        &scratch,
+        |w| trust_of(w, false),
+        &Source::Staged,
+        None,
+        vec![the_model_says(&format!(
+            "One comment.\n{MARKER}\nNote a header"
+        ))],
+    );
+    assert_eq!(
+        done.expect("a draft").message,
+        Some("Note a header".to_string()),
+        "the control was not drafted, so the refusals above prove nothing"
+    );
+}
+
 /// CMD-23, LABEL-8, PROC-14: a diff of a path nobody vouched for is not sent to a model, so no
 /// draft is made for the box, which is sendable and takes only words the planner could have held.
 /// The bytes of such a file decide nothing: the outcome is a message of `None`, no usage and no

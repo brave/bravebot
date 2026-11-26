@@ -1311,6 +1311,42 @@ fn a_stage_started_through_a_link_sends_the_link() {
     assert_eq!(value["notSandboxed"], bravebot_approval::not_sandboxed());
 }
 
+/// SANDBOX-29: a line the planner asked to run with no sandbox reaches the desktop app saying so,
+/// with the catalog's sentences for it and no standing answer, and every other line carries the
+/// flag false and both sentences null.
+#[test]
+fn a_run_request_says_when_the_line_was_asked_to_run_with_no_sandbox() {
+    use bravebot_agent::confirm::RunRequest;
+    let pipeline = bravebot_core::command::Pipeline::new(vec![bravebot_core::command::Stage::new(
+        "touch",
+        vec!["out.txt".into()],
+    )]);
+    let mut request = RunRequest::from_pipeline(&pipeline, &["/usr/bin/touch".into()], "/w");
+    request.confined = None;
+
+    let ordinary = wire::run_request(1, &request);
+    assert_eq!(ordinary["unconfined"], false);
+    assert!(ordinary["unconfinedNote"].is_null(), "{ordinary}");
+    assert!(ordinary["notRememberedNote"].is_null(), "{ordinary}");
+
+    request.unconfined = true;
+    let value = wire::run_request(1, &request);
+    assert_eq!(value["unconfined"], true);
+    assert_eq!(value["unconfinedNote"], bravebot_approval::unconfined());
+    assert!(
+        value["unconfinedNote"]
+            .as_str()
+            .is_some_and(|note| note.contains("with no sandbox")),
+        "{value}"
+    );
+    assert_eq!(
+        value["notRememberedNote"],
+        bravebot_approval::unconfined_not_remembered()
+    );
+    assert_eq!(value["canBeRemembered"], false);
+    assert_eq!(value["notSandboxed"], bravebot_approval::not_sandboxed());
+}
+
 #[test]
 fn command_approval_preserves_plan_shape_environment_and_redirections() {
     use bravebot_agent::confirm::RunRequest;
@@ -2257,11 +2293,12 @@ fn a_plan_prompt_carries_the_task_and_every_step() {
             task: "summarise every file".into(),
             steps: steps.clone(),
         },
+        "summarise every file",
     );
 
     assert_eq!(
         value,
-        json!({ "request": 8, "task": "summarise every file", "steps": steps })
+        json!({ "request": 8, "task": "summarise every file", "title": "summarise every file", "steps": steps })
     );
 }
 

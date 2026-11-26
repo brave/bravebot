@@ -6,6 +6,8 @@
 
 use crate::outcome::Work;
 use crate::tools::tally;
+use crate::workspace::{SessionCheckout, Workspace};
+use bravebot_i18n::t;
 
 /// Whose move an open loop is (OPEN-2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +114,46 @@ impl Loops {
             .collect()
     }
 
+    /// The person's line: each open kind with its count, grouped by whose move it is, or
+    /// `open: nothing` (OPEN-3). No path, command, todo text or job name.
+    pub fn to_the_person(&self) -> String {
+        if self.is_empty() {
+            return t!(open_loops_nothing).to_string();
+        }
+        let named = |kinds: Vec<Kind>| -> String {
+            kinds
+                .into_iter()
+                .map(|kind| {
+                    let count = self.count(kind);
+                    match kind {
+                        Kind::UnbuiltChanges => t!(open_loops_unbuilt).to_string(),
+                        Kind::FailedCommand => t!(open_loops_failed).to_string(),
+                        Kind::OpenTodos => t!(open_loops_todos, count = count),
+                        Kind::KeptCheckouts => t!(open_loops_checkouts, count = count),
+                        Kind::UncommittedFiles => t!(open_loops_uncommitted, count = count),
+                        Kind::StoppedGoal => t!(open_loops_goal).to_string(),
+                        Kind::RunningJobs => t!(open_loops_jobs, count = count),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let mut groups = Vec::new();
+        let planner = self.of(Owner::Planner);
+        if !planner.is_empty() {
+            groups.push(t!(open_loops_planner, items = named(planner)));
+        }
+        let person = self.of(Owner::Person);
+        if !person.is_empty() {
+            groups.push(t!(open_loops_person, items = named(person)));
+        }
+        let waiting = self.of(Owner::Wait);
+        if !waiting.is_empty() {
+            groups.push(named(waiting));
+        }
+        t!(open_loops_line, groups = groups.join("; "))
+    }
+
     /// What the planner is told at the start of a turn, where any loop is open (OPEN-4).
     ///
     /// Fixed English, counts and the job names bravebot minted. No path, no command and no todo text, so nothing a turn read or
@@ -163,6 +205,47 @@ impl Loops {
         Some(message)
     }
 
+    /// The counts of [`Loops::to_the_person`] as one sentence, for a window that shows what a resumed session left open as
+    /// a notice (OPEN-6): the planner's loops with no owner named, then the person's, said to be
+    /// theirs. `None` where nothing is open, since a resume with nothing open shows nothing.
+    pub fn left_open(&self) -> Option<String> {
+        if self.is_empty() {
+            return None;
+        }
+        let mut groups = Vec::new();
+        groups.extend(self.named(Owner::Planner));
+        if let Some(items) = self.named(Owner::Person) {
+            groups.push(t!(open_loops_left_open_person, items = items));
+        }
+        groups.extend(self.named(Owner::Wait));
+        Some(t!(open_loops_left_open, groups = groups.join("; ")))
+    }
+
+    /// Each open kind of `owner`'s with its count, as the catalog names it, or `None` where none
+    /// is open.
+    fn named(&self, owner: Owner) -> Option<String> {
+        let kinds = self.of(owner);
+        if kinds.is_empty() {
+            return None;
+        }
+        let named: Vec<String> = kinds
+            .into_iter()
+            .map(|kind| {
+                let count = self.count(kind);
+                match kind {
+                    Kind::UnbuiltChanges => t!(open_loops_unbuilt).to_string(),
+                    Kind::FailedCommand => t!(open_loops_failed).to_string(),
+                    Kind::OpenTodos => t!(open_loops_todos, count = count),
+                    Kind::KeptCheckouts => t!(open_loops_checkouts, count = count),
+                    Kind::UncommittedFiles => t!(open_loops_uncommitted, count = count),
+                    Kind::StoppedGoal => t!(open_loops_goal).to_string(),
+                    Kind::RunningJobs => t!(open_loops_jobs, count = count),
+                }
+            })
+            .collect();
+        Some(named.join(", "))
+    }
+
     /// How the planner's message names one open kind.
     fn for_the_planner(&self, kind: Kind) -> String {
         let n = self.count(kind);
@@ -179,6 +262,56 @@ impl Loops {
             Kind::RunningJobs => tally(n, "job running", "jobs running"),
         }
     }
+}
+
+/// The open loops a session's last turn ended with, and the ones the planner was last told of
+/// (OPEN-3, OPEN-4).
+///
+/// Every front end decides "changed since the last turn" and "changed since the planner was last
+/// told" with this one rule.
+#[derive(Debug, Clone, Default)]
+pub struct Told {
+    ended: Loops,
+    told: Loops,
+}
+
+impl Told {
+    /// Record the set a turn ended with, and return whether it differs from the set the last turn
+    /// ended with, which is when the person is shown a line (OPEN-3).
+    pub fn ended_with(&mut self, loops: Loops) -> bool {
+        if loops == self.ended {
+            return false;
+        }
+        self.ended = loops;
+        true
+    }
+
+    /// What the planner is told at the start of the next turn, where the set the last turn ended
+    /// with differs from the set it was last told of (OPEN-4). `None` when nothing changed, and
+    /// when nothing is open.
+    pub fn for_the_planner(&mut self) -> Option<String> {
+        if self.ended == self.told {
+            return None;
+        }
+        self.told = self.ended.clone();
+        self.told.to_the_planner()
+    }
+}
+
+/// The rows of a task list still open: the ones not struck through (OPEN-1). A finished or a
+/// dropped task is struck, so what is left is the work still to come.
+pub fn open_todos(rows: &[bravebot_core::todo::Row]) -> Vec<&bravebot_core::todo::Row> {
+    rows.iter().filter(|row| !row.struck()).collect()
+}
+
+/// The checkouts `workspace` keeps for the session and has neither applied nor removed (OPEN-1).
+/// A removed one is no longer listed, and one whose delegate still runs has no size yet.
+pub fn kept_checkouts(workspace: &Workspace) -> Vec<SessionCheckout> {
+    workspace
+        .session_checkouts()
+        .into_iter()
+        .filter(|checkout| checkout.size.is_some() && !checkout.applied)
+        .collect()
 }
 
 /// Which of `written`, the files this session wrote, differ from `HEAD` in the repository holding
@@ -255,6 +388,98 @@ mod tests {
             ran_after_last_write: after,
             last_command_failed: failed,
         }
+    }
+
+    /// OPEN-4. A tracker no turn has ended into tells the planner nothing.
+    #[test]
+    fn a_tracker_with_nothing_ended_tells_nothing() {
+        assert_eq!(Told::default().for_the_planner(), None);
+    }
+
+    /// OPEN-4. The planner is told of a changed set once, and not again until the set changes.
+    #[test]
+    fn the_planner_is_told_once_per_changed_set() {
+        let mut told = Told::default();
+        let failed = Loops::from_work(work(0, 1, true, true));
+        told.ended_with(failed.clone());
+        // Nothing told reads as empty, which the first assertion rejects.
+        let said = told.for_the_planner().unwrap_or_default();
+        assert!(
+            said.starts_with("Open from earlier in this session"),
+            "{said}"
+        );
+        assert!(said.contains("the last command failed"), "{said}");
+        assert_eq!(told.for_the_planner(), None, "told twice");
+
+        told.ended_with(failed.clone());
+        assert_eq!(told.for_the_planner(), None, "the same set was told again");
+
+        let more = Loops {
+            open_todos: 2,
+            ..failed
+        };
+        told.ended_with(more);
+        let said = told.for_the_planner().unwrap_or_default();
+        assert!(said.contains("2 todos"), "{said}");
+        assert_eq!(told.for_the_planner(), None);
+    }
+
+    /// OPEN-3, OPEN-4. A set that closes every loop is a change, and it tells the planner
+    /// nothing, since nothing is open.
+    #[test]
+    fn a_set_that_empties_tells_nothing() {
+        let mut told = Told::default();
+        told.ended_with(Loops::from_work(work(0, 1, true, true)));
+        assert!(told.for_the_planner().is_some());
+        assert!(told.ended_with(Loops::default()));
+        assert_eq!(told.for_the_planner(), None);
+        told.ended_with(Loops::from_work(work(0, 1, true, true)));
+        assert!(told.for_the_planner().is_some(), "the loop reopened");
+    }
+
+    /// OPEN-3. `ended_with` says the set changed only when it differs from the last one ended.
+    #[test]
+    fn ending_with_a_set_says_whether_it_changed() {
+        let mut told = Told::default();
+        assert!(!told.ended_with(Loops::default()));
+        let failed = Loops::from_work(work(0, 1, true, true));
+        assert!(told.ended_with(failed.clone()));
+        assert!(!told.ended_with(failed));
+        assert!(told.ended_with(Loops::default()));
+    }
+
+    /// OPEN-6. The sentence a resumed session's notice shows names the same counts, the planner's
+    /// with no owner and the person's as theirs, and there is none for an empty set.
+    #[test]
+    fn the_sentence_a_resume_shows_names_the_same_counts() {
+        assert_eq!(
+            Loops::from_work(work(2, 1, false, true))
+                .left_open()
+                .as_deref(),
+            Some("Left open from earlier: changes not built, the last command failed.")
+        );
+        assert_eq!(Loops::default().left_open(), None);
+        let resumed = Loops {
+            open_todos: 2,
+            kept_checkouts: 1,
+            uncommitted_files: 3,
+            ..Loops::from_work(work(2, 1, false, true))
+        };
+        assert_eq!(
+            resumed.left_open().as_deref(),
+            Some(
+                "Left open from earlier: changes not built, the last command failed, 2 todos; \
+                 1 kept checkout, 3 files not committed, for you to act on."
+            )
+        );
+        let yours = Loops {
+            kept_checkouts: 1,
+            ..Loops::default()
+        };
+        assert_eq!(
+            yours.left_open().as_deref(),
+            Some("Left open from earlier: 1 kept checkout, for you to act on.")
+        );
     }
 
     /// OPEN-1. A write after the last command leaves the change unbuilt, and a command after it
@@ -417,6 +642,32 @@ mod tests {
             ),
             (3, 3, 1)
         );
+    }
+
+    /// OPEN-3. The person's line names each open kind with its count, grouped by whose move it
+    /// is, with no path, command, todo text or job name.
+    #[test]
+    fn the_persons_line_groups_kinds_by_owner_and_names_no_path() {
+        let loops = Loops {
+            unbuilt_changes: true,
+            failed_command: true,
+            open_todos: 2,
+            running_jobs: vec!["job:1".to_string()],
+            kept_checkouts: 1,
+            uncommitted_files: 3,
+            stopped_goal: true,
+        };
+        assert_eq!(
+            loops.to_the_person(),
+            "open: changes not built, the last command failed, 2 todos (planner); 1 kept \
+             checkout, 3 files not committed, a stopped goal (you); 1 job running"
+        );
+    }
+
+    /// OPEN-3. With nothing open, the line says nothing is open.
+    #[test]
+    fn the_persons_line_with_nothing_open_is_open_nothing() {
+        assert_eq!(Loops::default().to_the_person(), "open: nothing");
     }
 
     /// OPEN-4, OPEN-7. The planner reads its own loops as its work, the person's as theirs, and the

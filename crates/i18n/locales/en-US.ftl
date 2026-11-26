@@ -2784,9 +2784,9 @@ run-write-not-remembered =
     a line naming a file to write is asked about every time, so this one cannot be remembered
 run-stdin-not-remembered =
     a line fed a reference is asked about every time, so this one cannot be remembered
-run-unconfined = the planner asked for this one line to run with no sandbox: no profile holds it, and the next line is held to the session's mode again
+run-unconfined = the model asked for this one line to run with no sandbox: no profile holds it, and the next line is held to the session's mode again
 run-unconfined-not-remembered =
-    a line the planner asked to run with no sandbox is asked about every time, so neither the line nor the request is remembered
+    a line the model asked to run with no sandbox is asked about every time, so neither the line nor the request is remembered
 run-scopes-not-remembered =
     a line the planner asked to carry a credential scope, toolchain list or loopback is asked every time, so it cannot be remembered
 run-kept-scope-not-remembered =
@@ -3795,6 +3795,10 @@ open-loops-jobs = { $count ->
     [one] { $count } job running
    *[other] { $count } jobs running
     }
+# The same counts as one sentence, which the desktop window shows above a resumed session's
+# transcript (OPEN-6). The planner's kinds come first with no owner named, then the person's.
+open-loops-left-open = Left open from earlier: { $groups }.
+open-loops-left-open-person = { $items }, for you to act on
 # What /unfinished says, to the person only (OPEN-5).
 unfinished-nothing = nothing is open
 unfinished-unbuilt = changes not built, in the files written since the last command:

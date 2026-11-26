@@ -10196,6 +10196,9 @@ const MAX_SCANNED_BYTES: usize = 8 * 1024 * 1024;
 struct Standing {
     /// The name the file authority and the trust map hold this destination under.
     key: String,
+    /// The keys of the file's other names (a symbolic link's landing, hard links, a second path to
+    /// the tree), which the effect is entered under with `key` (TRUST-4).
+    others: Vec<String>,
     /// The name a person and a finding see, which is the name relative to the workspace root.
     shown: String,
     /// The name the planner is told: `shown` with the directory the line ran in spelled as the
@@ -12731,6 +12734,13 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // Keyed the way the authority keys it, so the two spellings of one destination in
     // `> out 2> ./out` are one effect rather than a second entry refused by the first.
     let mut effects = std::collections::BTreeMap::new();
+    // Every key an effect of this line holds, a destination's other names included, and how many
+    // there are: each one advances the authority's revision once when it is entered.
+    let mut entered: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // Entered for names a destination gained after its first open, because a part of the line
+    // replaced it with a link in between. Completed untrusted, and by the drop of an effect that
+    // was not completed (TRUST-4).
+    let mut gained: Vec<(bravebot_core::file_authority::FileEffect, Vec<String>)> = Vec::new();
     // What each of those destinations held before the line opened it, taken at the same moment
     // and for the credential scan below: there is no later moment to ask, because afterwards
     // every answer is the line's own.
@@ -12868,24 +12878,80 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                     });
                 }
                 let key = authority.key(&tools.workspace.trust_key(&path.to_string_lossy()));
-                if effects.contains_key(&key) {
-                    return Ok(());
-                }
+                // The file's other names: where a link lands, its hard links and a second path to
+                // the tree. Looked up at every open, since a part run between two opens of one
+                // destination can have made it a link, and before the boundary is taken, since the
+                // walk reads directories (TRUST-4, CMDLINE-5).
+                let others = tools
+                    .workspace
+                    .other_trust_keys(&tools.workspace.relative_display(path));
+                // The names no effect of this line holds yet. A name an earlier destination
+                // entered is held by that effect and would be refused as a second writer.
+                let mut every: Vec<String> = others
+                    .keys
+                    .iter()
+                    .map(|other| authority.key(other))
+                    .filter(|other| *other != key)
+                    .collect();
+                every.sort();
+                every.dedup();
+                // A destination this line already entered gains only the names it was not entered
+                // under. A new one reserves every name, so a second path to a file the line holds
+                // is refused as a second writer to it, as another spelling of it is.
+                let fresh: Vec<String> = match entered.contains(&key) {
+                    true => every
+                        .iter()
+                        .filter(|other| !entered.contains(*other))
+                        .cloned()
+                        .collect(),
+                    false => every.clone(),
+                };
                 // Whatever the line's label: a line that stops short leaves every destination
                 // untrusted, and whether it will is not known until it has (MEMORY-5).
-                crate::memory::record_before_write(tools.workspace.memories(), &key, folds)
-                    .map_err(|e| crate::exec::ExecError::Io(e.to_string()))?;
+                for name in std::iter::once(&key).chain(&fresh) {
+                    crate::memory::record_before_write(tools.workspace.memories(), name, folds)
+                        .map_err(|e| crate::exec::ExecError::Io(e.to_string()))?;
+                }
+                if entered.contains(&key) {
+                    // A destination, or a name of one, this line entered. It gains a name only
+                    // where a part of the line left a link at it since the first open, and that
+                    // name is entered now and left untrusted: what the line writes through the link
+                    // is not what the destination was approved for (TRUST-4).
+                    if fresh.is_empty() {
+                        return Ok(());
+                    }
+                    return policy.capture_files(|_, capture| {
+                        let names: Vec<&str> = fresh.iter().map(String::as_str).collect();
+                        let effect = capture.begin_all(&names).ok_or_else(|| {
+                            crate::exec::ExecError::Io(
+                                "another file effect is still writing this destination".to_string(),
+                            )
+                        })?;
+                        entered.extend(fresh.iter().cloned());
+                        gained.push((effect, fresh.clone()));
+                        Ok(())
+                    });
+                }
                 policy.capture_files(|policy, capture| {
-                    let prior = if !policy.read_is_quarantined(&key) {
+                    let prior = if !policy.read_is_quarantined_under_names(
+                        &key,
+                        &others.keys,
+                        others.complete,
+                    ) {
                         bravebot_core::label::Integrity::Trusted
                     } else {
                         bravebot_core::label::Integrity::Untrusted
                     };
-                    let effect = capture.begin(&key).ok_or_else(|| {
+                    let names: Vec<&str> = std::iter::once(key.as_str())
+                        .chain(fresh.iter().map(String::as_str))
+                        .collect();
+                    let effect = capture.begin_all(&names).ok_or_else(|| {
                         crate::exec::ExecError::Io(
                             "another file effect is still writing this destination".to_string(),
                         )
                     })?;
+                    entered.insert(key.clone());
+                    entered.extend(fresh.iter().cloned());
                     // Kept only where the scan below could reach this destination, which is where
                     // what the line leaves in it will be at an integrity the driver may read.
                     // Reading a destination a line nobody vouched for is about to truncate buys
@@ -12902,6 +12968,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                     };
                     standing.push(Standing {
                         key: key.clone(),
+                        others: every.clone(),
                         shown: tools.workspace.relative_display(path),
                         told: told_destination(
                             tools.workspace,
@@ -12972,7 +13039,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     }
     // A proof about inputs before execution cannot label output captured beside a write.
     // Our own effect entries each advance the revision once and are accounted for separately.
-    let label = if authority.is_current(started_revision.wrapping_add(effects.len() as u64)) {
+    let label = if authority.is_current(started_revision.wrapping_add(entered.len() as u64)) {
         label
     } else {
         Label::new(
@@ -13007,6 +13074,10 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // modification time, so the mark reads it as changed and it is counted. Whether the line ended well does not enter into it: a line that failed halfway has
     // still left what it got to.
     let changed_a_file = tree_before.differs_now();
+    let gained_names: Vec<String> = gained
+        .iter()
+        .flat_map(|(_, names)| names.iter().cloned())
+        .collect();
     if ran
         .as_ref()
         .is_ok_and(|ran| ran.ended_well && ran.succeeded())
@@ -13026,9 +13097,21 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             };
             effect.complete(integrity);
         }
+        // A name a destination gained after its first open is left untrusted: the yes to the line
+        // was about the destination as it stood, and what the line wrote through the link is not
+        // known to be what that approval covered (TRUST-4).
+        for (effect, _) in gained.drain(..) {
+            effect.complete(bravebot_core::label::Integrity::Untrusted);
+        }
+    }
+    for name in &gained_names {
+        crate::memory::after_write(policy, tools.workspace.memories(), name, folds);
     }
     for destination in &standing {
         crate::memory::after_write(policy, tools.workspace.memories(), &destination.key, folds);
+        for other in &destination.others {
+            crate::memory::after_write(policy, tools.workspace.memories(), other, folds);
+        }
         // The line is the planner's own words, so the name in it is one it typed. Recorded by
         // `told`, the directory spelled as typed, and not by `shown`, which holds the place a link
         // in the tree led (CHECKOUT-13, LABEL-3). Recorded only where the line left a file, so a

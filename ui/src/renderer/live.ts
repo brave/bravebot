@@ -20,7 +20,7 @@ import type {
 } from '../shared/protocol'
 import { conversationKey } from '../shared/experience'
 import { type Fork, forkOf } from '../shared/forks'
-import type { Entry } from './transcript'
+import type { DroppedOnTask, Entry } from './transcript'
 import type { Turns } from './turn-details'
 import type { AgentEntry, FolderQuestion, RefusedFolder, RulesQuestion, SessionSettled } from '../shared/protocol'
 import { conversationPreferences, setConversation } from './experience'
@@ -48,7 +48,8 @@ export interface Queued {
   aside?: 'recap'
   /**
    * Set for a typed `/manifest` line that waits for the turn, which the bridge refused while it ran:
-   * its task. It starts a plan run when the turn ends and is never sent as a prompt (MANIFEST-9).
+   * its task. It starts a plan run when the turn ends, with the pictures and PDFs `staged` holds
+   * (DROP-4), and is never sent as a prompt (MANIFEST-9).
    */
   manifest?: string
   /**
@@ -89,6 +90,11 @@ export interface Live {
     directory: string
   }
   entries: Entry[]
+  /**
+   * The pictures and PDFs dropped onto the `/manifest` task this session last started, for its plan
+   * card to show beside the task. Window state only: the bridge is sent the grants, not these.
+   */
+  planDropped?: DroppedOnTask[]
   turns: Turns
   todos: TodoRow[]
   /** The notes kept on this session's record, oldest first. Shown beside it, never sent. */
@@ -148,6 +154,11 @@ export interface Live {
    * parent in its list — a session with no record yet is in no list at all.
    */
   forkedFrom: { directory: string; id: string; title: string; prompt: number } | null
+  /**
+   * What a resumed session left open, as the bridge's `openLoops` line says it (OPEN-6). Null for a
+   * fresh chat and for a resume with nothing open.
+   */
+  openLoops: string | null
   /**
    * A prompt to scroll to and mark, counted over the prompts the transcript drew.
    *
@@ -308,8 +319,9 @@ type Starting = 'turns' | 'quarantine' | 'phase' | 'checking' | 'hook' | 'agents
  * A session as the window first holds it: what the bridge's answer says, and nothing yet said,
  * heard, checked or running.
  */
-export function newLive(fields: Omit<Live, Starting>): Live {
+export function newLive(fields: Omit<Live, Starting | 'openLoops'> & { openLoops?: string | null }): Live {
   return {
+    openLoops: null,
     ...fields,
     turns: {},
     quarantine: [],

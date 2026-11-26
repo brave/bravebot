@@ -467,6 +467,11 @@ export interface OpenedSession extends SessionSettled {
   /** Said when the other front end wrote the transcript above: it drew it, and this one will not draw it the same way. */
   frontNote: string | null
   /**
+   * What the session left open, worked out again from the record and the disk (OPEN-6), as one
+   * translated line: `open: …`. Null when nothing is open. Absent from an older bridge.
+   */
+  openLoops?: string | null
+  /**
    * How many messages compaction has taken out of this conversation, in total.
    *
    * Only ever rises, and rises exactly when the session stopped carrying what was said before the
@@ -824,6 +829,12 @@ export interface TurnDone {
   archived: number
   /** As on `OpenedSession`. */
   rewind?: RewindPoint[]
+  /**
+   * The bridge's one line naming what the session leaves open (OPEN-3), such as
+   * `open: changes not built (planner)` or `open: nothing`, and `null` where the set is the one
+   * already shown. Drawn as sent, as text.
+   */
+  openLoops?: string | null
 }
 
 /**
@@ -867,6 +878,8 @@ export interface TurnError {
   id?: string | null
   /** What the turn said as it ran. A turn that failed has no reply to carry them on. */
   notices?: string[]
+  /** As on `TurnDone`. A turn that failed after a write still leaves that write open. */
+  openLoops?: string | null
   turn: number
   kind: 'cancelled' | 'precommit' | 'workspace' | 'chat'
   message: string
@@ -959,6 +972,8 @@ export interface ServerRequest {
 export interface ManifestRequest {
   request: number
   task: string
+  /** The task with each dropped file's marker replaced by its name, as the run's record is titled. */
+  title?: string
   steps: string[]
 }
 
@@ -1198,6 +1213,21 @@ export interface RunRequest {
   confinement?: { heading: string; directories: string[]; shownDirectories: string[]; sentences: string[] } | null
   /** The sentence for `confinement: null`, worded by the bridge in the person's language. */
   notSandboxed?: string | null
+  /**
+   * Whether the planner asked to run this one line with no sandbox. Such a line has no standing
+   * answer, so `canBeRemembered` is false for it. Absent from a bridge built before the field.
+   */
+  unconfined?: boolean
+  /**
+   * The sentence saying the line runs with no sandbox, worded by the bridge in the person's
+   * language, or `null` unless `unconfined` is true. Draw it as sent.
+   */
+  unconfinedNote?: string | null
+  /**
+   * The sentence saying neither the line nor the request is remembered, worded by the bridge, or
+   * `null` unless `unconfined` is true.
+   */
+  notRememberedNote?: string | null
   /**
    * Credential scopes and toolchain lists the planner asked this line to be lent, by name.
    *

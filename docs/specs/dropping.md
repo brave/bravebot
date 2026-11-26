@@ -52,8 +52,9 @@ Never a path a model proposed, never one read out of a file, never one a process
 justification cannot be checked from the bytes, so it lives at the call site. Two call sites mint
 the grant: the terminal's drop handling, which a pasted path reaches and which a Ctrl-V that finds
 files on the clipboard reaches by the same route ([PASTE-12](pasting.md#PASTE-12)), and the
-`dropped` and `attachments` lists a front end sends with `turn.send`, whose caller owes what
-[DROP-10](#DROP-10) states. Nothing else mints it.
+`dropped` and `attachments` lists a front end sends with `turn.send`, and the `attachments` it
+sends with `manifest.run`, checked the same way, whose caller owes what [DROP-10](#DROP-10) states.
+Nothing else mints it.
 
 `verified-by: bravebot_tui::drop::dropping_an_image_puts_a_marker_in_the_line`
 `verified-by: bravebot_tui::app::tests::pasting::a_file_the_clipboard_names_is_staged_as_dropping_it_stages_it`
@@ -341,7 +342,7 @@ what the path was for and can say so; the turn cannot.
 `verified-by: bravebot_ui_bridge::attaching::a_picture_the_bridge_cannot_carry_refuses_the_send`
 `verified-by: bravebot_ui_bridge::attaching::a_picture_named_in_the_text_list_fails_the_turn_and_is_not_sent`
 `verified-by: bravebot_ui_bridge::attaching::a_path_the_prompt_only_names_is_not_read_as_a_drop_and_one_in_the_dropped_list_is`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/sanitise.test.mjs and ui/scripts/drops.test.mjs pin its half: a window's turn.send reaches the agent with no dropped, attachments or images list of its own, its dropped and attachments are composed only from grants the main process minted, a path where an attachment id or a drop id goes sends nothing, and a manifest run forwards a task and a model and nothing else; make check-ui runs both)`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/sanitise.test.mjs and ui/scripts/drops.test.mjs pin its half: a window's turn.send reaches the agent with no dropped, attachments or images list of its own, its dropped and attachments are composed only from grants the main process minted, a path where an attachment id or a drop id goes sends nothing, and a manifest run forwards a task, a model, marker files and attachments composed from its grants, and no list the window named; make check-ui runs both)`
 
 <a id="DROP-11"></a>
 ### DROP-11: a dropped picture is sent with its path beside it
@@ -408,7 +409,11 @@ carries out a `/schedule` line itself, so the window sends the markers the line 
 the bridge writes each dropped file's name in place of its marker, and for a pasted picture the
 terminal's sentence that a picture cannot join that command ([DROP-4](#DROP-4)). Sending the line
 takes what it named off the box ([DROP-6](#DROP-6)), and a line that waits in the queue sends the
-same names when the queue reaches it.
+same names when the queue reaches it. A `/manifest` line sends its pictures and PDFs as grants,
+which the main process composes into `manifest.run`'s `attachments`, and a text file as its marker,
+which the bridge writes as the file's name, so the planner gets what the terminal gives it
+([DROP-4](#DROP-4), [DROP-11](#DROP-11)). A `/manifest` line that waits in the queue keeps its
+grants and sends them when the queue reaches it.
 
 One part does not follow. A message queued while a turn runs keeps its grants and sends them as
 its own turn when the running one ends, where [DROP-8](#DROP-8) names the file instead. The
@@ -418,6 +423,11 @@ the case DROP-8 already says carries its files.
 `verified-by: bravebot_ui_bridge::attaching::a_dropped_file_is_classified_by_the_terminals_rules`
 `verified-by: bravebot_ui_bridge::attaching::a_picture_the_bridge_cannot_carry_refuses_the_send`
 `verified-by: bravebot_ui_bridge::english_notes::a_note_for_the_window_is_in_english_whatever_the_machine_says`
+`verified-by: bravebot_ui_bridge::manifest::a_picture_dropped_onto_the_task_reaches_the_planner`
+`verified-by: bravebot_ui_bridge::manifest::a_picture_dropped_onto_the_task_stays_trusted_for_the_next_turn`
+`verified-by: bravebot_ui_bridge::manifest::a_text_file_dropped_onto_the_task_is_its_name`
+`verified-by: bravebot_ui_bridge::manifest::a_run_that_cannot_be_what_was_asked_for_is_refused`
+`verified-by: by-construction (the main process and the renderer are not crates this workspace compiles, so ui/scripts/drops.test.mjs pins that a manifest run carries its granted drops as attachments and refuses a path where a grant id goes or another session's grant, ui/scripts/manifest-command.test.mjs pins that the composer sends a /manifest line's dropped pictures and PDFs as grant ids and its text files as markers, and keeps them while the line waits in the queue, and ui/scripts/drive-manifest-drop.mjs drives a dropped picture on a /manifest line through the real app and bridge to a stub planner; make check-ui runs the tests)`
 `verified-by: by-construction (the preload and the renderer are not crates this workspace compiles, so ui/scripts/drops.test.mjs pins the markers and the main process's grants against a stub bridge whose nouns, cap and notes the agent does not use, so a rule, a number or a wording of the window's own would fail it; ui/scripts/drive-drop.mjs drives a trusted drag into the real app and bridge against a stub model, asserting the markers, the path written for a type nothing takes, the bridge's note for a picture over the cap at the drop and at the send, and that a page-dispatched drop stages nothing; make check-ui runs the test)`
 
 ## Known costs

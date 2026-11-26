@@ -149,9 +149,11 @@ pub fn permission_mode(value: &Value) -> Result<PermissionMode, Failure> {
 
 /// The sandbox mode a `session.sandbox` asks for.
 ///
-/// `strict`, `read-only` and `workspace-write` only. `off` is refused, and so is any other word, because a
-/// window has no way to show that nothing confines a program (SANDBOX-22). Reading the word as
-/// `workspace-write` instead would leave a client drawing a mode the session is not in.
+/// `strict`, `read-only` and `workspace-write` only. `off` is refused, and so is any other word,
+/// because a window says a program is unconfined only on the card for one line asked to run with no
+/// sandbox (SANDBOX-29), and nothing it draws says that every program of a session is
+/// (SANDBOX-22). Reading the word as `workspace-write` instead would leave a client drawing a mode
+/// the session is not in.
 pub fn sandbox_mode(value: &Value) -> Result<SandboxMode, Failure> {
     match value.as_str().and_then(SandboxMode::parse) {
         Some(mode) if mode != SandboxMode::Off => Ok(mode),
@@ -757,6 +759,12 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
         })),
         // The sentence for that null, in the catalog's words and so in the person's language.
         "notSandboxed": request.confined.is_none().then(bravebot_approval::not_sandboxed),
+        // Whether the planner asked to run this line with no sandbox. Such a line has no standing
+        // answer, so `canBeRemembered` is false for it, and the two sentences below say so in the
+        // catalog's words. Both are null for every other line.
+        "unconfined": request.unconfined,
+        "unconfinedNote": request.unconfined.then(bravebot_approval::unconfined),
+        "notRememberedNote": request.unconfined.then(bravebot_approval::unconfined_not_remembered),
         "summary": request.summary(),
     })
 }
@@ -1051,12 +1059,16 @@ pub fn mcp_move_request(id: u64, request: &MoveRequest) -> Value {
 /// does, and the routing it fixed. A front end draws every line and does not shorten the list,
 /// because the answer covers the whole plan (MANIFEST-10).
 ///
+/// `title` is the task as the run's record is titled: each dropped file's marker replaced by the
+/// file's name. A front end shows it where the task is named in a line, and need not work it out.
+///
 /// The task is the person's own words and the steps are the driver's rendering of a plan made
 /// from those words alone, so neither is untrusted content.
-pub fn manifest_request(id: u64, request: &ManifestRequest) -> Value {
+pub fn manifest_request(id: u64, request: &ManifestRequest, title: &str) -> Value {
     json!({
         "request": id,
         "task": request.task,
+        "title": title,
         "steps": request.steps,
     })
 }

@@ -6,6 +6,9 @@ import { leftOver, taken } from './interjecting'
 import { keepEnd } from './thinking'
 import { retryDue } from './retry'
 
+/** The open-loops line a turn ended with as an entry, or none where the bridge sent no line. */
+const saidOpen = (line: string | null | undefined, turn: number): t.Entry[] => typeof line === 'string' ? [t.openLoops(line, turn)] : []
+
 /** Fold one event into the live session. */
 export function apply(
   message: BridgeEvent,
@@ -43,6 +46,9 @@ export function apply(
           // Nothing reports the word again until the session is opened or rewound, so the one
           // read before this turn is no longer current and is not shown.
           context: null,
+          // What the session left open when it was resumed (OPEN-6) changes with this turn, and
+          // nothing reports it again, so it is no longer shown.
+          openLoops: null,
           entries: t.beginTurn(old.entries, message.data.turn) }
       case 'turn.interjected':
         return taken(old)
@@ -101,7 +107,7 @@ export function apply(
       case 'server.request':
         return { ...old, entries: [...old.entries, t.askedServer(message.data)] }
       case 'manifest.request':
-        return { ...old, entries: [...t.withoutNarratedPlan(old.entries, message.data.steps), t.askedManifest(message.data, t.narrowing(old.rules))] }
+        return { ...old, entries: [...t.withoutNarratedPlan(old.entries, message.data.steps), t.askedManifest(message.data, t.narrowing(old.rules), old.planDropped)] }
       case 'exposure.request':
         return { ...old, entries: [...old.entries, t.askedExposure(message.data)] }
       case 'mcp-server.request':
@@ -126,11 +132,11 @@ export function apply(
           sandboxMode: message.data.sandbox ?? old.sandboxMode }
       case 'manifest.done':
         refresh()
-        return { ...old, running: false, phase: null, checking: null, hook: null, thinking: '', outcome: 'complete',
+        return { ...old, running: false, phase: null, checking: null, hook: null, thinking: '', outcome: 'complete', planDropped: undefined,
           entries: [...old.entries, t.planReplied(message.data.reply, message.data.record)] }
       case 'manifest.error':
         refresh()
-        return { ...old, running: false, phase: null, checking: null, hook: null, thinking: '', queuePaused: true,
+        return { ...old, running: false, phase: null, checking: null, hook: null, thinking: '', queuePaused: true, planDropped: undefined,
           entries: [...t.interruptPending(old.entries), t.planEnded(message.data)] }
       case 'vouch.request':
         return { ...old, entries: [...old.entries, t.askedVouch(message.data)] }
@@ -156,7 +162,7 @@ export function apply(
           hook: null,
           composing: null,
           thinking: '',
-          entries: [...t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt), t.replied(message.data.reply, message.data.turn)],
+          entries: [...t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt), t.replied(message.data.reply, message.data.turn), ...saidOpen(message.data.openLoops, message.data.turn)],
           awaitingOrdinal: null,
           archived: message.data.archived,
           rewind: message.data.rewind ?? [],
@@ -178,7 +184,7 @@ export function apply(
           hook: null,
           composing: null,
           thinking: '',
-          entries: [...t.interruptPending(t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt)), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, accountMessage: message.data.accountMessage, accountCommand: message.data.accountCommand, attempts: message.data.attempts, status: message.data.status, cutOff: message.data.cutOff, turn: message.data.turn }],
+          entries: [...t.interruptPending(t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt)), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, accountMessage: message.data.accountMessage, accountCommand: message.data.accountCommand, attempts: message.data.attempts, status: message.data.status, cutOff: message.data.cutOff, turn: message.data.turn }, ...saidOpen(message.data.openLoops, message.data.turn)],
           awaitingOrdinal: null,
           queuePaused: true,
           rewind: message.data.rewind ?? [],

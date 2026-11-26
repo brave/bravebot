@@ -1213,7 +1213,10 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
         return;
     };
     let batch = super::Batch::of_call(lead, size, wake_after);
-    for (id, seeded) in started {
+    for (id, mut seeded) in started {
+        // What the turn that started it says its context has met, met with what it starts from:
+        // a constant the caller chose, so nothing here reads a byte of anything a delegate saw.
+        seeded.context = seeded.context.meet(task.delegates_have_met);
         let vouched = seeded.vouched.clone();
         let checkout = seeded
             .workspace
@@ -2114,7 +2117,7 @@ pub(super) fn tools_for_a_call<'a>(
             .as_ref()
             .map(|(owner, repo)| (owner.as_str(), repo.as_str())),
         found: Vec::new(),
-        confined_to: plan.addressed.as_ref().map(|addressed| addressed.tools()),
+        confined_to: task.confined_to(plan.addressed.as_ref()),
         offered: Some(&state.offered),
         servers: state.servers.as_deref_mut(),
         mcp: state.mcp.as_ref().map(|(offer, _)| offer),
