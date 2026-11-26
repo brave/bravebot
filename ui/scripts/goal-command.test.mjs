@@ -76,7 +76,7 @@ test('the composer sends a /goal line to the goal in each place it sends one, be
   const command = goal.slice(goal.indexOf('const command = '), goal.indexOf('const receive = '))
   // The answer is drawn as a row, and the line is never a prompt.
   assert.match(command, /call<GoalAnswer>\('session\.goal', \{ session: handle, argument, \.\.\.markersOf\(staged\) \}\)/)
-  assert.match(command, /t\.narrated\(answer\.lines\.join\('\\n'\), '\/goal'\)/)
+  assert.match(command, /t\.goalNoticed\(answer\.lines\.join\('\\n'\), answerTone\(answer\)\)/)
   assert.doesNotMatch(command, /turn\.send|turn\.interject|\bsend\(/)
 })
 
@@ -119,14 +119,15 @@ test('a check is drawn as a turn, so the stop key reaches it, and ends with its 
   assert.equal(checking.running, true, 'Stop and Escape act on a running chat, and send turn.cancel')
   assert.equal(checking.goalChecking, true)
   assert.equal(checking.goalNext, false)
-  assert.equal(checking.entries.at(-1).kind, 'narration')
-  assert.equal(checking.entries.at(-1).command, '/goal')
+  assert.equal(checking.entries.length, 0, 'the working row says it is a check, so no row is added')
 
   const after = hook.judged(checking, verdict())
   assert.equal(after.running, false)
   assert.equal(after.goalChecking, false)
   assert.equal(after.goalNext, true, 'a NOT MET asks for the turn that carries the work on')
   assert.equal(after.entries.at(-1).text, 'The goal is not met yet: a.txt is missing')
+  assert.equal(after.entries.at(-1).kind, 'goal-notice')
+  assert.equal(after.entries.length, 1, 'one row per check')
   assert.equal(after.entries.filter((entry) => entry.kind === 'user').length, 0, 'the verdict is no prompt')
   assert.deepEqual(after.goal, verdict().goal)
 
@@ -136,7 +137,7 @@ test('a check is drawn as a turn, so the stop key reaches it, and ends with its 
     assert.equal(ended.running, false, next)
   }
   const failed = hook.judged(checking, verdict({ verdict: 'failed', outcome: 'failed', next: 'ended', goal: null, line: 'The goal could not be checked (x), so it is cleared.' }))
-  assert.equal(failed.entries.at(-1).refused, true)
+  assert.equal(failed.entries.at(-1).tone, 'refused')
 })
 
 test('a check the stop key ended frees the chat once the goal is cleared, and a clear mid-turn leaves the turn alone', () => {
@@ -184,7 +185,7 @@ let components
 const loaded = async () => {
   const { loadComponents } = await import('./render-support.mjs')
   return (components ??= loadComponents({
-    contents: "export { Context } from './src/renderer/components/Context.tsx'\nexport { Row } from './src/renderer/components/Transcript.tsx'\nexport * as transcript from './src/renderer/transcript'",
+    contents: "export { Context } from './src/renderer/components/Context.tsx'\nexport { Row, GOAL_ICONS } from './src/renderer/components/Transcript.tsx'\nexport * as transcript from './src/renderer/transcript'",
   }, [withoutTree]))
 }
 
@@ -212,6 +213,11 @@ test('the carry-on prompt is drawn as the driver\'s row, not as a line the perso
   assert.doesNotMatch(markup, /bubble user/, 'not the person\'s bubble')
   assert.ok(markup.includes('Automatic turn · sent by /goal'), markup)
   assert.ok(markup.includes('Carry on &lt;b&gt;now&lt;/b&gt;'), 'the sentence is text')
+  // The head is the row; the sentence waits under a collapsed Details, as on a decision card.
+  // Leo's elements take their attributes once mounted, so the fold is read from the source.
+  assert.match(markup, /<\/span><div class="goal-turn-details"><leo-collapse><p class="goal-turn-prompt">/, markup)
+  const source = readFileSync('src/renderer/components/Transcript.tsx', 'utf8')
+  assert.match(source, /<Collapse className="card-details" title="Details" isOpen=\{undefined\}>\s*<p className="goal-turn-prompt">\{entry\.text\}<\/p>/)
 })
 
 const goalPanel = async (goal) => {
@@ -230,15 +236,50 @@ test('the goal panel shows the condition, rounds left, time set and tokens spent
   assert.ok(panel.includes('2m 05s'), panel)
   assert.ok(panel.includes('4.2k tokens'), panel)
   assert.ok(panel.includes('a.txt is missing'), panel)
-  assert.ok(panel.includes('Working towards it'), panel)
+  assert.ok(panel.includes('Working until a check says it holds.'), panel)
+  assert.ok(panel.includes('Running for') && panel.includes('>Spent<'), panel)
   assert.equal(await goalPanel(null), null, 'no panel without a goal')
 })
 
 test('a paused or stalled goal says so in words', async () => {
   const paused = await goalPanel(snapshot({ paused: true }))
   assert.match(paused, /goal-state paused/)
-  assert.ok(paused.includes('Paused. Type /goal resume to carry on.'), paused)
+  assert.ok(paused.includes('Paused. Type <code>/goal resume</code> to carry on.'), paused)
   const stalled = await goalPanel(snapshot({ stalled: true }))
   assert.match(stalled, /goal-state stalled/)
   assert.ok(stalled.includes('Stopped: rounds in a row made no tool call'), stalled)
+})
+
+// The goal's notices. The faults these reject are a notice whose mark does not say what the
+// check came to, a mark read from the sentence's words, and a command half drawn as code.
+test('each goal notice is marked from the fields the bridge sent, not from its sentence', () => {
+  assert.equal(shared.verdictTone('met'), 'met')
+  for (const outcome of ['impossible', 'spent', 'stalled']) assert.equal(shared.verdictTone(outcome), 'warning', outcome)
+  assert.equal(shared.verdictTone('failed'), 'refused')
+  for (const outcome of ['carry-on', 'unreadable', 'quarantined']) assert.equal(shared.verdictTone(outcome), 'plain', outcome)
+  assert.equal(shared.answerTone({ goal: snapshot({ paused: true }), changed: true, lines: ['The goal is met.'] }), 'paused')
+  assert.equal(shared.answerTone({ goal: snapshot(), changed: true, lines: ['The goal is paused.'] }), 'plain')
+  assert.equal(shared.answerTone({ goal: null, changed: true, lines: [] }), 'plain')
+})
+
+test('a goal notice draws its mark, and every whole command it names as one code span', async () => {
+  const { Row, GOAL_ICONS, transcript: own } = await loaded()
+  const draw = (entry) => renderToStaticMarkup(React.createElement(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
+  const paused = draw(own.goalNoticed('Turns are not judged until /goal resume, and /goal clear still takes it off. /goal resume.', 'paused'))
+  assert.match(paused, /class="goal-notice paused"/)
+  assert.equal([...paused.matchAll(/<code>\/goal resume<\/code>/g)].length, 2, paused)
+  assert.equal([...paused.matchAll(/<code>\/goal clear<\/code>/g)].length, 1, paused)
+  assert.doesNotMatch(paused, /<code>\/goal<\/code>/, 'never part of a command')
+  assert.match(draw(own.goalNoticed('The goal is met: a.txt is there', 'met')), /class="goal-notice met"/)
+  // `plain`, not `goal`: a notice's class must not be the Goal panel's `.goal`.
+  assert.match(draw(own.goalNoticed('Working towards: x', 'plain')), /class="goal-notice plain"/)
+  assert.deepEqual(GOAL_ICONS, { plain: 'flag', met: 'check-circle-filled', warning: 'warning-triangle-outline', paused: 'pause-circle', refused: 'warning-triangle-outline' })
+  assert.ok(draw(own.goalNoticed('<b>x</b> /goal clear', 'plain')).includes('&lt;b&gt;x&lt;/b&gt; <code>/goal clear</code>'), 'the sentence is text')
+})
+
+test('a check is drawn in the working row with its own word and no token count', () => {
+  const source = readFileSync('src/renderer/components/Transcript.tsx', 'utf8')
+  assert.match(source, /word=\{live\.goalChecking \? \(\) => GOAL_CHECK_WORD : /)
+  assert.match(source, /tokens=\{live\.goalChecking \? 0 : live\.tokens\}/)
+  assert.match(source, /export const GOAL_CHECK_WORD = 'Checking whether the goal is met'/)
 })

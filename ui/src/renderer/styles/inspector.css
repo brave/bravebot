@@ -140,7 +140,7 @@
 .goal-condition { margin: 0; font: var(--type-meta-strong); color: var(--ink-primary); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .goal-state {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--leo-spacing-m);
   margin: 0;
   font: var(--type-meta);
@@ -148,10 +148,14 @@
   --leo-icon-size: var(--icon-meta);
   --leo-icon-color: var(--ink-tertiary);
 }
-.goal-state leo-icon { flex: none; }
+/* The icon sits centred on the first line, however many lines the words take. */
+.goal-state leo-icon { flex: none; margin-top: calc((1lh - var(--icon-meta)) / 2); }
 .goal-state.paused,
 .goal-state.stalled { --leo-icon-color: var(--status-warning); }
-.goal-facts { padding: 0; }
+/* A command the state line names, at the size of the line around it. */
+.goal-state code { font-family: var(--font-mono); font-size: inherit; line-height: inherit; }
+/* On the condition's left edge, and ending where the other panels end, on the panel's padding. */
+.goal .goal-facts { margin-bottom: 0; padding: 0; }
 .goal-reason { overflow-wrap: anywhere; user-select: text; }
 
 /* An aside is a question and the model's answer, laid out like a note: the answer wraps and keeps its line breaks. */

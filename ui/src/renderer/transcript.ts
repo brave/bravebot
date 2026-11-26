@@ -41,6 +41,7 @@ import type {
 import type { ExportTurn } from '../shared/export'
 import type { DroppedFile } from '../shared/drops'
 import type { AsideDone } from '../shared/aside'
+import type { GoalTone } from '../shared/goal'
 
 /** A picture or PDF dropped onto a `/manifest` task, and the marker that stands for it there. */
 export interface DroppedOnTask {
@@ -224,6 +225,11 @@ export type Entry = (
    * person did not type. Drawn from the bridge's `goal.carried` event, never from a prompt's words.
    */
   | { kind: 'goal-turn'; id: string; text: string }
+  /**
+   * What `/goal` answered, or what a check of the goal came to (GOAL-13): the bridge's sentence,
+   * marked by `tone`, which comes from the answer's fields and never from the sentence.
+   */
+  | { kind: 'goal-notice'; id: string; text: string; tone: GoalTone }
   /** A message between two background sessions, drawn apart from the prompts (MSG-11). */
   | { kind: 'session-message'; id: string; direction: 'from' | 'to'; heading: string; kept: string | null; session: string; name: string; label: string; text: string | null }
   /** A replayed tool line from a stored session: no outcome, because none was kept. */
@@ -370,6 +376,7 @@ export const asideAnswered = (done: AsideDone): Entry => {
   return { kind: 'narration', id: nextId(), text: `${asked}: ${done.message ?? 'the question failed'}`, command, refused: true }
 }
 export const goalCarried = (prompt: string): Entry => ({ kind: 'goal-turn', id: nextId(), text: prompt })
+export const goalNoticed = (text: string, tone: GoalTone): Entry => ({ kind: 'goal-notice', id: nextId(), text, tone })
 export const watchFired =(number: number, path: string): Entry => ({ kind: 'watch', id: nextId(), text: `File watch ${number}: ${path}` })
 export const errored = (text: string, category?: string): Entry => ({ kind: 'error', id: nextId(), text, ...(category ? { category } : {}) })
 export const quarantined = (shown: Shown): Entry => ({ kind: 'quarantined', id: nextId(), shown })
@@ -694,6 +701,7 @@ export function plainText(entry: Entry): string | null {
     case 'narration':
     case 'watch':
     case 'goal-turn':
+    case 'goal-notice':
     case 'error':
     case 'replayed-tool':
     case 'plan-task':

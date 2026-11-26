@@ -1,5 +1,5 @@
 import { useCallback, useEffect, type MutableRefObject, type SetStateAction } from 'react'
-import type { GoalAnswer, GoalContinued, GoalJudged, GoalSnapshot } from '../shared/goal'
+import { answerTone, verdictTone, type GoalAnswer, type GoalContinued, type GoalJudged, type GoalSnapshot } from '../shared/goal'
 import { askingFirst } from './can-send'
 import { markersOf } from './interjecting'
 import type { Live } from './live'
@@ -34,16 +34,13 @@ export function goalChanged(live: Live, goal: GoalSnapshot | null): Live {
   return goal === null && live.goalChecking ? checkEnded(settled) : settled
 }
 
-/** The chat while the goal is out to the judge: drawn as a turn, so Stop and Escape send `turn.cancel` (GOAL-10). */
+/**
+ * The chat while the goal is out to the judge: drawn as a turn, so Stop and Escape send
+ * `turn.cancel` (GOAL-10). The working row says it is a check, and the verdict's notice takes its
+ * place, so the transcript gets no row of its own for the check.
+ */
 export function checkBegun(live: Live): Live {
-  return {
-    ...live,
-    running: true,
-    goalChecking: true,
-    goalNext: false,
-    phase: 'thinking',
-    entries: [...live.entries, t.narrated('Checking whether the goal is met…', '/goal')],
-  }
+  return { ...live, running: true, goalChecking: true, goalNext: false, phase: 'thinking' }
 }
 
 /** The chat once the check is over, however it ended. */
@@ -58,7 +55,7 @@ export function judged(live: Live, data: GoalJudged): Live {
     ...ended,
     goal: data.goal,
     goalNext: data.next === 'carry-on',
-    entries: [...ended.entries, { ...t.narrated(data.line, '/goal'), ...(data.outcome === 'failed' ? { refused: true as const } : {}) }],
+    entries: [...ended.entries, t.goalNoticed(data.line, verdictTone(data.outcome))],
   }
 }
 
@@ -85,7 +82,7 @@ export function useGoal({ openedLives, updateSession, dequeuing, live, livesRevi
   const command = useCallback(async (handle: string, argument: string, staged: Staged[]) => {
     try {
       const answer = await call<GoalAnswer>('session.goal', { session: handle, argument, ...markersOf(staged) })
-      updateSession(handle, (old) => old ? { ...old, goal: answer.goal, entries: [...old.entries, t.narrated(answer.lines.join('\n'), '/goal')] } : old)
+      updateSession(handle, (old) => old ? { ...old, goal: answer.goal, entries: [...old.entries, t.goalNoticed(answer.lines.join('\n'), answerTone(answer))] } : old)
     } catch (error) {
       updateSession(handle, (old) => old ? { ...old, entries: [...old.entries, t.errored(error instanceof RequestFailed ? error.reason : String(error))] } : old)
     }

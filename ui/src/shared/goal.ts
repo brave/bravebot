@@ -51,6 +51,32 @@ export interface GoalJudged {
 }
 
 /**
+ * How a goal notice is marked: `plain` for one that sets, reports or carries the goal on, `met`
+ * for a MET verdict, `warning` for a goal that ended without being met or stopped sending the work
+ * back, `paused` for a paused goal, and `refused` for a check that failed.
+ */
+export type GoalTone = 'plain' | 'met' | 'warning' | 'paused' | 'refused'
+
+/** The mark of a check's notice, from what the bridge says it came to. */
+export function verdictTone(outcome: GoalJudged['outcome']): GoalTone {
+  if (outcome === 'met') return 'met'
+  if (outcome === 'failed') return 'refused'
+  if (outcome === 'impossible' || outcome === 'spent' || outcome === 'stalled') return 'warning'
+  return 'plain'
+}
+
+/** The mark of the notice `session.goal` answered with: paused while the goal it left is paused. */
+export function answerTone(answer: GoalAnswer): GoalTone {
+  return answer.goal?.paused ? 'paused' : 'plain'
+}
+
+/**
+ * The whole commands the goal's sentences name, longest first, each drawn as one code span every
+ * time it appears. These are the bridge's catalog phrases (desktop-goal-* in en-US.ftl).
+ */
+export const GOAL_COMMANDS = ['/goal cargo test exits 0', '/goal <condition>', '/goal resume', '/goal clear', '/goal pause'] as const
+
+/**
  * The argument of a line that is `/goal` or `/goal <text>`, or null for any other line.
  *
  * Applied only to the text a person typed into the composer (CMD-1). A longer word such as `/goals`

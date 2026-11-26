@@ -22,8 +22,9 @@ const { service, rounds: requests } = await startModelService(async ({ body }) =
   // The judge is the only request sent with no tools (GOAL-3).
   if (!JSON.parse(body).tools) {
     judged += 1
-    // The second check waits, so the panel and the driver's row can be read before the goal ends.
-    if (judged === 2) await new Promise((resolve) => setTimeout(resolve, 3000))
+    // Each check waits, so the working row is seen saying it is a check, and the second so the
+    // panel and the driver's row can be read before the goal ends.
+    await new Promise((resolve) => setTimeout(resolve, judged === 2 ? 4000 : 1500))
     return { content: judged === 1 ? 'NOT MET\na.txt is not in the project yet.' : 'MET\na.txt is in the project.' }
   }
   return { content: 'I made a start on a.txt.' }
@@ -57,11 +58,34 @@ try {
   const panel = page.locator('[data-test="goal-panel"]')
   await until(async () => (await panel.count()) === 1 && (await panel.textContent()).includes(CONDITION), 'the side panel shows the goal')
   assert.match(await panel.textContent(), /10 of 10/, 'no round used yet')
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: join(output, `goal-set-${theme}.png`) })
+
+  // The desktop /status lists the goal with its units. It is opened from the menu, as
+  // drive-reports.mjs opens it.
+  await until(() => app.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('session.status').enabled), 'Session Status is offered')
+  await app.evaluate(({ Menu }) => { Menu.getApplicationMenu().getMenuItemById('session.status').click() })
+  const status = page.getByRole('dialog', { name: 'Session status', exact: true })
+  await until(async () => (await status.count()) === 1, 'the status dialog opens')
+  const said = await status.innerText()
+  assert.match(said, /not judged yet · 10 of 10 rounds left/, said)
+  assert.match(said, /set \d+s ago · 0 tokens spent/, said)
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: join(output, `goal-status-${theme}.png`) })
+  await page.keyboard.press('Escape')
+  await until(async () => (await status.count()) === 0, 'the status dialog closes')
 
   await composer.fill('create a.txt')
   await composer.press('Enter')
-  await until(async () => (await transcript()).includes('Checking whether the goal is met'), 'the check is drawn')
+  // The check is the working row's phase, with no reply token count and no row of its own.
+  const working = page.locator('.working')
+  await until(async () => (await working.count()) === 1 && (await working.innerText()).includes('Checking whether the goal is met'), 'the working row says the goal is being checked')
+  assert.doesNotMatch(await working.innerText(), /tokens written/, 'a check writes no reply')
+  await page.waitForTimeout(200)
+  await page.screenshot({ path: join(output, `goal-checking-${theme}.png`) })
   await until(async () => (await transcript()).includes('a.txt is not in the project yet.'), 'the NOT MET verdict is drawn')
+  const notices = page.locator('[data-test="goal-notice"]')
+  assert.equal(await page.locator('.narration', { hasText: 'Checking whether the goal is met' }).count(), 0, 'no row of its own for the check')
   // The panel takes the verdict's figures: one round used, and the judge's reason.
   await until(async () => /9 of 10/.test(await panel.textContent()), 'the panel counts the round the verdict used')
   assert.ok((await panel.textContent()).includes('a.txt is not in the project yet.'), 'the panel shows the last reason')
@@ -70,14 +94,31 @@ try {
   // as a line the person typed (GOAL-7).
   const driven = page.locator('[data-test="goal-turn"]')
   await until(async () => (await driven.count()) === 1, 'the carry-on prompt is drawn as the driver\'s row')
-  assert.ok((await driven.innerText()).includes(CONDITION), 'the row holds the driver\'s sentence')
+  // The driver's row sits between the NOT MET verdict and the answer to the turn it sent.
+  const order = await page.locator('.entries').evaluate((list) => {
+    const rows = [...list.querySelectorAll('[data-test="goal-notice"], [data-test="goal-turn"], .bubble.assistant')]
+    return rows.map((row) => row.matches('[data-test="goal-turn"]') ? 'driver' : row.matches('[data-test="goal-notice"]') ? 'notice' : 'answer')
+  })
+  const driverAt = order.indexOf('driver')
+  assert.equal(order[driverAt - 1], 'notice', `the NOT MET verdict is right above the driver's row: ${order}`)
+  // The head is the row; the sentence waits under a collapsed Details.
+  const details = driven.locator('leo-collapse')
+  assert.equal(await details.getAttribute('isopen'), null, 'the sentence is folded away')
+  assert.ok((await driven.textContent()).includes(CONDITION), 'the row holds the driver\'s sentence')
   assert.equal(await page.locator('.bubble.user', { hasText: 'stopping condition' }).count(), 0, 'no person\'s bubble for the carry-on prompt')
   await driven.scrollIntoViewIfNeeded()
+  await page.waitForTimeout(200)
   await page.screenshot({ path: join(output, `goal-not-met-${theme}.png`) })
+  await details.click({ position: { x: 20, y: 8 } })
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: join(output, `goal-carry-on-details-${theme}.png`) })
 
   // That turn is judged MET, and the goal ends, so the panel goes.
   await until(async () => (await transcript()).includes('a.txt is in the project.'), 'the MET verdict is drawn')
   await until(async () => (await panel.count()) === 0, 'the panel goes once the goal is met')
+  assert.equal(await notices.last().getAttribute('class'), 'goal-notice met', 'the MET verdict is marked as met')
+  // Set, NOT MET, MET: one row per check, and none for the checks themselves.
+  assert.equal(await notices.count(), 3, 'one notice per answer and per check')
   await page.waitForTimeout(300)
   await page.screenshot({ path: join(output, `goal-met-${theme}.png`) })
 
@@ -88,6 +129,8 @@ try {
   await composer.fill('/goal pause')
   await composer.press('Enter')
   await until(async () => (await page.locator('[data-test="goal-state"]').textContent()).includes('Paused'), 'the panel says the goal is paused')
+  assert.equal(await notices.last().getAttribute('class'), 'goal-notice paused', 'the pause notice is marked as paused')
+  assert.deepEqual(await notices.last().locator('code').allTextContents(), ['/goal resume', '/goal clear'], 'each whole command is one code span')
   await page.waitForTimeout(300)
   await page.screenshot({ path: join(output, `goal-paused-${theme}.png`) })
 

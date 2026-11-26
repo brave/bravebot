@@ -45,7 +45,7 @@ Three columns, each side one resizable and foldable:
   Overview summarises the plan, reads and confined material; Changes distinguishes
   pending decisions, approved writes and their actual execution outcomes. While a `/goal` is set,
   a **Goal** section heads Overview with the condition, whether it is working, paused or stopped
-  after rounds with no tool call, the rounds left, how long it has been set, the tokens spent since,
+  after rounds with no tool call, the rounds left, how long it has been running, the tokens spent,
   and the last check's reason. It is not one of the sections a person can hide. The **Choose sections**
   button at the end of the tab row opens a checklist of the Overview sections. Ticking or unticking
   one shows or hides it at once and leaves the menu open, and Escape closes it. The choice is kept

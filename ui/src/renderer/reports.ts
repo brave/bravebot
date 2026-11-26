@@ -186,8 +186,9 @@ function goalRows(goal: StatusGoal): Row[] {
   const state = goal.paused ? ' · paused, /goal resume arms it' : goal.stalled ? ' · stopped: rounds made no tool call' : ''
   return [
     ['Goal', goal.condition],
-    ['', `${rounds} · ${goal.left} left${state}`],
-    ['', `set ${elapsed(goal.elapsedSeconds)} ago · ${tokens(goal.spentTokens)} since`],
+    // The same count the Goal panel gives, with its unit.
+    ['', `${rounds} · ${goal.left} of ${goal.rounds + goal.left} rounds left${state}`],
+    ['', `set ${elapsed(goal.elapsedSeconds)} ago · ${tokens(goal.spentTokens)} spent`],
   ]
 }
 

@@ -531,22 +531,22 @@ export function Folders({ folders, running, problem, off, onAdd, onClose }: {
  */
 export function GoalPanel({ goal, off }: { goal: GoalSnapshot; off: boolean }): React.JSX.Element {
   const state = goal.paused
-    ? { icon: 'pause-circle' as const, className: 'goal-state paused', text: 'Paused. Type /goal resume to carry on.' }
+    ? { icon: 'pause-circle' as const, className: 'goal-state paused', text: <>Paused. Type <code>/goal resume</code> to carry on.</> }
     : goal.stalled
       ? { icon: 'warning-triangle-outline' as const, className: 'goal-state stalled', text: 'Stopped: rounds in a row made no tool call. Send a prompt to carry on.' }
-      : { icon: 'flag' as const, className: 'goal-state', text: 'Working towards it until a check says it holds.' }
+      : { icon: 'flag' as const, className: 'goal-state', text: 'Working until a check says it holds.' }
   return (
     <Section id="goal" title="Goal" off={off}
       about="The condition this chat works towards. After each turn a check with no tools judges whether it holds.">
       <div className="goal" data-test="goal-panel">
         <p className="goal-condition">{goal.condition}</p>
-        <p className={state.className} data-test="goal-state"><Icon name={state.icon} />{state.text}</p>
+        <p className={state.className} data-test="goal-state"><Icon name={state.icon} /><span>{state.text}</span></p>
         <dl className="context-facts goal-facts">
           <dt>Rounds left</dt>
           <dd className="num" data-test="goal-left">{goal.left} of {goal.rounds + goal.left}</dd>
-          <dt>Set for</dt>
+          <dt>Running for</dt>
           <dd className="num">{elapsed(goal.elapsedSeconds)}</dd>
-          <dt>Spent since</dt>
+          <dt>Spent</dt>
           <dd className="num">{tokens(goal.spentTokens)}</dd>
           {goal.lastReason && <>
             <dt>Last check</dt>
