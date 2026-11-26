@@ -8,6 +8,7 @@ governs:
   - crates/tui/src/app/side_requests.rs
   - crates/tui/src/app/terminal.rs
   - crates/tui/src/app/keys.rs
+  - crates/tui/src/app/mouse.rs
   - crates/tui/src/hangup.rs
   - crates/tui/src/input.rs
   - crates/tui/src/preview.rs

@@ -14,6 +14,7 @@ governs:
   - crates/tui/src/app/models.rs
   - crates/tui/src/app/session_commands.rs
   - crates/tui/src/app/keys.rs
+  - crates/tui/src/app/mouse.rs
   - crates/tui/src/command_table.rs
   - crates/tui/src/picking.rs
   - crates/tui/src/skills.rs

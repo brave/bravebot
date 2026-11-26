@@ -72,10 +72,14 @@ mod keys;
 // The glob for what this file and its tests call. The four `pub` ones stay public as
 // `bravebot_tui::app::..`, the path `tests/references.rs` names them by.
 use keys::*;
-pub use keys::{Action, handle_key, handle_key_while_working, handle_mouse};
+pub use keys::{Action, handle_key, handle_key_while_working};
 
 mod models;
 use models::*;
+
+mod mouse;
+// Public as `bravebot_tui::app::handle_mouse`, the path `tests/references.rs` names it by.
+pub use mouse::handle_mouse;
 // Public for the CLI, which names them as `bravebot_tui::app::..`.
 pub use models::{
     account_models_to_start_on, adopt_listing_for_model, configured_models_to_start_on,

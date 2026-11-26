@@ -13,6 +13,7 @@ governs:
   - crates/tui/src/app/turns.rs
   - crates/tui/src/app/side_requests.rs
   - crates/tui/src/app/keys.rs
+  - crates/tui/src/app/mouse.rs
   - crates/tui/src/invisible.rs
   - crates/core/src/invisible.rs
   - crates/tui/src/peek_mode.rs

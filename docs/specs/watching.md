@@ -18,6 +18,7 @@ governs:
   - crates/tui/src/app/side_requests.rs
   - crates/tui/src/app/actions.rs
   - crates/tui/src/app/keys.rs
+  - crates/tui/src/app/mouse.rs
   - crates/agent/src/aside.rs
 documented-by: docs/website/docs/using/interactive-mode.md
 ---
