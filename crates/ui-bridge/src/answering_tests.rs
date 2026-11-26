@@ -704,3 +704,125 @@ fn a_host_client_answering_runs_is_not_asked_about_an_unconfined_run() {
             .answer(request, Reply::Run(RunDecision::reject()))
     );
 }
+
+/// What a scope watch was told, in order, answering `kinds` each time.
+fn a_watch(
+    kinds: Option<Vec<Kind>>,
+) -> (
+    crate::widening::ScopeWatch,
+    Arc<Mutex<Vec<crate::widening::Widening>>>,
+) {
+    let told: Arc<Mutex<Vec<crate::widening::Widening>>> = Arc::default();
+    let noting = Arc::clone(&told);
+    let watch: crate::widening::ScopeWatch = Arc::new(move |session: &str, widening| {
+        assert_eq!(session, "s1");
+        noting.lock().unwrap().push(widening.clone());
+        kinds.clone()
+    });
+    (watch, told)
+}
+
+/// Decision 18: a fetch the person approves is a grant no ceiling holds, so the scope watch is told
+/// of it before the confirmer returns the yes, which is before anything the fetch brings back is
+/// sent, and who can answer is narrowed to what the watch answers. A fetch refused tells it nothing.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_approved_fetch_tells_the_scope_watch_before_the_yes_is_acted_on() {
+    let fetch = || bravebot_agent::confirm::FetchRequest {
+        url: "https://example.com/".into(),
+        host: "example.com".into(),
+        redirected_from: None,
+        classified: Default::default(),
+    };
+    for (answer, told_of) in [
+        (
+            Decision::Approve,
+            vec![crate::widening::Widening::Granted(
+                crate::widening::Grant::Fetch,
+            )],
+        ),
+        (Decision::Reject, vec![]),
+    ] {
+        let answerers = Answerers::default();
+        let mut turn = a_turn(&answerers);
+        let (watch, told) = a_watch(Some(vec![Kind::Run]));
+        let mut confirmer = turn
+            .confirmer
+            .take()
+            .expect("the confirmer is free")
+            .watched_by(Some(watch));
+        let (done, decided) = mpsc::channel();
+        std::thread::spawn(move || {
+            let decision = confirmer.confirm_fetch(&fetch());
+            done.send(decision).ok();
+        });
+        let shown = turn.the_question_shown_as("fetch.request");
+        let request = shown["request"].as_u64().expect("a number");
+        assert!(
+            told.lock().unwrap().is_empty(),
+            "told before the person answered"
+        );
+        assert!(turn.running.answer(request, Reply::Fetch(answer)));
+        let decision = decided
+            .recv_timeout(PATIENCE)
+            .expect("the fetch was left waiting");
+        assert_eq!(decision, answer);
+        assert_eq!(*told.lock().unwrap(), told_of);
+        let narrowed = !told_of.is_empty();
+        assert_eq!(answerers.can_answer(Kind::Fetch), !narrowed, "{answer:?}");
+        assert!(answerers.can_answer(Kind::Run));
+    }
+}
+
+/// Decision 18: a line the person approves to run with no sandbox is a grant no ceiling holds, and
+/// the scope watch is told of it. A line run confined is held to the sandbox the session's scope
+/// names, so a yes to it tells the watch nothing.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_approved_unconfined_run_tells_the_scope_watch_and_a_confined_one_does_not() {
+    use bravebot_core::command::{Pipeline, Stage};
+    let a_run = |unconfined: bool| RunRequest {
+        unconfined,
+        confined: None,
+        key_choice: None,
+        ..RunRequest::from_pipeline(
+            &Pipeline::new(vec![Stage::new("git", vec!["status".into()])]),
+            &["/usr/bin/git".into()],
+            "/tmp",
+        )
+    };
+    for (unconfined, told_of) in [
+        (
+            true,
+            vec![crate::widening::Widening::Granted(
+                crate::widening::Grant::UnconfinedRun,
+            )],
+        ),
+        (false, vec![]),
+    ] {
+        let answerers = Answerers::default();
+        let mut turn = a_turn(&answerers);
+        let (watch, told) = a_watch(None);
+        let mut confirmer = turn
+            .confirmer
+            .take()
+            .expect("the confirmer is free")
+            .watched_by(Some(watch));
+        let (done, decided) = mpsc::channel();
+        std::thread::spawn(move || {
+            let decision = confirmer.confirm_run(&a_run(unconfined));
+            done.send(decision).ok();
+        });
+        let shown = turn.the_question_shown_as("run.request");
+        let request = shown["request"].as_u64().expect("a number");
+        assert!(
+            turn.running
+                .answer(request, Reply::Run(RunDecision::approve()))
+        );
+        let decision = decided
+            .recv_timeout(PATIENCE)
+            .expect("the run was left waiting");
+        assert!(decision.approved());
+        assert_eq!(*told.lock().unwrap(), told_of, "unconfined: {unconfined}");
+    }
+}

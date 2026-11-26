@@ -88,6 +88,7 @@ fn take_a_turn_at(
         interjections: Default::default(),
         actors: Default::default(),
         published: Default::default(),
+        scope_watch: None,
     });
 }
 

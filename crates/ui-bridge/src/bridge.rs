@@ -307,6 +307,9 @@ pub struct Bridge {
     /// Reads the background roster for `background.list`, kept so a list read every second reuses
     /// the records it has already read (BG-17).
     background_reader: bravebot_session::listing::Reader,
+    /// Told of each moment a session may have come to reach more, by a host that holds connections
+    /// to a ceiling. None for a bridge with no such connection.
+    scope_watch: Option<crate::widening::ScopeWatch>,
 }
 
 impl Bridge {
@@ -328,7 +331,40 @@ impl Bridge {
             project_questions: 0,
             acting: None,
             background_reader: bravebot_session::listing::Reader::new(),
+            scope_watch: None,
         }
+    }
+
+    /// Tell `watch` of each moment a session may have come to reach more: when a turn starts, when
+    /// the trust question is answered, and when a person approves for a turn a grant no ceiling
+    /// holds. Each is told before the session sends anything that follows it, and the kinds the
+    /// watch answers with are the ones the session can be asked from then on.
+    pub fn with_scope_watch(mut self, watch: crate::widening::ScopeWatch) -> Self {
+        self.scope_watch = Some(watch);
+        self
+    }
+
+    /// Tell the scope watch, if there is one, that the session `handle` holds `scope` now, and
+    /// narrow who can answer in it to what the watch answers.
+    fn widened(&mut self, handle: &str, widening: &crate::widening::Widening) {
+        let Some(watch) = &self.scope_watch else {
+            return;
+        };
+        if let Some(kinds) = watch(handle, widening) {
+            self.narrow_answerable(handle, &kinds);
+        }
+    }
+
+    /// The scope the open session `handle` holds now, read under the settings its next turn reads,
+    /// or `None` where it is not open or a turn holds its state.
+    pub fn scope_of_session(
+        &self,
+        handle: &str,
+        machine: &bravebot_agent::servers::Machine,
+    ) -> Option<bravebot_core::scope::Scope> {
+        let open = self.open.get(handle)?;
+        let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
+        scope::scope_of(open, &settings, &machine.managed, &machine.home)
     }
 
     /// Put none of the questions about a checkout's settings (PERM-15): its proposed `allow` rules
@@ -1942,6 +1978,13 @@ impl Bridge {
             .is_some_and(|workers| !workers.is_idle())
     }
 
+    /// Whether a question of `kind` can be put in the session `handle` now, for a test of who can
+    /// answer.
+    #[cfg(test)]
+    pub(crate) fn can_be_asked(&mut self, handle: &str, kind: Kind) -> bool {
+        self.answerers_of(handle).can_answer(kind)
+    }
+
     fn answerers_of(&mut self, handle: &str) -> Answerers {
         let refuse = self.refuse_until_set;
         self.answerers
@@ -2324,9 +2367,22 @@ impl Bridge {
             ));
         }
 
+        // Before anything of the turn is sent, so a connection held to a ceiling the session has gone
+        // past is stopped before the turn's first event reaches it (decision 18). A settings edit
+        // since the last turn is found here.
+        if self.scope_watch.is_some() {
+            let machine = bravebot_agent::servers::Machine::current();
+            let scope = self
+                .open
+                .get(&handle)
+                .and_then(|open| scope::scope_of(open, &settings, &machine.managed, &machine.home));
+            self.widened(&handle, &crate::widening::Widening::TurnStarting(scope));
+        }
+
         let emitter = self.emitter.clone();
         let session = handle.clone();
         let answerers = self.answerers_of(&handle);
+        let scope_watch = self.scope_watch.clone();
 
         let worker_model = model.clone();
 
@@ -2405,6 +2461,7 @@ impl Bridge {
                 interjections,
                 actors: actors.clone(),
                 published,
+                scope_watch,
             });
         });
 
@@ -3635,6 +3692,16 @@ impl Bridge {
             }
         }
         open.answered_trust = true;
+        // Before the view says the question was answered, so a connection held to a ceiling the
+        // answer took the session past is stopped before that reaches it.
+        if self.scope_watch.is_some() {
+            let scope =
+                self.scope_of_session(&handle, &bravebot_agent::servers::Machine::current());
+            self.widened(&handle, &crate::widening::Widening::TrustAnswered(scope));
+        }
+        let Some(open) = self.open.get_mut(&handle) else {
+            return Err(Failure::no_such_session());
+        };
         self.emitter
             .view_trusted(&handle, Acting::from(actor.as_deref()));
         // The question is answered, so what it offered is spent. Offered only where the answer may
@@ -4965,6 +5032,8 @@ struct Work {
     actors: crate::turn::ActorNotes,
     /// Where the turn publishes its exchange and file authority for a `/btw` asked beside it.
     published: crate::turn::Published,
+    /// Told when the person approves for this turn a grant no ceiling holds.
+    scope_watch: Option<crate::widening::ScopeWatch>,
 }
 
 /// Where the prompt a turn carried landed among the things the user said.
@@ -5079,6 +5148,7 @@ fn work(work: Work) {
         interjections,
         actors,
         published,
+        scope_watch,
     } = work;
     // The model that answers is the one this turn names, and the configuration was built without
     // asking which. Taken here, on the worker, because the roster may be a request away.
@@ -5138,7 +5208,8 @@ fn work(work: Work) {
     )
     .answerable_by(answerers)
     .remembering(Arc::clone(&state.question_answers))
-    .taking_interjections(interjections);
+    .taking_interjections(interjections)
+    .watched_by(scope_watch);
 
     // The session's MCP servers (SERVERS-9), started by its first turn or first plan run and held
     // until it closes. Here rather than when the session opened, so that the questions about them

@@ -71,6 +71,21 @@ impl Answerers {
     pub fn nobody(&self) -> Result<(), Failure> {
         self.only(&[])
     }
+
+    /// From now on only the kinds `compute` gives can be answered, or nothing changes where it gives
+    /// none. `compute` runs while the set is held, so a change another thread makes to who can
+    /// answer falls before it or after it, and kinds worked out before that change cannot replace
+    /// what it set.
+    pub fn set_by(&self, compute: impl FnOnce() -> Option<Vec<Kind>>) -> Result<(), Failure> {
+        let mut who = self
+            .0
+            .lock()
+            .map_err(|_| Failure::bad_request("who can answer cannot be changed"))?;
+        if let Some(kinds) = compute() {
+            *who = Who::Only(kinds);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -129,5 +144,44 @@ mod tests {
         assert!(answerers.only(&[Kind::Write]).is_err());
         assert!(answerers.nobody().is_err());
         assert!(!answerers.can_answer(Kind::Write));
+    }
+
+    /// A change another thread makes while the kinds are being worked out waits for them and lands
+    /// after them, so it is the one that stands. Kinds set from what was read first would replace
+    /// it, and a connection that had just left could still be waited on to answer.
+    #[test]
+    fn a_change_made_while_kinds_are_worked_out_lands_after_them() {
+        let answerers = Answerers::default();
+        let other = answerers.clone();
+        let (started, changing) = std::sync::mpsc::channel();
+        let (done, changed) = std::sync::mpsc::channel();
+        answerers
+            .set_by(|| {
+                std::thread::spawn(move || {
+                    started.send(()).unwrap();
+                    other.only(&[Kind::Write]).unwrap();
+                    done.send(()).unwrap();
+                });
+                changing
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                // Nothing tells this thread the other is waiting on the set; the change it makes
+                // may not land before these kinds are given, which is what is under test.
+                assert!(
+                    changed
+                        .recv_timeout(std::time::Duration::from_millis(200))
+                        .is_err(),
+                    "the change landed while the kinds were worked out"
+                );
+                Some(vec![Kind::Run])
+            })
+            .unwrap();
+        changed
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(answerers.can_answer(Kind::Write));
+        assert!(!answerers.can_answer(Kind::Run));
+        answerers.set_by(|| None).unwrap();
+        assert!(answerers.can_answer(Kind::Write));
     }
 }

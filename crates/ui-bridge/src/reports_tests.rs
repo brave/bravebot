@@ -647,6 +647,7 @@ fn a_turn(
         interjections: Default::default(),
         actors: Default::default(),
         published: Default::default(),
+        scope_watch: None,
     }
 }
 
