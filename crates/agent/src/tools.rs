@@ -25236,6 +25236,7 @@ mod tests {
         clippy::too_many_lines,
         reason = "one fixture serves three tools and their controls, and the closure that runs a tool shares its setup with the assertions that follow"
     )]
+    #[cfg(unix)]
     #[test]
     fn an_edit_a_download_and_a_picture_in_the_session_directory_are_marked_as_session_writes() {
         use std::io::{Read, Write};
