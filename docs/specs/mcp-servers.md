@@ -2715,6 +2715,12 @@ the server again with `mcp add`, which pins it. Where
 OpenShell is not installed or the sandbox cannot be created with its policy confirmed, the server is
 not started and the person is told why. It is never started outside the sandbox in its place.
 
+The policy files `openshell` is given are written in `openshell-policies` in the state directory, where
+a confined stage cannot write them ([SANDBOX-33](sandboxing.md#SANDBOX-33)). Where nothing may be
+written to the state directory, as in an incognito session, an OpenShell server is not started and
+the person is told there is no state directory to write its policy in. The system temporary
+directory is not used in its place.
+
 The session holds the sandbox for as long as it holds the server, and deletes it when it lets the
 server go, a failed handshake included. A process ended by a signal deletes nothing, so each sandbox is recorded, with the process and
 the machine that made it, in `openshell-sandboxes` in the state directory before it is created, and
@@ -2759,6 +2765,9 @@ an approval given for a sandbox.
 `verified-by: bravebot_sandbox::openshell::only_a_recorded_sandbox_of_an_ended_process_is_left_behind`
 `verified-by: bravebot_sandbox::openshell::a_record_holds_this_process_and_a_sweep_keeps_a_running_one`
 `verified-by: bravebot_sandbox::openshell::a_name_is_random_and_fits_openshell`
+`verified-by: bravebot_sandbox::openshell::a_start_with_no_directory_for_the_policy_is_refused_and_runs_nothing`
+`verified-by: bravebot_agent::servers::the_openshell_policy_directory_is_openshell_policies_directly_under_the_state_directory`
+`verified-by: bravebot_agent::servers::there_is_no_openshell_policy_directory_where_the_home_has_none_or_is_not_writable`
 `verified-by: bravebot_mcp::openshell::a_recorded_sandbox_of_an_ended_process_is_removed_and_no_other`
 `verified-by: bravebot_sandbox::openshell::the_version_and_the_gateway_are_read_from_what_openshell_prints`
 `verified-by: bravebot_cli::mcp::doctor_is_told_the_servers_declared_for_openshell_and_no_others`
