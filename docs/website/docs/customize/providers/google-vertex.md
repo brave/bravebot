@@ -6,6 +6,32 @@ description: Configure Gemini through Google Vertex AI using an API key or Googl
 
 # Reaching Google Vertex AI
 
+## Setting it up with `bravebot auth login`
+
+```sh
+bravebot auth login gateway google-vertex
+```
+
+asks for a Google Cloud project, and nothing typed is express mode, which needs only a key. With a
+project it asks for a location, where nothing typed is `global`. It then asks for the key with nothing
+shown as you type, keeps it in `~/.bravebot/gateway-keys.json`, and records the entry in
+`~/.bravebot/settings.json`, so no block is written by hand:
+
+- no project: `"provider": {"google-vertex": {}}`, reached in [express mode](#express-mode-with-a-key-and-no-project);
+- a project: `"provider": {"google-vertex": {"options": {"project": "<project>", "location": "<location>"}}}`,
+  reached as described below.
+
+A project or location that holds a character Google does not allow in it is refused before the key is
+asked for, and nothing is stored or written. The question for the key names the host the key is sent
+to. Where a block already names `google-vertex`, or `GOOGLE_API_KEY` or `GOOGLE_CLOUD_PROJECT` configures
+it, no question is asked and no entry is written. `bravebot auth login` lists the service as Gemini on
+Google Vertex AI, and [Signing in](../signing-in.md#gemini-on-google-vertex-ai) describes the rest,
+including `auth status` and `auth logout`. The sign-in stores a key and does not choose a model: name one
+as `google-vertex/google/gemini-2.5-flash`. It does not start `gcloud`, so a project signed in with Google
+Cloud credentials is set up as [below](#signing-in-with-google-cloud-credentials-instead-of-a-key).
+
+## Reaching it by writing the block
+
 Vertex AI is reached with an API key in one of two ways, and whether the entry states a project picks
 between them. With a project, the entry reaches Vertex AI's OpenAI-compatible endpoint:
 

@@ -11758,12 +11758,12 @@ fn gateway_keys(scratch: &Scratch) -> PathBuf {
 }
 
 /// The ids `auth login gateway` offers where `TWO_GATEWAYS` are configured: those, then each known
-/// service no block of them names, read from the table a session reaches them by.
+/// service no block of them names, read from the table a session reaches them by, then Vertex AI.
 fn the_ids_offered_beside_two_gateways() -> String {
     let known: Vec<&str> = bravebot_config::provider::known_ids()
         .filter(|id| *id != "openrouter")
         .collect();
-    format!("openrouter, work, {}", known.join(", "))
+    format!("openrouter, work, {}, google-vertex", known.join(", "))
 }
 
 /// CLI-18 and INCOG-7: every refusal the gateway way can make without asking anything is made
@@ -11772,6 +11772,7 @@ fn the_ids_offered_beside_two_gateways() -> String {
 /// what follows `--key=` are not repeated, since each is most likely the key, typed where somebody
 /// took it for the argument.
 #[test]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
 fn auth_login_gateway_is_refused_before_a_key_is_asked_for() {
     let scratch = Scratch::new("cli-running-auth-gateway-refused").with_settings(TWO_GATEWAYS);
     let key_as_a_flag = format!("--key={A_STORED_KEY}");
@@ -11793,6 +11794,11 @@ fn auth_login_gateway_is_refused_before_a_key_is_asked_for() {
             2,
             "never a command-line argument",
         ),
+        (
+            &["auth", "login", "gateway", "google-vertex", A_STORED_KEY][..],
+            2,
+            "never a command-line argument",
+        ),
         (&["auth", "login", "gateway", "--key"][..], 2, "--key"),
         (
             &["auth", "login", "gateway", key_as_a_flag.as_str()][..],
@@ -11811,7 +11817,17 @@ fn auth_login_gateway_is_refused_before_a_key_is_asked_for() {
             "needs a terminal",
         ),
         (
+            &["auth", "login", "gateway", "google-vertex"][..],
+            2,
+            "needs a terminal",
+        ),
+        (
             &["--incognito", "auth", "login", "gateway", "work"][..],
+            1,
+            "incognito",
+        ),
+        (
+            &["--incognito", "auth", "login", "gateway", "google-vertex"][..],
             1,
             "incognito",
         ),
@@ -11970,6 +11986,101 @@ fn auth_logout_gateway_forgets_a_key_stored_for_a_known_service_no_block_names()
         std::fs::read_to_string(scratch.settings()).expect("the settings"),
         recorded,
         "forgetting a key changed the settings"
+    );
+}
+
+/// CLI-18: a key stored for Google Vertex AI, with no block naming it, is forgotten by name or as
+/// the only one stored, and the line names the host of express mode, which it still works at until it
+/// is revoked there, in place of the sentence for a key whose issuer is not known. Where a block states
+/// a location the host is that block's. The entry stays in settings.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn auth_logout_gateway_forgets_a_key_stored_for_google_vertex_naming_its_host() {
+    for (how, settings, host) in [
+        ("no block", None, "aiplatform.googleapis.com"),
+        (
+            "a block with a location",
+            Some(
+                r#"{"provider": {"google-vertex": {"options":
+                    {"project": "example-project-1", "location": "us-east5"}}}}"#,
+            ),
+            "us-east5-aiplatform.googleapis.com",
+        ),
+    ] {
+        let mut scratch = Scratch::new("cli-running-auth-gateway-logout-vertex").with_state(
+            "gateway-keys.json",
+            &stored_keys(&["google-vertex", "openai"]),
+        );
+        if let Some(settings) = settings {
+            scratch = scratch.with_settings(settings);
+        }
+        let keys = gateway_keys(&scratch);
+        let output = bravebot(
+            &scratch.path,
+            NOTHING_CONFIGURED,
+            &["auth", "logout", "gateway", "google-vertex"],
+        );
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(0), "{how}: {stderr}");
+        assert!(
+            !stdout.contains(A_STORED_KEY) && !stderr.contains(A_STORED_KEY),
+            "{how}: printed the key: {stdout}{stderr}"
+        );
+        assert!(
+            stdout.contains(host) && stdout.contains("still works at"),
+            "{how}: {stdout}"
+        );
+        let left = std::fs::read_to_string(&keys).expect("the key left");
+        assert!(
+            left.contains("openai") && !left.contains("google-vertex"),
+            "{how}: {left}"
+        );
+    }
+}
+
+/// CLI-18 and CLI-23: Vertex AI is asked about by name where nothing names it, is not signed in with
+/// no key or with a key no block names, and is signed in once the block the sign-in records is there.
+#[test]
+fn auth_status_gateway_asks_about_google_vertex_where_no_block_names_it() {
+    let scratch = Scratch::new("cli-running-auth-status-vertex");
+    let (code, stdout, stderr) =
+        status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "google-vertex"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("gateway google-vertex: not signed in: no key is stored for google-vertex")
+            && stdout.contains("bravebot auth login gateway google-vertex"),
+        "{stdout}"
+    );
+
+    let scratch = scratch.with_state("gateway-keys.json", &stored_keys(&["google-vertex"]));
+    let (code, stdout, stderr) =
+        status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "google-vertex"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("a key is stored for google-vertex")
+            && stdout.contains("no provider block names it"),
+        "{stdout}"
+    );
+
+    let scratch = scratch.with_settings(r#"{"provider": {"google-vertex": {}}}"#);
+    let (code, stdout, stderr) =
+        status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "google-vertex"]);
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert_eq!(
+        stdout,
+        "gateway google-vertex: signed in: stored by bravebot auth login gateway (never printed)\n"
+    );
+
+    // The express block with the key forgotten is not signed in, as no key is the one thing the
+    // service refuses.
+    let scratch = Scratch::new("cli-running-auth-status-vertex-express")
+        .with_settings(r#"{"provider": {"google-vertex": {}}}"#);
+    let (code, stdout, stderr) =
+        status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "google-vertex"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("gateway google-vertex: not signed in"),
+        "{stdout}"
     );
 }
 
@@ -12250,7 +12361,10 @@ fn auth_status_gateway_refuses_an_id_that_names_none_without_repeating_it() {
     let known: Vec<&str> = bravebot_config::provider::known_ids().collect();
     let (code, stdout, stderr) = status_of(&bare, NOTHING_CONFIGURED, &["gateway", A_STORED_KEY]);
     assert_eq!(code, Some(2), "{stdout}{stderr}");
-    assert!(stderr.contains(&known.join(", ")), "{stderr}");
+    assert!(
+        stderr.contains(&format!("{}, google-vertex", known.join(", "))),
+        "{stderr}"
+    );
     assert_eq!(stdout, "");
     let (code, stdout, _) = status_of(&bare, NOTHING_CONFIGURED, &["gateway"]);
     assert_eq!(code, Some(1), "{stdout}");

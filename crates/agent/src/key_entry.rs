@@ -34,6 +34,9 @@ pub enum Refusal {
     KeysUnreadable,
     /// A known service no block names needs one recorded, and none can be.
     CannotRecord(BlockError),
+    /// The block to record states a project and a location ([`Offer::takes_a_project`]), which only
+    /// a caller that asks for them can record. [`ready`] asks for neither, so it refuses.
+    NeedsProject,
 }
 
 /// The gateways `config` names. A configuration that lacks only the Brave credentials is one that
@@ -120,6 +123,11 @@ pub struct Ready<'i> {
 }
 
 /// Every check before a key is typed, in the order `bravebot auth login` makes them.
+///
+/// A service whose block states a project and a location is refused last, with
+/// [`Refusal::NeedsProject`]: `bravebot auth login` asks for them after these checks and records the
+/// block they name, and a caller with no such questions would record the block of express mode in
+/// place of the person's choice.
 pub fn ready<'i>(target: &Target<'_>, inputs: &Inputs<'i>) -> Result<Ready<'i>, Refusal> {
     if inputs.incognito {
         return Err(Refusal::Incognito);
@@ -140,6 +148,9 @@ pub fn ready<'i>(target: &Target<'_>, inputs: &Inputs<'i>) -> Result<Ready<'i>, 
             let offer = offers.swap_remove(position(&offers, id)?);
             let (directory, stored) = gateway_place(inputs.directory)?;
             recordable(&offer, directory)?;
+            if offer.takes_a_project() {
+                return Err(Refusal::NeedsProject);
+            }
             Ok(Ready {
                 directory,
                 stored: stored.get(id).is_some(),
@@ -195,6 +206,44 @@ pub fn store_gateway_key(directory: &Path, id: &str, key: Secret) -> Result<(), 
     write_keys(directory, &stored).map_err(StoreError::NotStored)
 }
 
+/// Why Vertex AI cannot be reached with the project and location typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VertexFault {
+    /// The project is not one an endpoint can be built from.
+    Project,
+    /// The location is not one a host can be built from.
+    Location,
+}
+
+/// Whether the project a person typed is one a Vertex AI endpoint can be built from, which is
+/// checked before the location is asked for. Nothing typed is express mode and is always usable.
+pub fn check_vertex_project(project: &str) -> Result<(), VertexFault> {
+    match project.is_empty() || bravebot_config::provider::is_vertex_project(project) {
+        true => Ok(()),
+        false => Err(VertexFault::Project),
+    }
+}
+
+/// The Vertex AI offer for the `project` and `location` a person typed, each trimmed by the caller
+/// and empty where nothing was typed.
+///
+/// No project is express mode, which needs the key alone and reads no location. A project is
+/// checked as [`bravebot_config::provider::vertex_endpoint`] checks it, so a value that would
+/// configure no service is refused here before a key is asked for and nothing is written. The
+/// refusal names which of the two is wrong and holds neither value.
+pub fn google_vertex_offer(project: &str, location: &str) -> Result<Offer<'static>, VertexFault> {
+    use bravebot_config::provider::is_vertex_location;
+    check_vertex_project(project)?;
+    if project.is_empty() {
+        return Offer::google_vertex(None, None).ok_or(VertexFault::Project);
+    }
+    if !location.is_empty() && !is_vertex_location(location) {
+        return Err(VertexFault::Location);
+    }
+    let location = (!location.is_empty()).then_some(location);
+    Offer::google_vertex(Some(project), location).ok_or(VertexFault::Project)
+}
+
 /// Why no block naming a known service's id can be added to the person's settings.
 #[derive(Debug)]
 pub enum BlockError {
@@ -209,7 +258,11 @@ pub fn with_block(offer: &Offer<'_>, settings: &Path) -> Result<Destination, Blo
     if destination.holds_gateway(offer.id()) {
         return Err(BlockError::NamesTheId);
     }
-    destination.add_gateway(Gateway::bare(offer.id(), &offer.provider.base_url));
+    destination.add_gateway(Gateway::stating(
+        offer.id(),
+        &offer.provider.base_url,
+        offer.entry.clone(),
+    ));
     // Past the size the settings reader reads, which a destination says only once it is asked.
     destination.text().map_err(BlockError::Unwritable)?;
     Ok(destination)
@@ -222,8 +275,9 @@ pub enum RecordError {
     Write(SettingsNotWritten),
 }
 
-/// Record a block naming `offer`'s id, as `"provider": {"<id>": {}}`, which is the reading that
-/// reaches the host compiled in for the id and names no variable and no key.
+/// Record the block that names `offer`'s id, which is `"provider": {"<id>": {}}` for a known service,
+/// the reading that reaches the host compiled in for the id and names no variable and no key, and
+/// for Vertex AI the entry stating the project and location its host is built from.
 pub fn record_block(offer: &Offer<'_>, settings: &Path) -> Result<(), RecordError> {
     let destination = with_block(offer, settings).map_err(RecordError::Block)?;
     write_settings(&destination).map_err(RecordError::Write)
@@ -263,6 +317,7 @@ mod tests {
         Offer {
             provider: std::borrow::Cow::Owned(Provider::known("openrouter").expect("known")),
             unconfigured: true,
+            entry: serde_json::Map::new(),
         }
     }
 
@@ -564,5 +619,43 @@ mod tests {
             at.and_then(|at| offers.get(at)).map(Offer::id),
             Some("openrouter")
         );
+    }
+
+    /// A caller that asks for no project cannot record the block Vertex AI states one in, so it is
+    /// refused where no block names the service, and ready where one does. Without the refusal the
+    /// desktop window would record the express block for a person who wanted a project. The check
+    /// comes after the ones that need no answer, so a file of keys that cannot be read is still the
+    /// reason given where both hold.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_service_whose_block_states_a_project_is_not_ready_for_a_caller_that_asks_for_none() {
+        let managed = Managed::default();
+        let lacking = Err(ConfigError::Missing("a variable"));
+        let directory = scratch("vertex-needs-a-project");
+        let inputs = |config, directory| Inputs {
+            incognito: false,
+            directory,
+            config,
+            managed: &managed,
+        };
+        let vertex = Target::Gateway("google-vertex");
+        assert_eq!(
+            refusal(&vertex, &inputs(&lacking, Some(&directory))),
+            "NeedsProject"
+        );
+        assert_eq!(refusal(&vertex, &inputs(&lacking, None)), "Nowhere");
+        let unreadable = scratch("vertex-needs-a-project-unreadable");
+        std::fs::write(keys::file(&unreadable), "not json").expect("written");
+        assert_eq!(
+            refusal(&vertex, &inputs(&lacking, Some(&unreadable))),
+            "KeysUnreadable"
+        );
+        assert!(!user_settings_file(&directory).exists());
+
+        let named = configured(
+            r#"{"provider": {"google-vertex": {"options": {"project": "example-project-1"}}}}"#,
+        );
+        let found = ready(&vertex, &inputs(&named, Some(&directory))).expect("ready");
+        assert!(found.offer.is_some_and(|offer| !offer.unconfigured));
     }
 }

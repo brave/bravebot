@@ -1334,7 +1334,8 @@ auth-ways-heading = Ways to sign in to a model service:
 auth-way-brave = Brave's premium service, with a key typed here and kept by bravebot
 auth-way-bedrock = An AWS account, for Amazon Bedrock
 auth-way-import = A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
-# The services are the ids bravebot knows an endpoint for, such as openrouter, comma separated.
+# The services are the ids bravebot knows an endpoint for, such as openrouter, comma separated, and
+# google-vertex with the name a person looking for Gemini knows it by.
 auth-way-gateway = A key for { $services } or a gateway a provider block in settings names, typed here and kept by bravebot
 auth-way-chatgpt = A ChatGPT Plus or Pro account, signed in to in a browser
 auth-way-xai = An xAI SuperGrok subscription, signed in to with a code entered on any device
@@ -1410,6 +1411,22 @@ auth-gateways-heading-managed =
     The gateways { $path } names for every user of this machine, which are the only ones a key can be stored for:
 # Beside a gateway in the list under auth-gateways-heading.
 auth-gateway-key-stored = a key stored
+# The name Google gives the service the google-vertex id reaches, which a person looking for Gemini
+# knows it by. Said beside the id.
+auth-service-google-vertex = Gemini on Google Vertex AI
+# Asked once google-vertex is picked and no provider block names it. Answering nothing is Vertex AI
+# express mode, which a key alone reaches.
+auth-vertex-project-question = Google Cloud project to use, or nothing for express mode, which needs only a key:
+# Asked only where a project was given. Answering nothing is the global location.
+auth-vertex-location-question = Location, such as us-central1, or nothing for global:
+# Said where the project typed is not one a Vertex AI endpoint can be built from. The value is not
+# repeated: it is free text.
+auth-vertex-project-refused =
+    that is not a Google Cloud project id: it holds letters, digits, _, ., : and -, and starts with a letter or a digit; nothing was stored
+# Said where the location typed is not one a Vertex AI host can be built from. The value is not
+# repeated: it is free text.
+auth-vertex-location-refused =
+    that is not a location: it holds lowercase letters, digits and -; nothing was stored
 auth-which-gateway = Which one? Type its number or its id, or nothing to stop:
 auth-not-a-listed-gateway = { $answer } is not one of the gateways listed
 auth-gateway-key-held = A key is already stored for { $id }.
@@ -1429,6 +1446,11 @@ auth-gateway-stored =
 # The file is the person's own settings file, and the host is the one compiled in for the id.
 auth-gateway-recorded =
     { $file } names { $id } under provider now, so sessions started from now on send the key stored for it to { $host }
+# Said once the key is stored for a service only the environment names: no provider block is recorded,
+# because one would replace what the environment configures. The variable is the one the service
+# reads its key from, which a session reads before a stored key.
+auth-gateway-stored-from-environment =
+    the key for { $id } is stored in { $path }. No provider block names { $id }; the environment configures it, and a session reads { $variable } before the stored key, so it sends the stored key to { $host } only while { $variable } is not exported and { $project } or the env block of settings names the service
 # Said where no provider block named the id, once its key is stored and the block recorded.
 auth-gateway-stored-and-recorded =
     the key for { $id } is stored in { $path }, and { $file } names { $id } under provider now, so sessions started from now on send it to { $host }
@@ -1474,7 +1496,8 @@ auth-status-gateway-none = no gateway key is stored; run bravebot auth login gat
 # storing one makes the gateway usable. The path is not said.
 auth-status-gateway-key-file-unusable =
     the file options.keyFile names { $reason }; fix it, or run bravebot auth login gateway { $id }, since a stored key is read before the file
-# The id is a service bravebot knows that no provider block names, so no session sends a key to it.
+# The id is a service bravebot knows, or google-vertex, that no provider block names, so no session sends
+# a key to it; or a google-vertex express block that has no key stored for it.
 auth-status-gateway-none-stored = no key is stored for { $id }; run bravebot auth login gateway { $id }
 auth-status-gateway-unrecorded =
     a key is stored for { $id } and no provider block names it, so no session sends it; run bravebot auth login gateway { $id } to record the block
@@ -4756,6 +4779,9 @@ desktop-accounts-key-brave-unreadable = The stored premium key could not be read
 desktop-accounts-key-misconfigured = The settings could not be read, so no key can be stored.
 desktop-accounts-key-not-offered = These settings offer no gateway by this name to store a key for.
 desktop-accounts-key-cannot-record = A key for this service is sent only once your settings name it, and they cannot be changed to name it, so no key was asked for.
+# Said of Google Vertex AI where no settings entry names it: its entry states a project and a location,
+# which this window does not ask for.
+desktop-accounts-key-needs-project = A key for Google Vertex AI is stored with the project and location it is used with, which this window does not ask for. Run bravebot auth login gateway google-vertex in a terminal, so no key was asked for.
 desktop-accounts-key-empty = No key was typed, so nothing was stored.
 desktop-accounts-key-stored-already = A key is stored already, so it was left as it is.
 desktop-accounts-key-not-stored = The key could not be stored on this computer.

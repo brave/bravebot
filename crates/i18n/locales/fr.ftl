@@ -1109,6 +1109,13 @@ auth-gateways-heading = Services pour lesquels une clé peut être enregistrée 
 auth-gateways-heading-managed =
     Les passerelles que { $path } nomme pour tous les utilisateurs de cette machine, qui sont les seules pour lesquelles une clé peut être enregistrée :
 auth-gateway-key-stored = une clé enregistrée
+auth-service-google-vertex = Gemini sur Google Vertex AI
+auth-vertex-project-question = Projet Google Cloud à utiliser, ou rien pour le mode express, qui n'a besoin que d'une clé :
+auth-vertex-location-question = Emplacement, par exemple us-central1, ou rien pour global :
+auth-vertex-project-refused =
+    ce n'est pas un identifiant de projet Google Cloud : il contient des lettres, des chiffres, _, ., : et -, et commence par une lettre ou un chiffre ; rien n'a été enregistré
+auth-vertex-location-refused =
+    ce n'est pas un emplacement : il contient des minuscules, des chiffres et - ; rien n'a été enregistré
 auth-which-gateway = Laquelle ? Tapez son numéro ou son identifiant, ou rien pour arrêter :
 auth-not-a-listed-gateway = { $answer } n'est pas l'une des passerelles listées
 auth-gateway-key-held = Une clé est déjà enregistrée pour { $id }.
@@ -1123,6 +1130,8 @@ auth-gateway-stored =
     la clé pour { $id } est enregistrée dans { $path }, et les sessions démarrées à partir de maintenant l'envoient à { $host }
 auth-gateway-recorded =
     { $file } nomme désormais { $id } sous provider : les sessions démarrées à partir de maintenant envoient la clé enregistrée pour lui à { $host }
+auth-gateway-stored-from-environment =
+    la clé pour { $id } est enregistrée dans { $path }. Aucun bloc provider ne nomme { $id } ; l'environnement le configure, et une session lit { $variable } avant la clé enregistrée, donc elle envoie la clé enregistrée à { $host } seulement tant que { $variable } n'est pas exportée et que { $project } ou le bloc env des réglages nomme le service
 auth-gateway-stored-and-recorded =
     la clé pour { $id } est enregistrée dans { $path }, et { $file } nomme désormais { $id } sous provider : les sessions démarrées à partir de maintenant l'envoient à { $host }
 auth-gateway-cannot-record =
@@ -3578,6 +3587,7 @@ desktop-accounts-key-brave-unreadable = La clé premium enregistrée n'a pas pu 
 desktop-accounts-key-misconfigured = Les réglages n'ont pas pu être lus, donc aucune clé ne peut être enregistrée.
 desktop-accounts-key-not-offered = Ces réglages ne proposent aucune passerelle de ce nom pour laquelle enregistrer une clé.
 desktop-accounts-key-cannot-record = Une clé pour ce service n'est envoyée qu'une fois que vos réglages le nomment, et ils ne peuvent pas être modifiés pour le nommer, donc aucune clé n'a été demandée.
+desktop-accounts-key-needs-project = Une clé pour Google Vertex AI est enregistrée avec le projet et l'emplacement avec lesquels elle sert, que cette fenêtre ne demande pas. Exécutez bravebot auth login gateway google-vertex dans un terminal ; aucune clé n'a donc été demandée.
 desktop-accounts-key-empty = Aucune clé n'a été saisie, donc rien n'a été enregistré.
 desktop-accounts-key-stored-already = Une clé est déjà enregistrée, donc elle a été laissée telle quelle.
 desktop-accounts-key-not-stored = La clé n'a pas pu être enregistrée sur cet ordinateur.

@@ -18,7 +18,7 @@ Ways to sign in to a model service:
   1. brave    Brave's premium service, with a key typed here and kept by bravebot
   2. bedrock  An AWS account, for Amazon Bedrock
   3. import   A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
-  4. gateway  A key for openrouter, openai, anthropic or a gateway a provider block in settings names, typed here and kept by bravebot
+  4. gateway  A key for openrouter, openai, anthropic, google-vertex (Gemini on Google Vertex AI) or a gateway a provider block in settings names, typed here and kept by bravebot
   5. chatgpt  A ChatGPT Plus or Pro account, signed in to in a browser
   6. xai      An xAI SuperGrok subscription, signed in to with a code entered on any device
 Which one? Type its number or its name, or nothing to stop:
@@ -111,29 +111,30 @@ the sign-in and says what would end each token. See [xAI](providers/xai.md).
 
 ## Gateway
 
-`gateway` stores an API key for `openrouter`, `openai` or `anthropic`, which bravebot knows the
-endpoints of, or for a gateway a provider block names, such as an
-[OpenAI-compatible gateway](providers/openai-compatible.md). A key for one of the three needs no
+`gateway` stores an API key for `openrouter`, `openai`, `anthropic` or `google-vertex` (Gemini on
+Google Vertex AI), which bravebot knows how to reach, or for a gateway a provider block names, such as an
+[OpenAI-compatible gateway](providers/openai-compatible.md). A key for one of the four needs no
 block written first:
 
 ```
 $ bravebot auth login gateway
 Services a key can be stored for:
-  1. work        gateway.work.example (a key stored)
-  2. openrouter  openrouter.ai
-  3. openai      api.openai.com
-  4. anthropic   api.anthropic.com
+  1. work           gateway.work.example (a key stored)
+  2. openrouter     openrouter.ai
+  3. openai         api.openai.com
+  4. anthropic      api.anthropic.com
+  5. google-vertex  aiplatform.googleapis.com (Gemini on Google Vertex AI)
 Which one? Type its number or its id, or nothing to stop: 3
 
 Key for openai, sent to api.openai.com (not shown as you type):
 the key for openai is stored in /home/you/.bravebot/gateway-keys.json, and /home/you/.bravebot/settings.json names openai under provider now, so sessions started from now on send it to api.openai.com
 ```
 
-The list is the gateways your settings name, then each of the three that no block names, each with
-the host its key is sent to. A block with the id of one of the three is listed once, with its own
-host. Where the machine-level file names the gateways, only those are offered, since an entry
-written in your settings would not be read there, and the list and the refusal of any other id name
-that file.
+The list is the gateways your settings name, then each of `openrouter`, `openai` and `anthropic` that no
+block names, then `google-vertex` where no block and no variable names it, each with the host its key
+is sent to. A block with the id of one of them is listed once, with its own host. Where the
+machine-level file names the gateways, only those are offered, since an entry written in your settings
+would not be read there, and the list and the refusal of any other id name that file.
 
 With one service offered, or one named as in `bravebot auth login gateway openai`, it asks for the
 key straight away. Nothing appears as the key is typed or pasted, including a key pasted the moment the
@@ -158,6 +159,57 @@ starts, so one already open keeps what it had.
 
 A key stored with no block naming its id is sent by no session. Running the sign-in for that id
 again records the block, whether you replace the key or keep it.
+
+### Gemini on Google Vertex AI
+
+`google-vertex` is the id bravebot reaches Google Vertex AI under. Picking it asks two questions before
+the key, and the answers decide which host the key is sent to:
+
+```
+$ bravebot auth login gateway google-vertex
+Google Cloud project to use, or nothing for express mode, which needs only a key:
+```
+
+- Typing nothing is express mode. The key alone reaches Google's native `generateContent` API at
+  `aiplatform.googleapis.com`, no location is asked for, and the entry recorded in
+  `~/.bravebot/settings.json` is `"provider": {"google-vertex": {}}`.
+- Typing a project asks for a location next (`Location, such as us-central1, or nothing for global:`).
+  Nothing typed is `global`. The entry states both, and the key is sent to
+  `aiplatform.googleapis.com` for `global` and to `<location>-aiplatform.googleapis.com` for any other
+  location:
+
+  ```json
+  {
+    "provider": {
+      "google-vertex": { "options": { "project": "<project>", "location": "<location>" } }
+    }
+  }
+  ```
+
+A project holds letters, digits, `_`, `.`, `:` and `-` and starts with a letter or a digit. A location
+holds lowercase letters, digits and `-`. A value that holds anything else is refused before the key is
+asked for, with exit status 2, and nothing is stored or written. The sentence names which answer was
+wrong and does not repeat it. Ending the input at either question stops without storing anything.
+
+The key is typed with nothing shown, as for the other gateways, and kept in
+`~/.bravebot/gateway-keys.json` under `google-vertex`. Where a block already names `google-vertex`, or
+`GOOGLE_API_KEY` or `GOOGLE_CLOUD_PROJECT` configures the service, neither question is asked and no
+entry is written, since an entry would replace what is configured. In the second case the sign-in says
+that the stored key is read after an exported `GOOGLE_API_KEY`, so it is sent only while that variable
+is not exported and `GOOGLE_CLOUD_PROJECT` or the `env` block of settings names the service. Where a settings entry for
+`google-vertex` configures no service, the sign-in says so before it asks anything.
+
+Storing the key does not choose a model. Name one as `google-vertex/google/gemini-2.5-flash` in the
+`model` key or after `--model`. [Google Vertex AI](providers/google-vertex.md) lists the models
+bravebot offers and says how a project is reached with Google Cloud credentials instead of a key.
+`bravebot auth login` does not start `gcloud`.
+
+`bravebot auth logout gateway google-vertex` forgets the key and names the host it still works at until
+it is revoked: the one the entry in settings states, and `aiplatform.googleapis.com` where none does.
+`bravebot auth status gateway google-vertex` reports a key stored with no entry as not signed in, and
+an express entry with no key stored as not signed in, since Vertex AI refuses a request with no key. The
+desktop app's Accounts settings do not ask for a project, so storing a key for `google-vertex` there is
+refused and names this command.
 
 Storing the key does not choose a model. Until one of the service's is named, `bravebot` refuses to
 start with `no model service is configured yet` and a line naming the

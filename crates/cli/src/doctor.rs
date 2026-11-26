@@ -1811,7 +1811,7 @@ pub(crate) fn gateway_credential(
     if provider.needs_google_cloud_token(&lookup) {
         return t!(doctor_gateway_token_google_cloud).to_string();
     }
-    match provider.credential_and_source(lookup) {
+    match provider.credential_as_reported(lookup) {
         (Credential::Token(_), Some(Source::Stored)) => t!(doctor_gateway_token_stored).to_string(),
         (Credential::Token(_), Some(Source::KeyFile)) => {
             t!(doctor_gateway_token_key_file).to_string()
@@ -4927,6 +4927,25 @@ mod tests {
         assert_eq!(
             gateway_credential(&express, |_| None),
             t!(doctor_gateway_token_absent, id = "google-vertex")
+        );
+    }
+
+    /// BACKEND-58 and CLI-23: `doctor` reports a bare express block, which names no credential, as
+    /// having no key, as `auth status` does, and a stored key as stored. The regression it rejects:
+    /// `doctor` reading the block as one that names no credential and needs none, which says "none
+    /// needed" where the service refuses a request without a key.
+    #[test]
+    fn doctor_reports_a_bare_express_block_as_missing_a_key_as_status_does() {
+        let bare = configured_gateway(r#"{"provider": {"google-vertex": {}}}"#);
+        assert_eq!(
+            gateway_credential(&bare, |_| None),
+            t!(doctor_gateway_token_absent, id = "google-vertex")
+        );
+        let mut stored = configured_gateway(r#"{"provider": {"google-vertex": {}}}"#);
+        stored.stored_key = Some(bravebot_config::Secret::new("placeholder-stored-key"));
+        assert_eq!(
+            gateway_credential(&stored, |_| None),
+            t!(doctor_gateway_token_stored)
         );
     }
 

@@ -22,7 +22,7 @@ use bravebot_agent::key_entry;
 use bravebot_config::bedrock::Tier;
 use bravebot_config::import::{Destination, Unwritable};
 use bravebot_config::keys::{self, Keys};
-use bravebot_config::provider::{Provider, known_ids};
+use bravebot_config::provider::{GOOGLE_VERTEX_ID, Provider, known_ids};
 use bravebot_config::{Config, ConfigError, Managed, Secret, Settings, env_var};
 use bravebot_i18n::t;
 use std::fmt::Display;
@@ -70,17 +70,26 @@ impl Way {
     }
 
     /// What the list says this way is. The gateway line names the services bravebot knows, read
-    /// from the same table a session reaches them by.
+    /// from the same table a session reaches them by, and Vertex AI, which has no row in it.
     fn description(self) -> String {
         match self {
             Way::Brave => t!(auth_way_brave).to_string(),
             Way::Bedrock => t!(auth_way_bedrock).to_string(),
             Way::Import => t!(auth_way_import).to_string(),
-            Way::Gateway => t!(auth_way_gateway, services = listed(known_ids())),
+            Way::Gateway => t!(auth_way_gateway, services = services()),
             Way::ChatGpt => t!(auth_way_chatgpt).to_string(),
             Way::Xai => t!(auth_way_xai).to_string(),
         }
     }
+}
+
+/// The services a key can be stored for where no block names them, as the gateway line says them:
+/// each known id, then Vertex AI with the name a person looking for Gemini knows it by.
+fn services() -> String {
+    let vertex = format!("{GOOGLE_VERTEX_ID} ({})", t!(auth_service_google_vertex));
+    let mut said: Vec<String> = known_ids().map(printable).collect();
+    said.push(vertex);
+    said.join(", ")
 }
 
 /// Run `bravebot auth <command>`.
@@ -568,12 +577,12 @@ fn refused(err: &mut impl Write, ending: Ending, message: impl Display) -> Endin
 }
 
 /// What was answered about the service the key is for.
-enum Asked<'o, 'c> {
+enum Asked<'a> {
     Nothing,
     /// A key is typed: none was stored, or it is to be replaced.
-    Type(&'o Offer<'c>),
+    Type(Offer<'a>),
     /// The key stored is kept.
-    Keep(&'o Offer<'c>),
+    Keep(Offer<'a>),
 }
 
 /// What the checks that need no answer found.
@@ -644,6 +653,7 @@ fn gateway_refused(err: &mut impl Write, task: &Task<'_>, refusal: key_entry::Re
         Refusal::Incognito
         | Refusal::Misconfigured
         | Refusal::BraveUnreadable
+        | Refusal::NeedsProject
         | Refusal::CannotRecord(_) => {
             unreachable!("not a refusal of the offers or of the place a gateway key is stored")
         }
@@ -653,25 +663,46 @@ fn gateway_refused(err: &mut impl Write, task: &Task<'_>, refusal: key_entry::Re
 /// Ask which service the key is for and, where one is stored for it, whether to replace it.
 ///
 /// A service whose block has to be recorded is checked before the question about replacing a key,
-/// so nobody answers it and is then told the sign-in cannot be finished.
-fn asked<'o, 'a, R: BufRead, W: Write>(
-    ready: &'o Ready<'a>,
+/// so nobody answers it and is then told the sign-in cannot be finished. Vertex AI, whose block
+/// states a project and a location, is checked before those are asked for, and again with them.
+fn asked<'a, R: BufRead, W: Write>(
+    ready: &Ready<'a>,
     settings: &Path,
     open_questions: impl FnOnce() -> Prompting<R, W>,
     err: &mut impl Write,
-) -> Result<Asked<'o, 'a>, Ending> {
+) -> Result<Asked<'a>, Ending> {
     let named = ready.named.and_then(|at| ready.offers.get(at));
     let mut asking = open_questions();
     let heading = offers_heading(ready.managed);
-    let offer = match which_gateway(&mut asking, &ready.offers, named, &ready.stored, &heading) {
+    let picked = match which_gateway(&mut asking, &ready.offers, named, &ready.stored, &heading) {
         Ok(Some(offer)) => offer,
         Ok(None) => return Ok(Asked::Nothing),
         Err(refusal) => return Err(refused(err, Ending::Argument, refusal)),
     };
-    if offer.unconfigured
-        && let Err(problem) = with_block(offer, settings)
-    {
-        return Err(refused(
+    let offer = if picked.takes_a_project() {
+        cannot_record(err, picked, settings)?;
+        match vertex_offer(&mut asking, err)? {
+            Some(offer) => offer,
+            None => return Ok(Asked::Nothing),
+        }
+    } else {
+        picked.clone()
+    };
+    if offer.unconfigured {
+        cannot_record(err, &offer, settings)?;
+    }
+    Ok(match replaced(&mut asking, &offer, &ready.stored) {
+        true => Asked::Type(offer),
+        false => Asked::Keep(offer),
+    })
+}
+
+/// The refusal to go on where the block `offer` needs cannot be recorded, which is said before a key
+/// is asked for.
+fn cannot_record(err: &mut impl Write, offer: &Offer<'_>, settings: &Path) -> Result<(), Ending> {
+    match with_block(offer, settings) {
+        Ok(_) => Ok(()),
+        Err(problem) => Err(refused(
             err,
             Ending::Failed,
             t!(
@@ -679,12 +710,43 @@ fn asked<'o, 'a, R: BufRead, W: Write>(
                 id = printable(offer.id()),
                 problem = problem
             ),
-        ));
+        )),
     }
-    Ok(match replaced(&mut asking, offer, &ready.stored) {
-        true => Asked::Type(offer),
-        false => Asked::Keep(offer),
-    })
+}
+
+/// Ask for the project and location Vertex AI is reached with, and return the offer they name.
+///
+/// No project is express mode, which needs the key alone, so the location is asked for only where
+/// a project is given. A value an endpoint cannot be built from ends the command with the argument
+/// status before a key is asked for and names which answer was refused, never its text. The end of
+/// the input answers nothing, which is not the same as answering that there is no project.
+fn vertex_offer<R: BufRead, W: Write>(
+    asking: &mut Prompting<R, W>,
+    err: &mut impl Write,
+) -> Result<Option<Offer<'static>>, Ending> {
+    let Some(project) = asking.answer(t!(auth_vertex_project_question)) else {
+        return Ok(None);
+    };
+    let location = match project.is_empty() || key_entry::check_vertex_project(&project).is_err() {
+        true => String::new(),
+        false => match asking.answer(t!(auth_vertex_location_question)) {
+            Some(location) => location,
+            None => return Ok(None),
+        },
+    };
+    match key_entry::google_vertex_offer(&project, &location) {
+        Ok(offer) => Ok(Some(offer)),
+        Err(key_entry::VertexFault::Project) => Err(refused(
+            err,
+            Ending::Argument,
+            t!(auth_vertex_project_refused),
+        )),
+        Err(key_entry::VertexFault::Location) => Err(refused(
+            err,
+            Ending::Argument,
+            t!(auth_vertex_location_refused),
+        )),
+    }
 }
 
 /// The sign-in of `bravebot auth login gateway`, over the places it reads and writes, so a test
@@ -707,7 +769,7 @@ fn sign_in_gateway<R: BufRead, W: Write>(
     let offer = match asked(&ready, &settings, open_questions, err) {
         Ok(Asked::Type(offer)) => offer,
         Ok(Asked::Keep(offer)) => {
-            return record_kept(offer, ready.directory, &settings, out, err);
+            return record_kept(&offer, ready.directory, &settings, out, err);
         }
         Ok(Asked::Nothing) => return Ending::Done,
         Err(ending) => return ending,
@@ -729,7 +791,7 @@ fn sign_in_gateway<R: BufRead, W: Write>(
         Ok(Some(key)) => key,
         Ok(None) => {
             tell(err, t!(auth_gateway_nothing_stored));
-            return record_kept(offer, ready.directory, &settings, out, err);
+            return record_kept(&offer, ready.directory, &settings, out, err);
         }
         Err(error) => {
             return refused(
@@ -739,7 +801,7 @@ fn sign_in_gateway<R: BufRead, W: Write>(
             );
         }
     };
-    store_key(offer, key, &ready, &settings, out, err)
+    store_key(&offer, key, &ready, &settings, out, err)
 }
 
 /// Store the key typed for `offer`, then record the block that names its id where one is needed.
@@ -782,14 +844,24 @@ fn store_key(
     let (id, host) = (printable(offer.id()), printable(offer.provider.host()));
     tell(
         out,
-        match offer.unconfigured {
-            false => t!(
+        match (offer.unconfigured, offer.provider.written_in_entry()) {
+            (false, true) => t!(
                 auth_gateway_stored,
                 id = id,
                 path = shown(&path),
                 host = host
             ),
-            true => t!(
+            // Configured by the environment alone, so no block is recorded: one would replace what
+            // the variables configure.
+            (false, false) => t!(
+                auth_gateway_stored_from_environment,
+                id = id,
+                path = shown(&path),
+                host = host,
+                variable = listed(offer.provider.env.iter().map(String::as_str)),
+                project = env_var::GOOGLE_CLOUD_PROJECT
+            ),
+            (true, _) => t!(
                 auth_gateway_stored_and_recorded,
                 id = id,
                 path = shown(&path),
@@ -820,8 +892,9 @@ fn block_refused(failed: key_entry::BlockError, offer: &Offer<'_>, settings: &Pa
     }
 }
 
-/// Record a block naming `offer`'s id, as `"provider": {"<id>": {}}`, which is the reading that
-/// reaches the host compiled in for the id and names no variable and no key.
+/// Record the block that names `offer`'s id, which is `"provider": {"<id>": {}}` for a known service,
+/// the reading that reaches the host compiled in for the id and names no variable and no key, and
+/// for Vertex AI the entry stating the project and location its host is built from.
 fn record_block(offer: &Offer<'_>, settings: &Path) -> Result<(), String> {
     crate::import::write(&with_block(offer, settings)?, unrecordable)
 }
@@ -849,7 +922,11 @@ fn not_recorded(
         t!(
             auth_gateway_not_recorded,
             id = printable(offer.id()),
-            entry = format!(r#""provider": {{"{}": {{}}}}"#, printable(offer.id())),
+            entry = format!(
+                r#""provider": {{"{}": {}}}"#,
+                printable(offer.id()),
+                offer.entry_text()
+            ),
             file = shown(settings),
             problem = problem
         ),
@@ -918,8 +995,13 @@ fn which_gateway<'o, 'c, R: BufRead, W: Write>(
                     Some(_) => format!(" ({})", t!(auth_gateway_key_stored)),
                     None => String::new(),
                 };
+                // The name a person looking for Gemini knows the service by, which its id does not say.
+                let named = match offer.provider.is_google_vertex() {
+                    true => format!(" ({})", t!(auth_service_google_vertex)),
+                    false => String::new(),
+                };
                 asking.say(&format!(
-                    "  {number}. {:<width$}  {}{held}",
+                    "  {number}. {:<width$}  {}{held}{named}",
                     printable(offer.id()),
                     printable(offer.provider.host()),
                     width = width.unwrap_or(0)
@@ -1614,7 +1696,7 @@ mod golden {
         "gateway local: signed in: none needed (the block names none)",
         "gateway openrouter: signed in: found (never printed)",
         "gateway work: unusable: the file of gateway keys cannot be read",
-        "refused Argument: that is not the id of a gateway a key can be stored for; they are local, openrouter, work, openai, anthropic",
+        "refused Argument: that is not the id of a gateway a key can be stored for; they are local, openrouter, work, openai, anthropic, google-vertex",
         "gateway work: not signed in: none found (set a variable its `env` names, or run bravebot auth login gateway work)",
         "gateway corp: signed in: none needed (the block names none)",
         "gateway corp: signed in: none needed (the block names none)",
@@ -1709,6 +1791,7 @@ mod tests {
     /// directory, read from the file as the list reads it with no configuration consulted, so a key
     /// stored for a known service that no block names is shown, and nothing stored shows nothing.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn the_gateway_line_shows_a_key_stored_for_a_service_no_block_names() {
         let scratch = Scratch::new("cli-auth-held-line");
         let directory = scratch.0.join("state");
@@ -1729,6 +1812,10 @@ mod tests {
             "{line}"
         );
         assert!(!line.contains("placeholder-gateway-key"), "{line}");
+        write_keys(&directory, &placeholder_keys(&[GOOGLE_VERTEX_ID])).expect("stored");
+        let line = held_in(&directory).expect("a key is held for Vertex AI");
+        assert!(line.contains(GOOGLE_VERTEX_ID), "{line}");
+        write_keys(&directory, &placeholder_keys(&["openai", "anthropic"])).expect("stored");
         assert!(
             !directory.join("settings.json").exists(),
             "the line was read with a block written"
@@ -1900,6 +1987,7 @@ mod tests {
             .map(|provider| Offer {
                 provider: Cow::Borrowed(provider),
                 unconfigured: false,
+                entry: serde_json::Map::new(),
             })
             .collect()
     }
@@ -2247,20 +2335,27 @@ mod tests {
             }
             None => Managed::default(),
         };
-        let config = configured(given.settings.unwrap_or(""), &managed);
+        let exported = |name: &str| {
+            given
+                .exported
+                .iter()
+                .find(|(exported, _)| *exported == name)
+                .map(|(_, value)| value.to_string())
+        };
+        // The gateways a session would read, which include the Vertex AI service the environment
+        // names where no block does.
+        let providers = bravebot_config::gateways(
+            &Settings::parse(given.settings.unwrap_or("")),
+            &managed,
+            &exported,
+        );
         let task = Task {
-            providers: &config.providers,
+            providers: &providers,
             managed: &managed,
             named: given.named,
             terminal: !given.no_terminal,
             directory: Some(&directory),
-            lookup: &|name| {
-                given
-                    .exported
-                    .iter()
-                    .find(|(exported, _)| *exported == name)
-                    .map(|(_, value)| value.to_string())
-            },
+            lookup: &exported,
         };
         let (mut out, mut err, mut asked) = (Vec::new(), Vec::new(), Vec::new());
         let mut key_question = None;
@@ -2327,12 +2422,16 @@ mod tests {
 
             if named.is_none() {
                 let listed = rows(&run.asked);
-                let hosts: Vec<(String, String)> = known_ids()
+                let mut hosts: Vec<(String, String)> = known_ids()
                     .map(|id| {
                         let host = Provider::known(id).expect("known").host().to_string();
                         (id.to_string(), host)
                     })
                     .collect();
+                hosts.push((
+                    GOOGLE_VERTEX_ID.to_string(),
+                    "aiplatform.googleapis.com".to_string(),
+                ));
                 assert_eq!(listed, hosts, "{how}: {}", run.asked);
             } else {
                 assert!(run.asked.is_empty(), "a named service was asked about");
@@ -2410,6 +2509,7 @@ mod tests {
                 .iter()
                 .map(|(id, host)| (id.as_str(), host.as_str(), true)),
         );
+        expected.push((GOOGLE_VERTEX_ID, "aiplatform.googleapis.com", true));
         assert_eq!(listed, expected);
     }
 
@@ -2419,6 +2519,537 @@ mod tests {
             "options": {"baseURL": "https://openrouter.example/api/v1"}},
         "work": {"options": {"baseURL": "https://gateway.work.example/v1"}}
     }}"#;
+
+    /// CLI-18: Google Vertex AI is on the gateway line under the name a person looking for Gemini
+    /// knows it by, and it is a service the table of known ids does not hold, so the line has to add
+    /// it. Without it, nothing on the list says Gemini can be signed in to here.
+    #[test]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn the_gateway_line_names_gemini_on_google_vertex_ai() {
+        let (said, _) = asked("\n", &nothing_held);
+        let line = said
+            .lines()
+            .find(|line| line.starts_with("  4. gateway"))
+            .unwrap_or_else(|| panic!("gateway is not listed: {said}"));
+        assert!(known_ids().all(|id| id != GOOGLE_VERTEX_ID));
+        assert!(line.contains(GOOGLE_VERTEX_ID), "{line}");
+        assert!(line.contains("Gemini"), "{line}");
+        assert!(line.contains("Google Vertex AI"), "{line}");
+    }
+
+    /// CLI-18 and BACKEND-58: with no project, Google Vertex AI is signed in to in express mode. The key
+    /// typed is stored under its id, the settings file holds the entry that reads as express mode and
+    /// nothing else, and read back as a session reads it the key is the credential and the host is
+    /// the express one. Picked by id, by number, or named. Nothing asks for a location, which express
+    /// mode does not read.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn google_vertex_with_no_project_is_stored_with_the_express_block() {
+        let number = known_ids().count() + 1;
+        let by_number = format!("{number}\n\n");
+        for (how, named, answers) in [
+            ("by id", None, "google-vertex\n\n"),
+            ("by number", None, by_number.as_str()),
+            ("named", Some("google-vertex"), "\n"),
+        ] {
+            let run = sign_in(
+                "cli-auth-vertex-express",
+                Given {
+                    named,
+                    answers,
+                    typed: Some(A_TYPED_KEY),
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Done, "{how}: {}", run.err);
+            run.holds_no_key();
+            assert!(
+                run.asked.contains(t!(auth_vertex_project_question))
+                    && !run.asked.contains(t!(auth_vertex_location_question)),
+                "{how}: express mode asked for a location, or no project was asked for: {}",
+                run.asked
+            );
+
+            let stored = run.keys();
+            assert_eq!(
+                stored.ids().collect::<Vec<_>>(),
+                [GOOGLE_VERTEX_ID],
+                "{how}"
+            );
+            let written = run.settings_text().expect("the settings file was written");
+            let value: serde_json::Value = serde_json::from_str(&written).expect("json");
+            assert_eq!(
+                value,
+                serde_json::json!({"provider": {"google-vertex": {}}}),
+                "{how}: {written}"
+            );
+            let mut read = Settings::parse(&written).providers().to_vec();
+            assert_eq!(read.len(), 1, "{how}: {written}");
+            let mut vertex = read.remove(0);
+            assert_eq!(
+                vertex.base_url, "https://aiplatform.googleapis.com/v1",
+                "{how}"
+            );
+            assert_eq!(
+                vertex.protocol(),
+                bravebot_config::provider::Protocol::GenerateContent,
+                "{how}"
+            );
+            vertex.stored_key = stored.get(GOOGLE_VERTEX_ID).cloned();
+            match vertex.credential_and_source(|_| None) {
+                (Credential::Token(token), Some(Source::Stored)) => {
+                    assert_eq!(token.expose(), A_TYPED_KEY, "{how}");
+                }
+                _ => panic!("{how}: the stored key is not the credential of the recorded block"),
+            }
+            let question = run.key_question.as_deref().expect("the key was asked for");
+            assert!(
+                question.contains(GOOGLE_VERTEX_ID)
+                    && question.contains("aiplatform.googleapis.com"),
+                "{question}"
+            );
+            assert!(
+                run.out.contains("aiplatform.googleapis.com"),
+                "{how}: {}",
+                run.out
+            );
+        }
+    }
+
+    /// CLI-18: only Google Vertex AI is asked for a project, and only where no block names it. Any
+    /// other service is asked nothing beyond the pick, and a block that names Vertex AI already holds
+    /// its project, so asking again would ask for what the person wrote down.
+    #[test]
+    fn no_project_is_asked_for_beside_another_service_or_a_block_naming_vertex_ai() {
+        let run = sign_in(
+            "cli-auth-vertex-not-asked-openai",
+            Given {
+                answers: "openai\n",
+                typed: Some(A_TYPED_KEY),
+                ..Given::default()
+            },
+        );
+        assert_eq!(run.ending, Ending::Done, "{}", run.err);
+        assert!(
+            !run.asked.contains(t!(auth_vertex_project_question)),
+            "{}",
+            run.asked
+        );
+        assert_eq!(run.keys().ids().collect::<Vec<_>>(), ["openai"]);
+
+        let settings =
+            r#"{"provider": {"google-vertex": {"options": {"project": "example-project-1"}}}}"#;
+        let run = sign_in(
+            "cli-auth-vertex-not-asked-block",
+            Given {
+                settings: Some(settings),
+                named: Some(GOOGLE_VERTEX_ID),
+                typed: Some(A_TYPED_KEY),
+                ..Given::default()
+            },
+        );
+        assert_eq!(run.ending, Ending::Done, "{}", run.err);
+        assert!(run.asked.is_empty(), "{}", run.asked);
+        assert_eq!(run.settings_text().as_deref(), Some(settings));
+        assert_eq!(
+            run.keys().get(GOOGLE_VERTEX_ID).map(Secret::expose),
+            Some(A_TYPED_KEY)
+        );
+        assert!(
+            run.out.contains("aiplatform.googleapis.com") && !run.out.contains("settings.json"),
+            "{}",
+            run.out
+        );
+    }
+
+    /// CLI-18 and BACKEND-49: a project the endpoint cannot be built from, or a location likewise,
+    /// ends the command with the argument status before the key is asked for. Nothing is stored or
+    /// recorded, the location is not asked for after a refused project, and the value refused is not
+    /// repeated.
+    #[test]
+    fn a_project_or_location_vertex_ai_cannot_be_reached_with_is_refused_before_the_key() {
+        for (answers, location_asked, refused) in [
+            ("google-vertex\na/b\n", false, "a/b"),
+            ("google-vertex\n-project\n", false, "-project"),
+            ("google-vertex\nexample-project-1\nUS\n", true, "US"),
+            ("google-vertex\nexample-project-1\nus/1\n", true, "us/1"),
+        ] {
+            let run = sign_in(
+                "cli-auth-vertex-refused",
+                Given {
+                    answers,
+                    typed: Some(A_TYPED_KEY),
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Argument, "{answers:?}: {}", run.err);
+            assert_eq!(run.key_question, None, "{answers:?}: the key was asked for");
+            assert!(
+                !keys::file(&run.directory).exists(),
+                "{answers:?}: a key was stored"
+            );
+            assert_eq!(
+                run.settings_text(),
+                None,
+                "{answers:?}: settings were written"
+            );
+            assert_eq!(
+                run.asked.contains(t!(auth_vertex_location_question)),
+                location_asked,
+                "{answers:?}: {}",
+                run.asked
+            );
+            assert!(
+                !run.err.contains(refused),
+                "{answers:?} repeated the value: {}",
+                run.err
+            );
+            assert!(run.out.is_empty(), "{answers:?}: {}", run.out);
+            run.holds_no_key();
+        }
+    }
+
+    /// CLI-18: the end of the input at either question answers nothing, which is not the answer
+    /// that there is no project or that the location is `global`. A sign-in cut off at the project
+    /// question or at the location question stores no key and records no block, where reading it
+    /// as express mode or as `global` would go on to ask for a key and record the block.
+    #[test]
+    fn the_input_ending_at_the_project_question_stores_and_records_nothing() {
+        for (at, answers) in [
+            ("the project", "google-vertex\n"),
+            ("the location", "google-vertex\nexample-project-1\n"),
+        ] {
+            let run = sign_in(
+                "cli-auth-vertex-input-ends",
+                Given {
+                    answers,
+                    typed: Some(A_TYPED_KEY),
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Done, "{at}: {}", run.err);
+            assert_eq!(run.key_question, None, "{at}: the key was asked for");
+            assert!(
+                !keys::file(&run.directory).exists(),
+                "{at}: a key was stored"
+            );
+            assert_eq!(run.settings_text(), None, "{at}: settings were written");
+        }
+    }
+
+    /// CLI-18: a block naming Google Vertex AI, as the record makes it, states the project and the
+    /// location typed, and `global` where none was, so the file says where requests go. Read back as a
+    /// session reads it the key stored is the credential and the host is the one the question named.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn google_vertex_with_a_project_is_recorded_with_its_project_and_location() {
+        for (answers, location, host) in [
+            (
+                "google-vertex\nexample-project-1\nus-central1\n",
+                "us-central1",
+                "us-central1-aiplatform.googleapis.com",
+            ),
+            (
+                "google-vertex\nexample-project-1\n\n",
+                "global",
+                "aiplatform.googleapis.com",
+            ),
+        ] {
+            let run = sign_in(
+                "cli-auth-vertex-project",
+                Given {
+                    answers,
+                    typed: Some(A_TYPED_KEY),
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Done, "{answers:?}: {}", run.err);
+            run.holds_no_key();
+            let written = run.settings_text().expect("the settings file was written");
+            let value: serde_json::Value = serde_json::from_str(&written).expect("json");
+            assert_eq!(
+                value,
+                serde_json::json!({"provider": {"google-vertex": {
+                    "options": {"project": "example-project-1", "location": location}
+                }}}),
+                "{answers:?}: {written}"
+            );
+            let stored = run.keys();
+            let mut read = Settings::parse(&written).providers().to_vec();
+            assert_eq!(read.len(), 1, "{answers:?}: {written}");
+            let mut vertex = read.remove(0);
+            assert_eq!(vertex.host(), host, "{answers:?}");
+            assert_eq!(
+                vertex.protocol(),
+                bravebot_config::provider::Protocol::ChatCompletions,
+                "{answers:?}"
+            );
+            vertex.stored_key = stored.get(GOOGLE_VERTEX_ID).cloned();
+            assert!(
+                matches!(
+                    vertex.credential_and_source(|_| None),
+                    (Credential::Token(_), Some(Source::Stored))
+                ),
+                "{answers:?}: the stored key is not the credential of the recorded block"
+            );
+            let question = run.key_question.as_deref().expect("the key was asked for");
+            assert!(question.contains(host), "{answers:?}: {question}");
+        }
+    }
+
+    /// CLI-18, BACKEND-50: where the environment configures Google Vertex AI and no block names it, it is
+    /// offered as a gateway that is configured already. No project or location is asked for and no block
+    /// is recorded, since a block would replace the route the variables name. The key is stored, the
+    /// host the question names is the one the environment builds, and a variable holding a key is
+    /// said to be sent in its place.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn google_vertex_the_environment_configures_is_stored_a_key_and_given_no_block() {
+        for (how, exported, host, variable_wins) in [
+            (
+                "a key",
+                &[("GOOGLE_API_KEY", AN_EXPORTED_KEY)][..],
+                "aiplatform.googleapis.com",
+                true,
+            ),
+            (
+                "a project and a location",
+                &[
+                    ("GOOGLE_CLOUD_PROJECT", "example-project-1"),
+                    ("VERTEX_LOCATION", "us-east5"),
+                ][..],
+                "us-east5-aiplatform.googleapis.com",
+                false,
+            ),
+        ] {
+            let run = sign_in(
+                "cli-auth-vertex-environment",
+                Given {
+                    named: Some(GOOGLE_VERTEX_ID),
+                    exported,
+                    typed: Some(A_TYPED_KEY),
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Done, "{how}: {}", run.err);
+            run.holds_no_key();
+            assert!(run.asked.is_empty(), "{how}: {}", run.asked);
+            assert_eq!(
+                run.keys().ids().collect::<Vec<_>>(),
+                [GOOGLE_VERTEX_ID],
+                "{how}"
+            );
+            assert_eq!(run.settings_text(), None, "{how}: a block was recorded");
+            let question = run.key_question.as_deref().expect("the key was asked for");
+            assert!(question.contains(host), "{how}: {question}");
+            assert!(
+                run.out.contains(host)
+                    && run.out.contains("environment")
+                    && !run.out.contains("settings.json"),
+                "{how}: {}",
+                run.out
+            );
+            assert_eq!(
+                run.err.contains(&*t!(
+                    auth_gateway_variable_wins,
+                    variable = "GOOGLE_API_KEY"
+                )),
+                variable_wins,
+                "{how}: {}",
+                run.err
+            );
+            assert!(
+                run.out.contains(&*t!(
+                    auth_gateway_stored_from_environment,
+                    id = GOOGLE_VERTEX_ID,
+                    path = shown(&keys::file(&run.directory)),
+                    host = host,
+                    variable = "GOOGLE_API_KEY",
+                    project = env_var::GOOGLE_CLOUD_PROJECT
+                )),
+                "{how}: {}",
+                run.out
+            );
+        }
+    }
+
+    /// CLI-18: an entry that names Google Vertex AI and configures no service, or a `provider` that is
+    /// not a block, cannot take the block, so that is said before a project is asked for, as it is
+    /// before replacing a key is asked about. Nothing is stored or recorded.
+    #[test]
+    fn an_entry_that_configures_no_vertex_service_is_refused_before_a_project_is_asked_for() {
+        for settings in [
+            r#"{"provider": {"google-vertex": {"options": {"project": "a/b"}}}}"#,
+            r#"{"provider": {"google-vertex": null}}"#,
+            r#"{"provider": {"google-vertex": "https://elsewhere.example.invalid/v1"}}"#,
+            r#"{"provider": []}"#,
+            "not a settings document",
+        ] {
+            let run = sign_in(
+                "cli-auth-vertex-entry-not-a-service",
+                Given {
+                    settings: Some(settings),
+                    named: Some(GOOGLE_VERTEX_ID),
+                    answers: "example-project-1\nus-central1\n",
+                    typed: Some(A_TYPED_KEY),
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Failed, "{settings}: {}", run.err);
+            assert!(
+                !run.asked.contains(t!(auth_vertex_project_question)),
+                "{settings}: the project was asked for: {}",
+                run.asked
+            );
+            assert_eq!(run.key_question, None, "{settings}: the key was asked for");
+            assert!(
+                !keys::file(&run.directory).exists(),
+                "{settings}: a key was stored"
+            );
+            assert_eq!(run.settings_text().as_deref(), Some(settings));
+            assert!(run.err.contains("settings.json"), "{settings}: {}", run.err);
+            run.holds_no_key();
+        }
+    }
+
+    /// CLI-18: a file of keys that cannot be read is refused before a project is asked for, and the
+    /// file is left as it is.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn an_unreadable_file_of_keys_is_refused_before_a_vertex_project_is_asked_for() {
+        let run = sign_in(
+            "cli-auth-vertex-keys-unreadable",
+            Given {
+                keys: Some("not a file of keys"),
+                named: Some(GOOGLE_VERTEX_ID),
+                answers: "example-project-1\n\n",
+                typed: Some(A_TYPED_KEY),
+                ..Given::default()
+            },
+        );
+        assert_eq!(run.ending, Ending::Failed, "{}", run.err);
+        assert!(run.asked.is_empty(), "{}", run.asked);
+        assert_eq!(run.key_question, None);
+        assert_eq!(run.settings_text(), None);
+        assert_eq!(
+            std::fs::read_to_string(keys::file(&run.directory)).expect("the file"),
+            "not a file of keys"
+        );
+    }
+
+    /// CLI-18 and INCOG-7: where the machine-level layer names the gateways, Google Vertex AI is not
+    /// offered, whether or not the environment would configure it, since a block recorded in the
+    /// person's file would not be read. The id is refused as one that is not offered, and not repeated.
+    #[test]
+    fn google_vertex_is_not_offered_where_the_machine_level_layer_names_the_gateways() {
+        let corp = r#"{"provider": {"corp": {"options": {"baseURL": "https://corp.example/v1"}}}}"#;
+        for exported in [
+            &[][..],
+            &[("GOOGLE_API_KEY", AN_EXPORTED_KEY)][..],
+            &[("GOOGLE_CLOUD_PROJECT", "example-project-1")][..],
+        ] {
+            let run = sign_in(
+                "cli-auth-vertex-managed",
+                Given {
+                    managed: Some(corp),
+                    named: Some(GOOGLE_VERTEX_ID),
+                    exported,
+                    typed: Some(A_TYPED_KEY),
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Argument, "{exported:?}: {}", run.err);
+            assert!(run.err.contains("corp"), "{exported:?}: {}", run.err);
+            assert!(
+                !run.err.contains(GOOGLE_VERTEX_ID),
+                "{exported:?}: the id was repeated: {}",
+                run.err
+            );
+            assert!(run.asked.is_empty(), "{exported:?}: {}", run.asked);
+            assert_eq!(run.key_question, None);
+            assert!(!keys::file(&run.directory).exists());
+            assert_eq!(run.settings_text(), None);
+            run.holds_no_key();
+        }
+
+        let run = sign_in(
+            "cli-auth-vertex-managed-none",
+            Given {
+                managed: Some(r#"{"provider": {}}"#),
+                named: Some(GOOGLE_VERTEX_ID),
+                typed: Some(A_TYPED_KEY),
+                ..Given::default()
+            },
+        );
+        assert_eq!(run.ending, Ending::Configuration, "{}", run.err);
+        assert_eq!(run.key_question, None);
+        assert!(!keys::file(&run.directory).exists());
+    }
+
+    /// CLI-18: a key already stored for Google Vertex AI is replaced only on a yes. Answering no, or
+    /// then typing nothing, keeps it and still records the block the project and location typed
+    /// state, and a yes with a key typed replaces it.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_key_stored_for_google_vertex_is_replaced_only_on_a_yes_and_its_block_is_recorded() {
+        let stored = r#"{"gateways": {"google-vertex": "sk-test-old-placeholder-not-a-key"}}"#;
+        let express = serde_json::json!({"provider": {"google-vertex": {}}});
+        let project = serde_json::json!({"provider": {"google-vertex": {
+            "options": {"project": "example-project-1", "location": "us-central1"}
+        }}});
+        for (how, answers, typed, kept, block) in [
+            ("kept, no project", "\nn\n", None, true, &express),
+            (
+                "kept, a project",
+                "example-project-1\nus-central1\nn\n",
+                None,
+                true,
+                &project,
+            ),
+            (
+                "replaced",
+                "example-project-1\nus-central1\ny\n",
+                Some(A_TYPED_KEY),
+                false,
+                &project,
+            ),
+            (
+                "stopped at the key",
+                "example-project-1\nus-central1\ny\n",
+                None,
+                true,
+                &project,
+            ),
+        ] {
+            let run = sign_in(
+                "cli-auth-vertex-orphan",
+                Given {
+                    keys: Some(stored),
+                    named: Some(GOOGLE_VERTEX_ID),
+                    answers,
+                    typed,
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Done, "{how}: {}", run.err);
+            run.holds_no_key();
+            let expected = if kept { AN_OLD_KEY } else { A_TYPED_KEY };
+            assert_eq!(
+                run.keys().get(GOOGLE_VERTEX_ID).map(Secret::expose),
+                Some(expected),
+                "{how}"
+            );
+            let written = run.settings_text().unwrap_or_default();
+            let value: serde_json::Value = serde_json::from_str(&written).expect("json");
+            assert_eq!(&value, block, "{how}: {written}");
+            assert!(
+                run.asked.contains(t!(auth_gateway_replace)),
+                "{how}: {}",
+                run.asked
+            );
+        }
+    }
 
     /// CLI-18: a block with the id picked is the gateway, whatever the table says of the id: its key
     /// is stored, the settings file is left byte for byte as it was, and nothing is said of a block.

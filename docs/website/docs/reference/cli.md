@@ -1082,19 +1082,22 @@ which to run. It needs a terminal for that. A script names the way instead:
 | `brave` | asks for a premium key with nothing shown as it is typed, and keeps it in `~/.bravebot/brave-key.json`, asking first before it replaces one already stored ([Brave's premium service](../customize/premium.md)) |
 | `bedrock` | the AWS sign-in a session would make on its first turn, for every account the configuration names, then sets `BRAVEBOT_USE_BEDROCK` to `1` in `~/.bravebot/settings.json` once the `AWS_PROFILE` account signs in, unless that file names it, something turns Bedrock off, or the session is incognito |
 | `import` | what `import-providers` runs |
-| `gateway [id]` | asks for a key for `openrouter`, `openai`, `anthropic` or a gateway a provider block names, with nothing shown as it is typed, and keeps it in `~/.bravebot/gateway-keys.json`. For one of the three that no block names it then adds `"provider": {"<id>": {}}` to `~/.bravebot/settings.json` |
+| `gateway [id]` | asks for a key for `openrouter`, `openai`, `anthropic`, `google-vertex` (Gemini on Google Vertex AI) or a gateway a provider block names, with nothing shown as it is typed, and keeps it in `~/.bravebot/gateway-keys.json`. For one of those that no block names it then adds `"provider": {"<id>": {}}` to `~/.bravebot/settings.json`. `google-vertex` first asks for a Google Cloud project and, with one, a location; no project is express mode and the entry then states `options.project` and `options.location` (`global` where none was typed) ([Signing in](../customize/signing-in.md#gemini-on-google-vertex-ai)) |
 | `chatgpt` | prints an address on `auth.openai.com` and opens it in a browser, waits five minutes for the browser to return to a port on `127.0.0.1`, and keeps the sign-in in `chatgpt-account.json` ([ChatGPT](../customize/providers/chatgpt.md)) |
 | `xai` | asks `auth.x.ai` for a code, prints an address and the code on standard error, waits for them to be used on any device, and keeps the sign-in in `xai-account.json` ([Signing in](../customize/signing-in.md#xai)) |
 
 `brave` needs a terminal, and is refused with status 2 where standard input or standard error is not one.
 `gateway` needs a terminal even with the id named, since the key is typed rather than given as an
-argument. A word after the id is refused with status 2 by `auth login`, `auth status` and `auth logout`
+argument, and `google-vertex` asks for its project and location first. A project or location Google cannot
+build a Vertex AI host from is refused with status 2 before the key is asked for, and nothing is stored.
+A word after the id is refused with status 2 by `auth login`, `auth status` and `auth logout`
 alike, and is not repeated, since it may be a key. With one service offered it asks for no id. Where the machine-level file names the
 gateways, only those are offered, and the list and the refusal of any other id name that file.
 
 `auth logout brave` removes the stored premium key and ends nothing at Brave, where the key still works
 until it is revoked. `auth logout gateway [id]` forgets a stored key, and the id can be left off when only one is stored. It names the host the key still works at, and
-leaves the settings as they are. `auth logout chatgpt` forgets the stored ChatGPT
+leaves the settings as they are. For `google-vertex` it names the host of the entry in settings, or
+`aiplatform.googleapis.com` where none names it. `auth logout chatgpt` forgets the stored ChatGPT
 sign-in and ends nothing at OpenAI, and `auth logout xai` forgets the stored xAI sign-in and ends nothing at
 xAI. In an incognito session the `brave`, `import`, `gateway`, `chatgpt` and `xai` ways are refused, and
 `bedrock`, `auth status` and every form of `auth logout` are allowed. See
@@ -1128,7 +1131,11 @@ be read. `auth status import` is refused, since an import keeps no sign-in. `aut
 asks about each gateway a provider block names and about a service whose key is stored with no block
 naming it, and `auth status gateway openai` asks about that id whether or not a block names it. A
 key stored for `openai`, `openrouter` or `anthropic` with no block naming it is reported as not
-signed in, since no session sends it, and `auth login gateway <id>` records the block. A block that
+signed in, since no session sends it, and `auth login gateway <id>` records the block. `google-vertex`
+is asked about the same way, and an express entry of it with no key stored is reported as not signed in,
+since Vertex AI refuses a request with no key. A project the environment names alone, or a block whose
+`env` names an unset `GOOGLE_API_KEY`, is reported as not signed in although `gcloud` would sign the
+request, since the listing does not ask `gcloud`. A block that
 names an `options.keyFile` that gives no key is reported as not signed in, with the file named only
 as the setting, and storing a key with `auth login gateway <id>` makes the stored key win over the
 file. The desktop accounts list says the same.

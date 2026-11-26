@@ -1113,8 +1113,8 @@ each by a number and by the word that names it:
   ([PREM-16](premium-credentials.md#PREM-16)).
 - `bedrock` signs in to every AWS account the configuration names for Amazon Bedrock.
 - `import` reads model services out of other tools, as `import-providers` does.
-- `gateway` stores a key for a service this program knows an endpoint for, or for a gateway a
-  provider block names.
+- `gateway` stores a key for a service this program knows an endpoint for, for Gemini on Google
+  Vertex AI, or for a gateway a provider block names.
 - `chatgpt` signs in to a ChatGPT Plus or Pro account in a browser ([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)).
 - `xai` signs in to an xAI SuperGrok subscription with a code entered on any device ([XAI-7](xai-sign-in.md#XAI-7)).
 
@@ -1157,11 +1157,14 @@ the tier variables. Where the name is set to something other than 1, it says tha
 instead, and names the machine-level file where that file is what sets it.
 
 `bravebot auth login gateway [id]` stores a key for a service this program knows an endpoint for,
-which are `openrouter`, `openai` and `anthropic`, or for the gateway whose provider block has that
-id, so a person holding a key for a known service writes no block first. Bedrock blocks are not
-gateways here. What is offered is the gateways the configuration names, then each known service no
-block names, each with the host its key is sent to: the one its block states, and for a known
-service no block names the one compiled in. A block with the id of a known service is listed once,
+which are `openrouter`, `openai` and `anthropic`, for Google Vertex AI under the id `google-vertex`,
+or for the gateway whose provider block has that id, so a person holding a key for one of those
+writes no block first. Bedrock blocks are not gateways here. What is offered is the gateways the
+configuration names, then each known service no block names, then `google-vertex` where no block or
+variable names it, each with the host its key is sent to: the one its block states, and for a service
+no block names the one compiled in, which for `google-vertex` is the host of express mode. The list of
+ways and the list of services name `google-vertex` as Gemini on Google Vertex AI, so a person looking
+for Gemini finds it. A block with the id of a known service is listed once,
 with its own host. Where the machine-level layer names the gateways only those are offered, since it
 replaces the blocks a person wrote and an entry recorded in the person's file would not be read. The
 heading of the list and the refusal of an id not offered then say that the machine-level file names
@@ -1180,8 +1183,8 @@ nothing:
 - an id not offered, naming the ids that are and not the word given, with the argument status;
 - no terminal on stdin and on stderr, with the argument status;
 - a file of keys that cannot be read, which is left as it is, with the failure status;
-- for a known service no block names, a settings file the entry below cannot be added to, with the
-  failure status: the file does not hold a settings document, it would be past the size bravebot
+- for a known service or Vertex AI that no block names, a settings file the entry below cannot be
+  added to, with the failure status: the file does not hold a settings document, it would be past the size bravebot
   reads with the entry in it, or it has a `provider` that is not a block of entries or an entry for
   the id that configures no service. This is checked once the id is known, before the question about
   replacing a key.
@@ -1198,9 +1201,30 @@ while this one waited is not written back. It is written to `gateway-keys.json` 
 directory, created 0600 on Unix and granted to this account alone on Windows, beside the file,
 flushed to disk and renamed over it. The command names the host the key is sent to.
 
+**Vertex AI.** Where no block or variable names `google-vertex`, picking it asks for a project and
+nothing typed is express mode, which needs the key alone. A location is asked for only where a project
+was typed, and nothing typed is `global`. Both are asked after the checks above, so an unwritable
+entry is refused before either. A project or location that a Vertex AI host cannot be built from
+([BACKEND-49](backends.md#BACKEND-49) states what each may hold) ends the command with the argument
+status before the key is asked for. The refusal says which answer was wrong, never repeats it, and
+stores and records nothing. The end of the input at either question ends the command successfully
+having run nothing, and is not read as express mode. The question for the key names the host the
+answers build: `aiplatform.googleapis.com` for express mode and for `global`, and
+`<location>-aiplatform.googleapis.com` for another location. Where a block names `google-vertex` and
+configures a service, neither question is asked and no entry is recorded, since the block is the
+person's. Where `GOOGLE_API_KEY` or `GOOGLE_CLOUD_PROJECT` configures the service and no block names
+it ([BACKEND-50](backends.md#BACKEND-50)), it is offered as a configured gateway: neither question
+is asked, the key is stored, no entry is recorded because an entry would replace what the
+environment configures, and the command says so and names the variable and the host. A settings
+entry for the id that configures no service is refused before either question, as for a known
+service. Where the machine-level layer names the gateways it is not offered.
+
 **The entry.** A key stored for an id no block names configures nothing, so once the key for a known
 service no block names is stored the command adds `"provider": {"<id>": {}}` to the person's own
-`settings.json`, rewriting the file as Known costs says, and says it did. The entry holds no field:
+`settings.json`, rewriting the file as Known costs says, and says it did. For Vertex AI the entry is
+`{}` for express mode and `{"options": {"project": "<project>", "location": "<location>"}}` with a
+project, where the location is `global` if none was typed, so the file states where requests go. An
+entry for a known service holds no field:
 the service is reached at the host compiled in, and the entry names no variable, so the variable the
 service's own tools read, such as `OPENAI_API_KEY`, is not read for it. Nothing is written where a
 block names the id or the file does. The entry is recorded once the key typed is stored, and for a
@@ -1221,7 +1245,11 @@ The main process asks the bridge, before anything is typed, whether a key can be
 refusals are this command's in the same order, with sentences of the window's own that name no
 file: an incognito session, a configuration that cannot be read, an id not offered, nowhere to keep
 a key, a file of keys that cannot be read, which is left as it is, and for a known service no block
-names, a settings file the entry cannot be added to. The key window names the host the key is sent
+names, a settings file the entry cannot be added to. Google Vertex AI where no block names it is
+refused with a sentence that says its entry states a project and a location, which the window does not
+ask for, and names `bravebot auth login gateway google-vertex` to run in a terminal, so no key is
+asked for and nothing is written. A block that names it and configures a service is stored for like any
+gateway's, and records nothing. The key window names the host the key is sent
 to, a variable in the block's `env` that is set and is sent instead, that a known service gets the
 entry, and, where a key is stored, that saving replaces it and the one replaced still works at its
 host until it is revoked there. A stored key is replaced only where the key window said so before it
@@ -1245,7 +1273,7 @@ With several stored and none named, or an id with none stored, it is refused wit
 status and names the ids that hold one. A word after the id is refused with the argument status and
 is not repeated, as `login` does not repeat it ([CRED-24](credential-protection.md#CRED-24)). The
 file is removed with its last key. It says the key still works at the host its block names, or for a
-known service no block names the host compiled in for it, until it is revoked there. The entry the
+known service no block names the host compiled in for it, or for `google-vertex` with no block the host of express mode, until it is revoked there. The entry the
 sign-in recorded stays in settings, since forgetting a key changes no setting. `auth logout bedrock`
 and
 `auth logout import` are refused and say what to run instead, since neither way keeps a credential
@@ -1281,6 +1309,21 @@ typed rather than passed as an argument because an argument is readable by other
 machine and kept in the shell's history. The file holds an id and a key and no host, so the block
 decides where the key goes, and a file of keys that will not parse is refused rather than read as
 empty, because the next write would make it empty.
+
+Vertex AI is an entry of the gateway list and not a way of its own, because it takes a key typed at
+the terminal, stored under an id and recorded in a block, as a known service does, so the replace
+question, the held column, `auth status`, `auth logout` and the window's refusals are the ones every
+gateway has. It is not a known service, because its endpoint is built from a project and a location
+the person chooses, and a known service is reached at one compiled-in host. The project is asked for
+before the key because the host the key is sent to depends on it, and the answers are checked before
+the key for the reason a service's entry is: a project or location holding `/`, `@`, `?` or `#` would
+send the key to another host. The location is written as `global` where none was typed so the file
+says where requests go, and reads the same as no location. The environment's route and a block that
+names the service are left as they are, because an entry the sign-in wrote would replace what they
+configure ([BACKEND-50](backends.md#BACKEND-50)). The window refuses the service where no entry
+names it because it has no questions for a project, and recording the express entry there would
+replace the choice the person would have made. Signing in to Google Cloud without a key is
+[BACKEND-65](backends.md#BACKEND-65) at request time, and this command does not start it.
 
 The Brave key, the import and the gateway key are refused in an incognito session for the reason in
 [INCOG-7](incognito.md#INCOG-7): each writes to the directory this program owns. The AWS session is
@@ -1406,6 +1449,24 @@ and was told of none.
 `verified-by: bravebot_ui_bridge::key_entry_tests::a_configured_gateway_says_its_host_and_the_variable_that_wins`
 `verified-by: bravebot_ui_bridge::key_entry_tests::a_request_names_brave_or_a_gateway_with_its_id`
 `verified-by: bravebot_ui_bridge::accounts::the_window_stores_a_typed_key_and_says_nothing_of_it`
+`verified-by: bravebot_cli::auth::the_gateway_line_names_gemini_on_google_vertex_ai`
+`verified-by: bravebot_cli::auth::google_vertex_with_no_project_is_stored_with_the_express_block`
+`verified-by: bravebot_cli::auth::google_vertex_with_a_project_is_recorded_with_its_project_and_location`
+`verified-by: bravebot_cli::auth::no_project_is_asked_for_beside_another_service_or_a_block_naming_vertex_ai`
+`verified-by: bravebot_cli::auth::a_project_or_location_vertex_ai_cannot_be_reached_with_is_refused_before_the_key`
+`verified-by: bravebot_cli::auth::the_input_ending_at_the_project_question_stores_and_records_nothing`
+`verified-by: bravebot_cli::auth::google_vertex_the_environment_configures_is_stored_a_key_and_given_no_block`
+`verified-by: bravebot_cli::auth::an_entry_that_configures_no_vertex_service_is_refused_before_a_project_is_asked_for`
+`verified-by: bravebot_cli::auth::an_unreadable_file_of_keys_is_refused_before_a_vertex_project_is_asked_for`
+`verified-by: bravebot_cli::auth::google_vertex_is_not_offered_where_the_machine_level_layer_names_the_gateways`
+`verified-by: bravebot_cli::auth::a_key_stored_for_google_vertex_is_replaced_only_on_a_yes_and_its_block_is_recorded`
+`verified-by: bravebot_cli::running::auth_logout_gateway_forgets_a_key_stored_for_google_vertex_naming_its_host`
+`verified-by: bravebot_agent::accounts::google_vertex_is_offered_once_in_express_mode_and_not_under_a_machine_level_list`
+`verified-by: bravebot_agent::accounts::a_key_stored_for_google_vertex_is_said_to_work_at_the_host_its_block_or_express_mode_names`
+`verified-by: bravebot_agent::key_entry::a_service_whose_block_states_a_project_is_not_ready_for_a_caller_that_asks_for_none`
+`verified-by: bravebot_ui_bridge::key_entry_tests::vertex_ai_no_entry_names_is_refused_before_the_key_and_one_an_entry_names_is_stored`
+`verified-by: bravebot_config::provider::the_entry_a_sign_in_records_reaches_the_host_it_names`
+`verified-by: bravebot_config::lib::the_settings_and_key_a_vertex_sign_in_writes_resolve_the_model_with_no_configuration`
 `verified-by: by-construction (the main process is not a crate this workspace compiles, so ui/scripts/key-entry.test.mjs drives its own key gate with a stand-in bridge and key window: an ask is dropped for a way that takes no key, a foreign sender, an unfocused window, a row the bridge does not mark as taking a key, a second ask while a key window is open and in the seconds after a cancel; the bridge is asked before anything is typed; whether to replace comes from the bridge and not the page; the key goes to the bridge alone and the page is told only how the key window ended; a refusal keeps the key window open; and closing it, the main window closing or quitting stores nothing; make check-ui runs the test)`
 
 <a id="CLI-19"></a>
@@ -1580,7 +1641,13 @@ no block names is asked about where it is named, and where no id is named, where
 it. It is not signed in, since a session sends it nothing: the line says that no key is stored for
 it, or that a key is stored and no block names it, and names the command that signs in, which
 records the block ([CLI-18](#CLI-18)). With no id and nothing to ask about, the one line says that
-no gateway key is stored. A gateway whose block names an `options.keyFile` that gives no key, where
+no gateway key is stored. Google Vertex AI is asked about the same way where no block names it. An express
+block of it names no credential and is not signed in while no key is stored, since the service refuses a
+request with none, where a block of another gateway naming no credential is signed in. A block that
+states a project and names no credential is signed in, since a request to it is signed by the Google
+Cloud CLI when no key is found ([BACKEND-65](backends.md#BACKEND-65)). A project the environment names
+alone, or a block whose `env` names `GOOGLE_API_KEY` while it is unset, is not signed in although the CLI
+would sign a request, because the listing does not ask the CLI. A gateway whose block names an `options.keyFile` that gives no key, where
 no variable and no stored key gives one, is not signed in, since a session refuses the request: the
 line says that the file the setting names gives no key and that storing a key with
 `bravebot auth login gateway <id>` makes the stored key win over the file, and it names no path and
@@ -1621,6 +1688,8 @@ particular sign-in worked.
 `verified-by: bravebot_cli::running::auth_status_gateway_with_an_unreadable_file_of_keys_is_unusable`
 `verified-by: bravebot_cli::running::auth_status_gateway_naming_no_credential_is_signed_in`
 `verified-by: bravebot_cli::running::auth_status_gateway_asks_about_a_known_service_no_block_names`
+`verified-by: bravebot_cli::running::auth_status_gateway_asks_about_google_vertex_where_no_block_names_it`
+`verified-by: bravebot_agent::accounts::google_vertex_stands_as_its_key_is_found`
 `verified-by: bravebot_cli::auth::a_known_service_no_block_names_is_not_signed_in_whether_or_not_a_key_is_stored`
 `verified-by: bravebot_cli::auth::without_a_name_a_known_service_is_asked_about_only_where_a_key_is_stored_for_it`
 `verified-by: bravebot_cli::auth::status_refuses_an_id_the_sign_in_does_not_offer_and_names_the_ids_it_does`

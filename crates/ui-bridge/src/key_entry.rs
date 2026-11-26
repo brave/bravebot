@@ -98,6 +98,7 @@ pub(crate) fn ready<'b>(target: &Target, before: &'b Before) -> Result<Ready<'b>
         Refusal::NoneOffered | Refusal::NotOffered(_) => t!(desktop_accounts_key_not_offered),
         Refusal::KeysUnreadable => t!(desktop_accounts_keys_unreadable),
         Refusal::CannotRecord(_) => t!(desktop_accounts_key_cannot_record),
+        Refusal::NeedsProject => t!(desktop_accounts_key_needs_project),
     })
 }
 

@@ -854,7 +854,12 @@ those variables name models by their bare id.
 `bravebot auth login gateway` offers a key for exactly these names where no block names them, and
 for none of them where the machine-level layer names the gateways. It shows each with the endpoint
 its entry would reach: a known name asked for alone is read as an entry that holds no field is, so
-the host it shows is the one a session sends the key to.
+the host it shows is the one a session sends the key to. It offers `google-vertex` as well, which is
+not a known name because its endpoint is built from a project and a location and not compiled in.
+Where no block or variable names it, it is offered as the entry that states no field, which is express
+mode ([BACKEND-58](#BACKEND-58)), and a project and location the person types replace that entry
+before anything is stored ([BACKEND-49](#BACKEND-49), [cli.md](cli.md)). It is offered under no managed
+list, as the known names are not.
 
 A known name supplies an endpoint and no credential. An `openai` entry is reached as any other
 gateway is, with its key as a bearer token in `authorization`, and names where that key lives as
@@ -969,6 +974,7 @@ qualified name at all, which is what keeps the other rosters' spellings out of t
 `verified-by: bravebot_config::lib::a_provider_entry_named_xai_keeps_the_name_and_no_model_is_the_accounts`
 `verified-by: bravebot_config::lib::an_entry_named_xai_that_states_no_endpoint_holds_nothing_and_its_models_are_not_read`
 `verified-by: bravebot_config::lib::a_gateway_listing_a_name_that_begins_with_xai_is_reached_by_its_qualified_name_alone`
+`verified-by: bravebot_config::lib::the_settings_and_key_a_vertex_sign_in_writes_resolve_the_model_with_no_configuration`
 
 <a id="BACKEND-19"></a>
 ### BACKEND-19: a gateway that was told no models is asked what it serves
@@ -3885,6 +3891,9 @@ for any other. An `options.baseURL` the entry states is where its requests go re
 An entry whose project or location holds a character outside the ones Google allows in it
 configures no service, and is not read as express mode for having a project: a project is letters, digits, `_`, `.`, `:` and `-`
 and starts with a letter or a digit, and a location is lowercase letters, digits and `-`.
+`bravebot auth login gateway google-vertex` holds the project and location it is given to the same
+rules before it stores a key, and records an entry that states both, with `global` for a location
+none was given ([CLI-18](cli.md#CLI-18)).
 
 The entry is not asked for a roster, since the endpoint has no model listing a key can call. In
 place of [BACKEND-19](#BACKEND-19)'s request, an entry that lists no models is offered a list
@@ -3925,6 +3934,10 @@ exactly what is offered, as for any other gateway.
 `verified-by: bravebot_config::provider::the_compiled_vertex_list_is_the_four_answered_ids_and_no_preview`
 `verified-by: bravebot_config::provider::a_project_and_location_holding_only_allowed_characters_are_accepted`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_google_vertex_host`
+`verified-by: bravebot_config::provider::a_project_or_location_the_endpoint_refuses_names_no_service_and_no_entry`
+`verified-by: bravebot_config::provider::the_entry_a_sign_in_records_reaches_the_host_it_names`
+`verified-by: bravebot_cli::auth::google_vertex_with_a_project_is_recorded_with_its_project_and_location`
+`verified-by: bravebot_cli::auth::a_project_or_location_vertex_ai_cannot_be_reached_with_is_refused_before_the_key`
 `verified-by: bravebot_aichat::client::a_google_vertex_entry_offers_the_compiled_models_without_asking`
 `verified-by: bravebot_tui::app::tests::backends_models::the_picker_offers_the_compiled_models_for_a_google_vertex_service_naming_none`
 `verified-by: bravebot_tui::app::tests::backends_models::a_google_vertex_block_naming_models_is_offered_those_alone`
@@ -3932,6 +3945,7 @@ exactly what is offered, as for any other gateway.
 `verified-by: bravebot_ui_bridge::models::the_window_offers_a_google_vertex_block_its_own_models_alone`
 `verified-by: bravebot_cli::doctor::doctor_names_the_compiled_models_a_google_vertex_service_is_offered`
 `verified-by: bravebot_config::lib::a_name_qualified_by_the_google_vertex_id_names_that_service_and_the_rest_is_sent`
+`verified-by: bravebot_config::lib::the_settings_and_key_a_vertex_sign_in_writes_resolve_the_model_with_no_configuration`
 
 <a id="BACKEND-50"></a>
 ### BACKEND-50: the environment names a Google Vertex service when no block does
@@ -3956,6 +3970,13 @@ A `provider.google-vertex` entry that configures a service replaces this route, 
 gateways is not given another by a variable. The block names its own project and location and reads
 neither variable for them. Configuring the service changes no model that is in force: nothing is
 sent to Google until a model named `google-vertex/...` is selected ([BACKEND-13](#BACKEND-13)).
+
+A key stored with `bravebot auth login gateway google-vertex` while the environment names the service
+and no block does is read after an exported `GOOGLE_API_KEY` and before one set in the `env` block of the
+settings, so it is sent only while `GOOGLE_API_KEY` is not exported. Where an exported `GOOGLE_API_KEY`
+is the only thing that names the service, the service ends with the export and the stored key is never
+sent. The sign-in records no block, since a block replaces this route. The sign-in says so and names
+both variables ([CLI-18](cli.md#CLI-18)).
 
 **Why.** `GOOGLE_API_KEY` is a name other Google clients read, and a key exported for one of them
 may be scoped to a service other than this one. What limits that is where the key goes and when: only
@@ -3982,6 +4003,7 @@ project, is dropped as any such entry is, and leaves the route open. A managed l
 `verified-by: bravebot_config::lib::a_google_vertex_block_replaces_the_environment_route`
 `verified-by: bravebot_config::lib::a_managed_gateway_list_takes_no_google_vertex_from_the_environment`
 `verified-by: bravebot_config::lib::a_google_vertex_service_from_the_environment_leaves_the_model_in_force_alone`
+`verified-by: bravebot_cli::auth::google_vertex_the_environment_configures_is_stored_a_key_and_given_no_block`
 `verified-by: bravebot_config::lib::a_google_vertex_service_holds_a_credential_the_record_names_by_host`
 
 <a id="BACKEND-51"></a>
@@ -4484,7 +4506,10 @@ Google's native `generateContent` API at `https://aiplatform.googleapis.com/v1`,
 no project. An entry that states a project is reached through the OpenAI-compatible endpoint
 ([BACKEND-49](#BACKEND-49)), so the project is what picks the route. No region is part of the
 address, and Google chooses where a request is served, so neither `options.location` nor
-`VERTEX_LOCATION` is read here. An entry that states an `options.baseURL` and no project keeps the
+`VERTEX_LOCATION` is read here. `bravebot auth status`, the window and `bravebot doctor` report an entry of this route that holds no key
+as not signed in or as having no key, since the service refuses a request with none, where they report a block of another
+gateway naming no credential as signed in or as needing none ([CLI-23](cli.md#CLI-23)). An entry that carries an
+`authorization` or `x-goog-api-key` header of its own authenticates by that header and is reported as any block naming no credential is. An entry that states an `options.baseURL` and no project keeps the
 OpenAI-compatible route at that endpoint ([BACKEND-17](#BACKEND-17)) unless it names the SDK
 `@ai-sdk/google-vertex`, which says the endpoint takes Vertex's own API: the route below then
 follows the endpoint it states in place of the host and the `/v1` path.
@@ -4560,6 +4585,10 @@ value, while which models read a budget at all is learned from a refusal as BACK
 `verified-by: bravebot_config::provider::a_stated_endpoint_is_where_an_express_entry_is_reached`
 `verified-by: bravebot_config::provider::a_stated_endpoint_with_no_project_keeps_chat_completions_unless_the_sdk_says_otherwise`
 `verified-by: bravebot_config::lib::a_key_alone_names_the_express_service_and_a_blank_project_is_no_project`
+`verified-by: bravebot_cli::auth::google_vertex_with_no_project_is_stored_with_the_express_block`
+`verified-by: bravebot_agent::accounts::google_vertex_stands_as_its_key_is_found`
+`verified-by: bravebot_config::provider::an_express_entry_is_reported_missing_a_key_unless_a_header_of_its_own_authenticates_it`
+`verified-by: bravebot_cli::doctor::doctor_reports_a_bare_express_block_as_missing_a_key_as_status_does`
 `verified-by: bravebot_aichat::client::a_google_express_request_carries_its_key_in_x_goog_api_key_and_nowhere_else`
 `verified-by: bravebot_aichat::client::a_google_express_request_without_a_key_sends_no_credential_header`
 `verified-by: bravebot_aichat::client::a_refused_google_express_request_does_not_repeat_the_key`
@@ -5139,6 +5168,7 @@ check before a turn is one more run of the program.
 `verified-by: bravebot_agent::backend::only_a_vertex_project_at_a_google_host_with_no_other_credential_is_given_the_cli_token`
 `verified-by: bravebot_agent::backend::the_cli_sign_in_is_due_only_for_a_vertex_project_with_no_key`
 `verified-by: bravebot_cli::doctor::a_vertex_project_with_no_key_is_reported_as_signed_in_by_the_google_cloud_cli`
+`verified-by: bravebot_agent::accounts::google_vertex_stands_as_its_key_is_found`
 `verified-by: bravebot_agent::gcloud::the_token_is_asked_for_with_the_application_default_credentials_command`
 `verified-by: bravebot_agent::gcloud::the_program_is_given_the_application_default_credentials_arguments`
 `verified-by: bravebot_agent::gcloud::a_token_the_cli_prints_is_returned_without_its_newline`
@@ -5822,7 +5852,8 @@ cancel kills it rather than asking it to stop.
 - **A Vertex project with no key is listed as not signed in.** `bravebot auth status` and the
   window list a `google-vertex` block whose `env` variable holds nothing, or whose `options.keyFile`
   gives no key, as not signed in, although a request to a Google Vertex host is sent the Google Cloud
-  CLI token ([BACKEND-65](#BACKEND-65)), because the account listing does not ask the CLI.
+  CLI token ([BACKEND-65](#BACKEND-65)), because the account listing does not ask the CLI. A project
+  the environment names alone is listed the same way.
 
 - **A managed block that names only a key file names no credential.** The layer drops
   `options.keyFile` where it drops `options.apiKey`, so a managed block that names only a key file is,

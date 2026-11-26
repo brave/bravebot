@@ -417,10 +417,16 @@ impl Gateway {
     /// All a known id needs to be configured: the endpoint compiled in for it is `endpoint`, and
     /// the entry names no variable and no key.
     pub fn bare(id: &str, endpoint: &str) -> Self {
+        Self::stating(id, endpoint, Map::new())
+    }
+
+    /// An entry that holds `entry`, which names no variable and no key, for an id whose endpoint
+    /// is built from the fields it states, as Vertex AI's is from a project.
+    pub fn stating(id: &str, endpoint: &str, entry: Map<String, Value>) -> Self {
         Self {
             id: id.to_string(),
             endpoint: endpoint.to_string(),
-            entry: Map::new(),
+            entry,
             key: Key::Named,
         }
     }

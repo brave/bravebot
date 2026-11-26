@@ -8,7 +8,7 @@ use crate::backend::{Backend, CredentialError};
 use crate::home;
 use bravebot_config::bedrock::Bedrock;
 use bravebot_config::keys::{self, Keys};
-use bravebot_config::provider::{Credential, Provider, Source, known_ids};
+use bravebot_config::provider::{Credential, GOOGLE_VERTEX_ID, Provider, Source, known_ids};
 use bravebot_config::{Config, ConfigError, Managed, Settings, brave_key, env_var};
 use bravebot_skus::chatgpt::AccountError;
 use std::borrow::Cow;
@@ -97,7 +97,8 @@ pub enum Why {
     NoAwsAccount,
     /// The machine-level layer names the gateways and names none.
     GatewayNoneConfigured,
-    /// A known service no block names, with no key stored for it.
+    /// A known service no block names, with no key stored for it, or a Vertex AI express block with
+    /// no key stored for it.
     GatewayNoneStored,
     /// A known service no block names, with a key stored that no session sends.
     GatewayUnrecorded,
@@ -635,24 +636,60 @@ pub fn write_settings(
 }
 
 /// A service a gateway key can be stored for.
+#[derive(Clone)]
 pub struct Offer<'c> {
     pub provider: Cow<'c, Provider>,
-    /// Whether no block of the configuration names the id. It is then one of the known names, and a
-    /// session sends a key stored for it only once the person's settings name it.
+    /// Whether no block of the configuration names the id. It is then one of the known names or
+    /// Vertex AI, and a session sends a key stored for it only once the person's settings name it.
     pub unconfigured: bool,
+    /// The fields the block recorded for an unconfigured id states: none for a known name, whose
+    /// endpoint is compiled in, and the project and location for Vertex AI, whose endpoint is built
+    /// from them.
+    pub entry: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Offer<'_> {
     pub fn id(&self) -> &str {
         &self.provider.id
     }
+
+    /// The entry recorded for this id as the JSON object it is written as, which is `{}` for a known
+    /// name.
+    pub fn entry_text(&self) -> String {
+        serde_json::Value::Object(self.entry.clone()).to_string()
+    }
+
+    /// Whether the person is asked for a project and a location before a key: Vertex AI where no
+    /// block names it, since the block recorded states them. A block that names it already does.
+    pub fn takes_a_project(&self) -> bool {
+        self.unconfigured && self.provider.is_google_vertex()
+    }
+}
+
+impl Offer<'static> {
+    /// Vertex AI for `project` and `location`, which are not asked for again once they are here, or
+    /// `None` where either is a value its endpoint cannot be built from
+    /// ([`bravebot_config::provider::vertex_entry`]).
+    pub fn google_vertex(project: Option<&str>, location: Option<&str>) -> Option<Self> {
+        let (provider, entry) = Provider::google_vertex(project, location)?;
+        Some(Offer {
+            provider: Cow::Owned(provider),
+            unconfigured: true,
+            entry,
+        })
+    }
 }
 
 /// What a key can be stored for: the gateways the configuration names, then each known id no block
-/// of it names, each with the host a key for it is sent to.
+/// of it names and Vertex AI where none does, each with the host a key for it is sent to.
 ///
-/// No known id where the machine-level layer names the gateways. That layer replaces the blocks a
-/// person wrote, so a block recorded for a known id in the person's file would not be read.
+/// No id that needs a block recorded where the machine-level layer names the gateways. That layer
+/// replaces the blocks a person wrote, so a block recorded for it in the person's file would not be
+/// read.
+///
+/// Vertex AI is offered in express mode, which is the service an entry that states no field reaches
+/// ([BACKEND-58](../../../docs/specs/backends.md#BACKEND-58)). A caller that asks for a project
+/// replaces the offer with [`Offer::google_vertex`].
 pub fn offered<'c>(providers: &'c [Provider], managed: &Managed) -> Vec<Offer<'c>> {
     let mut offers: Vec<Offer<'c>> = providers
         .iter()
@@ -660,6 +697,7 @@ pub fn offered<'c>(providers: &'c [Provider], managed: &Managed) -> Vec<Offer<'c
         .map(|provider| Offer {
             provider: Cow::Borrowed(provider),
             unconfigured: false,
+            entry: serde_json::Map::new(),
         })
         .collect();
     if managed.gateways().is_none() {
@@ -670,8 +708,12 @@ pub fn offered<'c>(providers: &'c [Provider], managed: &Managed) -> Vec<Offer<'c
                 .map(|provider| Offer {
                     provider: Cow::Owned(provider),
                     unconfigured: true,
+                    entry: serde_json::Map::new(),
                 }),
         );
+        if !providers.iter().any(|provider| provider.is_google_vertex()) {
+            offers.extend(Offer::google_vertex(None, None));
+        }
     }
     offers
 }
@@ -755,6 +797,10 @@ pub fn gateways(
 }
 
 /// How a gateway a provider block names stands: whether a turn would find a key for it, and where.
+///
+/// Express mode names no credential in its block and reaches a service that refuses a request with
+/// no key, so a block of it holding no key is not signed in, as a known service's is, although the
+/// block names no variable ([BACKEND-58](../../../docs/specs/backends.md#BACKEND-58)).
 fn configured(
     provider: &Provider,
     keys_unreadable: bool,
@@ -764,6 +810,9 @@ fn configured(
         (Credential::Token(_), Some(Source::Stored)) => Standing::SignedIn(Held::KeyStored),
         (Credential::Token(_), Some(Source::KeyFile)) => Standing::SignedIn(Held::KeyFromFile),
         (Credential::Token(_), _) => Standing::SignedIn(Held::KeyFromEnvironment),
+        (Credential::NotNeeded, _) if provider.is_vertex_express() => {
+            Standing::NotSignedIn(Why::GatewayNoneStored)
+        }
         (Credential::NotNeeded, _) => Standing::SignedIn(Held::KeyNotNeeded),
         (Credential::Absent | Credential::KeyFileUnusable(_), _) if keys_unreadable => {
             Standing::Unusable(Why::KeysUnreadable)
@@ -851,9 +900,11 @@ pub fn forget(way: &Way, directory: Option<&Path>) -> Result<Forgot, ForgetError
 }
 
 /// The host a key stored for `id` is good at until whoever issued it revokes it: the host the block
-/// that names the id states, or for a known service no block names the host compiled in for it.
+/// that names the id states, for a known service no block names the host compiled in for it, and
+/// for Vertex AI with no block the host of express mode, which is the host of the global location
+/// as well.
 ///
-/// Nothing for an id that is neither, such as a gateway whose block has since been taken out.
+/// Nothing for an id that is none of these, such as a gateway whose block has since been taken out.
 pub fn host_a_key_works_at(config: &Result<Config, ConfigError>, id: &str) -> Option<String> {
     let block = config.as_ref().ok().and_then(|config| {
         config
@@ -863,7 +914,14 @@ pub fn host_a_key_works_at(config: &Result<Config, ConfigError>, id: &str) -> Op
     });
     match block {
         Some(provider) => Some(provider.host().to_string()),
-        None => Provider::known(id).map(|provider| provider.host().to_string()),
+        None => Provider::known(id)
+            .or_else(|| {
+                (id == GOOGLE_VERTEX_ID)
+                    .then(|| Provider::google_vertex(None, None))
+                    .flatten()
+                    .map(|(provider, _)| provider)
+            })
+            .map(|provider| provider.host().to_string()),
     }
 }
 
@@ -1503,6 +1561,213 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(keys::file(&directory)).expect("left"),
             "not keys"
+        );
+    }
+
+    const VERTEX_PROJECT: &str = r#"{"provider": {"google-vertex": {"options":
+        {"project": "example-project-1", "location": "us-east5"}}}}"#;
+
+    /// A Vertex AI offer as `(not named by a block, host, states no field)`.
+    fn vertex_offers(offers: &[Offer<'_>]) -> Vec<(bool, String, bool)> {
+        offers
+            .iter()
+            .filter(|offer| offer.id() == "google-vertex")
+            .map(|offer| {
+                (
+                    offer.unconfigured,
+                    offer.provider.host().to_string(),
+                    offer.entry.is_empty(),
+                )
+            })
+            .collect()
+    }
+
+    /// CLI-18 and BACKEND-17: Vertex AI is offered once, in express mode, where nothing names it, as
+    /// the configured gateway where a block or the environment does, again where an entry names it and
+    /// configures nothing, and never where the machine-level layer names the gateways, since a block
+    /// recorded in the person's file would not be read there. The regressions it rejects are offering
+    /// it beside a managed list, and offering it twice beside the service the environment names, which
+    /// would record a block that replaces that route.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn google_vertex_is_offered_once_in_express_mode_and_not_under_a_machine_level_list() {
+        let express = (true, "aiplatform.googleapis.com".to_string(), true);
+        assert_eq!(
+            vertex_offers(&offered(&[], &Managed::default())),
+            std::slice::from_ref(&express)
+        );
+
+        let block = Settings::parse(VERTEX_PROJECT);
+        assert_eq!(
+            vertex_offers(&offered(block.providers(), &Managed::default())),
+            [(
+                false,
+                "us-east5-aiplatform.googleapis.com".to_string(),
+                true
+            )]
+        );
+
+        let nothing = Settings::parse("");
+        let key = |name: &str| (name == "GOOGLE_API_KEY").then(|| "placeholder-key".to_string());
+        let from_environment = bravebot_config::gateways(&nothing, &Managed::default(), &key);
+        assert_eq!(
+            vertex_offers(&offered(&from_environment, &Managed::default())),
+            [(false, "aiplatform.googleapis.com".to_string(), true)]
+        );
+
+        let configures_nothing =
+            Settings::parse(r#"{"provider": {"google-vertex": {"options": {"project": "a/b"}}}}"#);
+        assert_eq!(
+            vertex_offers(&offered(
+                configures_nothing.providers(),
+                &Managed::default()
+            )),
+            [express]
+        );
+
+        let directory = scratch("vertex-managed");
+        let file = directory.join("managed.json");
+        std::fs::write(
+            &file,
+            r#"{"provider": {"corp": {"options": {"baseURL": "https://corp.example/v1"}}}}"#,
+        )
+        .expect("a machine-level file");
+        let managed = Managed::at(&file);
+        for lookup in [
+            Box::new(|_: &str| None) as Box<dyn Fn(&str) -> Option<String>>,
+            Box::new(key),
+        ] {
+            let pinned = bravebot_config::gateways(&nothing, &managed, &lookup);
+            let ids: Vec<String> = offered(&pinned, &managed)
+                .iter()
+                .map(|offer| offer.id().to_string())
+                .collect();
+            assert_eq!(ids, ["corp"]);
+        }
+        std::fs::remove_dir_all(&directory).expect("the scratch directory removed");
+    }
+
+    /// CLI-23, BACKEND-58, BACKEND-65 and BACKEND-50: how `auth status` stands for Vertex AI. An
+    /// express block holding no key is not signed in, since the service refuses a request with none,
+    /// where a block of a gateway that names no credential needs none. A key stored for it is found,
+    /// a variable the environment names is read before a stored key, and a project with no key is not
+    /// signed in where its block or the environment names `GOOGLE_API_KEY` and it is unset, although
+    /// the Google Cloud CLI would sign the request. The regression it rejects is reporting the
+    /// express block as signed in with a key not needed, which stays true after `auth logout`.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn google_vertex_stands_as_its_key_is_found() {
+        const EXPRESS: &str = r#"{"provider": {"google-vertex": {}}}"#;
+        const PROJECT_NAMING_NO_KEY: &str = VERTEX_PROJECT;
+        const PROJECT_NAMING_THE_VARIABLE: &str = r#"{"provider": {"google-vertex": {
+            "env": ["GOOGLE_API_KEY"], "options": {"project": "example-project-1"}}}}"#;
+        let standing = |settings: &str, stored: &[&str], exported: &[(&str, &str)]| {
+            let lookup = |name: &str| {
+                exported
+                    .iter()
+                    .find(|(exported, _)| *exported == name)
+                    .map(|(_, value)| value.to_string())
+            };
+            let keys = keys_for(stored);
+            let mut config = configured("", &Ok(Keys::default()));
+            config.providers =
+                bravebot_config::gateways(&Settings::parse(settings), &Managed::default(), &lookup);
+            for provider in &mut config.providers {
+                provider.stored_key = keys.get(&provider.id).cloned();
+            }
+            let rows = gateways(
+                Ok(config),
+                &Managed::default(),
+                &Ok(keys),
+                Some("google-vertex"),
+                lookup,
+            )
+            .expect("a row");
+            assert_eq!(rows.len(), 1);
+            rows.into_iter().next().expect("a row").standing
+        };
+        let key = [("GOOGLE_API_KEY", "placeholder-exported-key")];
+        let project = [("GOOGLE_CLOUD_PROJECT", "example-project-1")];
+        let nothing: [(&str, &str); 0] = [];
+
+        assert!(matches!(
+            standing(EXPRESS, &[], &nothing),
+            Standing::NotSignedIn(Why::GatewayNoneStored)
+        ));
+        assert!(matches!(
+            standing(EXPRESS, &["google-vertex"], &nothing),
+            Standing::SignedIn(Held::KeyStored)
+        ));
+        // An entry that authenticates by a header of its own is not express mode, so it names no
+        // credential and needs none, as a block of any gateway does.
+        assert!(matches!(
+            standing(
+                r#"{"provider": {"google-vertex": {"options": {"headers": {"x-goog-api-key": "a-value"}}}}}"#,
+                &[],
+                &nothing
+            ),
+            Standing::SignedIn(Held::KeyNotNeeded)
+        ));
+        assert!(matches!(
+            standing("", &[], &key),
+            Standing::SignedIn(Held::KeyFromEnvironment)
+        ));
+        assert!(matches!(
+            standing("", &["google-vertex"], &key),
+            Standing::SignedIn(Held::KeyFromEnvironment)
+        ));
+        assert!(matches!(
+            standing("", &["google-vertex"], &project),
+            Standing::SignedIn(Held::KeyStored)
+        ));
+        assert!(matches!(
+            standing("", &[], &project),
+            Standing::NotSignedIn(Why::GatewayAbsent)
+        ));
+        assert!(matches!(
+            standing(PROJECT_NAMING_THE_VARIABLE, &[], &nothing),
+            Standing::NotSignedIn(Why::GatewayAbsent)
+        ));
+        assert!(matches!(
+            standing(PROJECT_NAMING_NO_KEY, &[], &nothing),
+            Standing::SignedIn(Held::KeyNotNeeded)
+        ));
+        assert!(matches!(
+            standing("", &[], &nothing),
+            Standing::NotSignedIn(Why::GatewayNoneStored)
+        ));
+        assert!(matches!(
+            standing("", &["google-vertex"], &nothing),
+            Standing::NotSignedIn(Why::GatewayUnrecorded)
+        ));
+    }
+
+    /// CLI-18: forgetting a key stored for Vertex AI names the host the key still works at, which is
+    /// the one its block states, and the express host where no block names it, so the sentence names
+    /// a host as it does for every service the program can sign in to. The regression it rejects is
+    /// the sentence for a key whose issuer is unknown, which says nothing about where it works.
+    #[test]
+    fn a_key_stored_for_google_vertex_is_said_to_work_at_the_host_its_block_or_express_mode_names()
+    {
+        let host = |settings: &str| {
+            host_a_key_works_at(
+                &Ok(configured(settings, &Ok(Keys::default()))),
+                "google-vertex",
+            )
+        };
+        assert_eq!(host("").as_deref(), Some("aiplatform.googleapis.com"));
+        assert_eq!(
+            host(VERTEX_PROJECT).as_deref(),
+            Some("us-east5-aiplatform.googleapis.com")
+        );
+        assert_eq!(
+            host_a_key_works_at(&Err(ConfigError::Missing("a variable")), "google-vertex")
+                .as_deref(),
+            Some("aiplatform.googleapis.com")
+        );
+        assert_eq!(
+            host_a_key_works_at(&Ok(configured("", &Ok(Keys::default()))), "nobody"),
+            None
         );
     }
 }
