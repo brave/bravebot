@@ -155,6 +155,11 @@ export interface Live {
    */
   forkedFrom: { directory: string; id: string; title: string; prompt: number } | null
   /**
+   * What a resumed session left open, as the bridge's `openLoops` line says it (OPEN-6). Null for a
+   * fresh chat and for a resume with nothing open.
+   */
+  openLoops: string | null
+  /**
    * A prompt to scroll to and mark, counted over the prompts the transcript drew.
    *
    * An ordinal rather than an entry id, because ids are minted fresh every time a session is
@@ -314,8 +319,9 @@ type Starting = 'turns' | 'quarantine' | 'phase' | 'checking' | 'hook' | 'agents
  * A session as the window first holds it: what the bridge's answer says, and nothing yet said,
  * heard, checked or running.
  */
-export function newLive(fields: Omit<Live, Starting>): Live {
+export function newLive(fields: Omit<Live, Starting | 'openLoops'> & { openLoops?: string | null }): Live {
   return {
+    openLoops: null,
     ...fields,
     turns: {},
     quarantine: [],

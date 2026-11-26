@@ -729,3 +729,23 @@ replace: || !holds_all(&self.undecided, &current.undecided), => ,
 mutation: Scope::covers lets a tool the ceiling still asked about go unasked
 file: crates/core/src/scope.rs
 replace: standing_answers: !holds_all(&self.standing_answers, &current.standing_answers), => standing_answers: !holds_all(&current.standing_answers, &self.standing_answers),
+
+mutation: Grant::allows lets a read grant control
+file: crates/core/src/device.rs
+replace: self == Self::Control => true
+
+mutation: Grant::allows refuses a read grant its own reading
+file: crates/core/src/device.rs
+replace: true => false
+
+mutation: Standing::authorizes allows a revoked device
+file: crates/core/src/device.rs
+replace: Verdict::Revoked => Verdict::Allowed
+
+mutation: Standing::authorizes allows a device nobody paired
+file: crates/core/src/device.rs
+replace: Verdict::NotPaired => Verdict::Allowed
+
+mutation: Standing::authorizes allows a grant that is too narrow
+file: crates/core/src/device.rs
+replace: Verdict::GrantTooNarrow => Verdict::Allowed

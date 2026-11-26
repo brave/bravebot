@@ -27,7 +27,7 @@ growing further. It keeps growing while a turn runs.
 | Escape | discard a half-typed prompt, keeping it for Up, or stop a running turn (with vi editing, from NORMAL mode) |
 | Ctrl-C | stop the nearest thing there is to stop, and leave when there is nothing left |
 | Ctrl-Z | [suspend to the shell](#suspending-to-the-shell), and `fg` brings the session back. Not on Windows |
-| Up / Down | walk back through every prompt you have sent in any session, starting with a line you cleared |
+| Up / Down | walk back through every prompt you have sent in any session, starting with a line you cleared. A [slash command](../reference/commands.md) you carried out is in the history too, and Enter on a recalled one runs it again. Up and Down keep walking the history while a recalled command has the list of commands open under it |
 | Ctrl-N | on a prompt recalled with Up, cycle between every prompt, this project's and this session's. It stays where you put it, and a scope with nothing in it is skipped |
 | Ctrl-R | search every prompt you have sent |
 | Tab | complete a slash command or an `@path` |
@@ -178,6 +178,8 @@ names an event that never arrives. Four chords are refused even carrying Ctrl: C
 which stop and leave, and Ctrl-J and Shift-Enter, which start a line. Ctrl-Alt-C and Ctrl-Alt-D are
 different chords from those two and can be given to an action; pressing them never stops a turn,
 clears the box or leaves.
+
+**A chord on Escape needs a terminal that reports modified keys.** `alt-esc` and `ctrl-esc` can be given to an action, and the action answers them in place of Escape's own behaviour of clearing the box. A terminal that does not report keys that way cannot send either chord (it sends Alt-Escape as a plain Escape). Where that is so, the action stays on its default key, and a note at startup names the setting, the chord and the key the action stayed on, for example `keybindings.stash: "alt-esc" cannot be delivered by this terminal, so stash stays on ctrl-s`. Several such chords are one note with a count. Every other chord is sent by every terminal and is never given up for this reason.
 
 **Every action is left on a key of its own.** A chord that cannot be read, or one the box already
 answers, leaves that action on its default, and so does a chord two actions both ask for: both give it

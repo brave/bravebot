@@ -1051,12 +1051,14 @@ mod tests {
 
     /// Puts `question` from one delegate while a second delegate's `ask_user` is open on the
     /// person, and says whether `question` returned while that was still open, what it returned,
-    /// and how many questions other than `ask_user` reached the person's confirmer. `between` runs
-    /// once the delegate has been started and before the open question is released, as a person
-    /// changing the mode would.
+    /// and how many questions other than `ask_user` reached the person's confirmer. A person
+    /// changing the mode is `before`, which runs after the confirmer was lent and before the
+    /// delegate puts `question`, or `while_waiting`, which runs after the delegate was started and
+    /// before the open question is released.
     fn while_a_question_is_open<R: Send>(
         mode: &crate::permission_mode::LiveMode,
-        between: impl FnOnce(),
+        before: impl FnOnce(),
+        while_waiting: impl FnOnce(),
         question: impl FnOnce(&mut Borrowed<'_, '_, crate::permission_mode::Confining<'_, Slow>>) -> R
         + Send,
     ) -> (bool, R, usize) {
@@ -1071,13 +1073,14 @@ mod tests {
             asked_rx
                 .recv_timeout(std::time::Duration::from_secs(10))
                 .expect("the open question reached the person");
+            before();
             let (done_tx, done_rx) = std::sync::mpsc::channel();
             let asking = scope.spawn(move || {
                 let answer = question(&mut other);
                 let _ = done_tx.send(());
                 answer
             });
-            between();
+            while_waiting();
             let early = done_rx
                 .recv_timeout(std::time::Duration::from_millis(500))
                 .is_ok();
@@ -1102,6 +1105,7 @@ mod tests {
         let mode = crate::permission_mode::LiveMode::new(PermissionMode::Bypass);
         let (early, answer, reached) = while_a_question_is_open(
             &mode,
+            || {},
             || {},
             |delegate| delegate.confirm_exposing_read_noting_the_mode(&an_exposure()),
         );
@@ -1130,6 +1134,7 @@ mod tests {
         let (early, answer, reached) = while_a_question_is_open(
             &bypass,
             || {},
+            || {},
             |delegate| {
                 (
                     delegate.confirm_write(&a_file_write()),
@@ -1155,6 +1160,7 @@ mod tests {
         let (early, answer, reached) = while_a_question_is_open(
             &accepting,
             || {},
+            || {},
             |delegate| delegate.confirm_write(&a_file_write()),
         );
         assert!(
@@ -1167,6 +1173,7 @@ mod tests {
         let planning = crate::permission_mode::LiveMode::new(PermissionMode::Plan);
         let (early, answer, reached) = while_a_question_is_open(
             &planning,
+            || {},
             || {},
             |delegate| delegate.confirm_write(&a_file_write()),
         );
@@ -1183,6 +1190,7 @@ mod tests {
         let mode = crate::permission_mode::LiveMode::new(PermissionMode::Ask);
         let (early, answer, reached) = while_a_question_is_open(
             &mode,
+            || {},
             || {},
             |delegate| {
                 (
@@ -1205,6 +1213,7 @@ mod tests {
         let (early, _, reached) = while_a_question_is_open(
             &accepting,
             || {},
+            || {},
             |delegate| delegate.confirm_run(&a_command()).approved(),
         );
         assert!(!early, "accepting edits answered a command");
@@ -1222,6 +1231,7 @@ mod tests {
         let (early, answer, reached) = while_a_question_is_open(
             &left,
             || left.set(PermissionMode::Ask),
+            || {},
             |delegate| delegate.confirm_exposing_read_noting_the_mode(&an_exposure()),
         );
         assert!(!early, "a question answered under the mode left behind");
@@ -1231,6 +1241,7 @@ mod tests {
         let entered = crate::permission_mode::LiveMode::new(PermissionMode::Ask);
         let (_, answer, reached) = while_a_question_is_open(
             &entered,
+            || {},
             || {
                 // Long enough for the delegate to have found the mode asks and queued.
                 std::thread::sleep(std::time::Duration::from_millis(200));

@@ -114,11 +114,49 @@ Everything a step produces is quarantined, whatever its label. There is no plann
 to. The ways out are a later processor, a write back into the workspace, and a release the plan
 named in advance.
 
+## Making many calls from a list
+
+Some tasks, such as grouping tabs or renaming bookmarks, need a number of calls that is known only
+after reading. A plan can hold an `apply` step for these. The plan fixes the server, the tools and each
+argument's source before anything is read. After a read returns a list, an isolated processor proposes
+the calls as rows, and only rows the plan allows are kept. A row cannot hold an address, alias or path
+of its own: every target is copied from an entry of a list the read returned, or is short new text.
+
+A server's declaration says which arguments a row may fill, since that is your decision about each tool:
+
+```sh
+bravebot mcp add tabs --apply group_tabs:urls=entries -- /path/to/server
+```
+
+`--apply <tool>:<argument>=<kind>` takes the kinds `entry`, `entries`, `new` and `row`, joined with
+commas where an argument may take more than one. Only a local server that does not ask every call can
+declare one, and `mcp get`, `mcp list` and the approval question show it.
+
+The resolved calls are put to you as one list that shows every value and where it came from, and no
+mode, rule or earlier answer answers it, bypassing included. Only the terminal interface puts it. A
+plan whose step would put a list in the desktop app or a one-shot run is refused with the plan, before
+anything is read. Each call you keep is made in order, a call that fails skips the calls that depend on
+it, and what each call returned is shown behind the margin and goes to no model.
+
+`--plan-covers <tool>` marks a tool with such an argument as one your approval of the plan may cover.
+When every tool of an `apply` step is marked and you answered the plan yourself, the step makes its
+calls without putting the list, and its plan line says so and names the server each list was read from.
+The list is still put when permissions were bypassed, in plan mode, where an `ask` or `deny` rule names
+one of the step's tools, or where a literal of the step holds a character the question writes out.
+Mark only tools that act on your own machine, delete nothing and overwrite nothing their reply does not
+record.
+
 ## What comes back
 
 The goal in plain words, the proposed plan verbatim, the frozen steps, and what each one did, on
 success **and on failure**, never behind a flag. A failed plan is printed on stderr even without
 `--trace`, and never shares stdout with the reply.
+
+In the terminal, the answer of a run started with `/manifest` is drawn as the assistant's reply only
+when it is trusted, such as the answer over a file you vouched for. An answer built from a file or page
+nobody vouched for is drawn behind the quarantine bar, under a heading that names it as the run's result
+and gives its label. It is shown as plain text, `/copy` and `/open` do not take it, and an export holds
+the heading's note and none of its words.
 
 ## Starting a plan-then-execute run
 

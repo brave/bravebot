@@ -89,6 +89,8 @@ class Usage:
 class Turn:
     prompt: str
     check: object  # (workdir: Path, reply: str) -> bool
+    # Delegates the turn has to start. Applied only where the tool reports how many it started.
+    min_delegates: int = 0
 
 
 @dataclass
@@ -107,6 +109,8 @@ class TurnResult:
     reply: str = ""
     tool_calls: int = 0
     cost_usd: float = 0.0
+    # Delegates the turn started, or None where the tool does not say.
+    delegates: object = None
 
 
 # ---------------------------------------------------------------------------------------------
@@ -184,6 +188,27 @@ def _asks_value(n):
     )
 
 
+def _part_key(n):
+    return hashlib.md5(f"part-{n}".encode()).hexdigest()[:8]
+
+
+def _setup_parts(workdir):
+    """Four files of filler with one `key:` line each, so a delegate has real text to read."""
+    for n in range(1, 5):
+        lines = [f"part {n} filler line {i}: nothing to report\n" for i in range(150)]
+        lines.insert(75, f"key: {_part_key(n)}\n")
+        (workdir / f"part_{n}.txt").write_text("".join(lines))
+
+
+def _delegate_one(n):
+    return Turn(
+        f"Start one delegate (a separate sub-agent) to read part_{n}.txt and report the value on "
+        f"its line starting with 'key:'. Reply with that value only.",
+        _says(_part_key(n)),
+        min_delegates=1,
+    )
+
+
 def _style_guide(rules):
     return "Follow these house rules in every reply.\n" + "".join(
         f"Rule {n}: when a request touches area {n}, state the area number once and keep the "
@@ -244,6 +269,27 @@ def scenarios():
             ],
         ),
         Scenario(
+            "delegate_fanout", "delegates",
+            "Four delegates started in one turn, each reading one file. Measures what the parent "
+            "and the delegates spend together, and whether the delegates share a cached prefix.",
+            _setup_parts,
+            [Turn(
+                "There are four files, part_1.txt to part_4.txt. Start one delegate (a separate "
+                "sub-agent) per file, all four at the same time. Each reads its file and reports "
+                "the value on its line starting with 'key:'. Reply with the four values in file "
+                "order, joined by dashes, and nothing else.",
+                _says("-".join(_part_key(n) for n in range(1, 5))),
+                min_delegates=4,
+            )],
+        ),
+        Scenario(
+            "delegate_serial", "delegates",
+            "Three turns over one conversation, each starting one delegate. Measures whether a "
+            "later delegate and the parent's next request read the earlier ones from the cache.",
+            _setup_parts,
+            [_delegate_one(1), _delegate_one(2), _delegate_one(3)],
+        ),
+        Scenario(
             "sysprompt_short", "system_prompt",
             "Two turns with a ten-rule addition to the system prompt.",
             lambda workdir: None, two_word_turns, system_extra=_style_guide(10),
@@ -291,7 +337,11 @@ def parse_claude(stdout):
 
 
 def parse_bravebot(stdout):
-    """bravebot `--json`. `total` is prompt plus output, so the prompt is what is left of it."""
+    """bravebot `--json`. `total` is prompt plus output, so the prompt is what is left of it.
+
+    The totals already include what every delegate spent. `delegates` counts the `spawn_agent`
+    calls the turn made that were not refused.
+    """
     result = last_json_line(stdout)
     if not result.get("ok"):
         raise BenchError(f"bravebot failed: {result.get('message')}")
@@ -304,7 +354,10 @@ def parse_bravebot(stdout):
         output=t["output"],
         requests=result.get("steps", 0) + 1,
     )
-    return TurnResult(usage, result.get("reply") or "", len(result.get("calls", []))), result.get("session")
+    calls = result.get("calls", [])
+    delegates = sum(1 for c in calls if c.get("tool") == "spawn_agent" and not c.get("refused"))
+    return (TurnResult(usage, result.get("reply") or "", len(calls), delegates=delegates),
+            result.get("session"))
 
 
 CODEX_COUNTERS = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens")
@@ -659,6 +712,17 @@ def weights_of(contestant):
     return WEIGHT_PROFILES[chosen or default]
 
 
+def turn_ok(turn, result, workdir):
+    """Whether the reply is right and, where the tool reports its delegates, enough were started.
+
+    A turn that asks for delegates and does the work inline spends less, so a correct reply alone
+    would let it win the scenario.
+    """
+    if result.delegates is not None and result.delegates < turn.min_delegates:
+        return False
+    return bool(turn.check(workdir, result.reply))
+
+
 def run_scenario(contestant, scenario, rep, sink):
     # The path is the same on every run: tools put the working directory in the system prompt, and
     # a path that changed would change the cached prefix and hide cross-run cache reuse.
@@ -677,14 +741,16 @@ def run_scenario(contestant, scenario, rep, sink):
             try:
                 result = run_turn(contestant, workdir, turn.prompt, state,
                                   scenario.system_extra, single)
-                ok = bool(turn.check(workdir, result.reply))
+                ok = turn_ok(turn, result, workdir)
                 record.update(ok=ok, reply=result.reply[:200], tool_calls=result.tool_calls,
+                              delegates=result.delegates,
                               fresh=result.usage.fresh, cache_read=result.usage.cache_read,
                               cache_write=result.usage.cache_write, output=result.usage.output,
                               requests=result.usage.requests,
                               cost=result.usage.cost(weights), cost_usd=result.cost_usd)
             except BenchError as error:
-                record.update(ok=False, error=str(error), tool_calls=0, fresh=0, cache_read=0,
+                record.update(ok=False, error=str(error), tool_calls=0, delegates=None, fresh=0,
+                              cache_read=0,
                               cache_write=0, output=0, requests=0, cost=0.0, cost_usd=0.0)
             record["wall_s"] = round(time.monotonic() - started, 2)
             sink(record)
@@ -724,6 +790,7 @@ def per_run(records, expected_turns):
         total = {k: sum(t[k] for t in turns) for k in
                  ("fresh", "cache_read", "cache_write", "output", "requests", "tool_calls",
                   "cost", "cost_usd", "wall_s")}
+        total["delegates"] = sum(t.get("delegates") or 0 for t in turns)
         total["ok"] = len(turns) == expected_turns.get(scenario, len(turns)) and all(
             t["ok"] for t in turns)
         total.update(contestant=contestant, scenario=scenario, rep=rep,
@@ -748,6 +815,7 @@ def summarize(records):
             "cache_read": med("cache_read"), "cache_write": med("cache_write"),
             "output": med("output"), "requests": med("requests"),
             "tool_calls": med("tool_calls"), "wall_s": med("wall_s"),
+            "delegates": med("delegates"),
             "hit": med("cache_read") / prompt if prompt else 0.0,
         }
     # Score each scenario against the cheapest contestant that solved it every time.
@@ -796,7 +864,7 @@ def render_report(table):
         lines.append("  ".join(cells))
     lines.append("")
     lines.append("per scenario (median over repeats): cost units, prompt tokens, cache hit, "
-                 "requests, solved")
+                 "requests, delegates started (0 where the tool does not say), solved")
     for scenario in sorted({s for _, s in table}):
         lines.append(f"  {scenario}")
         here = sorted(((c, v) for (c, s), v in table.items() if s == scenario),
@@ -804,7 +872,8 @@ def render_report(table):
         for name, v in here:
             lines.append(f"    {name:<22} score {v['score']:>5.1f}  cost {v['cost']:>9.0f}  "
                          f"prompt {v['prompt']:>8.0f}  hit {v['hit'] * 100:>3.0f}%  "
-                         f"req {v['requests']:>3.0f}  solved {v['success'] * 100:>3.0f}%")
+                         f"req {v['requests']:>3.0f}  delegates {v['delegates']:>2.0f}  "
+                         f"solved {v['success'] * 100:>3.0f}%")
     return "\n".join(lines)
 
 
@@ -971,6 +1040,16 @@ BRAVEBOT_SAMPLE = json.dumps({
               {"tool": "read_file", "target": "b.txt", "refused": False}]})
 
 
+BRAVEBOT_DELEGATE_SAMPLE = json.dumps({
+    "schema": 1, "ok": True, "status": 0, "reply": "a-b", "session": "b-2", "steps": 2,
+    "tokens": {"total": 90000, "output": 400, "context": 20000,
+               "cache_read": 50000, "cache_written": 30000},
+    "calls": [{"tool": "spawn_agent", "target": "reader", "refused": False},
+              {"tool": "spawn_agent", "target": "reader", "refused": False},
+              {"tool": "spawn_agent", "target": "worker", "refused": True},
+              {"tool": "read_file", "target": "a.txt", "refused": False}]})
+
+
 def codex_events(thread, tool_items, input_tokens, cached, output):
     events = [{"type": "thread.started", "thread_id": thread}, {"type": "turn.started"}]
     events += [{"type": "item.completed", "item": {"id": f"i{n}", "type": "command_execution"}}
@@ -1024,6 +1103,14 @@ def selftest():
     assert (brave.usage.fresh, brave.usage.cache_read, brave.usage.cache_write,
             brave.usage.output) == (6, 34745, 35012, 257), brave
     assert brave.usage.prompt == 69763 and brave.tool_calls == 2 and brave.usage.requests == 2
+
+    # A delegate counts when the call was not refused. The tokens are the run's totals, which
+    # already hold what the delegates spent, so nothing is added for them here.
+    brave, _ = parse_bravebot(BRAVEBOT_DELEGATE_SAMPLE)
+    assert brave.delegates == 2 and brave.tool_calls == 4, brave
+    assert brave.usage.prompt == 90000 - 400 and brave.usage.cache_read == 50000, brave
+    assert parse_bravebot(BRAVEBOT_SAMPLE)[0].delegates == 0
+    assert parse_claude(CLAUDE_SAMPLE)[0].delegates is None
 
     # codex: a resumed turn reports the thread's running total, so the second turn's cost is the
     # difference. Reading it raw would charge the second turn for the first as well.
@@ -1136,6 +1223,28 @@ def selftest():
     # The median over repeats resists one cold run.
     repeats = summarize([rec("a", c, True, rep=r) for r, c in enumerate((900, 100, 100))])
     assert repeats[("a", "hello")]["cost"] == 100
+
+    # A turn that asks for delegates fails when the tool reports fewer, however right the reply is.
+    # A tool that does not report them is judged on the reply alone.
+    fanout = {s.name: s for s in scenarios()}["delegate_fanout"]
+    answer = "-".join(_part_key(n) for n in range(1, 5))
+    fan_turn = fanout.turns[0]
+    assert fan_turn.min_delegates == 4
+    assert turn_ok(fan_turn, TurnResult(Usage(), answer, 0, delegates=4), None)
+    assert not turn_ok(fan_turn, TurnResult(Usage(), answer, 0, delegates=3), None)
+    assert not turn_ok(fan_turn, TurnResult(Usage(), answer, 0, delegates=0), None)
+    assert turn_ok(fan_turn, TurnResult(Usage(), answer, 0, delegates=None), None)
+    assert not turn_ok(fan_turn, TurnResult(Usage(), "wrong", 0, delegates=4), None)
+    assert len({_part_key(n) for n in range(1, 5)}) == 4
+    scratch = pathlib.Path(tempfile.mkdtemp())
+    try:
+        fanout.setup(scratch)
+        for n in range(1, 5):
+            text = (scratch / f"part_{n}.txt").read_text()
+            keys = [line for line in text.splitlines() if line.startswith("key:")]
+            assert keys == [f"key: {_part_key(n)}"], keys
+    finally:
+        shutil.rmtree(scratch)
 
     # Scenario checks accept the right answer and reject a near miss.
     by_name = {s.name: s for s in scenarios()}

@@ -4270,7 +4270,7 @@ where
                 let reads = reads_that_run_together(
                     &completion.calls[index..],
                     &state.repeats,
-                    addressed.as_ref().map(|addressed| addressed.tools()),
+                    task.confined_to(addressed.as_ref()),
                     Some(&state.offered),
                     hooks,
                     plugin_hooks,
@@ -9923,6 +9923,21 @@ mod tests {
             PathBuf,
             Vec<String>,
         ) {
+            traced_with(name, &Task::new("write the game in one file"), replies)
+        }
+
+        /// The same, for `task`.
+        pub(super) fn traced_with(
+            name: &str,
+            task: &Task,
+            replies: Vec<Result<Completion, BackendError>>,
+        ) -> (
+            Result<Outcome, TurnError>,
+            crate::report::RecordingReporter,
+            Vec<String>,
+            PathBuf,
+            Vec<String>,
+        ) {
             let scratch = crate::testutil::scratch_dir(name);
             let _ = std::fs::remove_dir_all(&scratch);
             std::fs::create_dir_all(&scratch).unwrap();
@@ -9943,7 +9958,7 @@ mod tests {
                 &config,
                 &Egress::new(),
                 &workspace,
-                &Task::new("write the game in one file"),
+                task,
                 &mut Conversation::new(),
                 &mut crate::confirm::ApproveWrites,
                 &mut reporter,
@@ -9976,6 +9991,54 @@ mod tests {
                 .map(|body| body.matches(TOLD).count())
                 .collect()
         }
+    }
+
+    /// OPEN-4, TURN-4: a caller that tells the planner of the open loops without showing them puts
+    /// the message in the turn's first request, and a turn that writes and runs nothing still ends
+    /// by saying none of it was built. `with_open_loops`, which shows them, takes that line away.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn telling_the_open_loops_opens_the_turn_and_keeps_the_unbuilt_changes_line() {
+        use ceiling::*;
+        const SAID: &str = "Open from earlier in this session: changes not built.";
+        const UNBUILT: &str = "no command was run, so none of it has been built or tested";
+        let replies = || {
+            vec![
+                said(
+                    "",
+                    &[("write_file", r#"{"path":"out.txt","contents":"one\n"}"#)],
+                    None,
+                ),
+                said("done", &[], None),
+            ]
+        };
+
+        let telling = Task::new("write it").telling_open_loops(Some(SAID.to_string()));
+        let (outcome, reporter, bodies, scratch, _) =
+            traced_with("open-loops-told-not-shown", &telling, replies());
+        outcome.expect("the turn ends");
+        assert_eq!(
+            std::fs::read_to_string(scratch.join("out.txt")).unwrap(),
+            "one\n",
+            "the write did not land, so nothing here was tested"
+        );
+        assert_eq!(bodies[0].matches(SAID).count(), 1, "{}", bodies[0]);
+        assert!(
+            reporter.narration.iter().any(|line| line.contains(UNBUILT)),
+            "{:?}",
+            reporter.narration
+        );
+
+        let showing = Task::new("write it").with_open_loops(Some(SAID.to_string()));
+        let (outcome, reporter, bodies, _, _) =
+            traced_with("open-loops-told-and-shown", &showing, replies());
+        outcome.expect("the turn ends");
+        assert_eq!(bodies[0].matches(SAID).count(), 1, "{}", bodies[0]);
+        assert!(
+            !reporter.narration.iter().any(|line| line.contains(UNBUILT)),
+            "{:?}",
+            reporter.narration
+        );
     }
 
     /// The failure in #973: a model asked for one long script spends the whole ceiling on one

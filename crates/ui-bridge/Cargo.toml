@@ -28,9 +28,13 @@ bravebot-diag = { path = "../diag" }
 bravebot-filetype = { path = "../filetype" }
 # The note a window shows for a file too large to attach, in the terminal's words.
 bravebot-i18n = { path = "../i18n" }
+# The host's network listener, which depends on no crate that opens a session.
+bravebot-listener = { path = "../listener" }
 # The rules for an `@` name, the ones the terminal uses, so the window reads a line as it does.
 bravebot-mentions = { path = "../mentions" }
 bravebot-net = { path = "../net" }
+# The QR code the host shows for an invitation.
+bravebot-qr = { path = "../qr" }
 # For `Stream`: where a confined MCP server's stderr goes when a session starts one, which is
 # nowhere, since this process has no screen of its own for it.
 bravebot-sandbox = { path = "../sandbox" }
@@ -54,6 +58,8 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 
 [dev-dependencies]
+# The phone's side of a connection, for the tests of the host's listener.
+bravebot-listener = { path = "../listener", features = ["testing"] }
 # The test of what the bridge sends and keeps for a failed ChatGPT turn signs in to a stand-in and
 # runs the turns against it. The seams are on for a build of this crate's tests alone, and a release
 # build refuses them (CHATGPT-2).

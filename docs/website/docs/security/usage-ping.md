@@ -52,6 +52,10 @@ command line run starts first that day. A ping that fails is tried again by the 
 an hour later. A scheduled or triggered run sends none, and neither does a session started with
 `--incognito`.
 
+## Where you are told
+
+The notice is said once for each `~/.bravebot`. The terminal shows it on its startup screen and the desktop app in the conversation panel. `-p`, `--plain` and `bravebot acp` write it once to standard error and never to standard output, so a script reading the reply, or an editor reading the protocol, is not affected. A scheduled or triggered run says nothing.
+
 ## Turning it off
 
 Any one of these is enough:

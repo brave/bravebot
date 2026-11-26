@@ -22,7 +22,7 @@ opens name it. The key that makes the bypass mode unreachable here is `bypassUnr
 read, not enumerated, not searched and not written, and a `Read` deny rule also stops a write to the
 path it covers. A file whose contents are off limits is not protected if it can be overwritten.
 Naming the path through a reference reaches the same refusal, including on the one route allowed to
-read what nobody vouched for: a processor is handed no denied file either. The planner is told the
+read what nobody vouched for: a processor is handed no denied file either. A reference to a file nobody vouched for is checked again when its file is opened, so a file replaced by a link to a denied file after the reference was made is refused and left unread. The planner is told the
 rule refused and that retrying is not the answer.
 
 ## What a rule covers
@@ -48,19 +48,20 @@ refuses `secrets/canary.txt`. On Linux and macOS a `deny` or `ask`
 rule also covers the name a file has under a second path to an open directory, such as a macOS
 firmlink or a Linux bind mount once you have opened it with `/add-dir`; the file is matched by its
 device and inode. An `allow` rule is matched as written, so a grant reaches no further than the
-spelling you approved.
+spelling you approved. A write is also checked again just before its bytes are written: if the destination now leads to a different file than the one you were asked about, for example through a link made while the question was open, the write is refused and you are not asked again.
 
 - **Unicode spellings.** A `deny` or `ask` path rule covers every spelling Unicode treats as the
   same name, so a rule written with a precomposed `é` refuses the file named with a letter and a
   combining accent, and the reverse. A compatibility form is not the same name: a full-width letter
   is not the plain letter. An `allow` rule is matched as written.
 - **Case.** On a volume that treats `.env` and `.ENV` as one file, a rule written one way covers the
-  other, in every list. On a volume that keeps them apart, or where it cannot be told, a rule about
+  other, in every list. Where the volume cannot be asked, a `deny` or `ask` rule is read as on a volume that folds, which can cost an extra question or refusal and grants nothing. On a volume that keeps them apart, or for an `allow` rule where it cannot be told, a rule about
   `Docs` says nothing about `docs`.
 - **Windows names.** A name that reads as something other than the file it spells, such as a stream, a
   device, a trailing dot or space, or an 8.3 short name, is refused outright, in a call's path or a
   redirection's target, since no rule can be matched against it. A path on a drive is a full path:
   `Read(//D:/added/**)` covers `d:\added\secret`.
+- **Directories, roots and `..`.** A `deny` or `ask` rule that names a directory covers the files under it, as the same rule ending in `/**` does, so `Read(./secrets)` refuses `secrets/key`. A rule that names a root, such as `Read(./)` or `Read(//)`, covers every path under it. A `..` in a rule is resolved when the rule is read, so `Read(../sib/.env)` covers the file a call to that path lands on. A `..` that cannot be resolved is reported and the rule decides nothing. An `allow` rule covers only the place it names.
 - **Hosts.** A host written with a trailing dot, `https://evil.example./`, is the host without it, so
   a `WebFetch(domain:evil.example)` rule covers both. A domain rule naming an address covers that
   address however it is spelled, so `WebFetch(domain:127.0.0.1)` covers `[::ffff:127.0.0.1]`,
@@ -71,7 +72,7 @@ spelling you approved.
 - **Commands.** A command rule is matched against the program and each argument as the line was split,
   not against the line run together. A space in an `allow` rule covers only the gap between two words,
   so `Bash(ls *)` does not cover `"ls /x"`, a script named `ls /x`. In `deny` and `ask` a space also
-  covers a space inside a word, and a `*` covers any text in every list.
+  covers a space inside a word, and a `*` covers any text in every list. A `deny` or `ask` rule is also read the way a line is typed, so quotes, a backslash before a character and a run of spaces in the rule mean what they mean in a line: `Bash(sh -c "*")` covers `sh -c "rm x"`, and `Bash(git\ push *)` covers `git push origin`. A quote that is never closed, or a backslash with nothing after it, leaves the rule matched as it is written and in force, and it is reported. An `allow` rule keeps its characters as written.
   A `deny` or `ask` rule also covers the program under a leading `timeout`, `time`, `nice`, `nohup`,
   `stdbuf`, `command`, `builtin`, `noglob` or `env`, so `Bash(git push *)` refuses `timeout 30 git push`.
   For `env` that includes its `-i` and `-u NAME` options, an optional `--` that ends the options, and
@@ -86,7 +87,7 @@ spelling you approved.
   `TIMEOUT 30 git push`. Two letters count as the same when a Windows volume would open them as
   one file name, so `Bash(git push *)` also covers `g` followed by a dotless `ı` and `t`, and
   `Bash(ssh *)` covers a long `ſsh`. A spelling that is covered although your volume would not open it
-  as that program costs you a question or a refusal and lets nothing through. Arguments keep their case, an `allow` rule is matched as written and grants
+  as that program costs you a question or a refusal and lets nothing through. A program word in a `deny` or `ask` rule is also compared by Unicode equivalence, so a rule written `café` covers the same name spelled with a combining accent, and the reverse. Arguments are not compared that way. Arguments keep their case, an `allow` rule is matched as written and grants
   none of these spellings, and a program given by a path such as `/usr/bin/git` is not covered by
   `Bash(git *)`. While a `deny` or
   `ask` command rule is in force, a program written as an 8.3 short name such as `POWERS~1` is
@@ -102,7 +103,7 @@ spelling you approved.
   definition is left out of the turn, and you are told. A checkout cannot put a denied file into the
   system prompt by committing a link to it.
 - **Files you name.** A file named with `@` or `--file`, or dropped, is checked against the rules
-  before it is vouched for or opened. A covered one is left out of the turn and you are told.
+  before it is vouched for or opened. A covered one is left out of the turn and you are told. A project file named by its absolute path is checked under its relative name as well, whichever Unicode form the project directory is spelled in, and a dropped file is also checked under the name it lands on once links are followed.
 - **`lsp` answers.** A location in a covered file is left out of the answer, without a count of how
   many were left out. Hover text names no file, so it is withheld whenever any rule covers reading a
   path.

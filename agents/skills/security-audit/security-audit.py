@@ -251,12 +251,13 @@ NUMBERS = {
     "eight": 8,
     "nine": 9,
     "ten": 10,
+    "eleven": 11,
 }
 PLACES = re.compile(
     r"\b(" + "|".join(NUMBERS) + r")\s+places?\s+(?:in|do|that)", re.IGNORECASE
 )
-# How the public page counts them: `## Ten deliberate exceptions`, and a sentence saying that bytes
-# nobody vouched for decide something "in ten places".
+# How the public page counts them: `## Eleven deliberate exceptions`, and a sentence saying that
+# bytes nobody vouched for decide something "in eleven places".
 EXCEPTIONS_HEADING = re.compile(
     r"^#{1,6}\s+(" + "|".join(NUMBERS) + r")\s+deliberate\s+exceptions\b", re.IGNORECASE
 )

@@ -40,6 +40,7 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | `policy::search_reason`, `SearchReason::asks` | A search goes unasked only where an `allow` rule for the family answers and the planner's context is public. A context that holds private content is always put to a person, whatever a rule says, and so is a search an `ask` or `deny` rule matches |
 | `trust::meet_of_rules`, `policy::weakest_name` | A subtree or a file asked about under several names is trusted only where every rule bearing on it, and every name, answers trusted. An undecided boundary, a name nothing answers, and a file with no name count as untrusted, so a rule can only lower the answer (`spec::a_meet_of_rules_is_trusted_only_where_every_rule_is`) |
 | `trust::weakest_decision`, `trust::weaker`, `trust::strength` | Where several spellings of one name hold a decision, the one that grants least decides: a distrust before an undecided boundary before a trust |
+| `Standing::authorizes`, `Grant::allows` | A request from a device is allowed exactly where the host holds the device as paired with a grant that covers the operation, as `spec::device_verdict` states: a device with no record and a revoked device are never allowed whatever grant they held, a `read` grant covers reading and never control, and a `control` grant covers both. The answer is read from what the person did on the host alone, with no input from the request (`spec::a_request_is_allowed_only_for_a_paired_device_whose_grant_covers_it`) |
 | `Scope::covers` | A session's scope is inside the ceiling a device was approved for exactly where none of its twenty-one fields is past it, as `spec::field_widened` states for each: a granting list holds nothing the ceiling's did not, a restricting list holds all of it, an undecided path of the ceiling's may be replaced by a distrust and no other path is undecided, an `ask` rule may be replaced by a `deny`, the sandbox reads and writes no more, the permission mode is no further along its order, `reads_stay_in_workspace` is not turned off, and the other booleans are not turned on, automatic vetting in neither direction. `spec::a_scope_covers_itself` proves a scope is inside the ceiling it is. The list of which fields went past is built by `flagged` and checked by the tests, and the contract states only that it is empty exactly where nothing did |
 | `TrustedPrograms::covers_every_step` | Every step a plan runs, including each step inside a `$(...)`, has an entry equal to it in file, start path, arguments, routes and tree |
 | `Remembered::covers`, `RememberedStep::matches`, `Shape::matches` | A remembered line covers a plan exactly where the lines are joined the same way and each step matches in name, file, start path, assignments, routes and arguments, with a number slot admitting only a number, and the step carries no expansion |
@@ -158,8 +159,12 @@ A pull request that weakens what these hold is flagged for a person. After CI ru
 request, the `Proof weakened` workflow runs `contrib/check-verus-weakened.py` against the merge base
 and lists in its job summary every contract the change removes or changes, assumption it adds,
 mutation it removes and survivor it adds, counting a line the ledger already holds once more, and
-every edit to `spec.rs`, `verify/history.rs` or a script that runs the checks. Where it lists any,
-it labels the pull request `proof-weakened` and asks the owners of `verify/` to review. It runs from
+every edit to `spec.rs`, `verify/history.rs` or a script that runs the checks. The list is a
+`Proof weakened` entry in the pull request's checks, neutral where it lists anything and success
+where it does not, so it blocks nothing. A weakening labels the pull request `proof-weakened`. An
+edit to one of those files weakens nothing by itself, and is listed apart and labelled
+`proof-tooling-changed`. Either asks the owners of `verify/` to review, and a label whose list is
+empty comes off. It runs from
 the default branch with that branch's copy of the script, on the commit GitHub says CI ran on, so a
 pull request can change neither the script nor which pull request is labelled, and its code is
 read with `git show` and never run.

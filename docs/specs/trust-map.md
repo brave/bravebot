@@ -567,6 +567,14 @@ unfinished lookup makes the whole answer untrusted. The same holds for the locat
 names and the file it was asked at ([LSP-3](tools/lsp.md)). A name that is not UTF-8 ends the lookup the same way and is reasoned
 only on this host, since the file system here does not hold such a name.
 
+A redirection in a `run` line is a write and is entered the same way: at every open of a destination
+the other names of the file are looked up, and the destination is reserved, recorded as a memory
+where it is one, and completed under every one of them. The line is refused as a second writer when
+any name is held by another effect, including a destination of the same line. A name a destination
+gains after its first open, because an earlier part of the line left a link at it, is entered when
+that open happens and is left untrusted when the line ends, since the yes to the line was about
+the destination as it stood.
+
 `verified-by: bravebot_core::policy::a_lookup_of_other_names_that_did_not_finish_reads_as_untrusted`
 `verified-by: bravebot_core::policy::a_trusted_write_leaves_an_exact_distrust_on_another_name_of_the_file`
 `verified-by: bravebot_core::file_authority::an_exact_distrust_on_another_name_survives_completion_and_a_drop_distrusts_every_name`
@@ -601,6 +609,11 @@ only on this host, since the file system here does not hold such a name.
 `verified-by: bravebot_agent::tools::tests::reading_together::a_run_redirecting_into_a_pipe_returns_and_leaves_the_boundary_free`
 `verified-by: bravebot_agent::workspace::an_untrusted_write_in_another_case_is_read_back_untrusted_under_either_spelling`
 `verified-by: bravebot_agent::turn::a_line_naming_one_file_under_two_case_spellings_is_refused_as_a_second_writer`
+`verified-by: bravebot_agent::turn::a_redirection_through_a_symbolic_link_distrusts_the_file_the_link_leads_to`
+`verified-by: bravebot_agent::turn::a_redirection_through_a_hard_link_distrusts_the_other_name_of_the_file`
+`verified-by: bravebot_agent::turn::a_line_naming_a_file_and_a_symbolic_link_to_it_is_refused_as_a_second_writer`
+`verified-by: bravebot_agent::turn::a_redirection_through_a_link_to_a_memory_records_the_memory`
+`verified-by: bravebot_agent::turn::a_redirection_reopened_through_a_link_an_earlier_part_made_distrusts_the_file_it_reaches`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_is_refused_as_a_second_writer_unless_it_is_a_listed_gap`
 `verified-by: bravebot_core::file_authority::an_untrusted_write_through_an_equivalent_spelling_is_read_untrusted_under_both`
@@ -1579,7 +1592,7 @@ said about the workspace is what this session already decided about the files a 
 taking it here asks what the workspace asks and no more.
 
 The rules recorded inside the directory still weaken the answer, because a line whose output is
-untrusted distrusts the file it redirected into, under the name the line spelled
+untrusted distrusts the file it redirected into, under every name the file has
 ([tools/command-line.md](tools/command-line.md)). Without that a turn could read its own untrusted
 output back as trusted through the directory around it, which is the case worth having right in a
 place intermediate files are written.
@@ -2302,8 +2315,8 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
 
   A redirection is the one exception: the harness opens that file itself, so what a line writes
   through `>` or `>>` is recorded
-  ([tools/command-line.md](tools/command-line.md#CMDLINE-5)), under the name the line spelled and
-  with the keying cost every other write has (below). A file the program opens on its own, which
+  ([tools/command-line.md](tools/command-line.md#CMDLINE-5)), under every name the destination has
+  ([TRUST-4](#TRUST-4)) and with the keying cost every other write has (below). A file the program opens on its own, which
   is `cmd -o notes.txt` or anything a build writes, is not.
 
   `/export` is the other file this process opens itself. It is not recorded, because a rule recorded
