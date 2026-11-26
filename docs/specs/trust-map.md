@@ -529,18 +529,34 @@ preview and compared as numbers, so a changed path cannot spend the old approval
 makes that check for every approval of a write, so none can compare the revision alone: a vouch,
 the approval of a `write_file` (text or a picture), of a `download_url` destination, of an
 `edit_file` and of a write step of a manifest run. An `edit_file` takes its stamp when it reads the
-file for the edit, in the same capture as the bytes it will compare, and not when it writes. A
-`run` line that starts while the person is asked voids the answer, because a program opens files
-its line does not name and moves no revision. A vouch answered after that is thrown away and the
-read says so. A write or an edit answered after that writes nothing, leaves the file as it was and
-tells the planner that the path may have changed while the user was being asked, so it reads the
-file again if its contents matter and repeats the call. An edit is refused before its endorsement
-is used. A path whose vouch was thrown away is offered again by the next read of it, about the file
+file for the edit, in the same capture as the bytes it will compare, and not when it writes. The
+revision is compared for every write. The count of `run` lines is compared only where a person was
+asked: a `run` line that starts while a person is asked voids the answer, because a program opens
+files its line does not name and moves no revision, and the person read a preview it may have made
+untrue. A write the mode answered, or that a rule or the trust map allowed without a question, was
+shown to nobody, so a `run` line that started after its stamp, such as one a sibling delegate
+started, voids nothing. A write the mode leaves to a person, such as one that creates a credential
+or lands on a protected path under a mode that answers other writes, counts as asked. A vouch the
+mode answered is compared the same way, by revision alone, and one a person answered is compared
+whole. Whether a person was asked is the word of the confirmer that put the question, taken from
+one look at the mode with the answer, so a mode changed while the question was put does not change
+how the write is compared. A new file in the session's own directory ([TRUST-14](#TRUST-14)) has no
+rule of its own here: it is compared as any other write, by revision alone where nobody was asked
+and whole where a person was, and a file that appears at the path after the stamp moves the
+revision and refuses the write. A vouch a person answered after a `run` line started is thrown away and the read says so. A
+write or an edit a person answered after that writes nothing, leaves the file as it was and tells
+the planner that the path may have changed while the user was being asked, so it reads the file
+again if its contents matter and repeats the call. A write nobody was asked about whose revision
+moved writes nothing, leaves the file as it was and tells the planner that the file may have been
+written, or a command started, since the write was prepared, that no approval question was put, and
+to repeat the call. Both refusals are recorded as refusals, saying whether a person was being asked
+([trace.md](trace.md)). An edit is refused before its endorsement is used. A path whose vouch was thrown away is offered again by the next read of it, about the file
 as it is then, so the read's own advice to read again is true. An answer that was spent, and a no,
 keep the path asked about for the rest of the turn. A change to another path invalidates no
 approval and no vouch, but any `run` line that started since the preview was drawn voids a vouch,
-a write approval and an edit approval of every path. The price is one more question, or one refused
-write, after a `run` line that started while the question was open, even a line that wrote nothing.
+a write approval and an edit approval a person gave, of every path. The price is one more question,
+or one refused write, after a `run` line that started while a person's question was open, even a
+line that wrote nothing. A write nobody was asked about pays nothing for a `run` line.
 The count moves no revision, so the output of other running commands keeps its label. The
 write-back exception in [WRITE-4](tools/write-file.md#WRITE-4) compares the same count against the
 count taken when its slot was read. A backup records the trust of its bytes at capture, taken under
@@ -697,6 +713,25 @@ enters. A program that something other than the turn started is not tracked or c
 `verified-by: bravebot_agent::turn::an_edit_is_made_when_no_run_started_while_it_was_being_asked`
 `verified-by: bravebot_agent::manifest::a_run_that_started_while_a_planned_write_was_being_asked_voids_the_yes`
 `verified-by: bravebot_agent::manifest::a_planned_write_is_made_when_no_run_started_while_it_was_being_asked`
+`verified-by: bravebot_core::file_authority::a_stamp_holds_by_revision_and_by_run_lines_only_where_a_person_was_asked`
+`verified-by: bravebot_agent::workspace::a_run_line_voids_only_a_write_a_person_was_asked_about_and_the_revision_voids_both`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_the_mode_answered_a_write_does_not_void_it`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_the_mode_answered_a_picture_write_does_not_void_it`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_the_mode_answered_a_download_does_not_void_it`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_the_mode_answered_an_edit_does_not_void_it`
+`verified-by: bravebot_agent::manifest::a_run_that_started_while_the_mode_answered_a_planned_write_does_not_void_it`
+`verified-by: bravebot_agent::turn::a_run_line_a_sibling_starts_does_not_void_a_delegates_unasked_write`
+`verified-by: bravebot_agent::turn::a_run_line_a_sibling_starts_does_not_void_a_new_file_in_the_sessions_own_directory`
+`verified-by: bravebot_agent::turn::a_file_that_appears_in_the_sessions_own_directory_after_the_stamp_is_not_overwritten`
+`verified-by: bravebot_agent::turn::a_mode_moved_to_asking_before_the_confirmer_looks_leaves_the_write_compared_as_asked`
+`verified-by: bravebot_agent::turn::a_mode_moved_to_bypass_before_the_confirmer_looks_leaves_the_write_compared_by_revision`
+`verified-by: bravebot_agent::permission_mode::a_write_names_who_answered_it_from_one_look_at_the_mode`
+`verified-by: bravebot_agent::permission_mode::plan_mode_names_itself_for_the_refusal_of_a_write`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_a_protected_write_was_being_asked_voids_the_yes_in_accept_edits`
+`verified-by: bravebot_agent::turn::an_unasked_write_over_a_file_whose_revision_moved_is_refused_without_saying_a_person_was_asked`
+`verified-by: bravebot_agent::workspace::a_refusal_of_a_write_nobody_was_asked_about_does_not_say_the_user_was_asked`
+`verified-by: bravebot_core::policy::a_vouch_a_mode_answered_is_spent_after_a_program_started_beside_it`
+`verified-by: bravebot_agent::turn::a_vouch_the_mode_answered_survives_a_run_line_a_sibling_started`
 `verified-by: bravebot_core::policy::a_path_is_offered_again_only_after_an_answer_was_thrown_away`
 
 **Why writing trusted data never asks.** Trusted data means the turn observed nothing untrusted,

@@ -5340,7 +5340,8 @@ fn refuse_denied_path_as<S: Sink>(
 ///
 /// A tool reports such a failure through here, so the planner cannot be told of a refusal the
 /// trail leaves out (TRACE-1). The record is worded from `named` for the reason
-/// [`WorkspaceError::describe`] gives. The other failures are not gate decisions and are only
+/// [`WorkspaceError::describe`] gives. A write refused as stale is recorded too, in fixed words
+/// that say whether a person was asked. The other failures are not gate decisions and are only
 /// worded. A deferred read is worded inside the policy's own read, so [`materialise`] records its
 /// refusal itself.
 ///
@@ -5355,6 +5356,13 @@ fn workspace_failure<S: Sink>(
     let (said, remedy) = describe_for(e, named, policy.nobody_to_ask());
     if let Some(remedy) = remedy {
         record_confinement_refusal(policy, &format!("{tool}.{field}"), named, remedy);
+    }
+    match e {
+        crate::workspace::WorkspaceError::Stale { .. } => policy.refuse_stale_write(tool, true),
+        crate::workspace::WorkspaceError::StaleUnasked { .. } => {
+            policy.refuse_stale_write(tool, false)
+        }
+        _ => {}
     }
     said
 }
@@ -6889,6 +6897,10 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     // Whether the body now is text the person saved from their editor, which the planner is told
     // and the question is put again for.
     let mut edited_by_person = false;
+    // Whether a person was put the question, which decides how the stamp is compared when the
+    // bytes are released: a `run` line that started meanwhile voids what a person was shown, and
+    // voids nothing where the mode or a rule answered (TRUST-4).
+    let mut person_asked = false;
 
     let (scanned, reviewed, reach) = loop {
         let body_label = body.label();
@@ -7014,7 +7026,15 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
             // Read as the question is put, because a person can change the mode while they decide
             // it, and the trail must not credit the new mode with an answer they gave.
             let mode = tools.permission_mode.get();
-            let answer = confirmer.confirm_write(&request);
+            let (answer, who) = confirmer.confirm_write_noting_the_mode(&request);
+            // Who answered is the confirmer's word where it gives one, so a mode changed between
+            // the read above and the confirmer's own look cannot leave a person's question
+            // compared as if nobody was asked.
+            let answered_by = crate::confirm::answered_by(who, || {
+                mode.answers_a_write_unasked(!request.credentials.is_empty(), request.protected)
+                    .then(|| mode.name())
+            });
+            person_asked |= answered_by.is_none();
             // The body the person saved is not an answer to this question: it replaces what the
             // question was about, and the write is put to them again with the new diff. Taken only
             // where the prompt offered it, so an edit sent where none was drawn is a refusal below,
@@ -7033,10 +7053,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
                 policy.refuse_unapproved_write(call);
                 return credential_aware_rejection(&shown_path, &scanned, false);
             }
-            policy.record_answer(
-                mode.answers_a_write_unasked(!request.credentials.is_empty(), request.protected)
-                    .then(|| mode.name()),
-            );
+            policy.record_answer(answered_by);
             keep_the_note(policy, "write_file", answer.approved(), answer.note());
             if !answer.approved() {
                 policy.refuse_unapproved_write(call);
@@ -7057,7 +7074,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
         policy,
         &path,
         &body,
-        Some(approved_at),
+        Some(crate::workspace::Prepared::new(approved_at, person_asked)),
         Some(&reach),
     ) {
         Ok(landed) => {
@@ -7141,6 +7158,10 @@ struct PictureBody {
 /// The bytes leave the slot decoded by the effect that writes them, which is handed the proof that
 /// the destination was endorsed, and nothing here reads one of them. The file is recorded as
 /// holding what the slot held, so a picture from a server's tool result leaves an untrusted file.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one write from its question to the effect that makes it, as the other writes here are"
+)]
 fn write_a_picture<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
@@ -7208,11 +7229,13 @@ fn write_a_picture<S: Sink, C: Confirmer>(
         may_edit: false,
     };
     let mode = tools.permission_mode.get();
-    let answer = confirmer.confirm_write(&request);
-    policy.record_answer(
+    let (answer, who) = confirmer.confirm_write_noting_the_mode(&request);
+    let answered_by = crate::confirm::answered_by(who, || {
         mode.answers_a_write_unasked(false, request.protected)
-            .then(|| mode.name()),
-    );
+            .then(|| mode.name())
+    });
+    let person_asked = answered_by.is_none();
+    policy.record_answer(answered_by);
     keep_the_note(policy, "write_file", answer.approved(), answer.note());
     if !answer.approved() {
         policy.refuse_unapproved_write("write_file");
@@ -7229,7 +7252,7 @@ fn write_a_picture<S: Sink, C: Confirmer>(
         policy,
         &path,
         label,
-        Some(approved_at),
+        Some(crate::workspace::Prepared::new(approved_at, person_asked)),
         Some(&reach),
         |file, proof| {
             use std::io::Write;
@@ -8131,6 +8154,7 @@ fn edit_file<S: Sink, C: Confirmer>(
         &landed,
     );
 
+    let mut person_asked = false;
     if write_needs_approval(policy, workspace, &proposed_path, body_label, destination)
         || (nobody_to_ask && put_where_nobody_can_be_asked(policy, workspace, &proposed_path))
         || !to_approve.is_empty()
@@ -8159,11 +8183,13 @@ fn edit_file<S: Sink, C: Confirmer>(
             may_edit: false,
         };
 
-        let answer = confirmer.confirm_write(&request);
-        policy.record_answer(
+        let (answer, who) = confirmer.confirm_write_noting_the_mode(&request);
+        let answered_by = crate::confirm::answered_by(who, || {
             mode.answers_a_write_unasked(!request.credentials.is_empty(), request.protected)
-                .then(|| mode.name()),
-        );
+                .then(|| mode.name())
+        });
+        person_asked = answered_by.is_none();
+        policy.record_answer(answered_by);
         keep_the_note(policy, "edit_file", answer.approved(), answer.note());
         if answer.approved() {
             standing.keep(policy, answer);
@@ -8191,7 +8217,7 @@ fn edit_file<S: Sink, C: Confirmer>(
         &proposed,
         &body,
         &current,
-        read_at,
+        crate::workspace::Prepared::new(read_at, person_asked),
         Some(&reach),
     ) {
         Ok(landed) => {
@@ -13846,11 +13872,13 @@ fn download_url<S: Sink, C: Confirmer>(
         may_edit: false,
     };
     let mode = tools.permission_mode.get();
-    let answer = confirmer.confirm_write(&request);
-    policy.record_answer(
+    let (answer, who) = confirmer.confirm_write_noting_the_mode(&request);
+    let answered_by = crate::confirm::answered_by(who, || {
         mode.answers_a_write_unasked(false, request.protected)
-            .then(|| mode.name()),
-    );
+            .then(|| mode.name())
+    });
+    let person_asked = answered_by.is_none();
+    policy.record_answer(answered_by);
     keep_the_note(policy, "download_url", answer.approved(), answer.note());
     if !answer.approved() {
         policy.refuse_unapproved_write("download_url");
@@ -13899,7 +13927,7 @@ fn download_url<S: Sink, C: Confirmer>(
         policy,
         &path,
         label,
-        Some(approved_at),
+        Some(crate::workspace::Prepared::new(approved_at, person_asked)),
         Some(&reach),
         |file, proof| {
             use std::io::Write;

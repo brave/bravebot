@@ -865,6 +865,11 @@ file authority and its own record of waits, so waiting for a file is charged to 
 waited ([DELEGATE-18](#DELEGATE-18)).
 Reservations are per path, so writes to other paths proceed.
 
+Because the authority is shared, a `run` line one delegate starts moves the count of lines every
+other run's stamp holds. That count voids only an answer a person gave while the line started; a write
+the permission mode answered, or a rule allowed without a question, is not refused because a sibling
+started a line ([TRUST-4](trust-map.md#TRUST-4)).
+
 [checkouts.md](checkouts.md) gives a delegate a checkout of its own where its spawn or its
 definition asks, so that two workers stop building each other's edits. Its writes still go through the
 one live file authority, under the checkout's paths.
@@ -875,6 +880,7 @@ before a search it has nothing to do with could begin.
 
 `verified-by: bravebot_agent::turn::two_delegates_work_at_the_same_time`
 `verified-by: bravebot_agent::turn::each_delegate_a_turn_spawns_is_numbered_and_its_work_reported_under_that_number`
+`verified-by: bravebot_agent::turn::a_run_line_a_sibling_starts_does_not_void_a_delegates_unasked_write`
 
 <a id="DELEGATE-16"></a>
 ### DELEGATE-16: one person is asked one question at a time, and one trail records them all
@@ -907,6 +913,7 @@ something unrelated to it.
 `verified-by: bravebot_agent::shared::a_question_the_mode_does_not_answer_still_waits_for_the_open_one`
 `verified-by: bravebot_agent::shared::the_mode_in_force_when_a_question_is_decided_answers_it`
 `verified-by: bravebot_agent::turn::a_delegates_answers_by_the_mode_are_recorded_with_the_modes_name`
+`verified-by: bravebot_agent::turn::a_run_line_a_sibling_starts_does_not_void_a_delegates_unasked_write`
 `verified-by: bravebot_agent::shared::the_mode_view_reaches_only_a_confirmer_lent_with_one_and_passes_to_nested_handles`
 `verified-by: bravebot_agent::shared::two_delegates_reporting_at_once_are_taken_one_call_at_a_time`
 `verified-by: bravebot_agent::shared::two_delegates_recording_at_once_are_taken_one_call_at_a_time`

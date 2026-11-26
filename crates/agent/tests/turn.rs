@@ -12311,7 +12311,34 @@ fn a_stale_edit_is_refused() {
 ///
 /// Returns what the file held afterwards and what the planner was told.
 fn write_file_while_a_program_starts(starts: bool) -> (String, String) {
-    let scratch = Scratch::new(&format!("write-program-{starts}"));
+    write_file_while_a_program_starts_under(starts, bravebot_agent::PermissionMode::default())
+}
+
+/// What the planner is told, and what the file holds afterwards, when `starts` is set and the
+/// confirmer's answer arrives under `mode`. Where the mode answers a write unasked nobody sees a
+/// preview, so the confirmer here stands in for the mode and for a sibling delegate starting a
+/// `run` line in the window between the stamp and the write.
+fn write_file_while_a_program_starts_under(
+    starts: bool,
+    mode: bravebot_agent::PermissionMode,
+) -> (String, String) {
+    let (kept, told, _) = write_file_while_a_program_starts_with_trail(
+        &format!("write-program-{starts}-{mode:?}"),
+        starts,
+        mode,
+    );
+    (kept, told)
+}
+
+/// [`write_file_while_a_program_starts_under`] that also returns the trail. `name` is the test's own
+/// directory: tests run in parallel and a directory is removed and made again by whoever asks for
+/// it, so two tests that share a name fail with a missing directory.
+fn write_file_while_a_program_starts_with_trail(
+    name: &str,
+    starts: bool,
+    mode: bravebot_agent::PermissionMode,
+) -> (String, String, RecordingSink) {
+    let scratch = Scratch::new(name);
     std::fs::write(scratch.path.join("a.txt"), "original\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
@@ -12333,7 +12360,9 @@ fn write_file_while_a_program_starts(starts: bool) -> (String, String) {
             }
         }),
     };
-    let task = Task::new("replace a.txt").with_file_authority(authority);
+    let task = Task::new("replace a.txt")
+        .with_file_authority(authority)
+        .with_permission_mode(mode);
     turns::run_with_trust(
         &config,
         &egress,
@@ -12350,7 +12379,51 @@ fn write_file_while_a_program_starts(starts: bool) -> (String, String) {
     (
         std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
         told,
+        sink,
     )
+}
+
+/// The reasons of the refusals under `stale_write` in the trail.
+fn stale_write_refusals(sink: &RecordingSink) -> Vec<String> {
+    sink.events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GateBlocked {
+                gate: "stale_write",
+                reason,
+                ..
+            } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// TRACE-1: a write refused because a `run` line started while a person was asked is recorded as
+/// a refusal that says a person was being asked, and is not recorded as a person's no. Rejects a
+/// stale refusal that leaves the trail with no entry, and one that is recorded as "not approved".
+#[test]
+fn a_write_refused_as_stale_after_a_person_was_asked_is_recorded_as_a_refusal() {
+    let (kept, told, sink) = write_file_while_a_program_starts_with_trail(
+        "write-program-trail",
+        true,
+        bravebot_agent::PermissionMode::default(),
+    );
+    assert_eq!(kept, "original\n", "{told}");
+    assert_eq!(
+        stale_write_refusals(&sink),
+        [
+            "write_file: the file may have changed while a person was being asked, so nothing was written"
+        ]
+    );
+    assert!(
+        sink.blocked().all(|event| !matches!(
+            event,
+            Event::GateBlocked { detail, reason, .. }
+                if detail.contains("was not approved") || reason.contains("was not approved")
+        )),
+        "the refusal was recorded as a person's no: {:#?}",
+        sink.events()
+    );
 }
 
 /// Rejects a write approval that ignores the count of `run` lines started, which is how the
@@ -12374,9 +12447,832 @@ fn a_write_is_made_when_no_run_started_while_it_was_being_asked() {
     assert!(!told.contains("may have changed"), "{told}");
 }
 
+/// TRUST-4, WRITE-4: where the mode answers a write nobody is asked about, a `run` line another
+/// delegate starts between the stamp and the write does not void it. The regression it rejects is
+/// the whole stamp compared for every write, which refused such a write as stale after "the user was
+/// being asked" although no question was shown.
+#[test]
+fn a_run_that_started_while_the_mode_answered_a_write_does_not_void_it() {
+    for mode in [
+        bravebot_agent::PermissionMode::Bypass,
+        bravebot_agent::PermissionMode::AcceptEdits,
+    ] {
+        let (kept, told) = write_file_while_a_program_starts_under(true, mode);
+        assert_eq!(
+            kept, "replaced\n",
+            "{mode:?}: the unasked write was refused"
+        );
+        assert!(
+            !told.contains("since this write was prepared")
+                && !told.contains("while the user was being asked"),
+            "{mode:?}: {told}"
+        );
+    }
+}
+
+/// The revision comparison stays where nobody was asked: a write over a file the authority was told
+/// changed after the stamp is refused, with the wording that does not say a person was asked. The
+/// regression it rejects is dropping the comparison for the unasked case together with the count
+/// of `run` lines.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_unasked_write_over_a_file_whose_revision_moved_is_refused_without_saying_a_person_was_asked()
+{
+    let scratch = Scratch::new("write-moved-unasked");
+    std::fs::write(scratch.path.join("a.txt"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"a.txt","contents":"replaced\n"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let authority = bravebot_core::file_authority::FileAuthority::new(
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    let moved = authority.clone();
+    let mut confirmer = ChangesTheFileWhenAsked {
+        change: Box::new(move || {
+            // A decision about the root moves the revision of every path beneath it.
+            moved.publish("/", bravebot_core::label::Integrity::Untrusted);
+        }),
+    };
+    let task = Task::new("replace a.txt")
+        .with_file_authority(authority)
+        .with_permission_mode(bravebot_agent::PermissionMode::Bypass);
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+    let _first = received.recv().unwrap();
+    let told = received.recv().unwrap();
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+        "original\n",
+        "a write over a file whose revision moved landed: {told}"
+    );
+    assert!(
+        told.contains("did not come from an approval question"),
+        "{told}"
+    );
+    assert!(!told.contains("while the user was being asked"), "{told}");
+}
+
+/// A trail that starts a `run` line on `authority` each time the mode answers a prompt, which
+/// happens after a write's stamp is taken and before its bytes are released. It stands for a
+/// sibling delegate's line starting in that window while nothing is put to a person, so the
+/// answer is the mode's and the confirmer behind it is never reached. Keeps what it is told like
+/// [`RecordingSink`], and counts how many lines it started so a test can say the window was hit.
+struct StartsAProgramWhenTheModeAnswers {
+    authority: bravebot_core::file_authority::FileAuthority,
+    started: usize,
+    trail: RecordingSink,
+}
+
+impl StartsAProgramWhenTheModeAnswers {
+    fn on(authority: &bravebot_core::file_authority::FileAuthority) -> Self {
+        Self {
+            authority: authority.clone(),
+            started: 0,
+            trail: RecordingSink::new(),
+        }
+    }
+}
+
+impl bravebot_core::event::Sink for StartsAProgramWhenTheModeAnswers {
+    fn emit(&mut self, event: Event) {
+        if matches!(
+            &event,
+            Event::GatePassed { gate: "approval", detail } if detail.contains("answered by")
+        ) {
+            self.authority.note_program_started();
+            self.started += 1;
+        }
+        self.trail.emit(event);
+    }
+
+    fn recording_for(&mut self, delegate: Option<bravebot_core::delegate::DelegateId>) {
+        self.trail.recording_for(delegate);
+    }
+}
+
+/// TRUST-4, DELEGATE-15, DELEGATE-16, the reported case: a delegate writes a new file under bypass,
+/// which answers the write without asking anybody, while a `run` line from a sibling starts on the
+/// shared file authority between the delegate's stamp and its write. The write lands. The lead's
+/// confirmer is the mode's own (`Confining`), so nothing reaches a person. Rejects comparing the
+/// whole stamp for every write, which refused the delegate's write as stale "while the user was
+/// being asked" and made it repeat the call. The line count is asserted so a test whose window was
+/// never hit cannot pass, and the trail still credits the mode with the answer (TRACE-7).
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_run_line_a_sibling_starts_does_not_void_a_delegates_unasked_write() {
+    let scratch = Scratch::new("delegate-unasked-write");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "HAVE-A-DELEGATE-WRITE-A-FILE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"WRITE-THE-FILE-NOW"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "WRITE-THE-FILE-NOW",
+            vec![
+                tool_request("write_file", r#"{"path":"created.md","contents":"hi"}"#),
+                reply_with("tried"),
+            ],
+        ),
+    ]);
+    let authority = bravebot_core::file_authority::FileAuthority::new(
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    let mut sink = StartsAProgramWhenTheModeAnswers::on(&authority);
+    let mut approving = RecordingConfirmer::approving();
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("HAVE-A-DELEGATE-WRITE-A-FILE")
+            .with_file_authority(authority)
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Confining::new(
+            &mut approving,
+            bravebot_agent::PermissionMode::Bypass,
+            false,
+        ),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+
+    assert!(
+        sink.started >= 1,
+        "no line started between the stamp and the write, so the test saw nothing"
+    );
+    assert!(
+        approving.seen.is_empty(),
+        "the write reached the confirmer behind the mode"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("created.md")).ok(),
+        Some("hi".to_string()),
+        "the delegate's write was refused after a sibling's line started"
+    );
+    assert!(
+        sink.trail.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "approval", detail }
+                if detail == "answered by bypass mode, nobody was asked"
+        )),
+        "the trail does not credit the mode: {:#?}",
+        sink.trail.events()
+    );
+}
+
+/// A write the mode answered is recorded as the mode's answer, whether the write then lands or is
+/// refused because the file's revision moved, and the refusal is never recorded as a person
+/// saying no (TRACE-7, TRACE-1). Returns the trail, what the planner was told and what the file
+/// held afterwards. `change` runs after the stamp, in the window the mode's answer is given.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn bypassed_write_trail(
+    name: &str,
+    change: impl Fn(&bravebot_core::file_authority::FileAuthority) + Send + 'static,
+) -> (RecordingSink, String, String) {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join("a.txt"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"a.txt","contents":"replaced\n"}"#),
+        reply_with("understood"),
+    ]);
+    let authority = bravebot_core::file_authority::FileAuthority::new(
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    let changing = authority.clone();
+    let mut confirmer = ChangesTheFileWhenAsked {
+        change: Box::new(move || change(&changing)),
+    };
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("replace a.txt")
+            .with_file_authority(authority)
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut confirmer,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+    let _first = received.recv().unwrap();
+    let told = received.recv().unwrap();
+    (
+        sink,
+        told,
+        std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+    )
+}
+
+/// The approval entries that say who answered a prompt.
+fn who_answered(sink: &RecordingSink) -> Vec<String> {
+    sink.events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "approval",
+                detail,
+            } if detail.starts_with("answered by") || detail.starts_with("no mode answered") => {
+                Some(detail.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// TRACE-7: a write the mode answered while a sibling's `run` line started goes through, and the
+/// trail names the mode as the one that answered and records no refusal. Rejects an
+/// implementation that records no answer for a write that was not voided, or credits a person.
+#[test]
+fn an_unasked_write_that_a_sibling_run_line_did_not_void_is_recorded_as_the_modes_answer() {
+    let (sink, told, kept) = bypassed_write_trail("bypassed-write-landed", |authority| {
+        authority.note_program_started()
+    });
+    assert_eq!(kept, "replaced\n", "{told}");
+    assert_eq!(
+        who_answered(&sink),
+        ["answered by bypass mode, nobody was asked"]
+    );
+    assert_eq!(
+        sink.blocked().count(),
+        0,
+        "a write that landed was recorded as refused: {:#?}",
+        sink.events()
+    );
+}
+
+/// TRACE-7, TRACE-1: a write the mode answered and the revision then voided is still recorded as
+/// the mode's answer, and no entry says a person did not approve it, since nobody was asked. The
+/// planner is told the new wording. Rejects routing the unasked refusal through
+/// `refuse_unapproved_write`, which records "the write was not approved" as if a person said no.
+#[test]
+fn an_unasked_write_the_revision_voided_is_not_recorded_as_a_persons_no() {
+    let (sink, told, kept) = bypassed_write_trail("bypassed-write-voided", |authority| {
+        // A decision about the root moves the revision of every path beneath it.
+        authority.publish("/", bravebot_core::label::Integrity::Untrusted);
+    });
+    assert_eq!(kept, "original\n", "{told}");
+    assert!(
+        told.contains("did not come from an approval question"),
+        "{told}"
+    );
+    assert_eq!(
+        who_answered(&sink),
+        ["answered by bypass mode, nobody was asked"]
+    );
+    assert_eq!(
+        stale_write_refusals(&sink),
+        [
+            "write_file: the file may have changed since the write was prepared and nobody was asked, so nothing was written"
+        ]
+    );
+    assert!(
+        sink.blocked().all(|event| !matches!(
+            event,
+            Event::GateBlocked { detail, reason, .. }
+                if detail.contains("was not approved") || reason.contains("was not approved")
+        )),
+        "the refusal was recorded as a person's no: {:#?}",
+        sink.events()
+    );
+}
+
+/// Forwards every question to the confirmer behind a mode, and moves the live mode to `to` just
+/// before a write question reaches it. It stands for a person pressing the mode key after a write
+/// tool read the mode and before the confirmer looked at it (MODE-8).
+struct ChangesTheModeBeforeAWriteIsAnswered<'a> {
+    behind: bravebot_agent::Confining<'a, ChangesTheFileWhenAsked>,
+    live: bravebot_agent::LiveMode,
+    to: bravebot_agent::PermissionMode,
+}
+
+impl bravebot_agent::Confirmer for ChangesTheModeBeforeAWriteIsAnswered<'_> {
+    fn confirm_write(
+        &mut self,
+        request: &bravebot_agent::WriteRequest,
+    ) -> bravebot_agent::WriteDecision {
+        self.live.set(self.to);
+        self.behind.confirm_write(request)
+    }
+    fn confirm_write_noting_the_mode(
+        &mut self,
+        request: &bravebot_agent::WriteRequest,
+    ) -> (
+        bravebot_agent::WriteDecision,
+        Option<bravebot_agent::confirm::WhoAnswered>,
+    ) {
+        self.live.set(self.to);
+        self.behind.confirm_write_noting_the_mode(request)
+    }
+    fn confirm_server(
+        &mut self,
+        request: &bravebot_agent::confirm::ServerRequest,
+    ) -> bravebot_agent::Decision {
+        self.behind.confirm_server(request)
+    }
+    fn confirm_run(&mut self, request: &bravebot_agent::RunRequest) -> bravebot_agent::RunDecision {
+        self.behind.confirm_run(request)
+    }
+    fn confirm_read_output(
+        &mut self,
+        request: &bravebot_agent::confirm::OutputRequest,
+    ) -> bravebot_agent::Decision {
+        self.behind.confirm_read_output(request)
+    }
+    fn confirm_vetted_read(
+        &mut self,
+        request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.behind.confirm_vetted_read(request)
+    }
+    fn confirm_fetch(
+        &mut self,
+        request: &bravebot_agent::confirm::FetchRequest,
+    ) -> bravebot_agent::Decision {
+        self.behind.confirm_fetch(request)
+    }
+    fn confirm_manifest(
+        &mut self,
+        request: &bravebot_agent::confirm::ManifestRequest,
+    ) -> bravebot_agent::Decision {
+        self.behind.confirm_manifest(request)
+    }
+    fn confirm_vouch(
+        &mut self,
+        request: &bravebot_agent::confirm::VouchRequest,
+    ) -> bravebot_agent::Decision {
+        self.behind.confirm_vouch(request)
+    }
+    fn confirm_exposing_read(
+        &mut self,
+        request: &bravebot_agent::confirm::ExposureRequest,
+    ) -> bravebot_agent::Decision {
+        self.behind.confirm_exposing_read(request)
+    }
+    fn confirm_tool_list(
+        &mut self,
+        request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.behind.confirm_tool_list(request)
+    }
+    fn confirm_mcp_call(
+        &mut self,
+        request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        self.behind.confirm_mcp_call(request)
+    }
+    fn confirm_path(
+        &mut self,
+        request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.behind.confirm_path(request)
+    }
+    fn confirm_host(
+        &mut self,
+        request: &bravebot_agent::confirm::HostRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.behind.confirm_host(request)
+    }
+    fn confirm_message(
+        &mut self,
+        request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        self.behind.confirm_message(request)
+    }
+    fn confirm_move(
+        &mut self,
+        request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.behind.confirm_move(request)
+    }
+    fn ask_user(&mut self, asking: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
+        self.behind.ask_user(asking)
+    }
+    fn interjection(&mut self) -> Option<String> {
+        self.behind.interjection()
+    }
+}
+
+/// TRUST-4, MODE-8: whether a person was asked about a write is the confirmer's own answer, taken
+/// from one look at the mode, and not the mode as the tool read it before the question. The tool
+/// reads bypass, the person moves the session to asking, and the confirmer then puts the question to
+/// the person, whose yes is compared whole: a `run` line that started while they were asked voids it
+/// and the planner is told so. Rejects deciding it from the read made before the question, which
+/// compared this write by revision alone and let a yes drawn before a program started overwrite the
+/// file.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_mode_moved_to_asking_before_the_confirmer_looks_leaves_the_write_compared_as_asked() {
+    let scratch = Scratch::new("write-mode-moved-before-the-confirmer");
+    std::fs::write(scratch.path.join("a.txt"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"a.txt","contents":"replaced\n"}"#),
+        reply_with("understood"),
+    ]);
+    let authority = bravebot_core::file_authority::FileAuthority::new(
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    let started = authority.clone();
+    let mut person = ChangesTheFileWhenAsked {
+        change: Box::new(move || started.note_program_started()),
+    };
+    let live = bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Bypass);
+    let mut confirmer = ChangesTheModeBeforeAWriteIsAnswered {
+        behind: bravebot_agent::Confining::new(&mut person, live.clone(), false),
+        live: live.clone(),
+        to: bravebot_agent::PermissionMode::Ask,
+    };
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("replace a.txt")
+            .with_file_authority(authority)
+            .with_permission_mode(live.clone()),
+        &mut confirmer,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+    let _first = received.recv().unwrap();
+    let told = received.recv().unwrap();
+    assert_eq!(live.get(), bravebot_agent::PermissionMode::Ask);
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+        "original\n",
+        "a write a person was asked about landed after a run line started while they were asked: {told}"
+    );
+    assert!(
+        told.contains("may have changed while the user was being asked about it"),
+        "{told}"
+    );
+    assert_eq!(
+        stale_write_refusals(&sink),
+        [
+            "write_file: the file may have changed while a person was being asked, so nothing was written"
+        ]
+    );
+}
+
+/// A trail that starts a `run` line on the shared authority each time a write's answer is recorded,
+/// whoever gave it, which is after the write's stamp is taken and before its bytes are released.
+struct StartsAProgramWhenAWriteIsAnswered {
+    authority: bravebot_core::file_authority::FileAuthority,
+    started: usize,
+    trail: RecordingSink,
+}
+
+impl bravebot_core::event::Sink for StartsAProgramWhenAWriteIsAnswered {
+    fn emit(&mut self, event: Event) {
+        if matches!(
+            &event,
+            Event::GatePassed { gate: "approval", detail }
+                if detail.starts_with("answered by") || detail.starts_with("no mode answered")
+        ) {
+            self.authority.note_program_started();
+            self.started += 1;
+        }
+        self.trail.emit(event);
+    }
+
+    fn recording_for(&mut self, delegate: Option<bravebot_core::delegate::DelegateId>) {
+        self.trail.recording_for(delegate);
+    }
+}
+
+/// TRUST-4, MODE-8: where the confirmer behind the mode answers a write itself, the mode's answer is
+/// the confirmer's own word, and the write is compared by revision alone. The tool reads asking, the
+/// person moves the session to bypass, and the mode then answers without anybody being asked, so a
+/// `run` line that starts before the write does not void it and the trail names the mode. The
+/// confirmer here has no view of what the mode answers unasked, so the question reaches
+/// [`bravebot_agent::Confining::confirm_write_noting_the_mode`] itself. Rejects a confirmer that
+/// reports a person for an answer the mode gave, which compares the whole stamp and refuses the
+/// write after "the user was being asked" although nobody was, and one that reports nothing, which
+/// leaves the caller to the asking mode it read before.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_mode_moved_to_bypass_before_the_confirmer_looks_leaves_the_write_compared_by_revision() {
+    let scratch = Scratch::new("write-mode-moved-to-bypass-before-the-confirmer");
+    std::fs::write(scratch.path.join("a.txt"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"a.txt","contents":"replaced\n"}"#),
+        reply_with("understood"),
+    ]);
+    let authority = bravebot_core::file_authority::FileAuthority::new(
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    let mut nobody_is_asked = ChangesTheFileWhenAsked {
+        change: Box::new(|| {}),
+    };
+    let live = bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Ask);
+    let mut confirmer = ChangesTheModeBeforeAWriteIsAnswered {
+        behind: bravebot_agent::Confining::new(&mut nobody_is_asked, live.clone(), false),
+        live: live.clone(),
+        to: bravebot_agent::PermissionMode::Bypass,
+    };
+    let mut sink = StartsAProgramWhenAWriteIsAnswered {
+        authority: authority.clone(),
+        started: 0,
+        trail: RecordingSink::new(),
+    };
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("replace a.txt")
+            .with_file_authority(authority)
+            .with_permission_mode(live.clone()),
+        &mut confirmer,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+    let _first = received.recv().unwrap();
+    let told = received.recv().unwrap();
+
+    assert_eq!(live.get(), bravebot_agent::PermissionMode::Bypass);
+    assert!(
+        sink.started >= 1,
+        "no line started between the stamp and the write, so the test saw nothing"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+        "replaced\n",
+        "a write the mode answered was refused after a run line started: {told}"
+    );
+    assert!(stale_write_refusals(&sink.trail).is_empty(), "{told}");
+    assert_eq!(
+        who_answered(&sink.trail),
+        ["answered by bypass mode, nobody was asked"]
+    );
+}
+
+/// TRUST-4, TRUST-14, the case in the report: a delegate creates a new file in the session's own
+/// directory under bypass while a sibling's `run` line starts between the stamp and the write. The
+/// write lands, since nobody was asked about it, and the trail credits the mode. There is no
+/// special case for the directory: it is the unasked rule. Rejects comparing the whole stamp for
+/// every write, which refused such a create after "the user was being asked". The count of lines is
+/// asserted so a test whose window was never hit cannot pass.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_run_line_a_sibling_starts_does_not_void_a_new_file_in_the_sessions_own_directory() {
+    let project = Scratch::new("scratch-create-unasked");
+    let session = Scratch::new("scratch-create-unasked-session");
+    let given = session
+        .path
+        .canonicalize()
+        .expect("the session's own directory");
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(given.clone()));
+    let landed = given.join("body.md");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            &serde_json::json!({"path": landed.to_string_lossy(), "contents": "hi"}).to_string(),
+        ),
+        reply_with("understood"),
+    ]);
+    let authority = bravebot_core::file_authority::FileAuthority::new(
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    let mut sink = StartsAProgramWhenTheModeAnswers::on(&authority);
+    let mut approving = RecordingConfirmer::approving();
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("write body.md")
+            .with_file_authority(authority)
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Confining::new(
+            &mut approving,
+            bravebot_agent::PermissionMode::Bypass,
+            false,
+        ),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+    let _first = received.recv().unwrap();
+    let told = received.recv().unwrap();
+
+    assert!(
+        sink.started >= 1,
+        "no line started between the stamp and the write, so the test saw nothing"
+    );
+    assert!(
+        approving.seen.is_empty(),
+        "the write reached the confirmer behind the mode"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&landed).ok(),
+        Some("hi".to_string()),
+        "a create in the session's own directory was refused after a sibling's line started: {told}"
+    );
+    assert!(
+        sink.trail.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "approval", detail }
+                if detail == "answered by bypass mode, nobody was asked"
+        )),
+        "the trail does not credit the mode: {:#?}",
+        sink.trail.events()
+    );
+}
+
+/// A trail that runs `change` each time the mode answers a prompt, which happens after a write's
+/// stamp is taken and before its bytes are released. Keeps what it is told like [`RecordingSink`].
+struct ChangesTheAuthorityWhenTheModeAnswers {
+    change: Box<dyn FnMut() + Send>,
+    trail: RecordingSink,
+}
+
+impl bravebot_core::event::Sink for ChangesTheAuthorityWhenTheModeAnswers {
+    fn emit(&mut self, event: Event) {
+        if matches!(
+            &event,
+            Event::GatePassed { gate: "approval", detail } if detail.contains("answered by")
+        ) {
+            (self.change)();
+        }
+        self.trail.emit(event);
+    }
+
+    fn recording_for(&mut self, delegate: Option<bravebot_core::delegate::DelegateId>) {
+        self.trail.recording_for(delegate);
+    }
+}
+
+/// TRUST-4, TRUST-14: the revision comparison stays for a create in the session's own directory. A
+/// file that appears at the path between the stamp and the write, as another writer's write does
+/// and tells the authority of, is not overwritten, and the refusal does not say a person was asked.
+/// Rejects dropping the comparison for a create, or for a write nobody was asked about, together
+/// with the count of `run` lines.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_file_that_appears_in_the_sessions_own_directory_after_the_stamp_is_not_overwritten() {
+    let project = Scratch::new("scratch-create-appears");
+    let session = Scratch::new("scratch-create-appears-session");
+    let given = session
+        .path
+        .canonicalize()
+        .expect("the session's own directory");
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(given.clone()));
+    let landed = given.join("body.md");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            &serde_json::json!({"path": landed.to_string_lossy(), "contents": "mine"}).to_string(),
+        ),
+        reply_with("understood"),
+    ]);
+    let authority = bravebot_core::file_authority::FileAuthority::new(
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    let appearing = authority.clone();
+    let appears_at = landed.clone();
+    let mut sink = ChangesTheAuthorityWhenTheModeAnswers {
+        change: Box::new(move || {
+            std::fs::write(&appears_at, "a sibling's").unwrap();
+            appearing.publish(
+                &appears_at.to_string_lossy(),
+                bravebot_core::label::Integrity::Untrusted,
+            );
+        }),
+        trail: RecordingSink::new(),
+    };
+    let mut approving = RecordingConfirmer::approving();
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("write body.md")
+            .with_file_authority(authority)
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Confining::new(
+            &mut approving,
+            bravebot_agent::PermissionMode::Bypass,
+            false,
+        ),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+    let _first = received.recv().unwrap();
+    let told = received.recv().unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&landed).ok(),
+        Some("a sibling's".to_string()),
+        "a create overwrote a file that appeared after the stamp: {told}"
+    );
+    assert!(
+        told.contains("did not come from an approval question"),
+        "{told}"
+    );
+    assert!(!told.contains("while the user was being asked"), "{told}");
+}
+
+/// What the planner is told, and what the file at `path` holds afterwards, when the confirmer's
+/// answer arrives under `mode` and a `run` line starts while the write is put to it.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn write_at_while_a_program_starts(
+    path: &str,
+    mode: bravebot_agent::PermissionMode,
+) -> (String, String) {
+    let scratch = Scratch::new(&format!("write-at-program-{mode:?}"));
+    std::fs::write(scratch.path.join(path), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            &format!(r#"{{"path":"{path}","contents":"replaced\n"}}"#),
+        ),
+        reply_with("understood"),
+    ]);
+    let authority = bravebot_core::file_authority::FileAuthority::new(
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    let started = authority.clone();
+    let mut confirmer = ChangesTheFileWhenAsked {
+        change: Box::new(move || started.note_program_started()),
+    };
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("replace the file")
+            .with_file_authority(authority)
+            .with_permission_mode(mode),
+        &mut confirmer,
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+    let _first = received.recv().unwrap();
+    let told = received.recv().unwrap();
+    (
+        std::fs::read_to_string(scratch.path.join(path)).unwrap(),
+        told,
+    )
+}
+
+/// TRUST-4, MODE-2: accepting edits answers an ordinary write and leaves a write to a protected
+/// path to the person, so a `run` line that starts while that person is asked still voids their
+/// yes, with the wording for a question that was asked. Rejects deciding that a person was asked
+/// from the mode's name alone, which would treat every write under accept-edits as unasked and
+/// spend a yes drawn before a program started.
+#[test]
+fn a_run_that_started_while_a_protected_write_was_being_asked_voids_the_yes_in_accept_edits() {
+    let (kept, told) =
+        write_at_while_a_program_starts(".gitmodules", bravebot_agent::PermissionMode::AcceptEdits);
+    assert_eq!(kept, "original\n", "a voided yes overwrote the file");
+    assert!(
+        told.contains("may have changed while the user was being asked about it"),
+        "the planner was not told the yes was voided: {told}"
+    );
+    let (kept, told) =
+        write_at_while_a_program_starts("notes.txt", bravebot_agent::PermissionMode::AcceptEdits);
+    assert_eq!(kept, "replaced\n", "the control write was refused: {told}");
+}
+
 /// As [`write_file_while_a_program_starts`], for a picture written by reference (WRITE-9).
 fn picture_write_while_a_program_starts(starts: bool) -> (Vec<u8>, String) {
-    let scratch = Scratch::new(&format!("picture-program-{starts}"));
+    picture_write_while_a_program_starts_under(starts, bravebot_agent::PermissionMode::default())
+}
+
+/// [`picture_write_while_a_program_starts`] with the confirmer's answer arriving under `mode`.
+fn picture_write_while_a_program_starts_under(
+    starts: bool,
+    mode: bravebot_agent::PermissionMode,
+) -> (Vec<u8>, String) {
+    let scratch = Scratch::new(&format!("picture-program-{starts}-{mode:?}"));
     std::fs::write(scratch.path.join("shot.png"), a_png()).unwrap();
     std::fs::write(scratch.path.join("copy.png"), b"original").unwrap();
     let authority = bravebot_core::file_authority::FileAuthority::new(
@@ -12390,7 +13286,9 @@ fn picture_write_while_a_program_starts(starts: bool) -> (Vec<u8>, String) {
             }
         }),
     };
-    let task = Task::new("keep a copy of the screenshot").with_file_authority(authority);
+    let task = Task::new("keep a copy of the screenshot")
+        .with_file_authority(authority)
+        .with_permission_mode(mode);
 
     let (bodies, _sink) = a_turn_that_reads_a_picture_for(
         &scratch,
@@ -12429,10 +13327,40 @@ fn a_picture_is_written_when_no_run_started_while_it_was_being_asked() {
     assert!(!told.contains("may have changed"), "{told}");
 }
 
+/// TRUST-4, WRITE-9: where the mode answers a picture write nobody is asked about, a `run` line
+/// started between the stamp and the write does not void it. Rejects a picture write that compares
+/// the whole stamp whatever answered, or that takes no part in the unasked rule the text write has.
+#[test]
+fn a_run_that_started_while_the_mode_answered_a_picture_write_does_not_void_it() {
+    for mode in [
+        bravebot_agent::PermissionMode::Bypass,
+        bravebot_agent::PermissionMode::AcceptEdits,
+    ] {
+        let (kept, told) = picture_write_while_a_program_starts_under(true, mode);
+        assert_eq!(
+            kept,
+            a_png(),
+            "{mode:?}: the unasked picture write was refused: {told}"
+        );
+        assert!(
+            !told.contains("while the user was being asked"),
+            "{mode:?}: {told}"
+        );
+    }
+}
+
 /// As [`write_file_while_a_program_starts`], for a download (DOWNLOAD-2). Returns the file's
 /// bytes, what the planner was told and the names left in the directory.
 fn download_while_a_program_starts(starts: bool) -> (Vec<u8>, String, Vec<String>) {
-    let scratch = Scratch::new(&format!("download-program-{starts}"));
+    download_while_a_program_starts_under(starts, bravebot_agent::PermissionMode::default())
+}
+
+/// [`download_while_a_program_starts`] with the confirmer's answer arriving under `mode`.
+fn download_while_a_program_starts_under(
+    starts: bool,
+    mode: bravebot_agent::PermissionMode,
+) -> (Vec<u8>, String, Vec<String>) {
+    let scratch = Scratch::new(&format!("download-program-{starts}-{mode:?}"));
     std::fs::write(scratch.path.join("data.bin"), b"original").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (site, _count) = serve_raw(raw_reply("application/octet-stream", b"new"));
@@ -12457,7 +13385,9 @@ fn download_while_a_program_starts(starts: bool) -> (Vec<u8>, String, Vec<String
         })),
         ..Default::default()
     };
-    let task = Task::new("refresh the data").with_file_authority(authority);
+    let task = Task::new("refresh the data")
+        .with_file_authority(authority)
+        .with_permission_mode(mode);
     turns::run_with_trust(
         &config,
         &egress,
@@ -12499,11 +13429,45 @@ fn a_download_is_saved_when_no_run_started_while_it_was_being_asked() {
     assert!(!told.contains("may have changed"), "{told}");
 }
 
+/// TRUST-4, DOWNLOAD-2: where the mode answers a download destination nobody is asked about, a
+/// `run` line started between the stamp and the write does not void it. Rejects a download that
+/// compares the whole stamp whatever answered. No staging file is left behind.
+#[test]
+fn a_run_that_started_while_the_mode_answered_a_download_does_not_void_it() {
+    for mode in [
+        bravebot_agent::PermissionMode::Bypass,
+        bravebot_agent::PermissionMode::AcceptEdits,
+    ] {
+        let (kept, told, names) = download_while_a_program_starts_under(true, mode);
+        assert_eq!(
+            kept, b"new",
+            "{mode:?}: the unasked download was refused: {told}"
+        );
+        assert!(
+            !told.contains("while the user was being asked"),
+            "{mode:?}: {told}"
+        );
+        assert_eq!(
+            names,
+            ["data.bin"],
+            "{mode:?}: a staging file was left behind"
+        );
+    }
+}
+
 /// As [`write_file_while_a_program_starts`], for an edit. The file is not touched while the person
 /// is asked, so the bytes the edit was drawn on are the bytes on disk and only the count of lines
 /// started says the yes may be about something else.
 fn edit_while_a_program_starts(starts: bool) -> (String, String) {
-    let scratch = Scratch::new(&format!("edit-program-{starts}"));
+    edit_while_a_program_starts_under(starts, bravebot_agent::PermissionMode::default())
+}
+
+/// [`edit_while_a_program_starts`] with the confirmer's answer arriving under `mode`.
+fn edit_while_a_program_starts_under(
+    starts: bool,
+    mode: bravebot_agent::PermissionMode,
+) -> (String, String) {
+    let scratch = Scratch::new(&format!("edit-program-{starts}-{mode:?}"));
     std::fs::write(scratch.path.join("a.txt"), "original\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
@@ -12528,7 +13492,8 @@ fn edit_while_a_program_starts(starts: bool) -> (String, String) {
     };
     let task = Task::new("edit a.txt")
         .with_permissions(rules(&[], &["Edit(a.txt)"], &[]))
-        .with_file_authority(authority);
+        .with_file_authority(authority)
+        .with_permission_mode(mode);
     turns::run_with_trust(
         &config,
         &egress,
@@ -12569,6 +13534,27 @@ fn an_edit_is_made_when_no_run_started_while_it_was_being_asked() {
     let (kept, told) = edit_while_a_program_starts(false);
     assert_eq!(kept, "replaced\n", "the approved edit did not land");
     assert!(!told.contains("may have changed"), "{told}");
+}
+
+/// TRUST-4, EDIT-1: where the mode answers an edit nobody is asked about, a `run` line started
+/// between the read that took the stamp and the write does not void it, and the bytes are still
+/// compared. Rejects an edit that compares the whole stamp whatever answered.
+#[test]
+fn a_run_that_started_while_the_mode_answered_an_edit_does_not_void_it() {
+    for mode in [
+        bravebot_agent::PermissionMode::Bypass,
+        bravebot_agent::PermissionMode::AcceptEdits,
+    ] {
+        let (kept, told) = edit_while_a_program_starts_under(true, mode);
+        assert_eq!(
+            kept, "replaced\n",
+            "{mode:?}: the unasked edit was refused: {told}"
+        );
+        assert!(
+            !told.contains("while the user was being asked"),
+            "{mode:?}: {told}"
+        );
+    }
 }
 
 /// What the planner is told when a write is refused because its destination leads to a different
@@ -92609,6 +93595,62 @@ fn a_vouch_a_person_declines_leaves_the_offer_and_no_trust_line() {
     );
     assert_eq!(trail_entries(&sink, "approval", "note.txt"), [OFFERED_LINE]);
     assert!(trail_entries(&sink, "trust", "note.txt trusted:").is_empty());
+}
+
+/// TRUST-4, TRACE-7, MODE-4: a vouch that bypass mode answers is spent although a `run` line a
+/// sibling delegate started while the answer was given moved the count of lines. Nobody was shown
+/// a preview, so the line made nothing untrue, and the rule the mode writes does not depend on
+/// what the file holds. Rejects comparing the whole stamp for a mode's vouch, which leaves the file
+/// quarantined and tells the planner "the user was being asked" about a question nobody was put.
+/// The line is started on the mode's approval entry, which is written after the stamp is taken
+/// and before the vouch is spent.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_vouch_the_mode_answered_survives_a_run_line_a_sibling_started() {
+    let scratch = Scratch::new("vouch-mode-sibling");
+    std::fs::write(scratch.path.join("note.txt"), "SENTINEL-NOTE: hello\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"note.txt"}"#),
+        reply_with("done"),
+    ]);
+    let authority = bravebot_core::file_authority::FileAuthority::new(
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    let mode = bravebot_agent::PermissionMode::Bypass;
+    let mut sink = StartsAProgramWhenTheModeAnswers::on(&authority);
+    let mut inner = VouchesForFiles::new(false);
+    let mut confirmer = bravebot_agent::Confining::new(&mut inner, mode, false);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("read the note")
+            .with_file_authority(authority)
+            .with_permission_mode(mode),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+    let _first = received.recv().unwrap();
+    let told = received.recv().unwrap();
+    assert!(sink.started >= 1, "the window was never hit");
+    assert_eq!(
+        trail_entries(&sink.trail, "trust", "note.txt trusted:"),
+        [BYPASS_TRUST_LINE],
+        "the mode's vouch was refused after a line started: {told}"
+    );
+    assert!(
+        !told.contains("changed while the user was being asked about it"),
+        "{told}"
+    );
 }
 
 /// One turn that lists the working directory, nobody having vouched for it, and reads the one

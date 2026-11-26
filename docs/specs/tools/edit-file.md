@@ -27,9 +27,12 @@ person approves a diff of a few lines.
 It refuses when the passage is missing, when it occurs more than once without `replace_all`, and
 when the file changed since it was read. The file has changed when its bytes differ from the ones
 read, and also when its stamp (revision and number of `run` lines started) is no longer the one
-taken with that read, so an edit answered after a `run` line started while the person was asked
-writes nothing, even where the line left the bytes as they were
-([TRUST-4](../trust-map.md#TRUST-4)). The refusal comes before the endorsement is used.
+taken with that read, so an edit a person answered after a `run` line started while the person was
+asked writes nothing, even where the line left the bytes as they were
+([TRUST-4](../trust-map.md#TRUST-4)). An edit nobody was asked about, because the permission mode or
+a rule answered it, compares the revision of the stamp and not the count of `run` lines, since no
+person read a diff that a program could have made untrue. The refusal comes before the endorsement
+is used.
 
 **Why.** A guess would change bytes nobody reviewed, and a stale diff would not describe what
 actually happens.
@@ -39,6 +42,7 @@ actually happens.
 `verified-by: bravebot_agent::turn::a_stale_edit_is_refused`
 `verified-by: bravebot_agent::turn::a_run_that_started_while_an_edit_was_being_asked_voids_the_yes`
 `verified-by: bravebot_agent::turn::an_edit_is_made_when_no_run_started_while_it_was_being_asked`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_the_mode_answered_an_edit_does_not_void_it`
 `verified-by: bravebot_agent::workspace::a_stale_write_does_not_consume_the_endorsement`
 `verified-by: bravebot_agent::turn::an_approved_edit_changes_only_the_matched_passage`
 

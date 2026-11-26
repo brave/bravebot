@@ -93,6 +93,19 @@ pub struct Stamp {
     programs: u64,
 }
 
+impl Stamp {
+    /// Whether a write prepared at `self` may go ahead where the path is stamped `now`.
+    ///
+    /// The revision must be as it was in every case: a write over a file the authority was told
+    /// of a change to is refused. The count of `run` lines is compared only where `person_asked`,
+    /// since only then did somebody see a preview that a program starting meanwhile may have made
+    /// untrue (TRUST-4). Where nobody was asked, a `run` line another delegate started between the
+    /// stamp and the write voids nothing. Numbers are compared and nothing else is read.
+    pub fn still_holds(self, now: Stamp, person_asked: bool) -> bool {
+        self.revision == now.revision && (!person_asked || self.programs == now.programs)
+    }
+}
+
 #[derive(Debug)]
 struct Shared {
     access: RwLock<()>,
@@ -613,6 +626,38 @@ impl Drop for FileEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TRUST-4: the revision is compared for every write, and the count of `run` lines only where a
+    /// person was asked. The four cases are told apart by moving the revision and the count
+    /// separately, so a comparison of either alone, of both for everyone, or of neither for the
+    /// unasked case each fails one row.
+    #[test]
+    fn a_stamp_holds_by_revision_and_by_run_lines_only_where_a_person_was_asked() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        let stamped = authority.stamp_of("a.txt");
+        assert!(stamped.still_holds(authority.stamp_of("a.txt"), true));
+        assert!(stamped.still_holds(authority.stamp_of("a.txt"), false));
+
+        authority.note_program_started();
+        let after_a_line = authority.stamp_of("a.txt");
+        assert!(
+            !stamped.still_holds(after_a_line, true),
+            "a line started while a person was asked did not void the answer"
+        );
+        assert!(
+            stamped.still_holds(after_a_line, false),
+            "a line started voided a write nobody was asked about"
+        );
+
+        authority.publish("a.txt", Integrity::Untrusted);
+        let after_a_write = authority.stamp_of("a.txt");
+        for person_asked in [true, false] {
+            assert!(
+                !stamped.still_holds(after_a_write, person_asked),
+                "a moved revision did not void the write, person_asked {person_asked}"
+            );
+        }
+    }
 
     /// A capture that had to wait for another guard records how long, and one that did not records
     /// nothing. Rejects an implementation that times every capture (a figure for a free boundary

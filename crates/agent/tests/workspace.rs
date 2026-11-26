@@ -5364,6 +5364,9 @@ fn a_failure_is_worded_about_the_name_the_caller_may_say() {
         WorkspaceError::Stale {
             path: carried.to_string(),
         },
+        WorkspaceError::StaleUnasked {
+            path: carried.to_string(),
+        },
         WorkspaceError::Contended {
             path: carried.to_string(),
         },
@@ -5424,6 +5427,25 @@ fn a_displayed_failure_still_names_the_path_it_happened_on() {
          was written or a command started, so nothing was written; read it again if its contents \
          matter, then repeat the call"
     );
+}
+
+/// A write nobody was asked about that is refused as stale says what happened and that no question
+/// was put, so the planner does not read it as an approval prompt or as another session writing
+/// into the directory, and it is told the call can be repeated.
+#[test]
+fn a_refusal_of_a_write_nobody_was_asked_about_does_not_say_the_user_was_asked() {
+    let failure = WorkspaceError::StaleUnasked {
+        path: "src/main.rs".to_string(),
+    };
+    for told in [failure.to_string(), failure.describe("src/main.rs")] {
+        assert_eq!(
+            told,
+            "'src/main.rs' may have been written, or a command started, since this write was \
+             prepared, so nothing was written. This did not come from an approval question: \
+             nobody was asked. Repeat the call; read the file again first if its contents matter"
+        );
+        assert!(!told.contains("while the user was being asked"));
+    }
 }
 
 /// The paged read must agree with the whole-file read about what is binary.

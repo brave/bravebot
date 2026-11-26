@@ -89,6 +89,24 @@ way when it is not approved. A `download_url` asks about its host and then about
 records the question that was answered no: a host that is refused as a fetch, and a file that is
 refused as a write, with the second question not put once the first is refused.
 
+A write, an edit or a save refused because the file may have been written, or a `run` line started,
+after it was prepared, is recorded as a refusal under `stale_write` and names the tool, or the step
+and its tool. The sentence says whether a person was being asked: a write a person was asked about
+says the file may have changed while a person was being asked, and a write nobody was asked about
+says it may have changed since the write was prepared and nobody was asked. Neither says the write was
+not approved, since no person said no. The entry is fixed words and carries nothing of the call
+([TRACE-2](#TRACE-2)). A write the mode answered and a stale refusal then stopped keeps its
+`approval` entry naming the mode ([TRACE-7](#TRACE-7)).
+
+A stale refusal counts as a refusal like any other. The turn does not end as clean, the run ends on
+the status for an effect a gate refused ([CLI-6](cli.md#CLI-6)), and a later call to the same tool
+that no gate refuses stops the note under the reply from naming it and changes neither
+([TURN-11](turns.md#TURN-11)). That holds for a write nobody was asked about as well, although the
+planner is told it can repeat the call and the repeat may write the file. The refusal is a decision
+of the write gate: the write did not happen, and a status that omitted it would say a turn wrote
+what it did not on its first try, as a repeat after any other refusal of a write does not make the
+turn clean ([TURN-11](turns.md#TURN-11)).
+
 A call to a server's tool ([SERVERS-7](mcp-servers.md#SERVERS-7)) that is put to a person who does
 not approve it is recorded the same way, as a refusal under `approval`. The entry names the call as
 `alias:tool`, the alias the person gave the server and the word on the list they vouched for, and
@@ -179,6 +197,9 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::turn::a_run_line_the_person_does_not_approve_is_recorded_as_not_run`
 `verified-by: bravebot_agent::turn::an_unconfined_line_the_person_does_not_approve_is_not_recorded_as_unconfined`
 `verified-by: bravebot_core::policy::a_write_or_a_fetch_the_person_did_not_approve_is_a_refusal_under_approval`
+`verified-by: bravebot_core::policy::a_write_refused_as_stale_is_a_refusal_that_says_whether_a_person_was_asked`
+`verified-by: bravebot_agent::turn::a_write_refused_as_stale_after_a_person_was_asked_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::turn::an_unasked_write_the_revision_voided_is_not_recorded_as_a_persons_no`
 `verified-by: bravebot_agent::turn::a_write_or_an_edit_the_person_does_not_approve_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::turn::a_fetch_or_a_save_the_person_does_not_approve_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::turn::a_file_of_an_apply_the_person_does_not_approve_is_recorded_under_the_apply`
@@ -391,6 +412,7 @@ The names are the modes' own text, so the entry holds no content (TRACE-2).
 `verified-by: bravebot_agent::turn::a_vouch_a_person_agrees_to_is_recorded_as_the_user_naming_the_file`
 `verified-by: bravebot_agent::turn::a_vouch_a_person_declines_leaves_the_offer_and_no_trust_line`
 `verified-by: bravebot_agent::turn::a_vouch_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_agent::turn::an_unasked_write_that_a_sibling_run_line_did_not_void_is_recorded_as_the_modes_answer`
 `verified-by: bravebot_core::policy::the_trail_says_who_answered_the_offer_to_vouch`
 `verified-by: bravebot_core::policy::deciding_to_offer_a_vouch_writes_nothing_and_asks_once`
 `verified-by: bravebot_core::policy::a_vouch_a_mode_answered_is_not_spent_on_a_version_nobody_was_shown`

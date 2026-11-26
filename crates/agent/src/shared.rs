@@ -434,6 +434,21 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         )
     }
 
+    fn confirm_write_noting_the_mode(
+        &mut self,
+        request: &WriteRequest,
+    ) -> (WriteDecision, Option<crate::confirm::WhoAnswered>) {
+        self.asked(
+            |unasked| {
+                unasked
+                    .write_noting_the_mode(request)
+                    .map(|(answer, mode)| (answer, Some(crate::confirm::WhoAnswered::Mode(mode))))
+            },
+            |held| held.confirm_write_noting_the_mode(request),
+            |refuse| refuse.confirm_write_noting_the_mode(request),
+        )
+    }
+
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
         self.asked(
             |unasked| unasked.run(request),

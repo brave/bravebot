@@ -161,6 +161,42 @@ use checkouts::{Made, TemporaryCheckouts, WorkingWrites};
 use reach::HostGrants;
 pub use reach::{Moved, PathReach, ReferenceProblem, Referenced, named_directory};
 
+/// What a write was prepared against: the path's stamp when the write was drawn, and whether a
+/// person was asked about it in between (TRUST-4).
+///
+/// Where a person was asked, the stamp is compared whole, so a `run` line that started while the
+/// question was open voids the answer. Where nobody was asked (the mode or a rule answered, or no
+/// question was drawn) no preview was shown, so only the revision is compared: a `run` line a
+/// sibling delegate started in the meantime voids nothing, and a write over a file whose revision
+/// moved is refused all the same. Numbers only; no byte of any file is read to make the choice.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Prepared {
+    stamp: Stamp,
+    person_asked: bool,
+}
+
+impl Prepared {
+    pub(crate) fn new(stamp: Stamp, person_asked: bool) -> Self {
+        Self {
+            stamp,
+            person_asked,
+        }
+    }
+
+    /// Whether the write may go ahead where the path is stamped `now`.
+    fn holds_at(self, now: Stamp) -> bool {
+        self.stamp.still_holds(now, self.person_asked)
+    }
+
+    /// The refusal for `path`, worded for whether a person was asked.
+    fn stale(self, path: String) -> WorkspaceError {
+        match self.person_asked {
+            true => WorkspaceError::Stale { path },
+            false => WorkspaceError::StaleUnasked { path },
+        }
+    }
+}
+
 /// The most an attachment may weigh.
 ///
 /// The whole thing goes into the request and is re-sent on every later round, so this bounds a
@@ -1933,9 +1969,11 @@ impl Workspace {
     /// longer describes what would happen, so the write is refused rather than applied to
     /// text nobody reviewed.
     ///
-    /// `read_at` is the stamp [`Workspace::read_stamped`] returned with `expected`. The write is
-    /// refused unless the path's stamp is still that one, so a `run` line that started while the
-    /// person was asked voids the approval even when it left the bytes as they were (TRUST-4).
+    /// `read_at` is the stamp [`Workspace::read_stamped`] returned with `expected`. The approval is
+    /// taken to be a person's, so the write is refused unless the path's stamp is still that one: a
+    /// `run` line that started while the person was asked voids it even when it left the bytes as
+    /// they were (TRUST-4). A write nobody was asked about compares the revision alone, through
+    /// [`Workspace::write_endorsed_if_unchanged_reaching`].
     pub fn write_endorsed_if_unchanged<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -1944,7 +1982,14 @@ impl Workspace {
         expected: &str,
         read_at: Stamp,
     ) -> Result<PathBuf, WorkspaceError> {
-        self.write_endorsed_if_unchanged_reaching(policy, path, contents, expected, read_at, None)
+        self.write_endorsed_if_unchanged_reaching(
+            policy,
+            path,
+            contents,
+            expected,
+            Prepared::new(read_at, true),
+            None,
+        )
     }
 
     /// [`Workspace::write_endorsed_if_unchanged`] for a write whose question was drawn when the
@@ -1955,7 +2000,7 @@ impl Workspace {
         path: &Labelled<String>,
         contents: &Labelled<String>,
         expected: &str,
-        read_at: Stamp,
+        read_at: Prepared,
         asked: Option<&Aimed>,
     ) -> Result<PathBuf, WorkspaceError> {
         // Checked before the write gates so a stale edit is reported as staleness rather than
@@ -1964,14 +2009,14 @@ impl Workspace {
         // entry.
         let relative = self.peek_relative(policy, path)?;
         policy.capture_files(|policy, capture| {
-            if read_at != capture.stamp_of(&self.trust_key(&relative)) {
-                return Err(WorkspaceError::Stale { path: relative });
+            if !read_at.holds_at(capture.stamp_of(&self.trust_key(&relative))) {
+                return Err(read_at.stale(relative));
             }
             let promoted = policy.promote_confined_read("edit_file", "path", path)?;
             let captured = self.read_text_captured(policy, &promoted, Reach::Confined)?;
             let current = policy.read_trusted_content("edit_file", &captured)?;
             if current != expected {
-                return Err(WorkspaceError::Stale { path: relative });
+                return Err(read_at.stale(relative));
             }
             Ok(())
         })?;
@@ -2021,7 +2066,7 @@ impl Workspace {
         policy: &mut Policy<'_, S>,
         path: &Labelled<String>,
         contents: &Labelled<String>,
-        expected: Option<Stamp>,
+        expected: Option<Prepared>,
         asked: Option<&Aimed>,
     ) -> Result<PathBuf, WorkspaceError> {
         policy.before_capability(Capability::FileWrite)?;
@@ -2099,7 +2144,7 @@ impl Workspace {
         policy: &mut Policy<'_, S>,
         relative: String,
         contents: &Labelled<String>,
-        expected: Option<Stamp>,
+        expected: Option<Prepared>,
     ) -> Result<PathBuf, WorkspaceError> {
         self.write_released(
             policy,
@@ -2123,7 +2168,7 @@ impl Workspace {
         policy: &mut Policy<'_, S>,
         path: &Labelled<String>,
         label: bravebot_core::label::Label,
-        expected: Option<Stamp>,
+        expected: Option<Prepared>,
         asked: Option<&Aimed>,
         fill: impl FnOnce(
             &mut std::fs::File,
@@ -2160,15 +2205,17 @@ impl Workspace {
     /// `label` is the body's, which is what the file's recorded trust follows. The bytes are
     /// `put`'s to carry, behind the proof it is handed.
     ///
-    /// `expected` is the stamp the person's approval was drawn on. It is compared whole, the one
-    /// place any approval of a write is checked: the revision alone would miss a `run` line that
-    /// started while the question was open (TRUST-4).
+    /// `expected` is what the write was prepared against. Where a person was asked it holds the
+    /// stamp their approval was drawn on, compared whole: the revision alone would miss a `run`
+    /// line that started while the question was open (TRUST-4). Where nobody was asked only the
+    /// revision is compared, so a `run` line a sibling delegate started in the meantime does not
+    /// void the write. This is the one place any approval of a write is checked.
     fn write_released<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
         relative: String,
         label: bravebot_core::label::Label,
-        expected: Option<Stamp>,
+        expected: Option<Prepared>,
         put: impl FnOnce(&Path, &bravebot_core::policy::Declassification) -> std::io::Result<()>,
     ) -> Result<PathBuf, WorkspaceError> {
         let resolved = self.resolve(&relative)?;
@@ -2207,10 +2254,10 @@ impl Workspace {
         // long read of a large file keeps no other capture waiting.
         let (effect, captured_trust) = policy.capture_files(|policy, capture| {
             let key = self.trust_key(&relative);
-            if expected.is_some_and(|stamp| stamp != capture.stamp_of(&key)) {
-                return Err(WorkspaceError::Stale {
-                    path: relative.clone(),
-                });
+            if let Some(prepared) = expected
+                && !prepared.holds_at(capture.stamp_of(&key))
+            {
+                return Err(prepared.stale(relative.clone()));
             }
             let captured_trust =
                 if policy.read_is_quarantined_under_names(&key, &others.keys, others.complete) {
@@ -7922,7 +7969,7 @@ mod tests {
             &mut policy,
             "src/a.md".to_string(),
             Label::trusted_public(),
-            Some(approved_at),
+            Some(Prepared::new(approved_at, true)),
             |_, _| Ok(()),
         );
         assert!(
@@ -7930,6 +7977,69 @@ mod tests {
             "{stale:?}"
         );
         let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// TRUST-4: the count of `run` lines is compared only where a person was asked. A line started
+    /// after the stamp voids a write a person was asked about, and does not void one nobody was
+    /// asked about, which a sibling delegate's `run` line would otherwise refuse. The revision is
+    /// compared in both cases, so a write over a file whose revision moved is refused either way and
+    /// the refusal for the unasked case does not say a person was asked. Rejects comparing the whole
+    /// stamp for every write, and rejects dropping the comparison for the unasked case.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_run_line_voids_only_a_write_a_person_was_asked_about_and_the_revision_voids_both() {
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        let (path, workspace) = tree("stamp-asked-or-not");
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        let authority = FileAuthority::new(trust);
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "write");
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+            &mut sink,
+        )
+        .unwrap()
+        .with_file_authority(authority.clone());
+        let stamp_of = |policy: &mut Policy<'_, RecordingSink>, name: &str| {
+            policy.capture_files(|_, capture| capture.stamp_of(&workspace.trust_key(name)))
+        };
+        let write = |policy: &mut Policy<'_, RecordingSink>, name: &str, prepared: Prepared| {
+            workspace.write_released(
+                policy,
+                name.to_string(),
+                Label::trusted_public(),
+                Some(prepared),
+                |resolved, _| std::fs::write(resolved, "body"),
+            )
+        };
+
+        // A `run` line starts after the stamp, as a sibling delegate's does.
+        let unasked = Prepared::new(stamp_of(&mut policy, "unasked.md"), false);
+        let asked = Prepared::new(stamp_of(&mut policy, "asked.md"), true);
+        authority.note_program_started();
+        write(&mut policy, "unasked.md", unasked).expect("a write nobody was asked about is kept");
+        let voided = write(&mut policy, "asked.md", asked);
+        assert!(
+            matches!(&voided, Err(WorkspaceError::Stale { path }) if path == "asked.md"),
+            "{voided:?}"
+        );
+        assert!(!path.join("asked.md").exists());
+
+        // The revision of the path moves after the stamp: refused in both cases.
+        let unasked = Prepared::new(stamp_of(&mut policy, "moved.md"), false);
+        assert!(authority.publish("moved.md", bravebot_core::label::Integrity::Untrusted));
+        let refused = write(&mut policy, "moved.md", unasked);
+        assert!(
+            matches!(&refused, Err(WorkspaceError::StaleUnasked { path }) if path == "moved.md"),
+            "{refused:?}"
+        );
+        assert!(!path.join("moved.md").exists());
+        std::fs::remove_dir_all(path).ok();
     }
 
     /// The firmlink name of the working directory is another key for every file in it, so a write

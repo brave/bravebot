@@ -241,7 +241,9 @@ over a string the planner chose rather than one you typed.
 **A yes is not spent if the file may have changed while you were asked.** If the file changed, or a
 `run` line started while the question was open, the yes is thrown away, the file stays quarantined
 and the read says so. A program can rewrite files its line does not name, so the text you read in the
-preview may no longer be what the file holds.
+preview may no longer be what the file holds. Where the permission mode vouches in your place, nobody
+read a preview, so only a change to the file throws the vouch away, and a `run` line that started
+meanwhile does not.
 
 ### `/add-dir`
 

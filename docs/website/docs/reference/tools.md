@@ -513,6 +513,12 @@ The agent is told the path may have changed while you were being asked, and to r
 repeat the call. Any `run` line that started during the question has this effect, even one that wrote
 nothing. `edit_file` and `download_url` follow the same rule.
 
+A write nobody asked you about, because the permission mode answered it or a rule allowed it, is not
+refused for a `run` line that started meanwhile, such as one another delegate started, since you read
+no preview. It is still refused if the file was written in between. The agent is then told the file
+may have been written, or a command started, since the write was prepared, that no question was put
+to you, and to repeat the call.
+
 See [Trusted directories](../security/trust.md#what-a-write-does) for what a write does to the trust
 map.
 

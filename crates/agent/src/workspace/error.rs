@@ -80,6 +80,10 @@ pub enum WorkspaceError {
     /// The file may have changed since the approval was drawn, because it was written or because a
     /// `run` line started meanwhile (TRUST-4), so the approved change no longer applies.
     Stale { path: String },
+    /// The file was written, or a `run` line started, after a write nobody was asked about was
+    /// prepared (TRUST-4). No question was put to a person, so nothing was voided by an answer;
+    /// the call can be repeated.
+    StaleUnasked { path: String },
     /// Another effect already holds the path, so this write was refused rather than interleaved.
     Contended { path: String },
     /// The destination leads to a different file now than when the person was asked, or a rule
@@ -266,6 +270,14 @@ impl WorkspaceError {
                      again if its contents matter, then repeat the call"
                 )
             }
+            Self::StaleUnasked { .. } => {
+                format!(
+                    "'{named}' may have been written, or a command started, since this write was \
+                     prepared, so nothing was written. This did not come from an approval \
+                     question: nobody was asked. Repeat the call; read the file again first if \
+                     its contents matter"
+                )
+            }
             Self::Contended { .. } => {
                 format!("another write to '{named}' is still in progress, so nothing was written")
             }
@@ -341,6 +353,7 @@ impl WorkspaceError {
             | Self::Io { path, .. }
             | Self::Unreadable { path, .. }
             | Self::Stale { path }
+            | Self::StaleUnasked { path }
             | Self::Contended { path }
             | Self::Redirected { path }
             | Self::Protected { path }
