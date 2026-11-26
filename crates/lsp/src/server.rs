@@ -4245,8 +4245,9 @@ done
     /// directory made for the session under the place the caller named, and not under the system
     /// temporary directory.
     ///
-    /// It rejects a fix that moves `CARGO_TARGET_DIR` and leaves `GOCACHE` derived from somewhere
-    /// else: gopls loads and runs what is in its build cache with the person's access.
+    /// It rejects a launch that points `CARGO_TARGET_DIR` at the session's directory and leaves
+    /// `GOCACHE` somewhere else: gopls loads and runs what is in its build cache with the person's
+    /// access.
     #[cfg(unix)]
     #[test]
     #[expect(clippy::expect_used, reason = "a test fails by panicking")]
@@ -4701,9 +4702,9 @@ done
     /// caller named and not under the system temporary directory.
     ///
     /// It rejects a launch that sets `TMPDIR` only for an index kept under the state directory,
-    /// which leaves these servers the system temporary directory a stage may write while the
-    /// other languages are moved out of it. Run on the directory a session that keeps nothing is
-    /// handed, which the test beside it for a kept index does not reach.
+    /// which leaves these servers the system temporary directory a stage may write, while the
+    /// Rust and Go servers index under the session's directory. Run on the directory a session
+    /// that keeps nothing is handed, which the test beside it for a kept index does not reach.
     #[cfg(unix)]
     #[test]
     #[expect(clippy::expect_used, reason = "a test fails by panicking")]

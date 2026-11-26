@@ -823,8 +823,8 @@ mod tests {
 
     /// INPUT-14 (#4609): where `bravebot` or `bravebot/editor` is a link, nothing is made and nothing
     /// is made where the link leads. A link there is not one a stage can make (SANDBOX-12 keeps it out
-    /// of the cache rows), but an earlier version or a person can, and a directory made through it is
-    /// in a place this process does not know the owner or the mode of.
+    /// of the cache rows), but a person can, and a directory made through it is in a place this
+    /// process does not know the owner or the mode of.
     ///
     /// The regression it rejects is a directory made with `create_dir_all`, which follows the link.
     #[cfg(unix)]
