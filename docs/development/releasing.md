@@ -9,15 +9,18 @@ make all-platforms
 
 ## Publishing a version
 
-Two steps to name the version, then manual publishes: Jenkins for signed binaries, then
-GitHub Actions for the npm package, then the package manifests. Each can wait days after the tag.
+Two steps to name the version, then publish the signed binaries, the npm packages and
+the package manifests. The release pipeline builds the signed binaries and publishes
+the GitHub release; the npm packages publish automatically when that release is
+published. `make publish-npm` remains the manual retry. Each step can wait days after
+the tag.
 
 ```sh
 make bump-version BUMP=bugfix   # or minor, major
 # review the commit it made, land it on main
 make github-release
-# later: Jenkins job bravebot-build with UPLOAD and RELEASE
-# later: make publish-npm TAG=v<version>
+# later: the release pipeline with UPLOAD and RELEASE
+# then the npm packages publish automatically; retry with make publish-npm TAG=v<version>
 # later: make package-manifests TAG=v<version>
 ```
 
@@ -63,24 +66,31 @@ git config bravebot.releaseRemote upstream
 `github-release` fails before tagging if no remote by that name exists.
 
 The tag push does not publish binaries. GitHub Actions still builds and tests on the tag.
-Signed, configured assets are built, notarised, and uploaded by the Jenkins job
-`bravebot-build` with `UPLOAD` and `RELEASE` enabled. That job builds the tip of the branch it
-is given. A RELEASE run refuses unless tag `v<version>` from `Cargo.toml` already exists and
+Signed, configured assets are built, notarised, and uploaded by the release pipeline with
+`UPLOAD` and `RELEASE` enabled. It builds the tip of the branch it is given. A RELEASE run refuses unless tag `v<version>` from `Cargo.toml` already exists and
 points at that commit, then creates a GitHub release of that name and attaches the signed
 binaries plus the `.sha256` files written after signing. `gh release create` fails if that
 release already exists.
 
-After Jenkins has created that GitHub release, `make publish-npm TAG=v<version>` dispatches
-`publish-npm.yml` from that tag. It publishes seven packages: `@brave/bravebot-<platform>-<arch>`
-for each of the six platforms, each holding that platform's binary, and then `@brave/bravebot`,
-which lists the six as `optionalDependencies` at its own version and holds no binary. Without
-`TAG` the target takes the latest GitHub release rather than the version in the tree, which may
-already be bumped past it. The workflow, not the target, refuses a tag that does not match its
-tree or a release missing an asset. OIDC trusted publishing; there is no `NPM_TOKEN`, and the
-trusted publisher on npmjs.com must name that workflow file, and the `npm-publish` environment, for
-each of the seven packages. The publishing jobs wait on that environment's required reviewer, so
-the dispatch is followed by an approval from a second maintainer
+Publishing that final GitHub release starts `publish-npm.yml` automatically. GitHub runs the
+workflow file at the tagged commit, which checks out that tag and publishes seven packages. A
+prerelease or draft is refused. The packages are:
+`@brave/bravebot-<platform>-<arch>` for each of the six platforms, each holding that platform's
+binary, and then `@brave/bravebot`, which lists the six as `optionalDependencies` at its own
+version and holds no binary. `make publish-npm TAG=v<version>` is the manual retry: it reruns the
+failed jobs of the release-event run for the tag. There is no dispatch, and a bad build needs a
+new patch version. A rerun is allowed for 30 days; after that, publish a new patch version.
+Without `TAG` the target takes the latest GitHub release rather than the version in the tree,
+which may already be bumped past it. The workflow, not the target, refuses a tag that does not
+match its tree or a release missing an asset. OIDC trusted publishing; there is no `NPM_TOKEN`,
+and the trusted publisher on npmjs.com must name that workflow file, and the `npm-publish`
+environment, for each of the seven packages. The environment has a required reviewer, so a
+release event is followed by an approval from a second maintainer
 ([branch-protection.md](branch-protection.md#the-npm-publish-environment)).
+
+The release must be published as a draft with a PAT or a GitHub App token: `GITHUB_TOKEN` does not
+start the workflow. Immutable releases are a required repository setting; if a release is
+published before its assets, the asset check fails and the fix is a new patch release.
 
 A trusted publisher can be added only to a package that exists, so a platform package name the
 registry has never held is created first. Log in with `npm login` as a maintainer who can publish
@@ -88,8 +98,9 @@ under `@brave`, then run `make npm-bootstrap`. It publishes a placeholder, `0.0.
 the `bootstrap` tag, for each platform package the registry lacks, and prints the npmjs.com page
 for each. On each page add a trusted publisher: GitHub Actions, repository `brave/bravebot`,
 workflow `publish-npm.yml`, environment `npm-publish`. This is needed once per new package name, not
-once per release, and `make npm-bootstrap` does nothing when every name exists. `make publish-npm`
-stops before it dispatches when a platform package is missing
+once per release, and `make npm-bootstrap` does nothing when every name exists. The publish
+workflow's release job runs the same check before the platform jobs, and `make publish-npm` stops
+before it reruns; both fail when a platform package is missing
 ([RELEASE-21](../specs/releases.md#RELEASE-21)).
 
 Each platform package is built by `npm/scripts/stage-platform-package.js` on a runner of that
@@ -97,10 +108,10 @@ platform's own kind. It verifies the binary against its published `.sha256` befo
 then its signature: the `.sha256` on Linux, the code signature on macOS and Windows. `install.sh`
 does the same when it runs, except on Windows, which it does not install, and `install.ps1` does
 the same for Windows alone. Installing the npm
-package runs no script and checks nothing itself. A dispatch after a partial failure publishes
+package runs no script and checks nothing itself. A rerun after a partial failure publishes
 the packages that are missing and skips the ones the registry already has.
 
-After Jenkins has created that GitHub release, `make package-manifests TAG=v<version>` downloads
+After the release pipeline has created that GitHub release, `make package-manifests TAG=v<version>` downloads
 the macOS and Windows `.sha256` files from it and runs `contrib/package-manifests.py`, which writes
 `dist/packages/Casks/bravebot.rb` and the three WinGet manifests under
 `dist/packages/manifests/b/Brave/Bravebot/<version>/`. It refuses a tag that is not `v` plus the

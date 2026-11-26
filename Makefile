@@ -102,9 +102,9 @@ help:
 	@echo
 	@echo "Releasing:"
 	@echo "  make bump-version BUMP=bugfix|minor|major   Set the next version"
-	@echo "  make github-release                         Tag it; Jenkins and npm publish are later"
+	@echo "  make github-release                         Tag it; signed assets and npm publish are later"
 	@echo "  make npm-bootstrap                          Create the name of each new platform package, before its first publish"
-	@echo "  make publish-npm [TAG=v<version>]           Publish npm for TAG, or the latest GitHub release"
+	@echo "  make publish-npm [TAG=v<version>]           Retry the npm publish for TAG, or the latest GitHub release"
 	@echo "  make package-manifests TAG=v<version>       Write the Homebrew cask and WinGet manifests into dist/packages"
 	@echo "  make app-bundle                             Package the desktop application, release build"
 	@echo "  make app-release                            Its disk images for both Mac architectures, unsigned"
@@ -1459,8 +1459,9 @@ bump-version:
 	echo "review it, land it on main, then run: make github-release"
 
 # Tags the current version and pushes it. GitHub Actions runs CI on the tag.
-# Signed assets and the npm package are published later, each by hand: Jenkins
-# (bravebot-build with UPLOAD and RELEASE), then make publish-npm.
+# Signed assets are published later by the release pipeline (UPLOAD and RELEASE).
+# Publishing that release publishes the npm packages automatically; make
+# publish-npm is the manual retry.
 #
 # A refused push takes the tag with it. A tag left behind locally is one the
 # remote never got, and the next run reports the version as already tagged
@@ -1505,8 +1506,8 @@ github-release:
 		exit 1; \
 	fi; \
 	echo "pushed $(TAG) to $(RELEASE_REMOTE); GitHub Actions will run CI on the tag"; \
-	echo "publish signed assets later with Jenkins job bravebot-build (UPLOAD and RELEASE)"; \
-	echo "then publish npm: make publish-npm TAG=$(TAG)"; \
+	echo "publish signed assets later with the release pipeline (UPLOAD and RELEASE)"; \
+	echo "the npm packages publish when that release is published; retry with: make publish-npm TAG=$(TAG)"; \
 	echo "watch CI with: gh run watch --repo brave/bravebot"
 
 # Publishes a placeholder under each platform package name the registry has no package of, so
@@ -1518,6 +1519,9 @@ npm-bootstrap:
 
 # Without TAG on the command line, the latest GitHub release: this tree may be bumped past it.
 # Refuses first when the registry has no package of a platform's name (make npm-bootstrap).
+# Reruns the failed jobs of the release-event run for TAG; there is no dispatch.
+# The lookup filters by branch/tag before limiting, so thirty newer releases do not hide it.
+# GitHub allows a rerun for 30 days; after that, or for a bad build, publish a new patch version.
 .PHONY: publish-npm
 publish-npm:
 	@set -eu; \
@@ -1527,9 +1531,14 @@ publish-npm:
 		tag="$$(gh release view --repo brave/bravebot --json tagName --jq .tagName)"; \
 	fi; \
 	node npm/scripts/bootstrap-platform-packages.js --check; \
-	echo "dispatching publish-npm.yml for $$tag"; \
-	gh workflow run publish-npm.yml --repo brave/bravebot --ref "$$tag" -f tag="$$tag"; \
-	echo "watch it with: gh run watch --repo brave/bravebot"
+	run_id="$$(gh run list --repo brave/bravebot --workflow publish-npm.yml --event release --branch "$$tag" --limit 1 --json databaseId --jq '.[0].databaseId')"; \
+	if [ -z "$$run_id" ]; then \
+		echo "error: no publish-npm run for $$tag; publish a new patch release instead" >&2; \
+		exit 1; \
+	fi; \
+	echo "rerunning failed jobs of publish-npm.yml run $$run_id for $$tag"; \
+	gh run rerun "$$run_id" --failed --repo brave/bravebot; \
+	echo "watch it with: gh run watch $$run_id --repo brave/bravebot"
 
 .PHONY: package-manifests
 package-manifests:

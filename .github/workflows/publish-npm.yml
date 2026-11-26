@@ -1,23 +1,33 @@
 name: Publish npm
 
-# Started by hand, after the tag exists and after Jenkins has created the GitHub
-# release. Authentication is OIDC: there is no NPM_TOKEN.
+# A published final GitHub release starts the publish. The release pipeline creates the
+# release only after its signed assets are uploaded, so the event marks the point the
+# packages can be built. Authentication is OIDC: there is no NPM_TOKEN. A prerelease
+# or draft is refused by the release job below.
+#
+# The release must be published by a PAT or a GitHub App token: GitHub does not start a
+# workflow for an event triggered by the repository's GITHUB_TOKEN.
 #
 # Seven packages are published, the six platform packages first. Each @brave/bravebot-<platform>
 # holds the verified binary for one platform, and @brave/bravebot depends on all six and holds
 # none.
 #
+# GitHub runs the workflow file at the tagged commit, not the default branch. A tag whose
+# commit carries a modified copy runs that copy, so the npm-publish environment's required
+# reviewer is the control. A failed publish is retried by rerunning this run; a bad build is
+# fixed by bumping the patch version and publishing a new release.
+#
 # On npmjs.com, the trusted publisher of every one of the seven packages must name this file
-# exactly: publish-npm.yml, and the GitHub environment npm-publish. That environment has a required
-# reviewer who is not the dispatcher (docs/development/branch-protection.md), and it is what holds a
-# dispatch of another ref's copy of this file: the dispatcher writes that copy, so nothing in it can.
+# exactly: publish-npm.yml, and the GitHub environment npm-publish. That environment has a
+# required reviewer who is not the publisher (docs/development/branch-protection.md), and it is
+# what holds a tag whose commit carries a copy of this file without the refusals below.
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Version tag to publish (v followed by the version in the tree)
-        required: true
-        type: string
+  release:
+    types: [released]
+
+# Set the run title from the release tag, so a monitor can find the run without
+# guessing.
+run-name: Publish npm ${{ github.event.release.tag_name }}
 
 # The floor for anything added here later. The OIDC grant is not in it: it is
 # declared on the one job that publishes, because a grant is readable by every step
@@ -40,11 +50,11 @@ jobs:
     steps:
       # refs/tags/ rather than the bare name: handed an unqualified ref, this action
       # looks for a remote branch of that name before a tag of it, so a branch called
-      # v0.9.0 is what a dispatch of v0.9.0 would lint. Qualified, the fetch is for the
-      # tag alone and a tag that does not exist fails the run.
+      # v0.9.0 is what an unqualified checkout would take. Qualified, the fetch is for
+      # the tag alone and a tag that does not exist fails the run.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: refs/tags/${{ github.event.release.tag_name }}
 
       # The wrapper runs no script at install and depends on nothing but exactly the platform
       # packages, each at its own version. Any other, or one at a range, is bytes nobody reviewed.
@@ -82,7 +92,7 @@ jobs:
         run: python3 contrib/check-pnpm-lockfiles.py
 
   # What can be refused about the release without a platform's own tools, before any package is
-  # published: the tag, the assets, and the signature on each Linux checksum. The macOS and
+  # published: the tag, the registry names, the assets, and the signature on each Linux checksum. The macOS and
   # Windows signatures are checked by the platform jobs below, which have the tools. It holds only
   # `contents: read`, so the grant is not in the job that reads the release.
   release:
@@ -96,11 +106,16 @@ jobs:
       # the tree passes both and the publishing jobs read a different one.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: refs/tags/${{ github.event.release.tag_name }}
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
 
       - name: Refuse a tag that does not match the tree
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           set -eu
           cargo_version="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' Cargo.toml | head -n 1)"
@@ -114,10 +129,30 @@ jobs:
             exit 1
           fi
 
+      # The released event is for final releases; read the release itself so a
+      # mislabeled or promoted release is held to the same rule.
+      - name: Refuse a prerelease or draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -eu
+          release="$(gh release view "$TAG" --json isPrerelease,isDraft)"
+          if [ "$(printf '%s' "$release" | jq -r '.isPrerelease or .isDraft')" = "true" ]; then
+            echo "error: publish-npm runs only for final releases; $TAG is a prerelease or draft" >&2
+            exit 1
+          fi
+
+      # The registry has no trusted publisher for a name it has never held, so the
+      # platform job would fail on the 404 after six runners started. Check the names
+      # here, before the matrix fans out.
+      - name: Refuse a platform package name the registry has never held
+        run: node npm/scripts/bootstrap-platform-packages.js --check
+
       - name: Refuse a GitHub release that is missing a platform asset
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           set -eu
           names="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
@@ -147,7 +182,7 @@ jobs:
           done
           if [ -n "$missing" ]; then
             echo "error: GitHub release $TAG is missing:$missing"
-            echo "run Jenkins job bravebot-build (UPLOAD and RELEASE) first"
+            echo "run the release pipeline (UPLOAD and RELEASE) first"
             exit 1
           fi
 
@@ -156,7 +191,7 @@ jobs:
       - name: Refuse a Linux checksum whose signature does not verify
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           set -eu
           fingerprint="$(sed -n 's/^const SIGNING_KEY_FINGERPRINT = "\([0-9A-F]\{40\}\)";$/\1/p' npm/scripts/stage-platform-package.js)"
@@ -187,7 +222,7 @@ jobs:
   # signature that is not Brave's, and publishes what that script wrote. What is published is
   # what was verified in the same job.
   #
-  # A package already on the registry at this version is left alone, so a dispatch after a
+  # A package already on the registry at this version is left alone, so a rerun after a
   # partial failure publishes what is missing. A version cannot be published twice, and one
   # platform being refused does not undo the others.
   #
@@ -225,7 +260,7 @@ jobs:
       # Qualified for the reason above.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: refs/tags/${{ github.event.release.tag_name }}
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
@@ -268,7 +303,7 @@ jobs:
       # to the tag.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: refs/tags/${{ github.event.release.tag_name }}
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:

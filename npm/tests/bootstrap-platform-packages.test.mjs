@@ -254,7 +254,7 @@ test("the instructions name the page where each published package takes a truste
     }
   }));
 
-/** The check is what the dispatch step runs, so it fails on the first absence and names them all. */
+/** The check is the preflight, so it fails on the first absence and names them all. */
 test("the check names every package the registry lacks, and passes when there is none", () => {
   const held = [NAMES[0], NAMES[5]];
 
@@ -279,18 +279,41 @@ test("the check publishes nothing", () => {
 });
 
 /**
- * The dispatch is the step that costs a second person's approval and six runner jobs. A missing
- * package fails it after both, so the Makefile asks first.
+ * A rerun costs six runner jobs. A missing package fails it after that, so the
+ * Makefile asks first.
  */
-test("make publish-npm checks the registry before it dispatches the workflow", () => {
+test("make publish-npm checks the registry before it reruns the workflow", () => {
   const makefile = read("../../Makefile");
   const recipe = makefile.slice(makefile.indexOf("\npublish-npm:"), makefile.indexOf("\n.PHONY: package-manifests"));
 
   const checked = recipe.indexOf("bootstrap-platform-packages.js --check");
-  const dispatched = recipe.indexOf("gh workflow run publish-npm.yml");
+  const rerun = recipe.indexOf("gh run rerun");
   assert.ok(checked !== -1, "publish-npm does not run the check");
-  assert.ok(dispatched !== -1, "publish-npm does not dispatch");
-  assert.ok(checked < dispatched, "the check runs after the dispatch");
+  assert.ok(rerun !== -1, "publish-npm does not rerun");
+  assert.ok(checked < rerun, "the check runs after the rerun");
+  assert.ok(
+    recipe.includes('--branch "$$tag"'),
+    "the run lookup is not filtered by the release tag"
+  );
+  assert.ok(
+    recipe.includes('gh run rerun "$$run_id" --failed'),
+    "publish-npm reruns every job instead of the failed ones"
+  );
+});
+
+/**
+ * The release event does not go through the Makefile, so the workflow runs the same
+ * check before the six platform jobs start.
+ */
+test("the publish workflow checks the registry before the platform jobs", () => {
+  const workflow = read("../../.github/workflows/publish-npm.yml");
+  const release = workflow.indexOf("  release:\n    name: Check the GitHub release");
+  const platform = workflow.indexOf("  platform:\n    name:");
+  const checked = workflow.indexOf("bootstrap-platform-packages.js --check");
+
+  assert.ok(release !== -1, "the release job is missing");
+  assert.ok(platform !== -1, "the platform job is missing");
+  assert.ok(checked > release && checked < platform, "the check is not before the platform jobs");
 });
 
 /**

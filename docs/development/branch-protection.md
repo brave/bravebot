@@ -80,23 +80,26 @@ changing the setting or adding a check, and both change this page.
 
 ## The npm-publish environment
 
-`publish-npm.yml` runs the file at the ref it is dispatched on, and the npm trusted-publisher record
-checks the repository and the workflow filename, not the ref. The `platform` and `publish` jobs, the
-two that hold `id-token: write`, therefore name `environment: npm-publish`
-([RELEASE-11](../specs/releases.md#RELEASE-11)). The environment is a repository setting, so this
-page is where it is recorded:
+`publish-npm.yml` runs on `release: released`. GitHub runs the workflow file at the tagged commit,
+not the default branch. The npm trusted-publisher record checks the repository and the workflow
+filename, not the ref. The `platform` and `publish` jobs, the two that hold `id-token: write`,
+therefore name `environment: npm-publish` ([RELEASE-11](../specs/releases.md#RELEASE-11)). The
+environment is a repository setting, so this page is where it is recorded:
 
 | Setting | Value |
 |---|---|
 | Environment name | `npm-publish` |
-| Required reviewers | a maintainer who is not the person dispatching |
+| Required reviewers | a maintainer who is not the person who published the release |
 | Prevent self-review | true |
-| Deployment branches and tags | `v*` tags and `main` (narrows the ref; the reviewer is the control) |
+| Deployment branches and tags | `v*` tags and `main` (the release event is a `v*` tag) |
+| Immutable releases | required; admin follow-up, not enabled by this PR |
 
 On npmjs.com, each of the seven packages' trusted-publisher record names the environment
-`npm-publish` beside the repository and `publish-npm.yml`. A dispatch from a ref that is neither a
-tag nor `main`, or one nobody approves, then publishes nothing. Read the live values with a
-maintainer's token:
+`npm-publish` beside the repository and `publish-npm.yml`. A release event runs the file at the
+tagged commit. A write collaborator can push a tag whose commit carries a copy of this file
+without its refusals and publish a release for it; the environment's required reviewer is the
+control, because a copy cannot remove a repository setting. A release event nobody approves
+publishes nothing. Read the live values with a maintainer's token:
 
 ```sh
 gh api repos/brave/bravebot/environments/npm-publish
