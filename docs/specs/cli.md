@@ -2210,6 +2210,7 @@ status as a substituted `--model` does.
 `verified-by: bravebot_cli::main::a_blank_processor_model_is_refused_rather_than_read_as_no_choice`
 `verified-by: bravebot_cli::main::a_processor_model_the_managed_settings_refuse_is_refused_before_the_run`
 `verified-by: bravebot_cli::running::a_processor_model_nothing_serves_is_refused_before_the_run`
+`verified-by: bravebot_cli::running::a_processor_model_for_a_service_with_no_block_is_refused_before_the_run`
 `verified-by: bravebot_cli::running::a_processor_model_named_on_the_command_line_runs_a_turns_processor`
 `verified-by: bravebot_cli::running::a_processor_model_named_on_the_command_line_runs_a_manifest_step_and_outranks_the_setting`
 `verified-by: bravebot_cli::running::a_blank_processor_model_is_refused_before_the_run`

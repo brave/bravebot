@@ -99410,6 +99410,84 @@ fn an_advisor_the_settings_name_that_nothing_serves_is_answered_per_call_and_sto
     );
 }
 
+/// ADVISOR-8, ADVISOR-7, BACKEND-3: a model the setting names that is written for a service
+/// bravebot knows, with no `provider` block of that id, does not stop the run or hide the tool; each
+/// call is answered with the not-served sentence and nothing is sent for it. The endpoint is the
+/// test's server, which answers for any name, so an advisor call that was sent would reach it under
+/// the model's name and be recorded.
+///
+/// Rejects removing the `Serving::Unconfigured` arm from `advisor::consult`, which sends the whole
+/// conversation to the endpoint under `ollama/some-model`, and a refusal that ends the turn after
+/// the first call.
+#[test]
+fn an_advisor_the_settings_name_for_a_service_with_no_block_is_answered_per_call_and_stops_nothing()
+{
+    let scratch = Scratch::new("advisor-setting-no-block");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("advisor", AN_ADVISOR_CALL),
+        tool_request(
+            "advisor",
+            r#"{"question":"and which file after that?","why":"asking again"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let mut config = config_for(&endpoint);
+    config.advisor_model = Some("ollama/some-model".into());
+    let egress = bravebot_net::Egress::new();
+    assert_eq!(
+        bravebot_agent::backend::serving(&config, &egress, "ollama/some-model"),
+        bravebot_agent::backend::Serving::Unconfigured {
+            id: "ollama".into()
+        },
+        "this test needs a model written for a service with no block"
+    );
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("choose the first file to read"),
+        &mut bravebot_agent::Unattended,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("a setting naming a model with no provider block does not stop the run");
+    let requests: Vec<serde_json::Value> = every_request(&received)
+        .iter()
+        .map(|body| serde_json::from_str(body).expect("a request"))
+        .collect();
+
+    assert_eq!(
+        requests.len(),
+        3,
+        "the planner's three requests and nothing for the advisor"
+    );
+    assert!(
+        the_tools_in(&requests[0]).contains(&"advisor".to_string()),
+        "the tool was withheld up front"
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.to_string().contains("ollama/some-model")),
+        "a request named the advisor model"
+    );
+    let sentence = "refused: no configured service answers for the advisor model, so it is not \
+                    asked. Carry on without it.";
+    assert!(
+        requests[1].to_string().contains(sentence),
+        "the first call was not answered with the sentence: {}",
+        requests[1]
+    );
+    assert_eq!(
+        requests[2].to_string().matches(sentence).count(),
+        2,
+        "the second call was not refused again: {}",
+        requests[2]
+    );
+}
+
 /// ADVISOR-7: a stop while the advisor is being asked ends the turn as a stop anywhere else does,
 /// carrying the requests that were sent, and is not read back to the planner as a failed call.
 #[test]

@@ -195,6 +195,8 @@ Brave's own roster lists a name written that way is not known here, and
 `verified-by: bravebot_ui_bridge::models::the_window_refuses_a_model_for_a_known_service_that_has_no_block`
 `verified-by: bravebot_agent::turn::a_skill_whose_model_names_a_service_with_no_block_keeps_the_sessions_model_and_names_it`
 `verified-by: bravebot_tui::app::tests::instructions::an_advisor_written_for_a_service_with_no_block_is_refused_naming_it_and_the_held_one_stays`
+`verified-by: bravebot_agent::turn::an_advisor_the_settings_name_for_a_service_with_no_block_is_answered_per_call_and_stops_nothing`
+`verified-by: bravebot_cli::running::a_processor_model_for_a_service_with_no_block_is_refused_before_the_run`
 `verified-by: bravebot_tui::app::tests::naming::a_definition_whose_model_names_a_service_with_no_block_runs_nothing_and_says_so`
 
 `verified-by: bravebot_agent::backend::a_configured_bedrock_model_selects_the_bedrock_backend`
