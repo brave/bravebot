@@ -1582,7 +1582,8 @@ impl Bridge {
                     // Taken as the last turn's, as a resume takes it (OPEN-3, OPEN-6). The child
                     // keeps no checkouts.
                     if let Ok(workspace) = Workspace::new(&project) {
-                        let loops = crate::open_loops::of(&forked, &workspace);
+                        // The fork starts with no goal (GOAL-12).
+                        let loops = crate::open_loops::of(&forked, &workspace, false);
                         forked.open_loops.ended_with(loops);
                     }
                     forked.account = self.account_session(&project);
@@ -2269,6 +2270,10 @@ impl Bridge {
         let state = Arc::clone(&open.state);
         let reports = Arc::clone(&open.reports);
         let watches = Arc::clone(&open.watches);
+        let goal = Arc::clone(&open.goal);
+        // The condition this turn works towards, read when it starts as the terminal reads it: a
+        // paused goal's turns are not told of it (GOAL-14).
+        let working_towards = goal.lock().ok().and_then(|slot| slot.in_force());
         let (turn_number, tokens_at_turn) = state
             .lock()
             .map(|s| (s.turns + 1, s.tokens))
@@ -2299,6 +2304,13 @@ impl Bridge {
         let answerers = self.answerers_of(&handle);
 
         let worker_model = model.clone();
+
+        // A prompt sent now goes before the goal's check and its carry-on, which this turn's end
+        // makes due again. Cleared here, past every refusal and before the worker can end the
+        // turn, so the turn's own end is what sets the check due.
+        if let Ok(mut slot) = goal.lock() {
+            slot.turn_starting();
+        }
 
         self.emitter.view_started(
             &handle,
@@ -2341,6 +2353,8 @@ impl Bridge {
                 addressing,
                 addressing_standing,
                 watches,
+                goal,
+                working_towards,
                 emitter,
                 session,
                 project,
@@ -2728,6 +2742,8 @@ impl Bridge {
             .lock()
             .map(|watches| !watches.is_empty())
             .unwrap_or(true);
+        // A goal set, paused or not, goes on sending work without anybody typing (BG-2).
+        let under_a_goal = open.goal.lock().map_or(true, |slot| slot.running.is_some());
         // Read only when nothing is running, since a running turn holds the state. A busy chat is
         // refused before the record is consulted.
         let left = match busy {
@@ -2743,8 +2759,8 @@ impl Bridge {
             sandbox: self.sandbox_mode_in(&open.project, open.sandbox),
             settled: self.sandbox_mode_in(&open.project, None),
             busy,
-            // A chat has no loop or goal, so its watches are all it could keep running.
-            keeps_running: watching,
+            // A chat has no loop, so its watches and its goal are all it could keep running.
+            keeps_running: watching || under_a_goal,
             recorded: left.is_some(),
             incognito: bravebot_core::incognito::engaged(),
         };
@@ -3183,6 +3199,7 @@ impl Bridge {
         let mut workspace =
             turn_workspace(project.clone(), &settings, open.reads_stay_in_workspace)
                 .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+        let stopped_goal = goal_stalled(open);
         let mut guard = open
             .state
             .lock()
@@ -3293,7 +3310,7 @@ impl Bridge {
                 workspace = workspace.with_kept_between_turns(kept);
             }
             state.open_loops = Default::default();
-            let loops = crate::open_loops::of(state, &workspace);
+            let loops = crate::open_loops::of(state, &workspace, stopped_goal);
             state.open_loops.ended_with(loops);
         }
         if !discard && state.handle.is_some() {
@@ -4828,15 +4845,21 @@ fn take_back_checkouts(open: &Open, record: &Record, settings: &Settings) {
         state.kept = Some(workspace.kept_between_turns());
         // The placed checkouts are open loops of the session's too, part of the set the resume
         // took as the last turn's (OPEN-3, OPEN-6).
-        let loops = crate::open_loops::of(&state, &workspace);
+        let loops = crate::open_loops::of(&state, &workspace, goal_stalled(open));
         state.open_loops.ended_with(loops);
     }
 }
 
+/// Whether the chat `open` has a goal that stopped sending the work back and is still set, which
+/// is an open loop (OPEN-1). Read before the state is locked, which a turn holds for its length.
+fn goal_stalled(open: &Open) -> bool {
+    open.goal.lock().is_ok_and(|slot| slot.stalled())
+}
+
 /// The line a turn ends with where the open loops changed since the last turn ended, or `None`
 /// where they are the same, so a loop the person left open is not said every turn (OPEN-3).
-fn say_open_loops(state: &mut State, workspace: &Workspace) -> Option<String> {
-    let loops = crate::open_loops::of(state, workspace);
+fn say_open_loops(state: &mut State, workspace: &Workspace, stopped_goal: bool) -> Option<String> {
+    let loops = crate::open_loops::of(state, workspace, stopped_goal);
     let line = loops.to_the_person();
     state.open_loops.ended_with(loops).then_some(line)
 }
@@ -4850,8 +4873,9 @@ fn resumed_loops(
 ) -> Option<bravebot_agent::open_loops::Loops> {
     let settings = crate::settings::layers(Some(directory), settings);
     let workspace = with_session_checkouts(open, session_workspace(open, &settings).ok()?);
+    let stopped_goal = goal_stalled(open);
     let state = open.state.lock().ok()?;
-    Some(crate::open_loops::of(&state, &workspace))
+    Some(crate::open_loops::of(&state, &workspace, stopped_goal))
 }
 
 /// As a session is forked, place the names the parent's file tools reached as the child's, so the
@@ -4955,6 +4979,11 @@ struct Work {
     /// Each MCP server the settings request, with the file that requested it.
     mcp_requested: Vec<(PathBuf, String)>,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
+    /// The chat's goal slot, where the turn records its work and whether the check is due.
+    goal: Arc<Mutex<crate::goal::GoalSlot>>,
+    /// The condition of the goal in force when the turn started, which the planner is told of
+    /// (GOAL-14). `None` where no goal is set or it is paused.
+    working_towards: Option<String>,
     model: Option<String>,
     /// The definition this turn is addressed to, where it is a turn in a bot's conversation
     /// (MEMORY-10).
@@ -5078,6 +5107,8 @@ fn work(work: Work) {
         permission_mode,
         mcp_requested,
         watches,
+        goal,
+        working_towards,
         model,
         addressing,
         addressing_standing,
@@ -5214,7 +5245,10 @@ fn work(work: Work) {
         .addressing_standing(addressing_standing)
         // The open loops that changed since the planner was last told (OPEN-4). The turn ends
         // with OPEN-3's line, sent on `turn.done`/`turn.error`, in place of TURN-4's narration.
-        .with_open_loops(state.open_loops.for_the_planner());
+        .with_open_loops(state.open_loops.for_the_planner())
+        // The goal in force, which the planner is told it works towards (GOAL-14, GOAL-15,
+        // GOAL-16), as the terminal tells it.
+        .working_towards(working_towards);
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }
@@ -5240,7 +5274,12 @@ fn work(work: Work) {
         .lock()
         .map(|w| bravebot_agent::watch::MAX_LIVE.saturating_sub(w.live().len()))
         .unwrap_or(0);
-    task = task.arming(if free == 0 {
+    // A goal set, paused or not, is work that happens without anybody typing, so a turn under one
+    // arms no watch (GOAL-11), as the terminal's `arming` decides.
+    let under_a_goal = goal.lock().map_or(true, |slot| slot.running.is_some());
+    task = task.arming(if under_a_goal {
+        bravebot_agent::watch::Arming::UnderAGoal
+    } else if free == 0 {
         bravebot_agent::watch::Arming::Full
     } else {
         bravebot_agent::watch::Arming::Allowed { free }
@@ -5298,7 +5337,8 @@ fn work(work: Work) {
     state.rewind.keep_backups(workspace.take_backups());
     // Kept whatever the outcome (GROUND-4): a failed or cancelled turn may still have written or
     // run something, and the session's open loops are worked out from all of it (OPEN-1).
-    state.work.then(completed.work);
+    let turn_work = completed.work;
+    state.work.then(turn_work);
     for path in reporter.written() {
         if !state.written.contains(path) {
             state.written.push(path.clone());
@@ -5357,7 +5397,16 @@ fn work(work: Work) {
     // The loops this turn left open, whatever its ending, after its work and todos are the
     // session's: said to the person where they changed (OPEN-3), and told to the planner on the
     // next turn (OPEN-4).
-    let open_line = say_open_loops(&mut state, &workspace);
+    //
+    // The goal's record takes this turn's work whatever its ending (GROUND-4). Only a turn that
+    // ended normally and was not stopped makes the check due: a failed or stopped turn is not
+    // judged and leaves the goal set (GOAL-10).
+    let judged = outcome.is_ok() && !cancel.is_cancelled();
+    let stopped_goal = goal.lock().is_ok_and(|mut slot| {
+        slot.turn_ended(turn_work, reporter.tool_calls(), judged);
+        slot.stalled()
+    });
+    let open_line = say_open_loops(&mut state, &workspace, stopped_goal);
 
     let event = match outcome {
         Ok(outcome) => {

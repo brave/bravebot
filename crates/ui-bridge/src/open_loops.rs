@@ -13,9 +13,10 @@ use bravebot_agent::open_loops::Loops;
 /// its newest task list, the checkouts it keeps and has not applied, and the files it wrote that
 /// differ from `HEAD`.
 ///
-/// Running jobs and the stopped goal are always empty. A desktop chat has no background job and
-/// no goal (`background.rs`), so there is nothing for either to count.
-pub(crate) fn of(state: &State, workspace: &Workspace) -> Loops {
+/// `stopped_goal` says the chat's goal stopped sending the work back and is still set (GOAL-20),
+/// which the goal slot beside the chat holds and the state does not. Running jobs are always
+/// empty: a desktop chat starts no background job (`background.rs`).
+pub(crate) fn of(state: &State, workspace: &Workspace, stopped_goal: bool) -> Loops {
     Loops {
         open_todos: state
             .todos
@@ -29,7 +30,7 @@ pub(crate) fn of(state: &State, workspace: &Workspace) -> Loops {
         )
         .len(),
         running_jobs: Vec::new(),
-        stopped_goal: false,
+        stopped_goal,
         ..Loops::from_work(state.work)
     }
 }
@@ -109,7 +110,7 @@ mod tests {
             }),
         );
 
-        let loops = of(&state, &workspace);
+        let loops = of(&state, &workspace, false);
 
         assert_eq!(
             loops,
@@ -133,7 +134,7 @@ mod tests {
         let (root, workspace, trust) = project("open-loops-resumed-before");
         let state = resumed_from("open-loops-resumed-before", &workspace, trust, json!({}));
 
-        let loops = of(&state, &workspace);
+        let loops = of(&state, &workspace, false);
 
         assert!(loops.is_empty(), "{loops:?}");
         let _ = std::fs::remove_dir_all(&root);
@@ -183,7 +184,7 @@ mod tests {
             json!({"written": [root.join("a.txt")]}),
         );
 
-        let loops = of(&state, &workspace);
+        let loops = of(&state, &workspace, false);
 
         assert_eq!(
             loops,

@@ -312,6 +312,8 @@ pub struct BridgeReporter {
     /// Where the exchange is kept at each round for a question asked beside the turn (CMD-8), or
     /// `None` where nothing asks one, so no fork is built.
     published: Option<ExchangeSlot>,
+    /// How many tool calls the turn's own planner started. See [`BridgeReporter::tool_calls`].
+    tool_calls: usize,
 }
 
 impl BridgeReporter {
@@ -329,7 +331,15 @@ impl BridgeReporter {
             roster: Arc::default(),
             reports: None,
             published: None,
+            tool_calls: 0,
         }
+    }
+
+    /// How many tool calls the turn's own planner started, which a goal's check counts towards a
+    /// stall (GOAL-20). A delegate's calls are left out, as they are of the turn's own tool rows
+    /// in the terminal.
+    pub fn tool_calls(&self) -> usize {
+        self.tool_calls
     }
 
     /// Keep the exchange each round's request is built over in `slot`, replacing the one before.
@@ -672,6 +682,9 @@ impl Reporter for BridgeReporter {
     }
 
     fn tool_started(&mut self, activity: Activity) {
+        if self.reporting_for.is_none() {
+            self.tool_calls += 1;
+        }
         self.say("tool.started", wire::activity(&activity));
     }
 

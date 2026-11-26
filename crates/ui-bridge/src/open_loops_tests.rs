@@ -36,7 +36,7 @@ fn a_failed_command_after_a_write_and_an_open_todo_are_open_loops() {
         ],
     );
 
-    let loops = crate::open_loops::of(&state, &workspace);
+    let loops = crate::open_loops::of(&state, &workspace, false);
     assert_eq!(
         loops,
         bravebot_agent::open_loops::Loops {
@@ -54,7 +54,7 @@ fn a_fresh_session_has_no_open_loops() {
     let workspace = Workspace::new(directory.path()).unwrap();
     let state = State::fresh(TrustStore::new(workspace.root()));
     assert_eq!(
-        crate::open_loops::of(&state, &workspace),
+        crate::open_loops::of(&state, &workspace, false),
         bravebot_agent::open_loops::Loops::default()
     );
 }
@@ -134,7 +134,7 @@ fn a_desktop_turn_tells_the_planner_of_open_loops_once_per_changed_set() {
     {
         let mut held = state.lock().unwrap();
         held.work.count(false, true, true);
-        let loops = crate::open_loops::of(&held, &Workspace::new(&project).unwrap());
+        let loops = crate::open_loops::of(&held, &Workspace::new(&project).unwrap(), false);
         held.open_loops.ended_with(loops);
     }
     let sent = a_turn(&project, &state, 4, None);
@@ -404,7 +404,7 @@ fn undoing_a_turn_tells_the_planner_of_the_loops_left_open() {
     state
         .todos
         .insert(2, vec![row(bravebot_core::todo::Status::Pending)]);
-    let loops = crate::open_loops::of(&state, &workspace);
+    let loops = crate::open_loops::of(&state, &workspace, false);
     state.open_loops.ended_with(loops);
     assert!(state.open_loops.for_the_planner().is_some(), "setup");
     let mut bridge = Bridge::new(Box::new(|_| {}));
@@ -451,7 +451,7 @@ fn undoing_the_only_turn_leaves_nothing_open() {
     state.turns = 1;
     state.work.count(true, false, false);
     state.written.push(project.join("a.txt"));
-    let loops = crate::open_loops::of(&state, &workspace);
+    let loops = crate::open_loops::of(&state, &workspace, false);
     state.open_loops.ended_with(loops);
     let mut bridge = Bridge::new(Box::new(|_| {}));
     let handle = bridge.mint(Open::opened(project.clone(), state, true, None, false));
@@ -466,7 +466,7 @@ fn undoing_the_only_turn_leaves_nothing_open() {
     assert!(held.written.is_empty(), "{:?}", held.written);
     // The loops the undone turn ended with are gone, so a session with nothing open has not
     // changed since.
-    let loops = crate::open_loops::of(&held, &workspace);
+    let loops = crate::open_loops::of(&held, &workspace, false);
     assert!(!held.open_loops.ended_with(loops), "{:?}", held.open_loops);
 }
 
@@ -535,6 +535,8 @@ fn a_turn_that(
             permission_mode: LiveMode::new(PermissionMode::AcceptEdits),
             mcp_requested: Vec::new(),
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
+            goal: Arc::default(),
+            working_towards: None,
             model: None,
             addressing: None,
             addressing_standing: false,

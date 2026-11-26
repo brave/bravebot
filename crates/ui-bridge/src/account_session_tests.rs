@@ -69,6 +69,8 @@ fn take_a_turn_at(
         permission_mode: PermissionMode::Ask.into(),
         mcp_requested: Vec::new(),
         watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
+        goal: Arc::default(),
+        working_towards: None,
         model: Some(ACCOUNT_MODEL.into()),
         addressing: None,
         addressing_standing: false,

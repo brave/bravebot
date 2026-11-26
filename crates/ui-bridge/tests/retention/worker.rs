@@ -72,6 +72,8 @@ fn take_turn_in(
             permission_mode,
             mcp_requested: Vec::new(),
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
+            goal: Arc::default(),
+            working_towards: None,
             model: None,
             addressing: None,
             addressing_standing: false,

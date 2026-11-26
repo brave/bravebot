@@ -23,6 +23,49 @@ use std::time::Instant;
 #[derive(Debug, Default)]
 pub(crate) struct GoalSlot {
     pub(crate) running: Option<Running>,
+    /// Whether the turn that ended last is one the goal's check is to judge: a turn that ended
+    /// normally, not stopped, under a goal in force. A failed or stopped turn is not judged
+    /// (GOAL-10), and a prompt the person sends goes before the check.
+    pub(crate) due: bool,
+    /// How many tool calls that turn made, which a check that finds the goal not met counts
+    /// towards a stall (GOAL-20).
+    pub(crate) calls: usize,
+    /// The driver's sentence that sends the work back, kept until the chat is idle to start it.
+    pub(crate) carry_on: Option<String>,
+}
+
+impl GoalSlot {
+    /// The condition a turn starting now works towards: the goal's, where one is set and not
+    /// paused (GOAL-14).
+    pub(crate) fn in_force(&self) -> Option<String> {
+        self.running
+            .as_ref()
+            .filter(|running| !running.is_paused())
+            .map(|running| running.condition().to_string())
+    }
+
+    /// A turn is starting, such as for a prompt the person sent, which goes before any check or
+    /// carry-on that was waiting. Its own end makes the check due again.
+    pub(crate) fn turn_starting(&mut self) {
+        self.due = false;
+        self.carry_on = None;
+    }
+
+    /// Record the turn that has just ended: its work, whatever its ending (GROUND-4), how many
+    /// tool calls it made, and whether the check is due, which is only for a turn that ended
+    /// normally and was not stopped, under a goal in force.
+    pub(crate) fn turn_ended(&mut self, work: bravebot_agent::Work, calls: usize, judged: bool) {
+        if let Some(running) = self.running.as_mut() {
+            running.worked(work);
+        }
+        self.calls = calls;
+        self.due = judged && self.in_force().is_some();
+    }
+
+    /// Whether the goal stopped because its rounds made no tool call, and is still set (OPEN-1).
+    pub(crate) fn stalled(&self) -> bool {
+        self.running.as_ref().is_some_and(Running::is_stalled)
+    }
 }
 
 /// What `session.goal` did: the lines the window shows, and whether the goal changed, which is
