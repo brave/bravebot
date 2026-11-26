@@ -18,7 +18,9 @@ use crate::process::{ConfinedChild, Environment, Streams};
 use crate::{Sandbox, SandboxError};
 #[cfg(test)]
 use bravebot_sandbox_rules::quote::seatbelt_literal as quote;
-use bravebot_sandbox_rules::seatbelt::{Action, Operation, Rule, Target, write};
+use bravebot_sandbox_rules::seatbelt::{
+    self, Action, Hold, Parts, Row, Rule, Target, Write, write,
+};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -26,41 +28,9 @@ use std::process::Command;
 
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
-/// The socket every host name lookup on macOS goes through.
-const RESOLVER: &str = "/private/var/run/mDNSResponder";
-
-/// The Mach services every confined process may look up. Each answers a question about the machine
-/// (accounts, groups, network configuration, log and notification delivery) or is the keychain
-/// service the base reads a keychain file for. None starts a program, reads or writes the
-/// pasteboard, or opens a file or URL on the caller's behalf, which is what LaunchServices, the
-/// pasteboard and launchd do, so a lookup of any of those is refused.
-const MACH_SERVICES: &[&str] = &[
-    "com.apple.SecurityServer",
-    "com.apple.SystemConfiguration.DNSConfiguration",
-    "com.apple.SystemConfiguration.configd",
-    "com.apple.bsd.dirhelper",
-    "com.apple.logd",
-    "com.apple.system.notification_center",
-    "com.apple.system.opendirectoryd.libinfo",
-    "com.apple.system.opendirectoryd.membership",
-];
-
-/// The certificate trust services, looked up only by a process that may reach the network. Trust
-/// evaluation makes these fetch an issuer from the certificate's Authority Information Access URL
-/// from their own unconfined process, so a profile with no egress that allowed them would let the
-/// process make a request to any URL it names.
-const TRUST_SERVICES: &[&str] = &["com.apple.trustd", "com.apple.trustd.agent"];
-
-/// The services a policy's profile allows a lookup of: the trust services only where the policy
-/// allows network egress.
-fn mach_services(policy: &SandboxPolicy) -> impl Iterator<Item = &'static &'static str> {
-    let trust: &[&str] = if policy.allow_network {
-        TRUST_SERVICES
-    } else {
-        &[]
-    };
-    MACH_SERVICES.iter().chain(trust)
-}
+// The fixed lists a profile names, which the tests check it for.
+#[cfg(all(test, target_os = "macos"))]
+use bravebot_sandbox_rules::seatbelt::{MACH_SERVICES, RESOLVER, TRUST_SERVICES};
 
 /// The pattern of a path with a `.git` component, in either case, since the default volume opens
 /// `.GIT` when git asks for `.git`.
@@ -70,54 +40,41 @@ const GIT_DIRECTORY: &str = "/\\.[Gg][Ii][Tt](/|$)";
 #[cfg(all(test, target_os = "macos"))]
 const GIT_DIRECTORY_WRITE: &str = "(deny file-write* (regex #\"/\\.[Gg][Ii][Tt](/|$)\"))\n";
 
-/// A rule about `path`, a subpath and everything beneath it.
-fn subpath(action: Action, operation: Operation, path: &Path) -> Rule {
-    Rule {
-        action,
-        operation,
-        target: Target::Subpath(path.to_string_lossy().into_owned()),
-    }
+/// A refusal of `write` at `path` and everything beneath it.
+fn refuse_subpath(write: Write, path: &Path) -> Hold {
+    hold(
+        Action::Deny,
+        write,
+        Target::Subpath(path.to_string_lossy().into_owned()),
+    )
 }
 
-/// A rule about exactly `path`.
-fn literal(action: Action, operation: Operation, path: &Path) -> Rule {
-    Rule {
-        action,
-        operation,
-        target: Target::Literal(path.to_string_lossy().into_owned()),
-    }
+/// A refusal of `write` at exactly `path`.
+fn refuse_literal(write: Write, path: &Path) -> Hold {
+    hold(
+        Action::Deny,
+        write,
+        Target::Literal(path.to_string_lossy().into_owned()),
+    )
 }
 
-/// A rule about every path `pattern` matches.
-fn regex(action: Action, operation: Operation, pattern: String) -> Rule {
-    Rule {
+/// A rule about writing, which the profile holds after the write rows.
+fn hold(action: Action, write: Write, target: Target) -> Hold {
+    Hold {
         action,
-        operation,
-        target: Target::Regex(pattern),
-    }
-}
-
-/// A rule about everything `operation` reaches.
-fn any(action: Action, operation: Operation) -> Rule {
-    Rule {
-        action,
-        operation,
-        target: Target::Any,
-    }
-}
-
-/// A rule allowing `operation` for `target`.
-fn allow(operation: Operation, target: Target) -> Rule {
-    Rule {
-        action: Action::Allow,
-        operation,
+        write,
         target,
     }
 }
 
-/// `allows` as the action a row takes.
-fn action(allows: bool) -> Action {
-    if allows { Action::Allow } else { Action::Deny }
+/// Each of `rows` as a row of the profile, in order.
+fn rows(rows: Vec<(&Path, bool)>) -> Vec<Row> {
+    rows.into_iter()
+        .map(|(path, allows)| Row {
+            path: path.to_string_lossy().into_owned(),
+            allows,
+        })
+        .collect()
 }
 
 /// A name as a regular expression that matches every spelling `bravebot_core::protected::is_protected`
@@ -171,7 +128,7 @@ fn regex_literal(text: &str) -> String {
 ///
 /// A second hard link to the file that exists before the stage starts is not covered: the refusal
 /// is by path and does not follow the inode, so the caller refuses a stage in that case.
-fn kept_in_place_rules(policy: &SandboxPolicy) -> Vec<Rule> {
+fn kept_in_place_rules(policy: &SandboxPolicy) -> Vec<Hold> {
     let mut refused: Vec<PathBuf> = Vec::new();
     let mut unlinked: Vec<PathBuf> = Vec::new();
     for kept in &policy.kept_in_place {
@@ -195,14 +152,14 @@ fn kept_in_place_rules(policy: &SandboxPolicy) -> Vec<Rule> {
     refused.dedup();
     unlinked.sort();
     unlinked.dedup();
-    let mut out: Vec<Rule> = refused
+    let mut out: Vec<Hold> = refused
         .iter()
-        .map(|path| subpath(Action::Deny, Operation::FileWrite, path))
+        .map(|path| refuse_subpath(Write::Any, path))
         .collect();
     out.extend(
         unlinked
             .iter()
-            .map(|path| literal(Action::Deny, Operation::FileWriteUnlink, path)),
+            .map(|path| refuse_literal(Write::Unlink, path)),
     );
     out
 }
@@ -224,7 +181,7 @@ fn kept_in_place_rules(policy: &SandboxPolicy) -> Vec<Rule> {
 /// a link or a rename made there. A row with no refusal beneath it gets no rule, and a refusal
 /// outside every write row needs none. A file made or removed beside the refusal, or beside the
 /// missing name, is not refused.
-fn refused_path_ancestor_rules(policy: &SandboxPolicy) -> Vec<Rule> {
+fn refused_path_ancestor_rules(policy: &SandboxPolicy) -> Vec<Hold> {
     let rows: Vec<PathBuf> = policy
         .writable
         .iter()
@@ -263,37 +220,16 @@ fn refused_path_ancestor_rules(policy: &SandboxPolicy) -> Vec<Rule> {
             }
         }
     }
-    let mut out: Vec<Rule> = above
+    let mut out: Vec<Hold> = above
         .iter()
-        .map(|path| literal(Action::Deny, Operation::FileWriteUnlink, path))
+        .map(|path| refuse_literal(Write::Unlink, path))
         .collect();
     out.extend(
         absent
             .iter()
-            .map(|path| literal(Action::Deny, Operation::FileWriteCreate, path)),
+            .map(|path| refuse_literal(Write::Create, path)),
     );
     out
-}
-
-/// The row that allows the named machine-information queries, with its closing newline.
-fn sysctl_read_rules() -> Rule {
-    let names = [
-        "hw.machine",
-        "hw.memsize",
-        "hw.ncpu",
-        "hw.pagesize",
-        "hw.pagesize_compat",
-        "kern.argmax",
-        "kern.hostname",
-        "kern.osrelease",
-        "kern.ostype",
-        "kern.version",
-    ];
-    Rule {
-        action: Action::Allow,
-        operation: Operation::SysctlRead,
-        target: Target::SysctlNames(names.iter().map(|name| (*name).to_string()).collect()),
-    }
 }
 
 /// Where `path` leads: its longest prefix that is on disk with every link followed, then the rest
@@ -325,11 +261,11 @@ fn landed(path: &Path) -> PathBuf {
 /// beneath it refused again. The `.git` refusal comes last so that no row re-grants it. One
 /// pattern for every row would be a profile the kernel refuses to compile once a policy has a few
 /// hundred rows, which is why only the rows that need it carry their own.
-fn protected_name_rules(policy: &SandboxPolicy) -> Vec<Rule> {
-    let mut out = vec![regex(
+fn protected_name_rules(policy: &SandboxPolicy) -> Vec<Hold> {
+    let mut out = vec![hold(
         Action::Deny,
-        Operation::FileWrite,
-        format!("/({})(/|$)", other_names_pattern()),
+        Write::Any,
+        Target::Regex(format!("/({})(/|$)", other_names_pattern())),
     )];
     let rows: Vec<PathBuf> = policy.writable.iter().map(|row| row.path.clone()).collect();
     let mut seen: Vec<PathBuf> = Vec::new();
@@ -338,19 +274,20 @@ fn protected_name_rules(policy: &SandboxPolicy) -> Vec<Rule> {
         // A row at a refused path is withdrawn and not lifted, and a refusal beneath a row wins
         // over the grant, so both are said again after it.
         if !seen.contains(&row) && is_inside_a_protected_name(&row) && !refused.contains(&row) {
-            out.push(subpath(Action::Allow, Operation::FileWrite, &row));
+            let granted = Target::Subpath(row.to_string_lossy().into_owned());
+            out.push(hold(Action::Allow, Write::Any, granted));
             out.push(protected_names_write(&row));
             for path in refused.iter().filter(|path| path.starts_with(&row)) {
-                out.push(subpath(Action::Deny, Operation::FileWrite, path));
+                out.push(refuse_subpath(Write::Any, path));
             }
             seen.push(row);
         }
     }
-    out.push(Rule {
-        action: Action::Deny,
-        operation: Operation::FileWrite,
-        target: Target::RawRegex(GIT_DIRECTORY),
-    });
+    out.push(hold(
+        Action::Deny,
+        Write::Any,
+        Target::RawRegex(GIT_DIRECTORY),
+    ));
     out
 }
 
@@ -387,14 +324,14 @@ fn is_inside_a_protected_name(row: &Path) -> bool {
 ///
 /// Only the part of the path beneath the row is read, so a row that is itself inside such a
 /// directory, such as a server's home under `~/.bravebot`, is writable under itself.
-fn protected_names_write(row: &Path) -> Rule {
+fn protected_names_write(row: &Path) -> Hold {
     let row = row.to_string_lossy();
     let pattern = format!(
         "^{}/(.*/)?({})(/|$)",
         regex_literal(row.trim_end_matches('/')),
         other_names_pattern()
     );
-    regex(Action::Deny, Operation::FileWrite, pattern)
+    hold(Action::Deny, Write::Any, Target::Regex(pattern))
 }
 
 /// The program a confined process is reached through where the environment would not
@@ -454,46 +391,19 @@ impl SeatbeltSandbox {
     }
 
     /// The rules of the profile for a policy, in the order the profile holds them.
+    ///
+    /// This works out which paths the policy grants and refuses, in the order the profile holds
+    /// them, and `bravebot_sandbox_rules::seatbelt::rules` puts them in a profile with the rules
+    /// every profile holds. What Verus proves of that profile is in that crate.
     pub fn rules(policy: &SandboxPolicy) -> Vec<Rule> {
-        let mut out = vec![any(Action::Deny, Operation::Default)];
+        seatbelt::rules(&Self::parts(policy))
+    }
 
-        // Without these the process cannot start at all: the loader must exec the binary and
-        // the system libraries look up the services in `MACH_SERVICES`, and `TRUST_SERVICES` where
-        // the network is allowed. Those grant no filesystem or network reach of their own, and no
-        // other service is reachable.
-        out.push(any(Action::Allow, Operation::ProcessExec));
-        // KERN_PROCARGS2 can be authorised through either sysctl-read or process-info*.
-        // Refuse both routes: emptying a child's environment does not erase the parent's
-        // exec-time environment. Only named machine-information queries are allowed.
-        out.push(any(Action::Deny, Operation::ProcessInfo));
-        // System tools query their own pidinfo during startup. This exception cannot name
-        // the parent or any other process, including another process in the same sandbox.
-        out.push(allow(Operation::ProcessInfoPidinfo, Target::SelfProcess));
-        // CPU count and page size serve language runtimes (the numeric page-size query
-        // resolves to pagesize_compat). hw.memsize is the physical memory size, which sort
-        // reads to size its buffer. kern.argmax is the one system-wide argument-size
-        // limit that xargs, find -exec {} + and getconf ARG_MAX read. The remaining names are
-        // uname's fields, used by Python's package platform detection. No process arguments or
-        // environment query is in this list.
-        out.push(sysctl_read_rules());
-        let services = mach_services(policy).map(|service| (*service).to_string());
-        out.push(allow(
-            Operation::MachLookup,
-            Target::GlobalNames(services.collect()),
-        ));
-
-        // The dynamic loader reads the root directory entry itself, which a subpath
-        // grant for e.g. /usr does not cover. Without this the process dies with
-        // SIGABRT before main runs, which looks like a mysterious crash rather than a
-        // denied read. Seatbelt has no operation that separates opening `/` from listing
-        // it, so this row also lets a process list the entries of `/`. That is the one
-        // directory listing SANDBOX-13 allows outside the grants; no file contents are
-        // readable through it.
-        out.push(literal(Action::Allow, Operation::FileRead, Path::new("/")));
-
-        // `ENV` is exec'd under `process-exec` above and is not opened for reading, so no
-        // read row names it: its contents are readable only where a policy grants /usr/bin.
-
+    /// What the profile for a policy is built from.
+    fn parts(policy: &SandboxPolicy) -> Parts {
+        // `ENV` is exec'd under `process-exec` and is not opened for reading, so no read row names
+        // it: its contents are readable only where a policy grants /usr/bin.
+        //
         // The last matching rule wins, so the rows are written from the widest path to the
         // narrowest: a refusal follows the grants it narrows, a row beneath a refusal lifts it, and
         // a refusal beneath that row holds again. At one path a read row follows the refusal, which
@@ -510,9 +420,6 @@ impl SeatbeltSandbox {
             .chain(refused_reads.iter().map(|path| (path.as_path(), false)))
             .collect();
         reads.sort_by_key(|(path, allows)| (depth(path), *allows));
-        for (path, allows) in reads {
-            out.push(subpath(action(allows), Operation::FileRead, path));
-        }
 
         // Written the same way, except that a row at a refused path is withdrawn and not lifted:
         // the refusal of a write is a person's, and it wins at the path it names.
@@ -525,9 +432,6 @@ impl SeatbeltSandbox {
             .chain(refused_writes.iter().map(|path| (path.as_path(), false)))
             .collect();
         writes.sort_by_key(|(path, allows)| (depth(path), *allows));
-        for &(path, allows) in &writes {
-            out.push(subpath(action(allows), Operation::FileWrite, path));
-        }
 
         // A repository's configuration and hooks are commands git runs, unconfined, the next time
         // anybody runs git there, and so are a `.husky` script, a `.pre-commit-config.yaml` and
@@ -535,92 +439,48 @@ impl SeatbeltSandbox {
         // these follow the rows they narrow. The `.git` refusal holds at any path; the others are
         // read beneath each write row, so a row that is itself inside one of those directories
         // stays writable.
+        let mut holds = Vec::new();
         if !policy.writable.is_empty() && !policy.git_directories_writable {
-            out.extend(protected_name_rules(policy));
+            holds.extend(protected_name_rules(policy));
         }
 
         // A refused path is refused at its own path, and renaming a directory above it is a write
         // Seatbelt does not count as one beneath that directory, so each directory between a row
         // and a refusal is refused removal after every row has been written.
-        out.extend(refused_path_ancestor_rules(policy));
+        holds.extend(refused_path_ancestor_rules(policy));
 
         // A file held in place is refused its write above, and a write is also how a directory
         // above it is renamed away or replaced, which Seatbelt does not count as a write beneath
         // that directory. Removing a name is refused at every directory above the file, where it
         // stands and where it leads. These follow the protected-name rules and sit outside the
         // condition above, so a stage that lifts the `.git` hold-back keeps them.
-        out.extend(kept_in_place_rules(policy));
-
-        // Looking at a path answers what it is and not what it holds: this allows stat and
-        // readlink, and neither a file's contents nor a directory's entries. Without it every path
-        // outside the grants answers "refused" where it would answer "not there", and a search of
-        // PATH stops at the first such entry rather than going on to the next, as node's does when
-        // it starts anything; and node resolves its own script through each directory above it.
-        // Landlock restricts no look at all, so this is the reach Linux already gives.
-        out.push(any(Action::Allow, Operation::FileReadMetadata));
+        holds.extend(kept_in_place_rules(policy));
 
         // Seatbelt counts a connect to a unix socket as network-outbound and no file rule covers
         // it, so an unfiltered rule reaches every socket the account can, a Docker daemon's
         // included. Egress is IP, and a socket is reached where a write row reaches it, as
         // Landlock's ResolveUnix is granted. Linux spreads a write row around every refusal of a
         // read or a write beneath it, so these are the write rows above, with a refusal of a read
-        // added as a refusal of the connect. Host names resolve through the platform resolver's
-        // socket, where Linux resolves over IP, and its row follows the refusals so that none of
-        // them takes it away.
-        //
-        // Egress limited to a port is to that port on the loopback address and to nothing else by
-        // IP, and the resolver is left out: the proxy on that port resolves the names it is asked
-        // for.
-        if policy.allow_network {
-            let mut sockets: Vec<(&Path, bool)> = writes
-                .iter()
-                .copied()
-                .chain(refused_reads.iter().map(|path| (path.as_path(), false)))
-                .collect();
-            sockets.sort_by_key(|(path, allows)| (depth(path), *allows));
-            for (path, allows) in sockets {
-                out.push(subpath(action(allows), Operation::NetworkOutbound, path));
-            }
-            let to = policy
+        // added as a refusal of the connect.
+        let mut sockets: Vec<(&Path, bool)> = writes
+            .iter()
+            .copied()
+            .chain(refused_reads.iter().map(|path| (path.as_path(), false)))
+            .collect();
+        sockets.sort_by_key(|(path, allows)| (depth(path), *allows));
+
+        Parts {
+            reads: rows(reads),
+            writes: rows(writes),
+            holds,
+            sockets: rows(sockets),
+            network: policy.allow_network,
+            egress_to: policy
                 .egress_only_to
-                .map(|port| format!("localhost:{port}"));
-            let any_address = to.is_none();
-            out.push(allow(Operation::NetworkOutbound, Target::RemoteIp(to)));
-            if any_address {
-                out.push(literal(
-                    Action::Allow,
-                    Operation::NetworkOutbound,
-                    Path::new(RESOLVER),
-                ));
-            }
+                .map(|port| format!("localhost:{port}")),
+            loopback: policy.allow_loopback,
+            subprocesses: policy.allow_subprocesses,
         }
-
-        // Listening is `network-inbound`, which covers binding the port as well as accepting on
-        // it. Each row names this machine's loopback address, so a stage that listens is reached
-        // from this machine and a stage that connects goes to this machine. A stage held to the
-        // proxy's port keeps that one port: another local port could be a service that carries it
-        // past the host list.
-        if policy.allow_loopback {
-            let local = || "localhost:*".to_string();
-            out.push(allow(Operation::NetworkInbound, Target::LocalIp(local())));
-            if policy.egress_only_to.is_none() {
-                out.push(allow(
-                    Operation::NetworkOutbound,
-                    Target::RemoteIp(Some(local())),
-                ));
-            }
-        }
-
-        if policy.allow_subprocesses {
-            out.push(any(Action::Allow, Operation::ProcessFork));
-        }
-
-        // Without a signal row a process cannot stop a child it started, and a test runner or a
-        // `timeout` waits on it for good. `same-sandbox` reaches what this profile started and no
-        // process outside it: `pgrp` would reach the session, which shares the process group.
-        out.push(allow(Operation::Signal, Target::SameSandbox));
-
-        out
     }
 }
 
@@ -1952,7 +1812,7 @@ int main(int argc, char **argv) {
             reads_the_system_only().allow_network_egress_only_to(8080),
         ] {
             let open = lookups(&policy);
-            for service in TRUST_SERVICES.iter().chain(MACH_SERVICES) {
+            for service in TRUST_SERVICES.iter().chain(&MACH_SERVICES) {
                 assert!(
                     open.contains(&(*service).to_owned()),
                     "{service} not in {open:?}"
