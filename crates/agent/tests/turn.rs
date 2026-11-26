@@ -69335,6 +69335,120 @@ fn the_answer_to_a_spawn_in_a_checkout_says_no_delegate_is_offered_lsp() {
     }
 }
 
+/// TOOL-6. The answer to a spawn in a checkout names `lsp` at all only where the collecting
+/// turn's own list holds it, in each of the four sentences the answer has: one delegate or a
+/// fan-out, with the working directory's changes carried or not. A `reader` delegate, which
+/// lacks the language-server capability, is the collecting turn here, so none of the four
+/// sentences says the delegate is or is not offered `lsp`. Where
+/// [`the_answer_to_a_spawn_in_a_checkout_says_no_delegate_is_offered_lsp`] pins the wording a
+/// turn with `lsp` is given (the control), this pins the wording one without it is given,
+/// through the same real call path (`collect_delegates` reading the collecting turn's own
+/// `tools.beside`), with a `reader` delegate standing in place of the top-level turn.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_reader_collecting_a_checkout_spawn_is_not_told_about_lsp_at_all() {
+    let answered = |tag: &str, isolation: &str, each: bool| -> String {
+        let scratch = Scratch::new(&format!("checkout-no-lsp-reader-{tag}"));
+        let home = Scratch::new(&format!("checkout-no-lsp-reader-{tag}-home"));
+        repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+        repository::check_out(&scratch.path, &[("README", "committed\n")]);
+        if isolation == "checkout_with_changes" {
+            // A change already in the working directory when the reader asks for the checkout,
+            // since a reader delegate has no write_file to make one of its own.
+            std::fs::write(scratch.path.join("README"), "uncommitted edit\n").unwrap();
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let spawn = if each {
+            serde_json::json!({
+                "kind": "worker",
+                "task": "SHARED",
+                "each": ["LOOK-ONE", "LOOK-TWO"],
+                "isolation": isolation,
+            })
+        } else {
+            serde_json::json!({ "kind": "worker", "task": "LOOK-ONE", "isolation": isolation })
+        }
+        .to_string();
+
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                "DELEGATE-THE-CHECKOUT-SPAWN",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"SPAWN-INSIDE-A-READER"}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "SPAWN-INSIDE-A-READER",
+                vec![
+                    tool_request("spawn_agent", &spawn),
+                    reply_with("waiting"),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            ("LOOK-ONE", vec![reply_with("looked")]),
+            ("LOOK-TWO", vec![reply_with("looked")]),
+        ]);
+        let (asked, _) = run_in_a_repository(
+            &workspace,
+            &home.path,
+            &endpoint,
+            &received,
+            "DELEGATE-THE-CHECKOUT-SPAWN",
+        );
+        // The reader delegate's own requests: its conversation begins with its own task and
+        // never widens to the top turn's, which is what the exclusion relies on; the top turn's
+        // own later requests do mention the reader's task (it is what spawned it), so the
+        // positive side alone would not keep them out.
+        asked
+            .iter()
+            .filter(|body| {
+                body.contains("SPAWN-INSIDE-A-READER")
+                    && !body.contains("DELEGATE-THE-CHECKOUT-SPAWN")
+            })
+            .map(|body| tool_results(body))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    for (tag, isolation, each, form) in [
+        ("one", "checkout", false, "It works in a checkout of commit"),
+        (
+            "each",
+            "checkout",
+            true,
+            "Each works in a checkout of its own of commit",
+        ),
+        (
+            "one-carried",
+            "checkout_with_changes",
+            false,
+            "into it as they were when it was made.",
+        ),
+        (
+            "each-carried",
+            "checkout_with_changes",
+            true,
+            "into each as they were when it was made.",
+        ),
+    ] {
+        let answer = answered(tag, isolation, each);
+        assert!(
+            answer.contains(form),
+            "the {tag} form was not the sentence this case is about ({form}): {answer}"
+        );
+        assert!(
+            !answer.contains("offered lsp"),
+            "the {tag} form named lsp to a turn that does not hold it: {answer}"
+        );
+    }
+}
+
 /// CHECKOUT-15. A checkout its delegate did nothing in goes with the delegate, directory and
 /// `worktrees` entry both.
 #[test]
