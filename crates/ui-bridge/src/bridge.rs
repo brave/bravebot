@@ -2241,30 +2241,25 @@ impl Bridge {
             &open.project,
             self.settings.as_deref(),
         )?;
-        let attribution = settings.attribution().clone();
-        // The level the terminal's `/effort` and this window's picker record, ranked against the
-        // settings layers as BACKEND-43 ranks them, read afresh for every turn so a level picked
-        // between turns applies to the next one.
-        let effort = recorded_effort(&settings);
+        // Read afresh for every turn, so a level or a mode picked between turns applies to the
+        // next one.
+        let RunSettings {
+            attribution,
+            effort,
+            output_cap,
+            deadlines,
+            sandbox,
+            mcp_requested,
+        } = RunSettings::read(&settings, open.sandbox);
         // The variant the window picked for this session, read when the turn starts so a pick
         // made while a turn runs applies to the next one (BACKEND-66).
         let variant = open.variant.clone();
-        let output_cap = settings.run_output_cap();
         let download_cap = settings.download_max_bytes();
-        let deadlines = bravebot_agent::exec::Deadlines::from_settings(&settings);
         let auto_vetting = open.auto_vetting;
         let front_end = self.front_end;
-        let sandbox = bravebot_config::sandbox::for_a_window_choosing(
-            open.sandbox,
-            &settings,
-            &bravebot_config::Managed::load(),
-        );
         // The session's own handle, carried to the worker: the planner, the tools and the prompts all
         // read what the window chose last, including a choice made while the turn runs (MODE-8).
         let permission_mode = open.permission_mode.clone();
-        // Each MCP server the settings request, with the file that requested it (SERVERS-2). Read
-        // on every turn and used by the first turn or plan run, which is the one that starts them.
-        let mcp_requested = bravebot_agent::servers::requested_by(&settings);
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
         let reports = Arc::clone(&open.reports);
@@ -3029,20 +3024,17 @@ impl Bridge {
             self.settings.as_deref(),
         )?;
         let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
-        let attribution = settings.attribution().clone();
-        let effort = recorded_effort(&settings);
-        let output_cap = settings.run_output_cap();
-        let deadlines = bravebot_agent::exec::Deadlines::from_settings(&settings);
-        let sandbox = bravebot_config::sandbox::for_a_window_choosing(
-            open.sandbox,
-            &settings,
-            &bravebot_config::Managed::load(),
-        );
+        let RunSettings {
+            attribution,
+            effort,
+            output_cap,
+            deadlines,
+            sandbox,
+            mcp_requested,
+        } = RunSettings::read(&settings, open.sandbox);
         // The session's own handle, as a turn holds it (MODE-8).
         let permission_mode = open.permission_mode.clone();
         let workspace = session_workspace(open, &settings)?;
-        // Read as a turn reads them, for the first turn or run to start the session's servers.
-        let mcp_requested = bravebot_agent::servers::requested_by(&settings);
 
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
@@ -3191,10 +3183,7 @@ impl Bridge {
             .map_err(|_| Failure::new(ErrorCode::Internal, "session state is poisoned"))?;
         let state = &mut *guard;
         // Opened as a turn opens them, so a path a rewound turn wrote in one goes back there.
-        for directory in &state.directories {
-            let _ = workspace.add_directory(&directory.display().to_string());
-            bravebot_config::add_writable_directory(directory.clone());
-        }
+        open_session_directories(&mut workspace, &state.directories);
 
         state.rewind.bind_coverage(&workspace);
         let Some(point) = state.rewind.take(steps) else {
@@ -4130,10 +4119,7 @@ impl Bridge {
                 continue;
             };
             if let Some((directories, _)) = &held {
-                for directory in directories {
-                    let _ = workspace.add_directory(&directory.display().to_string());
-                    bravebot_config::add_writable_directory(directory.clone());
-                }
+                open_session_directories(&mut workspace, directories);
             }
             let mode = open.permission_mode.clone();
             let due = {
@@ -4688,11 +4674,17 @@ fn workspace_of(
         .map(|s| (s.directories.clone(), s.scratch.directory()))
         .unwrap_or((Vec::new(), None));
     workspace.open_scratch(scratch);
-    for directory in &directories {
+    open_session_directories(&mut workspace, &directories);
+    Ok(workspace)
+}
+
+/// Reopen the directories a session added, in `workspace` and in the set the sandbox may write.
+/// One that can no longer be opened is left out.
+fn open_session_directories(workspace: &mut Workspace, directories: &[PathBuf]) {
+    for directory in directories {
         let _ = workspace.add_directory(&directory.display().to_string());
         bravebot_config::add_writable_directory(directory.clone());
     }
-    Ok(workspace)
 }
 
 /// Open each of `folders`, directories the settings files named that nobody is asked about, in the
@@ -4822,6 +4814,43 @@ fn take_back_touched(
 /// this window's picker, ranked against `settings` as BACKEND-43 ranks them.
 pub(crate) fn recorded_effort(settings: &Settings) -> Option<bravebot_session::store::Effort> {
     bravebot_session::store::effort(bravebot_session::store::load_effort(), settings)
+}
+
+/// What a turn or a plan run reads from the settings layers when it starts, so a setting a turn
+/// takes is added here once and reaches both.
+struct RunSettings {
+    /// What the settings say a commit message and a pull request the run writes may carry
+    /// (BACKEND-30).
+    attribution: bravebot_config::Attribution,
+    /// The level the terminal's `/effort` and this window's picker record, ranked against the
+    /// settings layers as BACKEND-43 ranks them.
+    effort: Option<bravebot_session::store::Effort>,
+    /// What the settings say a command's output may spend of the conversation, where they said
+    /// anything (RUN-21).
+    output_cap: Option<usize>,
+    deadlines: bravebot_agent::exec::Deadlines,
+    /// The mode the window chose, or the one the settings give where it has chosen none.
+    sandbox: SandboxMode,
+    /// Each MCP server the settings request, with the file that requested it (SERVERS-2). Used by
+    /// the first turn or run, which is the one that starts them.
+    mcp_requested: Vec<(PathBuf, String)>,
+}
+
+impl RunSettings {
+    fn read(settings: &Settings, chosen_sandbox: Option<SandboxMode>) -> Self {
+        Self {
+            attribution: settings.attribution().clone(),
+            effort: recorded_effort(settings),
+            output_cap: settings.run_output_cap(),
+            deadlines: bravebot_agent::exec::Deadlines::from_settings(settings),
+            sandbox: bravebot_config::sandbox::for_a_window_choosing(
+                chosen_sandbox,
+                settings,
+                &bravebot_config::Managed::load(),
+            ),
+            mcp_requested: bravebot_agent::servers::requested_by(settings),
+        }
+    }
 }
 
 /// Everything a worker needs to run one turn.
@@ -7335,6 +7364,56 @@ mod additional_directories_tests {
             refused.message
         );
         assert!(bridge.open.is_empty(), "a refused session.new minted one");
+    }
+
+    /// Reopening a session's directories puts each one in the workspace and in the set a stage may
+    /// write. A directory that has been deleted is skipped and the ones after it are still opened:
+    /// a loop that stopped at the first one it could not open would leave the later ones closed.
+    #[test]
+    fn reopening_the_directories_skips_one_that_is_gone_and_opens_the_rest() {
+        let project = tempfile::tempdir().unwrap();
+        let beside = tempfile::tempdir().unwrap();
+        let gone = project.path().join("deleted-since");
+        let beside_path = beside.path().canonicalize().unwrap();
+        let mut workspace =
+            turn_workspace(project.path().to_path_buf(), &Settings::default(), false).unwrap();
+
+        open_session_directories(&mut workspace, &[gone, beside_path.clone()]);
+
+        assert!(
+            workspace.added_directories().contains(&beside_path),
+            "the directory after the missing one was not opened in the workspace"
+        );
+        assert!(
+            bravebot_config::added_writable_directories().contains(&beside_path),
+            "the directory was not counted as one a stage may write"
+        );
+        bravebot_config::close_writable_directory(&beside_path);
+    }
+}
+
+#[cfg(test)]
+mod run_settings_tests {
+    use super::*;
+
+    /// A turn and a plan run both take their figures from `RunSettings::read`. Each figure here is
+    /// set to a value no other field shares and differs from the built-in one, so a read that
+    /// swapped two, dropped one back to its default, or ignored the mode the window chose fails.
+    #[test]
+    fn the_run_settings_carry_each_figure_the_layers_name_and_the_mode_the_window_chose() {
+        let settings = Settings::parse(
+            r#"{"attribution": {"commit": "commit words", "pr": "pr words"},
+                "run": {"maxOutput": 4321, "defaultSeconds": 77, "maxSeconds": 999}}"#,
+        );
+
+        let read = RunSettings::read(&settings, Some(SandboxMode::Strict));
+
+        assert_eq!(read.attribution.commit.as_deref(), Some("commit words"));
+        assert_eq!(read.attribution.pr.as_deref(), Some("pr words"));
+        assert_eq!(read.output_cap, Some(4321));
+        assert_eq!(read.deadlines.default, Duration::from_secs(77));
+        assert_eq!(read.deadlines.ceiling, Duration::from_secs(999));
+        assert_eq!(read.sandbox, SandboxMode::Strict);
     }
 }
 
