@@ -24,6 +24,20 @@ pub enum BackendKind {
     Xai,
 }
 
+impl BackendKind {
+    /// A fixed name for a front end, one for each variant and never a host, an address or
+    /// anything the service wrote ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Aichat => "aichat",
+            Self::Bedrock => "bedrock",
+            Self::Gateway => "gateway",
+            Self::Chatgpt => "chatgpt",
+            Self::Xai => "xai",
+        }
+    }
+}
+
 /// Fixed failure categories, distinguished by what the user can do about them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
