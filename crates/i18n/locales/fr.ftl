@@ -3704,6 +3704,30 @@ goal-replaces-loop =
     la boucle qui tournait a été arrêtée : une session ne travaille qu'à une chose à la fois
 
 
+## Ce que la fenêtre de bureau dit de /goal
+
+desktop-goal-set =
+    Objectif : { $condition }. Rien ne démarre tant que vous n'avez pas envoyé quelque chose.
+    Ensuite chaque tour est jugé par rapport à lui, et /goal clear le retire.
+desktop-goal-replaced = L'objectif qui était fixé a été remplacé.
+desktop-goal-replaces-watches =
+    Les surveillances en cours ont été arrêtées, car une discussion ne travaille qu'à une chose à
+    la fois.
+desktop-goal-cleared = L'objectif est retiré.
+desktop-goal-paused =
+    L'objectif est suspendu. Les tours ne sont pas jugés par rapport à lui avant /goal resume, et
+    /goal clear le retire toujours.
+desktop-goal-already-paused = L'objectif est déjà suspendu. /goal resume le réarme.
+desktop-goal-resumed = L'objectif est repris. Le prochain tour est de nouveau jugé par rapport à lui.
+desktop-goal-not-paused = L'objectif n'est pas suspendu.
+desktop-goal-none =
+    Aucun objectif n'est fixé. /goal <condition> en fixe un, comme /goal cargo test se termine
+    avec le code 0, et /goal clear le retire.
+desktop-goal-active = Objectif : { $condition }
+desktop-goal-last-check = La dernière vérification a dit : { $reason }
+desktop-goal-never-checked = Rien n'a encore été jugé par rapport à lui.
+
+
 ## Être averti quand un fichier change
 
 watch-armed =

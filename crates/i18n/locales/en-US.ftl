@@ -4878,6 +4878,30 @@ goal-replaces-loop =
     the loop that was running has been stopped: a session works towards one thing at a time
 
 
+## What the desktop window says of /goal
+
+desktop-goal-set =
+    Working towards: { $condition }. Nothing runs until you send something. From then on each turn
+    is judged against it, and /goal clear takes it off.
+desktop-goal-replaced = The goal that was set has been replaced.
+desktop-goal-replaces-watches =
+    The watches that were running have been stopped, because a chat works towards one thing at a
+    time.
+desktop-goal-cleared = The goal is cleared.
+desktop-goal-paused =
+    The goal is paused. Turns are not judged against it until /goal resume, and /goal clear still
+    takes it off.
+desktop-goal-already-paused = The goal is already paused. /goal resume arms it again.
+desktop-goal-resumed = The goal is resumed. The next turn is judged against it again.
+desktop-goal-not-paused = The goal is not paused.
+desktop-goal-none =
+    No goal is set. /goal <condition> sets one, as in /goal cargo test exits 0, and /goal clear
+    takes it off again.
+desktop-goal-active = Working towards: { $condition }
+desktop-goal-last-check = The last check said: { $reason }
+desktop-goal-never-checked = Nothing has been judged against it yet.
+
+
 ## Being told when a file changes
 
 watch-armed =

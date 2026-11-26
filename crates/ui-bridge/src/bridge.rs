@@ -80,6 +80,9 @@ struct Open {
     running: Option<Running>,
     model: Option<String>,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
+    /// The goal this chat works towards, set by a `/goal` the person typed. Beside the watches and
+    /// never in `state`, so nothing that writes the session record reaches it (GOAL-12).
+    goal: Arc<Mutex<crate::goal::GoalSlot>>,
     /// Settled once, when the session opened, as the terminal does: a session that opened with
     /// the mode on said so at the top, and a later change to the file would make that untrue.
     auto_vetting: bool,
@@ -182,6 +185,7 @@ impl Open {
             running: None,
             model: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
+            goal: Arc::new(Mutex::new(crate::goal::GoalSlot::default())),
             auto_vetting,
             // Set with the rules, which are read once the session is minted.
             reads_stay_in_workspace: false,
@@ -601,6 +605,7 @@ impl Bridge {
             "crash_reports.mark_notice_shown" => Ok(crate::crash_notice::mark_shown()),
             "changelog.read" => Ok(crate::help::changelog()),
             "schedule.command" => self.schedule_command(request),
+            "session.goal" => self.goal_command(request),
             "caffeinate.confirmed" => {
                 Ok(json!({"confirmed": bravebot_session::store::load_caffeinate_confirmed()}))
             }
@@ -4007,6 +4012,62 @@ impl Bridge {
             &self.emitter,
             bravebot_schedule::in_session,
         )
+    }
+
+    /// `/goal` typed in the window (CMD-1). Setting a goal sends nothing (GOAL-2) and ends the
+    /// chat's watches, which are its other unattended work (GOAL-11). Every change is sent as
+    /// `goal.changed`.
+    fn goal_command(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let argument = request.string("argument")?;
+        // Only names and sentences enter the line: no dropped file is opened, and a pasted
+        // picture is said not to join it (DROP-4).
+        let argument = crate::attached::in_words_for_a_command(request, &argument)?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let asked = bravebot_agent::goal::parse(&argument);
+        let mut watches_ended = 0;
+        if matches!(asked, bravebot_agent::goal::Asked::Set(_)) {
+            let mut watches = open
+                .watches
+                .lock()
+                .map_err(|_| Failure::bad_request("Watches unavailable."))?;
+            for watch in watches.live() {
+                self.emitter.send(Event::new(
+                    "watch.ended",
+                    &handle,
+                    json!({"number": watch.number(), "reason": "goal"}),
+                ));
+                watches_ended += 1;
+            }
+            watches.stop_all();
+        }
+        // A turn holds the state for its length, and the total until it ends is the one it began
+        // with.
+        let tokens = match open.state.try_lock() {
+            Ok(state) => state.tokens,
+            Err(_) => open.tokens_at_turn,
+        };
+        let mut slot = open
+            .goal
+            .lock()
+            .map_err(|_| Failure::bad_request("Goal unavailable."))?;
+        let answer = crate::goal::command(
+            &mut slot,
+            asked,
+            tokens,
+            open.running.is_some(),
+            watches_ended,
+        );
+        let goal = crate::goal::snapshot(&slot, tokens, std::time::Instant::now());
+        if answer.changed {
+            self.emitter
+                .send(Event::new("goal.changed", &handle, json!({ "goal": goal })));
+        }
+        Ok(crate::goal::answered(&answer, goal))
     }
 
     fn watches(&mut self, request: &Request) -> Result<Value, Failure> {
@@ -7923,6 +7984,10 @@ mod completion_tests;
 #[cfg(test)]
 #[path = "open_loops_tests.rs"]
 mod open_loops_tests;
+
+#[cfg(test)]
+#[path = "goal_tests.rs"]
+mod goal_tests;
 
 // Beside the turn worker rather than the store, because one of them runs a turn.
 #[cfg(test)]
