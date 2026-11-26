@@ -463,17 +463,25 @@ impl Resolved {
     }
 
     /// A program a person named: their `$SHELL`, a hook's or an editor's path, the client after
-    /// `--`, a credential authority they configured. A bare name given here is searched by the
-    /// operating system, so a caller that takes one looks it up with [`Resolved::find`] first.
-    pub fn named_by_person(program: impl Into<PathBuf>) -> Self {
-        Self(program.into())
+    /// `--`, a credential authority they configured.
+    ///
+    /// `None` for a value with no path separator. A bare name given to [`start`] is searched by the
+    /// operating system on the `PATH` it inherits, which is the lookup SANDBOX-30 replaces, so a
+    /// caller that holds one looks it up with [`Resolved::find`] first.
+    #[must_use]
+    pub fn named_by_person(program: impl Into<PathBuf>) -> Option<Self> {
+        with_a_separator(program.into()).map(Self)
     }
 
     /// A path an earlier step returned and the caller kept: this program's own executable
     /// passed down to a supervisor, the program a `run` line was planned with, a language server the host resolved before the person was shown it, a
     /// stage's program.
-    pub fn found_earlier(program: impl Into<PathBuf>) -> Self {
-        Self(program.into())
+    ///
+    /// `None` for a value with no path separator, as for [`Resolved::named_by_person`]: what a
+    /// lookup returns is a path, so a bare name was not returned by one.
+    #[must_use]
+    pub fn found_earlier(program: impl Into<PathBuf>) -> Option<Self> {
+        with_a_separator(program.into()).map(Self)
     }
 
     /// The program the caller of a confinement backend asked to run inside it. The backend starts
@@ -486,6 +494,30 @@ impl Resolved {
     pub fn as_path(&self) -> &Path {
         &self.0
     }
+}
+
+/// `program` where it holds a path separator (`/`, and `\` on Windows), which no search of `PATH`
+/// applies to, and `None` for a bare name.
+///
+/// This reads the program path a person or a lookup supplied, never content a stage or a service
+/// returned, so the check decides nothing from untrusted bytes. On Unix the bytes are read as they
+/// are. Where a path is not bytes (Windows) one that is not text is refused, as a lossy rendering
+/// would test a path nobody wrote (PATH-002).
+#[cfg(unix)]
+fn with_a_separator(program: PathBuf) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    program
+        .as_os_str()
+        .as_bytes()
+        .contains(&b'/')
+        .then_some(program)
+}
+
+/// [`with_a_separator`] where a path is not bytes: a path that is not text is refused.
+#[cfg(not(unix))]
+fn with_a_separator(program: PathBuf) -> Option<PathBuf> {
+    let text = program.to_str()?;
+    text.contains(['/', '\\']).then_some(program)
 }
 
 /// What of this process's environment a started program inherits.
@@ -1606,11 +1638,12 @@ mod tests {
     /// `start` runs the program its argument names. The regression it rejects: a start that
     /// ignores the `Resolved` it is given, which would make every caller's lookup decorative.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn start_is_given_the_program_the_resolved_names() {
         for resolved in [
             Resolved::written_in_source("/usr/bin/xcode-select"),
-            Resolved::named_by_person("/opt/editor/bin/vim"),
-            Resolved::found_earlier("/usr/bin/git"),
+            Resolved::named_by_person("/opt/editor/bin/vim").expect("a path"),
+            Resolved::found_earlier("/usr/bin/git").expect("a path"),
             Resolved::to_confine("/bin/cat"),
         ] {
             assert_eq!(
@@ -1626,8 +1659,9 @@ mod tests {
     /// The regressions it rejects: a start that ignores the names, one that removes only the first,
     /// and one that removes something of its own when it is given none.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn start_removes_the_names_it_is_given_and_no_others() {
-        let program = Resolved::named_by_person("true");
+        let program = Resolved::named_by_person("/usr/bin/true").expect("a path");
         let removed = |inherits| {
             let mut removed: Vec<_> = start(
                 &program,
@@ -1690,10 +1724,11 @@ mod tests {
     /// which `get_envs` does not report, so code that builds a confined program's environment from
     /// this process's own and the command's `get_envs` hands the program all of it.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_start_given_only_some_names_reports_the_removal_of_the_rest_through_get_envs() {
         let kept = ["PATH"];
         let command = start(
-            &Resolved::named_by_person("true"),
+            &Resolved::named_by_person("/usr/bin/true").expect("a path"),
             Inherits::Only(&kept),
             SearchPath::Inherited,
             CodeSelectors::Kept,
@@ -1748,11 +1783,12 @@ mod tests {
     /// take nothing off. The regressions it rejects: a `withhold` that does nothing, which lets an
     /// assignment bring a withheld name back, and one that removes names under a rule that names none.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn withhold_takes_a_name_set_after_start_off_again() {
         let names = ["BRAVEBOT_PROBE_KEY".to_string()];
         let set = |inherits: Inherits<'_>| {
             let mut command = start(
-                &Resolved::named_by_person("true"),
+                &Resolved::named_by_person("/usr/bin/true").expect("a path"),
                 inherits,
                 SearchPath::Inherited,
                 CodeSelectors::Kept,
@@ -1781,8 +1817,9 @@ mod tests {
     /// `env` shebang to find a file a stage wrote, and one that always does, which breaks a language
     /// server that is meant to find the project's interpreter.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn start_gives_a_reduced_path_only_where_it_is_asked_for() {
-        let program = Resolved::named_by_person("true");
+        let program = Resolved::named_by_person("/usr/bin/true").expect("a path");
         let sets_path = |path| {
             start(&program, Inherits::All, path, CodeSelectors::Kept)
                 .get_envs()
@@ -1812,6 +1849,42 @@ mod tests {
             Resolved::find(OsStr::new("no-such-program-bravebot-2740")),
             None
         );
+    }
+
+    /// SANDBOX-30. `named_by_person` and `found_earlier` take a path, and a value with no path
+    /// separator is refused by each, so a bare name is never started by a search of the inherited
+    /// `PATH`. The regressions it rejects: a constructor that wraps whatever it is given, which
+    /// starts `sh` by the operating system's search, one that refuses a relative path with a
+    /// separator (`bin/tool`, `./tool`), which a hook may name relative to its directory, and one
+    /// that refuses an absolute path.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_bare_name_is_refused_and_a_value_with_a_separator_is_kept() {
+        assert_eq!(Resolved::named_by_person("sh"), None);
+        assert_eq!(Resolved::found_earlier("sh"), None);
+        assert_eq!(Resolved::named_by_person(""), None);
+        assert_eq!(Resolved::found_earlier(""), None);
+        for kept in ["/bin/sh", "./tool", "bin/tool"] {
+            let named = Resolved::named_by_person(kept).expect("a value with a separator");
+            let found = Resolved::found_earlier(kept).expect("a value with a separator");
+            assert_eq!(named.as_path(), std::path::Path::new(kept));
+            assert_eq!(found.as_path(), std::path::Path::new(kept));
+        }
+    }
+
+    /// A bare name whose bytes are not text is refused, and a path whose bytes are not text is
+    /// kept. The regression it rejects: reading the value as text (`to_str`), which refuses a path
+    /// the person owns only because its name is not UTF-8.
+    #[cfg(unix)]
+    #[test]
+    fn a_bare_name_that_is_not_text_is_refused_and_a_path_that_is_not_text_is_kept() {
+        use std::os::unix::ffi::OsStrExt;
+        let bare = OsStr::from_bytes(b"to\xffol");
+        let path = OsStr::from_bytes(b"/opt/to\xffol");
+        assert_eq!(Resolved::named_by_person(bare), None);
+        assert_eq!(Resolved::found_earlier(bare), None);
+        assert!(Resolved::named_by_person(path).is_some());
+        assert!(Resolved::found_earlier(path).is_some());
     }
 
     /// A Windows executable extension is not part of the name a program is known by, in any case,
@@ -3074,6 +3147,7 @@ mod tests {
     /// `HOME` as `home` and the `extra` variables besides, and `session` is the one directory a stage
     /// may write.
     #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn home_removed(
         selectors: CodeSelectors<'_>,
         program: &Path,
@@ -3090,7 +3164,7 @@ mod tests {
                 .map(|(name, value)| (OsString::from(*name), value.as_os_str().to_os_string())),
         );
         let command = start_against(
-            &Resolved::found_earlier(program),
+            &Resolved::found_earlier(program).expect("an absolute path"),
             Inherits::All,
             SearchPath::Inherited,
             selectors,

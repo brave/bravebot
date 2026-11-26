@@ -533,7 +533,11 @@ fn start(program: &Path, arguments: &[String], path: &Path) -> Result<(), Failur
 
 /// The command that opens `file` for a click: the editor's own arguments, then the file, started
 /// without this agent's own credentials.
-fn file_command(program: &Path, arguments: &[String], file: &OsStr) -> std::process::Command {
+fn file_command(
+    program: &Path,
+    arguments: &[String],
+    file: &OsStr,
+) -> Option<std::process::Command> {
     let withheld = bravebot_config::scrub::own_credentials();
     command_for(
         program,
@@ -544,28 +548,31 @@ fn file_command(program: &Path, arguments: &[String], file: &OsStr) -> std::proc
 }
 
 /// The command that starts `program`, given the arguments after the editor's own as they are.
+///
+/// `None` for a `program` with no path separator. [`lookup`] returns a path for every editor, so
+/// the editor a person named is never started by the operating system's search of `PATH`.
 fn command_for(
     program: &Path,
     arguments: &[String],
     trailing: &[&OsStr],
     inherits: bravebot_sandbox::programs::Inherits<'_>,
-) -> std::process::Command {
+) -> Option<std::process::Command> {
     let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::named_by_person(program),
+        &bravebot_sandbox::programs::Resolved::named_by_person(program)?,
         inherits,
         bravebot_sandbox::programs::SearchPath::Reduced,
         // The editor is the person's own choice (SANDBOX-30).
         bravebot_sandbox::programs::CodeSelectors::Kept,
     );
     command.args(arguments).args(trailing);
-    command
+    Some(command)
 }
 
 /// Run `command` and wait for it, saying what a run that did not end well says as the caller gives
-/// it, who knows what the run was for.
+/// it, who knows what the run was for. No `command` is an editor that would not start.
 fn run(
     program: &Path,
-    mut command: std::process::Command,
+    command: Option<std::process::Command>,
     exited_badly: impl FnOnce(String, Option<i32>) -> String,
 ) -> Result<(), Failure> {
     let name = program
@@ -573,6 +580,13 @@ fn run(
         .unwrap_or(program.as_os_str())
         .to_string_lossy()
         .into_owned();
+    let Some(mut command) = command else {
+        return Err(Failure::Editor(t!(
+            editor_would_not_start,
+            editor = name,
+            problem = io::Error::from(io::ErrorKind::NotFound)
+        )));
+    };
 
     match command.status() {
         Ok(status) if status.success() => Ok(()),
@@ -881,6 +895,7 @@ mod tests {
     /// prompt is edited in withholds none. A start that inherited everything would hand those
     /// credentials to whatever a workspace file makes the editor run.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn the_editor_a_click_opens_is_started_without_this_agents_own_credentials() {
         fn withheld_from(command: &std::process::Command) -> Vec<String> {
             let mut names: Vec<String> = command
@@ -894,7 +909,8 @@ mod tests {
         let program = Path::new("/usr/bin/vim");
         let arguments = vec!["+3".to_string()];
 
-        let click = file_command(program, &arguments, OsStr::new("/work/a.rs"));
+        let click =
+            file_command(program, &arguments, OsStr::new("/work/a.rs")).expect("an absolute path");
         let mut expected = bravebot_config::scrub::own_credentials();
         expected.sort();
         assert!(
@@ -913,7 +929,8 @@ mod tests {
             &arguments,
             &[OsStr::new("/work/prompt.md")],
             bravebot_sandbox::programs::Inherits::All,
-        );
+        )
+        .expect("an absolute path");
         assert!(
             withheld_from(&prompt).is_empty(),
             "the editor a prompt is edited in is not given all of the environment"

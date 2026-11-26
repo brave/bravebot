@@ -166,12 +166,13 @@ impl Asker for Tally {
 /// Rejects: a refusal made after the host question, one made after the program was started, and a
 /// classifier that lets an archive or an npm name through as a git source.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn an_archive_an_npm_name_and_a_plain_url_start_no_program_and_ask_nothing() {
     let markers = Markers::new();
     let listener = Counter::start(None);
     let program = tempfile::tempdir().unwrap();
     let stand_in = markers.script(program.path(), "git", "git-started", 1);
-    let git = Resolved::found_earlier(&stand_in);
+    let git = Resolved::found_earlier(&stand_in).expect("an absolute path");
     let root = tempfile::tempdir().unwrap();
     let parent = tempfile::tempdir().unwrap();
     let home = root.path().join("home");

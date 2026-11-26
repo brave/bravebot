@@ -127,7 +127,8 @@ impl Drop for Held {
 pub fn start_program(program: &str, arguments: &[OsString]) -> io::Result<Held> {
     let program = bravebot_sandbox::programs::find(std::ffi::OsStr::new(program))
         .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
-    let mut command = crate::powershell::start(program);
+    let mut command = crate::powershell::start(program)
+        .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
     let child = command
         .args(arguments)
         .stdin(Stdio::piped())

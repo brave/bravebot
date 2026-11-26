@@ -348,9 +348,10 @@ mod tests {
     }
 
     /// [`withheld`] for a value that need not be text.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn withheld_bytes(name: &str, value: &OsStr) -> bool {
         let command = opening_against(
-            &Resolved::found_earlier("/usr/bin/open"),
+            &Resolved::found_earlier("/usr/bin/open").expect("an absolute path"),
             &[],
             [(OsString::from(name), value.to_os_string())],
             &|path: &Path| path.starts_with("/safe"),
@@ -421,6 +422,7 @@ mod tests {
     /// ended by then is killed with every program it started, and this panics, which fails the
     /// child and so the test that ran it.
     #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn is_the_child_of_helper_run_by() -> bool {
         const SESSION: &str = "BRAVEBOT_TEST_BROWSER_SESSION";
         const OPENER: &str = "BRAVEBOT_TEST_BROWSER_OPENER";
@@ -433,7 +435,8 @@ mod tests {
             .unwrap_or_else(|_| "https://example.invalid/".to_string());
         let status = crate::testutil::status_within(
             &mut opening(
-                &Resolved::found_earlier(std::path::PathBuf::from(opener)),
+                &Resolved::found_earlier(std::path::PathBuf::from(opener))
+                    .expect("an absolute path"),
                 &[address],
             ),
             the_deadline_the_child_gives_the_opener(),
@@ -2355,6 +2358,20 @@ mod tests {
         println!("kde-open not exercised (no marker form): {untried:?}");
     }
 
+    /// SANDBOX-30. A bare name is not a program a lookup returned, so the constructors that take a
+    /// path a lookup returned refuse it and nothing is started by the operating system's search of
+    /// `PATH`. The opener's own names are bare (`open`, `xdg-open`, `rundll32`), so they are
+    /// resolved with `Resolved::find` before they are started. The regression it rejects: a bare
+    /// name wrapped as it is, which `Command` then searches on the `PATH` this process inherits.
+    #[test]
+    fn a_bare_opener_name_is_not_a_resolved_program() {
+        for os in ["macos", "windows", "linux"] {
+            let (program, _) = opener(os, "https://example.invalid/");
+            assert!(Resolved::found_earlier(program).is_none(), "{program}");
+            assert!(Resolved::named_by_person(program).is_none(), "{program}");
+        }
+    }
+
     /// CHATGPT-13, the Windows start, checked on every host. The command built for it is
     /// `rundll32`, the library's entry point and the address, as exactly those arguments: an address
     /// holding `&`, `|`, `^`, `%` and `"` is neither split nor joined with another, and no shell is
@@ -2362,23 +2379,22 @@ mod tests {
     /// string with the entry point, or passed to `cmd /c start`, which reads `&`. That `rundll32`
     /// then opens a page was read and not run, which needs Windows.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments() {
         let url = "https://auth.example/a?x=1&y=2|3^4%20\"5";
         assert!(is_openable(url));
 
         let (program, arguments) = opener("windows", url);
+        let rundll32 = "/windows/System32/rundll32.exe";
         let command = opening_against(
-            &Resolved::found_earlier(r"C:\Windows\System32\rundll32.exe"),
+            &Resolved::found_earlier(rundll32).expect("an absolute path"),
             &arguments,
             [],
             &|_| true,
         );
 
         assert_eq!(program, "rundll32");
-        assert_eq!(
-            command.get_program(),
-            OsStr::new(r"C:\Windows\System32\rundll32.exe")
-        );
+        assert_eq!(command.get_program(), OsStr::new(rundll32));
         let given: Vec<&OsStr> = command.get_args().collect();
         assert_eq!(
             given,
@@ -2449,6 +2465,7 @@ mod tests {
     /// `PATHEXT` as an option: an existing file outside the stage's directories is removed for it,
     /// which a `PATHEXT` judged as a file would keep.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn comspec_is_removed_for_a_program_a_stage_may_write_and_kept_for_an_installed_one() {
         let session = crate::testutil::scratch_dir("opener-comspec-session");
         let safe = crate::testutil::scratch_dir("opener-comspec-safe");
@@ -2466,7 +2483,7 @@ mod tests {
         // Shadows the helper above, which judges by the name `/safe` and cannot see a file on disk.
         let withheld = |name: &str, value: &Path| {
             opening_against(
-                &Resolved::found_earlier("/usr/bin/open"),
+                &Resolved::found_earlier("/usr/bin/open").expect("an absolute path"),
                 &[],
                 [(OsString::from(name), value.as_os_str().to_os_string())],
                 &|path: &Path| !path.starts_with(&session),
@@ -2492,12 +2509,13 @@ mod tests {
     /// spells `ComSpec` as Windows tools often do slips past.
     #[cfg(windows)]
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_windows_name_is_removed_in_whatever_case_it_is_set() {
         // The command is told to remove the spelling the list holds, so the name is compared
         // without regard to case. Only a path under `C:\safe` is outside a stage's directories.
         let withheld = |name: &str, value: &str| {
             opening_against(
-                &Resolved::found_earlier("rundll32"),
+                &Resolved::find(OsStr::new("rundll32")).expect("rundll32 is not found"),
                 &[],
                 [(OsString::from(name), OsString::from(value))],
                 &|path: &Path| path.starts_with(r"C:\safe"),
@@ -2630,6 +2648,7 @@ mod tests {
     /// `start ended: ..` for how `rundll32` ended, and runs it. It begins with a newline, which
     /// ends the line the test harness left open, so every record is at the start of a line.
     #[cfg(windows)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn is_the_child_of_the_windows_start() -> bool {
         let (Some(stage), Some(program)) = (
             std::env::var_os(WINDOWS_START_STAGE),
@@ -2642,7 +2661,7 @@ mod tests {
             .unwrap_or_else(|_| "https://example.invalid/".to_string());
         let (_, arguments) = opener("windows", &address);
         let mut command = opening_against(
-            &Resolved::found_earlier(std::path::PathBuf::from(program)),
+            &Resolved::found_earlier(std::path::PathBuf::from(program)).expect("an absolute path"),
             &arguments,
             std::env::vars_os(),
             &|path: &Path| !path.starts_with(&stage),
@@ -3156,6 +3175,7 @@ mod tests {
     /// directory makes first, is kept.
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_bus_socket_is_judged_by_where_it_leads_on_the_disk() {
         let session = crate::testutil::scratch_dir("opener-bus-session");
         let safe = crate::testutil::scratch_dir("opener-bus-safe");
@@ -3175,7 +3195,7 @@ mod tests {
         let writable = vec![session.clone()];
         let removed = |name: &str, value: String| {
             opening_against(
-                &Resolved::found_earlier("/usr/bin/open"),
+                &Resolved::found_earlier("/usr/bin/open").expect("an absolute path"),
                 &[],
                 [(OsString::from(name), OsString::from(value))],
                 &|path: &Path| {
@@ -3207,6 +3227,7 @@ mod tests {
     /// GLib reads when `HOME` is unset; SANDBOX-18 refuses the writes there.
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_home_is_judged_with_the_paths_the_opener_reads_under_it_on_the_disk() {
         let session = crate::testutil::scratch_dir("opener-home-session");
         let safe = crate::testutil::scratch_dir("opener-home-safe");
@@ -3243,7 +3264,7 @@ mod tests {
         };
         let removed = |value: &Path| {
             opening_against(
-                &Resolved::found_earlier("/usr/bin/open"),
+                &Resolved::found_earlier("/usr/bin/open").expect("an absolute path"),
                 &[],
                 [(OsString::from("HOME"), value.as_os_str().to_os_string())],
                 &outside,
@@ -3314,6 +3335,7 @@ mod tests {
     /// file has to exist to be kept.
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn the_opener_judges_a_kde_service_cache_by_the_file_it_names() {
         let session = crate::testutil::scratch_dir("opener-sycoca-session");
         let safe = crate::testutil::scratch_dir("opener-sycoca-safe");
@@ -3332,7 +3354,7 @@ mod tests {
         // session one a stage may write.
         let checked = |name: &str, value: &Path| {
             let command = opening_against(
-                &Resolved::found_earlier("/usr/bin/open"),
+                &Resolved::found_earlier("/usr/bin/open").expect("an absolute path"),
                 &[],
                 [(OsString::from(name), value.as_os_str().to_os_string())],
                 &|path: &Path| !path.starts_with(&session),
@@ -3357,6 +3379,7 @@ mod tests {
     /// The regression it rejects: a comparison of the names as written, which a link slips past.
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn an_xdg_directory_is_judged_by_where_it_leads_on_the_disk() {
         let session = crate::testutil::scratch_dir("opener-xdg-session");
         let safe = crate::testutil::scratch_dir("opener-xdg-safe");
@@ -3374,7 +3397,7 @@ mod tests {
         };
         let removed_for = |name: &str, value: &OsStr| {
             opening_against(
-                &Resolved::found_earlier("/usr/bin/open"),
+                &Resolved::found_earlier("/usr/bin/open").expect("an absolute path"),
                 &[],
                 [(OsString::from(name), value.to_os_string())],
                 &outside,
@@ -3408,6 +3431,7 @@ mod tests {
     /// judgment of the name as written, which a link into the session slips past.
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn gio_launch_desktop_is_removed_for_a_wrapper_a_stage_may_write_and_kept_for_an_installed_one()
     {
         let session = crate::testutil::scratch_dir("opener-gio-session");
@@ -3429,7 +3453,7 @@ mod tests {
         // Shadows the helper above, which judges by the name `/safe` and cannot see a file on disk.
         let withheld = |name: &str, value: &Path| {
             opening_against(
-                &Resolved::found_earlier("/usr/bin/open"),
+                &Resolved::found_earlier("/usr/bin/open").expect("an absolute path"),
                 &[],
                 [(OsString::from(name), value.as_os_str().to_os_string())],
                 &outside,
@@ -3474,6 +3498,7 @@ mod tests {
     /// one is reached only through a `/` in the value. The address has the scheme `bravebot-test`,
     /// which no system handler opens.
     #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn file_name_prefix_run(
         test: &str,
         variable: &str,
@@ -3533,7 +3558,7 @@ mod tests {
 
         let value = value.replace("@STAGE@", &stage.display().to_string());
         let judged = opening_against(
-            &Resolved::found_earlier(opener.to_str().unwrap()),
+            &Resolved::found_earlier(opener.to_str().unwrap()).expect("an absolute path"),
             &[],
             [(OsString::from(variable), OsString::from(&value))],
             &|path: &Path| path.starts_with("/safe"),
@@ -3660,8 +3685,9 @@ mod tests {
     /// with, is not read as a credential. The start this process makes is then held to leaving out
     /// every one of them.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn the_opener_is_not_handed_this_agents_own_credentials() {
-        let program = Resolved::found_earlier("/usr/bin/open");
+        let program = Resolved::found_earlier("/usr/bin/open").expect("an absolute path");
         let arguments = vec!["https://example.invalid/".to_string()];
 
         let command = opening_against(&program, &arguments, std::iter::empty(), &|_: &Path| true);

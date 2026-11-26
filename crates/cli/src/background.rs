@@ -235,9 +235,7 @@ fn start_host(
     if cfg!(not(unix)) {
         return Err(fail(Ending::Failed, t!(bg_unsupported)));
     }
-    // The host is this same program started again; nothing is trusted from where it says it is.
-    // nosemgrep: rust.lang.security.current-exe.current-exe
-    let Ok(me) = std::env::current_exe() else {
+    let Ok(me) = bravebot_sandbox::programs::Resolved::own_executable() else {
         return Err(fail(Ending::Failed, t!(bg_not_started)));
     };
     bravebot_session::jobs::start_host(&me, roster, id, first, directory, mode).map_err(|err| {
@@ -729,9 +727,11 @@ mod tests {
     /// session worked in, and a start that names no mode asks.
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn the_host_is_started_with_the_mode_it_runs_in() {
         let command = host_command(
-            std::path::Path::new("/bin/bravebot"),
+            &bravebot_sandbox::programs::Resolved::found_earlier("/bin/bravebot")
+                .expect("an absolute path"),
             "3f2a9c1e",
             Some(std::path::Path::new("/work")),
             Mode::AcceptEdits,
@@ -747,8 +747,12 @@ mod tests {
     /// is in, so closing the terminal that started it does not hold a directory open.
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn the_supervisor_is_started_as_the_hidden_command_from_the_root() {
-        let command = supervisor_command(std::path::Path::new("/bin/bravebot"));
+        let command = supervisor_command(
+            &bravebot_sandbox::programs::Resolved::found_earlier("/bin/bravebot")
+                .expect("an absolute path"),
+        );
         let arguments: Vec<_> = command.get_args().collect();
         assert_eq!(arguments, ["__bg-supervisor"]);
         assert_eq!(command.get_current_dir(), Some(std::path::Path::new("/")));

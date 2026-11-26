@@ -138,7 +138,10 @@ fn installed_in(path: &OsStr) -> PathBuf {
 /// ([CRED-14](../../../docs/specs/credential-protection.md#CRED-14)) and each variable that
 /// selects code, generic or in [`CODE_SELECTORS`], that names a path a stage may write. The rest of
 /// the environment stays, since the other `CLOUDSDK_*` values are what the CLI is run to read.
-fn command_for(program: &Path) -> Command {
+///
+/// `None` for a `program` with no path separator, which is the empty path [`installed`] gives where
+/// no `gcloud` was found. Only a path [`installed`] returned is started (SANDBOX-30).
+fn command_for(program: &Path) -> Option<Command> {
     command_for_with(
         program,
         std::env::vars_os(),
@@ -152,10 +155,10 @@ fn command_for_with(
     program: &Path,
     held: impl IntoIterator<Item = (OsString, OsString)>,
     outside_stage_writable: &impl Fn(&Path) -> bool,
-) -> Command {
+) -> Option<Command> {
     let held: Vec<(OsString, OsString)> = held.into_iter().collect();
     let mut command = bravebot_sandbox::programs::start_against(
-        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        &bravebot_sandbox::programs::Resolved::found_earlier(program)?,
         bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
         bravebot_sandbox::programs::SearchPath::Reduced,
         bravebot_sandbox::programs::CodeSelectors::Checked(&CODE_SELECTORS),
@@ -169,19 +172,19 @@ fn command_for_with(
         &held,
         outside_stage_writable,
     );
-    command
+    Some(command)
 }
 
-fn token_command(program: &Path) -> Command {
-    let mut command = command_for(program);
+fn token_command(program: &Path) -> Option<Command> {
+    let mut command = command_for(program)?;
     command.args(["auth", "application-default", "print-access-token"]);
-    command
+    Some(command)
 }
 
-fn login_command(program: &Path) -> Command {
-    let mut command = command_for(program);
+fn login_command(program: &Path) -> Option<Command> {
+    let mut command = command_for(program)?;
     command.args(["auth", "application-default", "login"]);
-    command
+    Some(command)
 }
 
 fn start_piped(command: &mut Command) -> std::io::Result<std::process::Child> {
@@ -212,7 +215,10 @@ fn token_from(program: &Path) -> Result<Secret, GcloudError> {
     if program.as_os_str().is_empty() {
         return Err(GcloudError::NotInstalled);
     }
-    let mut output = start_piped(&mut token_command(program))
+    let Some(mut command) = token_command(program) else {
+        return Err(GcloudError::NotInstalled);
+    };
+    let mut output = start_piped(&mut command)
         .and_then(std::process::Child::wait_with_output)
         .map_err(|e| spawn_error(&e))?;
     if !output.status.success() {
@@ -277,7 +283,10 @@ fn login_from(program: &Path, mut say: impl FnMut(String)) -> Result<(), GcloudE
     if program.as_os_str().is_empty() {
         return Err(GcloudError::NotInstalled);
     }
-    let mut child = start_piped(&mut login_command(program)).map_err(|e| spawn_error(&e))?;
+    let Some(mut command) = login_command(program) else {
+        return Err(GcloudError::NotInstalled);
+    };
+    let mut child = start_piped(&mut command).map_err(|e| spawn_error(&e))?;
     let (lines, arriving) = mpsc::channel::<String>();
     let mut readers = Vec::new();
     if let Some(stream) = child.stdout.take() {
@@ -349,14 +358,15 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn the_token_is_asked_for_with_the_application_default_credentials_command() {
-        let command = token_command(Path::new("/usr/bin/gcloud"));
+        let command = token_command(Path::new("/usr/bin/gcloud")).expect("an absolute path");
         assert_eq!(
             args_of(&command),
             ["auth", "application-default", "print-access-token"]
         );
         assert_eq!(
-            args_of(&login_command(Path::new("/usr/bin/gcloud"))),
+            args_of(&login_command(Path::new("/usr/bin/gcloud")).expect("an absolute path")),
             ["auth", "application-default", "login"]
         );
     }
@@ -405,6 +415,22 @@ mod tests {
         }
     }
 
+    /// SANDBOX-30. A bare `gcloud` is never handed to the operating system's search of `PATH`: the
+    /// start is refused and reported as not installed, as the empty path is.
+    #[test]
+    fn a_bare_name_is_not_started_and_is_reported_as_not_installed() {
+        assert!(command_for(Path::new("gcloud")).is_none());
+        assert!(command_for(Path::new("")).is_none());
+        assert_eq!(
+            token_from(Path::new("gcloud")).unwrap_err(),
+            GcloudError::NotInstalled
+        );
+        assert_eq!(
+            login_from(Path::new("gcloud"), |_| {}).unwrap_err(),
+            GcloudError::NotInstalled
+        );
+    }
+
     #[test]
     fn no_program_is_reported_as_not_installed() {
         assert_eq!(
@@ -435,9 +461,11 @@ mod tests {
     /// so the names `gcloud`'s own wrapper looks up (its shell, its Python) are searched through
     /// directories a stage may write ([PATH-005](../../../docs/best-practices/paths.md#PATH-005)).
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_started_gcloud_is_given_a_path_the_lookup_has_reduced() {
         let program = Path::new("/usr/bin/gcloud");
         for command in [token_command(program), login_command(program)] {
+            let command = command.expect("an absolute path");
             let path = command
                 .get_envs()
                 .find(|(name, _)| *name == OsStr::new("PATH"));
@@ -447,6 +475,7 @@ mod tests {
 
     /// Whether `name` is taken off the environment a `gcloud` is started with, when the person's
     /// environment holds `value` for it and `writable` is the directory a stage may write.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn withheld(name: &str, value: &Path, writable: &Path) -> bool {
         let row = writable.to_path_buf();
         let rows = std::slice::from_ref(&row);
@@ -454,7 +483,8 @@ mod tests {
             Path::new("/usr/bin/gcloud"),
             [(OsString::from(name), value.as_os_str().to_os_string())],
             &|file: &Path| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
-        );
+        )
+        .expect("an absolute path");
         command
             .get_envs()
             .any(|(set, now)| set == OsStr::new(name) && now.is_none())
@@ -462,6 +492,7 @@ mod tests {
 
     /// Whether a `gcloud` start has `PYTHONNOUSERSITE=1`, when the person's `HOME` is `home` and
     /// `writable` is the one directory a stage may write.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn turns_off_the_user_site(home: &Path, writable: &Path) -> bool {
         let row = writable.to_path_buf();
         let rows = std::slice::from_ref(&row);
@@ -469,7 +500,8 @@ mod tests {
             Path::new("/usr/bin/gcloud"),
             [(OsString::from("HOME"), home.as_os_str().to_os_string())],
             &|file: &Path| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
-        );
+        )
+        .expect("an absolute path");
         command
             .get_envs()
             .any(|(name, value)| name == "PYTHONNOUSERSITE" && value == Some(OsStr::new("1")))
@@ -1094,9 +1126,10 @@ mod tests {
     /// The regression it rejects: starting without the credential removal, so the agent's own keys
     /// reach the CLI ([CRED-14](../../../docs/specs/credential-protection.md#CRED-14)).
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_started_gcloud_has_this_agents_credentials_removed() {
         let names = bravebot_config::scrub::own_credentials();
-        let command = command_for(Path::new("/usr/bin/gcloud"));
+        let command = command_for(Path::new("/usr/bin/gcloud")).expect("an absolute path");
         for name in &names {
             assert!(
                 command

@@ -927,7 +927,7 @@ pub enum StartError {
 /// live a supervisor is made sure of (BG-11). The line is taken back on every failure.
 #[cfg(unix)]
 pub fn start_host(
-    program: &Path,
+    program: &bravebot_sandbox::programs::Resolved,
     roster: &Roster,
     id: &str,
     first: &str,
@@ -978,7 +978,7 @@ pub fn start_host(
 
 #[cfg(not(unix))]
 pub fn start_host(
-    _program: &Path,
+    _program: &bravebot_sandbox::programs::Resolved,
     _roster: &Roster,
     _id: &str,
     _first: &str,
@@ -999,7 +999,7 @@ pub fn start_host(
 /// The session is running whatever becomes of this, so it is not undone when the supervisor cannot
 /// be started.
 #[cfg(unix)]
-fn ensure_supervisor(roster: &Roster, program: &Path) {
+fn ensure_supervisor(roster: &Roster, program: &bravebot_sandbox::programs::Resolved) {
     use std::process::Stdio;
     use std::time::{Duration, Instant};
 
@@ -1029,9 +1029,9 @@ fn ensure_supervisor(roster: &Roster, program: &Path) {
 /// The command that runs the supervisor: the hidden `__bg-supervisor`, from a directory that no
 /// terminal holds open.
 #[cfg(unix)]
-pub fn supervisor_command(program: &Path) -> std::process::Command {
+pub fn supervisor_command(program: &bravebot_sandbox::programs::Resolved) -> std::process::Command {
     let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        program,
         bravebot_sandbox::programs::Inherits::All,
         bravebot_sandbox::programs::SearchPath::Inherited,
         // This program started again for the person; it keeps the environment they set (SANDBOX-30).
@@ -1044,13 +1044,13 @@ pub fn supervisor_command(program: &Path) -> std::process::Command {
 /// The command that runs the process for `id`: the hidden `__bg-host` with the mode word it runs in.
 #[cfg(unix)]
 pub fn host_command(
-    program: &Path,
+    program: &bravebot_sandbox::programs::Resolved,
     id: &str,
     directory: Option<&Path>,
     mode: Mode,
 ) -> std::process::Command {
     let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        program,
         bravebot_sandbox::programs::Inherits::All,
         bravebot_sandbox::programs::SearchPath::Inherited,
         // This program started again for the person; it keeps the environment they set (SANDBOX-30).
@@ -1596,9 +1596,13 @@ mod tests {
     /// the line it left for the session, so a later start does not run it.
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_host_program_that_does_not_exist_starts_nothing_and_takes_back_its_line() {
         let (dir, roster) = roster();
-        let missing = dir.path().join("no-such-bravebot");
+        let missing = bravebot_sandbox::programs::Resolved::found_earlier(
+            dir.path().join("no-such-bravebot"),
+        )
+        .expect("an absolute path");
         let started = start_host(&missing, &roster, A, "hello", None, Mode::Ask);
         assert!(
             matches!(

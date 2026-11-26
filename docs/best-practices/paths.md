@@ -273,9 +273,9 @@ the files it reads when a workflow starts a new program or a new command of one.
 
 ```rust
 // Wrong: the variables are inherited as the person set them, so a value naming a file a stage
-// wrote is run outside confinement.
+// wrote is run outside confinement. `program` is a `Resolved` from `Resolved::find`.
 bravebot_sandbox::programs::start(
-    &Resolved::found_earlier(program),
+    &program,
     Inherits::Without(&own_credentials()),
     SearchPath::Reduced,
     CodeSelectors::Kept,
@@ -285,7 +285,7 @@ bravebot_sandbox::programs::start(
 // `OWN` is the program's own `CODE_SELECTORS` list, such as the one `gcloud.rs` passes; the generic
 // table is removed as well, by `programs::withhold_code_selectors_with`.
 bravebot_sandbox::programs::start(
-    &Resolved::found_earlier(program),
+    &program,
     Inherits::Without(&own_credentials()),
     SearchPath::Reduced,
     CodeSelectors::Checked(&OWN),

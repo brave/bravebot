@@ -684,7 +684,7 @@ const SYSTEMCTL_CODE_SELECTORS: [(&str, Names); 2] = [
 /// credentials.
 #[cfg(unix)]
 fn tool(name: &str) -> Option<std::process::Command> {
-    let found = bravebot_sandbox::programs::find(std::ffi::OsStr::new(name))?;
+    let found = bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new(name))?;
     Some(started(
         &found,
         std::env::vars_os(),
@@ -692,22 +692,23 @@ fn tool(name: &str) -> Option<std::process::Command> {
     ))
 }
 
-/// The command that starts the scheduler program found at `program`, against a given environment
+/// The command that starts the scheduler program `program` is, against a given environment
 /// and a given judgment of which files are outside the directories a stage may write.
 ///
 /// `systemctl` has [`SYSTEMCTL_CODE_SELECTORS`] removed as well as the generic names. `crontab` and
 /// `launchctl` have the generic names alone.
 #[cfg(unix)]
 fn started(
-    program: &Path,
+    program: &bravebot_sandbox::programs::Resolved,
     held: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
     outside_stage_writable: &impl Fn(&Path) -> bool,
 ) -> std::process::Command {
-    let resolved = bravebot_sandbox::programs::Resolved::found_earlier(program);
     let credentials = bravebot_config::scrub::own_credentials();
-    if bravebot_sandbox::programs::program_name(program).is_some_and(|name| name == "systemctl") {
+    if bravebot_sandbox::programs::program_name(program.as_path())
+        .is_some_and(|name| name == "systemctl")
+    {
         bravebot_sandbox::programs::start_against(
-            &resolved,
+            program,
             bravebot_sandbox::programs::Inherits::Without(&credentials),
             bravebot_sandbox::programs::SearchPath::Reduced,
             bravebot_sandbox::programs::CodeSelectors::Checked(&SYSTEMCTL_CODE_SELECTORS),
@@ -716,7 +717,7 @@ fn started(
         )
     } else {
         bravebot_sandbox::programs::start_against(
-            &resolved,
+            program,
             bravebot_sandbox::programs::Inherits::Without(&credentials),
             bravebot_sandbox::programs::SearchPath::Reduced,
             // `crontab -l` and `crontab -`, and `launchctl load` and `unload`: no variable of their
@@ -1469,9 +1470,14 @@ impl Undelivered {
 /// arguments, and with standard output and error discarded. The write is made on a thread of its
 /// own, so a program that never reads cannot stop the limit being kept.
 fn deliver(program: &Path, bytes: Vec<u8>, limit: Duration) -> Result<(), Undelivered> {
+    // A destination is stored absolute (`well_formed_destination`), so a value without a path
+    // separator is a file that was edited by hand, and it is not started.
+    let Some(program) = bravebot_sandbox::programs::Resolved::named_by_person(program) else {
+        return Err(Undelivered::NotStarted);
+    };
     let withheld = bravebot_config::scrub::withheld();
     let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::named_by_person(program),
+        &program,
         bravebot_sandbox::programs::Inherits::Without(&withheld),
         bravebot_sandbox::programs::SearchPath::Reduced,
         // The program is the one the person named for delivery, run as a hook is.
@@ -2829,10 +2835,12 @@ mod tests {
     /// Whether the start of `program` takes `name` off the environment when the person's
     /// environment holds `value` for it, and the directory `stage` is one a stage may write.
     #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn removed_by(program: &str, name: &str, value: &std::ffi::OsStr, stage: &Path) -> bool {
         let writable = vec![stage.to_path_buf()];
         started(
-            Path::new(program),
+            &bravebot_sandbox::programs::Resolved::found_earlier(program)
+                .expect("an absolute path"),
             [(std::ffi::OsString::from(name), value.to_os_string())],
             &|file: &Path| {
                 bravebot_sandbox::programs::outside_stage_writable_with(file, &writable, &[])
@@ -2936,7 +2944,8 @@ mod tests {
     {
         use std::os::unix::fs::PermissionsExt;
         const NAME: &str = "DBUS_SESSION_BUS_ADDRESS";
-        let Some(systemctl) = bravebot_sandbox::programs::find(std::ffi::OsStr::new("systemctl"))
+        let Some(systemctl) =
+            bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new("systemctl"))
         else {
             eprintln!("skipped: systemctl is not installed");
             return;
@@ -2980,7 +2989,7 @@ mod tests {
                 command
             } else {
                 let mut command = bravebot_sandbox::programs::start(
-                    &bravebot_sandbox::programs::Resolved::found_earlier(&systemctl),
+                    &systemctl,
                     bravebot_sandbox::programs::Inherits::All,
                     bravebot_sandbox::programs::SearchPath::Inherited,
                     bravebot_sandbox::programs::CodeSelectors::Kept,

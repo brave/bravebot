@@ -4501,6 +4501,11 @@ that passes it on. A program is started with `bravebot_sandbox::programs::start(
 path, selectors)`. `program` is a `Resolved` and not a path or a string. Only the lookup (`Resolved::find`,
 `Resolved::find_on`) and a named constructor build one, and each constructor says who chose the
 program: `own_executable`, `written_in_source`, `named_by_person`, `found_earlier` and `to_confine`.
+`named_by_person` and `found_earlier` return `None` for a value with no path separator, so a bare
+name is never started by the operating system's search of the inherited `PATH`: a caller that holds
+one resolves it with `Resolved::find` or `Resolved::find_on` first. The check reads the program
+path the person or the lookup supplied, as bytes on Unix, and decides nothing from content a stage
+or a service returned.
 `inherits` is `Inherits::All`, `Inherits::Without` the names
 [CRED-14](credential-protection.md#CRED-14) removes, or `Inherits::Only` the names it passes on, and
 `path` is `SearchPath::Reduced` or `SearchPath::Inherited`, and `selectors` is
@@ -6674,6 +6679,10 @@ shown by running the program, or not entirely:
   nothing on Windows.
 
 `verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
+`verified-by: bravebot_sandbox::programs::a_bare_name_is_refused_and_a_value_with_a_separator_is_kept`
+`verified-by: bravebot_sandbox::programs::a_bare_name_that_is_not_text_is_refused_and_a_path_that_is_not_text_is_kept`
+`verified-by: bravebot_agent::gcloud::a_bare_name_is_not_started_and_is_reported_as_not_installed`
+`verified-by: bravebot_tui::opener::a_bare_opener_name_is_not_a_resolved_program`
 `verified-by: bravebot_sandbox::programs::the_program_behind_a_writable_directory_is_the_one_found`
 `verified-by: bravebot_sandbox::programs::a_program_is_found_when_no_writable_directory_is_involved`
 `verified-by: bravebot_sandbox::programs::a_relative_path_entry_is_never_searched`

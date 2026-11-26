@@ -27,10 +27,10 @@
 //! a turn, and the only thing it is ever used for is computing a signature.
 
 use bravebot_config::{Held, Secret};
-use bravebot_sandbox::programs::{Names, selectors};
+use bravebot_sandbox::programs::{Names, Resolved, selectors};
 use std::ffi::{OsStr, OsString};
 use std::io::BufRead;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 
@@ -50,36 +50,16 @@ const AWS: &str = "aws";
 /// those directories out, so a person whose only `aws` is in one has none, as far as this is
 /// concerned.
 ///
-/// The empty path when there is none, which [`absent`] recognises before anything is started, since
-/// what a platform says on being asked to start it is not the same everywhere.
-fn installed() -> PathBuf {
+/// `None` when there is none, so nothing is started and every caller reports the CLI as not
+/// installed. What a platform says on being asked to start a program that is not there is not the
+/// same everywhere. The value is the absolute path the lookup returned, never a bare name, so the
+/// operating system's own search of `PATH` does not run.
+fn installed() -> Option<Resolved> {
     installed_in(&std::env::var_os("PATH").unwrap_or_default())
 }
 
-fn installed_in(path: &OsStr) -> PathBuf {
-    bravebot_sandbox::programs::find_on(OsStr::new(AWS), path).unwrap_or_default()
-}
-
-/// A command for that program, with this agent's own credentials taken off it.
-///
-/// Every `aws` this crate starts is built here, because the CLI is a program the agent started and
-/// [CRED-14](../../../docs/specs/credential-protection.md#CRED-14) puts what this agent
-/// authenticates with out of reach of one. What a person approving a session read was a model
-/// request, not a handover of the signing key, and `aws sso login` goes on to open a browser, so
-/// the reach of an inherited environment does not stop at the CLI.
-///
-/// Which names those are is the configuration surface's rather than this file's: a second list
-/// written down here would be a list one name out of date the first time the real one changed.
-/// This agent's own and no more, rather than the wider set a program somebody asked for is held
-/// to: nobody asked for this program, so there is no answer of theirs to apply, and what the
-/// machine holds for AWS is what the CLI is being run to resolve. `AWS_PROFILE`, `AWS_REGION` and
-/// the rest of the user's environment are exactly what the clause leaves in place.
-fn aws() -> Command {
-    command_for(&installed())
-}
-
-fn absent(command: &Command) -> bool {
-    command.get_program().is_empty()
+fn installed_in(path: &OsStr) -> Option<Resolved> {
+    Resolved::find_on(OsStr::new(AWS), path)
 }
 
 /// The variables a program the CLI starts or loads reads to choose code to run, and what each
@@ -145,7 +125,24 @@ const CODE_SELECTORS: [(&str, Names); 18] = [
     ("BOTOCORE_EXPERIMENTAL__PLUGINS", Names::Options),
 ];
 
-fn command_for(program: &Path) -> Command {
+/// A command for that program, with this agent's own credentials taken off it.
+///
+/// Every `aws` this crate starts is built here, because the CLI is a program the agent started and
+/// [CRED-14](../../../docs/specs/credential-protection.md#CRED-14) puts what this agent
+/// authenticates with out of reach of one. What a person approving a session read was a model
+/// request, not a handover of the signing key, and `aws sso login` goes on to open a browser, so
+/// the reach of an inherited environment does not stop at the CLI.
+///
+/// Which names those are is the configuration surface's rather than this file's: a second list
+/// written down here would be a list one name out of date the first time the real one changed.
+/// This agent's own and no more, rather than the wider set a program somebody asked for is held
+/// to: nobody asked for this program, so there is no answer of theirs to apply, and what the
+/// machine holds for AWS is what the CLI is being run to resolve. `AWS_PROFILE`, `AWS_REGION` and
+/// the rest of the user's environment are exactly what the clause leaves in place.
+///
+/// The program is a [`Resolved`], which is an absolute path and never a bare name, so the
+/// operating system's own search of `PATH` does not choose it.
+fn command_for(program: &Resolved) -> Command {
     command_for_with(
         program,
         std::env::vars_os(),
@@ -156,7 +153,7 @@ fn command_for(program: &Path) -> Command {
 /// [`command_for`] against a given environment and a given judgment of which files are outside the
 /// directories a stage may write.
 fn command_for_with(
-    program: &Path,
+    program: &Resolved,
     held: impl IntoIterator<Item = (OsString, OsString)>,
     outside_stage_writable: &impl Fn(&Path) -> bool,
 ) -> Command {
@@ -166,7 +163,7 @@ fn command_for_with(
     // run to resolve.
     let held: Vec<(OsString, OsString)> = held.into_iter().collect();
     let mut command = bravebot_sandbox::programs::start_against(
-        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        program,
         bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
         bravebot_sandbox::programs::SearchPath::Reduced,
         bravebot_sandbox::programs::CodeSelectors::Checked(&CODE_SELECTORS),
@@ -184,11 +181,18 @@ fn command_for_with(
 }
 
 /// The export, as a command, so what it is handed can be read without running it.
-fn export_command(profile: Option<&str>) -> Command {
+///
+/// `None` where the CLI is not installed.
+fn export_command(profile: Option<&str>) -> Option<Command> {
+    Some(export_command_for(&installed()?, profile))
+}
+
+/// [`export_command`] for a program already found.
+fn export_command_for(program: &Resolved, profile: Option<&str>) -> Command {
     // `--format process` is the documented, stable shape for exactly this: a program asking another
     // program for credentials. The alternative, `--format env`, returns shell assignments that would
     // have to be parsed as such.
-    let mut command = aws();
+    let mut command = command_for(program);
     command.args(["configure", "export-credentials", "--format", "process"]);
     if let Some(profile) = profile {
         command.args(["--profile", profile]);
@@ -197,15 +201,29 @@ fn export_command(profile: Option<&str>) -> Command {
 }
 
 /// The profile listing, as a command, for the same reason.
-fn profiles_command() -> Command {
-    let mut command = aws();
+///
+/// `None` where the CLI is not installed.
+fn profiles_command() -> Option<Command> {
+    Some(profiles_command_for(&installed()?))
+}
+
+/// [`profiles_command`] for a program already found.
+fn profiles_command_for(program: &Resolved) -> Command {
+    let mut command = command_for(program);
     command.args(["configure", "list-profiles"]);
     command
 }
 
 /// The sign-in, as a command, for the same reason.
-fn login_command(profile: Option<&str>) -> Command {
-    let mut command = aws();
+///
+/// `None` where the CLI is not installed.
+fn login_command(profile: Option<&str>) -> Option<Command> {
+    Some(login_command_for(&installed()?, profile))
+}
+
+/// [`login_command`] for a program already found.
+fn login_command_for(program: &Resolved, profile: Option<&str>) -> Command {
+    let mut command = command_for(program);
     command.args(["sso", "login"]);
     if let Some(profile) = profile {
         command.args(["--profile", profile]);
@@ -562,10 +580,9 @@ pub fn sign_in_if_needed_until(
     if let Some(absent) = absent_from(profile, profiles()) {
         return Err(Stopped::Failed(absent));
     }
-    let command = login_command(profile);
-    if absent(&command) {
+    let Some(command) = login_command(profile) else {
         return Err(Stopped::Failed(CredentialError::NotInstalled));
-    }
+    };
     login_until(command, say, stop)
 }
 
@@ -687,10 +704,9 @@ fn output_of(command: &mut Command) -> std::io::Result<std::process::Output> {
 
 /// Ask the CLI for credentials, without trying to fix anything.
 fn export(profile: Option<&str>) -> Result<Credentials, CredentialError> {
-    let mut command = export_command(profile);
-    if absent(&command) {
+    let Some(mut command) = export_command(profile) else {
         return Err(CredentialError::NotInstalled);
-    }
+    };
     let mut output = output_of(&mut command).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => CredentialError::NotInstalled,
         _ => CredentialError::Refused {
@@ -719,7 +735,7 @@ fn export(profile: Option<&str>) -> Result<Credentials, CredentialError> {
 /// Run only after something has already failed, so the check before every turn still costs one
 /// export and no more.
 fn profiles() -> Option<Vec<String>> {
-    let output = output_of(&mut profiles_command()).ok()?;
+    let output = output_of(&mut profiles_command()?).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -770,10 +786,9 @@ fn login(profile: Option<&str>, mut say: impl FnMut(String)) -> Result<(), Crede
         return Err(absent);
     }
 
-    let mut command = login_command(profile);
-    if absent(&command) {
+    let Some(mut command) = login_command(profile) else {
         return Err(CredentialError::NotInstalled);
-    }
+    };
     // Both output streams are piped, because which one carries the code is the CLI's business and a
     // person who cannot see it is stuck either way. Nothing is typed at this: the code goes into a
     // browser, and the terminal belongs to whoever called, so a program left able to read stdin
@@ -924,6 +939,13 @@ fn first_line(stderr: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    /// The program at an absolute path, as a lookup that found it would give it.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn aws_at(path: impl Into<PathBuf>) -> Resolved {
+        Resolved::found_earlier(path).expect("an absolute path")
+    }
 
     /// A reply in a buffer of its own, since reading one clears the bytes it was read from.
     fn reply(body: &[u8]) -> Vec<u8> {
@@ -959,7 +981,7 @@ mod tests {
         let mut expected = bravebot_config::scrub::own_credentials();
         expected.sort();
         let mut withheld = withheld_from(&command_for_with(
-            Path::new("/usr/bin/aws"),
+            &aws_at("/usr/bin/aws"),
             std::iter::empty(),
             &|_: &Path| true,
         ));
@@ -969,18 +991,25 @@ mod tests {
             "the start was handed a different set from the one the configuration names"
         );
 
-        let mut started = withheld_from(&aws());
+        let program = aws_at("/usr/bin/aws");
+        let mut started = withheld_from(&command_for(&program));
         started.sort();
         assert!(
             expected.iter().all(|name| started.contains(name)),
             "the start in this environment was handed a credential: {started:?}"
         );
         for (what, command) in [
-            ("the export", export_command(None)),
-            ("the export for a profile", export_command(Some("work"))),
-            ("the profile listing", profiles_command()),
-            ("the sign-in", login_command(None)),
-            ("the sign-in for a profile", login_command(Some("work"))),
+            ("the export", export_command_for(&program, None)),
+            (
+                "the export for a profile",
+                export_command_for(&program, Some("work")),
+            ),
+            ("the profile listing", profiles_command_for(&program)),
+            ("the sign-in", login_command_for(&program, None)),
+            (
+                "the sign-in for a profile",
+                login_command_for(&program, Some("work")),
+            ),
         ] {
             let mut withheld = withheld_from(&command);
             withheld.sort();
@@ -1032,7 +1061,7 @@ mod tests {
     /// [`withheld_value`] for a value that need not be text.
     fn withheld_bytes(name: &str, value: &OsStr) -> bool {
         let command = command_for_with(
-            Path::new("/usr/bin/aws"),
+            &aws_at("/usr/bin/aws"),
             [(OsString::from(name), value.to_os_string())],
             &|path: &Path| path.starts_with("/safe"),
         );
@@ -1135,7 +1164,7 @@ mod tests {
         };
         let withheld_where_only_the_lookalike_is_outside = |name: &str, value: &OsStr| {
             command_for_with(
-                Path::new("/usr/bin/aws"),
+                &aws_at("/usr/bin/aws"),
                 [(OsString::from(name), value.to_os_string())],
                 &only_the_lookalike,
             )
@@ -1184,6 +1213,7 @@ mod tests {
     /// directory first on `PATH`. The CLI is started unconfined with the person's access to
     /// `~/.aws`, so the one behind it is the one that has to run.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn an_aws_a_confined_stage_wrote_at_the_front_of_path_is_not_the_one_run() {
         let session = fresh_directory("credentials-planted-session");
         let planted = session.join(".venv").join("bin");
@@ -1194,7 +1224,8 @@ mod tests {
         bravebot_sandbox::programs::keep_out(&session);
         let path = std::env::join_paths([&planted, &system]).unwrap();
 
-        let command = command_for(&installed_in(&path));
+        let found = installed_in(&path).expect("the aws behind the planted one");
+        let command = command_for(&found);
 
         assert_eq!(command.get_program(), real.as_os_str());
     }
@@ -1210,9 +1241,7 @@ mod tests {
         bravebot_sandbox::programs::keep_out(&session);
         let path = std::env::join_paths([&planted]).unwrap();
 
-        let command = command_for(&installed_in(&path));
-
-        assert!(absent(&command));
+        assert_eq!(installed_in(&path), None);
     }
 
     /// A stage given every path the account can write may replace the `aws` in a Homebrew prefix
@@ -1220,6 +1249,7 @@ mod tests {
     /// unconfined with the person's access to `~/.aws`, so the one behind it is the one that has
     /// to run.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn an_aws_where_a_stage_given_the_whole_machine_may_write_is_not_the_one_run() {
         let prefix = fresh_directory("credentials-held-prefix");
         let planted = prefix.join("bin");
@@ -1230,7 +1260,8 @@ mod tests {
         bravebot_sandbox::programs::keep_out_where_writable(&prefix);
         let path = std::env::join_paths([&planted, &system]).unwrap();
 
-        let command = command_for(&installed_in(&path));
+        let found = installed_in(&path).expect("the aws behind the planted one");
+        let command = command_for(&found);
 
         assert_eq!(command.get_program(), real.as_os_str());
     }
@@ -1243,7 +1274,7 @@ mod tests {
         let real = executable_aws(&system);
         let path = std::env::join_paths([&system]).unwrap();
 
-        assert_eq!(installed_in(&path), real);
+        assert_eq!(installed_in(&path), Some(aws_at(real)));
     }
 
     /// SANDBOX-30: an `aws` that is a script with an `env` shebang looks its interpreter up on the
@@ -1323,7 +1354,7 @@ mod tests {
     /// authenticates with and deliberately leaves what the person already has.
     #[test]
     fn the_machines_own_aws_configuration_still_reaches_the_cli() {
-        let withheld = withheld_from(&export_command(Some("work")));
+        let withheld = withheld_from(&export_command_for(&aws_at("/usr/bin/aws"), Some("work")));
         for kept in [
             "AWS_PROFILE",
             "AWS_REGION",
@@ -1344,7 +1375,7 @@ mod tests {
         let row = writable.to_path_buf();
         let rows = std::slice::from_ref(&row);
         let command = command_for_with(
-            Path::new("/usr/bin/aws"),
+            &aws_at("/usr/bin/aws"),
             [(OsString::from(name), value.as_os_str().to_os_string())],
             &|file: &Path| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
         );
@@ -1360,7 +1391,7 @@ mod tests {
         let row = writable.to_path_buf();
         let rows = std::slice::from_ref(&row);
         let command = command_for_with(
-            Path::new("/usr/bin/aws"),
+            &aws_at("/usr/bin/aws"),
             [(OsString::from("HOME"), home.as_os_str().to_os_string())],
             &|file: &Path| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
         );
@@ -1770,14 +1801,14 @@ mod tests {
             return;
         }
 
-        let real = installed();
-        if absent(&command_for(&real)) {
+        let Some(real) = installed() else {
             eprintln!(
                 "skipped: no `aws` is installed in a directory the lookup accepts, so no \
                  credential_process helper was run by the real CLI"
             );
             return;
-        }
+        };
+        let real = real.as_path().to_path_buf();
 
         // A profile named `helper` whose `credential_process` is a script that notes it ran and
         // prints a credential in the shape the CLI reads.
@@ -1865,8 +1896,9 @@ mod tests {
                 .map(|arg| arg.to_string_lossy().into_owned())
                 .collect()
         };
+        let program = aws_at("/usr/bin/aws");
         assert_eq!(
-            args(&export_command(Some("work"))),
+            args(&export_command_for(&program, Some("work"))),
             [
                 "configure",
                 "export-credentials",
@@ -1876,9 +1908,12 @@ mod tests {
                 "work"
             ]
         );
-        assert_eq!(args(&profiles_command()), ["configure", "list-profiles"]);
         assert_eq!(
-            args(&login_command(Some("work"))),
+            args(&profiles_command_for(&program)),
+            ["configure", "list-profiles"]
+        );
+        assert_eq!(
+            args(&login_command_for(&program, Some("work"))),
             ["sso", "login", "--profile", "work"]
         );
     }

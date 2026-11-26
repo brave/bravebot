@@ -831,7 +831,8 @@ fn start(
         confinement,
         std::env::vars_os(),
         &bravebot_sandbox::programs::outside_stage_writable,
-    );
+    )
+    .ok_or(Started::Other)?;
 
     let mut command = match confinement {
         Some(confinement) => confinement
@@ -853,6 +854,9 @@ fn start(
 /// production, and `outside_stage_writable` judges a file as [`outside_stage_writable`] does.
 ///
 /// [`outside_stage_writable`]: bravebot_sandbox::programs::outside_stage_writable
+///
+/// `None` for a `started_as` with no path separator, which a lookup does not return and which the
+/// operating system would search for on `PATH` (SANDBOX-30).
 fn stage_command(
     started_as: &Path,
     args: &[String],
@@ -860,7 +864,7 @@ fn stage_command(
     confinement: Option<&Confinement>,
     held: impl IntoIterator<Item = (OsString, OsString)>,
     outside_stage_writable: &impl Fn(&Path) -> bool,
-) -> Command {
+) -> Option<Command> {
     let withheld = bravebot_config::scrub::withheld();
     let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
     let held: Vec<(OsString, OsString)> = held.into_iter().collect();
@@ -877,7 +881,7 @@ fn stage_command(
         })
         .collect();
     let mut command = bravebot_sandbox::programs::start_against(
-        &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
+        &bravebot_sandbox::programs::Resolved::found_earlier(started_as)?,
         inherits,
         unconfined_path(confinement),
         // The tool the check re-runs unconfined is one bravebot found, so the variables that
@@ -919,7 +923,7 @@ fn stage_command(
     }
     // After the suite's own variables, so a name a person's `run.scrubEnv` lists is still removed.
     inherits.withhold(&mut command);
-    command
+    Some(command)
 }
 
 /// The exit code of `child`, or `None` when a signal ended it or it ran past [`LIMIT`].
@@ -1021,6 +1025,8 @@ pub fn login_row_for(
 /// [`bravebot_sandbox::programs::withhold_prefixed`] with
 /// [`bravebot_sandbox::programs::LOADER_PREFIXES`]. The token variables are removed so that `gh`
 /// answers from its stored login.
+///
+/// `None` for a `gh` with no path separator, as for [`stage_command`].
 fn login_command(
     gh: &Path,
     args: &[String],
@@ -1029,13 +1035,13 @@ fn login_command(
     confinement: Option<&Confinement>,
     held: impl IntoIterator<Item = (OsString, OsString)>,
     outside_stage_writable: &impl Fn(&Path) -> bool,
-) -> Command {
+) -> Option<Command> {
     let withheld = bravebot_config::scrub::withheld();
     let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
     let held: Vec<(OsString, OsString)> = held.into_iter().collect();
     let names: Vec<OsString> = held.iter().map(|(name, _)| name.clone()).collect();
     let mut command = bravebot_sandbox::programs::start_against(
-        &bravebot_sandbox::programs::Resolved::found_earlier(gh),
+        &bravebot_sandbox::programs::Resolved::found_earlier(gh)?,
         inherits,
         unconfined_path(confinement),
         // The stored-login `gh` is a program bravebot found, so the generic names that select
@@ -1055,7 +1061,7 @@ fn login_command(
         names,
     );
     inherits.withhold(&mut command);
-    command
+    Some(command)
 }
 
 fn ask_for_the_login(
@@ -1083,7 +1089,8 @@ fn ask_for_the_login(
         confinement,
         std::env::vars_os(),
         &bravebot_sandbox::programs::outside_stage_writable,
-    );
+    )
+    .ok_or(Started::Other)?;
     let mut command = match confinement {
         Some(confinement) => confinement
             .wrap(command, &step, session)
@@ -1524,6 +1531,7 @@ mod tests {
     }
 
     /// The command a stage's program is started with, when the environment holds `name` as `value`.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn stage_with(name: &OsStr, value: &OsStr, writable: &Path) -> Command {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let index = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -1541,6 +1549,7 @@ mod tests {
             [(name.to_os_string(), value.to_os_string())],
             &judged(writable),
         )
+        .expect("an absolute path")
     }
 
     /// The command the stored-login `gh` is started with, when the environment holds `name` as
@@ -1550,6 +1559,7 @@ mod tests {
     }
 
     /// [`login_with`] for the run under `confinement`, or the run with none.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn login_in(
         confinement: Option<&Confinement>,
         name: &OsStr,
@@ -1567,6 +1577,7 @@ mod tests {
             [(name.to_os_string(), value.to_os_string())],
             &judged(writable),
         )
+        .expect("an absolute path")
     }
 
     fn removed(command: &Command, name: &OsStr) -> bool {
