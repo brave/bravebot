@@ -8,6 +8,8 @@
  * test can call it without a window.
  */
 
+import type { LoopRow } from '../shared/loop'
+
 /** What `session.report.cost` answers. */
 export interface CostReport {
   total: number
@@ -217,7 +219,7 @@ const HELD_BY_THE_TURN = 'held by the running turn'
  * The notice Session Status… opens, the desktop's `/status` (CMD-8). While a turn runs, the trust
  * map and the vouched programs are said to be held by it, and neither is stated.
  */
-export function statusNotice(report: StatusReport): ReportNotice {
+export function statusNotice(report: StatusReport, loops: readonly LoopRow[] = []): ReportNotice {
   const rows: Row[] = [['Session', report.title || 'untitled, nothing sent yet']]
   if (report.sessionId) rows.push(['Session id', report.sessionId])
   rows.push(['Directory', report.project])
@@ -230,6 +232,8 @@ export function statusNotice(report: StatusReport): ReportNotice {
   rows.push(['Sandbox', SANDBOX_NAMES[report.sandboxMode] ?? report.sandboxMode])
   rows.push(['Spent', `${turns(report.turns)} · ${tokens(report.tokens)}`])
   if (report.goal) rows.push(...goalRows(report.goal))
+  // One row per loop under its number, from `loops.list` (LOOP-13); none where the session has none.
+  for (const loop of loops) rows.push([`Loop ${loop.number}`, `${loop.prompt} · ${loop.pace} · ${loop.when}`])
   if (report.rulesHeldByTurn || !report.rules) {
     rows.push(['Trust', HELD_BY_THE_TURN], ['Programs', HELD_BY_THE_TURN])
     return {

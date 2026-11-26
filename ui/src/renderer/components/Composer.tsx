@@ -154,6 +154,8 @@ export interface ComposerProps {
   onDiagnostics: () => void
   /** A one-time note docked on top of the box, such as the usage ping notice. Memoised by the caller. */
   notice?: React.ReactNode
+  /** The row saying the session's loops are live (LOOP-13), docked on top of the box. Memoised by the caller. */
+  loops?: React.ReactNode
   /** Whether files can be attached. A bot view has no session yet, so nothing to attach them to. */
   canAttach?: boolean
   /** The strip under the box: which project this chat runs in, and its branch. */
@@ -188,7 +190,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
     draft, onDraft, onCancel, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview, onPeek,
     interjected, queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
-    canAttach = true, footer, notice, starting = false, summonable = NO_BOTS,
+    canAttach = true, footer, notice, loops, starting = false, summonable = NO_BOTS,
     enhancement, onEnhance, onStopEnhance, onDismissEnhancement,
     handoff, onStopHandoff, onDropHandoff,
   } = props
@@ -327,6 +329,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
     <footer className="composer" data-paste-session={session}>
       <div className="composer-stack">
         {notice}
+        {loops}
         {backendReady === false && <BackendTray onSetup={onSetup} onCheckBackend={onCheckBackend} onDiagnostics={onDiagnostics} />}
         {interjected.length > 0 && (
           <div className="composer-tray interjected-messages" role="group" aria-label="Sent to this turn" data-test="interjected-messages">

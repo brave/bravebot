@@ -1,4 +1,5 @@
 import { Watches } from './Watches'
+import { LoopStatus } from './LoopStatus'
 import type { Enhancement } from '../enhancing'
 import type { Handoff } from '../handoff'
 import type { FileAttachment } from '../../shared/files'
@@ -628,6 +629,8 @@ export function Transcript({
   }, [live?.running, entries, faces, bot])
   // A plan card waiting for its answer, during which the working row is not shown.
   const awaitingPlan = useMemo(() => entries.some((entry) => entry.kind === 'manifest' && entry.decision === null), [entries])
+  // Made once per session, so the memoised composer is not drawn again for it.
+  const loopRow = useMemo(() => live ? <LoopStatus session={live.handle} /> : null, [live?.handle])
   // Entered and left once per element crossed, so counted rather than toggled.
   const dragDepth = useRef(0)
   const [dragging, setDragging] = useState(false)
@@ -1041,6 +1044,7 @@ export function Transcript({
           onCheckBackend={checkBackend}
           onDiagnostics={diagnostics}
           notice={notice}
+          loops={loopRow}
           footer={footer}
         />
       </div>

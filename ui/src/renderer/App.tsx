@@ -66,6 +66,7 @@ import { useExperience, conversationPreferences, setConversation, setExperience,
 import { showToast } from './toasts'
 import { planRewind } from './rewind'
 import { call } from './rpc'
+import type { LoopList } from '../shared/loop'
 import { contextNotice, costNotice, statusNotice, type ContextReport, type CostReport, type RequestReport, type StatusReport } from './reports'
 import { RequestDialog } from './components/RequestDialog'
 import { RewindConfirm } from './components/Rewind'
@@ -707,7 +708,11 @@ export function App(): React.JSX.Element {
     const session = liveRef.current?.handle
     if (!session) return
     try {
-      setNotice(statusNotice(await call<StatusReport>('session.report.status', { session })))
+      const [report, loops] = await Promise.all([
+        call<StatusReport>('session.report.status', { session }),
+        call<LoopList>('loops.list', { session }),
+      ])
+      setNotice(statusNotice(report, loops.loops))
     } catch (error) {
       setProblem(String(error))
     }
