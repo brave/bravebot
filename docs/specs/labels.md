@@ -97,7 +97,7 @@ guards:
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
-      - crates/agent/tests/workspace.rs: 312
+      - crates/agent/tests/workspace.rs: 323
       - crates/core/src/policy.rs: 32
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -680,6 +680,11 @@ a better label than its inputs had: that is laundering, whichever crate it happe
 derived from untrusted input needs to be trusted for something to work, the
 design is wrong, not the label.
 
+A name added to a question the trust map is asked can only lower a label. `read_git` asks about a
+repository and the paths an answer showed under every name each has ([GIT-3](tools/read-git.md#GIT-3),
+[TRUST-4](trust-map.md#TRUST-4)), and `Policy::observe_repository_under_names` takes the meet of the
+answers, so the label is never better than the one for the name the planner typed.
+
 `verified-by: bravebot_core::value::relabel_may_degrade`
 `verified-by: bravebot_core::value::relabel_may_not_upgrade`
 `verified-by: bravebot_core::value::relabel_refuses_incomparable_labels`
@@ -687,6 +692,8 @@ design is wrong, not the label.
 `verified-by: bravebot_core::label::degradation_never_raises_integrity_or_lowers_confidentiality`
 `verified-by: bravebot_core::label::trusted_input_cannot_launder_untrusted`
 `verified-by: bravebot_core::label::top_of_taint_degrades_from_everything`
+`verified-by: bravebot_core::policy::a_repository_answer_is_asked_under_every_name_of_the_git_directory_and_each_path`
+`verified-by: bravebot_agent::workspace::a_commit_shown_through_a_link_is_untrusted_where_the_map_distrusts_the_file_it_lands_on`
 
 <a id="LABEL-8"></a>
 ### LABEL-8: a first label comes from provenance, and is not an upgrade
@@ -697,6 +704,14 @@ the table below. Each is the **first** label such a value ever receives, assigne
 the policy layer tracked.
 
 If you find yourself relabelling a value that already has a label, stop: that is LABEL-7.
+
+The first label of an answer of `read_git` comes from the trust map's answers for `.git` and the
+paths shown, under the names the file system gives each of them ([GIT-3](tools/read-git.md#GIT-3)).
+The path names an answer shows are read from the tree objects of a repository the map vouched for,
+and they choose which files are looked up. No byte of a blob or of a file's contents decides which
+names are asked or what the label is. That is sound because the lookups only add names to the
+questions the map is asked, and an added name can only lower the label, so a path name that adds a
+lookup cannot make an answer trusted that the name typed would not.
 
 The sentence holds for every model this program requests, and the program keeps it true by not
 requesting one it does not hold for. A model that searches the web before it replies, which OpenAI's
@@ -1130,8 +1145,11 @@ arrives at all.
     nothing.** The first happens inside the body the planner cannot read. The second is a blob that
     is binary or past the size cap, which a search names or describes and does not print.
 
-  What is **not** on the list: the label, which depends only on the paths shown, each recorded
-  before its blob is read, any destination, any argument of a later call, and a line of the blob. The pattern, the path and the skip are the
+  What is **not** on the list: the label, which depends only on the paths shown and on `.git`, each
+  recorded before its blob is read and each asked under every name its file or directory has (the
+  names are the file system's, found from names and metadata and never from a blob's bytes,
+  [TRUST-4](trust-map.md#TRUST-4)), any destination, any argument of a later call, and a line of the
+  blob. The pattern, the path and the skip are the
   planner's own arguments and no byte of a blob reaches them. This entry cannot take the search's
   wording that the result is labelled "before any file is opened" or that which files the walk
   reaches is never decided by a byte of a file. `read_git` labels an answer after the walk has

@@ -2765,6 +2765,21 @@ impl FileFormat {
     }
 }
 
+/// What the map was asked about to open a repository: the key of what its answer is read under,
+/// the other names of that key, whether the lookup of the other names finished, and the other
+/// names of the repository directory.
+#[derive(Debug, Clone)]
+struct GitRead {
+    /// The key of `.git`, or of the working tree for a status.
+    key: String,
+    /// The other names of `key`.
+    others: Vec<String>,
+    /// False where the lookup of the other names could not finish, which reads as untrusted.
+    complete: bool,
+    /// The other names of the repository directory, which `key` is below.
+    repository_names: Vec<String>,
+}
+
 /// A path inside the repository the planner called `named`, spelled the way it spelled the
 /// repository, so the trust map is asked about the name it would be asked about for a read.
 pub(crate) fn in_repository(named: &str, inside: &str) -> String {
@@ -3952,9 +3967,8 @@ impl Workspace {
             };
 
             let root = self.resolve(&named)?;
-            let spelled = |inside: &str| in_repository(&named, inside);
             let deadline = Instant::now() + self.search_time;
-            let (opened, read_set) = self
+            let (opened, read) = self
                 .open_for_git(policy, &named, &root, query, deadline)
                 .map_err(declined)?;
             let request = crate::git::Request {
@@ -3973,11 +3987,6 @@ impl Workspace {
             };
             let withheld = |inside: &str| self.denies_in_repository(policy, &named, inside);
             let answer = opened.answer(&request, &withheld).map_err(declined)?;
-            let mut shown: Vec<String> = answer
-                .shown
-                .iter()
-                .map(|inside| self.trust_key(&spelled(inside)))
-                .collect();
             let checkouts: Vec<String> = self.kept.checkouts.lock().map_or_else(
                 |_| Vec::new(),
                 |listed| {
@@ -3987,19 +3996,8 @@ impl Workspace {
                         .collect()
                 },
             );
-            for root in &checkouts {
-                shown.extend(
-                    answer
-                        .shown
-                        .iter()
-                        .map(|inside| format!("{root}/{}", inside.trim_start_matches('/'))),
-                );
-            }
-            let label = policy.observe_repository(
-                Capability::FileRead,
-                &read_set,
-                shown.iter().map(String::as_str),
-            )?;
+            let label =
+                self.observe_git_answer(policy, &named, &read, &answer.shown, &checkouts)?;
             Ok(Labelled::new(answer, label))
         })
     }
@@ -4019,23 +4017,29 @@ impl Workspace {
         root: &Path,
         query: crate::git::Query,
         deadline: Instant,
-    ) -> Result<(crate::git::Repository, String), crate::git::Declined> {
+    ) -> Result<(crate::git::Repository, GitRead), crate::git::Declined> {
         // A question about a checkout's own repository is answered from the common directory and
         // the entry the driver recorded, and the checkout's `.git` is never read (CHECKOUT-12).
         let routed = self.checkout.as_deref().filter(|_| root == self.root);
-        let git_key = match routed {
+        let git = match routed {
             Some(checkout) => checkout.source.trusted_git_dir_at(policy, ".", true)?,
             None => self.trusted_git_dir(policy, named)?,
         };
-        // Status compares every file in the working tree, so all of it is its read set.
+        // Status compares every file in the working tree, so all of it is its read set, asked about
+        // under every name the directory has (TRUST-4).
         let read_set = if query == crate::git::Query::Status {
             let tree_key = self.trust_key(named);
-            if !policy.trusts_beneath(&tree_key) {
+            let tree_names = &git.repository_names;
+            if !policy.trusts_beneath_under_names(&tree_key, tree_names, git.complete) {
                 return Err(crate::git::Declined::UntrustedTree);
             }
-            tree_key
+            GitRead {
+                key: tree_key,
+                others: git.repository_names.clone(),
+                ..git
+            }
         } else {
-            git_key
+            git
         };
         let opened = match routed {
             Some(checkout) => {
@@ -4140,12 +4144,13 @@ impl Workspace {
     }
 
     /// The trust map's name for `.git` in the repository the planner called `named`, where the map
-    /// trusts all of it and no deny rule covers it, decided before anything there is listed.
+    /// trusts all of it under every name the repository directory has and no deny rule covers it,
+    /// decided before anything there is listed.
     fn trusted_git_dir<S: Sink>(
         &self,
         policy: &Policy<'_, S>,
         named: &str,
-    ) -> Result<String, crate::git::Declined> {
+    ) -> Result<GitRead, crate::git::Declined> {
         self.trusted_git_dir_at(policy, named, false)
     }
 
@@ -4159,7 +4164,18 @@ impl Workspace {
         policy: &Policy<'_, S>,
         named: &str,
         absolute: bool,
-    ) -> Result<String, crate::git::Declined> {
+    ) -> Result<GitRead, crate::git::Declined> {
+        // The other names of the repository directory are those the file tools ask under
+        // (TRUST-4). A delegate's checkout is asked under its absolute key alone: its names are
+        // spelled relative to this workspace's root, which the delegate's policy would read under
+        // its own (CHECKOUT-12).
+        let other = match absolute {
+            true => OtherKeys {
+                keys: Vec::new(),
+                complete: true,
+            },
+            false => self.other_trust_keys(named),
+        };
         let git_key = match absolute {
             true => {
                 let resolved = self.root.join(in_repository(named, ".git"));
@@ -4171,7 +4187,12 @@ impl Workspace {
             }
             false => self.git_dir_key(named),
         };
-        if !policy.trusts_beneath(&git_key) {
+        let git_others: Vec<String> = other
+            .keys
+            .iter()
+            .map(|name| in_repository(name, ".git"))
+            .collect();
+        if !policy.trusts_beneath_under_names(&git_key, &git_others, other.complete) {
             return Err(crate::git::Declined::Untrusted);
         }
         if policy.read_is_denied(&git_key)
@@ -4179,7 +4200,59 @@ impl Workspace {
         {
             return Err(crate::git::Declined::Fenced);
         }
-        Ok(git_key)
+        Ok(GitRead {
+            key: git_key,
+            others: git_others,
+            complete: other.complete,
+            repository_names: other.keys,
+        })
+    }
+
+    /// Label an answer of `read_git` from the repository it came out of and the paths it showed,
+    /// each asked under every name it has (TRUST-4). `named` is how the planner spelled the
+    /// repository, `read` what [`Workspace::open_for_git`] asked the map about, `shown` the
+    /// working-tree paths the answer named, and `checkouts` the roots of the session's delegate
+    /// checkouts, whose copy of each path is asked as well.
+    ///
+    /// The other names are found from the file system's names and metadata and never from a file's
+    /// bytes, and can only add questions to the map, so the label is no better than the map says of
+    /// any of them. A name whose lookup did not finish reads as untrusted.
+    fn observe_git_answer<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        named: &str,
+        read: &GitRead,
+        shown: &[String],
+        checkouts: &[String],
+    ) -> Result<Label, bravebot_core::policy::Denial> {
+        let names = other_names::WalkNames::of(self);
+        let mut keyed: Vec<(String, OtherKeys)> = shown
+            .iter()
+            .map(|inside| {
+                let spelled = in_repository(named, inside);
+                let others = self.other_trust_keys_with(&names, &spelled);
+                (self.trust_key(&spelled), others)
+            })
+            .collect();
+        for root in checkouts {
+            keyed.extend(shown.iter().map(|inside| {
+                let copy = format!("{root}/{}", inside.trim_start_matches('/'));
+                (
+                    copy,
+                    OtherKeys {
+                        keys: Vec::new(),
+                        complete: true,
+                    },
+                )
+            }));
+        }
+        policy.observe_repository_under_names(
+            Capability::FileRead,
+            (&read.key, &read.others, read.complete),
+            keyed
+                .iter()
+                .map(|(key, others)| (key.as_str(), others.keys.as_slice(), others.complete)),
+        )
     }
 
     /// Refuse the repository at `root`, which the planner called `named`, unless `query` could
@@ -4273,8 +4346,19 @@ impl Workspace {
             let spelled = in_repository(named, inside);
             policy.read_is_denied(&self.trust_key(&spelled)) || self.names_a_store(&spelled)
         };
+        // Asked under every name the path has, as a path an answer of `read_git` showed is
+        // (GIT-3, TRUST-4): the answer chooses whether a `.gitattributes` file is read and which
+        // sentence a refusal is, and a file the map distrusts only under another name would
+        // otherwise be read as trusted. The hard-link walk is made once for the whole tree.
+        let names = other_names::WalkNames::of(self);
         let trusted = |inside: &str| {
-            !policy.read_is_quarantined(&self.trust_key(&in_repository(named, inside)))
+            let spelled = in_repository(named, inside);
+            let others = self.other_trust_keys_with(&names, &spelled);
+            !policy.read_is_quarantined_under_names(
+                &self.trust_key(&spelled),
+                &others.keys,
+                others.complete,
+            )
         };
         crate::git::checkout::make(&git_dir, target, id, &withheld, &trusted, bound)
             .map_err(refused)
@@ -4299,7 +4383,7 @@ impl Workspace {
         // Exclusive: `observe_repository` emits the observation and a trail line inside this
         // closure, and a shared capture must emit nothing while it is held.
         policy.capture_files(|policy, _capture| {
-            let git_key = self.trusted_git_dir(policy, ".")?;
+            let git = self.trusted_git_dir(policy, ".")?;
             if !policy.trusts_beneath(&tree_key) {
                 return Err(Declined::UntrustedTree);
             }
@@ -4337,7 +4421,7 @@ impl Workspace {
             let label = policy
                 .observe_repository(
                     Capability::FileRead,
-                    &git_key,
+                    &git.key,
                     shown.iter().map(String::as_str),
                 )
                 .map_err(|_| Declined::Untrusted)?;

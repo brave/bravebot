@@ -1245,17 +1245,24 @@ and a final line that had no terminator comes back without one.
 
 Listing a hunk and finding it again are decisions taken from file content, so both are taken only
 where the map vouches for the file now, for the path as the session stood before the turn, and for
-what the rewind point captured ([LABEL-5](labels.md#LABEL-5)). A file the map does not vouch for is
+what the rewind point captured ([LABEL-5](labels.md#LABEL-5)). The map is asked under every name the
+file has ([TRUST-4](trust-map.md#TRUST-4)) and the weakest answer decides: a file distrusted under
+another name only, or whose other names could not all be found, is not vouched for, and that holds for
+the read just before the write as well. A file the map does not vouch for is
 named as one hunks are not taken from, none of its lines is drawn, and `/undo` is the only way
 back.
 
-The path is distrusted before it is written, as a restoration of it is, and holds the decision it
-held before once the write has succeeded: the file is then made of lines the map vouched for on
-both sides, and no other path's decision moves. A write that fails part way leaves the path
-distrusted and the line says why, and a memory it holds is recorded as one the next session does
-not trust, as a rewind that failed on it records it ([MEMORY-5](definition-memory.md#MEMORY-5)). A
+The path is distrusted before it is written, as a restoration of it is, under every name the file has,
+and holds the decision it held before once the write has succeeded: the file is then made of lines the
+map vouched for on both sides, and no other path's decision moves. The names are looked up again after
+the question about a protected name, so a link made while the person answers is covered. A write that
+fails part way leaves every name distrusted and the line says why, and a memory the file is under any
+name is recorded as one the next session does not trust, as a rewind that failed on it records it
+([MEMORY-5](definition-memory.md#MEMORY-5)). A
 refusal before anything is written leaves the map as it was, and a map a failed write changed is
-written to the session's record at once, so a resume does not trust the file again. The rewind
+written to the session's record at once, so a resume does not trust the file again. The put back takes
+no writer reservation ([TRUST-4](trust-map.md#TRUST-4)), since the command waits for the turn to end
+([CMD-8](commands.md#CMD-8)). The rewind
 point is not changed, so `/undo` after a hunk went back still puts the whole file back as it stood
 before the turn.
 
@@ -1292,6 +1299,10 @@ compares nothing.
 `verified-by: bravebot_agent::hunks::a_file_too_different_to_line_up_is_named_and_refused`
 `verified-by: bravebot_agent::hunks::a_path_that_leads_out_of_the_project_at_the_write_is_refused_with_the_map_as_it_was`
 `verified-by: bravebot_agent::hunks::a_write_that_fails_in_a_way_nothing_here_names_leaves_the_path_distrusted`
+`verified-by: bravebot_agent::hunks::a_file_distrusted_only_under_another_name_is_not_compared_and_not_written`
+`verified-by: bravebot_agent::hunks::a_file_whose_other_names_were_not_all_found_is_not_compared`
+`verified-by: bravebot_agent::hunks::a_hunk_put_back_into_a_file_that_is_also_a_memory_distrusts_and_settles_the_memory`
+`verified-by: bravebot_agent::hunks::every_name_of_the_file_is_distrusted_before_the_write_is_entered`
 `verified-by: bravebot_agent::hunks::bytes_are_handed_over_only_for_a_path_the_map_vouches_for`
 `verified-by: bravebot_agent::hunks::a_list_stops_at_its_limit_and_counts_the_rest`
 `verified-by: bravebot_agent::hunks::a_pipe_where_the_file_was_is_refused_and_not_waited_on`

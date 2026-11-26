@@ -217,8 +217,6 @@ impl Workspace {
         };
         #[cfg(unix)]
         {
-            use std::os::unix::fs::MetadataExt;
-
             let reported_path = Path::new(reported);
             let absolute = if reported_path.is_absolute() {
                 reported_path.to_path_buf()
@@ -226,33 +224,13 @@ impl Workspace {
                 self.root.join(reported_path)
             };
             if names.has_second_trees() {
-                match self
-                    .same_tree_names_of(&absolute, |directory| names.identity(self, directory))
-                {
-                    Some(found) => keys.extend(found.iter().map(|name| self.trust_key(name))),
-                    None => complete = false,
-                }
+                complete &= self.add_same_tree_names(names, &absolute, &mut keys);
             }
             if is_file {
                 // Followed, as the read path's lookup is: a symbolic link named as the target is
                 // the file it opens, whose hard links are the names that count.
                 match std::fs::metadata(&absolute) {
-                    Ok(found) if found.nlink() >= 2 => {
-                        match names.link_index(self) {
-                            Some(index) => {
-                                if let Some(linked) = index.get(&(found.dev(), found.ino())) {
-                                    keys.extend(
-                                        linked.spelled.iter().map(|name| self.trust_key(name)),
-                                    );
-                                    // A name that is not UTF-8 has no key a rule can be
-                                    // written about.
-                                    complete &= !linked.unspellable;
-                                }
-                            }
-                            None => complete = false,
-                        }
-                    }
-                    Ok(_) => {}
+                    Ok(found) => complete &= self.add_hard_link_names(names, &found, &mut keys),
                     Err(_) => complete = false,
                 }
             }
@@ -309,6 +287,88 @@ impl Workspace {
         keys.sort();
         keys.dedup();
         OtherKeys { keys, complete }
+    }
+
+    /// [`Workspace::other_trust_keys`] for each of many names asked in one call, with the index of
+    /// hard-linked files kept in `names` so the open directories are walked for it once and not once
+    /// per name. The lookups are the same, and so is what comes back: a name's landing, its hard
+    /// links and its spelling under a second path to an open tree, with `complete` false where one
+    /// could not finish (TRUST-4).
+    ///
+    /// For the paths an answer showed, which are many and which may name a file that is only in a
+    /// commit. A name that does not resolve or that is no file in the working tree has no hard
+    /// link, as for [`Workspace::other_trust_keys`]. Read from the file system's names and metadata
+    /// and never from a file's bytes, and it can only add keys.
+    pub(super) fn other_trust_keys_with(&self, names: &WalkNames, named: &str) -> OtherKeys {
+        let mut keys = Vec::new();
+        #[cfg(unix)]
+        let mut complete = true;
+        #[cfg(not(unix))]
+        let complete = {
+            let _ = names;
+            true
+        };
+        if let Some(landed) = self.landing(named) {
+            keys.push(self.trust_key(&landed));
+        }
+        #[cfg(unix)]
+        {
+            if let Ok(resolved) = self.resolve(named) {
+                if names.has_second_trees() {
+                    complete &= self.add_same_tree_names(names, &resolved, &mut keys);
+                }
+                if let Ok(found) = std::fs::metadata(&resolved)
+                    && found.is_file()
+                {
+                    complete &= self.add_hard_link_names(names, &found, &mut keys);
+                }
+            }
+        }
+        let own = self.trust_key(named);
+        keys.retain(|key| *key != own);
+        keys.sort();
+        keys.dedup();
+        OtherKeys { keys, complete }
+    }
+
+    /// Adds to `keys` the spellings of `path` under the other open directories that are the same
+    /// directory, with the identity lookups of the walk kept in `names`. False where the lookup
+    /// could not finish.
+    #[cfg(unix)]
+    fn add_same_tree_names(&self, names: &WalkNames, path: &Path, keys: &mut Vec<String>) -> bool {
+        match self.same_tree_names_of(path, |directory| names.identity(self, directory)) {
+            Some(found) => {
+                keys.extend(found.iter().map(|name| self.trust_key(name)));
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Adds to `keys` the other names of the file whose metadata is `found`, from the index of
+    /// hard-linked files kept in `names`. Nothing is added for a file with one link. False where the
+    /// index could not be built, or a name has no spelling a rule can be written about.
+    #[cfg(unix)]
+    fn add_hard_link_names(
+        &self,
+        names: &WalkNames,
+        found: &std::fs::Metadata,
+        keys: &mut Vec<String>,
+    ) -> bool {
+        use std::os::unix::fs::MetadataExt;
+
+        if found.nlink() < 2 {
+            return true;
+        }
+        let Some(index) = names.link_index(self) else {
+            return false;
+        };
+        let Some(linked) = index.get(&(found.dev(), found.ino())) else {
+            return true;
+        };
+        keys.extend(linked.spelled.iter().map(|name| self.trust_key(name)));
+        // A name that is not UTF-8 has no key a rule can be written about.
+        !linked.unspellable
     }
 
     /// The other names of the file `named` opens, where it has a hard link, by device and inode

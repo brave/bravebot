@@ -289,6 +289,10 @@ on a volume that holds two spellings differing only in case as one file, a write
 `Sub/.bravebot/memory/notes.md` under `sub`. A write that cannot be recorded, because the session
 has no state directory or the record cannot be written, does not land. A rewind putting back bytes
 the map will not trust is recorded first in the same way, and is not put back where it cannot be.
+That is asked of every name the file has ([TRUST-4](trust-map.md#TRUST-4)): where a file's hard link
+or its spelling under a second path to an open tree is a memory, the memory is recorded as well, and
+a rewind that cannot record one of them does not put the file back. A `/hunks` put back that fails
+after the file may have changed records a memory under every name the same way.
 The record will also hold the old notes [MEMORY-11](#MEMORY-11) puts in it, which the desktop now
 records when it migrates a bot. Before every turn, a planned one included, each path the record names is untrusted in the
 session's map, as though the session's own write had marked it, so the memory is withheld
@@ -360,6 +364,10 @@ in that directory, which [INCOG-3](incognito.md#INCOG-3) otherwise refuses, so
 `verified-by: bravebot_agent::turn::a_redirection_into_a_memory_in_another_case_is_recorded_before_it_opens_it`
 `verified-by: bravebot_agent::rewind::a_rewind_into_a_memory_is_recorded_as_a_write_is`
 `verified-by: bravebot_agent::rewind::a_rewind_into_a_memory_in_another_case_is_recorded_as_a_session_asks_about_it`
+`verified-by: bravebot_agent::rewind::a_rewind_into_a_file_that_is_also_a_memory_records_the_memory_too`
+`verified-by: bravebot_agent::rewind::a_rewind_into_a_file_hard_linked_as_a_memory_records_the_memory`
+`verified-by: bravebot_agent::rewind::a_rewind_that_ends_trusted_settles_every_name_of_the_file`
+`verified-by: bravebot_agent::hunks::a_hunk_put_back_into_a_file_that_is_also_a_memory_distrusts_and_settles_the_memory`
 `verified-by: bravebot_agent::manifest::a_memory_an_earlier_session_left_untrusted_is_untrusted_in_a_plan`
 `verified-by: bravebot_agent::manifest::a_plan_writing_untrusted_bytes_into_a_memory_records_it`
 `verified-by: bravebot_agent::incognito::a_memory_left_untrusted_is_still_recorded`

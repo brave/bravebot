@@ -1,6 +1,9 @@
 //! Undo coverage and restoration. Decisions use metadata, never backup contents.
-use crate::workspace::{Backup, Before, Workspace, WorkspaceError};
-use bravebot_core::{label::Integrity, trust::TrustStore};
+use crate::workspace::{Backup, Before, OtherKeys, Workspace, WorkspaceError};
+use bravebot_core::{
+    label::Integrity,
+    trust::{TrustStore, is_absolute_key},
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -109,7 +112,11 @@ impl RewindCoverage {
 ///
 /// A definition's memory the old bytes can land in untrusted is recorded in the state directory
 /// `home` before they do, as a write's are, and a restore that cannot be recorded is refused
-/// (MEMORY-5).
+/// (MEMORY-5). That is asked of every name the file has, as a write is (TRUST-4): where the name
+/// the backup holds lands, its hard links and its spelling under a second path to an open tree.
+/// Each is distrusted before the bytes go back, recorded where it is a memory, and settled once
+/// they have. A file whose other names could not all be found is put back distrusted and is not
+/// trusted again by the rewind.
 ///
 /// A path that is a protected name, or lands on one once links are followed, is put to `confirmer`
 /// as a write to it is and is refused unless the answer is yes (PERM-9, MODE-2). A confirmer that
@@ -125,16 +132,67 @@ pub fn restore(
 ) -> Vec<PathBuf> {
     // The owning turn has joined. Stop tracked servers before any file restoration.
     drop(servers.take());
-    restore_with(backups, current, target, home, |path, was| {
-        workspace.put_back(path, was, confirmer)
-    })
+    restore_with(
+        backups,
+        current,
+        target,
+        home,
+        |path| other_names(workspace, path),
+        |path, was| workspace.put_back(path, was, confirmer),
+    )
 }
 
+/// The keys the map holds the file at `path` under besides the one it is keyed under, each spelled
+/// as the map holds it so a memory's directory can be read off it.
+///
+/// Looked up as a write looks them up ([`Workspace::other_trust_keys`]), from the file system's
+/// names and never from the file's bytes, and before anything is put back since the walk reads
+/// directories.
+pub(crate) fn other_names(workspace: &Workspace, path: &Path) -> OtherKeys {
+    let found = workspace.other_trust_keys(&workspace.relative_display(path));
+    let root = crate::workspace::key_of(workspace.root());
+    // Read under the working directory the way the map reads a relative name, which is how a
+    // memory's directory is read off a key.
+    let held = |key: String| {
+        let below: Vec<&str> = key
+            .split('/')
+            .filter(|part| !part.is_empty() && *part != ".")
+            .collect();
+        match (is_absolute_key(&key), root.as_str()) {
+            (true, _) => key,
+            (false, "/") => format!("/{}", below.join("/")),
+            (false, root) => format!("{root}/{}", below.join("/")),
+        }
+    };
+    OtherKeys {
+        keys: found.keys.into_iter().map(held).collect(),
+        complete: found.complete,
+    }
+}
+
+/// Every name of a file for the map and the record: `own` first, then `others` sorted and without
+/// `own` or repeats, and whether the lookup of the others finished. A rewind and a hunk put back
+/// ask the map, distrust and record under each of them (TRUST-4).
+pub(crate) fn every_name(own: String, others: OtherKeys) -> (Vec<String>, bool) {
+    let mut every = others.keys;
+    every.retain(|name| *name != own);
+    every.sort();
+    every.dedup();
+    every.insert(0, own);
+    (every, others.complete)
+}
+
+/// `names` gives the other names of the file a backup holds, as [`other_names`] does.
+///
+/// No writer reservation is taken for them: the turn that wrote the files has joined and its
+/// servers have stopped before a restore runs, and this map is not the live file authority a
+/// reservation is held in.
 fn restore_with(
     backups: Vec<Backup>,
     current: &mut TrustStore,
     target: &TrustStore,
     home: Option<&Path>,
+    names: impl Fn(&Path) -> OtherKeys,
     mut write: impl FnMut(&Path, &Before) -> Result<(), WorkspaceError>,
 ) -> Vec<PathBuf> {
     *current = current.meet(target);
@@ -157,26 +215,38 @@ fn restore_with(
         }
         // The key the file's rules are held under, which on a drive letter is not the name the
         // host resolved it to.
-        let path = crate::workspace::key_of(&backup.path);
-        current.distrust(&path);
+        let own = crate::workspace::key_of(&backup.path);
+        // Every name the file has, this one first (TRUST-4).
+        let (every, complete) = every_name(own, names(&backup.path));
+        for name in &every {
+            current.distrust(name);
+        }
         let bytes = matches!(backup.was, Before::Bytes(_));
-        let ends_trusted = backup.captured_trust == Integrity::Trusted && target.is_trusted(&path);
-        if bytes && !ends_trusted && crate::memory::record_before_write(home, &path, folds).is_err()
+        // A file whose names were not all found is read as untrusted, as a write reads it.
+        let was_trusted = backup.captured_trust == Integrity::Trusted && complete;
+        let ends_trusted = was_trusted && every.iter().all(|name| target.is_trusted(name));
+        if bytes
+            && !ends_trusted
+            && !every
+                .iter()
+                .all(|name| crate::memory::record_before_write(home, name, folds).is_ok())
         {
             refused.push(backup.path);
             continue;
         }
         if write(&backup.path, &backup.was).is_err() {
             refused.push(backup.path);
-        } else if bytes && backup.captured_trust == Integrity::Trusted {
-            match target.integrity_of(&path) {
-                Some(Integrity::Trusted) => current.trust(&path),
-                Some(Integrity::Untrusted) => {}
-                None => current.undecide(&path),
+        } else if bytes && was_trusted {
+            for name in &every {
+                match target.integrity_of(name) {
+                    Some(Integrity::Trusted) => current.trust(name),
+                    Some(Integrity::Untrusted) => {}
+                    None => current.undecide(name),
+                }
             }
         }
         if bytes {
-            restored.push(path);
+            restored.extend(every);
         }
         // A restored absence stays distrusted; it cannot vouch for future contents.
     }
@@ -269,6 +339,14 @@ fn lists_in_its_directory(target: &Path) -> bool {
 mod tests {
     use super::*;
 
+    /// A file with no other name, as most are.
+    fn alone(_: &Path) -> OtherKeys {
+        OtherKeys {
+            keys: Vec::new(),
+            complete: true,
+        }
+    }
+
     #[test]
     fn restored_trusted_bytes_keep_an_undecided_target_decision() {
         let mut current = TrustStore::new("/work");
@@ -284,6 +362,7 @@ mod tests {
             &mut current,
             &TrustStore::new("/work"),
             None,
+            alone,
             |_, _| Ok(()),
         );
         assert!(refused.is_empty());
@@ -333,6 +412,7 @@ mod tests {
             &mut current,
             &target,
             None,
+            alone,
             |path, before| {
                 if path == root.join("broken") {
                     std::fs::write(path, "partial").unwrap();
@@ -366,6 +446,172 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// MEMORY-5, TRUST-4 for a rewind. A file with another name that is a definition's memory (a
+    /// hard link, or a second path to the tree) is that memory too: old bytes the map will not
+    /// trust put back into it are recorded under that name, the map distrusts it, and with nowhere
+    /// to record it they are not put back. The fault this rejects is asking only the name the
+    /// backup was taken under, which leaves the next session reading the memory as trusted.
+    #[test]
+    fn a_rewind_into_a_file_that_is_also_a_memory_records_the_memory_too() {
+        let home = crate::testutil::scratch_dir("rewind-other-name-home");
+        std::fs::remove_dir_all(&home).ok();
+        let memory = "/work/.bravebot/memory/notes.md";
+        let record = crate::memory::Record::new(&home, "/work");
+        let mut trusting = TrustStore::new("/work");
+        trusting.trust(".");
+        let linked = |_: &Path| OtherKeys {
+            keys: vec![memory.to_string()],
+            complete: true,
+        };
+        let rewind = |home: Option<&Path>, current: &mut TrustStore| {
+            let mut written = 0;
+            let refused = restore_with(
+                vec![Backup {
+                    kept: false,
+                    path: "/work/data.md".into(),
+                    was: Before::Bytes(b"old".to_vec()),
+                    captured_trust: Integrity::Untrusted,
+                }],
+                current,
+                &trusting,
+                home,
+                linked,
+                |_, _| {
+                    written += 1;
+                    Ok(())
+                },
+            );
+            (refused, written)
+        };
+
+        assert_eq!(
+            rewind(None, &mut trusting.clone()),
+            (vec![PathBuf::from("/work/data.md")], 0),
+            "bytes were put back into a file that is a memory under another name, with nothing to \
+             record it in"
+        );
+        let mut current = trusting.clone();
+        assert_eq!(rewind(Some(&home), &mut current), (Vec::new(), 1));
+        assert_eq!(
+            record.paths(),
+            [memory],
+            "the memory the file is under another name was left out of the record"
+        );
+        assert!(
+            !current.is_trusted(memory),
+            "the map trusts the other name of a file put back untrusted"
+        );
+        assert!(
+            current.is_trusted("/work/control.md"),
+            "a file the rewind did not touch was distrusted"
+        );
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    /// The record is settled under every name as well: bytes that end trusted take the memory a
+    /// file is under another name out of the record, as a trusted write does, and a file whose
+    /// other names could not all be found is not trusted again, since one of them may be distrusted.
+    #[test]
+    fn a_rewind_that_ends_trusted_settles_every_name_of_the_file() {
+        let home = crate::testutil::scratch_dir("rewind-other-name-settled-home");
+        std::fs::remove_dir_all(&home).ok();
+        let memory = "/work/.bravebot/memory/notes.md";
+        let record = crate::memory::Record::new(&home, "/work");
+        crate::memory::record_before_write(Some(&home), memory, false).unwrap();
+        assert_eq!(record.paths(), [memory]);
+        let mut trusting = TrustStore::new("/work");
+        trusting.trust(".");
+        let rewind = |complete| {
+            let mut current = trusting.clone();
+            let refused = restore_with(
+                vec![Backup {
+                    kept: false,
+                    path: "/work/data.md".into(),
+                    was: Before::Bytes(b"old".to_vec()),
+                    captured_trust: Integrity::Trusted,
+                }],
+                &mut current,
+                &trusting,
+                Some(&home),
+                |_: &Path| OtherKeys {
+                    keys: vec![memory.to_string()],
+                    complete,
+                },
+                |_, _| Ok(()),
+            );
+            assert!(refused.is_empty());
+            current
+        };
+
+        let incomplete = rewind(false);
+        assert!(
+            !incomplete.is_trusted("/work/data.md"),
+            "a file whose other names were not all found was trusted again"
+        );
+        assert_eq!(record.paths(), [memory]);
+
+        let complete = rewind(true);
+        assert!(complete.is_trusted("/work/data.md"));
+        assert!(complete.is_trusted(memory));
+        assert!(
+            record.paths().is_empty(),
+            "the memory the file is under another name stayed in the record after it ended trusted"
+        );
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    /// The other names are found by the file system and not given: a file with a hard link in a
+    /// definition's memory directory, put back through the workspace, records that memory.
+    #[cfg(unix)]
+    #[test]
+    fn a_rewind_into_a_file_hard_linked_as_a_memory_records_the_memory() {
+        let root = crate::testutil::scratch_dir("rewind-hard-link-memory-root");
+        let home = crate::testutil::scratch_dir("rewind-hard-link-memory-home");
+        for dir in [&root, &home] {
+            std::fs::remove_dir_all(dir).ok();
+        }
+        std::fs::create_dir_all(root.join(".bravebot/memory")).unwrap();
+        std::fs::write(root.join("data.md"), "ours").unwrap();
+        std::fs::write(root.join("control.md"), "ours").unwrap();
+        std::fs::hard_link(
+            root.join("data.md"),
+            root.join(".bravebot/memory/notes-keeper.md"),
+        )
+        .unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        let mut trusting = crate::workspace::trust_store(workspace.root());
+        trusting.trust(".");
+        let mut current = trusting.clone();
+
+        let refused = restore(
+            &workspace,
+            vec![Backup {
+                kept: false,
+                path: workspace.root().join("data.md"),
+                was: Before::Bytes(b"from the web".to_vec()),
+                captured_trust: Integrity::Untrusted,
+            }],
+            &mut current,
+            &trusting,
+            &mut None,
+            Some(&home),
+            &mut crate::confirm::ApproveWrites,
+        );
+
+        assert!(refused.is_empty(), "{refused:?}");
+        let key = crate::workspace::key_of(workspace.root());
+        assert_eq!(
+            crate::memory::Record::new(&home, &key).paths(),
+            [format!("{key}/.bravebot/memory/notes-keeper.md")],
+            "the memory reached through its other name was not recorded"
+        );
+        assert!(!current.is_trusted(&format!("{key}/.bravebot/memory/notes-keeper.md")));
+        assert!(current.is_trusted(&format!("{key}/control.md")));
+        for dir in [root, home] {
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
     /// MEMORY-5 for a rewind. Old bytes put back into a memory the map will not trust are recorded
     /// first, and with nowhere to record them they are not put back. Bytes that end trusted need
     /// no record and take the memory out of one, and a rewind that undoes a yes records it again.
@@ -390,6 +636,7 @@ mod tests {
                 &mut current,
                 &trusting,
                 home,
+                alone,
                 |_, _| {
                     written += 1;
                     Ok(())
@@ -430,6 +677,7 @@ mod tests {
             &mut current,
             &undone,
             None,
+            alone,
             |_, _| Ok(()),
         );
         assert_eq!(
@@ -442,6 +690,7 @@ mod tests {
             &mut current,
             &undone,
             Some(&home),
+            alone,
             |_, _| Ok(()),
         );
         assert_eq!(
@@ -479,6 +728,7 @@ mod tests {
                 &mut current,
                 &trusting,
                 Some(&home),
+                alone,
                 |_, _| Ok(()),
             );
             assert!(refused.is_empty(), "{case:?}");
@@ -512,6 +762,7 @@ mod tests {
                 &mut current,
                 &target,
                 None,
+                alone,
                 |_, _| panic!("entered"),
             );
         }));

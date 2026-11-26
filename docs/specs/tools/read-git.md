@@ -19,6 +19,7 @@ governs:
   - crates/agent/src/git/survey.rs
   - crates/agent/src/git/tags.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/other_names.rs
   - crates/agent/src/tools.rs
   - crates/agent/src/tools/offered.rs
   - crates/core/src/policy.rs
@@ -120,9 +121,14 @@ and `sh`; nothing calls it, and [SANDBOX-30](../sandboxing.md#SANDBOX-30) record
 
 The map is asked about `.git` as a subtree, so a rule distrusting one file anywhere beneath it, a
 pack somebody fetched or a ref somebody else wrote, keeps the repository closed. Nobody having said
-anything about a repository is not trust in it. The question is asked of the name the planner wrote
-and the rules alone, before any file under `.git` is read, and a repository it fails is refused
-with a sentence pointing at `run`, where the turn is offered one.
+anything about a repository is not trust in it. The question is asked before any file under `.git`
+is read, of the name the planner wrote and of every other name the repository's directory has: where
+a symbolic link it was reached through lands, its hard links and its name under a second path to an
+open tree ([TRUST-4](../trust-map.md#TRUST-4)), each with `/.git` after it. A distrust beneath any of
+them keeps the repository closed, and so does a lookup of those names that did not finish. The rules
+are asked of the name written and of the file it lands on ([GIT-4](#GIT-4)). A repository it fails
+is refused with a sentence pointing at `run`, where the turn is offered one. A link made inside
+`.git` is not looked up as a name of its own ([TRUST-4](../trust-map.md#TRUST-4) Known costs).
 
 The files a read opens are listed before any of them is decoded, and that list is what the rules
 are held against. A file a read opens is on it; a file no read opens is not. That is the
@@ -146,6 +152,8 @@ this reader declines ([GIT-8](#GIT-8)), never what it runs.
 `verified-by: bravebot_agent::git::status_surveys_the_index_and_the_info_files_it_reads`
 `verified-by: bravebot_agent::git::a_name_under_git_in_another_case_is_listed_as_the_reader_spells_it`
 `verified-by: bravebot_agent::turn::a_distrusted_file_deep_under_git_keeps_the_repository_closed`
+`verified-by: bravebot_agent::workspace::a_repository_reached_through_a_link_is_not_opened_where_the_map_distrusts_its_git_directory`
+`verified-by: bravebot_core::policy::a_subtree_is_trusted_beneath_only_under_every_name`
 
 <a id="GIT-3"></a>
 ### GIT-3: an answer is labelled by the whole of `.git` and by every path it showed
@@ -154,6 +162,17 @@ A path it showed is the working-tree path of a file whose history the answer pri
 the workspace root, so a repository in `sub` shows `sub/<path>`. An answer showing a path the map
 distrusts is as untrusted as that file, and reaches the planner as a reference, however trusted the
 `.git` it came out of. A log naming no path showed none and is labelled by `.git` alone.
+
+Each path it showed is asked under every name that file has, as a read of it is
+([TRUST-4](../trust-map.md#TRUST-4)): the name the planner reached the repository by, where a link
+on the way lands, a hard link of the file and its name under a second path to an open tree. `.git` is
+asked under every name of the repository's directory ([GIT-2](#GIT-2)). The answer is as untrusted as
+the weakest of them, and an answer whose lookup of any name did not finish is untrusted. The names
+are found from the file system's names and metadata. The path names the answer shows, which come from
+the tree objects of the repository, choose which files are looked up, and no byte of a blob or of a
+file's contents does. A lookup only adds a name to the questions the map is asked, so the label can
+only be lower than the name typed gives ([LABEL-7](../labels.md#LABEL-7)). A path that exists only in
+a commit has no other name to look up.
 
 Only an answer labelled trusted is examined for credentials. If the driver may not examine an
 answer, which happens only if the trust map changes between the label and the examination, the
@@ -177,6 +196,11 @@ than by what it holds, a file the map distrusts would reach the planner through 
 `verified-by: bravebot_agent::workspace::a_repository_below_the_root_is_read_under_the_rules_on_its_own_path`
 `verified-by: bravebot_core::policy::a_repository_answer_is_untrusted_where_a_path_it_showed_is`
 `verified-by: bravebot_core::policy::a_repository_answer_is_untrusted_where_anything_under_git_is`
+`verified-by: bravebot_core::policy::a_repository_answer_is_asked_under_every_name_of_the_git_directory_and_each_path`
+`verified-by: bravebot_agent::workspace::a_commit_shown_through_a_link_is_untrusted_where_the_map_distrusts_the_file_it_lands_on`
+`verified-by: bravebot_agent::workspace::a_log_of_a_path_through_a_link_is_untrusted_where_the_map_distrusts_the_file_it_lands_on`
+`verified-by: bravebot_agent::workspace::a_commit_showing_a_file_with_a_hard_link_the_map_distrusts_is_untrusted`
+`verified-by: bravebot_agent::workspace::a_commit_showing_a_file_whose_other_names_were_not_all_found_is_untrusted`
 `verified-by: bravebot_agent::git::a_path_not_plainly_inside_the_repository_is_refused`
 `verified-by: bravebot_agent::git::a_tree_entry_whose_name_would_leave_its_directory_is_not_read`
 `verified-by: bravebot_agent::git::a_path_whose_name_is_not_utf8_is_left_out_as_withheld`
@@ -267,7 +291,9 @@ repository read_git opens ([CHECKOUT-12](../checkouts.md#CHECKOUT-12)).
 
 Whether read_git opens the repository is decided by the opener a read_git call goes through. The
 checks a call makes on the name it was given before it reaches the opener are not made. Nothing
-under `.git` is read until the map has vouched for all of it ([GIT-2](#GIT-2)).
+under `.git` is read until the map has vouched for all of it ([GIT-2](#GIT-2)), under every name
+the repository's directory has, so the opener answers for a directory reached through a link as a
+call on that link does.
 
 **Why.** A planner that ran git and got a sealed result does not otherwise learn that the question
 has an answer it can read. Said after every run, the sentence would be noise the planner learns to
@@ -283,6 +309,7 @@ planner then spends a round on that call before it asks `run` again.
 `verified-by: bravebot_agent::workspace::read_git_opens_a_repository_in_a_directory_that_was_added`
 `verified-by: bravebot_agent::workspace::read_git_opens_no_repository_whose_name_is_not_text`
 `verified-by: bravebot_agent::workspace::read_git_opens_no_repository_under_a_directory_named_tilde`
+`verified-by: bravebot_agent::workspace::read_git_opens_a_link_to_a_repository_as_a_call_through_the_link_does`
 
 <a id="GIT-8"></a>
 ### GIT-8: a repository whose files change what a read means is declined, not followed
@@ -431,7 +458,9 @@ and an index this reader does not parse in full lists entries it cannot see.
 ### GIT-11: status is answered only where the trust map trusts the whole working tree
 
 The map is asked about the repository's directory as a subtree, as [GIT-2](#GIT-2) asks about
-`.git`, and a tree it fails is refused with a sentence pointing at `run` where the turn is offered
+`.git`, under the name the planner wrote and under every other name the directory has (a link that
+lands on it, a hard link, a second path to an open tree), and a tree it fails, or whose names were
+not all found, is refused with a sentence pointing at `run` where the turn is offered
 one. log, show and diff in the
 same repository are answered as before.
 
@@ -442,6 +471,7 @@ closed.
 
 `verified-by: bravebot_agent::turn::status_is_answered_only_where_the_whole_working_tree_is_trusted`
 `verified-by: bravebot_agent::workspace::a_status_below_the_root_is_asked_about_its_own_directory`
+`verified-by: bravebot_agent::workspace::a_status_through_a_link_is_declined_where_the_map_distrusts_the_tree_it_lands_on`
 
 <a id="GIT-12"></a>
 ### GIT-12: a log is read a page at a time, with whole messages where asked
