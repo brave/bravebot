@@ -357,6 +357,10 @@ is in [the mouse](transcript.md#what-a-click-does). It holds
   name the `/model` picker gives it, with the service after a tier's name, as `Sonnet (Bedrock)`, rather
   than by the inference-profile ARN a Bedrock tier is requested by; `/status` draws it the same way and
   keeps the request name on the line beneath,
+- the sandbox mode in force, as one row under a Sandbox heading: `strict`, `read-only`,
+  `workspace-write` or `off`. It follows `/sandbox` as soon as the mode changes, and a click on it
+  opens the list of modes that a bare [`/sandbox`](../reference/commands.md#sandbox-strict--read-only--workspace-write--off)
+  opens,
 - the goal, while one stands,
 - a Pull requests section and an Issues section, each left out while it has nothing to list. Each
   starts with the pull request or the issue you gave with `/pr` or `/issue`, and goes on with the ones

@@ -146,6 +146,7 @@ fn says(session: &Session, laid: &Laid, hit: Hit) -> Option<Says> {
             }
         },
         Hit::Panel(Target::Model) => said(t!(hover_panel_model)),
+        Hit::Panel(Target::Sandbox) => said(t!(hover_panel_sandbox)),
         Hit::Panel(Target::Effort) => said(t!(hover_panel_effort)),
         Hit::Panel(Target::Context) => said(t!(hover_panel_context)),
         Hit::Panel(Target::Servers) => said(t!(hover_panel_servers)),

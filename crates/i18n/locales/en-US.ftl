@@ -2510,6 +2510,14 @@ effort-hint-max = the most thinking, cost aside
 # names are the words the setting is spelled with, so they are not translated; only what each one is for is.
 config-picker-title = settings
 config-picker-keys = ↑↓ choose  ·  Enter select  ·  Esc keep current
+# The /sandbox panel. The mode names are the words /sandbox takes, so they are not translated; only
+# what each one is for is.
+sandbox-picker-title = sandbox mode
+sandbox-picker-keys = ↑↓ choose  ·  Enter select  ·  Esc keep current
+sandbox-hint-strict = the machine is not read; the session's directories are written
+sandbox-hint-read-only = the machine is read; nothing is written
+sandbox-hint-workspace-write = the machine is read; the session's directories are written
+sandbox-hint-off = no confinement: programs run with your own access
 config-editing-hint-ordinary = arrows and the readline chords
 config-editing-hint-vi = modal editing, with hjkl and the operators
 # Choosing which sections the info panel draws. The names of the sections are the panel's headings.
@@ -3157,6 +3165,8 @@ status-confinement = Confinement
 status-confinement-nothing-confined = this session confines nothing
 # Where the session started MCP servers, the level is in force over them and over nothing else.
 status-confinement-servers = this session confines the MCP servers it started, and nothing else it runs
+# The mode and what chose it: the flag, the file or `/sandbox`, which no other row says.
+status-sandbox-mode = Sandbox mode
 status-mcp-servers = MCP servers
 status-mcp-servers-none = none
 # How one started server's tools stand. A list nobody has read yet is put to the person at the
@@ -3722,6 +3732,7 @@ open-takes =
 # The info panel's section headings.
 panel-session = Session
 panel-model = Model
+panel-sandbox = Sandbox
 panel-goal = Goal
 panel-goal-paused = paused
 panel-context = Context
@@ -3967,7 +3978,7 @@ command-language = Choose the interface language for the next start, or drop the
 command-crash-reports = Say whether crash reports are on and why, or switch them for the next start
 command-add-dir = Open another directory and trust it for this session, or close one
 command-reach = Remember a directory or credential for a command, or list and remove them
-command-sandbox = Show the sandbox mode, or change it
+command-sandbox = Choose the sandbox mode from a list, or name one to change it
 command-cd = Work in another directory from now on, and trust it for this session
 command-rename = Call this conversation something else
 command-note = Note something on this session's record, without putting it in the conversation
@@ -6033,7 +6044,7 @@ doctor-sandbox-counts = { $passed } passed, { $failed } failed, { $skipped } ski
 session-sandbox-report = sandbox mode: { $detail }
 session-sandbox-from-command = { $mode } from /sandbox
 session-sandbox-from-flag = { $mode } from --sandbox
-session-sandbox-needs-a-mode = /sandbox takes one of { $names }, or nothing to report the mode in force
+session-sandbox-needs-a-mode = /sandbox takes one of { $names }
 session-sandbox-already = The sandbox mode is already { $mode }.
 session-sandbox-set = The sandbox mode is { $mode } for the rest of this session.
 session-sandbox-turn-follows-it = The turn running now uses it for each program it starts from now on. A program already started keeps its profile.
@@ -6148,6 +6159,7 @@ hover-address = ctrl-click to open this address in the browser
 hover-path = click to show this file, ctrl-click to open it in the editor
 hover-path-edit = ctrl-click to open this file in the editor
 hover-panel-model = click to choose the model
+hover-panel-sandbox = click to choose the sandbox mode
 hover-panel-effort = click to choose the effort
 hover-panel-context = click to see how full the context is
 hover-panel-servers = click to list the MCP servers

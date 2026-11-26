@@ -216,6 +216,7 @@ mod tests {
             [
                 "[x] Session",
                 "[x] Model",
+                "[x] Sandbox",
                 "[x] Goal",
                 "[x] Pull requests",
                 "[x] Issues",
@@ -255,6 +256,7 @@ mod tests {
             let mut picker = Picker::new(Sections::default());
             pressed(&mut picker, KeyCode::Down);
             pressed(&mut picker, KeyCode::Down);
+            pressed(&mut picker, KeyCode::Down);
             assert_eq!(at_row(&picker), Some(Section::Goal));
 
             assert_eq!(
@@ -263,16 +265,16 @@ mod tests {
                 "{toggle:?}"
             );
             assert_eq!(at_row(&picker), Some(Section::Goal));
-            assert_eq!(names(&picker)[2], "[ ] Goal");
-            assert_eq!(names(&picker)[1], "[x] Model");
-            assert_eq!(names(&picker)[3], "[x] Pull requests");
+            assert_eq!(names(&picker)[3], "[ ] Goal");
+            assert_eq!(names(&picker)[2], "[x] Sandbox");
+            assert_eq!(names(&picker)[4], "[x] Pull requests");
 
             assert_eq!(
                 pressed(&mut picker, toggle),
                 Outcome::Changed(Sections::default()),
                 "{toggle:?} again"
             );
-            assert_eq!(names(&picker)[2], "[x] Goal");
+            assert_eq!(names(&picker)[3], "[x] Goal");
         }
     }
 
@@ -388,7 +390,7 @@ mod tests {
     fn one_press_on_a_row_turns_it_off_and_the_next_turns_it_on_again() {
         let mut picker = Picker::new(Sections::default());
         let shown = placed_in_140_by_40(&picker);
-        let event = left(shown.list.y + 3, shown.list.x + 4);
+        let event = left(shown.list.y + 4, shown.list.x + 4);
         let mut last = None;
         let now = std::time::Instant::now();
 
@@ -432,7 +434,7 @@ mod tests {
         assert_eq!(clicked(&mut picker, wheel), Outcome::Continue);
         assert_eq!(
             at_row(&picker),
-            Some(Section::PullRequests),
+            Some(Section::Goal),
             "three rows of the wheel"
         );
         assert_eq!(picker.sections(), Sections::default());
@@ -451,7 +453,7 @@ mod tests {
             );
         }
         assert_eq!(picker.sections(), Sections::default());
-        assert_eq!(at_row(&picker), Some(Section::PullRequests));
+        assert_eq!(at_row(&picker), Some(Section::Goal));
 
         assert_eq!(clicked(&mut picker, left(0, 0)), Outcome::Close);
         assert_eq!(picker.sections(), Sections::default());
@@ -480,8 +482,8 @@ mod tests {
             })
             .collect();
         assert_eq!(rows[0], "❯ [x] Session");
-        assert_eq!(rows[8], "  [ ] Files");
-        assert_eq!(rows[9], "  [x] Plan");
+        assert_eq!(rows[9], "  [ ] Files");
+        assert_eq!(rows[10], "  [x] Plan");
         let all: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
         assert!(all.contains(t!(sidebar_picker_title)), "{all}");
         assert!(all.contains(t!(sidebar_picker_keys)), "{all}");

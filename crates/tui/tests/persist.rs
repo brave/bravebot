@@ -455,6 +455,33 @@ fn the_sections_turned_off_are_read_back_next_session_and_turning_them_on_replac
     });
 }
 
+/// The Sandbox section turned off is kept under the id `sandbox` and read back next session, and a
+/// file written before the section existed, which does not name it, leaves it drawn.
+///
+/// Rejects: an id other than `sandbox` (a heading or a variant name), a choice that is not read
+/// back, and a file without the id that turns the section off.
+#[test]
+fn the_sandbox_section_turned_off_is_kept_by_its_id_and_an_older_file_leaves_it_on() {
+    use bravebot_tui::panel::{Section, Sections};
+    with_temp_home("sidebar-sandbox", || {
+        let adopted = || {
+            let mut next = bravebot_tui::state::Session::new("test").with_stored_history();
+            next.adopt_panel();
+            next.panel_sections()
+        };
+        let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        session.adopt_panel();
+        session.set_panel_sections(Sections::default().toggled(Section::Sandbox));
+        assert_eq!(store::load_sidebar(), Some(vec!["sandbox".to_string()]));
+        let back = adopted();
+        assert!(!back.shows(Section::Sandbox));
+        assert!(back.shows(Section::Model));
+
+        store::save_sidebar(&["goal", "plan"]);
+        assert!(adopted().shows(Section::Sandbox), "an older file hid it");
+    });
+}
+
 /// A file somebody edited, or one half written, is no choice: every section is drawn, for no
 /// file, an unreadable one, a name that is no section anywhere in it, and a heading as the panel
 /// draws it. A section the file does not name, as one added later is not, is drawn.

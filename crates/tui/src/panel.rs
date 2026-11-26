@@ -69,6 +69,7 @@ pub fn drawn(session: &Session, columns: u16) -> bool {
 pub enum Section {
     Session,
     Model,
+    Sandbox,
     Goal,
     PullRequests,
     Issues,
@@ -81,9 +82,10 @@ pub enum Section {
 
 impl Section {
     /// Every section in the order the panel draws them.
-    pub const ALL: [Section; 10] = [
+    pub const ALL: [Section; 11] = [
         Section::Session,
         Section::Model,
+        Section::Sandbox,
         Section::Goal,
         Section::PullRequests,
         Section::Issues,
@@ -99,6 +101,7 @@ impl Section {
         match self {
             Section::Session => "session",
             Section::Model => "model",
+            Section::Sandbox => "sandbox",
             Section::Goal => "goal",
             Section::PullRequests => "pull-requests",
             Section::Issues => "issues",
@@ -123,6 +126,7 @@ impl Section {
         match self {
             Section::Session => t!(panel_session),
             Section::Model => t!(panel_model),
+            Section::Sandbox => t!(panel_sandbox),
             Section::Goal => t!(panel_goal),
             Section::PullRequests => t!(panel_pull_requests),
             Section::Issues => t!(panel_issues),
@@ -519,6 +523,8 @@ pub enum Target {
     Model,
     /// The effort row: the same question `/effort` asks.
     Effort,
+    /// The sandbox row: the same list a bare `/sandbox` opens.
+    Sandbox,
     /// The context reading: the same question `/context` asks.
     Context,
     /// A started MCP server's row: the same question a bare `/mcp` asks.
@@ -921,6 +927,20 @@ fn head(session: &Session, text: usize, refs_room: usize) -> Body {
                 .into_iter()
                 .map(|(row, target)| Place::on_row(first + row, target)),
         );
+    }
+
+    // The mode in force is always held, so the section always has its one row (PANEL-9). Only the
+    // fixed name of the mode is drawn.
+    if shown.shows(Section::Sandbox) {
+        section(
+            &mut body,
+            t!(panel_sandbox).to_string(),
+            vec![row(
+                session.sandbox_mode().name().to_string(),
+                Style::default(),
+            )],
+        );
+        targets.push(Place::on_row(body.len() - 1, Target::Sandbox));
     }
 
     if let Some(goal) = session.goal().filter(|_| shown.shows(Section::Goal)) {
@@ -1558,6 +1578,89 @@ mod tests {
         assert_eq!(markers(&drawn), 0, "the marker outlived the recorded level");
     }
 
+    /// PANEL-9. The Sandbox section is drawn right after Model, as one row holding the name of the
+    /// mode in force, and the row follows a change of the mode at once, `off` included.
+    ///
+    /// Rejects: a section drawn before Model or after the goal, a row that names the mode the
+    /// session started with and is not read again, a row left out for `off` as if it were the
+    /// default, and a section drawn without its heading.
+    #[test]
+    fn the_sandbox_section_follows_the_model_and_names_the_mode_in_force() {
+        use bravebot_sandbox::SandboxMode;
+        let mut session = with_every_section();
+        for mode in SandboxMode::ALL {
+            session.set_sandbox_mode(mode);
+            let drawn = texts(&lines(&session, WIDTH, 60));
+            let at = |needle: &str| {
+                let found = drawn.iter().position(|row| row == needle);
+                assert!(found.is_some(), "{needle:?} is not drawn: {drawn:#?}");
+                found.unwrap_or_default()
+            };
+            let heading = at(Section::Sandbox.heading());
+            assert_eq!(heading, at(Section::Model.heading()) + 3, "{drawn:#?}");
+            assert_eq!(drawn[heading + 1], mode.name(), "{drawn:#?}");
+            assert!(heading < at(Section::Goal.heading()), "{drawn:#?}");
+        }
+    }
+
+    /// PANEL-17. A sidebar choice that does not name the Sandbox section, as a file written before
+    /// the section existed does not, still draws it, and a choice that names it by id hides it.
+    ///
+    /// Rejects: a section that is drawn only when a file names it, which hides it from everyone
+    /// with a file already, and an id other than `sandbox`.
+    #[test]
+    fn the_sandbox_section_is_drawn_for_a_choice_written_before_it_existed() {
+        let mut session = with_every_section();
+        session.set_panel_sections(Sections::from_ids(&["goal", "plan"]));
+        let drawn = texts(&lines(&session, WIDTH, 60));
+        assert!(
+            drawn.iter().any(|row| row == Section::Sandbox.heading()),
+            "{drawn:#?}"
+        );
+        session.set_panel_sections(Sections::from_ids(&["sandbox"]));
+        let drawn = texts(&lines(&session, WIDTH, 60));
+        assert!(
+            !drawn.iter().any(|row| row == Section::Sandbox.heading()),
+            "{drawn:#?}"
+        );
+        assert!(
+            laid_out(&session, WIDTH, 60)
+                .3
+                .iter()
+                .all(|place| place.target != Target::Sandbox),
+            "a hidden section kept its click target"
+        );
+    }
+
+    /// MOUSE-11. The row under the Sandbox heading is the click target `Target::Sandbox`, and the
+    /// heading above it is not.
+    ///
+    /// Rejects: a target on the heading, a target on the Model row beside it, and a row that is not
+    /// a link.
+    #[test]
+    fn the_sandbox_row_is_a_click_target() {
+        let session = with_every_section();
+        let area = Rect::new(84, 0, WIDTH, 60);
+        let rows = texts(&lines(&session, area.width, area.height));
+        let found = rows
+            .iter()
+            .position(|row| row == Section::Sandbox.heading());
+        assert!(found.is_some(), "no Sandbox heading: {rows:#?}");
+        let heading = found
+            .and_then(|row| u16::try_from(row).ok())
+            .unwrap_or_default();
+        let inside = area.x + 3;
+        assert_eq!(
+            target_at(&session, area, area.y + heading + 1, inside),
+            Some(Target::Sandbox)
+        );
+        assert_eq!(target_at(&session, area, area.y + heading, inside), None);
+        assert_eq!(
+            target_at(&session, area, area.y + heading - 2, inside),
+            Some(Target::Model)
+        );
+    }
+
     /// MOUSE-11, PANEL-9. Rejects: a target on the heading above the rows, one on the border
     /// column, one on a row cut for want of room, an effort row for a model that reads none, and
     /// one on the `this session only` row under a session-only level, which would make a click there
@@ -1972,7 +2075,7 @@ mod tests {
             .collect();
         let rows: Vec<(&str, Status)> = names.iter().map(|(t, s)| (t.as_str(), *s)).collect();
         let mut session = a_plan_a_long_way_up(plan(&rows));
-        let drawn = screen(&mut session, 120, 14);
+        let drawn = screen(&mut session, 120, 17);
         let inside = 120 - WIDTH + 4;
         let before = (session.top_row(), session.rows_below());
 
@@ -2233,7 +2336,7 @@ mod tests {
         let rows: Vec<(&str, Status)> = tasks.iter().map(|(t, s)| (t.as_str(), *s)).collect();
         let mut session = working_on(plan(&rows));
         session.complete("done", Vec::new(), 0);
-        let height = 17;
+        let height = 20;
         let shown = |session: &Session| texts(&lines(session, WIDTH, height));
 
         let closed = shown(&session);
@@ -2746,16 +2849,16 @@ mod tests {
         );
         let reading = crate::render::context_reading(&session);
 
-        // Six rows of Session, a blank, and two of Context: the hint line and the key that hides
-        // the panel need two rows more than that.
-        let short = screen(&mut session, 100, 10);
+        // Six rows of Session, a blank, three of Sandbox, a blank, and two of Context: the hint line
+        // and the key that hides the panel need two rows more than that.
+        let short = screen(&mut session, 100, 13);
         assert!(
-            short[9].contains(&reading),
+            short[12].contains(&reading),
             "the hint line dropped {reading:?} for a panel with no room for it: {short:#?}"
         );
-        let tall = screen(&mut session, 100, 11);
+        let tall = screen(&mut session, 100, 14);
         assert!(
-            !tall[10].contains(&reading) && panel_column(&tall, 100).contains(&reading),
+            !tall[13].contains(&reading) && panel_column(&tall, 100).contains(&reading),
             "the reading did not move into a panel with room for it: {tall:#?}"
         );
     }
@@ -3272,6 +3375,7 @@ mod tests {
         let headings = [
             t!(panel_session).to_string(),
             t!(panel_model).to_string(),
+            t!(panel_sandbox).to_string(),
             t!(panel_goal).to_string(),
             t!(panel_pull_requests).to_string(),
             t!(panel_issues).to_string(),
@@ -3280,11 +3384,12 @@ mod tests {
             t!(panel_mcp_servers).to_string(),
             t!(panel_plan).to_string(),
         ];
+        // The Sandbox section always has its row, so a bare session draws it and the context.
         let bare = texts(&lines(&Session::new("none"), WIDTH, 30));
         let shown: Vec<&String> = headings.iter().filter(|h| bare.contains(h)).collect();
         assert_eq!(
             shown,
-            vec![&headings[5]],
+            vec![&headings[2], &headings[6]],
             "headings over nothing: {bare:#?}"
         );
 
@@ -3299,7 +3404,7 @@ mod tests {
         full.link(Some("https://x.test/i/1"), Some("https://x.test/p/2"));
         full.report_language_servers(Roster::of([Language::Rust]));
         full.servers.started = vec!["notes".to_string()];
-        let drawn = texts(&lines(&full, WIDTH, 30));
+        let drawn = texts(&lines(&full, WIDTH, 34));
         let at: Vec<usize> = headings
             .iter()
             .map(|h| {
@@ -4608,16 +4713,16 @@ mod tests {
             .find(|row| row.starts_with('+'))
     }
 
-    /// A panel of fifteen rows leaves the plan ten: the context section takes two, the blank and
-    /// the heading two more, and the key that hides the panel one. Eight of the ten are tasks when
-    /// the plan does not fit, since one row names the key that prints the plan whole and one says
-    /// what was left out.
-    const HEIGHT_FOR_EIGHT_TASKS: u16 = 15;
+    /// A panel of eighteen rows leaves the plan ten: the sandbox section takes three, the context
+    /// section two, the blank and the heading two more, and the key that hides the panel one. Eight
+    /// of the ten are tasks when the plan does not fit, since one row names the key that prints the
+    /// plan whole and one says what was left out.
+    const HEIGHT_FOR_EIGHT_TASKS: u16 = 18;
 
-    /// The height of a panel whose plan has `room` rows: the context section takes two, the blank
-    /// and the heading two more, and the key that hides the panel one.
+    /// The height of a panel whose plan has `room` rows: the sandbox section takes three rows, the
+    /// context section two, the blank and the heading two more, and the key that hides the panel one.
     fn height_for_room(room: u16) -> u16 {
-        room + 5
+        room + 8
     }
 
     /// A plan whose unfinished rows are at its end must show them. In a plan of eight rows done and
@@ -5021,7 +5126,7 @@ mod tests {
 
         // The least height with room for the plan: its heading and one row, which says what the
         // plan holds since there is no room for any of its rows.
-        let drawn = panel_for(&fifty, 6);
+        let drawn = panel_for(&fifty, height_for_room(1));
         assert_eq!(tasks_in(&drawn), Vec::<usize>::new(), "{drawn:#?}");
         let at = drawn
             .iter()
@@ -5037,7 +5142,7 @@ mod tests {
             "{drawn:#?}"
         );
         // One row fewer leaves the plan none, and it is not drawn at all.
-        let drawn = panel_for(&fifty, 5);
+        let drawn = panel_for(&fifty, height_for_room(0));
         assert!(!drawn.contains(&heading), "{drawn:#?}");
         assert_eq!(left_out_in(&drawn), None, "{drawn:#?}");
         for height in [1, 2] {
@@ -5675,7 +5780,7 @@ mod tests {
             !drawn.contains(&key(&working_on(Vec::new()))),
             "the key took a task's row: {drawn:#?}"
         );
-        for height in [6, 7] {
+        for height in [height_for_room(1), height_for_room(2)] {
             let drawn = panel_for(&nine, height);
             assert!(
                 !drawn.contains(&key(&working_on(Vec::new()))),
@@ -5688,7 +5793,7 @@ mod tests {
         // taking a row still to do, names no key either where there is room for a task and the
         // count and no more.
         let finished = plan_of(&[(Status::Done, 12)]);
-        for (height, tasks) in [(6, 0), (7, 1)] {
+        for (height, tasks) in [(height_for_room(1), 0), (height_for_room(2), 1)] {
             let drawn = panel_for(&finished, height);
             assert_eq!(tasks_in(&drawn).len(), tasks, "{drawn:#?}");
             assert!(
@@ -6055,6 +6160,7 @@ mod tests {
         let row_of = |section| match section {
             Section::Session => "~/bravebot".to_string(),
             Section::Model => "claude-sonnet".to_string(),
+            Section::Sandbox => session.sandbox_mode().name().to_string(),
             Section::Goal => "the tests pass".to_string(),
             Section::PullRequests => "https://x.test/p/2".to_string(),
             Section::Issues => "https://x.test/i/1".to_string(),
@@ -6117,6 +6223,7 @@ mod tests {
         for (section, target) in [
             (Section::Session, Target::Name),
             (Section::Model, Target::Model),
+            (Section::Sandbox, Target::Sandbox),
             (Section::PullRequests, Target::PullRequest(0)),
             (Section::Issues, Target::Issue(0)),
             (Section::Context, Target::Context),
@@ -6314,6 +6421,7 @@ mod tests {
             [
                 "session",
                 "model",
+                "sandbox",
                 "goal",
                 "pull-requests",
                 "issues",
