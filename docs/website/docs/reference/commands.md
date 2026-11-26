@@ -709,6 +709,12 @@ is put to a judge, and where it is not met yet the work goes back for another tu
 
 A one-shot run takes the same condition with [`--goal`](cli.md#--goal-condition).
 
+`/goal` is available in the desktop app too, typed in a chat's composer. Each check and verdict is a
+row in the transcript, a turn the goal sends back is drawn as an automatic turn rather than as your
+message, and the context panel's Overview shows the condition, rounds left, time set and tokens
+spent. The stop button and Escape take the goal off while a check is out, as Escape does in the
+terminal. Closing or deleting the chat ends its goal, and setting a goal ends the chat's watches.
+
 ```
 /goal cargo test exits 0 and the diff is committed
 /goal                              # say what the condition is, and how it is going
