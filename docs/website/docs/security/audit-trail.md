@@ -180,7 +180,7 @@ told one sentence that names no setting, so this line is where to read which one
 request: the sandbox mode, a workspace you have not trusted, a managed closed network, a delegate,
 or for `scopes` a platform with no sandbox or a session with no profile directory. Under sandbox mode
 `off` and in a turn that confines none of its runs, a request is accepted and ignored, so it gets no
-blocked line.
+blocked line. A credential scope you kept at an earlier prompt that a later line is lent is recorded apart, under `kept_scopes`, so the trail never says the planner asked for what you kept.
 
 ```
 BLOCK   sandbox: run.unconfined: the request was refused and the line did not run: the strict sandbox mode does not take it

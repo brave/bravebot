@@ -317,8 +317,12 @@ Not every text is written this way yet. Some results and refusals still name `ru
 `read_git` without reading the list: the decoding note of a page read, the
 result of an approved `request_path`, the unconfined way out that a refused write names, the descriptions of
 `load_skill`, `search_skills`, `download_url` and `ask_user`, the notice about `search_skills`, the
-planning, person-facing and environment prompts, the reminder of a kept skill after compaction, and
-the refusals of a checkout. A text of this kind is to be written from the list when it is found, and
+planning, person-facing and environment prompts, and the reminder of a kept skill after compaction.
+A refusal of a checkout names `read_git` as the reader it would have used only where the caller
+gives no other name: `checkout_for_cause_as` and `checkout_in_temporary_directory_cause_as` let
+`spawn_agent` name the reader this turn's own list holds, `read_git` where it does and a name that
+turn can act on where it does not, and `offered` does the same for `apply_checkout` and
+`apply_kept_checkout`. A text of this kind is to be written from the list when it is found, and
 the test for it is the one the sites above have: a list without the tool, and a list with every
 tool as the control.
 
@@ -384,6 +388,8 @@ without naming a tool to fetch them with.
 `verified-by: bravebot_agent::tools::tests::untrusted_refusals::the_git_refusal_names_run_only_where_the_turn_holds_it`
 `verified-by: bravebot_agent::tools::tests::untrusted_refusals::an_untrusted_git_answer_is_refused_in_the_helpers_words`
 `verified-by: bravebot_agent::tools::the_repo_map_lsp_and_vet_content_descriptions_name_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::a_checkout_refusal_names_read_git_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::workspace::a_checkout_refusal_names_the_reader_its_caller_gives`
 `verified-by: bravebot_agent::tools::tests::editing::an_empty_old_text_names_write_file_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::tools::tests::arguments::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::tools::tests::arguments::a_refused_read_of_a_non_output_reference_does_not_name_vet_content_off_the_list`

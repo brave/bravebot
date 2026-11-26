@@ -12214,6 +12214,36 @@ fn a_checkout_is_made_only_of_a_repository_read_git_would_open() {
     }
 }
 
+/// CHECKOUT-4, TOOL-6. `checkout_for_cause_as` names the reader its caller gives in a refused
+/// checkout's sentence, rather than always `read_git`: the turn asking for the checkout is not
+/// always the turn that would have called `read_git`, and may not be offered it.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_checkout_refusal_names_the_reader_its_caller_gives() {
+    let scratch = Scratch::new("checkout-reader-name");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    // No trust rule, so the repository is declined.
+    let policy = checkout_policy(&workspace, &mut sink, &[], &[]);
+    let state = Scratch::new("checkout-reader-name-state");
+
+    let as_read_git = workspace
+        .checkout_for_cause(&policy, &state.path, d1())
+        .expect_err("declined");
+    assert!(as_read_git.1.contains("read_git"), "{}", as_read_git.1);
+
+    let as_stand_in = workspace
+        .checkout_for_cause_as(&policy, &state.path, d1(), "the repository reader")
+        .expect_err("declined");
+    assert!(!as_stand_in.1.contains("read_git"), "{}", as_stand_in.1);
+    assert!(
+        as_stand_in.1.contains("the repository reader"),
+        "{}",
+        as_stand_in.1
+    );
+}
+
 /// CHECKOUT-5. A file a deny rule covers is not written into the checkout, and the answer names
 /// it, while every other file is written as HEAD holds it.
 #[test]

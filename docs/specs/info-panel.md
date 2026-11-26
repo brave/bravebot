@@ -266,28 +266,35 @@ and the hit rate, and the token total and the two cache rows are not drawn.
    that names another model changes nothing here. The effort row is left out where the model reads
    none. Both come from the session's settings, so the section is left out while the person has
    chosen no model and no effort level is in force.
-3. **Goal.** The condition, while a goal stands ([GOAL-1](goal.md#GOAL-1)).
-4. **Pull requests.** A row for the session's own pull request link and one for each pull request
+3. **Sandbox.** The sandbox mode in force, as one row holding its name: `strict`, `read-only`,
+   `workspace-write` or `off` ([SANDBOX-22](sandboxing.md#SANDBOX-22)). The row is read from the
+   session each frame, so `/sandbox`, the flag and a pick from the list `/sandbox` opens show at
+   once, and `off` is drawn as the other modes are, since the row is the answer to which of them
+   holds. It always has its row, so the section is always there. A click on the row opens the list
+   a bare `/sandbox` opens ([MOUSE-11](mouse.md#MOUSE-11)). Only the fixed name of the mode is
+   drawn, and nothing a model, tool or file returned reaches the row.
+4. **Goal.** The condition, while a goal stands ([GOAL-1](goal.md#GOAL-1)).
+5. **Pull requests.** A row for the session's own pull request link and one for each pull request
    the session met ([PANEL-12](#PANEL-12), [PANEL-16](#PANEL-16)). A row is `{owner}/{repo}#{n}`,
    cut from the left with an ellipsis where it is longer than the row, and its cells are a terminal
    link (OSC 8) to the item's address.
-5. **Issues.** The same for the session's own issue link and the issues it met. The two sections
+6. **Issues.** The same for the session's own issue link and the issues it met. The two sections
    are cut to the room the sections below them and the Plan's reserve leave, the pull requests
    having their room before the issues do. A section that does not fit whole keeps the rows that
    do and ends with a row `+{n} more` that counts the rest. A section with no room for a row is
    left out with its heading, so a heading is never drawn over nothing and a count is never drawn
    over no row.
-6. **Context.** PANEL-8. It always has a reading, so it is always there. Under the reading it
+7. **Context.** PANEL-8. It always has a reading, so it is always there. Under the reading it
    has the session's token total, as `/cost` opens with it, in tokens and not money, counting what
    the turn in flight has spent so far, the requests its delegates have completed included as
    they complete, and left out until a token has been spent.
-7. **Language servers.** PANEL-13.
-8. **MCP servers.** PANEL-14.
-9. **Files.** A `{n} files` row with the lines added and removed over every file the session wrote.
+8. **Language servers.** PANEL-13.
+9. **MCP servers.** PANEL-14.
+10. **Files.** A `{n} files` row with the lines added and removed over every file the session wrote.
    A click on that row opens the files state ([MOUSE-20](mouse.md#MOUSE-20)), as `/diff` does
    ([FILES-3](files-mode.md#FILES-3)). It is left out until a file has been written. The Plan takes
    the rows it leaves, as PANEL-13 says of the server sections.
-10. **Plan.** PANEL-10.
+11. **Plan.** PANEL-10.
 
 A section with nothing to show has no heading. A section the person turned off with `/sidebar`
 ([PANEL-17](#PANEL-17)) is left out the same way, with its heading, its rows and the blank row
@@ -315,6 +322,8 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::panel::the_info_panel_marks_a_session_only_level_and_names_it_either_way`
 `verified-by: bravebot_tui::app::a_level_the_command_line_named_or_the_files_settled_is_not_marked_as_this_sessions`
 `verified-by: bravebot_tui::panel::only_the_drawn_model_and_effort_rows_are_click_targets`
+`verified-by: bravebot_tui::panel::the_sandbox_section_follows_the_model_and_names_the_mode_in_force`
+`verified-by: bravebot_tui::panel::the_sandbox_row_is_a_click_target`
 `verified-by: bravebot_tui::status::the_status_line_names_a_session_only_pick_as_it_names_a_recorded_one`
 `verified-by: bravebot_tui::status::the_status_line_says_a_session_only_level_is_for_this_session_only`
 `verified-by: bravebot_tui::status::on_the_account_a_session_only_level_is_said_to_apply_from_clear_and_not_the_next_session`
@@ -721,8 +730,8 @@ reads cannot decide anything.
 ### PANEL-17: `/sidebar` turns each section of the panel on or off, and the choice is kept
 
 `/sidebar` opens a bordered checklist over the transcript, titled `info panel`, with one row for each
-section of the panel in the order [PANEL-9](#PANEL-9) gives: Session, Model, Goal, Pull requests,
-Issues, Context, Language servers, MCP servers, Files and Plan. A row reads `[x] Name` while its
+section of the panel in the order [PANEL-9](#PANEL-9) gives: Session, Model, Sandbox, Goal, Pull
+requests, Issues, Context, Language servers, MCP servers, Files and Plan. A row reads `[x] Name` while its
 section is drawn and `[ ] Name` while it is turned off, and it is there whether or not the section
 has anything to show. Up and Down, and `j` and `k`, walk the list and stop at both ends. Space or
 Enter turns the row under the cursor on or off, and the cursor stays on it. A left press on a row
@@ -748,7 +757,7 @@ write `panel`, so with the panel closed a change shows when the panel is next op
 
 The choice is written to `~/.bravebot/sidebar` on each change, as the panel's state is
 ([PANEL-5](#PANEL-5)), so a crash or Ctrl-C while the checklist is open loses nothing. The file holds
-one section id on each line for each section turned off: `session`, `model`, `goal`,
+one section id on each line for each section turned off: `session`, `model`, `sandbox`, `goal`,
 `pull-requests`, `issues`, `context`, `language-servers`, `mcp-servers`, `files` and `plan`. The
 ids are fixed words and are not the translated headings. The file is written empty when every
 section is on again. It is read once, at the start. No file, an empty file, one that cannot be read,
@@ -790,6 +799,8 @@ migration.
 `verified-by: bravebot_tui::panel::the_hint_line_offers_the_panel_the_same_with_every_section_off`
 `verified-by: bravebot_tui::panel::the_context_reading_and_the_hit_rate_stay_on_the_hint_line_while_the_context_section_is_off`
 `verified-by: bravebot_tui::persist::the_sections_turned_off_are_read_back_next_session_and_turning_them_on_replaces_them`
+`verified-by: bravebot_tui::persist::the_sandbox_section_turned_off_is_kept_by_its_id_and_an_older_file_leaves_it_on`
+`verified-by: bravebot_tui::panel::the_sandbox_section_is_drawn_for_a_choice_written_before_it_existed`
 `verified-by: bravebot_tui::persist::a_sidebar_file_that_does_not_read_cleanly_leaves_every_section_on`
 `verified-by: bravebot_session::store::the_sidebar_file_is_its_trimmed_nonblank_lines_and_nothing_else`
 `verified-by: bravebot_tui::state_directory::a_recorded_choice_is_readable_only_by_its_owner`

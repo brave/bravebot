@@ -357,6 +357,10 @@ is in [the mouse](transcript.md#what-a-click-does). It holds
   name the `/model` picker gives it, with the service after a tier's name, as `Sonnet (Bedrock)`, rather
   than by the inference-profile ARN a Bedrock tier is requested by; `/status` draws it the same way and
   keeps the request name on the line beneath,
+- the sandbox mode in force, as one row under a Sandbox heading: `strict`, `read-only`,
+  `workspace-write` or `off`. It follows `/sandbox` as soon as the mode changes, and a click on it
+  opens the list of modes that a bare [`/sandbox`](../reference/commands.md#sandbox-strict--read-only--workspace-write--off)
+  opens,
 - the goal, while one stands,
 - a Pull requests section and an Issues section, each left out while it has nothing to list. Each
   starts with the pull request or the issue you gave with `/pr` or `/issue`, and goes on with the ones
@@ -470,6 +474,15 @@ added to the panel's Pull requests and Issues sections and to
 [`/prs` and `/issues`](../reference/commands.md#issues-and-prs), and set no link. What a program
 printed is never read, so an issue created with `gh issue create` is listed once a later line or call
 names its number.
+
+A session with no link of a kind can also get one from its own commands. After the planner runs
+`gh pr create`, `gh issue create` or `pr-fix.py open` and the command exits with status 0, the first
+later call that names a pull request or an issue (the first of the kind created) becomes the session's
+link of that kind. It fills an empty slot only and never replaces a link you gave with `/pr` or
+`/issue` or one the planner recorded for an address you typed. It reads the commands the planner
+wrote and the exit status, never what a program printed, so the item named may be another one than
+the item just created. Check the link in the info panel, and set it with `/pr` or `/issue` if it is
+not the one you want.
 
 ## Sessions in the background
 

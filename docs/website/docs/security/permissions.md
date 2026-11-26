@@ -163,7 +163,7 @@ messages whoever contributed wrote. It is trusted for exactly the reason a direc
 is trusted: you said so.
 
 An entry is keyed by **resolved path, the path that starts it, exact arguments, and the directory it
-was given in**. `git log` says nothing about `git push`, and nothing about `git log --all`. `$PATH` and
+was given in**. `git log` says nothing about `git push`, and nothing about `git log --all`. Where a step's output goes is part of the entry too: a line that sends output to `/dev/null` or merges errors with `2>&1` is an entry of its own, so a vouch given for `sh check.sh > /dev/null` does not cover `sh check.sh`, whose output the planner would read as trusted. `$PATH` and
 aliases decide what a name means, so an assertion never follows a name onto a different binary. A
 program named through a link, such as a virtualenv's `python`, is started by the link so it can find
 its virtualenv. An entry for it does not cover the interpreter the link points to when that
@@ -176,6 +176,8 @@ answer about a `check.sh` at the root, and it grants nothing in `sub/nested/` ei
 at a vendored dependency asks again however often you vouched for `git log` at the root, and what it
 prints there is quarantined, because no entry names that directory. `sub`, `./sub` and a symlink
 pointing at `sub` are one directory and not three.
+
+**A line lent a credential scope you kept asks every time.** After you keep a scope with `m` or `e` at a run prompt, a later line for those programs is lent it. That line is asked about even where one of the four answers below would otherwise cover it, no key at that prompt remembers it, and what it prints stays quarantined.
 
 Four things can answer the run prompt, and nothing else:
 
@@ -277,6 +279,7 @@ stop no prompt:
 | a run fed your private data | the same reason `a` is not offered there |
 | a line naming a file to write | the record holds no destination |
 | a line setting a variable in front of a program | asked about whatever is recorded |
+| a line lent a credential scope you kept | asked about every time, whatever is recorded |
 | a line running anywhere but the workspace root | including one that names a directory |
 | a line a `deny` or `ask` rule matches | a keypress must not overturn a rule you wrote |
 | an [incognito session](../using/incognito.md) | it adds nothing to `~/.bravebot` |
@@ -456,6 +459,12 @@ remembers a requested credential scope for every session is `e`, not `k`.
 It says that nothing the run reads can add a step, drop one, or send anything anywhere the plan does not
 already name; that approving the plan is **not** approving its writes, which are each still put to you as
 they come up; and that nothing has happened yet, so declining leaves everything as it is.
+
+Approving the plan does answer the calls to an MCP server's tool that its lines show, and the calls of
+an `apply` step whose tools you marked with `--plan-covers`. A `deny` rule, an `ask` rule, plan mode and
+private data in a call still stop at the step, and an `apply` step whose tools are not all marked puts
+its list to you. A plan approved by bypassing was read by nobody, so it answers none of them. See
+[Making many calls from a list](../using/manifest-mode.md#making-many-calls-from-a-list).
 
 No standing form is offered and Enter does not approve a plan. A plan is written afresh for each run, so
 remembering an answer to one would be approving steps nobody has seen.

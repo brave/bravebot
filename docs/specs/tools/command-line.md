@@ -527,19 +527,55 @@ it untrusted and reserves that path until the process has stopped. Reads during 
 use the old grant. Other paths remain available, and no lock spans the process wait. Every early
 exit stops already-started stages before releasing their reservations.
 
-An untrusted line leaves its opened destinations untrusted. A complete successful trusted line
-may retain a destination's prior trust, but cannot raise it: `>>` can retain untrusted bytes.
-Failure, cancellation or an error after entry leaves explicit distrust. An untaken branch enters
-no effect and changes no decision. A failed attempt to open a destination is conservative about
-its possible effects; an approval alone changes nothing.
+An untrusted line leaves its opened destinations untrusted under every name the file has
+([TRUST-4](../trust-map.md#TRUST-4)), which includes the name the line spelled and each name
+`Workspace::names_reached` gives for it: the spelling with each `..` taken out, where no
+link is on the way, and the place the path lands. A destination spelled with a `..` that lands inside
+the workspace is therefore untrusted under the plain name a file tool asks under, which the file tools
+never read under the `..` spelling ([TRUST-10](../trust-map.md#TRUST-10)). The
+names are entered in one reservation, so a second open of the same file under another spelling in one
+line is refused as a second writer ([TRUST-4](../trust-map.md#TRUST-4)). A complete
+successful trusted line may retain a destination's prior trust, but cannot raise it: `>>` can retain
+untrusted bytes. A trusted line that appends with `>>` through a `..` spelling leaves the file
+untrusted under every name it was entered under, since the policy reads a name holding a `..` as
+untrusted and so finds no prior trust to keep, and the person has to vouch for the file again to
+trust it. Failure, cancellation or an error after entry leaves explicit distrust. An untaken
+branch enters no effect and changes no decision. A failed attempt to open a destination is
+conservative about its possible effects; an approval alone changes nothing.
+
+A destination is entered under every name the file has, as a `write_file` is: a symbolic link at the
+destination or on the way to it, and a hard link. Each other name is recorded untrusted before the
+open, reserved so that a second writer under any of them is refused while the line holds the first,
+read for what the map said before the line, and completed with the destination. The names are found
+at every open, so a destination that an earlier part of the line linked to another file is entered
+under the names it has then. A search for the names that does not finish reads as untrusted. A later
+part of the line that opens another name of a destination the line already holds, whether the file
+had both names when the line began or an earlier part gave it the second, is refused as a second
+writer and does not run.
 
 `verified-by: bravebot_agent::turn::foreground_redirection_quarantines_live_reads_and_all_endings`
+`verified-by: bravebot_agent::turn::a_redirection_distrusts_every_name_of_the_file_it_wrote`
+`verified-by: bravebot_agent::turn::a_line_naming_one_file_under_two_of_its_names_is_refused_as_a_second_writer`
+`verified-by: bravebot_agent::turn::a_redirection_enters_a_name_an_earlier_part_of_the_line_gave_the_file`
+`verified-by: bravebot_agent::turn::a_redirection_whose_other_names_were_not_all_found_leaves_the_file_untrusted`
+`verified-by: bravebot_agent::turn::a_later_part_of_a_line_opening_another_name_of_a_held_destination_is_refused`
+`verified-by: bravebot_agent::turn::a_trusted_redirection_does_not_lift_a_name_of_the_file_out_of_a_distrusted_directory`
+`verified-by: bravebot_agent::turn::a_trusted_redirection_that_fails_leaves_every_name_of_the_file_untrusted`
+`verified-by: bravebot_agent::turn::a_trusted_redirection_that_errors_after_entry_leaves_every_name_of_the_file_untrusted`
+`verified-by: bravebot_agent::turn::a_trusted_redirection_stopped_with_the_turn_leaves_every_name_of_the_file_untrusted`
+`verified-by: bravebot_agent::turn::each_alias_in_the_table_reads_back_a_redirection_through_it_as_untrusted_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::turn::a_trusted_line_appending_to_a_trusted_file_leaves_it_trusted`
 `verified-by: bravebot_agent::turn::a_trusted_line_appending_to_an_untrusted_file_leaves_it_untrusted`
 `verified-by: bravebot_agent::turn::a_trusted_line_that_exits_nonzero_leaves_its_destination_untrusted`
 `verified-by: bravebot_agent::tools::tests::arguments::a_foreground_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`
 `verified-by: bravebot_agent::tools::tests::arguments::a_foreground_line_whose_substitution_redirects_a_script_s_output_leaves_it_untrusted`
 `verified-by: bravebot_agent::tools::tests::arguments::a_substitutions_redirection_in_a_foreground_line_leaves_its_destination_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::a_redirection_spelled_with_dotdot_leaves_the_plain_name_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::an_absolute_redirection_spelled_with_dotdot_leaves_the_plain_name_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::a_redirection_through_a_link_and_a_dotdot_leaves_the_file_it_lands_on_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::two_spellings_of_one_redirection_destination_in_a_line_are_refused_as_a_second_writer`
+`verified-by: bravebot_agent::tools::tests::arguments::a_redirection_spelled_with_dotdot_does_not_relabel_the_lines_own_output`
+`verified-by: bravebot_agent::tools::tests::arguments::a_vouched_append_through_a_dotdot_spelling_keeps_its_output_trusted_and_leaves_the_file_untrusted`
 `verified-by: bravebot_agent::tools::tests::arguments::a_foreground_line_whose_substitution_writes_into_an_opened_directory_still_writes_it`
 `verified-by: bravebot_agent::tools::tests::arguments::a_line_naming_the_stores_directly_or_through_an_existing_link_is_refused_before_it_runs`
 `verified-by: bravebot_agent::tools::tests::arguments::a_background_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`

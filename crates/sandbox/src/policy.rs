@@ -746,7 +746,7 @@ fn make_a_file(path: &Path) -> std::io::Result<()> {
 /// On Windows the owner-only access list is passed to the call that creates each
 /// directory, since the standard library's builder would leave each with the list its
 /// parent hands down.
-fn make_a_directory(path: &Path) -> std::io::Result<()> {
+pub(crate) fn make_a_directory(path: &Path) -> std::io::Result<()> {
     #[cfg(windows)]
     {
         crate::windows::create_directory_owner_only(path)

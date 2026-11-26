@@ -2108,6 +2108,503 @@ fn a_substitutions_redirection_in_a_foreground_line_leaves_its_destination_untru
     );
 }
 
+/// What `read_file` and `edit_file` answer for `path` in ask mode, and the file's text after
+/// the edit, in a trusted project whose `run` has written `path` (TRUST-4, CMDLINE-5).
+#[cfg(unix)]
+fn read_then_edit(
+    policy: &mut Policy<'_, RecordingSink>,
+    workspace: &Workspace,
+    project: &std::path::Path,
+    path: &str,
+    file: &str,
+) -> (String, String, String) {
+    let (read, edit) = with_tools(workspace, |tools| {
+        let read = read_file(
+            policy,
+            tools,
+            &mut crate::confirm::Unattended,
+            &mut crate::report::IgnoreReports,
+            &json!({"path": path}),
+        );
+        let edit = edit_file(
+            policy,
+            tools.workspace,
+            &*tools.slots,
+            crate::findings::Recording::default(),
+            crate::PermissionMode::Ask,
+            false,
+            None,
+            &mut crate::confirm::ApproveWrites,
+            &json!({"path": path, "old_text": "PAYLOAD", "new_text": "X"}),
+        );
+        (read, edit)
+    });
+    let after = std::fs::read_to_string(project.join(file)).unwrap_or_default();
+    (told(policy, &read.text), told(policy, &edit.text), after)
+}
+
+/// TRUST-4, CMDLINE-5, TRUST-10: a redirection whose destination is spelled with a `..` that
+/// lands inside the project writes the file the plain name reaches, and the file tools refuse
+/// the `..` spelling, so the untrusted entry has to be under the plain name as well as under the
+/// typed one. The project is trusted and the line runs in bypass mode. The regression it rejects
+/// is the entry made under the typed spelling only, which leaves `dd.txt` with the project's
+/// trust: `read_file dd.txt` then returns what the program wrote as trusted text and `edit_file`
+/// edits it. The `control.txt` variant is the control: it has no `..`. `plain.txt` is written before the
+/// run and read only to show that the project's files are trusted. Each variant
+/// writes a different file, so a name one variant left untrusted does not answer for another.
+/// `read_file` refuses the `..` spelling, so the entry under the plain name is the one a read meets.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_redirection_spelled_with_dotdot_leaves_the_plain_name_untrusted() {
+    let (_scratch, state, project) = background_fixture("run-redirect-dotdot");
+    std::fs::create_dir(project.join("d")).expect("a directory");
+    std::fs::write(project.join("plain.txt"), "visible").expect("a control file");
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_state(&state);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([
+            Capability::ShellExec,
+            Capability::FileRead,
+            Capability::FileWrite,
+        ]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let variants = [
+        ("control.txt", "control.txt"),
+        ("d/../dd.txt", "dd.txt"),
+        ("d/../d/../ee.txt", "ee.txt"),
+        ("./d/../ff.txt", "ff.txt"),
+    ];
+    for (spelled, file) in variants {
+        let ran = with_tools(&workspace, |tools| {
+            tools.permission_mode = crate::LiveMode::new(crate::PermissionMode::Bypass);
+            run(
+                &mut policy,
+                tools,
+                &mut crate::confirm::ApproveRuns,
+                &mut crate::report::IgnoreReports,
+                &json!({"command": format!("echo PAYLOAD > {spelled}")}),
+            )
+        });
+        assert!(ran.ran_a_program, "{spelled}: the line did not run");
+        assert_eq!(
+            std::fs::read_to_string(project.join(file)).unwrap(),
+            "PAYLOAD\n",
+            "{spelled}: the line did not write {file}"
+        );
+
+        let (read, edit, after) = read_then_edit(&mut policy, &workspace, &project, file, file);
+        assert!(
+            !read.contains("PAYLOAD"),
+            "{spelled}: read_file {file} returned what the line wrote as trusted text: {read}"
+        );
+        assert!(
+            edit.starts_with("refused: this file is closed to edit_file"),
+            "{spelled}: edit_file {file} was not refused as untrusted: {edit}"
+        );
+        assert_eq!(after, "PAYLOAD\n", "{spelled}: {file} was edited");
+    }
+
+    // The file tools refuse the `..` spelling, so the entry under the plain name is the one a read meets.
+    let (read, edit, _) =
+        read_then_edit(&mut policy, &workspace, &project, "d/../dd.txt", "dd.txt");
+    for said in [&read, &edit] {
+        assert!(
+            said.contains("contains '..' and lands inside the workspace"),
+            "the file tools did not refuse a `..` that lands inside the root: {said}"
+        );
+    }
+    let (plain, _, _) = read_then_edit(&mut policy, &workspace, &project, "plain.txt", "plain.txt");
+    assert!(
+        plain.contains("visible"),
+        "the project's files are not trusted, so this test shows nothing: {plain}"
+    );
+}
+
+/// TRUST-4: one file opened under two spellings in one line is refused as a second writer, as
+/// two spellings that fold to one slot are. `> d/../dd.txt` then `> dd.txt` is the same file, so
+/// the second open meets the reservation the first took on every name of the file, and the line
+/// stops there. The file is untrusted under the plain name afterwards, and the second write did
+/// not land. The regression it rejects is entering the file again under the other spelling, which
+/// would let two writers hold one file, or letting the second open through unreserved, which
+/// leaves its write with no entry of its own. Both orders are tried, since the first open is the
+/// one that enters the names.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn two_spellings_of_one_redirection_destination_in_a_line_are_refused_as_a_second_writer() {
+    let (_scratch, state, project) = background_fixture("run-redirect-two-spellings");
+    std::fs::create_dir(project.join("d")).expect("a directory");
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_state(&state);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([
+            Capability::ShellExec,
+            Capability::FileRead,
+            Capability::FileWrite,
+        ]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    for (file, line) in [
+        (
+            "aa.txt",
+            "echo FIRST > d/../aa.txt && echo PAYLOAD > aa.txt",
+        ),
+        (
+            "bb.txt",
+            "echo FIRST > bb.txt && echo PAYLOAD > d/../bb.txt",
+        ),
+    ] {
+        let ran = with_tools(&workspace, |tools| {
+            tools.permission_mode = crate::LiveMode::new(crate::PermissionMode::Bypass);
+            run(
+                &mut policy,
+                tools,
+                &mut crate::confirm::ApproveRuns,
+                &mut crate::report::IgnoreReports,
+                &json!({ "command": line }),
+            )
+        });
+        let said = told(&mut policy, &ran.text);
+        assert_eq!(
+            std::fs::read_to_string(project.join(file)).unwrap(),
+            "FIRST\n",
+            "{line}: the second spelling wrote the file as a second writer: {said}"
+        );
+        assert!(
+            said.contains("another file effect is still writing this destination"),
+            "{line}: the second spelling was not refused as a second writer: {said}"
+        );
+
+        let (read, edit, after) = read_then_edit(&mut policy, &workspace, &project, file, file);
+        assert!(!read.contains("FIRST"), "{line}: read {file}: {read}");
+        assert!(
+            edit.starts_with("refused: this file is closed to edit_file"),
+            "{line}: edit {file}: {edit}"
+        );
+        assert_eq!(after, "FIRST\n", "{line}: {file} was edited");
+    }
+}
+
+/// TRUST-4, CMDLINE-5: the output of a line a person vouched for, that writes a destination
+/// spelled with a `..`, is labelled as the output of the same line writing the plain name, and
+/// the file it wrote is untrusted under the plain name. Entering the file under two names moves
+/// the authority's revision twice, and the revision check that relabels a line's output as
+/// untrusted when something else changed a file during it has to count both. The first assertion
+/// rejects counting one change per destination, which labels the `..` line's output untrusted and
+/// the plain line's trusted. The second rejects leaving out the names the `..` spelling reaches,
+/// which leaves `dotted.txt` with the project's trust, so `read_file dotted.txt` returns what the
+/// line wrote as trusted text.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_redirection_spelled_with_dotdot_does_not_relabel_the_lines_own_output() {
+    let (_scratch, state, project) = background_fixture("run-redirect-dotdot-label");
+    std::fs::create_dir(project.join("d")).expect("a directory");
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_state(&state);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    let mut sink = RecordingSink::new();
+    let root = workspace.root().to_path_buf();
+    let script = root.join("gen.sh");
+    let vouched = bravebot_core::programs::TrustedPrograms::from_iter(
+        ["plain.txt", "d/../dotted.txt"].map(|spelled| {
+            bravebot_core::programs::Command::new(script.clone(), Vec::new(), root.clone()).routed(
+                vec![bravebot_core::command::Route::Stdout {
+                    path: root.join(spelled),
+                    append: false,
+                }],
+            )
+        }),
+    );
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([
+            Capability::ShellExec,
+            Capability::FileRead,
+            Capability::FileWrite,
+        ]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust)
+    .with_root(&root)
+    .with_programs(vouched);
+
+    let mut integrity = Vec::new();
+    for command in ["./gen.sh > plain.txt", "./gen.sh > d/../dotted.txt"] {
+        let ran = with_tools(&workspace, |tools| {
+            tools.permission_mode = crate::LiveMode::new(crate::PermissionMode::Bypass);
+            run(
+                &mut policy,
+                tools,
+                &mut crate::confirm::ApproveRuns,
+                &mut crate::report::IgnoreReports,
+                &json!({ "command": command }),
+            )
+        });
+        assert!(ran.ran_a_program, "{command}: the line did not run");
+        integrity.push(ran.text.label().integrity);
+    }
+
+    assert_eq!(
+        integrity[0],
+        Integrity::Trusted,
+        "the control line's output is not trusted, so this test shows nothing"
+    );
+    assert_eq!(
+        integrity[1], integrity[0],
+        "the `..` spelling changed the label of the line's own output"
+    );
+    let (read, _, _) = read_then_edit(
+        &mut policy,
+        &workspace,
+        &project,
+        "dotted.txt",
+        "dotted.txt",
+    );
+    assert!(
+        !read.contains("generated"),
+        "read_file dotted.txt returned what the `..` line wrote as trusted text: {read}"
+    );
+}
+
+/// TRUST-4, CMDLINE-5: a destination written as an absolute path with a `..` that lands inside
+/// the project is untrusted under the plain name, as the relative spelling is. The regression it
+/// rejects is a key built from the path as the line spelled it, which for an absolute path is the
+/// project's own path joined with `d/../abs.txt` and is read by no file tool.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_absolute_redirection_spelled_with_dotdot_leaves_the_plain_name_untrusted() {
+    let (_scratch, state, project) = background_fixture("run-redirect-dotdot-absolute");
+    std::fs::create_dir(project.join("d")).expect("a directory");
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_state(&state);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([
+            Capability::ShellExec,
+            Capability::FileRead,
+            Capability::FileWrite,
+        ]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let spelled = workspace.root().join("d/../abs.txt");
+    let ran = with_tools(&workspace, |tools| {
+        tools.permission_mode = crate::LiveMode::new(crate::PermissionMode::Bypass);
+        run(
+            &mut policy,
+            tools,
+            &mut crate::confirm::ApproveRuns,
+            &mut crate::report::IgnoreReports,
+            &json!({"command": format!("echo PAYLOAD > {}", spelled.display())}),
+        )
+    });
+    assert!(ran.ran_a_program, "the line did not run");
+    assert_eq!(
+        std::fs::read_to_string(project.join("abs.txt")).unwrap(),
+        "PAYLOAD\n",
+        "the line did not write abs.txt"
+    );
+
+    let (read, edit, after) =
+        read_then_edit(&mut policy, &workspace, &project, "abs.txt", "abs.txt");
+    assert!(
+        !read.contains("PAYLOAD"),
+        "read_file abs.txt returned what the line wrote as trusted text: {read}"
+    );
+    assert!(
+        edit.starts_with("refused: this file is closed to edit_file"),
+        "edit_file abs.txt was not refused as untrusted: {edit}"
+    );
+    assert_eq!(after, "PAYLOAD\n", "abs.txt was edited");
+}
+
+/// TRUST-4, CMDLINE-5: where `d` is a link to a directory below the project, `d/../lnk.txt`
+/// lands in that directory's parent, which is not the file the spelling with the `..` taken out
+/// names. The file is untrusted under the name it lands under, `sub/lnk.txt`. The regression it
+/// rejects is a key built only from the spelling with each `..` removed, which names `lnk.txt`
+/// and leaves the file that was written holding the project's trust.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_redirection_through_a_link_and_a_dotdot_leaves_the_file_it_lands_on_untrusted() {
+    let (_scratch, state, project) = background_fixture("run-redirect-dotdot-link");
+    std::fs::create_dir_all(project.join("sub/other")).expect("a directory below the project");
+    std::os::unix::fs::symlink("sub/other", project.join("d")).expect("a link");
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_state(&state);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([
+            Capability::ShellExec,
+            Capability::FileRead,
+            Capability::FileWrite,
+        ]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let ran = with_tools(&workspace, |tools| {
+        tools.permission_mode = crate::LiveMode::new(crate::PermissionMode::Bypass);
+        run(
+            &mut policy,
+            tools,
+            &mut crate::confirm::ApproveRuns,
+            &mut crate::report::IgnoreReports,
+            &json!({"command": "echo PAYLOAD > d/../lnk.txt"}),
+        )
+    });
+    assert!(ran.ran_a_program, "the line did not run");
+    assert_eq!(
+        std::fs::read_to_string(project.join("sub/lnk.txt")).unwrap(),
+        "PAYLOAD\n",
+        "the line did not write the file the link and the `..` lead to"
+    );
+
+    let (read, edit, after) = read_then_edit(
+        &mut policy,
+        &workspace,
+        &project,
+        "sub/lnk.txt",
+        "sub/lnk.txt",
+    );
+    assert!(
+        !read.contains("PAYLOAD"),
+        "read_file sub/lnk.txt returned what the line wrote as trusted text: {read}"
+    );
+    assert!(
+        edit.starts_with("refused: this file is closed to edit_file"),
+        "edit_file sub/lnk.txt was not refused as untrusted: {edit}"
+    );
+    assert_eq!(after, "PAYLOAD\n", "sub/lnk.txt was edited");
+}
+
+/// TRUST-4, CMDLINE-5: a line a person vouched for that appends to a file through a `..`
+/// spelling keeps the label of its own output, as the same line appending to the plain name
+/// does, and leaves the file untrusted under the plain name. The line's prior trust of the
+/// destination is read under the typed spelling first, and that name keeps its `..`, which the
+/// policy reads as untrusted whatever rule covers the directory (`integrity_in_force`), so the
+/// line completes as one that was not known to have kept the file trusted. The file is left
+/// untrusted, so the person has to vouch for it again. The trust store is rooted at the workspace root, as it is in a
+/// session, so the typed name is under the project's rule and the `..` is what decides it. The
+/// plain spelling of the same line is the control: it keeps the file trusted. The regression it
+/// rejects is a completion that trusts the plain name on the strength of the typed spelling's
+/// entry, which would lift a name nobody vouched for, and one that relabels the line's output.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_vouched_append_through_a_dotdot_spelling_keeps_its_output_trusted_and_leaves_the_file_untrusted()
+ {
+    let (_scratch, state, project) = background_fixture("run-append-dotdot-trusted");
+    std::fs::create_dir(project.join("d")).expect("a directory");
+    for file in ["plain.txt", "dotted.txt"] {
+        std::fs::write(project.join(file), "mine\n").expect("a trusted file");
+    }
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_state(&state);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    let mut sink = RecordingSink::new();
+    let root = workspace.root().to_path_buf();
+    let script = root.join("gen.sh");
+    let vouched = bravebot_core::programs::TrustedPrograms::from_iter(
+        ["plain.txt", "d/../dotted.txt"].map(|spelled| {
+            bravebot_core::programs::Command::new(script.clone(), Vec::new(), root.clone()).routed(
+                vec![bravebot_core::command::Route::Stdout {
+                    path: root.join(spelled),
+                    append: true,
+                }],
+            )
+        }),
+    );
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([
+            Capability::ShellExec,
+            Capability::FileRead,
+            Capability::FileWrite,
+        ]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust)
+    .with_root(&root)
+    .with_programs(vouched);
+
+    for (command, file, file_stays_trusted) in [
+        ("./gen.sh >> plain.txt", "plain.txt", true),
+        ("./gen.sh >> d/../dotted.txt", "dotted.txt", false),
+    ] {
+        let ran = with_tools(&workspace, |tools| {
+            tools.permission_mode = crate::LiveMode::new(crate::PermissionMode::Bypass);
+            run(
+                &mut policy,
+                tools,
+                &mut crate::confirm::ApproveRuns,
+                &mut crate::report::IgnoreReports,
+                &json!({ "command": command }),
+            )
+        });
+        assert!(ran.ran_a_program, "{command}: the line did not run");
+        assert_eq!(
+            ran.text.label().integrity,
+            Integrity::Trusted,
+            "{command}: the line's own output is not trusted"
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.join(file)).unwrap(),
+            "mine\ngenerated\n",
+            "{command}: the line did not append to {file}"
+        );
+        let (read, _, _) = read_then_edit(&mut policy, &workspace, &project, file, file);
+        assert_eq!(
+            read.contains("generated"),
+            file_stays_trusted,
+            "{command}: what read_file {file} answered after the append: {read}"
+        );
+    }
+}
+
 /// CMDLINE-17 for a delegate: its `run` reads `background` with no condition on being a
 /// delegate, so the refusal holds for it too, for the link write and for the redirected
 /// script. The regression it rejects is the delegate path starting the line, which the

@@ -46,6 +46,9 @@ export function apply(
           // Nothing reports the word again until the session is opened or rewound, so the one
           // read before this turn is no longer current and is not shown.
           context: null,
+          // What the session left open when it was resumed (OPEN-6) changes with this turn, and
+          // nothing reports it again, so it is no longer shown.
+          openLoops: null,
           entries: t.beginTurn(old.entries, message.data.turn) }
       case 'turn.interjected':
         return taken(old)

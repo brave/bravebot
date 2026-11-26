@@ -1,14 +1,21 @@
-//! What a desktop session left open, as its record keeps it (OPEN-6) and its turns end by saying it
-//! (OPEN-3).
-//!
-//! Driven through the bridge against a scripted planner, because the record is written by the
-//! turn's save: the work the turn did, the files it landed on and the handle that writes them have
-//! to agree before a resume can work out what was left open.
+//! A desktop turn keeps what it did and the files it wrote in the session's record, so a resume can
+//! work out what the session left open (OPEN-6).
+
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
 #![allow(
     clippy::unwrap_used,
     reason = "a test that unwraps fails at the line that did"
 )]
+#![expect(clippy::expect_used, reason = "a test fails by panicking")]
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "a send to a window or a scripted reply nobody reads any more is not a fault, and a scratch read that comes up short fails the test where its body is read"
+)]
 
+#[expect(
+    dead_code,
+    reason = "undo_endpoint.rs is shared by several test binaries, and open_loops does not use all of it"
+)]
 #[path = "../../tui/src/undo_endpoint.rs"]
 mod endpoint;
 #[path = "../test-support/message_ids.rs"]
@@ -16,115 +23,92 @@ mod message_ids;
 #[path = "../../session/test-support/profile.rs"]
 mod test_profile;
 
-use bravebot_session::sessions;
 use bravebot_ui_bridge::bridge::Bridge;
-use bravebot_ui_bridge::protocol::{ErrorCode, Event, Failure, Request};
+use bravebot_ui_bridge::protocol::{Event, Request};
 use serde_json::{Value, json};
+use std::collections::VecDeque;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 
 struct Window {
     bridge: Bridge,
     events: mpsc::Receiver<Event>,
-    /// Every event of the last turn, as its name and its data.
-    seen: Vec<String>,
 }
 
 impl Window {
     /// A bridge whose model is the scripted endpoint, on a project the person trusted.
     fn on(project: &Path, endpoint: &str) -> (Self, String) {
-        // Beside the project and not in it, so the file grants on every host (PERM-14).
-        let settings = project.with_file_name(format!(
-            "{}-test-settings.json",
-            project
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("project")
-        ));
+        let settings = Self::settings_of(project);
         std::fs::write(
             &settings,
-            json!({"model": "undo-test/test", "provider": {"undo-test": {
+            json!({"model": "open-loops-test/test", "provider": {"open-loops-test": {
                 "options": {"baseURL": endpoint}, "models": {"test": {}}
             }}})
             .to_string(),
         )
         .unwrap();
-        let (sent, events) = mpsc::channel();
-        let bridge = Bridge::new(Box::new(move |event| {
-            #[expect(
-                clippy::let_underscore_must_use,
-                reason = "an event sent after the test stopped reading has nobody to tell"
-            )]
-            let _ = sent.send(event);
-        }))
-        .with_settings(Some(settings));
-        let mut window = Self {
-            bridge,
-            events,
-            seen: Vec::new(),
-        };
+        let mut window = Self::with_settings(settings);
         let made = window.call("session.new", json!({"directory": project}));
         let session = made["session"].as_str().unwrap().to_string();
         window.call("trust.reply", json!({"session": session, "trusted": true}));
         (window, session)
     }
 
-    fn dispatch(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
-        let mut request = json!({"id": 1, "method": method});
-        request["params"] = params;
-        self.bridge
-            .dispatch(&Request::parse(&request.to_string()).unwrap())
+    /// A bridge reading `settings`, with no session open.
+    fn with_settings(settings: PathBuf) -> Self {
+        let (sent, events) = mpsc::channel();
+        let bridge = Bridge::new(Box::new(move |event| {
+            let _ = sent.send(event);
+        }))
+        .with_settings(Some(settings));
+        Self { bridge, events }
     }
 
+    /// The settings file `on` writes for `project`. Beside the project and not in it, so the file
+    /// grants on every host (PERM-14).
+    fn settings_of(project: &Path) -> PathBuf {
+        project.with_file_name(format!(
+            "{}-test-settings.json",
+            project
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("project")
+        ))
+    }
+
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "each caller builds the parameters for this one call"
+    )]
     #[expect(clippy::panic, reason = "a test fails by panicking")]
     fn call(&mut self, method: &str, params: Value) -> Value {
-        self.dispatch(method, params)
+        let line = json!({"id": 1, "method": method, "params": params}).to_string();
+        self.bridge
+            .dispatch(&Request::parse(&line).unwrap())
             .unwrap_or_else(|failure| panic!("{method}: {failure:?}"))
     }
 
-    /// Send `prompt`, approve every write, and return the turn's final event.
+    /// Send `prompt`, approve every question, and return the turn's final event.
     fn turn(&mut self, session: &str, prompt: &str) -> Event {
-        self.turn_cancelled_at(session, prompt, None)
-    }
-
-    /// As `turn`, and where `cancel_at` names the planner's requests and a count, cancel the turn
-    /// once that many have reached the endpoint.
-    fn turn_cancelled_at(
-        &mut self,
-        session: &str,
-        prompt: &str,
-        mut cancel_at: Option<(&mpsc::Receiver<String>, usize)>,
-    ) -> Event {
-        let params = message_ids::with_fresh(
-            json!({"session": session, "prompt": prompt, "model": "undo-test/test"}),
+        self.call(
+            "turn.send",
+            message_ids::with_fresh(json!({"session": session, "prompt": prompt})),
         );
-        self.once_finished(|window| window.dispatch("turn.send", params.clone()))
-            .unwrap();
-        self.seen.clear();
         let until = std::time::Instant::now() + endpoint::LIMIT;
         loop {
             assert!(std::time::Instant::now() < until, "the turn never ended");
-            if let Some((requests, left)) = cancel_at.as_mut()
-                && requests.try_recv().is_ok()
-            {
-                *left -= 1;
-                if *left == 0 {
-                    self.call("turn.cancel", json!({"session": session}));
-                    cancel_at = None;
-                }
-            }
             let Ok(event) = self
                 .events
                 .recv_timeout(std::time::Duration::from_millis(10))
             else {
                 continue;
             };
-            self.seen.push(format!("{} {}", event.name, event.data));
             match event.name {
-                "confirm.request" | "run.request" => {
-                    let reply = event.name.replace("request", "reply");
+                "confirm.request" => {
                     self.call(
-                        &reply,
+                        "confirm.reply",
                         json!({"session": session, "request": event.data["request"], "decision": "approve"}),
                     );
                 }
@@ -133,23 +117,71 @@ impl Window {
             }
         }
     }
+}
 
-    /// Retried while the worker that sent the last turn's final event lets the session go.
-    fn once_finished(
-        &mut self,
-        mut request: impl FnMut(&mut Self) -> Result<Value, Failure>,
-    ) -> Result<Value, Failure> {
-        let until = std::time::Instant::now() + endpoint::LIMIT;
-        loop {
-            match request(self) {
-                Err(failure) if failure.code == ErrorCode::TurnInFlight => {
-                    assert!(std::time::Instant::now() < until, "the turn never finished");
-                    std::thread::sleep(std::time::Duration::from_millis(10));
+/// Answers each request with the next reply of the first rule whose marker is in its body.
+fn serve(rules: Vec<(&'static str, Vec<String>)>) -> String {
+    serve_recording(rules).0
+}
+
+/// As `serve`, and also keeps the body of every request the planner made, in the order they came.
+fn serve_recording(rules: Vec<(&'static str, Vec<String>)>) -> (String, Arc<Mutex<Vec<String>>>) {
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let kept = Arc::clone(&bodies);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let waiting = Arc::new(Mutex::new(
+        rules
+            .into_iter()
+            .map(|(marker, replies)| (marker, VecDeque::from(replies)))
+            .collect::<Vec<_>>(),
+    ));
+    std::thread::spawn(move || {
+        while let Ok((stream, _)) = listener.accept() {
+            let waiting = Arc::clone(&waiting);
+            let kept = Arc::clone(&kept);
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stream);
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
                 }
-                result => return result,
-            }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let body = String::from_utf8_lossy(&body).to_string();
+                let reply = if body.contains("You are a prompt-injection classifier.") {
+                    Some(endpoint::answer())
+                } else {
+                    kept.lock().unwrap().push(body.clone());
+                    waiting
+                        .lock()
+                        .unwrap()
+                        .iter_mut()
+                        .filter(|(marker, _)| body.contains(marker))
+                        .find_map(|(_, replies)| replies.pop_front())
+                };
+                let mut stream = reader.into_inner();
+                let response = match reply {
+                    Some(reply) => format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                        reply.len()
+                    ),
+                    None => "HTTP/1.1 418 Teapot\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        .into(),
+                };
+                let _ = stream.write_all(response.as_bytes());
+            });
         }
-    }
+    });
+    (address, bodies)
 }
 
 fn project(name: &str) -> PathBuf {
@@ -158,186 +190,259 @@ fn project(name: &str) -> PathBuf {
     std::fs::canonicalize(project).unwrap()
 }
 
-/// OPEN-6: a desktop turn that writes a file leaves a record saying it wrote, and which file, so a
-/// resume can work out that the change was never built. The regression it rejects is a desktop
-/// save that never gives the handle the session's work, which left every record it wrote saying
-/// nothing was done.
+/// Whether the bridge can run a command here. It runs every command confined and refuses one the
+/// sandbox cannot confine, so a test that needs a command to have run and failed is left out
+/// elsewhere.
+fn commands_run_here() -> bool {
+    bravebot_sandbox::base::Prelude::current().is_some()
+        && bravebot_sandbox::confinement_works_here()
+}
+
+/// OPEN-6: a desktop turn that writes a file and then runs a command that fails saves what it did
+/// and the file it wrote in the session's record, as a terminal turn does.
 #[test]
-fn a_desktop_turn_that_writes_a_file_saves_the_work_and_the_file() {
-    if !test_profile::in_isolated_profile() {
+fn a_desktop_turn_saves_its_work_and_the_files_it_wrote() {
+    if !test_profile::in_isolated_profile() || !commands_run_here() {
         return;
     }
-    let project = project("open-loops-saved-work");
-    let (config, _requests, server) = endpoint::endpoint(
+    let project = project("open-loops-desktop-saves-work");
+    let endpoint = serve(vec![(
+        "WRITE-THEN-FAIL",
         vec![
-            endpoint::tool("write_file", json!({"path": "notes.md", "contents": "one"})),
+            endpoint::tool(
+                "write_file",
+                json!({"path": "out.txt", "contents": "written by the turn\n"}),
+            ),
+            endpoint::tool("run", json!({"command": "ls no-such-file"})),
             endpoint::answer(),
         ],
-        None,
-    );
-    let (mut window, session) = Window::on(&project, &config.endpoint);
+    )]);
+    let (mut window, session) = Window::on(&project, &endpoint);
 
-    let done = window.turn(&session, "write the notes");
-    server.join().unwrap();
+    let done = window.turn(&session, "WRITE-THEN-FAIL");
 
     assert_eq!(done.name, "turn.done", "{:?}", done.data);
-    let listed = sessions::list(&project);
-    assert_eq!(listed.len(), 1, "the session should be listed");
-    let record = sessions::load(&project, &listed[0].id).unwrap();
-    assert!(record.work.writes >= 1, "{:?}", record.work);
-    assert!(!record.work.ran_after_last_write, "{:?}", record.work);
+    assert_eq!(
+        std::fs::read_to_string(project.join("out.txt")).unwrap(),
+        "written by the turn\n"
+    );
+    let id = done.data["id"].as_str().expect("the record's id");
+    let record = bravebot_ui_bridge::store::load(&project, id).expect("the session's record");
+    assert!(
+        record.work.writes > 0,
+        "no write was kept: {:?}",
+        record.work
+    );
+    assert!(
+        record.work.last_command_failed,
+        "the failed command was not kept: {:?}",
+        record.work
+    );
     let written: Vec<PathBuf> = record
         .written
         .iter()
-        .filter_map(sessions::StoredPath::to_path)
+        .filter_map(bravebot_session::sessions::StoredPath::to_path)
         .collect();
-    assert_eq!(written, vec![project.join("notes.md")]);
+    assert_eq!(written, [project.join("out.txt")]);
 }
 
-/// The line every final event of a turn carries, `null` where the open loops did not change.
-fn open_line(event: &Event) -> &Value {
-    &event.data["openLoops"]
-}
-
-/// OPEN-3: a desktop turn ends with one line naming the open loops when they changed, nothing when
-/// they are the same as the last turn left them, and `open: nothing` once a command has built the
-/// change. The line replaces TURN-4's narration. The regressions it rejects are a turn end that
-/// says nothing of an unbuilt write, one that repeats an unchanged set, one that keeps TURN-4's
-/// "no command was run" beside the line, and one that never says the loops closed.
+/// OPEN-6: a session the desktop wrote, reopened, replies with the line naming what its last turn
+/// left open: the file written after the failed command is an unbuilt change, and the failed
+/// command is still the last one. The line names no path. The project is not a
+/// repository, so nothing is uncommitted.
 #[test]
-fn a_desktop_turn_ends_with_the_open_loops_when_they_changed() {
-    if !test_profile::in_isolated_profile() {
+fn a_reopened_session_replies_with_what_it_left_open() {
+    if !test_profile::in_isolated_profile() || !commands_run_here() {
         return;
     }
-    // A command runs only where the sandbox can confine it, so the build is left out elsewhere.
-    let builds = bravebot_sandbox::base::Prelude::current().is_some()
-        && bravebot_sandbox::confinement_works_here();
-    let project = project("open-loops-turn-end");
-    let mut replies = vec![
-        endpoint::tool("write_file", json!({"path": "notes.md", "contents": "one"})),
-        endpoint::answer(),
-        endpoint::answer(),
-    ];
-    if builds {
-        replies.push(endpoint::tool("run", json!({"command": "/usr/bin/true"})));
-        replies.push(endpoint::answer());
-    }
-    let (config, _requests, server) = endpoint::endpoint(replies, None);
-    let (mut window, session) = Window::on(&project, &config.endpoint);
-
-    let wrote = window.turn(&session, "write the notes");
-    assert_eq!(wrote.name, "turn.done", "{:?}", wrote.data);
-    assert_eq!(
-        open_line(&wrote),
-        "open: changes not built (planner)",
-        "{:?}",
-        wrote.data
-    );
-    let narrated: Vec<&String> = window
-        .seen
-        .iter()
-        .filter(|said| said.contains("no command was run"))
-        .collect();
-    assert!(
-        narrated.is_empty(),
-        "TURN-4's narration is still said: {narrated:?}"
-    );
-
-    let idle = window.turn(&session, "nothing to do");
-    assert_eq!(idle.name, "turn.done", "{:?}", idle.data);
-    assert_eq!(open_line(&idle), &Value::Null, "{:?}", idle.data);
-    if !builds {
-        server.join().unwrap();
-        return;
-    }
-
-    let built = window.turn(&session, "build it");
-    server.join().unwrap();
-    assert_eq!(built.name, "turn.done", "{:?}", built.data);
-    assert_eq!(open_line(&built), "open: nothing", "{:?}", built.data);
-}
-
-/// OPEN-1 with SESSION-19: undoing a desktop turn that wrote a file takes its write out of the
-/// session's work and written files, saves the record that way, and takes the set it leaves as
-/// shown, so the next turn that writes says the unbuilt change again. The regressions it rejects
-/// are an undo that keeps the undone turn's write in the record, and one that leaves the undone
-/// set as the one shown, so the next write is not said.
-#[test]
-fn undoing_a_turn_that_wrote_takes_its_write_out_of_the_open_loops() {
-    if !test_profile::in_isolated_profile() {
-        return;
-    }
-    let project = project("open-loops-rewound");
-    let (config, _requests, server) = endpoint::endpoint(
+    let project = project("open-loops-desktop-reopened");
+    let endpoint = serve(vec![(
+        "FAIL-THEN-WRITE",
         vec![
-            endpoint::answer(),
-            endpoint::tool("write_file", json!({"path": "notes.md", "contents": "one"})),
-            endpoint::answer(),
-            endpoint::tool("write_file", json!({"path": "other.md", "contents": "two"})),
+            endpoint::tool("run", json!({"command": "ls no-such-file"})),
+            endpoint::tool(
+                "write_file",
+                json!({"path": "out.txt", "contents": "written by the turn\n"}),
+            ),
             endpoint::answer(),
         ],
-        None,
-    );
-    let (mut window, session) = Window::on(&project, &config.endpoint);
+    )]);
+    let (mut window, session) = Window::on(&project, &endpoint);
+    let done = window.turn(&session, "FAIL-THEN-WRITE");
+    assert_eq!(done.name, "turn.done", "{:?}", done.data);
+    let id = done.data["id"]
+        .as_str()
+        .expect("the record's id")
+        .to_string();
 
-    let first = window.turn(&session, "nothing to do");
-    assert_eq!(first.name, "turn.done", "{:?}", first.data);
-    let wrote = window.turn(&session, "write the notes");
+    // The first window closes and waits for what it was still doing, so the record it held is free.
+    assert!(
+        window.bridge.shut_down(std::time::Duration::from_secs(10)),
+        "the first window's work did not end"
+    );
+    drop(window);
+    let mut reopened = Window::with_settings(Window::settings_of(&project));
+    let opened = reopened.call("session.open", json!({"directory": project, "id": id}));
+
+    let line = opened["openLoops"].as_str().expect("an open-loops line");
     assert_eq!(
-        open_line(&wrote),
-        "open: changes not built (planner)",
-        "{:?}",
-        wrote.data
+        Some(line.to_string()),
+        bravebot_agent::open_loops::Loops {
+            unbuilt_changes: true,
+            failed_command: true,
+            ..Default::default()
+        }
+        .left_open()
     );
+    assert!(!line.contains("out.txt"), "{line}");
+    assert!(!line.contains(&*project.to_string_lossy()), "{line}");
+}
 
-    window
-        .once_finished(|window| {
-            window.dispatch("session.rewind", json!({"session": session, "steps": 1}))
-        })
-        .unwrap();
-    let listed = sessions::list(&project);
-    assert_eq!(listed.len(), 1, "the session should be listed");
-    let record = sessions::load(&project, &listed[0].id).unwrap();
+/// Close `window`, waiting for what it was still doing so the record it held is free, and open
+/// record `id` of `project` in a new one. The new window and what `session.open` answered.
+fn reopen(mut window: Window, project: &Path, id: &str) -> (Window, Value) {
+    assert!(
+        window.bridge.shut_down(std::time::Duration::from_secs(10)),
+        "the first window's work did not end"
+    );
+    drop(window);
+    let mut reopened = Window::with_settings(Window::settings_of(project));
+    let opened = reopened.call("session.open", json!({"directory": project, "id": id}));
+    (reopened, opened)
+}
+
+/// OPEN-6: a session whose turn wrote nothing and ran nothing replies with no open-loops line, so
+/// the window shows no notice.
+#[test]
+fn a_reopened_session_that_left_nothing_open_replies_with_no_line() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("open-loops-desktop-nothing-open");
+    let endpoint = serve(vec![("JUST-ANSWER", vec![endpoint::answer()])]);
+    let (mut window, session) = Window::on(&project, &endpoint);
+    let done = window.turn(&session, "JUST-ANSWER");
+    assert_eq!(done.name, "turn.done", "{:?}", done.data);
+    let id = done.data["id"]
+        .as_str()
+        .expect("the record's id")
+        .to_string();
+
+    let (_reopened, opened) = reopen(window, &project, &id);
+
+    assert_eq!(opened["openLoops"], Value::Null, "{opened}");
+}
+
+/// OPEN-6, SESSION-19: rewinding a turn that ran a failed command and wrote a file takes what it
+/// did out of the record, so the session reopened afterwards reports nothing that turn left open.
+#[test]
+fn a_rewound_turn_leaves_nothing_open_on_reopen() {
+    if !test_profile::in_isolated_profile() || !commands_run_here() {
+        return;
+    }
+    let project = project("open-loops-desktop-rewound");
+    let endpoint = serve(vec![
+        ("JUST-ANSWER", vec![endpoint::answer()]),
+        (
+            "FAIL-THEN-WRITE",
+            vec![
+                endpoint::tool("run", json!({"command": "ls no-such-file"})),
+                endpoint::tool(
+                    "write_file",
+                    json!({"path": "out.txt", "contents": "written by the turn\n"}),
+                ),
+                endpoint::answer(),
+            ],
+        ),
+    ]);
+    let (mut window, session) = Window::on(&project, &endpoint);
+    let first = window.turn(&session, "JUST-ANSWER");
+    assert_eq!(first.name, "turn.done", "{:?}", first.data);
+    let done = window.turn(&session, "FAIL-THEN-WRITE");
+    assert_eq!(done.name, "turn.done", "{:?}", done.data);
+    let id = done.data["id"]
+        .as_str()
+        .expect("the record's id")
+        .to_string();
+    let record = bravebot_ui_bridge::store::load(&project, &id).expect("the session's record");
+    assert!(record.work.last_command_failed, "{:?}", record.work);
+
+    window.call("session.rewind", json!({"session": session, "steps": 1}));
+
+    let record = bravebot_ui_bridge::store::load(&project, &id).expect("the session's record");
     assert_eq!(record.work, bravebot_agent::Work::default());
     assert!(record.written.is_empty(), "{:?}", record.written);
-
-    let again = window.turn(&session, "write the other notes");
-    server.join().unwrap();
-    assert_eq!(again.name, "turn.done", "{:?}", again.data);
-    assert_eq!(
-        open_line(&again),
-        "open: changes not built (planner)",
-        "{:?}",
-        again.data
-    );
+    let (_reopened, opened) = reopen(window, &project, &id);
+    assert_eq!(opened["openLoops"], Value::Null, "{opened}");
 }
 
-/// OPEN-3 with GROUND-4: a turn cancelled after it wrote still counts the write, and the line goes
-/// on `turn.error`. The regression it rejects is a line said only on `turn.done`.
+/// OPEN-4, OPEN-6: the first turn after a reopen tells the planner what the session left open, and
+/// the turn after it does not tell it again. The first turn is answered only by a rule that needs
+/// the message, so it ends only if the message was sent. The second turn's request carries the
+/// message once, as the history of the first turn, and is not given it a second time.
 #[test]
-fn a_cancelled_turn_carries_the_open_loops_on_its_error() {
-    if !test_profile::in_isolated_profile() {
+fn the_first_turn_after_a_reopen_tells_the_planner_what_was_left_open() {
+    const TOLD: &str = "Open from earlier in this session";
+    if !test_profile::in_isolated_profile() || !commands_run_here() {
         return;
     }
-    let project = project("open-loops-cancelled");
-    let (config, requests, server) = endpoint::endpoint(
-        vec![
-            endpoint::tool("write_file", json!({"path": "notes.md", "contents": "one"})),
-            "hold".into(),
-        ],
-        None,
+    let project = project("open-loops-desktop-told");
+    let (endpoint, bodies) = serve_recording(vec![
+        (
+            "FAIL-THEN-WRITE",
+            vec![
+                endpoint::tool("run", json!({"command": "ls no-such-file"})),
+                endpoint::tool(
+                    "write_file",
+                    json!({"path": "out.txt", "contents": "written by the turn\n"}),
+                ),
+                endpoint::answer(),
+            ],
+        ),
+        (TOLD, vec![endpoint::answer()]),
+        ("TURN-AFTER-THAT", vec![endpoint::answer()]),
+    ]);
+    let (mut window, session) = Window::on(&project, &endpoint);
+    let done = window.turn(&session, "FAIL-THEN-WRITE");
+    assert_eq!(done.name, "turn.done", "{:?}", done.data);
+    assert!(
+        bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|body| !body.contains(TOLD)),
+        "a fresh session's turn was told of open loops"
     );
-    let (mut window, session) = Window::on(&project, &config.endpoint);
+    let id = done.data["id"]
+        .as_str()
+        .expect("the record's id")
+        .to_string();
+    assert!(
+        window.bridge.shut_down(std::time::Duration::from_secs(10)),
+        "the first window's work did not end"
+    );
+    drop(window);
+    let mut reopened = Window::with_settings(Window::settings_of(&project));
+    let opened = reopened.call("session.open", json!({"directory": project, "id": id}));
+    assert!(opened["openLoops"].is_string(), "{opened}");
+    let session = opened["session"].as_str().unwrap().to_string();
 
-    let stopped = window.turn_cancelled_at(&session, "write the notes", Some((&requests, 2)));
-    server.join().unwrap();
+    let before = bodies.lock().unwrap().len();
+    let first = reopened.turn(&session, "FIRST-AFTER-REOPEN");
+    assert_eq!(first.name, "turn.done", "{:?}", first.data);
+    let told: Vec<String> = bodies.lock().unwrap()[before..].to_vec();
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(told[0].matches(TOLD).count(), 1, "{}", told[0]);
 
-    assert_eq!(stopped.name, "turn.error", "{:?}", stopped.data);
-    assert_eq!(stopped.data["kind"], "cancelled", "{:?}", stopped.data);
+    let before = bodies.lock().unwrap().len();
+    let second = reopened.turn(&session, "TURN-AFTER-THAT");
+    assert_eq!(second.name, "turn.done", "{:?}", second.data);
+    let later: Vec<String> = bodies.lock().unwrap()[before..].to_vec();
+    assert_eq!(later.len(), 1, "{later:?}");
     assert_eq!(
-        open_line(&stopped),
-        "open: changes not built (planner)",
-        "{:?}",
-        stopped.data
+        later[0].matches(TOLD).count(),
+        1,
+        "the second turn was told again: {}",
+        later[0]
     );
 }

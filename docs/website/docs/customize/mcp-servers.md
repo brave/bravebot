@@ -90,6 +90,8 @@ argument, and a flag of bravebot's own among them, such as `--settings`, is the 
 | `--exclude-tools <list>` | never offer these tools, written the same way |
 | `--ask-every-call` | put every call to this server to you, whatever a rule, an earlier answer or `--dangerously-skip-permissions` says, and keep no answer to one; see [Servers that ask every call](#servers-that-ask-every-call) |
 | `--choice <tool>:<argument>` | with `--ask-every-call` and a program: name an argument of one of the server's tools that a choice may fill; repeatable, one pair to each flag; see [Arguments that take a choice](#arguments-that-take-a-choice) |
+| `--apply <tool>:<argument>=<kind>` | with a program: name an argument of one of the server's tools that a row of a [plan-first run's](../using/manifest-mode.md#making-many-calls-from-a-list) `apply` step may fill; the kind is `entry`, `entries`, `new` or `row`, joined with commas where an argument may take more than one; repeatable, one triple to each flag |
+| `--plan-covers <tool>` | with a program: mark a tool that has an `--apply` argument as one your approval of a plan may cover, so the plan's `apply` step makes its calls without putting the list to you; repeatable |
 | `-s <scope>` | which settings file [asks for the server](#asking-for-one-from-a-checkout) once you approve it: `local`, the default, `project` or `user`; it may come before the alias |
 
 ### Choosing which tools are offered
@@ -213,7 +215,11 @@ declared weather in /Users/you/.bravebot/mcp.json
   Use this MCP server? [y/N]
 ```
 
-A declaration with tool lists also shows `tools: a, b` and `exclude tools: c`.
+A declaration with tool lists also shows `tools: a, b` and `exclude tools: c`. One with `--apply`
+arguments shows them as `arguments a plan's apply step may fill:` followed by each
+`tool:argument=kind`, and `mcp get` and `mcp list` show the same line. The arguments and the
+`--plan-covers` marks are part of what your approval binds to, and only a local program that does not
+use `--ask-every-call` may hold either.
 
 `y` approves it and [asks for it](#asking-for-one-from-a-checkout) in the file `-s` names, so a
 session in this directory starts it. Anything else, a blank line included, leaves it declared, not
@@ -942,8 +948,12 @@ declared in /Users/you/.bravebot/mcp.json
 ```
 
 Your approval is left where it is, so a server comes back as you answered for it once the file stops
-refusing it. Only a list counts, and an entry in neither form is skipped: a deny list of nothing
-else denies nothing, and an allow list of nothing else starts nothing. A url whose host is spelled
+refusing it. Only a list counts. An entry in neither form matches no server: a deny list of nothing
+else denies nothing, and an allow list of nothing else starts nothing. Such an entry is not skipped in
+silence: `bravebot doctor` and the session as it opens name the file, the list and the entry as the file
+spelled it. A port, a scheme, a path or a name with a character outside ASCII letters, digits, `-` and
+`_` is not part of a host entry, so an entry written with one is such an entry. An IPv6 address written
+without brackets, such as `fd00::1`, is read as the bracketed host. A url whose host is spelled
 in a way bravebot and the connection could read apart, with a backslash or a percent escape for
 one, matches no `allow` entry, and is refused wherever `deny` names a host. The file cannot declare
 a server, approve one or answer any of the three questions for you, so a declaration or an

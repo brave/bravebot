@@ -188,8 +188,8 @@ deny-rule cell that is not covered, is a defect. A change that fixes a spelling 
 a spelling with no row gets one in the same commit as its test.
 
 The rows a volume can make without a person opening another directory are `ALIASES` in
-`crates/agent/test-support/aliases.rs`. Seven tests ask the six consumers about every row (the
-deny rule is asked in `turn.rs` and in `file_preview.rs`, the others once, in `workspace.rs`), skip
+`crates/agent/test-support/aliases.rs`. Eight tests ask the seven consumers about every row (the
+deny rule is asked in `turn.rs` and in `file_preview.rs`, the redirection in `turn.rs`, the others once, in `workspace.rs`), skip
 a row the volume holds apart, and fail on a row listed as unhandled once it is handled. The fifth
 consumer is the lookup of a program bravebot starts itself ([SANDBOX-30](sandboxing.md#SANDBOX-30)), which is asked
 of the rows that spell a directory another way and leaves out an entry under every spelling of a
@@ -206,18 +206,22 @@ and resolves a file with `canonicalize` before it compares it with the directori
 which is what resolves those spellings on Windows, and no test has run that on a Windows host. A value
 that is not text is judged as the bytes it is, which a test of each start pins.
 
+A `run` redirection is asked every row by a seventh consumer, `RedirectionTrust`: after a line wrote
+through `>` or `>>` under one name of a row, from output nobody vouched for, the file reads back as
+untrusted under the other name too.
+
 | Alias | Example | Map and writer reservation | Deny rules | Pinned by, or tracked in |
 |---|---|---|---|---|
 | `.` segment | `src/./a.md` for `src/a.md` | one rule | covered | `bravebot_agent::workspace::a_second_spelling_of_a_distrusted_file_is_read_as_untrusted` |
 | Doubled or trailing separator | `src//a.md`, a rule about `src/` | one rule | covered | `bravebot_core::trust::equivalent_path_spellings_are_the_same_rule` |
-| `..`, `~` and absolute spellings | `src/../a.md`, `~/n/a.md`, `/work/src/a.md` | refused unless a directory a person opened holds the file, then one rule under that directory's name (TRUST-10, TRUST-18) | covered | `bravebot_agent::workspace::a_leading_tilde_and_the_home_it_stands_for_give_the_same_trust_key` |
+| `..`, `~` and absolute spellings | `src/../a.md`, `~/n/a.md`, `/work/src/a.md` | refused unless a directory a person opened holds the file, then one rule under that directory's name (TRUST-10, TRUST-18); a `run` redirection is not refused, and is recorded under the key of the spelling and under each name `Workspace::names_reached` gives: the spelling with each `..` taken out, where no link is on the way, and the place the path lands | covered | `bravebot_agent::workspace::a_leading_tilde_and_the_home_it_stands_for_give_the_same_trust_key`, `bravebot_agent::tools::tests::arguments::a_redirection_spelled_with_dotdot_leaves_the_plain_name_untrusted`, `bravebot_agent::tools::tests::arguments::an_absolute_redirection_spelled_with_dotdot_leaves_the_plain_name_untrusted`, `bravebot_agent::tools::tests::arguments::a_redirection_through_a_link_and_a_dotdot_leaves_the_file_it_lands_on_untrusted` |
 | Drive letter, `\` and `\\?\` prefix | `C:\work\a.md` | one key where the host separates with `\` (TRUST-18) | covered | `bravebot_core::spelling::a_name_rooted_at_a_drive_letter_is_keyed_from_slash_where_a_backslash_separates` |
 | Letter case | `SRC/a.md` | one rule where the volume folds case | covered, in either case the file is stored in | `bravebot_agent::workspace::a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted` |
 | Long s | `ſrc/a.md` | one rule where the volume folds case | covered | `bravebot_core::trust::a_folding_volume_reads_a_long_s_as_the_letter_it_opens_as` |
 | Letter whose case is two letters | `claß.md` and `class.md` | a distrust, an undecided boundary and the writer reservation join the two; a trust reaches only the spelling it was written about | covered | `bravebot_core::trust::a_trust_does_not_reach_a_spelling_only_full_case_folding_joins`, `bravebot_core::trust::a_refusal_about_a_spelling_only_full_case_folding_joins_decides_the_other` |
 | NFC and NFD | `café.md` in either form | a distrust, an undecided boundary and the writer reservation join the forms; a trust reaches only the spelling it was written about | covered, whichever form the rule and the file are in | `bravebot_agent::workspace::a_canonically_equivalent_spelling_of_a_distrusted_file_is_read_as_untrusted`, `bravebot_core::permissions::a_deny_or_ask_rule_covers_every_canonical_spelling_of_a_name` |
-| Symbolic link | a link to the file, or on the way to it | the other names are found by following the link, so a read is untrusted where the map distrusts any of them, a write distrusts all of them, and a writer under one name refuses a writer under the other (TRUST-4) | covered | `bravebot_agent::workspace::each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_listed_gap`, `each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_is_a_listed_gap`, `each_alias_in_the_table_is_refused_as_a_second_writer_unless_it_is_a_listed_gap`, `bravebot_agent::workspace::a_trusted_write_does_not_read_back_as_trusted_through_a_name_in_a_distrusted_directory` |
-| Hard link | a second entry for the file | on Unix, as for a symbolic link, the other names found by device and inode; on Windows the file index is not read, so a hard link stays a Known cost there | covered on Unix, by device and inode | the three `each_alias_in_the_table_` tests above, `bravebot_agent::workspace::the_other_names_of_a_file_are_its_hard_links_landing_and_second_path` |
+| Symbolic link | a link to the file, or on the way to it | the other names are found by following the link, so a read is untrusted where the map distrusts any of them, a write, a `run` redirection included, distrusts all of them, and a writer under one name refuses a writer under the other (TRUST-4) | covered | `bravebot_agent::workspace::each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_listed_gap`, `each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_is_a_listed_gap`, `each_alias_in_the_table_is_refused_as_a_second_writer_unless_it_is_a_listed_gap`, `bravebot_agent::workspace::a_trusted_write_does_not_read_back_as_trusted_through_a_name_in_a_distrusted_directory`, `bravebot_agent::turn::a_redirection_distrusts_every_name_of_the_file_it_wrote`, `bravebot_agent::turn::a_line_naming_one_file_under_two_of_its_names_is_refused_as_a_second_writer`, `bravebot_agent::turn::each_alias_in_the_table_reads_back_a_redirection_through_it_as_untrusted_unless_it_is_a_listed_gap` |
+| Hard link | a second entry for the file | on Unix, as for a symbolic link, the other names found by device and inode; on Windows the file index is not read, so a hard link stays a Known cost there | covered on Unix, by device and inode | the `each_alias_in_the_table_` tests above, the two redirection tests of the previous row, `bravebot_agent::workspace::the_other_names_of_a_file_are_its_hard_links_landing_and_second_path` |
 | Another path to the same tree | a macOS firmlink, a Linux bind mount, once both are open | on Unix, as for a symbolic link, with the name under each open directory that is the same directory found by device and inode; `/add-dir` and every other door refuse to open a second path to a tree that is already open ([TRUST-9](#TRUST-9)), so the pair is reached only by a tree opened before the other, which the lookup covers; on Windows a Known cost | covered on Unix, by device and inode of the directory | `bravebot_agent::workspace::a_name_is_respelled_under_each_open_directory_that_is_the_same_directory`, `bravebot_agent::workspace::a_firmlink_name_of_the_working_directory_is_another_key_for_the_file`, `a_file_written_through_a_second_path_to_the_tree_reads_back_untrusted_through_the_other` and `a_second_writer_through_a_second_path_to_the_tree_is_refused` (any Unix host, identity injected), `a_file_written_through_the_firmlink_spelling_reads_back_untrusted_through_the_other` and `a_second_writer_through_the_other_firmlink_spelling_is_refused` (macOS), the "another path to the same tree" row of the alias table (macOS), `bravebot_sandbox::programs::a_path_entry_the_volume_opens_as_a_directory_a_stage_may_write_is_not_searched` for the program lookup |
 | 8.3 short name | `ENV~1` for `.env` | refused on Windows, never reaches the map | refused | `bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only` |
 | Alternate data stream | `.env::$DATA` | refused on Windows | refused | same |
@@ -567,6 +571,19 @@ unfinished lookup makes the whole answer untrusted. The same holds for the locat
 names and the file it was asked at ([LSP-3](tools/lsp.md)). A name that is not UTF-8 ends the lookup the same way and is reasoned
 only on this host, since the file system here does not hold such a name.
 
+A redirection in a `run` line is a write and is entered the same way: at every open of a destination
+the other names of the file are looked up, and the destination is reserved, recorded as a memory
+where it is one, and completed under every one of them. The line is refused as a second writer when
+any name is held by another effect, including a destination of the same line. A name a destination
+gains after its first open, because an earlier part of the line left a link at it, is entered when
+that open happens and is left untrusted when the line ends, since the yes to the line was about
+the destination as it stood. The names are those of the lookup above and each name
+`Workspace::names_reached` gives for the typed path, which are the names a file tool would ask
+under: the spelling with
+each `..` taken out where no link is on the way, and the place the path lands. A line that opens
+one file under two spellings (`> d/../dd.txt` and then `> dd.txt`) is refused at the second open
+as a second writer, in either order.
+
 `verified-by: bravebot_core::policy::a_lookup_of_other_names_that_did_not_finish_reads_as_untrusted`
 `verified-by: bravebot_core::policy::a_trusted_write_leaves_an_exact_distrust_on_another_name_of_the_file`
 `verified-by: bravebot_core::file_authority::an_exact_distrust_on_another_name_survives_completion_and_a_drop_distrusts_every_name`
@@ -577,6 +594,12 @@ only on this host, since the file system here does not hold such a name.
 `verified-by: bravebot_ui_bridge::manifest::ordinary_manifest_endings_keep_file_trust_in_the_bridge`
 `verified-by: bravebot_agent::turn::overlapping_delegate_writes_follow_effect_order_in_both_collection_orders`
 `verified-by: bravebot_agent::workspace::reads_before_write_publication_and_failed_replacements_remain_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::a_redirection_spelled_with_dotdot_leaves_the_plain_name_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::an_absolute_redirection_spelled_with_dotdot_leaves_the_plain_name_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::a_redirection_through_a_link_and_a_dotdot_leaves_the_file_it_lands_on_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::two_spellings_of_one_redirection_destination_in_a_line_are_refused_as_a_second_writer`
+`verified-by: bravebot_agent::tools::tests::arguments::a_redirection_spelled_with_dotdot_does_not_relabel_the_lines_own_output`
+`verified-by: bravebot_agent::tools::tests::arguments::a_vouched_append_through_a_dotdot_spelling_keeps_its_output_trusted_and_leaves_the_file_untrusted`
 `verified-by: bravebot_agent::workspace::shared_file_authority_preserves_aliases_scratch_added_paths_and_independent_writes`
 `verified-by: bravebot_core::file_authority::path_revisions_follow_whole_segment_ancestors`
 `verified-by: bravebot_core::file_authority::completion_observes_ancestor_decisions_but_not_sibling_decisions`
@@ -601,6 +624,11 @@ only on this host, since the file system here does not hold such a name.
 `verified-by: bravebot_agent::tools::tests::reading_together::a_run_redirecting_into_a_pipe_returns_and_leaves_the_boundary_free`
 `verified-by: bravebot_agent::workspace::an_untrusted_write_in_another_case_is_read_back_untrusted_under_either_spelling`
 `verified-by: bravebot_agent::turn::a_line_naming_one_file_under_two_case_spellings_is_refused_as_a_second_writer`
+`verified-by: bravebot_agent::turn::a_redirection_through_a_symbolic_link_distrusts_the_file_the_link_leads_to`
+`verified-by: bravebot_agent::turn::a_redirection_through_a_hard_link_distrusts_the_other_name_of_the_file`
+`verified-by: bravebot_agent::turn::a_line_naming_a_file_and_a_symbolic_link_to_it_is_refused_as_a_second_writer`
+`verified-by: bravebot_agent::turn::a_redirection_through_a_link_to_a_memory_records_the_memory`
+`verified-by: bravebot_agent::turn::a_redirection_reopened_through_a_link_an_earlier_part_made_distrusts_the_file_it_reaches`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_is_refused_as_a_second_writer_unless_it_is_a_listed_gap`
 `verified-by: bravebot_core::file_authority::an_untrusted_write_through_an_equivalent_spelling_is_read_untrusted_under_both`
@@ -613,6 +641,12 @@ only on this host, since the file system here does not hold such a name.
 `verified-by: bravebot_agent::tools::tests::confinement::a_hard_link_is_refused_when_the_walk_for_its_other_names_gives_up_under_a_write_rule`
 `verified-by: bravebot_agent::workspace::an_untrusted_write_through_a_canonically_equivalent_spelling_is_read_back_untrusted_under_either`
 `verified-by: bravebot_agent::turn::a_line_naming_one_file_under_two_equivalent_spellings_is_refused_as_a_second_writer`
+`verified-by: bravebot_agent::turn::a_redirection_distrusts_every_name_of_the_file_it_wrote`
+`verified-by: bravebot_agent::turn::a_line_naming_one_file_under_two_of_its_names_is_refused_as_a_second_writer`
+`verified-by: bravebot_agent::turn::a_redirection_enters_a_name_an_earlier_part_of_the_line_gave_the_file`
+`verified-by: bravebot_agent::turn::a_redirection_whose_other_names_were_not_all_found_leaves_the_file_untrusted`
+`verified-by: bravebot_agent::turn::a_trusted_redirection_does_not_lift_a_name_of_the_file_out_of_a_distrusted_directory`
+`verified-by: bravebot_agent::turn::each_alias_in_the_table_reads_back_a_redirection_through_it_as_untrusted_unless_it_is_a_listed_gap`
 `verified-by: bravebot_core::policy::a_vouch_for_the_version_shown_is_spent_on_it`
 `verified-by: bravebot_core::policy::a_vouch_is_not_spent_on_a_version_nobody_was_shown`
 `verified-by: bravebot_core::policy::a_vouch_is_not_spent_after_a_program_started_while_the_question_was_open`
@@ -1579,8 +1613,8 @@ said about the workspace is what this session already decided about the files a 
 taking it here asks what the workspace asks and no more.
 
 The rules recorded inside the directory still weaken the answer, because a line whose output is
-untrusted distrusts the file it redirected into, under the name the line spelled
-([tools/command-line.md](tools/command-line.md)). Without that a turn could read its own untrusted
+untrusted distrusts the file it redirected into, under every name the file has
+([tools/command-line.md](tools/command-line.md#CMDLINE-5)). Without that a turn could read its own untrusted
 output back as trusted through the directory around it, which is the case worth having right in a
 place intermediate files are written.
 
@@ -1748,7 +1782,13 @@ spelling under a recorded name, and nothing covers either.
 
 A `..` component keeps the name it was given. Confinement refuses such a path rather than resolving
 it (TRUST-10), so it is refused before anything reads it, and reducing it here would be guessing at
-which file it named.
+which file it named. A redirection in a `run` line is the one path that reaches the key without
+that refusal, because the line is confined by where the destination lands, so `> d/../dd.txt`
+writes `dd.txt` and is keyed as typed, a name no file tool reads. The line therefore records the
+destination under the typed key and under each name `Workspace::names_reached` gives: the spelling
+with each `..` taken out where no link is on the way (`dd.txt`), and the place the path lands. All
+of them are entered in one reservation
+([TRUST-4](#TRUST-4), [CMDLINE-5](tools/command-line.md#CMDLINE-5)).
 
 Where the path lands decides which directory's name it takes and the spelling decides the rest, and
 each half answers a different question. A name spelled inside the project that lands out of it
@@ -2302,8 +2342,12 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
 
   A redirection is the one exception: the harness opens that file itself, so what a line writes
   through `>` or `>>` is recorded
-  ([tools/command-line.md](tools/command-line.md#CMDLINE-5)), under the name the line spelled and
-  with the keying cost every other write has (below). A file the program opens on its own, which
+  ([tools/command-line.md](tools/command-line.md#CMDLINE-5)), under every name the destination has
+  ([TRUST-4](#TRUST-4)), which includes each name `Workspace::names_reached` gives (the spelling
+  with each `..` taken out where no link is on the way, and the place the path lands), and with the
+  keying cost every other write has (below). A trusted line that appends with `>>` through a `..`
+  spelling leaves the file untrusted under every name it was entered under, which costs the person a
+  vouch to trust it again. A file the program opens on its own, which
   is `cmd -o notes.txt` or anything a build writes, is not.
 
   `/export` is the other file this process opens itself. It is not recorded, because a rule recorded

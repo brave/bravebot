@@ -2897,8 +2897,13 @@ window has chosen a mode for the session with `session.sandbox`, which replaces 
 from the next turn. `off` is read there as `workspace-write`, because a window says a program is unconfined only on the card for one line asked to run with no sandbox ([SANDBOX-29](#SANDBOX-29)), and nothing it draws says that every program of a session is. A
 subagent's programs run under the mode of the session that started it, and the mode is not in the
 session record, so a resumed session takes the mode its start-up chose and not the one it was
-saved under. `/sandbox` alone says the mode in force and the flag or file that chose it, in the words `doctor`
-uses. `/sandbox strict`, `/sandbox read-only`, `/sandbox workspace-write` and `/sandbox off` set the mode for the rest of the
+saved under. `/sandbox` alone opens a list of the four modes, `off` among them, with the mode in
+force marked and the cursor on it, and the same list opens from a click on the Sandbox row of the
+info panel ([PANEL-9](info-panel.md#PANEL-9), [MOUSE-11](mouse.md#MOUSE-11)). Enter on a row is
+the same as typing `/sandbox` and its word, so the managed floor, the reply and the note to a
+running turn are those of the typed word, and Escape leaves the mode as it was. The list opens at
+rest and while a turn runs, as a picker of the session. The flag or file that chose the mode in
+force is read from `/status` and `doctor`. `/sandbox strict`, `/sandbox read-only`, `/sandbox workspace-write` and `/sandbox off` set the mode for the rest of the
 process, and only a person's typed word does ([CMD-1](commands.md#CMD-1)): no tool, skill, hook or
 `AGENTS.md` line sets it, and the planner is told the mode in force and nothing about the command.
 A mode named while a turn runs is set as it is typed, `off` included ([CMD-8](commands.md#CMD-8)), and the
@@ -3102,6 +3107,14 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_agent::sandbox_reason::each_way_a_mode_is_looser_than_the_pin_has_its_own_sentence`
 `verified-by: bravebot_tui::sandbox_command::a_word_that_is_not_a_mode_changes_nothing_and_the_bare_word_only_reports`
 `verified-by: bravebot_tui::sandbox_command::the_report_names_what_chose_the_mode`
+`verified-by: bravebot_tui::sandbox_prompt::the_list_is_every_mode_in_the_order_they_are_listed`
+`verified-by: bravebot_tui::sandbox_prompt::the_picker_opens_on_the_mode_in_force`
+`verified-by: bravebot_tui::sandbox_prompt::the_mode_in_force_is_drawn_as_current_and_no_other`
+`verified-by: bravebot_tui::sandbox_prompt::the_picker_is_drawn_as_a_titled_panel_with_its_keys`
+`verified-by: bravebot_tui::app::a_bare_sandbox_command_opens_the_picker_and_says_nothing`
+`verified-by: bravebot_tui::app::a_row_taken_in_the_sandbox_picker_sets_the_mode_and_escape_leaves_it`
+`verified-by: bravebot_tui::app::a_row_the_managed_file_refuses_is_refused_when_taken`
+`verified-by: bravebot_tui::app::a_click_on_the_panels_sandbox_row_opens_the_sandbox_picker_at_rest_and_mid_turn`
 `verified-by: bravebot_tui::app::the_sandbox_command_carries_its_word_unparsed`
 `verified-by: bravebot_tui::app::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_follows_it`
 `verified-by: bravebot_tui::app::moving_the_sandbox_to_off_mid_turn_is_carried_out_when_typed`
@@ -7047,6 +7060,25 @@ than `PATH` and `HOME` is refused before anything is created, since nothing of t
 environment goes into the sandbox. The program's standard streams are carried by `openshell sandbox
 exec`, so a long-lived MCP connection runs over them as it does over a local child's pipes.
 
+The policy `openshell` is given with `--policy`, for the create and again for the rule set, is a file
+this process writes in a directory under the state directory, `openshell-policies`,
+which a confined stage cannot write ([SANDBOX-12](#SANDBOX-12)), so a stage cannot replace the
+file before `openshell` opens it. The directory is created with mode 0700 and narrowed to it where
+it exists, and is refused where it is a link or belongs to another account. The file is created
+new with mode 0600 and a name of 32 hexadecimal digits read from the operating system's random
+source, so no name is one a stage could plant. Each file is removed when its owner is dropped. The
+file for the create is held until the preparation of the sandbox returns, which is after the sandbox
+reports `Ready` and, where hosts are allowed, after the rule set is applied, or at the step that
+refuses the start. The file for the rule set is removed when `policy set` returns. A file
+left by a process ended by a signal stays in the directory, which
+[STATE-4](state-directory.md#STATE-4) does not sweep. The system temporary directory, which a
+stage may write, is never used in its place. Where the session has no state directory to write, as
+in an incognito session, the start is refused before the sandbox is created and nothing is run.
+
+**A known cost.** A session with no writable state directory cannot start a server in an OpenShell
+sandbox. The policy is passed as a file because nothing confirms that `openshell` takes `--policy`
+from standard input or a descriptor.
+
 OpenShell inspects the TLS of what the program sends, through a certificate authority the sandbox
 trusts by `SSL_CERT_FILE` and the variables like it. That is how its rules see the host of an HTTPS
 request. It differs from the proxy of [SANDBOX-24](#SANDBOX-24), which never decrypts, and a program
@@ -7067,6 +7099,15 @@ such as `/usr/local/bin/python3` matches nothing, since OpenShell matches the bi
 `verified-by: bravebot_sandbox::openshell::a_start_whose_sandbox_or_policy_cannot_be_confirmed_is_refused_and_the_sandbox_deleted`
 `verified-by: bravebot_sandbox::openshell::a_program_name_that_is_not_utf8_reaches_sandbox_exec_as_its_bytes`
 `verified-by: bravebot_sandbox::openshell::a_real_path_that_is_not_utf8_is_refused_before_any_rule_is_set`
+`verified-by: bravebot_sandbox::openshell::a_start_with_no_directory_for_the_policy_is_refused_and_runs_nothing`
+`verified-by: bravebot_sandbox::openshell::a_policy_file_is_never_one_a_stage_planted_under_a_name_it_could_predict`
+`verified-by: bravebot_sandbox::openshell::a_stage_overwriting_the_temporary_directory_does_not_change_the_policy_openshell_reads`
+`verified-by: bravebot_sandbox::openshell::the_policy_directory_is_made_owner_only`
+`verified-by: bravebot_sandbox::openshell::an_existing_policy_directory_with_a_wider_mode_is_narrowed`
+`verified-by: bravebot_sandbox::openshell::a_link_in_place_of_the_policy_directory_is_refused_and_nothing_is_run`
+`verified-by: bravebot_sandbox::openshell::a_policy_directory_another_account_owns_is_refused`
+`verified-by: bravebot_sandbox::openshell::a_policy_file_is_owner_only_and_holds_the_document`
+`verified-by: bravebot_sandbox::openshell::a_policy_file_is_named_from_thirty_two_lower_case_hexadecimal_digits`
 `verified-by: bravebot_mcp::openshell::a_server_in_an_openshell_sandbox_answers_over_stdio_and_reaches_only_its_host`
 `verified-by: bravebot_mcp::openshell::a_program_missing_from_the_image_is_refused_and_the_sandbox_removed`
 `verified-by: bravebot_mcp::openshell::a_long_lived_connection_carries_many_calls_a_pause_and_a_long_reply`

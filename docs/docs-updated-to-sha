@@ -8,8 +8,8 @@
 # (agents/skills/update-docs) to fold it in. The skill rewrites the sha below; nothing
 # else should.
 #
-# Bots/slice 1 rows module (#4134)
-# 2026-11-14
-# https://github.com/brave/bravebot/commit/27372e2071b479260b18c50b849d072b0f242e07
+# Format a ui/package.json script entry so make bump-version can rewrite the file (#4579)
+# 2026-11-25
+# https://github.com/brave/bravebot/commit/1f4ae57d7a0004dee415df823f2442851fb44b50
 
-27372e2071b479260b18c50b849d072b0f242e07
+1f4ae57d7a0004dee415df823f2442851fb44b50

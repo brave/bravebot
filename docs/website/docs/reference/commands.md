@@ -44,7 +44,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/detach` | | Leave a background session you attached to, leaving it running |
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
 | `/reach` | `[<where> -- <command>]` | Remember a directory or credential for a command, or list and remove them |
-| `/sandbox` | `[<mode>]` | Show the sandbox mode, or change it |
+| `/sandbox` | `[<mode>]` | Choose the sandbox mode from a list, or name one to change it |
 | `/loop` | `[[interval] <prompt> \| stop [n]]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/after` | `<delay> <prompt>` | Send a prompt once, after a delay |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
@@ -553,8 +553,11 @@ same file and decides later `git` commands that reach that owner.
 
 ## `/sandbox [strict | read-only | workspace-write | off]`
 
-Bare, it says the sandbox mode programs `run` starts are held to and what chose it: the default, a
-settings file, the managed file, `--sandbox`, or an earlier `/sandbox`. With a word it sets the mode
+Bare, it opens a list of the four modes with the one in force marked and the cursor on it. Up and
+Down move the cursor and Enter sets the mode, as typing the word does, with the same reply; a click
+on a row works as in the other pickers, and Escape leaves the mode as it was. It opens at the prompt
+and while a turn runs. The Sandbox row of the info panel opens the same list when clicked, and
+`/status` and `bravebot doctor` say what chose the mode in force. With a word it sets the mode
 for the rest of the session. Typed while a turn runs with nothing waiting, a mode is set at once,
 `off` included, and the turn running uses it for each program it starts from then on and tells the
 model the mode changed. A program already started keeps the profile it started under, and so does a
@@ -913,7 +916,7 @@ has the rest. [`/sidebar`](#sidebar) chooses which sections it draws.
 ## `/sidebar`
 
 Opens a checklist titled `info panel` with a row for each section of the info panel: Session, Model,
-Goal, Pull requests, Issues, Context, Language servers, MCP servers, Files and Plan. A row reads
+Sandbox, Goal, Pull requests, Issues, Context, Language servers, MCP servers, Files and Plan. A row reads
 `[x]` while the panel draws the section and `[ ]` while it is turned off. Up and Down, or `j` and
 `k`, move the cursor, Space or Enter turns the row under it on or off, and a click on a row does the
 same in one press. The panel follows each change as it is made. Escape closes the checklist and keeps
@@ -926,6 +929,10 @@ names the key that hides it. While Context is off, the context reading and the c
 the hint line under the box, as they do where the panel is not drawn. `/sidebar` does not open the
 panel, so with the panel closed a change shows the next time it is opened. Nothing typed after the
 word is used: `/sidebar` followed by words is sent as a prompt.
+
+## `/redraw`
+
+Repairs a terminal that was cleared or reset from outside bravebot, for example by a shortcut of the terminal emulator. Such a terminal can stay blank where nothing has changed, because bravebot redraws only what changed and nothing tells it the screen was lost. `/redraw` gives the terminal's modes back (the alternate screen, mouse, pasting, focus and keyboard reporting), asks for them again, and draws the whole screen. It sends nothing to the model, spends no tokens and starts no turn. It takes no argument: `/redraw` followed by words is a prompt. Typed while a turn runs, it is carried out at once.
 
 ## `/diff`
 
@@ -1375,8 +1382,7 @@ what the session met in the order it was first met. A session that has met none 
 
 A session meets an item when you type a full GitHub address in a line you send, when you
 open it with `--issue` or `--pr`, when the model's own `run`, `fetch_url` or `download_url` call names
-it (`gh pr view 12 --repo owner/repo`, an address, `Closes https://github.com/owner/repo/issues/12` in a commit message), and
-when a file you vouched for names it. Nothing a program printed, a web page said or the model wrote in
+it (`gh pr view 12 --repo owner/repo`, an address, `Closes https://github.com/owner/repo/issues/12` in a commit message). Nothing a program printed, a web page said, a file the model read (including one you vouched for) or the model wrote in
 a reply is read, so an address in the output of `gh pr view` is not listed, and an issue the model
 creates with `gh issue create` is listed once a later line or call names its number. An address is listed as the issue or pull request itself, with anything after its number dropped, and the word `owner/repo#12` is not read. A bare `#12` names
 no repository and is read only after `gh pr`, `gh issue` or a word such as `Closes`, in the repository of
@@ -1552,6 +1558,15 @@ still writing is not in the file, and neither is a prompt waiting behind the tur
 is working on is marked `**Outcome:** still running when exported`. Without a path the file takes the
 session's default name, which an export after the turn then finds taken, so give that one a path of
 its own.
+
+The file holds what the model was given, and nothing that was shown on the screen alone. Later turns
+can read the file like any other file in the directory, so words the model never saw are left out of
+it. A call is written with its target as the model named it (a quarantined file stays a reference and
+its name is not written), a patch hunk is written by its number and no file name, and a task list is
+written as the model wrote it. What a `!!` command printed, the rows of a command you stopped, and
+the answer a `/manifest` run showed you are each replaced by one sentence saying it was shown on the
+screen and how many lines it had. A file you previewed is written as a preview with no name and no
+lines. The lines you typed are written as you typed them.
 
 ## `/copy [n | block [n] | text [n]]`
 

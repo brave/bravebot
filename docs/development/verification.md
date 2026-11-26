@@ -27,6 +27,8 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | `Policy::declassify_into_workspace`, `Policy::declassify_written_into_workspace`, `Policy::declassify_checkout_into_workspace` | Each returns the value at public with the integrity it had, so a release never raises integrity |
 | `Policy::endorsed_for_reading` | `read_output`, `promote_vetted` and `promote_vetted_picture` hand a slot to the planner only where it is the kind the gate serves and a single-use endorsement for it was issued |
 | `Policy::promote_a_tool_list`, `Policy::promote_a_server_move` | Each passes exactly when a single-use endorsement for the server's alias was issued, and returns `(T,pub)` |
+| `ReleasePlan::contains`, `ReleasePlan::allows_into`, `Policy::precommitted`, `Policy::precommitted_into` | A slot is precommitted exactly where the plan the turn began with names it, and released to a place exactly where the plan names that slot with that destination byte for byte |
+| `Policy::record_note`, `Policy::promote_reference_for_read` | A note a person typed is kept at `(T,pub)`, and a reference promoted for a read comes back `(T,pub)` |
 | `Policy::adopt_edited_body` | It adopts a body a person edited exactly when the proposed body was `(T,pub)`, and records the saved body at `(T,pub)` |
 | `Policy::record_answers` | It records a reply exactly when the questions were trusted, at the questions' own label |
 | `Policy::label_user_command_output`, `Policy::label_user_configuration`, `Policy::label_kept_fact` | Each gives the first label its provenance names: `(T,priv)` for a command the person typed, `(T,pub)` for their configuration, and trusted at the confidentiality the fact was kept at |
@@ -38,9 +40,12 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | `policy::fetch_reason`, `FetchReason::asks` | A fetch goes unasked exactly where an `allow` rule names its host |
 | `policy::mcp_reason`, `McpReason::asks` | A call to a server's tool is always put to a person where the server's declaration asks about every call or the arguments are private, whatever a rule or a standing answer says, and so is one an `ask` or `deny` rule matches. It goes unasked only on an `allow` rule or, where no rule matched, on an approved plan or the person having said to stop asking |
 | `policy::search_reason`, `SearchReason::asks` | A search goes unasked only where an `allow` rule for the family answers and the planner's context is public. A context that holds private content is always put to a person, whatever a rule says, and so is a search an `ask` or `deny` rule matches |
+| `punycode::adapt`, `punycode::digits_of` | The Punycode arithmetic of a host name outside ASCII never wraps, for every label: the bias `adapt` returns is below 288, and each digit `digits_of` writes is below 36. `encode` and `to_ascii`, which call them over a label's code points, are not proved |
 | `trust::meet_of_rules`, `policy::weakest_name` | A subtree or a file asked about under several names is trusted only where every rule bearing on it, and every name, answers trusted. An undecided boundary, a name nothing answers, and a file with no name count as untrusted, so a rule can only lower the answer (`spec::a_meet_of_rules_is_trusted_only_where_every_rule_is`) |
 | `trust::weakest_decision`, `trust::weaker`, `trust::strength` | Where several spellings of one name hold a decision, the one that grants least decides: a distrust before an undecided boundary before a trust |
+| `Standing::authorizes`, `Grant::allows` | A request from a device is allowed exactly where the host holds the device as paired with a grant that covers the operation, as `spec::device_verdict` states: a device with no record and a revoked device are never allowed whatever grant they held, a `read` grant covers reading and never control, and a `control` grant covers both. The answer is read from what the person did on the host alone, with no input from the request (`spec::a_request_is_allowed_only_for_a_paired_device_whose_grant_covers_it`) |
 | `Scope::covers` | A session's scope is inside the ceiling a device was approved for exactly where none of its twenty-one fields is past it, as `spec::field_widened` states for each: a granting list holds nothing the ceiling's did not, a restricting list holds all of it, an undecided path of the ceiling's may be replaced by a distrust and no other path is undecided, an `ask` rule may be replaced by a `deny`, the sandbox reads and writes no more, the permission mode is no further along its order, `reads_stay_in_workspace` is not turned off, and the other booleans are not turned on, automatic vetting in neither direction. `spec::a_scope_covers_itself` proves a scope is inside the ceiling it is. The list of which fields went past is built by `flagged` and checked by the tests, and the contract states only that it is empty exactly where nothing did |
+| `trust::covers_bytes` | A trust-map key covers another segment by segment: the root covers every key, the empty key every key that is not a full path, and any other key itself and what is beneath it after a `/`, so `src` never covers `srcfoo`. `covers_spelled` asks it of the two keys' bytes. Folding case and Unicode canonical equivalence (`fold_case`, `fold_simple`, `canonical_form`) happen before it and are not proved |
 | `TrustedPrograms::covers_every_step` | Every step a plan runs, including each step inside a `$(...)`, has an entry equal to it in file, start path, arguments, routes and tree |
 | `Remembered::covers`, `RememberedStep::matches`, `Shape::matches` | A remembered line covers a plan exactly where the lines are joined the same way and each step matches in name, file, start path, assignments, routes and arguments, with a number slot admitting only a number, and the step carries no expansion |
 | `permissions::ruling_of` | A matching `deny` decides over every other rule, an `ask` over an `allow`, and an `allow` only where nothing restricts |
@@ -158,8 +163,12 @@ A pull request that weakens what these hold is flagged for a person. After CI ru
 request, the `Proof weakened` workflow runs `contrib/check-verus-weakened.py` against the merge base
 and lists in its job summary every contract the change removes or changes, assumption it adds,
 mutation it removes and survivor it adds, counting a line the ledger already holds once more, and
-every edit to `spec.rs`, `verify/history.rs` or a script that runs the checks. Where it lists any,
-it labels the pull request `proof-weakened` and asks the owners of `verify/` to review. It runs from
+every edit to `spec.rs`, `verify/history.rs` or a script that runs the checks. The list is a
+`Proof weakened` entry in the pull request's checks, neutral where it lists anything and success
+where it does not, so it blocks nothing. A weakening labels the pull request `proof-weakened`. An
+edit to one of those files weakens nothing by itself, and is listed apart and labelled
+`proof-tooling-changed`. Either asks the owners of `verify/` to review, and a label whose list is
+empty comes off. It runs from
 the default branch with that branch's copy of the script, on the commit GitHub says CI ran on, so a
 pull request can change neither the script nor which pull request is labelled, and its code is
 read with `git show` and never run.
@@ -203,12 +212,16 @@ make check-verus
   to Verus, so their contract is the one on `endorsed_for_reading`, the question each asks before it
   reads the slot.
 - That a release plan, an endorsement or the context integrity is what the session holds.
-  `Policy` is opaque to Verus, so `precommitted`, `precommitted_into`, `consume_grant` and
-  `context_integrity` are assumed to answer the uninterpreted `spec_precommitted`,
-  `spec_precommitted_into`, `spec_granted` and `spec_context`. `Policy::absorb` is assumed to meet
-  `spec_context` by handing the observation to its `Context`, whose `absorb` is proved, and
+  `Policy` is opaque to Verus, so `release_plan`, `consume_grant` and `context_integrity` are
+  assumed to answer the uninterpreted `spec_release_plan`, `spec_granted` and `spec_context`.
+  Which slots and destinations a `ReleasePlan` names is proved of the plan itself, so
+  `precommitted` and `precommitted_into` are proved from `release_plan`. `Policy::absorb` is assumed
+  to meet `spec_context` by handing the observation to its `Context`, whose `absorb` is proved, and
   `consume_grant` to spend from `spec_grants` by handing the call to its `Grants`, whose `spend` is
   proved.
-- `Policy::record_note` and `Policy::promote_reference_for_read`. The first keeps the note in
-  `Policy`, which is opaque to Verus, and the second reads the path out of `SlotStore`.
+- That the note `Policy::record_note` keeps is the one `Policy::take_note` hands on. `keep_note` is
+  assumed to set the uninterpreted `spec_note`, and `record_note` is proved to keep a `(T,pub)`
+  note there.
+- Which path `Policy::promote_reference_for_read` promotes. `SlotStore` is opaque to Verus, so
+  `path_of_reference` is assumed, and the contract says only that the path comes back `(T,pub)`.
 - Any gate without a row above.

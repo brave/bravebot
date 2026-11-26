@@ -16,7 +16,8 @@ It compares the three files at the merge base with the checkout and reports, lin
 - a mutation removed, which is a defect the contracts no longer have to refuse;
 - a survivor added, which is a change Verus may now accept;
 - any change to `crates/core/src/spec.rs` or to the scripts that run the checks, which can change
-  what every contract means without changing a line of the ledger.
+  what every contract means without changing a line of the ledger. This weakens nothing by itself,
+  so it is reported apart, as `tooling`, and the rest as `weakened`.
 
 A contract or a mutation added, and an assumption or a survivor removed, is a strengthening and is
 not reported. With `--summary` the report is written as Markdown for a job summary, and with
@@ -52,6 +53,19 @@ WATCHED = (
     "verify/history.rs",
 )
 ASSUMES = re.compile(r"^\S+: assumes ")
+# The kind a watched file's edit is reported as. It weakens nothing by itself, and changes what the
+# checks mean, so it is reported apart from the weakenings for an owner to read.
+TOOLING = "changes what the checks mean"
+
+
+def weakened(found):
+    """The items of `found` that weaken a contract, a mutation or a survivor."""
+    return [(kind, text) for kind, text in found if kind != TOOLING]
+
+
+def tooling(found):
+    """The watched files `found` names, each of which changes what the checks mean."""
+    return [text for kind, text in found if kind == TOOLING]
 
 
 def git(root, *args):
@@ -125,33 +139,48 @@ def weakenings(before, after, watched_changed):
     )
     found.extend(("survivor added", entry) for entry in added.elements())
     for path in watched_changed:
-        found.append(("checked by hand", path))
+        found.append((TOOLING, path))
     return found
 
 
 def render(found, markdown):
-    """The report a person reads."""
+    """The report a person reads: the weakenings, then the watched files the change edits."""
     if not found:
         return "check-verus-weakened: nothing the contracts hold is weakened\n"
     if not markdown:
         return "".join(
             f"check-verus-weakened: {kind}: {text.splitlines()[0]}\n" for kind, text in found
         )
-    lines = [
-        "## This change weakens what Verus checks",
-        "",
-        "Each item below is a contract, a mutation or a survivor that holds the code to less than"
-        " the base did, or a file that changes what every contract means. The pull request has to"
-        " say why each is right. See `docs/best-practices/verification.md`.",
-        "",
-    ]
-    for kind, text in found:
-        lines.append(f"- **{kind}**")
+    lines = []
+    if weakened(found):
+        lines += [
+            "## This change weakens what Verus checks",
+            "",
+            "Each item below is a contract, a mutation or a survivor that holds the code to less"
+            " than the base did. The pull request has to say why each is right. See"
+            " `docs/best-practices/verification.md`.",
+            "",
+        ]
+        for kind, text in weakened(found):
+            lines.append(f"- **{kind}**")
+            lines.append("")
+            lines.append("  ```")
+            lines.extend(f"  {line}" for line in text.splitlines())
+            lines.append("  ```")
         lines.append("")
-        lines.append("  ```")
-        lines.extend(f"  {line}" for line in text.splitlines())
-        lines.append("  ```")
-    return "\n".join(lines) + "\n"
+    else:
+        lines += ["## This change weakens no contract, mutation or survivor", ""]
+    if tooling(found):
+        lines += [
+            "## Files that change what the checks mean",
+            "",
+            "These hold the definitions every contract names, or run the checks. An edit to one"
+            " weakens nothing by itself, and can change what every contract means, so an owner of"
+            " `verify/` reads it.",
+            "",
+        ]
+        lines.extend(f"- `{path}`" for path in tooling(found))
+    return "\n".join(lines).rstrip("\n") + "\n"
 
 
 def check(root, base, head=None):
@@ -252,7 +281,27 @@ class Selftest(unittest.TestCase):
     def test_a_change_to_a_watched_file_is_reported_by_name(self):
         self.assertEqual(
             weakenings(self.files(), self.files(), ["crates/core/src/spec.rs"]),
-            [("checked by hand", "crates/core/src/spec.rs")],
+            [(TOOLING, "crates/core/src/spec.rs")],
+        )
+
+    def test_a_watched_file_alone_is_tooling_and_not_a_weakening(self):
+        found = weakenings(self.files(), self.files(), ["contrib/check-verus.py"])
+        self.assertEqual(weakened(found), [])
+        self.assertEqual(tooling(found), ["contrib/check-verus.py"])
+        report = render(found, markdown=True)
+        self.assertIn("weakens no contract, mutation or survivor", report)
+        self.assertIn("`contrib/check-verus.py`", report)
+        self.assertNotIn("This change weakens what Verus checks", report)
+
+    def test_a_weakening_beside_a_watched_file_reports_both_apart(self):
+        before = self.files("a.rs::f: r => ensures r > 0,\n")
+        found = weakenings(before, self.files(), ["crates/core/src/spec.rs"])
+        self.assertEqual([kind for kind, _ in weakened(found)], ["contract removed"])
+        self.assertEqual(tooling(found), ["crates/core/src/spec.rs"])
+        report = render(found, markdown=True)
+        self.assertLess(
+            report.index("This change weakens what Verus checks"),
+            report.index("Files that change what the checks mean"),
         )
 
     def test_comments_and_blank_lines_do_not_count(self):
@@ -274,7 +323,11 @@ def main():
     parser.add_argument("--base", help="the commit to compare with; BASE_SHA by default")
     parser.add_argument("--head", help="the commit to read; the checkout by default")
     parser.add_argument("--summary", help="append the report as Markdown to this file")
-    parser.add_argument("--github-output", help="write weakened=true or false to this file")
+    parser.add_argument("--report", help="write the report as Markdown to this file")
+    parser.add_argument(
+        "--github-output",
+        help="write weakened= and tooling=, each true or false, to this file",
+    )
     args = parser.parse_args()
     if args.selftest:
         suite = unittest.defaultTestLoader.loadTestsFromTestCase(Selftest)
@@ -290,9 +343,12 @@ def main():
     if args.summary:
         with open(args.summary, "a", encoding="utf-8") as summary:
             summary.write(render(found, markdown=True))
+    if args.report:
+        Path(args.report).write_text(render(found, markdown=True), encoding="utf-8")
     if args.github_output:
         with open(args.github_output, "a", encoding="utf-8") as output:
-            output.write(f"weakened={'true' if found else 'false'}\n")
+            output.write(f"weakened={'true' if weakened(found) else 'false'}\n")
+            output.write(f"tooling={'true' if tooling(found) else 'false'}\n")
     return 0
 
 

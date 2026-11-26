@@ -1,4 +1,4 @@
-//! The pickers that `/model`, `/config`, `/theme`, `/effort` and `/sidebar` open, held as state of the session.
+//! The pickers that `/model`, `/config`, `/theme`, `/effort`, `/sandbox` and `/sidebar` open, held as state of the session.
 //!
 //! `/model` is always a mode of the session. The others are loops of their own at rest: each draws,
 //! reads a key and returns what was picked. A turn cannot wait inside such a loop, because the same
@@ -23,7 +23,9 @@ use crate::list_picker::{self, Outcome};
 use crate::theme::Theme;
 use bravebot_aichat::models::Model;
 
-use crate::{config_prompt, effort_prompt, model_prompt, sidebar_prompt, theme_prompt};
+use crate::{
+    config_prompt, effort_prompt, model_prompt, sandbox_prompt, sidebar_prompt, theme_prompt,
+};
 
 /// A picker that is open.
 #[derive(Debug)]
@@ -36,6 +38,8 @@ pub enum Picking {
     Effort(effort_prompt::Picker),
     /// `/config`.
     Editing(config_prompt::Picker),
+    /// `/sandbox` alone, the modes `run` may be held to, open on the one in force.
+    Sandbox(sandbox_prompt::Picker),
     /// `/sidebar`, a checklist of the sections of the info panel (PANEL-17).
     Sidebar(sidebar_prompt::Picker),
 }
@@ -49,6 +53,8 @@ pub enum Picked {
     /// The row, and how long the pick lasts.
     Effort(effort_prompt::Row, model_prompt::Scope),
     Editing(config_prompt::Row),
+    /// The mode, which is carried out as `/sandbox <mode>` is.
+    Sandbox(sandbox_prompt::Row),
 }
 
 /// What a key press did to an open picker.
@@ -92,6 +98,10 @@ impl Picking {
                 let outcome = list_picker::handle_key(picker, code, modifiers);
                 step(outcome, picker.chosen().copied(), Picked::Editing)
             }
+            Picking::Sandbox(picker) => {
+                let outcome = list_picker::handle_key(picker, code, modifiers);
+                step(outcome, picker.chosen().copied(), Picked::Sandbox)
+            }
             Picking::Sidebar(picker) => {
                 sidebar_step(sidebar_prompt::press(picker, code, modifiers))
             }
@@ -110,6 +120,7 @@ impl Picking {
             Picking::Theme(picker) => listed(theme_prompt::placed(frame, picker)),
             Picking::Effort(picker) => listed(effort_prompt::placed(frame, picker)),
             Picking::Editing(picker) => listed(config_prompt::placed(frame, picker)),
+            Picking::Sandbox(picker) => listed(sandbox_prompt::placed(frame, picker)),
             Picking::Sidebar(picker) => listed(sidebar_prompt::placed(frame, picker)),
         }
     }
@@ -155,6 +166,10 @@ impl Picking {
                 let outcome = list_picker::handle_mouse(picker, placed, mouse, last, now, wheel);
                 step(outcome, picker.chosen().copied(), Picked::Editing)
             }
+            Picking::Sandbox(picker) => {
+                let outcome = list_picker::handle_mouse(picker, placed, mouse, last, now, wheel);
+                step(outcome, picker.chosen().copied(), Picked::Sandbox)
+            }
             Picking::Sidebar(picker) => sidebar_step(sidebar_prompt::click(
                 picker, placed, mouse, last, now, wheel,
             )),
@@ -168,6 +183,7 @@ impl Picking {
             Picking::Theme(picker) => theme_prompt::draw(frame, picker),
             Picking::Effort(picker) => effort_prompt::draw(frame, picker),
             Picking::Editing(picker) => config_prompt::draw(frame, picker),
+            Picking::Sandbox(picker) => sandbox_prompt::draw(frame, picker),
             Picking::Sidebar(picker) => sidebar_prompt::draw(frame, picker),
         }
     }

@@ -188,7 +188,7 @@ not what you are agreeing to.
 
 Two lines that compile alike are one thing to agree to. One approval cannot be reused for the same
 steps joined differently, for the same steps writing somewhere else, or for the same steps in another
-directory.
+directory. A line that sends a stream to `/dev/null` or merges it with `2>&1` is covered by `a` only as written: the same program with the stream left alone is asked about again.
 
 **Every branch is endorsed before anything runs.** `a && b` may run `b`, `a || b` may run `b`, and
 `a ; b` will, so all of them are in the plan and all of them are approved up front. Nothing is put to
@@ -485,7 +485,8 @@ accepted only in the spelling of the open directory the target lands in. The mes
 `/dev/null`.
 
 **A redirection also records what it wrote.** Where the line's output is untrusted, every file the line
-opened for writing becomes untrusted, which is what stops a program's output being read back as
+opened for writing becomes untrusted under every name the file has, so a symbolic link or a hard link to it
+does not leave it trusted. That is what stops a program's output being read back as
 trusted. Where the output is trusted the map is left as it was, because `>>` keeps whatever the file
 already held and vouching for a program answers for the program rather than for one file's contents, so
 a line never raises a path's trust. What is recorded is what the line actually opened rather than the
@@ -728,7 +729,7 @@ raise is one it knows it may ask for.
 When the deadline runs out the steps are stopped, and **what they printed before that comes back exactly
 as it would from a line that ended on its own**, under the same label. Reaching the deadline ends a run
 rather than failing it, so a program that never exits, like a server told to serve a page, still gives
-you everything it printed. The result says it was stopped, which is how you tell the two apart.
+you everything it printed. The result says it was stopped, which is how you tell the two apart. A line stopped at the longest deadline a call may name is told so: a longer deadline cannot be asked for, and the agent is told to start the line again with `background: true`. A build or test that may outlast the ceiling is started in the background from the first.
 
 On Linux and macOS each step leads a process group of its own. A stop asks the group to end first, so
 the programs the step started are asked with it, and gives it two seconds to finish what it holds, such

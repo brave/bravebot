@@ -842,14 +842,14 @@ fn reaching_out(source: &str) -> Vec<String> {
     found
 }
 
-/// LAYER-1 says the kernel does no I/O and prints nothing, and the file-type crate and the crate
-/// that reads a processor's answer for a number do no I/O. A manifest cannot say it: they depend
+/// LAYER-1 says the kernel does no I/O and prints nothing, and the file-type crate, the QR crate and
+/// the crate that reads a processor's answer for a number do no I/O. A manifest cannot say it: they depend
 /// on nothing outside the standard library and the kernel, which is where the file system, the
 /// environment, child processes and the terminal live. So what holds the promise is the code never
 /// naming them, read off the source with the tests left out.
 #[test]
 fn the_kernel_and_the_file_type_crate_do_no_io_and_print_nothing() {
-    for krate in ["core", "filetype", "choice"] {
+    for krate in ["core", "filetype", "choice", "qr"] {
         let files = rust_files(&workspace().join("crates").join(krate).join("src"));
         assert!(
             files.len() > 1,
@@ -874,10 +874,11 @@ fn the_kernel_and_the_file_type_crate_do_no_io_and_print_nothing() {
 /// and opens nothing. A dependency is added here by deciding that the crate it names does no I/O,
 /// which is the question the manifests test cannot ask: it holds a row's list to the manifest and
 /// grants whatever the row grants.
-const IO_FREE: [(&str, &[&str]); 3] = [
+const IO_FREE: [(&str, &[&str]); 4] = [
     ("core", &[]),
     ("filetype", &[]),
     ("choice", &["bravebot-core", "serde_json"]),
+    ("qr", &[]),
 ];
 
 /// The crates a manifest asks for in the tables its own targets link, `[dependencies]` and the

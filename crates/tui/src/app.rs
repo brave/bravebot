@@ -205,6 +205,7 @@ fn status_report(
         confinement: &session.confinement,
         sockets_with_a_path_reachable: session.sockets_with_a_path_reachable,
         sandbox_mode: session.sandbox_mode(),
+        sandbox_chosen: crate::sandbox_command::detail(session.sandbox()),
         servers: &session.servers,
         permission_mode: session.permission_mode(),
         began_in_bypass: session.began_in_bypass(),
@@ -418,7 +419,15 @@ fn carry_out_while_working(
 /// holds the configuration can carry it out, and the turn that follows is the first.
 fn carry_out_held_pick(session: &mut Session, config: &mut Config) {
     if let Some(picked) = session.take_pick() {
-        session.answer_while_working(|session| carry_out_pick(session, config, picked));
+        let sandbox_pick = matches!(picked, crate::picking::Picked::Sandbox(_));
+        session.answer_while_working(|session| {
+            let kept = session.sandbox_mode();
+            carry_out_pick(session, config, picked);
+            // The turn running follows a new mode, and is told so as `/sandbox <word>` tells it.
+            if sandbox_pick && session.sandbox_mode() != kept {
+                session.note(t!(session_sandbox_turn_follows_it).to_string());
+            }
+        });
     }
 }
 
@@ -433,6 +442,11 @@ fn carry_out_pick(session: &mut Session, config: &mut Config, picked: crate::pic
         Picked::Theme(theme) => theme_picked(session, &theme.name),
         Picked::Effort(row, scope) => effort_picked(session, row.0, scope),
         Picked::Editing(row) => config_picked(session, row),
+        // The word a person would have typed, through the function they would have typed it to, so
+        // the managed floor, the already-held sentence and the jobs note are the same ones.
+        Picked::Sandbox(row) => {
+            crate::sandbox_command::run(session, row.0.name(), &bravebot_config::Managed::load())
+        }
     }
 }
 
@@ -566,7 +580,16 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     if let Some(argument) = argument_to(line, PLUGIN_COMMAND) {
         return Action::Plugin(argument.to_string());
     }
+    // A bare word opens the list of modes, at rest and while a turn runs, and says nothing: the
+    // picker is a mode of the session, and the choice goes through `sandbox_command::run` as the
+    // word does. A word after it is carried whole to the loop, unchanged (SANDBOX-22).
     if let Some(word) = argument_to(line, SANDBOX_COMMAND) {
+        if word.is_empty() {
+            session.open_picking(crate::picking::Picking::Sandbox(
+                crate::sandbox_prompt::Picker::new(session.sandbox_mode()),
+            ));
+            return Action::Redraw;
+        }
         return Action::Sandbox(word.to_string());
     }
     if line.trim() == COST_COMMAND {
@@ -9005,7 +9028,6 @@ mod tests {
     #[test]
     fn a_click_off_a_call_or_a_drag_over_one_opens_no_scroller_at_rest() {
         let (mut session, buffer) = at_rest_over_calls();
-        let (row, column) = find_on(&buffer, "Run(make)");
         let panel = session
             .laid
             .panes
@@ -9019,6 +9041,13 @@ mod tests {
         assert_eq!(click(&mut session, short, short_column), Action::Copy);
         assert_eq!(click(&mut session, short + 1, short_column), Action::Copy);
         assert!(!session.scrolling(), "a call with nothing more opened it");
+        // The sandbox row of the panel is a click target, so it is turned off for the click on the
+        // panel's cell on the call's row, which is blank or text without a target.
+        session.set_panel_sections(
+            crate::panel::Sections::default().toggled(crate::panel::Section::Sandbox),
+        );
+        let buffer = drawn_at(&mut session, 120, 40);
+        let (row, column) = find_on(&buffer, "Run(make)");
         assert_ne!(click(&mut session, row, panel + 4), Action::Redraw);
         assert!(!session.scrolling());
 
@@ -10237,6 +10266,41 @@ mod tests {
         assert!(working.queued.is_empty(), "the click waited");
     }
 
+    /// MOUSE-11. A click on the panel's sandbox row opens the same list a bare `/sandbox` opens,
+    /// on the mode in force, at rest and while a turn runs, and nothing is queued or said.
+    ///
+    /// Rejects: a click that is a copy, a click that waits for the turn, a click that notes the
+    /// mode in force instead of opening the list, and a list opened on a mode other than the one
+    /// held.
+    #[test]
+    fn a_click_on_the_panels_sandbox_row_opens_the_sandbox_picker_at_rest_and_mid_turn() {
+        use crate::picking::Picking;
+        let held = bravebot_sandbox::SandboxMode::ReadOnly;
+        // `None` when the click opened no sandbox list, which the comparison below reports.
+        let opened_on = |session: &Session| match session.picking() {
+            Some(Picking::Sandbox(picker)) => picker.chosen().map(|row| row.0),
+            _ => None,
+        };
+
+        let (mut session, _) = panel_with_a_model();
+        session.set_sandbox_mode(held);
+        let buffer = drawn(&mut session);
+        let (row, column) = find_on(&buffer, held.name());
+        let noted = session.transcript.len();
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+        assert_eq!(opened_on(&session), Some(held));
+        assert_eq!(session.transcript.len(), noted, "the click said something");
+        assert!(session.selection.is_none());
+
+        let (mut working, _) = panel_of_command_rows(true);
+        working.set_sandbox_mode(held);
+        let buffer = drawn(&mut working);
+        let (row, column) = find_on(&buffer, held.name());
+        beside_a_turn(|beside| clicked_during_a_turn(&mut working, row, column + 1, beside));
+        assert_eq!(opened_on(&working), Some(held));
+        assert!(working.queued.is_empty(), "the click waited");
+    }
+
     /// A click on any other row of the panel, or on the transcript, is the copy it always was, and
     /// a click on the border column is the resize handle.
     #[test]
@@ -11147,7 +11211,7 @@ mod tests {
         use crate::panel::Target;
         for turn_running in [false, true] {
             let mut fixture = a_session_whose_tools_returned_something(turn_running);
-            let frame = drawn_at(&mut fixture, 120, 32);
+            let frame = drawn_at(&mut fixture, 120, 36);
             assert!(
                 render::as_text(&fixture).contains(FROM_A_TOOL),
                 "the transcript does not hold what the tools returned"
@@ -11187,7 +11251,7 @@ mod tests {
 
             for (target, row, column) in targets {
                 let mut session = a_session_whose_tools_returned_something(turn_running);
-                drawn_at(&mut session, 120, 32);
+                drawn_at(&mut session, 120, 36);
                 let said = session.transcript.len();
                 let _ = addresses_opened();
                 // At rest the loop opens what the click asks for, so the action says it; during a
@@ -11213,7 +11277,7 @@ mod tests {
                     "{target:?} opened the wrong addresses (turn running: {turn_running})"
                 );
 
-                let after = drawn_at(&mut session, 120, 32);
+                let after = drawn_at(&mut session, 120, 36);
                 if let Some((_, panel)) = session
                     .laid
                     .panes
@@ -33881,7 +33945,7 @@ mod tests {
             );
         }
         // The report is one note per line, so the transcript grows by exactly its lines.
-        const STATUS_REPORT_LINES: usize = 11;
+        const STATUS_REPORT_LINES: usize = 12;
         assert_eq!(
             session.transcript.len(),
             transcript + STATUS_REPORT_LINES,
@@ -35255,14 +35319,197 @@ mod tests {
         assert_eq!(said_under_the_turn(&session), the_servers_listed());
     }
 
-    /// `/sandbox` carries its word whole to the loop, bare for the report, and a longer word or a
+    /// A bare `/sandbox` opens the list of modes and carries nothing to the loop, and says nothing:
+    /// no report is noted. Rejects: the bare word carried to the loop as `Action::Sandbox("")`,
+    /// which notes a report, and a picker opened on a mode other than the one held.
+    #[test]
+    fn a_bare_sandbox_command_opens_the_picker_and_says_nothing() {
+        use crate::picking::Picking;
+        let mut session = Session::new("none");
+        session.set_sandbox_mode(bravebot_sandbox::SandboxMode::ReadOnly);
+        let noted = session.transcript.len();
+        type_line(&mut session, "/sandbox");
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        let opened_on = match session.picking() {
+            Some(Picking::Sandbox(picker)) => picker.chosen().map(|row| row.0),
+            _ => None,
+        };
+        assert_eq!(
+            opened_on,
+            Some(bravebot_sandbox::SandboxMode::ReadOnly),
+            "the bare word did not open the sandbox list on the mode held"
+        );
+        assert_eq!(
+            session.transcript.len(),
+            noted,
+            "the bare word said something"
+        );
+    }
+
+    /// A bare `/sandbox` typed while a turn runs opens the picker as it is typed: not queued, not
+    /// handed to the turn, and nothing said under the turn (R4). Rejects: the bare word waiting for
+    /// the turn to end, and one that is carried out as the report.
+    #[test]
+    fn a_bare_sandbox_command_opens_the_picker_mid_turn() {
+        use crate::picking::Picking;
+        let mut session = a_turn_running_on("first");
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, SANDBOX_COMMAND, key(KeyCode::Enter), beside)
+        });
+        assert!(
+            matches!(session.picking(), Some(Picking::Sandbox(_))),
+            "{:?}",
+            session.picking()
+        );
+        assert!(session.queued.is_empty(), "/sandbox waited");
+        assert_eq!(session.interjections().take(), None);
+        assert!(said_under_the_turn(&session).is_empty());
+    }
+
+    /// Enter on a row of the picker moves the session to that mode through `carry_out_pick`, as
+    /// `/sandbox <word>` does, with the same sentence. Esc leaves the mode alone.
+    ///
+    /// Rejects: a pick that is dropped, one that sets the mode of the row the picker opened on, and
+    /// an Esc that applies the row under the cursor.
+    #[test]
+    fn a_row_taken_in_the_sandbox_picker_sets_the_mode_and_escape_leaves_it() {
+        use crate::picking::Picking;
+        use bravebot_sandbox::SandboxMode;
+        let _none = bravebot_config::managed_file_on_this_thread(std::path::Path::new(
+            "/nonexistent/bravebot-managed.json",
+        ));
+        let mut config = a_config_needing_no_sign_in();
+        let mut session = Session::new("none");
+        session.set_sandbox_mode(SandboxMode::Strict);
+        session.open_picking(Picking::Sandbox(crate::sandbox_prompt::Picker::new(
+            SandboxMode::Strict,
+        )));
+        // strict, read-only, workspace-write, off: three rows down is `off`.
+        for _ in 0..3 {
+            session.press_in_picking(KeyCode::Down, KeyModifiers::NONE);
+        }
+        session.press_in_picking(KeyCode::Enter, KeyModifiers::NONE);
+        let picked = session.take_pick();
+        assert_eq!(
+            picked,
+            Some(crate::picking::Picked::Sandbox(crate::sandbox_prompt::Row(
+                SandboxMode::Off
+            ))),
+            "Enter took no row"
+        );
+        let Some(picked) = picked else {
+            return;
+        };
+        carry_out_pick(&mut session, &mut config, picked);
+        assert_eq!(session.sandbox_mode(), SandboxMode::Off);
+        assert_eq!(
+            session.transcript.last().map(|entry| entry.text.as_str()),
+            Some(t!(session_sandbox_set_off))
+        );
+
+        session.open_picking(Picking::Sandbox(crate::sandbox_prompt::Picker::new(
+            SandboxMode::Off,
+        )));
+        session.press_in_picking(KeyCode::Up, KeyModifiers::NONE);
+        session.press_in_picking(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(session.picking().is_none());
+        assert!(session.take_pick().is_none(), "Esc took a row");
+        assert_eq!(session.sandbox_mode(), SandboxMode::Off);
+    }
+
+    /// A mode the managed file does not allow is refused when its row is taken, with the sentence
+    /// `/sandbox <word>` gives, naming the file, and the mode does not move.
+    ///
+    /// Rejects: a pick that sets the mode without asking the managed floor, and one that refuses
+    /// without naming the file.
+    #[test]
+    fn a_row_the_managed_file_refuses_is_refused_when_taken() -> std::io::Result<()> {
+        use bravebot_sandbox::SandboxMode;
+        let dir = crate::testutil::scratch_dir("sandbox-picker-pin");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir)?;
+        let file = dir.join("managed.json");
+        std::fs::write(&file, r#"{"sandbox": {"mode": "strict"}}"#)?;
+        let _machine = bravebot_config::managed_file_on_this_thread(&file);
+        let mut config = a_config_needing_no_sign_in();
+        let mut session = Session::new("none");
+        session.set_sandbox_mode(SandboxMode::Strict);
+
+        carry_out_pick(
+            &mut session,
+            &mut config,
+            crate::picking::Picked::Sandbox(crate::sandbox_prompt::Row(SandboxMode::Off)),
+        );
+
+        assert_eq!(session.sandbox_mode(), SandboxMode::Strict);
+        let said = session
+            .transcript
+            .last()
+            .map(|entry| entry.text.clone())
+            .unwrap_or_default();
+        assert!(said.contains(&file.display().to_string()), "{said}");
+        assert!(said.contains("off"), "{said}");
+        Ok(())
+    }
+
+    /// A held pick carried out while a turn runs follows the same rule as `/sandbox <word>` typed
+    /// mid-turn: a changed mode is followed by the note that the turn uses it from now on, and a
+    /// pick of the mode already held adds none.
+    ///
+    /// Rejects: a pick carried out mid-turn without the note, and one that adds the note when
+    /// nothing changed.
+    #[test]
+    fn a_sandbox_row_taken_mid_turn_adds_the_note_that_the_turn_follows_it() {
+        use bravebot_sandbox::SandboxMode;
+        let _none = bravebot_config::managed_file_on_this_thread(std::path::Path::new(
+            "/nonexistent/bravebot-managed.json",
+        ));
+        let mut config = a_config_needing_no_sign_in();
+        let mut session = a_turn_running_on("first");
+        let held = session.sandbox_mode();
+        let other = SandboxMode::ALL
+            .into_iter()
+            .find(|mode| *mode != held)
+            .unwrap_or(held);
+        assert_ne!(other, held, "there is no mode other than the one held");
+        for follows in [true, false] {
+            let now = session.sandbox_mode();
+            session.open_picking(crate::picking::Picking::Sandbox(
+                crate::sandbox_prompt::Picker::new(now),
+            ));
+            // Move the cursor to `other` as a person would, then take the row.
+            let from = SandboxMode::ALL.iter().position(|m| *m == now).unwrap();
+            let to = SandboxMode::ALL.iter().position(|m| *m == other).unwrap();
+            for _ in 0..from.abs_diff(to) {
+                let key = if to > from {
+                    KeyCode::Down
+                } else {
+                    KeyCode::Up
+                };
+                session.press_in_picking(key, KeyModifiers::NONE);
+            }
+            session.press_in_picking(KeyCode::Enter, KeyModifiers::NONE);
+            let before = session.transcript.len();
+            carry_out_held_pick(&mut session, &mut config);
+            let said: Vec<String> = session.transcript[before..]
+                .iter()
+                .map(|entry| entry.text.clone())
+                .collect();
+            let note = t!(session_sandbox_turn_follows_it).to_string();
+            assert_eq!(said.contains(&note), follows, "{said:?}");
+        }
+    }
+
+    /// `/sandbox` carries its word whole to the loop, and a longer word or a
     /// sentence that mentions it is not the command (CMD-2). The regression it rejects is the word
     /// cut at the first space, which would read `/sandbox off please` as `/sandbox off`.
     #[test]
     fn the_sandbox_command_carries_its_word_unparsed() {
         let mut session = Session::new("none");
         for (line, word) in [
-            ("/sandbox", ""),
             ("/sandbox strict", "strict"),
             ("/sandbox off please", "off please"),
         ] {
@@ -35377,24 +35624,6 @@ mod tests {
             given_to_the_turn.get(),
             bravebot_sandbox::SandboxMode::Strict,
             "a refused mode reached the running turn"
-        );
-    }
-
-    /// The bare word reports the mode and changes nothing, mid-turn as at rest, with no sentence
-    /// about the running turn since nothing moved.
-    #[test]
-    fn the_sandbox_report_is_given_mid_turn() {
-        let mut session = a_turn_running_on("first");
-
-        nothing_beside(|beside| {
-            typed_during_a_turn(&mut session, "/sandbox", key(KeyCode::Enter), beside)
-        });
-
-        assert!(session.queued.is_empty());
-        assert_eq!(said_under_the_turn(&session).len(), 1);
-        assert_eq!(
-            session.sandbox_mode(),
-            bravebot_sandbox::SandboxMode::WorkspaceWrite
         );
     }
 
@@ -36607,6 +36836,7 @@ mod tests {
                     CONFIG_COMMAND,
                     MODEL_COMMAND,
                     REDRAW_COMMAND,
+                    SANDBOX_COMMAND,
                     SESSIONS_COMMAND,
                     SIDEBAR_COMMAND,
                 ]
@@ -38072,6 +38302,57 @@ mod tests {
         assert_eq!(session.status, Status::Idle);
         assert!(!session.handoff_pending(), "a stopped brief was offered");
         assert!(session.input().is_empty());
+    }
+
+    /// A summary thread that panicked took the conversation with it, and a fresh one in its place is
+    /// trusted and public, which resets what the conversation had read (COMPACT-3) and is then saved
+    /// over the record. The join is an error that carries the catalog's sentence, so the session ends
+    /// with the conversation and the record as they were.
+    #[test]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn a_summary_worker_that_panics_is_an_error_and_returns_no_conversation() {
+        let worker = std::thread::spawn(
+            || -> (
+                Result<Option<bravebot_agent::compact::Compacted>, String>,
+                Conversation,
+                Trail,
+            ) { panic!("the summary worker failed") },
+        );
+
+        match join_the_summary(worker) {
+            Ok((done, conversation, _trail)) => panic!(
+                "a conversation came back from a worker that panicked: {} messages, {}",
+                conversation.len(),
+                match done {
+                    Ok(_) => "a summary".to_string(),
+                    Err(problem) => problem,
+                }
+            ),
+            Err(error) => assert_eq!(error.to_string(), t!(compact_ended_unexpectedly)),
+        }
+    }
+
+    /// A worker that returned is handed back whole, with the failure it reported, so only a join
+    /// that fails changes what the session does.
+    #[test]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn a_summary_worker_that_returns_is_handed_back_with_its_conversation() {
+        let mut conversation = Conversation::new();
+        conversation.push(bravebot_aichat::protocol::Message::user("port the parser"));
+        let worker = std::thread::spawn(move || {
+            (
+                Err::<Option<bravebot_agent::compact::Compacted>, String>("offline".to_string()),
+                conversation,
+                Trail::new(),
+            )
+        });
+
+        let Ok((done, conversation, _trail)) = join_the_summary(worker) else {
+            panic!("a worker that returned was reported as having panicked");
+        };
+
+        assert!(matches!(done, Err(ref problem) if problem == "offline"));
+        assert_eq!(conversation.len(), 1);
     }
 
     /// A loopback model answering every request with `words`, streamed the way the real one is.
@@ -44547,6 +44828,150 @@ mod tests {
         }
     }
 
+    /// PERM-17: the session the terminal client opens on reads `permissions.bypassUnreachable` from
+    /// the settings it was started with, so the rung is off the ladder the key walks and the flag
+    /// that opened the session in bypass is put back to asking. The named tests call
+    /// `open_in_the_mode_asked_for` themselves, so a startup that handed it other settings would
+    /// leave every one passing. The control opens the same session under settings that say nothing
+    /// and reaches bypass on the ladder, so the walk cannot pass by never reaching it. Rejects:
+    /// `new_session` reading something other than the settings it was given for the key.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_session_the_startup_builds_keeps_bypass_off_the_ladder_where_the_settings_say_it_is_unreachable()
+     {
+        use bravebot_agent::PermissionMode;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-opening-bypass-unreachable");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        // The machine's own managed file is not the layer under test.
+        let _machine = bravebot_config::managed_file_on_this_thread(std::path::Path::new(
+            "no-managed-file-is-here.json",
+        ));
+
+        let opened_under = |settings: &bravebot_config::Settings| {
+            new_session(
+                &mut a_config_needing_no_sign_in(),
+                settings,
+                &workspace,
+                &AskedFor::default(),
+                crate::state::Servers::default(),
+                SessionBasis {
+                    confinement: String::new(),
+                    sockets_with_a_path_reachable: false,
+                    sandbox: crate::sandbox_command::Sandboxed::at_start(),
+                    skip_permissions: true,
+                    asked_for_auto: false,
+                    from_link: false,
+                    prompts: bravebot_agent::turn::SystemPrompts::default(),
+                },
+            )
+        };
+        let modes_the_key_walks = |session: &mut Session| {
+            (0..12)
+                .map(|_| {
+                    session.cycle_permission_mode();
+                    session.permission_mode()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mut unconstrained = opened_under(&bravebot_config::Settings::default());
+        assert_eq!(
+            unconstrained.permission_mode(),
+            PermissionMode::Bypass,
+            "the flag did not open the control session in bypass"
+        );
+        assert!(
+            modes_the_key_walks(&mut unconstrained).contains(&PermissionMode::Bypass),
+            "bypass is not on the ladder of a session whose settings say nothing"
+        );
+
+        let mut refused = opened_under(&bravebot_config::Settings::parse(
+            r#"{"permissions": {"bypassUnreachable": true}}"#,
+        ));
+        assert_eq!(
+            refused.permission_mode(),
+            PermissionMode::Ask,
+            "the flag left the session in bypass where the settings made it unreachable"
+        );
+        let walked = modes_the_key_walks(&mut refused);
+        assert!(
+            !walked.contains(&PermissionMode::Bypass),
+            "the key reached bypass where the settings made it unreachable: {walked:?}"
+        );
+    }
+
+    /// PERM-17: the file an administrator pinned makes bypass unreachable for a session that opens
+    /// with settings saying nothing, since the startup takes the strictest of the settings and that
+    /// file. `Settings::under` does not carry the key, so a read of the settings alone leaves the
+    /// rung on the ladder. The control opens the same session with no managed file and one press
+    /// of the key reaches bypass from auto, where the managed file puts it back to asking.
+    /// Rejects: a startup that reads the settings layers for the key and not the managed file.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_managed_file_that_makes_bypass_unreachable_keeps_it_off_the_ladder_of_a_new_session() {
+        use bravebot_agent::PermissionMode;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-opening-managed-bypass");
+        std::fs::create_dir_all(&root).expect("create");
+        let managed_file = root.join("managed.json");
+        std::fs::write(
+            &managed_file,
+            r#"{"permissions": {"bypassUnreachable": true}}"#,
+        )
+        .expect("write the managed file");
+        let settings = bravebot_config::Settings::default();
+        let after_one_press_from_auto = || {
+            let mut session = open_in_the_mode_asked_for(
+                Session::new("none"),
+                false,
+                true,
+                false,
+                &bravebot_config::Settings::default(),
+            );
+            assert_eq!(
+                session.permission_mode(),
+                PermissionMode::Auto,
+                "the line did not open the session in auto"
+            );
+            session.cycle_permission_mode();
+            session.permission_mode()
+        };
+
+        {
+            let _machine = bravebot_config::managed_file_on_this_thread(std::path::Path::new(
+                "no-managed-file-is-here.json",
+            ));
+            assert!(
+                !bypass_is_unreachable(&settings),
+                "the control has a layer that makes bypass unreachable"
+            );
+            assert_eq!(
+                after_one_press_from_auto(),
+                PermissionMode::Bypass,
+                "bypass is not the rung after auto where nothing makes it unreachable"
+            );
+        }
+
+        let _machine = bravebot_config::managed_file_on_this_thread(&managed_file);
+        assert!(
+            bypass_is_unreachable(&settings),
+            "the managed file's bypassUnreachable was not read"
+        );
+        assert_eq!(
+            after_one_press_from_auto(),
+            PermissionMode::Ask,
+            "a session opened under the managed file reached bypass by the key"
+        );
+    }
+
     /// TRUST-15: a session begun from a record, resumed or forked, is given a directory of its own
     /// that its workspace reaches, and the directory goes when that session ends, as it does when
     /// `event_loop` returns and drops what it began with. Each session is begun with the workspace
@@ -48081,6 +48506,49 @@ mod tests {
             goal_to_work_towards(&session),
             Some("cargo test exits 0".to_string()),
             "a resumed goal was not told to the turn"
+        );
+    }
+
+    /// GOAL-14: the task a turn is built with carries the condition of the goal in force, and
+    /// nothing for a paused goal. The test above reads `goal_to_work_towards` alone, so a task
+    /// builder that read the goal that is set, or passed no condition, would leave it passing.
+    /// Rejects: `the_turn_task` reading `session.goal()` where it should read the goal in force,
+    /// and one that leaves the condition off the task.
+    #[test]
+    fn the_task_a_turn_is_built_with_carries_the_goal_only_while_it_is_in_force() {
+        let root = a_workspace_with_a_readme();
+        let mut session = Session::new("none").in_workspace(root.path());
+        let said_to = |session: &mut Session| {
+            a_task_built_for(session, root.path(), "go")
+                .working_towards
+                .clone()
+        };
+        assert_eq!(
+            said_to(&mut session),
+            None,
+            "a turn with no goal was built with a condition"
+        );
+
+        session.start_goal("cargo test exits 0".to_string());
+        assert_eq!(
+            said_to(&mut session),
+            Some("cargo test exits 0".to_string()),
+            "a turn under a goal was built without its condition"
+        );
+
+        session.pause_goal();
+        assert!(session.goal().is_some(), "pausing ended the goal");
+        assert_eq!(
+            said_to(&mut session),
+            None,
+            "a turn under a paused goal was built with its condition"
+        );
+
+        session.resume_goal();
+        assert_eq!(
+            said_to(&mut session),
+            Some("cargo test exits 0".to_string()),
+            "a resumed goal was not carried on the task"
         );
     }
 

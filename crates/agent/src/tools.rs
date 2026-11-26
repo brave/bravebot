@@ -1792,6 +1792,18 @@ fn lsp_clause(beside: Beside, plural: bool) -> &'static str {
     }
 }
 
+/// What a checkout refusal names as the reader that would have opened the repository: `read_git`
+/// itself where this turn's list holds it, and a name this turn can act on otherwise (TOOL-6). The
+/// turn asking `spawn_agent` or `apply_checkout` for a checkout is not the turn that would have
+/// called `read_git`, and may not be offered it.
+fn checkout_reader(beside: Beside) -> &'static str {
+    if beside.holds(Named::ReadGit) {
+        "read_git"
+    } else {
+        "the repository reader"
+    }
+}
+
 /// How a job that has ended finished, read off the exit code and the signal of each of its steps.
 ///
 /// Structure and nothing else: no byte of what the pipeline printed reaches this. Failed rather
@@ -7294,7 +7306,7 @@ fn apply_checkout<S: Sink, C: Confirmer>(
         }
         Some(_) => return Produced::problem("error: 'paths' is a list of paths"),
     };
-    let offered = offered(policy, workspace, &kept, given.as_deref());
+    let offered = offered(policy, workspace, &kept, given.as_deref(), tools.beside);
     let paths: Vec<String> = match given {
         None => offered.paths.iter().cloned().collect(),
         Some(given) => match only_recorded(&id, &offered, given) {
@@ -7321,11 +7333,15 @@ struct Offered {
 /// The paths of the kept checkout that may come back. The status is read afresh on every call,
 /// since a program may have written there since the last one, unless `given` names only paths the
 /// driver recorded itself, which no status could add to or take from.
+///
+/// `beside` is this turn's tool list, read only to say which reader a status that could not be
+/// read names, where reading it fails (TOOL-6).
 fn offered<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     kept: &crate::workspace::SessionCheckout,
     given: Option<&[String]>,
+    beside: Beside,
 ) -> Offered {
     let mut paths = kept.candidates.named.clone();
     let mut listed = std::collections::BTreeSet::new();
@@ -7360,7 +7376,7 @@ fn offered<S: Sink>(
         Err(declined) => Some(format!(
             "The status could not be read, so a file a program wrote other than by a redirection \
              is not found: {}",
-            declined.describe("the checkout")
+            declined.describe_as("the checkout", checkout_reader(beside))
         )),
     };
     Offered {
@@ -7428,7 +7444,7 @@ pub(crate) fn apply_kept_checkout<S: Sink, C: Confirmer>(
         return Err(format!("the session keeps no checkout {id}"));
     };
     let given = (!paths.is_empty()).then_some(paths.as_slice());
-    let offered = offered(policy, tools.workspace, &kept, given);
+    let offered = offered(policy, tools.workspace, &kept, given, tools.beside);
     let paths = match paths.is_empty() {
         true => offered.paths.iter().cloned().collect(),
         false => only_recorded(id, &offered, paths)?,
@@ -10198,6 +10214,9 @@ const MAX_SCANNED_BYTES: usize = 8 * 1024 * 1024;
 struct Standing {
     /// The name the file authority and the trust map hold this destination under.
     key: String,
+    /// The keys of the file's other names (a symbolic link's landing, hard links, a second path to
+    /// the tree), which the effect is entered under with `key` (TRUST-4).
+    others: Vec<String>,
     /// The name a person and a finding see, which is the name relative to the workspace root.
     shown: String,
     /// The name the planner is told: `shown` with the directory the line ran in spelled as the
@@ -12733,6 +12752,13 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // Keyed the way the authority keys it, so the two spellings of one destination in
     // `> out 2> ./out` are one effect rather than a second entry refused by the first.
     let mut effects = std::collections::BTreeMap::new();
+    // Every key an effect of this line holds, a destination's other names included, and how many
+    // there are: each one advances the authority's revision once when it is entered.
+    let mut entered: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // Entered for names a destination gained after its first open, because a part of the line
+    // replaced it with a link in between. Completed untrusted, and by the drop of an effect that
+    // was not completed (TRUST-4).
+    let mut gained: Vec<(bravebot_core::file_authority::FileEffect, Vec<String>)> = Vec::new();
     // What each of those destinations held before the line opened it, taken at the same moment
     // and for the credential scan below: there is no later moment to ask, because afterwards
     // every answer is the line's own.
@@ -12869,25 +12895,96 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                         path: target,
                     });
                 }
-                let key = authority.key(&tools.workspace.trust_key(&path.to_string_lossy()));
-                if effects.contains_key(&key) {
-                    return Ok(());
-                }
+                let own = tools.workspace.trust_key(&path.to_string_lossy());
+                let key = authority.key(&own);
+                // The file's other names: where a link lands, its hard links and a second path to
+                // the tree. Looked up at every open, since a part run between two opens of one
+                // destination can have made it a link, and before the boundary is taken, since the
+                // walk reads directories (TRUST-4, CMDLINE-5).
+                let others = tools
+                    .workspace
+                    .other_trust_keys(&tools.workspace.relative_display(path));
+                // And each name a read of the file is asked under (`Workspace::names_reached`): the
+                // spelling with each `..` taken out, which the file tools refuse to read the file
+                // under as typed, and the place the path lands. Built from the redirection's own
+                // text and the file system, never from a byte of any file.
+                let mut named: Vec<String> = others.keys.clone();
+                named.extend(
+                    tools
+                        .workspace
+                        .names_reached(path)
+                        .iter()
+                        .map(|reached| tools.workspace.trust_key(reached)),
+                );
+                named.retain(|name| *name != own);
+                named.sort();
+                named.dedup();
+                // `every` is each other name the file has. `fresh`, below, is the subset of them
+                // this line has not entered yet: a name an earlier destination entered is held by
+                // that effect and would be refused as a second writer.
+                let mut every: Vec<String> = named
+                    .iter()
+                    .map(|other| authority.key(other))
+                    .filter(|other| *other != key)
+                    .collect();
+                every.sort();
+                every.dedup();
+                // A destination this line already entered under this spelling gains only the names
+                // it was not entered under. A new one reserves every name, so another spelling of
+                // a file the line holds, or a second path to it, is refused as a second writer
+                // (`> d/../dd.txt` then `> dd.txt`). Held by the effects and not by `entered`,
+                // which also holds the other names of an earlier destination.
+                let fresh: Vec<String> = match effects.contains_key(&key) {
+                    true => every
+                        .iter()
+                        .filter(|other| !entered.contains(*other))
+                        .cloned()
+                        .collect(),
+                    false => every.clone(),
+                };
                 // Whatever the line's label: a line that stops short leaves every destination
                 // untrusted, and whether it will is not known until it has (MEMORY-5).
-                crate::memory::record_before_write(tools.workspace.memories(), &key, folds)
-                    .map_err(|e| crate::exec::ExecError::Io(e.to_string()))?;
+                for name in std::iter::once(&key).chain(&fresh) {
+                    crate::memory::record_before_write(tools.workspace.memories(), name, folds)
+                        .map_err(|e| crate::exec::ExecError::Io(e.to_string()))?;
+                }
+                if effects.contains_key(&key) {
+                    // A destination this line entered under this spelling. It gains a name only
+                    // where a part of the line left a link at it since the first open, and that
+                    // name is entered now and left untrusted: what the line writes through the link
+                    // is not what the destination was approved for (TRUST-4).
+                    if fresh.is_empty() {
+                        return Ok(());
+                    }
+                    return policy.capture_files(|_, capture| {
+                        let names: Vec<&str> = fresh.iter().map(String::as_str).collect();
+                        let effect = capture.begin_all(&names).ok_or_else(|| {
+                            crate::exec::ExecError::Io(
+                                "another file effect is still writing this destination".to_string(),
+                            )
+                        })?;
+                        entered.extend(fresh.iter().cloned());
+                        gained.push((effect, fresh.clone()));
+                        Ok(())
+                    });
+                }
                 policy.capture_files(|policy, capture| {
-                    let prior = if !policy.read_is_quarantined(&key) {
-                        bravebot_core::label::Integrity::Trusted
-                    } else {
-                        bravebot_core::label::Integrity::Untrusted
-                    };
-                    let effect = capture.begin(&key).ok_or_else(|| {
+                    let prior =
+                        if !policy.read_is_quarantined_under_names(&key, &named, others.complete) {
+                            bravebot_core::label::Integrity::Trusted
+                        } else {
+                            bravebot_core::label::Integrity::Untrusted
+                        };
+                    let names: Vec<&str> = std::iter::once(key.as_str())
+                        .chain(fresh.iter().map(String::as_str))
+                        .collect();
+                    let effect = capture.begin_all(&names).ok_or_else(|| {
                         crate::exec::ExecError::Io(
                             "another file effect is still writing this destination".to_string(),
                         )
                     })?;
+                    entered.insert(key.clone());
+                    entered.extend(fresh.iter().cloned());
                     // Kept only where the scan below could reach this destination, which is where
                     // what the line leaves in it will be at an integrity the driver may read.
                     // Reading a destination a line nobody vouched for is about to truncate buys
@@ -12904,6 +13001,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                     };
                     standing.push(Standing {
                         key: key.clone(),
+                        others: every.clone(),
                         shown: tools.workspace.relative_display(path),
                         told: told_destination(
                             tools.workspace,
@@ -12974,7 +13072,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     }
     // A proof about inputs before execution cannot label output captured beside a write.
     // Our own effect entries each advance the revision once and are accounted for separately.
-    let label = if authority.is_current(started_revision.wrapping_add(effects.len() as u64)) {
+    let label = if authority.is_current(started_revision.wrapping_add(entered.len() as u64)) {
         label
     } else {
         Label::new(
@@ -13009,6 +13107,10 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // modification time, so the mark reads it as changed and it is counted. Whether the line ended well does not enter into it: a line that failed halfway has
     // still left what it got to.
     let changed_a_file = tree_before.differs_now();
+    let gained_names: Vec<String> = gained
+        .iter()
+        .flat_map(|(_, names)| names.iter().cloned())
+        .collect();
     if ran
         .as_ref()
         .is_ok_and(|ran| ran.ended_well && ran.succeeded())
@@ -13028,9 +13130,21 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             };
             effect.complete(integrity);
         }
+        // A name a destination gained after its first open is left untrusted: the yes to the line
+        // was about the destination as it stood, and what the line wrote through the link is not
+        // known to be what that approval covered (TRUST-4).
+        for (effect, _) in gained.drain(..) {
+            effect.complete(bravebot_core::label::Integrity::Untrusted);
+        }
+    }
+    for name in &gained_names {
+        crate::memory::after_write(policy, tools.workspace.memories(), name, folds);
     }
     for destination in &standing {
         crate::memory::after_write(policy, tools.workspace.memories(), &destination.key, folds);
+        for other in &destination.others {
+            crate::memory::after_write(policy, tools.workspace.memories(), other, folds);
+        }
         // The line is the planner's own words, so the name in it is one it typed. Recorded by
         // `told`, the directory spelled as typed, and not by `shown`, which holds the place a link
         // in the tree led (CHECKOUT-13, LABEL-3). Recorded only where the line left a file, so a
@@ -14630,12 +14744,19 @@ fn spawn_agent<S: Sink, R: Reporter>(
         let made = match wanted.map(|wanted| wanted.place) {
             None => None,
             Some(place) => match match place {
-                CheckoutPlace::State(state) => {
-                    tools.workspace.checkout_for_cause(policy, state, id)
+                CheckoutPlace::State(state) => tools.workspace.checkout_for_cause_as(
+                    policy,
+                    state,
+                    id,
+                    checkout_reader(tools.beside),
+                ),
+                CheckoutPlace::Temporary => {
+                    tools.workspace.checkout_in_temporary_directory_cause_as(
+                        policy,
+                        id,
+                        checkout_reader(tools.beside),
+                    )
                 }
-                CheckoutPlace::Temporary => tools
-                    .workspace
-                    .checkout_in_temporary_directory_cause(policy, id),
             } {
                 Ok(made) => {
                     if let Some(checkout) = made.checkout() {
@@ -19725,6 +19846,64 @@ mod tests {
         );
     }
 
+    /// `web_search` hands back a reference and says what to do with it, in its own words about
+    /// "the results". Each of `spawn_processor`, `write_file` and `vet_content` is named only where
+    /// the list holds it, and every combination reads exactly as written here. The regression it
+    /// rejects is `web_search` borrowing the wording of `fetch_url` ("the page") or a sentence for
+    /// one combination of the neighbours being sent for another.
+    #[test]
+    fn the_web_search_description_names_only_the_tools_the_list_holds() {
+        let head = "Search the web with the Brave Search API. 'service' picks what is asked: web, \
+                    news, videos, images, llm_context (pre-extracted page text for grounding), \
+                    suggest, spellcheck or places. What comes back is quarantined, like a file \
+                    nobody vouched for: you get a reference rather than the results, and you \
+                    cannot read it or be told what it says.";
+        let tail = " The user is asked before the query leaves the machine, and it is sent to the \
+                    Brave Search API and nowhere else.";
+        let reading = " Where you have to read the results yourself, vet_content is the question \
+                       to ask.";
+        for (spawn, write, moves) in [
+            (
+                true,
+                true,
+                " Hand the reference to spawn_processor to have a question answered about it, or \
+                 to write_file as contents_ref to save it.",
+            ),
+            (
+                true,
+                false,
+                " Hand the reference to spawn_processor to have a question answered about it.",
+            ),
+            (
+                false,
+                true,
+                " Hand the reference to write_file as contents_ref to save it.",
+            ),
+            (false, false, ""),
+        ] {
+            for vet in [true, false] {
+                let mut gone = Vec::new();
+                if !spawn {
+                    gone.push("spawn_processor");
+                }
+                if !write {
+                    gone.push("write_file");
+                }
+                if !vet {
+                    gone.push("vet_content");
+                }
+                let mut offered = the_table_without(&gone);
+                offer_web_search(&mut offered);
+                let expected = format!("{head}{moves}{}{tail}", if vet { reading } else { "" });
+                assert_eq!(
+                    description_of(&offered, "web_search"),
+                    expected,
+                    "without {gone:?}"
+                );
+            }
+        }
+    }
+
     /// `job_output` says what a job's output is passed to when it comes back as a reference. Each of
     /// the three tools is named only where the list holds it, and a list with none still says that
     /// the output comes back as a reference.
@@ -20296,6 +20475,18 @@ mod tests {
         assert_eq!(lsp_clause(holding, true), " or is offered lsp");
         assert_eq!(lsp_clause(without, false), "");
         assert_eq!(lsp_clause(without, true), "");
+    }
+
+    /// TOOL-6. A checkout refusal names `read_git` only where this turn's list holds it, and a
+    /// name this turn can act on otherwise: the turn asking `spawn_agent` or `apply_checkout` for
+    /// a checkout is not always the turn that would have called `read_git`.
+    #[test]
+    fn a_checkout_refusal_names_read_git_only_where_the_list_holds_it() {
+        assert_eq!(checkout_reader(Beside::every()), "read_git");
+        assert_ne!(
+            checkout_reader(Beside::every().without(Named::ReadGit)),
+            "read_git"
+        );
     }
 
     /// The processor's description as the turn it is read in is offered it.

@@ -117,17 +117,39 @@ pub(super) fn compact_animated(
         |_, session, message| compact_reported(session, message),
     )?;
 
-    let (done, conversation, sink) = worker.join().unwrap_or_else(|_| {
-        (
-            Err(t!(compact_ended_unexpectedly).to_string()),
-            Conversation::new(),
-            Trail::new(),
-        )
-    });
+    let (done, conversation, sink) = join_the_summary(worker)?;
 
     compact_ended(session, config.context_budget, &done, cancel.is_cancelled());
 
     Ok((conversation, sink.events().to_vec()))
+}
+
+/// Take back what the thread summarising the conversation returns, and the conversation with it.
+///
+/// A thread that panicked hands back nothing, and the conversation went into it. There is no
+/// conversation to put in its place: a fresh one is trusted and public, which would reset the
+/// integrity and confidentiality the conversation had gathered (COMPACT-3), and the caller would
+/// save it over the session's record. So a panic is an error, which ends the session as every
+/// other failure of a worker does, with the conversation and the record on disk as they were.
+///
+/// Apart from [`compact_animated`] so that a thread that panics is somewhere a test can reach
+/// without a terminal. It is not shared with the other workers in this file, because what each
+/// has to give back when its thread panics differs, and a conversation is not something to
+/// substitute.
+pub(super) fn join_the_summary(
+    worker: thread::JoinHandle<(
+        Result<Option<bravebot_agent::compact::Compacted>, String>,
+        Conversation,
+        Trail,
+    )>,
+) -> io::Result<(
+    Result<Option<bravebot_agent::compact::Compacted>, String>,
+    Conversation,
+    Trail,
+)> {
+    worker
+        .join()
+        .map_err(|_| io::Error::other(t!(compact_ended_unexpectedly).to_string()))
 }
 
 /// What the thread `compact_animated` starts runs: the summary, and the hooks a person declared for

@@ -6,6 +6,7 @@
 
 use crate::capability::Capability;
 use crate::command::{Asked, Expansion, Plan, Route, Step, Steps, ValuePart};
+use crate::device::{Grant, Operation, Standing, Verdict};
 use crate::label::{Confidentiality, Integrity, Label};
 use crate::permissions::{Decision, Ruling};
 use crate::policy::{
@@ -1033,6 +1034,58 @@ pub proof fn a_scope_is_covered_where_no_field_is_widened(ceiling: Scope, curren
                 Field::ConfinedLines => {},
             }
         }
+    }
+}
+
+/// A grant covers an operation: `read` covers reading and `control` covers both.
+pub open spec fn grant_allows(grant: Grant, operation: Operation) -> bool {
+    operation == Operation::Read || grant == Grant::Control
+}
+
+/// What the host answers a request, from what it holds about the device and nothing in the request.
+pub open spec fn device_verdict(standing: Standing, operation: Operation) -> Verdict {
+    match standing {
+        Standing::Unknown => Verdict::NotPaired,
+        Standing::Revoked => Verdict::Revoked,
+        Standing::Paired(grant) => {
+            if grant_allows(grant, operation) {
+                Verdict::Allowed
+            } else {
+                Verdict::GrantTooNarrow
+            }
+        },
+    }
+}
+
+/// A request is allowed only for a device that is paired with a grant that covers it. A device with
+/// no record, and one that was revoked, are never allowed, and nor is a control request on a read
+/// grant.
+pub proof fn a_request_is_allowed_only_for_a_paired_device_whose_grant_covers_it(
+    standing: Standing,
+    operation: Operation,
+)
+    ensures
+        device_verdict(standing, operation) == Verdict::Allowed <==> (exists|grant: Grant|
+            standing == Standing::Paired(grant) && grant_allows(grant, operation)),
+        standing == Standing::Unknown ==> device_verdict(standing, operation) != Verdict::Allowed,
+        standing == Standing::Revoked ==> device_verdict(standing, operation) != Verdict::Allowed,
+        standing == Standing::Paired(Grant::Read) && operation == Operation::Control
+            ==> device_verdict(standing, operation) != Verdict::Allowed,
+{
+}
+
+/// Whether a trust-map key `prefix` covers the key `path`, segment by segment: the root `/` covers
+/// every key, the empty key covers every key that is not a full path, and any other key covers
+/// itself and every key beneath it after a `/`. So `src` covers `src` and `src/a`, and not
+/// `srcfoo`.
+pub open spec fn covers_key(prefix: Seq<u8>, path: Seq<u8>) -> bool {
+    if prefix == seq![b'/'] {
+        true
+    } else if prefix.len() == 0 {
+        path.len() == 0 || path[0] != b'/'
+    } else {
+        path == prefix || (path.len() > prefix.len() && path.subrange(0, prefix.len() as int)
+            == prefix && path[prefix.len() as int] == b'/')
     }
 }
 

@@ -954,20 +954,77 @@ fn tail_beneath<'k>(prefix: &str, key: &'k str) -> &'k str {
 
 /// [`covers`] for two keys already in the form they are compared in.
 fn covers_spelled(prefix: &str, path: &str) -> bool {
+    covers_bytes(prefix.as_bytes(), path.as_bytes())
+}
+
+/// [`covers_spelled`] over the bytes of the two keys.
+///
+/// A `/` is one byte in UTF-8 and never part of a longer character, so comparing bytes is
+/// comparing the segments the two keys spell.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::covers_key(prefix@, path@),
+))]
+fn covers_bytes(prefix: &[u8], path: &[u8]) -> bool {
     // The filesystem root covers everything, and is the one key with no segment of its own.
-    if prefix == "/" {
+    let root = prefix.len() == 1 && prefix[0] == b'/';
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        if prefix@ == seq![b'/'] {
+            assert(prefix@.len() == 1 && prefix@[0] == b'/');
+        }
+        if root {
+            assert(prefix@ =~= seq![b'/']);
+        }
+    }
+    if root {
         return true;
     }
     // The empty key is not a second one of those. It is what a map made against something that is
     // not a path keys its own root under, and a full path is never under such a root.
     if prefix.is_empty() {
-        return !is_absolute_key(path);
+        return path.is_empty() || path[0] != b'/';
     }
-    if path == prefix {
+    if path.len() < prefix.len() {
+        return false;
+    }
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= prefix.len(),
+            prefix.len() <= path.len(),
+            prefix.len() > 0,
+            prefix@ != seq![b'/'],
+            forall|before: int| 0 <= before < at ==> path@[before] == prefix@[before],
+        decreases prefix.len() - at,
+    ))]
+    while at < prefix.len() {
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let differs = path[at] != prefix[at];
+        if differs {
+            #[cfg(verus_keep_ghost)]
+            proof! {
+                assert(path@.subrange(0, prefix.len() as int)[at as int] != prefix@[at as int]);
+                if path@ == prefix@ {
+                    assert(path@[at as int] == prefix@[at as int]);
+                }
+            }
+            return false;
+        }
+        at += 1;
+    }
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        assert(path@.subrange(0, prefix.len() as int) =~= prefix@);
+    }
+    if path.len() == prefix.len() {
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            assert(path@ =~= prefix@);
+        }
         return true;
     }
-    path.strip_prefix(prefix)
-        .is_some_and(|rest| rest.starts_with('/'))
+    path[prefix.len()] == b'/'
 }
 
 #[cfg(test)]
@@ -1279,6 +1336,18 @@ mod tests {
         assert!(!store.is_trusted("srcfoo/main.rs"));
         assert!(!store.is_trusted("srcfoo"));
         assert!(store.is_trusted("src/foo"));
+    }
+
+    /// A directory whose name is one byte covers what is beneath it and nothing else: only the key
+    /// `/` is the root, so a rule about `a` reaches `a/x` and not `b` or `/b`.
+    #[test]
+    fn a_one_letter_directory_covers_only_what_is_beneath_it() {
+        assert!(covers_spelled("a", "a"));
+        assert!(covers_spelled("a", "a/x"));
+        assert!(!covers_spelled("a", "b"));
+        assert!(!covers_spelled("a", "/b"));
+        assert!(!covers_spelled("a", "ab"));
+        assert!(covers_spelled("/", "/b"));
     }
 
     /// Equivalent spellings of a path must be one rule, or a user could trust `./src` and

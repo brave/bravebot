@@ -373,6 +373,8 @@ export function App(): React.JSX.Element {
         forkedFrom: cameFrom(forksRef.current, summary.directory, summary.id, sessionsRef.current),
         // From the record, which the list row carries (SESSION-34).
         handedOffFrom: sourceOf(summary.handedOffFrom, sessionsRef.current),
+        // OPEN-6: what the resumed session left open, as the bridge said it.
+        openLoops: opened.openLoops ?? null,
         focus: focus ?? null,
         // Ungrounded on purpose, even though this session has said the briefing before. What was
         // said before is in the conversation only until compaction takes it, and a resumed session

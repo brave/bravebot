@@ -3,9 +3,10 @@ name: Proof weakened
 # Flags a pull request that weakens what `make check-verus` holds bravebot-core to, so a person
 # reads it (docs/development/verification.md). contrib/check-verus-weakened.py compares the contract
 # ledger, the mutations and the survivors with the merge base, and names the definitions and
-# scripts that change what every contract means. Where it finds any, this labels the pull request
-# `proof-weakened`, writes what it found to the job summary, and asks the owners of verify/ to
-# review, and where it finds none it takes the label off. It fails nothing: whether a weakening is
+# scripts that change what every contract means. A weakening labels the pull request
+# `proof-weakened`, and an edit to one of those files `proof-tooling-changed`, since that weakens
+# nothing by itself. Either writes what it found to the job summary and asks the owners of verify/
+# to review, and a label whose list is empty comes off. It fails nothing: whether a weakening is
 # right is the reviewer's call.
 #
 # Everything that decides the answer is the base branch's, because a pull request can change its
@@ -20,8 +21,10 @@ on:
     workflows: [CI]
     types: [completed]
 
-# A label is an issue's, so creating one and putting one on a pull request take issues: write.
+# A label is an issue's, so creating one and putting one on a pull request take issues: write. The
+# check run that shows the list on the pull request takes checks: write.
 permissions:
+  checks: write
   contents: read
   issues: write
   pull-requests: write
@@ -84,19 +87,43 @@ jobs:
           test "$(git rev-parse FETCH_HEAD)" = "$HEAD_SHA"
           base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
           python3 contrib/check-verus-weakened.py --base "$base" --head "$HEAD_SHA" \
-            --summary "$GITHUB_STEP_SUMMARY" --github-output "$GITHUB_OUTPUT"
+            --summary "$GITHUB_STEP_SUMMARY" --report "$RUNNER_TEMP/report.md" \
+            --github-output "$GITHUB_OUTPUT"
 
-      - name: Label the pull request and ask the owners of verify/ to review
-        if: ${{ steps.weakened.outputs.weakened == 'true' }}
+      # Each label goes on where its list has an item and comes off where it has none, so a push
+      # that undoes a weakening clears the label it earned.
+      - name: Label the pull request
+        if: ${{ steps.weakened.outputs.weakened != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pull.outputs.number }}
+          REPO: ${{ github.repository }}
+          WEAKENED: ${{ steps.weakened.outputs.weakened }}
+          TOOLING: ${{ steps.weakened.outputs.tooling }}
+        run: |
+          label() {
+            name=$1; on=$2; description=$3
+            if [ "$on" = true ]; then
+              gh label create "$name" --repo "$REPO" --color B60205 --description "$description" \
+                2>/dev/null || true
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "$name"
+            else
+              gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "$name" 2>/dev/null || true
+            fi
+          }
+          label proof-weakened "$WEAKENED" "Weakens a Verus contract, mutation or survivor"
+          label proof-tooling-changed "$TOOLING" \
+            "Edits spec.rs or a script that runs the Verus checks"
+
+      - name: Ask the owners of verify/ to review
+        if: >-
+          ${{ steps.weakened.outputs.weakened == 'true' ||
+          steps.weakened.outputs.tooling == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.pull.outputs.number }}
           REPO: ${{ github.repository }}
         run: |
-          gh label create proof-weakened --repo "$REPO" --color B60205 \
-            --description "Weakens a Verus contract, mutation or survivor" \
-            2>/dev/null || true
-          gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label proof-weakened
           # The owners CODEOWNERS names for verify/, less the author, who cannot review their own.
           author=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json author --jq .author.login)
           for owner in bbondy darkdh; do
@@ -106,11 +133,37 @@ jobs:
             fi
           done
 
-      - name: Take the label off a pull request that no longer weakens anything
-        if: ${{ steps.weakened.outputs.weakened == 'false' }}
+      # A workflow_run job belongs to the default branch's commit, so the pull request's checks do
+      # not list it. This check run on the pull request's head commit does, beside the others, with
+      # the list in it: neutral where something is weakened or a watched file edited, so it blocks
+      # nothing, and success where neither is. Last, and allowed to fail, so a check run GitHub
+      # refuses leaves the labels and the review request done.
+      - name: Show the list in the pull request's checks
+        if: ${{ steps.weakened.outputs.weakened != '' }}
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ steps.pull.outputs.number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER: ${{ github.server_url }}
+          WEAKENED: ${{ steps.weakened.outputs.weakened }}
+          TOOLING: ${{ steps.weakened.outputs.tooling }}
         run: |
-          gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label proof-weakened 2>/dev/null || true
+          if [ "$WEAKENED" = true ]; then
+            conclusion=neutral
+            title="Weakens what Verus checks; an owner of verify/ reads it"
+          elif [ "$TOOLING" = true ]; then
+            conclusion=neutral
+            title="Weakens nothing, and edits what the checks mean; an owner of verify/ reads it"
+          else
+            conclusion=success
+            title="Weakens nothing Verus checks"
+          fi
+          jq -n --arg sha "$HEAD_SHA" --arg conclusion "$conclusion" --arg title "$title" \
+            --arg url "${SERVER}/${REPO}/actions/runs/${RUN_ID}" \
+            --rawfile summary "$RUNNER_TEMP/report.md" \
+            '{name: "Proof weakened", head_sha: $sha, status: "completed",
+              conclusion: $conclusion, details_url: $url,
+              output: {title: $title, summary: ($summary | .[0:65000])}}' \
+            | gh api --method POST "repos/${REPO}/check-runs" --input - --jq .html_url

@@ -259,19 +259,88 @@ fn a_bypass_worker_is_kept_inside_the_workspace_where_the_person_asked() {
 /// write a file, though its kind (a worker) holds the tool and the call is made. The control is the
 /// same definition without the line, whose write lands. The regression it rejects is a `tools:` line
 /// that no longer narrows what the delegate holds, which rests the restriction on the model reading
-/// its tool list. The line narrows what the delegate holds, so a tool sharing a capability with a
-/// named one (`list_files` beside `read_file`) is not refused by name: that is not pinned here.
+/// its tool list. A tool that shares a capability with a named one is refused by name in
+/// `a_delegate_cannot_call_a_tool_its_tools_line_leaves_out_though_one_it_shares_a_capability_with_is_named`.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_delegate_whose_definition_leaves_out_write_file_cannot_call_it() {
     for (kind, line, writes) in [("wide", "", true), ("narrow", "tools: read_file\n", false)] {
-        a_delegate_calls_write_file(kind, line, writes);
+        let (scratch, bodies) = a_delegate_calls(
+            kind,
+            line,
+            &[
+                (
+                    "write_file",
+                    r#"{"path":"written-by-delegate.txt","contents":"X"}"#,
+                ),
+                ("read_file", r#"{"path":"notes.txt"}"#),
+            ],
+        );
+        assert!(
+            bodies.iter().any(|body| body.contains("NOTES-CONTENT")
+                && !body.contains("HAVE-THE-DEFINITION")),
+            "{kind}: the control: the delegate's own read of a file its line names did not work"
+        );
+        assert_eq!(
+            scratch
+                .path
+                .join("written-by-delegate.txt")
+                .try_exists()
+                .expect("the file's state is readable"),
+            writes,
+            "{kind}: the delegate's write_file call did not follow its definition's tools line"
+        );
     }
 }
 
-/// One delegate from a definition holding `line` of front matter, which calls `write_file` and then
-/// `read_file`, and whether its write landed.
+/// MODE-9, DELEGATE-19: a delegate started from a definition whose `tools:` line names `read_file`
+/// is answered `error: no such tool 'list_files'` when it calls `list_files`, which its kind holds
+/// under the same capability as `read_file`, and its `read_file` call is answered. The control is
+/// the same definition without the line, whose `list_files` call returns the directory's listing.
+///
+/// The regression it rejects is a `tools:` line that removes a tool from the offered list and from
+/// the capabilities the delegate holds and leaves dispatch to every tool of a held capability, so
+/// the delegate can still call a tool it was never offered. The scratch directory holds a file whose
+/// name only a listing carries, so a refused call that still listed would show.
+#[test]
+fn a_delegate_cannot_call_a_tool_its_tools_line_leaves_out_though_one_it_shares_a_capability_with_is_named()
+ {
+    for (kind, line, lists) in [
+        ("wide-lists", "", true),
+        ("narrow-lists", "tools: read_file\n", false),
+    ] {
+        let (_scratch, bodies) = a_delegate_calls(
+            kind,
+            line,
+            &[
+                ("list_files", r#"{"directory":"."}"#),
+                ("read_file", r#"{"path":"notes.txt"}"#),
+            ],
+        );
+        let in_a_request = |marker: &str| bodies.iter().any(|body| body.contains(marker));
+        assert!(
+            bodies.iter().any(|body| body.contains("NOTES-CONTENT")
+                && !body.contains("HAVE-THE-DEFINITION")),
+            "{kind}: the control: the delegate's read_file, which its line names, was not answered"
+        );
+        assert_eq!(
+            in_a_request("ONLY-A-LISTING-NAMES-THIS.txt"),
+            lists,
+            "{kind}: the delegate's list_files call did not follow its definition's tools line"
+        );
+        assert_eq!(
+            in_a_request("no such tool 'list_files'"),
+            !lists,
+            "{kind}: a call to a tool the tools line leaves out was not answered as an unknown tool"
+        );
+    }
+}
+
+/// One delegate from a definition holding `line` of front matter, which makes `calls` in order, in
+/// a workspace holding `notes.txt` and a file only a listing names, and the requests the model was
+/// sent.
 #[expect(clippy::expect_used, reason = "a test fails by panicking")]
-fn a_delegate_calls_write_file(kind: &str, line: &str, writes: bool) {
+fn a_delegate_calls(kind: &str, line: &str, calls: &[(&str, &str)]) -> (Scratch, Vec<String>) {
     let scratch = Scratch::new(&format!("delegate-tools-line-{kind}"));
     let home = Scratch::new(&format!("delegate-tools-line-home-{kind}"));
     std::fs::create_dir_all(home.path.join("agents")).expect("the definitions directory");
@@ -283,7 +352,13 @@ fn a_delegate_calls_write_file(kind: &str, line: &str, writes: bool) {
     )
     .expect("the definition");
     std::fs::write(scratch.path.join("notes.txt"), "NOTES-CONTENT").expect("notes");
+    std::fs::write(scratch.path.join("ONLY-A-LISTING-NAMES-THIS.txt"), "").expect("marker");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut delegate: Vec<String> = calls
+        .iter()
+        .map(|(tool, arguments)| tool_request(tool, arguments))
+        .collect();
+    delegate.push(reply_with("tried"));
     let (endpoint, received) = serve_by_marker(vec![
         (
             "HAVE-THE-DEFINITION-DO-IT",
@@ -296,17 +371,7 @@ fn a_delegate_calls_write_file(kind: &str, line: &str, writes: bool) {
                 reply_with("done"),
             ],
         ),
-        (
-            "WRITE-A-FILE",
-            vec![
-                tool_request(
-                    "write_file",
-                    r#"{"path":"written-by-delegate.txt","contents":"X"}"#,
-                ),
-                tool_request("read_file", r#"{"path":"notes.txt"}"#),
-                reply_with("tried"),
-            ],
-        ),
+        ("WRITE-A-FILE", delegate),
     ]);
     turn::resume(
         &config_for(&endpoint),
@@ -326,15 +391,5 @@ fn a_delegate_calls_write_file(kind: &str, line: &str, writes: bool) {
     .expect("the turn runs");
 
     let bodies: Vec<String> = received.try_iter().collect();
-    assert!(
-        bodies
-            .iter()
-            .any(|body| body.contains("NOTES-CONTENT") && !body.contains("HAVE-THE-DEFINITION")),
-        "{kind}: the control: the delegate's own read of a file its line names did not work"
-    );
-    assert_eq!(
-        scratch.path.join("written-by-delegate.txt").exists(),
-        writes,
-        "{kind}: the delegate's write_file call did not follow its definition's tools line"
-    );
+    (scratch, bodies)
 }

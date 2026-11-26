@@ -134,6 +134,8 @@ it does without a list. On Linux the request changes nothing. A list that is set
 is a list, and an empty `allowedHosts` refuses every host. See [the sandbox](security.md) for what the list
 can and cannot hold back.
 
+A host name that holds a character outside ASCII is refused as not listed and never looked up, and it is not put to you under `ask`, so a spelling such as a full-width letter cannot reach a name a `deniedHosts` entry refuses. A name written in ASCII, an `xn--` name included, is compared like any other.
+
 `deniedHosts` and `onUnlisted: refuse` only take reach away, so any file may write them. `allowedHosts`
 and `onUnlisted: ask` give it back, so they are read from your own file and a `--settings` file
 outside the project; a project or local file's are ignored and named by `bravebot doctor`. A value
@@ -167,7 +169,7 @@ directory the session was opened on included. Each list is empty unless you writ
 A path is absolute, starts with `~/`, or is relative to the directory the session was opened on. A
 `..` that climbs out of it is refused. `*` and `?` work in `allowRead` and `denyRead`, so
 `**/*.env` refuses every file ending in `.env` under the directory; the listing is made when a
-command starts, so a file made afterwards is not in it. A link is judged by where it leads.
+command starts, so a file made afterwards is not in it. A `denyRead` glob also holds back a name that differs only in case or Unicode form, so `*.pem` refuses `SERVER.PEM`; an `allowRead` glob is compared exactly. A `denyRead` or `denyWrite` entry for a path that does not exist yet also refuses a file made there later under another Unicode form of its name, on a volume such as APFS that opens both. A link is judged by where it leads.
 
 The narrower path wins: `allowWrite` on `~/a` and `denyWrite` on `~/a/b` writes `~/a/c` and not
 `~/a/b/x`. Where both name the same path the refusal wins, and it wins over what a command is given

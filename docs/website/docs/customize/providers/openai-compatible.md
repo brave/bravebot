@@ -399,7 +399,8 @@ not exist and a network that is not up yet cannot be told apart by the failure.
 
 A reply that stopped before it was finished, or that the service reported as failing part way
 through, is sent again twice, because each attempt is billed. A reply that is still arriving is
-given up on when nothing has come for two minutes. All three are figures you can change for one
+given up on when nothing has come for two minutes. A reply that goes quiet before any of its body has
+arrived is sent again as a failed connection is. All three are figures you can change for one
 gateway in its `options`:
 
 ```json

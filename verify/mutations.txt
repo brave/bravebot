@@ -729,3 +729,75 @@ replace: || !holds_all(&self.undecided, &current.undecided), => ,
 mutation: Scope::covers lets a tool the ceiling still asked about go unasked
 file: crates/core/src/scope.rs
 replace: standing_answers: !holds_all(&self.standing_answers, &current.standing_answers), => standing_answers: !holds_all(&current.standing_answers, &self.standing_answers),
+
+mutation: Grant::allows lets a read grant control
+file: crates/core/src/device.rs
+replace: self == Self::Control => true
+
+mutation: Grant::allows refuses a read grant its own reading
+file: crates/core/src/device.rs
+replace: true => false
+
+mutation: Standing::authorizes allows a revoked device
+file: crates/core/src/device.rs
+replace: Verdict::Revoked => Verdict::Allowed
+
+mutation: Standing::authorizes allows a device nobody paired
+file: crates/core/src/device.rs
+replace: Verdict::NotPaired => Verdict::Allowed
+
+mutation: Standing::authorizes allows a grant that is too narrow
+file: crates/core/src/device.rs
+replace: Verdict::GrantTooNarrow => Verdict::Allowed
+
+mutation: covers_bytes reads a plain string prefix as a segment, so src covers srcfoo
+file: crates/core/src/trust.rs
+replace: path[prefix.len()] == b'/' => true
+
+mutation: covers_bytes lets the empty key cover a full path
+file: crates/core/src/trust.rs
+replace: return path.is_empty() || path[0] != b'/'; => return true;
+
+mutation: covers_bytes skips comparing the bytes of the prefix
+file: crates/core/src/trust.rs
+replace: let differs = path[at] != prefix[at]; => let differs = false;
+
+mutation: covers_bytes reads any one-byte key as the root
+file: crates/core/src/trust.rs
+replace: let root = prefix.len() == 1 && prefix[0] == b'/'; => let root = prefix.len() == 1;
+
+mutation: ReleasePlan::contains names every slot releasable
+file: crates/core/src/policy.rs
+replace: let named = same_slot(&self.sources[at], slot); => let named = true;
+
+mutation: ReleasePlan::allows_into releases a slot to a destination the plan did not name with it
+file: crates/core/src/policy.rs
+replace: let to_here = same_slot(named, slot) && same_destination(to, destination); => let to_here = same_slot(named, slot);
+
+mutation: Policy::record_note keeps the note a person typed as untrusted
+file: crates/core/src/policy.rs
+replace: let label = Label::new(Integrity::Trusted, Confidentiality::Public); => let label = Label::new(Integrity::Untrusted, Confidentiality::Public);
+
+mutation: Policy::promote_reference_for_read promotes the path at the slot's own label
+file: crates/core/src/policy.rs
+replace: Ok(Labelled::trusted(path)) => Ok(Labelled::new(path, Label::new(Integrity::Untrusted, Confidentiality::Public)))
+
+mutation: adapt stops dividing delta, so the bias it returns is past what digits_of may be given
+file: crates/core/src/punycode.rs
+replace: delta /= BASE - T_MIN; => delta /= 1 + delta / delta;
+
+mutation: adapt skips halving delta, so adding a part of it to itself can wrap
+file: crates/core/src/punycode.rs
+replace: let mut delta = if first { delta / DAMP } else { delta / 2 }; => let mut delta = if first { delta / DAMP } else { delta };
+
+mutation: digits_of takes a bias past the largest adapt returns, so k can pass bias by more than the digits allow
+file: crates/core/src/punycode.rs
+replace: let bias = bias.min(MOST_BIAS); => let bias = bias;
+
+mutation: digits_of divides what is left by too little, so k keeps growing until it wraps
+file: crates/core/src/punycode.rs
+replace: q = (q - t) / (BASE - t); => q = (q - t) / 2;
+
+mutation: digits_of stops at a threshold of 36 or more, so the last digit it pushes can be past z9
+file: crates/core/src/punycode.rs
+replace: } else if k >= bias + T_MAX { => } else if k >= bias + T_MAX + 20 {

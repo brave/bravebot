@@ -75,7 +75,7 @@ A `mcp.deny` entry matches a sandboxed server by its program and arguments as th
 Tool lists are discovered and approved **before** a manifest is planned, so the sandbox belongs to the MCP session, not to one manifest run.
 
 1. **Approve the declaration.** The question names the OpenShell backend, the pinned image and the allowed hosts.
-2. **Create the sandbox.** The session creates it on the server's own thread, within the declaration's startup bound, with the filesystem policy, and waits for `Ready`. Where the server has hosts, it resolves the program's real path in the image and loads the network rules with `policy set --wait`.
+2. **Create the sandbox.** The session creates it on the server's own thread, within the declaration's startup bound, with the filesystem policy, and waits for `Ready`. Where the server has hosts, it resolves the program's real path in the image and loads the network rules with `policy set --wait`. Each policy document is passed to `openshell` as a file in `openshell-policies` in the state directory (see Isolation and network policy).
 3. **Start MCP over stdio.** Only once the sandbox is ready and its policy confirmed does bravebot start the program with `sandbox exec --no-tty`. The usual parsing, line-size, handshake and call limits apply ([MCP-7](../specs/mcp.md#MCP-7), [MCP-13](../specs/mcp.md#MCP-13), [SERVERS-15](../specs/mcp-servers.md#SERVERS-15)).
 4. **Approve the tool list.** The person vouches for the tools ([SERVERS-8](../specs/mcp-servers.md#SERVERS-8)), and manifest planning may then offer them.
 5. **Reuse and release.** Approved calls use the same stdio connection. The sandbox is deleted when the session releases the server.
@@ -103,6 +103,8 @@ The first OpenShell start in a process deletes recorded sandboxes of the same ma
 The policy is built by a pure function of the approved declaration and the session's network decision.
 
 **Filesystem.** The image only; no host mounts. System directories are read-only and `/tmp` is writable. Landlock is set to `compatibility: hard_requirement`, so a kernel that cannot enforce it refuses the sandbox rather than running it unconfined.
+
+**Policy document.** `openshell` reads the policy from a file, for the create and again for the rule set. bravebot writes it in `openshell-policies` in the state directory, which a confined stage cannot write, so a stage cannot replace the file between the write and the moment `openshell` opens it. The directory has mode 0700, the file is created new with mode 0600 and a random 32-digit name, and each file is removed when its owner is dropped: the file for the create after the sandbox is ready and its rule set is applied, or when a step refuses the start, and the file for the rule set when `policy set` returns. The system temporary directory, which a stage may write, is never used. With no writable state directory, as in an incognito session, the server is not started. Passing the document on standard input or as a descriptor would avoid that, but it is not known that `openshell` takes the policy that way, so it is not done.
 
 **Network.** Each declared host becomes an enforced port-443 rule for the program's real path inside the image, after narrowing: hosts the session's allowed list does not cover, and hosts any session denied entry overlaps, are removed, and names are converted to OpenShell's spelling with unsupported ones dropped. Where the session's network is closed, no hosts are declared, or a denied entry cannot be read, no host is granted.
 

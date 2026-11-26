@@ -170,6 +170,9 @@ pub struct OpenShell {
     name: String,
     image: String,
     hosts: Vec<String>,
+    /// Where the policy files are written: a directory no confined stage may write, under the
+    /// state directory. `None` where the session has no state directory.
+    policy_directory: Option<std::path::PathBuf>,
     /// How far the sandbox got: made, so it is deleted when this is dropped, and ready, so a start
     /// may use it.
     state: Mutex<Prepared>,
@@ -187,11 +190,19 @@ struct Prepared {
 impl OpenShell {
     /// A sandbox named `name`, made from `image`, whose program may reach `hosts` and nothing else.
     ///
-    /// Nothing is created yet. `None` where the `openshell` program is not found in a directory
+    /// The policy files `openshell` is given are written in `policy_directory`, which must be a
+    /// place no confined stage may write.
+    ///
+    /// Nothing is created yet. `Err` where the `openshell` program is not found in a directory
     /// SANDBOX-30 allows, which a caller reports as the backend being unavailable.
-    pub fn new(name: &str, image: &str, hosts: &[String]) -> Result<Self, SandboxError> {
+    pub fn new(
+        name: &str,
+        image: &str,
+        hosts: &[String],
+        policy_directory: Option<&std::path::Path>,
+    ) -> Result<Self, SandboxError> {
         let cli = find_cli()?;
-        Self::with_program(cli, name, image, hosts)
+        Self::with_program(cli, name, image, hosts, policy_directory)
     }
 
     /// [`OpenShell::new`] with the `openshell` program already resolved.
@@ -200,6 +211,7 @@ impl OpenShell {
         name: &str,
         image: &str,
         hosts: &[String],
+        policy_directory: Option<&std::path::Path>,
     ) -> Result<Self, SandboxError> {
         if !is_sandbox_name(name) {
             return Err(setup(format!(
@@ -219,6 +231,7 @@ impl OpenShell {
             name: name.to_string(),
             image: image.to_string(),
             hosts: hosts.to_vec(),
+            policy_directory: policy_directory.map(std::path::Path::to_path_buf),
             state: Mutex::new(Prepared::default()),
         })
     }
@@ -291,7 +304,8 @@ impl OpenShell {
                 self.name
             )));
         }
-        let first = PolicyFile::write(&policy_document(None, &[]))?;
+        let directory = self.policy_directory()?;
+        let first = PolicyFile::write(directory, &policy_document(None, &[]))?;
         // Taken as made from the moment it is asked for: a create that is killed at its bound or
         // fails may still have been made by the gateway, so drop deletes it either way.
         state.created = true;
@@ -322,7 +336,8 @@ impl OpenShell {
         self.wait_until_ready()?;
         if !self.hosts.is_empty() {
             let binary = self.real_path(program)?;
-            let granted = PolicyFile::write(&policy_document(Some(&binary), &self.hosts))?;
+            let granted =
+                PolicyFile::write(directory, &policy_document(Some(&binary), &self.hosts))?;
             self.run_ok(
                 "setting the sandbox's policy",
                 &[
@@ -340,6 +355,24 @@ impl OpenShell {
         }
         state.ready = true;
         Ok(())
+    }
+
+    /// The directory the policy files are written in.
+    ///
+    /// A session with no state directory has no place a confined stage cannot write, and nothing
+    /// shows that `openshell` reads a policy from its standard input or from a descriptor, so the
+    /// start is refused before anything is created. The system temporary directory is never used
+    /// in its place.
+    fn policy_directory(&self) -> Result<&std::path::Path, SandboxError> {
+        self.policy_directory.as_deref().ok_or_else(|| {
+            setup(
+                "the sandbox's policy cannot be written where a confined program cannot replace it, \
+                 because this session has no state directory to write it in (an incognito session, \
+                 or a state directory that cannot be written); start the server in a session with a \
+                 writable state directory"
+                    .into(),
+            )
+        })
     }
 
     /// Wait for the sandbox to report itself ready, or refuse once it errs or the time is up.
@@ -519,8 +552,9 @@ impl Sandbox for OpenShell {
 struct PolicyFile(tempfile_path::TempPath);
 
 impl PolicyFile {
-    fn write(document: &str) -> Result<Self, SandboxError> {
-        tempfile_path::TempPath::write(document)
+    /// `document` in a new file in `directory`, which is made owner-only if it is not.
+    fn write(directory: &std::path::Path, document: &str) -> Result<Self, SandboxError> {
+        tempfile_path::TempPath::write(directory, document)
             .map(Self)
             .map_err(|e| setup(format!("writing the sandbox's policy failed: {e}")))
     }
@@ -530,33 +564,30 @@ impl PolicyFile {
     }
 }
 
-/// A file in the temporary directory, readable by this account alone, removed on drop.
+/// A file in a directory this account alone may enter, named from the operating system's random
+/// source, readable by this account alone, removed on drop.
+///
+/// The directory is the caller's to place where no confined stage may write, which the temporary
+/// directory is not: a stage that replaces the file before `openshell` opens it chooses the policy
+/// the sandbox is made with.
 mod tempfile_path {
-    use std::io::Write;
+    use std::io::{Read, Write};
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT: AtomicU64 = AtomicU64::new(0);
 
     pub(super) struct TempPath(PathBuf);
 
     impl TempPath {
-        pub(super) fn write(text: &str) -> std::io::Result<Self> {
-            let path = std::env::temp_dir().join(format!(
-                "bravebot-openshell-{}-{}.yaml",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
+        pub(super) fn write(directory: &Path, text: &str) -> std::io::Result<Self> {
+            owner_only_directory(directory)?;
+            let path = directory.join(format!("bravebot-openshell-{}.yaml", random_name()?));
             let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
+            options.write(true).create_new(true).mode(0o600);
             let mut file = options.open(&path)?;
+            // Owned from here, so a file whose write fails is removed too.
+            let owned = Self(path);
             file.write_all(text.as_bytes())?;
-            Ok(Self(path))
+            Ok(owned)
         }
 
         pub(super) fn path(&self) -> &Path {
@@ -572,6 +603,42 @@ mod tempfile_path {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
         }
+    }
+
+    /// `directory`, made if absent and set to mode 0700 whether it was made now or before. Refused
+    /// where the path is a link or a directory another account owns, since a mode on those says
+    /// nothing about who may replace what is inside.
+    fn owner_only_directory(directory: &Path) -> std::io::Result<()> {
+        crate::policy::make_a_directory(directory)?;
+        let found = std::fs::symlink_metadata(directory)?;
+        if !found.is_dir() {
+            return Err(std::io::Error::other(format!(
+                "`{}` is not a directory",
+                directory.display()
+            )));
+        }
+        if found.uid() != rustix::process::geteuid().as_raw() {
+            return Err(std::io::Error::other(format!(
+                "`{}` is not owned by this account",
+                directory.display()
+            )));
+        }
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
+    }
+
+    /// Thirty-two lower-case hexadecimal digits (128 bits) read from `/dev/urandom`, which the
+    /// operating system fills from its own randomness. No other source is used, because a stage can
+    /// work out a name made from the process id, a counter or the time and create that file first.
+    fn random_name() -> std::io::Result<String> {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut bytes = [0u8; 16];
+        std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+        let mut name = String::with_capacity(32);
+        for byte in bytes {
+            name.push(char::from(HEX[usize::from(byte >> 4)]));
+            name.push(char::from(HEX[usize::from(byte & 0xf)]));
+        }
+        Ok(name)
     }
 }
 
@@ -1043,8 +1110,14 @@ mod tests {
         ] {
             assert!(!is_host_rule(bad), "{bad:?} was accepted");
             assert!(
-                OpenShell::with_program(resolved(), "spike", "python:3.13-slim", &[bad.into()])
-                    .is_err()
+                OpenShell::with_program(
+                    resolved(),
+                    "spike",
+                    "python:3.13-slim",
+                    &[bad.into()],
+                    None
+                )
+                .is_err()
             );
         }
         for good in [
@@ -1069,13 +1142,13 @@ mod tests {
             "1spike",
         ] {
             assert!(
-                OpenShell::with_program(resolved(), bad, "python:3.13-slim", &[]).is_err(),
+                OpenShell::with_program(resolved(), bad, "python:3.13-slim", &[], None).is_err(),
                 "{bad:?}"
             );
         }
         for bad in ["", "python 3", "python:3\n--policy x"] {
             assert!(
-                OpenShell::with_program(resolved(), "spike", bad, &[]).is_err(),
+                OpenShell::with_program(resolved(), "spike", bad, &[], None).is_err(),
                 "{bad:?}"
             );
         }
@@ -1084,16 +1157,19 @@ mod tests {
                 resolved(),
                 "bravebot-mcp-1",
                 "python:3.13-slim@sha256:abc",
-                &[]
+                &[],
+                None
             )
             .is_ok()
         );
         // OpenShell refuses a name past its maximum, so this refuses it first, with a reason.
         let longest = "abcdefghij-klmnopqr";
         assert_eq!(longest.len(), MAX_NAME);
-        assert!(OpenShell::with_program(resolved(), longest, "python:3.13-slim", &[]).is_ok());
+        assert!(
+            OpenShell::with_program(resolved(), longest, "python:3.13-slim", &[], None).is_ok()
+        );
         let past = "abcdefghij-klmnopqrs";
-        assert!(OpenShell::with_program(resolved(), past, "python:3.13-slim", &[]).is_err());
+        assert!(OpenShell::with_program(resolved(), past, "python:3.13-slim", &[], None).is_err());
     }
 
     #[test]
@@ -1277,6 +1353,17 @@ mod tests {
 
         /// One whose `sandbox exec` prints `resolved`, a `printf` format, as a program's real path.
         fn resolving(failing: &str, resolved: &str) -> Self {
+            Self::scripted(failing, resolved, None)
+        }
+
+        /// One whose `sandbox create` and `policy set` each wait `delay` (a `sleep` argument), then
+        /// open the file named after `--policy` and keep the bytes in `read-<command>` in its
+        /// directory, as `openshell` reads the policy it is given some time after it is started.
+        fn reading_the_policy_after(delay: &str) -> Self {
+            Self::scripted("none", "/usr/local/bin/python3.13", Some(delay))
+        }
+
+        fn scripted(failing: &str, resolved: &str, reads_policy_after: Option<&str>) -> Self {
             static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             let dir = std::env::temp_dir().join(format!(
                 "bravebot-fake-openshell-{}-{}",
@@ -1286,8 +1373,14 @@ mod tests {
             std::fs::create_dir_all(&dir).expect("a directory");
             let log = dir.join("log");
             let phase = if failing == "get" { "Error" } else { "Ready" };
+            let reads = reads_policy_after.map_or_else(String::new, |delay| {
+                format!(
+                    "policy=''; previous=''; for argument in \"$@\"; do if [ \"$previous\" = --policy ]; then policy=$argument; fi; previous=$argument; done; sleep {delay}; cat \"$policy\" > '{dir}/read-'\"$1\"'-'\"$2\" 2>> '{dir}/read-errors'",
+                    dir = dir.display(),
+                )
+            });
             let script = format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\ncase \"$1 $2\" in\n  \"{failing}\") exit 1 ;;\n  \"sandbox get\") echo '  Phase: {phase}' ;;\n  \"sandbox exec\") if [ /dev/fd/2 -ef /dev/null ]; then printf 'stderr-null %s\\n' \"$*\" >> '{log}'; fi; printf '{resolved}\\n' ;;\nesac\nexit 0\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\ncase \"$1 $2\" in\n  \"{failing}\") exit 1 ;;\n  \"sandbox create\"|\"policy set\") {reads} ;;\n  \"sandbox get\") echo '  Phase: {phase}' ;;\n  \"sandbox exec\") if [ /dev/fd/2 -ef /dev/null ]; then printf 'stderr-null %s\\n' \"$*\" >> '{log}'; fi; printf '{resolved}\\n' ;;\nesac\nexit 0\n",
                 log = log.display(),
             );
             let program = dir.join("openshell");
@@ -1299,11 +1392,21 @@ mod tests {
         }
 
         fn shell(&self, hosts: &[String]) -> OpenShell {
+            self.shell_writing_in(hosts, Some(&self.dir.join("policy")))
+        }
+
+        /// A backend given `policy_directory` to write its policy files in, or none.
+        fn shell_writing_in(
+            &self,
+            hosts: &[String],
+            policy_directory: Option<&std::path::Path>,
+        ) -> OpenShell {
             OpenShell::with_program(
                 Resolved::found_earlier(self.dir.join("openshell")),
                 "bb-testsandbox1",
                 "python:3.13-slim",
                 hosts,
+                policy_directory,
             )
             .expect("valid")
         }
@@ -1374,6 +1477,374 @@ mod tests {
                 "{failing}: the sandbox was not deleted on drop: {lines:?}"
             );
         }
+    }
+
+    /// SANDBOX-33: with no directory to write the policy in, which is a session with no state
+    /// directory, the start is refused before `openshell` is run at all. The regression it rejects
+    /// is a start that falls back to the system temporary directory, which a confined stage may
+    /// write, and creates the sandbox from a file it could replace: the fake CLI would then log a
+    /// `sandbox create`. Both host lists are tried, since the policy is written once for the create
+    /// and again for the rule set, and a refusal made only when there are hosts would pass the first.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_start_with_no_directory_for_the_policy_is_refused_and_runs_nothing() {
+        for hosts in [Vec::new(), vec!["example.com".to_string()]] {
+            let cli = FakeCli::failing("none");
+            let shell = cli.shell_writing_in(&hosts, None);
+            let refused = start(&shell);
+            assert!(
+                matches!(&refused, Err(SandboxError::SetupFailed { detail, .. }) if detail.contains("no state directory")),
+                "{hosts:?}: {refused:?}"
+            );
+            assert!(
+                !shell.state.lock().expect("lock").created,
+                "{hosts:?}: a sandbox was taken as created"
+            );
+            let again = start(&shell);
+            assert!(
+                matches!(again, Err(SandboxError::SetupFailed { .. })),
+                "{hosts:?}: {again:?}"
+            );
+            drop(shell);
+            assert_eq!(
+                cli.lines(),
+                Vec::<String>::new(),
+                "{hosts:?}: openshell was run"
+            );
+        }
+    }
+
+    /// A directory of its own under the crate's scratch root, emptied first.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn emptied(name: &str) -> std::path::PathBuf {
+        let path = crate::testutil::scratch_dir(name);
+        std::fs::remove_dir_all(&path).ok();
+        std::fs::create_dir_all(&path).expect("a scratch directory");
+        path
+    }
+
+    /// The permission bits of `path`, links followed.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn mode_of(path: &std::path::Path) -> u32 {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(path).expect("metadata").mode() & 0o777
+    }
+
+    /// SANDBOX-33: the policy directory, and the missing directories above it, are made reachable
+    /// by this account alone. The regression it rejects is a directory made with the process's
+    /// default mode (0755 under the usual umask), which lets another account list it and, where the
+    /// account's files are shared, replace what is in it.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_policy_directory_is_made_owner_only() {
+        let root = emptied("openshell-policy-directory-made");
+        let directory = root.join("state").join("openshell-policies");
+        let file = tempfile_path::TempPath::write(&directory, "document").expect("written");
+        assert_eq!(
+            mode_of(&directory),
+            0o700,
+            "{} is not owner-only",
+            directory.display()
+        );
+        assert_eq!(
+            mode_of(&root.join("state")),
+            0o700,
+            "the missing parent of the policy directory is not owner-only"
+        );
+        drop(file);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// SANDBOX-33: a policy directory that exists with a wider mode is narrowed to 0700 before a
+    /// file is written in it. The regression it rejects is a directory taken as it is found, which
+    /// leaves it open to a stage or another account that the mode was meant to keep out.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn an_existing_policy_directory_with_a_wider_mode_is_narrowed() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = emptied("openshell-policy-directory-narrowed");
+        for wide in [0o755, 0o777] {
+            let directory = root.join(format!("policies-{wide:o}"));
+            std::fs::create_dir(&directory).expect("directory");
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(wide))
+                .expect("widened");
+            assert_eq!(mode_of(&directory), wide, "the fixture is not wide");
+            let file = tempfile_path::TempPath::write(&directory, "document").expect("written");
+            assert_eq!(
+                mode_of(&directory),
+                0o700,
+                "a directory of mode {wide:o} was left as it was"
+            );
+            drop(file);
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// SANDBOX-33: a link where the policy directory should be is refused, at the write and at a
+    /// start, which runs nothing. The regression it rejects is a check that follows the link: a
+    /// stage that could plant one would send the policy file, and the mode change, to a directory
+    /// it chose. The directory the link names is left as it was.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn a_link_in_place_of_the_policy_directory_is_refused_and_nothing_is_run() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = emptied("openshell-policy-directory-linked");
+        let target = root.join("target");
+        std::fs::create_dir(&target).expect("target");
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).expect("mode");
+        let link = root.join("policies");
+        std::os::unix::fs::symlink(&target, &link).expect("link");
+        let Err(error) = tempfile_path::TempPath::write(&link, "document") else {
+            panic!("a file was written through the link");
+        };
+        assert!(
+            error.to_string().contains("is not a directory"),
+            "refused for another reason: {error}"
+        );
+        assert_eq!(mode_of(&target), 0o755, "the linked directory was changed");
+        assert_eq!(
+            std::fs::read_dir(&target).expect("listed").count(),
+            0,
+            "a file was written in the linked directory"
+        );
+        let cli = FakeCli::failing("none");
+        let shell = cli.shell_writing_in(&["example.com".to_string()], Some(&link));
+        let refused = start(&shell);
+        assert!(
+            matches!(&refused, Err(SandboxError::SetupFailed { detail, .. }) if detail.contains("is not a directory")),
+            "{refused:?}"
+        );
+        assert!(
+            !shell.state.lock().expect("lock").created,
+            "a sandbox was taken as created"
+        );
+        drop(shell);
+        assert_eq!(cli.lines(), Vec::<String>::new(), "openshell was run");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// SANDBOX-33: a directory another account owns is refused, since its owner may replace what is
+    /// in it whatever its mode. The root directory stands for one, as an account that is not root
+    /// cannot make a directory owned by another. The refusal is by the owner check: a change of the
+    /// directory's mode would also fail for this account, with another message. Where the tests run
+    /// as root, which owns it, there is nothing to refuse.
+    #[test]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn a_policy_directory_another_account_owns_is_refused() {
+        if rustix::process::geteuid().is_root() {
+            eprintln!("SKIPPED (running as root, which owns the directory used as another's)");
+            return;
+        }
+        let Err(error) = tempfile_path::TempPath::write(std::path::Path::new("/"), "document")
+        else {
+            panic!("a file was written in a directory another account owns");
+        };
+        assert!(
+            error.to_string().contains("not owned by this account"),
+            "refused for another reason: {error}"
+        );
+    }
+
+    /// SANDBOX-33: a policy file is readable and writable by this account alone, and holds the
+    /// document it was given. The regression it rejects is a file created with the default mode
+    /// (0644 under the usual umask), which another account may read.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_policy_file_is_owner_only_and_holds_the_document() {
+        let directory = emptied("openshell-policy-file-mode");
+        let file = tempfile_path::TempPath::write(&directory, "the document").expect("written");
+        assert_eq!(mode_of(file.path()), 0o600, "{}", file.path().display());
+        assert_eq!(
+            std::fs::read_to_string(file.path()).expect("read"),
+            "the document"
+        );
+        drop(file);
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    /// SANDBOX-33: each policy file is named `bravebot-openshell-` and 32 lower-case hexadecimal
+    /// digits, and no two files written in a row share a name. The regression it rejects is a name
+    /// that is shorter, in upper case, or built from the process id alone, which a stage can predict
+    /// or that repeats. Whether the digits are unpredictable is not checked: a counter padded to 32
+    /// digits passes.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn a_policy_file_is_named_from_thirty_two_lower_case_hexadecimal_digits() {
+        let directory = emptied("openshell-policy-file-names");
+        let files: Vec<_> = (0..64)
+            .map(|_| tempfile_path::TempPath::write(&directory, "document").expect("written"))
+            .collect();
+        let mut names = std::collections::BTreeSet::new();
+        for file in &files {
+            assert_eq!(file.path().parent(), Some(directory.as_path()));
+            let name = file
+                .path()
+                .file_name()
+                .and_then(OsStr::to_str)
+                .expect("a UTF-8 name")
+                .to_string();
+            let digits = name
+                .strip_prefix("bravebot-openshell-")
+                .and_then(|rest| rest.strip_suffix(".yaml"))
+                .unwrap_or_else(|| panic!("`{name}` is not bravebot-openshell-<digits>.yaml"));
+            assert_eq!(digits.len(), 32, "{name}");
+            assert!(
+                digits
+                    .bytes()
+                    .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+                "{name} is not lower-case hexadecimal"
+            );
+            names.insert(name);
+        }
+        assert_eq!(names.len(), files.len(), "two files had the same name");
+        drop(files);
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    /// The document a stage plants, or writes over a policy file with. It is not what
+    /// [`policy_document`] gives for any input, so a recorded copy of it names the source.
+    const STAGE_DOCUMENT: &[u8] =
+        b"version: 1\nnetwork_policies:\n  everything:\n    endpoints:\n      - host: \"*\"\n";
+
+    /// Files a stage planted, removed when this is dropped.
+    struct Planted(Vec<std::path::PathBuf>);
+
+    impl Planted {
+        /// `bravebot-openshell-<pid>-<n>.yaml` for `n` below 32, in `directory`: names built from the
+        /// process id and a counter, which a stage that knows the process id can create first.
+        #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+        fn names_from_the_process_id_in(directory: &std::path::Path) -> Self {
+            let paths = (0..32)
+                .map(|n| {
+                    let path = directory.join(format!(
+                        "bravebot-openshell-{}-{n}.yaml",
+                        std::process::id()
+                    ));
+                    std::fs::write(&path, STAGE_DOCUMENT).expect("planted");
+                    path
+                })
+                .collect();
+            Self(paths)
+        }
+    }
+
+    impl Drop for Planted {
+        fn drop(&mut self) {
+            for path in &self.0 {
+                std::fs::remove_file(path).ok();
+            }
+        }
+    }
+
+    /// What the fake CLI read from the file named after `--policy` for `command`, as `sandbox-create`
+    /// or `policy-set`.
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn read_by(cli: &FakeCli, command: &str) -> Vec<u8> {
+        let errors = std::fs::read(cli.dir.join("read-errors")).unwrap_or_default();
+        assert!(
+            errors.is_empty(),
+            "{command}: the policy could not be read: {}",
+            String::from_utf8_lossy(&errors)
+        );
+        std::fs::read(cli.dir.join(format!("read-{command}")))
+            .unwrap_or_else(|error| panic!("{command}: nothing was read: {error}"))
+    }
+
+    /// SANDBOX-33: the policy `openshell` opens is the one this process wrote, and not a file a
+    /// stage planted under a name it could predict. The system temporary directory, which a stage
+    /// may write, and the policy directory itself each hold files named from the process id and a
+    /// counter. The regression it rejects is a policy file given such a name: the start would be
+    /// refused because the name is taken, or `openshell` would read the planted bytes. The policy
+    /// directory is left holding only what was planted, so each file this process wrote is removed.
+    /// A policy file written in the temporary directory under a random name is rejected by the
+    /// next test, not by this one.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_policy_file_is_never_one_a_stage_planted_under_a_name_it_could_predict() {
+        let cli = FakeCli::reading_the_policy_after("0.05");
+        let hosts = vec!["example.com".to_string()];
+        let policies = cli.dir.join("policy");
+        std::fs::create_dir_all(&policies).expect("the policy directory");
+        // The test plays the stage, which writes the system temporary directory. Only the planted
+        // files are created there, and `Planted` removes them when it is dropped.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let in_temporary = Planted::names_from_the_process_id_in(&std::env::temp_dir());
+        let in_policies = Planted::names_from_the_process_id_in(&policies);
+        let shell = cli.shell(&hosts);
+        let mut child = start(&shell).expect("the start is not refused by a planted name");
+        child.wait().expect("the fake CLI exits");
+        let created = read_by(&cli, "sandbox-create");
+        let granted = read_by(&cli, "policy-set");
+        assert_eq!(
+            String::from_utf8_lossy(&created),
+            policy_document(None, &[])
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&granted),
+            policy_document(Some("/usr/local/bin/python3.13"), &hosts)
+        );
+        let left = std::fs::read_dir(&policies).expect("listed").count();
+        assert_eq!(left, 32, "a policy file of this process was not removed");
+        for path in in_temporary.0.iter().chain(&in_policies.0) {
+            assert_eq!(
+                std::fs::read(path).expect("still there"),
+                STAGE_DOCUMENT,
+                "{}",
+                path.display()
+            );
+        }
+    }
+
+    /// SANDBOX-33: a stage that overwrites every policy-looking file in the system temporary
+    /// directory while `openshell` waits to open its `--policy` path changes neither the policy the
+    /// sandbox is created with nor the one its host rules are set from: `openshell` reads, for both
+    /// calls, the bytes [`policy_document`] gives. The regression it rejects is a policy written
+    /// in the temporary directory, which the same account, and so a confined stage, may write: the
+    /// recorded bytes would be the stage's.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_stage_overwriting_the_temporary_directory_does_not_change_the_policy_openshell_reads() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let cli = FakeCli::reading_the_policy_after("0.4");
+        let hosts = vec!["example.com".to_string()];
+        let shell = cli.shell(&hosts);
+        let finished = std::sync::Arc::new(AtomicBool::new(false));
+        let stage = {
+            let finished = std::sync::Arc::clone(&finished);
+            std::thread::spawn(move || {
+                while !finished.load(Ordering::Relaxed) {
+                    // The stage stand-in lists the system temporary directory, which a stage may
+                    // write, and overwrites the policy-looking files in it; it creates nothing.
+                    // nosemgrep: rust.lang.security.temp-dir.temp-dir
+                    let listing = std::fs::read_dir(std::env::temp_dir());
+                    for entry in listing.into_iter().flatten().flatten() {
+                        let name = entry.file_name();
+                        let name = name.to_string_lossy();
+                        if name.starts_with("bravebot-openshell-") && name.ends_with(".yaml") {
+                            std::fs::write(entry.path(), STAGE_DOCUMENT).ok();
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            })
+        };
+        let started = start(&shell);
+        finished.store(true, Ordering::Relaxed);
+        stage.join().expect("the stage stand-in ended");
+        let mut child = started.expect("started");
+        child.wait().expect("the fake CLI exits");
+        assert_eq!(
+            String::from_utf8_lossy(&read_by(&cli, "sandbox-create")),
+            policy_document(None, &[]),
+            "the sandbox was created from a document a stage wrote"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&read_by(&cli, "policy-set")),
+            policy_document(Some("/usr/local/bin/python3.13"), &hosts),
+            "the host rules were set from a document a stage wrote"
+        );
     }
 
     /// SANDBOX-33: a program whose real path in the image is not UTF-8 cannot be named in the
@@ -1463,8 +1934,8 @@ mod tests {
 
     #[test]
     fn a_variable_other_than_path_or_home_is_refused_before_anything_is_created() {
-        let shell =
-            OpenShell::with_program(resolved(), "spike", "python:3.13-slim", &[]).expect("valid");
+        let shell = OpenShell::with_program(resolved(), "spike", "python:3.13-slim", &[], None)
+            .expect("valid");
         let variables = crate::Variables::new().with("GITHUB_TOKEN", "x");
         let refused = shell.spawn(
             OsStr::new("python3"),

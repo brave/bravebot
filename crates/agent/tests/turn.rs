@@ -34371,6 +34371,27 @@ fn a_run_turn_with_trust(
     trust: bravebot_core::trust::TrustStore,
 ) -> Result<turn::Outcome, turn::TurnError> {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
+    a_run_turn_in(
+        &workspace,
+        arguments,
+        confirmer,
+        programs,
+        trust,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+}
+
+/// The same, in a workspace the caller built, stoppable through `cancel`, and handing back the
+/// decisions the turn ends with whether or not it completed.
+fn a_run_turn_in(
+    workspace: &Workspace,
+    arguments: &str,
+    confirmer: &mut AskedAboutRuns,
+    programs: bravebot_core::programs::TrustedPrograms,
+    trust: bravebot_core::trust::TrustStore,
+    cancel: &bravebot_core::cancel::Cancel,
+) -> turn::CompletedTurn {
     let (endpoint, _received) =
         serve_sequence(vec![tool_request("run", arguments), reply_with("done")]);
     let config = config_for(&endpoint);
@@ -34379,7 +34400,7 @@ fn a_run_turn_with_trust(
     turn::resume(
         &config,
         &egress,
-        &workspace,
+        workspace,
         &Task::new("run it"),
         &mut bravebot_agent::Conversation::new(),
         confirmer,
@@ -34388,9 +34409,8 @@ fn a_run_turn_with_trust(
         trust,
         programs,
         None,
-        &bravebot_core::cancel::Cancel::new(),
+        cancel,
     )
-    .outcome
 }
 
 /// The same, for a session that keeps the record of lines somebody asked to be remembered past it.
@@ -35557,6 +35577,446 @@ fn a_redirection_carrying_untrusted_output_distrusts_the_file_it_wrote() {
     );
 }
 
+/// A redirection through a symbolic link writes the file the link leads to, so that file is
+/// distrusted as well as the name the line spelled (TRUST-2 "Symbolic link" row, TRUST-4). Left
+/// trusted under its own name, the untrusted bytes read back as trusted through it. A file the line
+/// did not touch stays trusted, so a map that distrusts everything does not pass.
+#[cfg(unix)]
+#[test]
+fn a_redirection_through_a_symbolic_link_distrusts_the_file_the_link_leads_to() {
+    let scratch = Scratch::new("run-redirect-link-target");
+    std::fs::write(scratch.path.join("notes.html"), "from the web\n").unwrap();
+    std::fs::write(scratch.path.join("target.txt"), "ours\n").unwrap();
+    std::fs::write(scratch.path.join("control.txt"), "ours\n").unwrap();
+    std::os::unix::fs::symlink(
+        scratch.path.join("target.txt"),
+        scratch.path.join("link.txt"),
+    )
+    .unwrap();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    let outcome = a_run_turn(
+        &scratch,
+        r#"{"command":"cat notes.html > link.txt"}"#,
+        &mut confirmer,
+        bravebot_core::programs::TrustedPrograms::new(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("target.txt")).unwrap(),
+        "from the web\n",
+        "the redirection did not write through the link"
+    );
+    assert!(
+        !outcome.trust.is_trusted("link.txt"),
+        "the name the line spelled reads back trusted"
+    );
+    assert!(
+        !outcome.trust.is_trusted("target.txt"),
+        "the file the link leads to reads back trusted under its own name"
+    );
+    assert!(
+        outcome.trust.is_trusted("control.txt"),
+        "a file the line did not write was distrusted"
+    );
+}
+
+/// The same for a hard link, which is a second name of the file that no walk of the spelled name's
+/// directory finds: the file is distrusted under every name it has.
+#[cfg(unix)]
+#[test]
+fn a_redirection_through_a_hard_link_distrusts_the_other_name_of_the_file() {
+    let scratch = Scratch::new("run-redirect-hard-link");
+    std::fs::write(scratch.path.join("notes.html"), "from the web\n").unwrap();
+    std::fs::write(scratch.path.join("target.txt"), "ours\n").unwrap();
+    std::fs::write(scratch.path.join("control.txt"), "ours\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join("target.txt"),
+        scratch.path.join("linked.txt"),
+    )
+    .unwrap();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    let outcome = a_run_turn(
+        &scratch,
+        r#"{"command":"cat notes.html > linked.txt"}"#,
+        &mut confirmer,
+        bravebot_core::programs::TrustedPrograms::new(),
+    )
+    .unwrap();
+
+    for name in ["linked.txt", "target.txt"] {
+        assert!(
+            !outcome.trust.is_trusted(name),
+            "{name} holds what an unvouched program printed and reads back trusted"
+        );
+    }
+    assert!(
+        outcome.trust.is_trusted("control.txt"),
+        "a file the line did not write was distrusted"
+    );
+}
+
+/// A part of a line can leave a link at a destination the line already opened. The next open of
+/// that name reaches a file the first did not, and that file is entered then and left untrusted
+/// (TRUST-4, CMDLINE-5). Entered once, by the first open's names alone, `real.txt` stays trusted
+/// although the line wrote it.
+#[cfg(unix)]
+#[test]
+fn a_redirection_reopened_through_a_link_an_earlier_part_made_distrusts_the_file_it_reaches() {
+    let scratch = Scratch::new("run-redirect-relinked-trust");
+    std::fs::write(scratch.path.join("notes.html"), "from the web\n").unwrap();
+    std::fs::write(scratch.path.join("real.txt"), "ours\n").unwrap();
+    std::fs::write(scratch.path.join("control.txt"), "ours\n").unwrap();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    let outcome = a_run_turn(
+        &scratch,
+        r#"{"command":"echo first > out.txt && rm out.txt && ln -s real.txt out.txt && cat notes.html >> out.txt"}"#,
+        &mut confirmer,
+        bravebot_core::programs::TrustedPrograms::new(),
+    )
+    .unwrap();
+
+    assert!(
+        std::fs::read_to_string(scratch.path.join("real.txt"))
+            .unwrap()
+            .contains("from the web"),
+        "the second open did not land at the link's target"
+    );
+    assert!(
+        !outcome.trust.is_trusted("real.txt"),
+        "the file a later open of the destination reached reads back trusted"
+    );
+    assert!(
+        outcome.trust.is_trusted("control.txt"),
+        "a file the line did not write was distrusted"
+    );
+}
+
+/// `> target.txt 2> link.txt` names one file twice, the second time through a symbolic link. The
+/// reservation the line holds for the first name covers the second, so the line is refused as a
+/// second writer to that file, as it is for two case spellings (TRUST-4). Entered under the spelled
+/// name alone, the link is a second effect on a file the line already holds.
+#[cfg(unix)]
+#[test]
+fn a_line_naming_a_file_and_a_symbolic_link_to_it_is_refused_as_a_second_writer() {
+    let scratch = Scratch::new("run-redirect-link-second-writer");
+    std::fs::write(scratch.path.join("notes.html"), "from the web\n").unwrap();
+    std::fs::write(scratch.path.join("target.txt"), "ours\n").unwrap();
+    std::os::unix::fs::symlink(
+        scratch.path.join("target.txt"),
+        scratch.path.join("link.txt"),
+    )
+    .unwrap();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    let outcome = a_run_turn(
+        &scratch,
+        r#"{"command":"cat notes.html > target.txt 2> link.txt"}"#,
+        &mut confirmer,
+        bravebot_core::programs::TrustedPrograms::new(),
+    )
+    .unwrap();
+
+    assert!(
+        !std::fs::read_to_string(scratch.path.join("target.txt"))
+            .unwrap_or_default()
+            .contains("from the web"),
+        "a line naming one file under two names ran as two writers to it"
+    );
+    // The file stays distrusted under its own name. The link has no rule of its own in the map: a
+    // read through it asks under the name it lands on, which is this one (TRUST-2).
+    assert!(
+        !outcome.trust.is_trusted("target.txt"),
+        "target.txt was left trusted by a line that was refused after entering it"
+    );
+}
+
+/// MEMORY-5 for a redirection through a symbolic link to a definition's memory. The record that the
+/// next session reads is made under the name the memory has, and a line writing through the link
+/// names the link, so the record is made for every name of the file.
+#[cfg(unix)]
+#[test]
+fn a_redirection_through_a_link_to_a_memory_records_the_memory() {
+    let scratch = Scratch::new("memory-redirect-link");
+    let home = Scratch::new("memory-redirect-link-home");
+    std::fs::create_dir_all(scratch.path.join(".bravebot/memory")).unwrap();
+    let memory = scratch.path.join(".bravebot/memory/notes-keeper.md");
+    std::fs::write(&memory, "OUR-OWN-WORDS\n").unwrap();
+    std::fs::write(scratch.path.join("notes.html"), "from the web\n").unwrap();
+    std::os::unix::fs::symlink(&memory, scratch.path.join("link.md")).unwrap();
+    let workspace = Workspace::new(&scratch.path).unwrap();
+
+    let outcome = a_run_writing_a_memory(
+        &workspace,
+        Some(&home),
+        "cat notes.html > link.md",
+        bravebot_agent::RunDecision::approve(),
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(&memory).unwrap(),
+        "from the web\n",
+        "the redirection did not write the memory through the link"
+    );
+    assert!(!outcome.trust.is_trusted(".bravebot/memory/notes-keeper.md"));
+    assert_eq!(
+        memories_recorded(&home, &workspace),
+        vec![memory_key(&workspace, "notes-keeper")],
+        "a memory a line left untrusted through a link was not recorded for the next session"
+    );
+}
+
+/// How a second name is made for `target.txt` in the tests of a redirection through another name.
+#[cfg(unix)]
+enum AnotherName {
+    SymbolicLinkToTheFile,
+    SymbolicLinkOnTheWay,
+    HardLink,
+}
+
+/// The files of a scratch directory for a redirection written under one name of `target`, and the
+/// two names. `old` is in the target before the line, and the target is trusted by the workspace.
+#[cfg(unix)]
+fn a_file_with_another_name(scratch: &Scratch, kind: &AnotherName) -> (String, String) {
+    std::fs::write(scratch.path.join("notes.html"), "from the web\n").unwrap();
+    match kind {
+        AnotherName::SymbolicLinkToTheFile => {
+            std::fs::write(scratch.path.join("target.txt"), "old\n").unwrap();
+            std::os::unix::fs::symlink("target.txt", scratch.path.join("link.txt")).unwrap();
+            ("link.txt".to_string(), "target.txt".to_string())
+        }
+        AnotherName::SymbolicLinkOnTheWay => {
+            std::fs::create_dir_all(scratch.path.join("real")).unwrap();
+            std::fs::write(scratch.path.join("real/target.txt"), "old\n").unwrap();
+            std::os::unix::fs::symlink("real", scratch.path.join("linked")).unwrap();
+            (
+                "linked/target.txt".to_string(),
+                "real/target.txt".to_string(),
+            )
+        }
+        AnotherName::HardLink => {
+            std::fs::write(scratch.path.join("target.txt"), "old\n").unwrap();
+            std::fs::hard_link(
+                scratch.path.join("target.txt"),
+                scratch.path.join("link.txt"),
+            )
+            .unwrap();
+            ("link.txt".to_string(), "target.txt".to_string())
+        }
+    }
+}
+
+/// A redirection writes the file, and the file has every name it has: a symbolic link at the
+/// destination, a symbolic link to the directory holding it, or a hard link. What an unvouched
+/// program printed is in the file whichever name it is read by, so a read of the other name must
+/// not come back trusted (TRUST-2, TRUST-4, CMDLINE-5). Entering the spelled name alone leaves the
+/// file the redirection wrote trusted under the name the line did not type.
+#[cfg(unix)]
+#[test]
+fn a_redirection_distrusts_every_name_of_the_file_it_wrote() {
+    // Every case is run and every failure reported, so a regression in one name of the file is
+    // seen whether or not another case fails first.
+    let mut failures = Vec::new();
+    for (label, kind) in [
+        ("symbolic link", AnotherName::SymbolicLinkToTheFile),
+        ("link on the way", AnotherName::SymbolicLinkOnTheWay),
+        ("hard link", AnotherName::HardLink),
+    ] {
+        let scratch = Scratch::new("run-redirect-other-names");
+        let (typed, other) = a_file_with_another_name(&scratch, &kind);
+        let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+        let outcome = a_run_turn(
+            &scratch,
+            &format!(r#"{{"command":"cat notes.html > {typed}"}}"#),
+            &mut confirmer,
+            bravebot_core::programs::TrustedPrograms::new(),
+        )
+        .unwrap();
+
+        if std::fs::read_to_string(scratch.path.join(&other)).unwrap_or_default()
+            != "from the web\n"
+        {
+            failures.push(format!("{label}: the redirection did not write the file"));
+        }
+        for name in [&typed, &other] {
+            if outcome.trust.is_trusted(name) {
+                failures.push(format!(
+                    "{label}: {name} holds what an unvouched program printed and reads back trusted"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// `> link 2> target` names one file twice through two names the line spelled differently. The
+/// reservation the line holds for the first covers every name of the file, so the second is
+/// refused as a second writer and neither name is left trusted.
+#[cfg(unix)]
+#[test]
+fn a_line_naming_one_file_under_two_of_its_names_is_refused_as_a_second_writer() {
+    // Every case is run and every failure reported, as in the test of the trust record above.
+    let mut failures = Vec::new();
+    for (label, kind) in [
+        ("symbolic link", AnotherName::SymbolicLinkToTheFile),
+        ("link on the way", AnotherName::SymbolicLinkOnTheWay),
+        ("hard link", AnotherName::HardLink),
+    ] {
+        let scratch = Scratch::new("run-redirect-two-names");
+        let (typed, other) = a_file_with_another_name(&scratch, &kind);
+        let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+        let outcome = a_run_turn(
+            &scratch,
+            &format!(r#"{{"command":"cat notes.html > {typed} 2> {other}"}}"#),
+            &mut confirmer,
+            bravebot_core::programs::TrustedPrograms::new(),
+        )
+        .unwrap();
+
+        if std::fs::read_to_string(scratch.path.join(&other))
+            .unwrap_or_default()
+            .contains("from the web")
+        {
+            failures.push(format!(
+                "{label}: a line naming one file under two of its names ran as two writers to it"
+            ));
+        }
+        for name in [&typed, &other] {
+            if outcome.trust.is_trusted(name) {
+                failures.push(format!(
+                    "{label}: {name} is trusted after a line the reservation refused"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// A later part of a line that opens another name of a destination an earlier part holds is
+/// refused as a second writer, whether the file had both names when the line began or an earlier
+/// part of the line gave it the second one (CMDLINE-5, TRUST-4). The reservation lasts until the
+/// line ends, so the part that opens the other name does not run.
+#[cfg(unix)]
+#[test]
+fn a_later_part_of_a_line_opening_another_name_of_a_held_destination_is_refused() {
+    let mut failures = Vec::new();
+    for (label, kind) in [
+        ("symbolic link", AnotherName::SymbolicLinkToTheFile),
+        ("link on the way", AnotherName::SymbolicLinkOnTheWay),
+        ("hard link", AnotherName::HardLink),
+    ] {
+        let scratch = Scratch::new("run-redirect-later-part-other-name");
+        let (typed, other) = a_file_with_another_name(&scratch, &kind);
+        let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+        let outcome = a_run_turn(
+            &scratch,
+            &format!(r#"{{"command":"echo first > {typed} ; echo second > {other}"}}"#),
+            &mut confirmer,
+            bravebot_core::programs::TrustedPrograms::new(),
+        )
+        .unwrap();
+
+        if std::fs::read_to_string(scratch.path.join(&other))
+            .unwrap_or_default()
+            .contains("second")
+        {
+            failures.push(format!(
+                "{label}: a later part of the line opened another name of a destination the line held"
+            ));
+        }
+        for name in [&typed, &other] {
+            if outcome.trust.is_trusted(name) {
+                failures.push(format!(
+                    "{label}: {name} is trusted after a line the reservation refused"
+                ));
+            }
+        }
+    }
+
+    // An earlier part of the line gives the file a second name, by a hard link or by a symbolic
+    // link, and a later part opens that name. The open is refused and the line never entered the
+    // name, so the trust map holds no rule for it. A read of it is still untrusted, because the
+    // read looks up the other names of the file and finds out.txt, which the line distrusted
+    // (TRUST-2). The map is not asked directly here, since it would answer for the spelling only.
+    for (label, link) in [
+        ("new hard link", "ln out.txt second.txt"),
+        ("new symbolic link", "ln -s out.txt second.txt"),
+    ] {
+        let scratch = Scratch::new("run-redirect-later-part-new-name");
+        std::fs::write(scratch.path.join("control.txt"), "mine\n").unwrap();
+        let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+        let outcome = a_run_turn(
+            &scratch,
+            &format!(r#"{{"command":"echo first > out.txt ; {link} ; echo second > second.txt"}}"#),
+            &mut confirmer,
+            bravebot_core::programs::TrustedPrograms::new(),
+        )
+        .unwrap();
+        if std::fs::read_to_string(scratch.path.join("out.txt"))
+            .unwrap_or_default()
+            .contains("second")
+        {
+            failures.push(format!(
+                "{label}: a later part of the line opened a name an earlier part gave the file"
+            ));
+        }
+        if outcome.trust.is_trusted("out.txt") {
+            failures.push(format!(
+                "{label}: out.txt is trusted after a line the reservation refused"
+            ));
+        }
+
+        // A second turn reads a file nothing distrusted and then the second name.
+        let workspace = Workspace::new(&scratch.path).unwrap();
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request("read_file", r#"{"path":"control.txt"}"#),
+            tool_request("read_file", r#"{"path":"second.txt"}"#),
+            reply_with("done"),
+        ]);
+        let mut sink = RecordingSink::new();
+        turn::resume(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("read them"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            outcome.trust,
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .unwrap();
+        let read: Vec<bool> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::Observed {
+                    capability: bravebot_core::capability::Capability::FileRead,
+                    label,
+                } => Some(label.integrity == bravebot_core::label::Integrity::Untrusted),
+                _ => None,
+            })
+            .collect();
+        if read != [false, true] {
+            failures.push(format!(
+                "{label}: reads of control.txt and second.txt were untrusted: {read:?}, want [false, true]"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 /// Where the trust store folds case, `> summary.txt 2> SUMMARY.txt` names one file twice. The
 /// reservation the line holds for the first spelling covers the second, so the line is refused as
 /// a second writer to that file, and the file stays untrusted under either spelling. Taking the
@@ -35594,6 +36054,411 @@ fn a_line_naming_one_file_under_two_case_spellings_is_refused_as_a_second_writer
             "{spelling} holds what an unvouched program printed and reads back trusted"
         );
     }
+}
+
+/// A part of the line gives a file a second name after the line opened it, and a later part
+/// redirects into it again. The names are looked up at every open, so the new name is entered and
+/// reads back untrusted too (CMDLINE-5, TRUST-4).
+#[cfg(unix)]
+#[test]
+fn a_redirection_enters_a_name_an_earlier_part_of_the_line_gave_the_file() {
+    let scratch = Scratch::new("run-redirect-name-made-mid-line");
+    std::fs::write(scratch.path.join("notes.html"), "from the web\n").unwrap();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    let outcome = a_run_turn(
+        &scratch,
+        r#"{"command":"echo first > out.txt ; ln out.txt second.txt ; cat notes.html > out.txt"}"#,
+        &mut confirmer,
+        bravebot_core::programs::TrustedPrograms::new(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("second.txt")).unwrap(),
+        "from the web\n",
+        "the second redirection did not write the file"
+    );
+    for name in ["out.txt", "second.txt"] {
+        assert!(
+            !outcome.trust.is_trusted(name),
+            "{name} holds what an unvouched program printed and reads back trusted"
+        );
+    }
+}
+
+/// A workspace the person vouched for, holding a file `notes.txt` that also has the name
+/// `alias.txt`, built over a lookup of other names that may stop at `cap` files.
+#[cfg(unix)]
+fn a_vouched_append_to_a_file_with_a_second_name(name: &str, cap: Option<usize>) -> (bool, String) {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join("notes.txt"), "mine\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join("notes.txt"),
+        scratch.path.join("alias.txt"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path)
+        .unwrap()
+        .with_search_caps(cap, None);
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let outcome = a_run_turn_in(
+        &workspace,
+        r#"{"command":"echo ours >> notes.txt"}"#,
+        &mut confirmer,
+        vouching_for_writing("echo", &["ours"], &scratch.path, "notes.txt", true),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .unwrap();
+    (
+        outcome.trust.is_trusted("notes.txt"),
+        std::fs::read_to_string(scratch.path.join("alias.txt")).unwrap(),
+    )
+}
+
+/// A lookup of a destination's other names that stopped before it finished is not a finding that
+/// the file has none (TRUST-2, TRUST-4). A line the person vouched for appends to a trusted file
+/// that has a second name, and the walk for that name is cut short, so the file reads as untrusted
+/// afterwards where the same line with the walk finished leaves it trusted. Taking an unfinished
+/// walk as "no other name" would leave the file trusted under a name nobody found.
+#[cfg(unix)]
+#[test]
+fn a_redirection_whose_other_names_were_not_all_found_leaves_the_file_untrusted() {
+    let (trusted, held) =
+        a_vouched_append_to_a_file_with_a_second_name("run-redirect-names-found", None);
+    assert_eq!(held, "mine\nours\n", "the append did not reach the file");
+    assert!(
+        trusted,
+        "a vouched append to a trusted file with the lookup finished left it untrusted, so a file \
+         read as untrusted after a cut walk shows nothing"
+    );
+
+    let (trusted, held) =
+        a_vouched_append_to_a_file_with_a_second_name("run-redirect-names-not-found", Some(1));
+    assert_eq!(held, "mine\nours\n", "the append did not reach the file");
+    assert!(
+        !trusted,
+        "a lookup that stopped before it finished was taken as a file with no other name"
+    );
+}
+
+/// A line the person vouched for cannot raise a destination, and does not lift another name of the
+/// file out of a directory the map distrusts (TRUST-4, CMDLINE-5). Appending keeps the bytes the
+/// file held, so a name in a distrusted directory leaves the file untrusted under every name, whether
+/// the line typed that name or another one.
+#[cfg(unix)]
+#[test]
+fn a_trusted_redirection_does_not_lift_a_name_of_the_file_out_of_a_distrusted_directory() {
+    let mut failures = Vec::new();
+    for (label, typed, other, link) in [
+        (
+            "hard link at the typed name",
+            "notes.txt",
+            "vendor/page.txt",
+            "hard",
+        ),
+        (
+            "symbolic link at the typed name",
+            "link.txt",
+            "vendor/page.txt",
+            "symbolic",
+        ),
+        (
+            "typed name in the distrusted directory",
+            "vendor/page.txt",
+            "notes.txt",
+            "hard",
+        ),
+    ] {
+        let scratch = Scratch::new("run-redirect-distrusted-directory");
+        std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+        let (stored, made) = if typed.starts_with("vendor/") {
+            (typed, other)
+        } else {
+            (other, typed)
+        };
+        std::fs::write(scratch.path.join(stored), "theirs\n").unwrap();
+        match link {
+            "hard" => std::fs::hard_link(scratch.path.join(stored), scratch.path.join(made)),
+            _ => std::os::unix::fs::symlink(stored, scratch.path.join(made)),
+        }
+        .unwrap();
+        let mut trust = bravebot_core::trust::TrustStore::new("/work");
+        trust.trust(".");
+        trust.distrust("vendor");
+        assert!(
+            !trust.is_trusted("vendor/page.txt")
+                && trust.is_trusted(if typed.starts_with("vendor/") {
+                    other
+                } else {
+                    typed
+                }),
+            "{label}: the fixture does not hold one name distrusted and the other trusted"
+        );
+        let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+        let outcome = a_run_turn_with_trust(
+            &scratch,
+            &format!(r#"{{"command":"echo ours >> {typed}"}}"#),
+            &mut confirmer,
+            vouching_for_writing("echo", &["ours"], &scratch.path, typed, true),
+            trust,
+        )
+        .unwrap();
+
+        if std::fs::read_to_string(scratch.path.join(other)).unwrap_or_default() != "theirs\nours\n"
+        {
+            failures.push(format!("{label}: the append did not reach the file"));
+        }
+        for name in [typed, other] {
+            if outcome.trust.is_trusted(name) {
+                failures.push(format!(
+                    "{label}: {name} reads back trusted after a vouched line appended to a file \
+                     held in a distrusted directory"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// A line that exits non-zero leaves every name of its destination distrusted, though the line is
+/// vouched for and the file was trusted before it ran (CMDLINE-5, TRUST-4). Distrusting only the
+/// name the line typed leaves the file trusted under the others.
+#[cfg(unix)]
+#[test]
+fn a_trusted_redirection_that_fails_leaves_every_name_of_the_file_untrusted() {
+    let mut failures = Vec::new();
+    for (label, kind) in [
+        ("symbolic link", AnotherName::SymbolicLinkToTheFile),
+        ("link on the way", AnotherName::SymbolicLinkOnTheWay),
+        ("hard link", AnotherName::HardLink),
+    ] {
+        let scratch = Scratch::new("run-redirect-fails-every-name");
+        let (typed, other) = a_file_with_another_name(&scratch, &kind);
+        let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+        let outcome = a_run_turn(
+            &scratch,
+            &format!(r#"{{"command":"false >> {typed}"}}"#),
+            &mut confirmer,
+            vouching_for_writing("false", &[], &scratch.path, &typed, true),
+        )
+        .unwrap();
+
+        for name in [&typed, &other] {
+            if outcome.trust.is_trusted(name) {
+                failures.push(format!(
+                    "{label}: {name} reads back trusted after the line exited non-zero"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// A line stopped with the turn while it runs leaves every name of its destination distrusted
+/// (CMDLINE-5, TRUST-4). The stop is sent once the line has made a file, which is after the
+/// destination was entered. A line that completes is the control: it leaves the typed name trusted,
+/// so what the stopped line leaves is the stop's doing.
+#[cfg(unix)]
+#[test]
+fn a_trusted_redirection_stopped_with_the_turn_leaves_every_name_of_the_file_untrusted() {
+    let mut failures = Vec::new();
+    for (label, kind) in [
+        ("symbolic link", AnotherName::SymbolicLinkToTheFile),
+        ("link on the way", AnotherName::SymbolicLinkOnTheWay),
+        ("hard link", AnotherName::HardLink),
+    ] {
+        for stopped in [false, true] {
+            let scratch = Scratch::new("run-redirect-stopped-every-name");
+            let (typed, other) = a_file_with_another_name(&scratch, &kind);
+            let script = if stopped {
+                "echo started > started.txt; sleep 30"
+            } else {
+                "echo started > started.txt"
+            };
+            let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+            let cancel = bravebot_core::cancel::Cancel::new();
+            let marker = scratch.path.join("started.txt");
+            let stopper = {
+                let cancel = cancel.clone();
+                std::thread::spawn(move || {
+                    let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                    while std::time::Instant::now() < until {
+                        if marker.exists() {
+                            if stopped {
+                                cancel.cancel();
+                            }
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                })
+            };
+            let workspace = Workspace::new(&scratch.path).unwrap();
+
+            let completed = a_run_turn_in(
+                &workspace,
+                &serde_json::json!({ "command": format!("sh -c '{script}' >> {typed}") })
+                    .to_string(),
+                &mut confirmer,
+                vouching_for_writing("sh", &["-c", script], &scratch.path, &typed, true),
+                trusting_the_workspace(),
+                &cancel,
+            );
+            stopper.join().unwrap();
+
+            if stopped
+                && !matches!(
+                    completed.outcome,
+                    Err(bravebot_agent::turn::TurnError::Cancelled { .. })
+                )
+            {
+                failures.push(format!("{label}: the turn did not end stopped"));
+            }
+            if !stopped && completed.outcome.is_err() {
+                failures.push(format!("{label}: the control turn failed"));
+            }
+            let trust = &completed.decisions.trust;
+            if stopped {
+                for name in [&typed, &other] {
+                    if trust.is_trusted(name) {
+                        failures.push(format!(
+                            "{label}: {name} reads back trusted after the line was stopped"
+                        ));
+                    }
+                }
+            } else if !trust.is_trusted(&typed) {
+                failures.push(format!(
+                    "{label}: the control line that completed left {typed} untrusted, so a stop \
+                     leaving it untrusted shows nothing"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// A line that fails after it entered a destination, here by naming the same file again under
+/// another of its names while the first is held, leaves every name distrusted, though it is vouched
+/// for and its streams went to files it was allowed (CMDLINE-5, TRUST-4).
+#[cfg(unix)]
+#[test]
+fn a_trusted_redirection_that_errors_after_entry_leaves_every_name_of_the_file_untrusted() {
+    let mut failures = Vec::new();
+    for (label, kind) in [
+        ("symbolic link", AnotherName::SymbolicLinkToTheFile),
+        ("link on the way", AnotherName::SymbolicLinkOnTheWay),
+        ("hard link", AnotherName::HardLink),
+    ] {
+        let scratch = Scratch::new("run-redirect-errors-every-name");
+        let (typed, other) = a_file_with_another_name(&scratch, &kind);
+        let tree = scratch.path.canonicalize().unwrap();
+        let entry = vouched_in("echo", &["ours"], &scratch.path).routed(vec![
+            bravebot_core::command::Route::Stdout {
+                path: tree.join(&typed),
+                append: true,
+            },
+            bravebot_core::command::Route::Stderr {
+                path: tree.join(&other),
+                append: true,
+            },
+        ]);
+        let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+        let outcome = a_run_turn(
+            &scratch,
+            &format!(r#"{{"command":"echo ours >> {typed} 2>> {other}"}}"#),
+            &mut confirmer,
+            bravebot_core::programs::TrustedPrograms::from_iter([entry]),
+        )
+        .unwrap();
+
+        if std::fs::read_to_string(scratch.path.join(&other)).unwrap_or_default() != "old\n" {
+            failures.push(format!(
+                "{label}: the line ran, so it did not fail after entry"
+            ));
+        }
+        for name in [&typed, &other] {
+            if outcome.trust.is_trusted(name) {
+                failures.push(format!(
+                    "{label}: {name} reads back trusted after the line failed after entry"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// A redirection through each name the table of spellings lists reads back as untrusted under the
+/// name the file was made with (TRUST-2, TRUST-4, CMDLINE-5), while a file no row names keeps its
+/// trust. A row the redirection does not cover lists the issue that tracks it, and fails once it
+/// does. Every row is asked and every failing row is reported.
+#[test]
+fn each_alias_in_the_table_reads_back_a_redirection_through_it_as_untrusted_unless_it_is_a_listed_gap()
+ {
+    let mut failures = Vec::new();
+    for (index, row) in aliases::ALIASES.iter().enumerate() {
+        let scratch = Scratch::new(&format!("alias-redirect-{index}"));
+        if !aliases::prepare(&scratch.path, row) {
+            continue;
+        }
+        std::fs::write(scratch.path.join("notes.html"), "from the web\n").unwrap();
+        let workspace = Workspace::new(&scratch.path)
+            .unwrap()
+            .with_second_path_open(aliases::second_path(&scratch.path, row).as_deref())
+            .unwrap();
+        let spelled = aliases::spelling(workspace.root(), row);
+        let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+        trust.trust(".");
+        let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+        let completed = a_run_turn_in(
+            &workspace,
+            &serde_json::json!({ "command": format!("cat notes.html > {spelled}") }).to_string(),
+            &mut confirmer,
+            bravebot_core::programs::TrustedPrograms::new(),
+            trust,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        assert!(
+            completed.outcome.is_ok(),
+            "{}: the turn failed: {:?}",
+            row.kind,
+            completed.outcome.as_ref().err()
+        );
+        let trust = completed.decisions.trust;
+
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join(row.name)).unwrap_or_default(),
+            "from the web\n",
+            "{}: the redirection through {spelled:?} did not write the file",
+            row.kind
+        );
+        assert!(
+            trust.is_trusted(aliases::CONTROL),
+            "{}: a redirection distrusted a file no row names",
+            row.kind
+        );
+        let untrusted_under_the_name = !trust.is_trusted(row.name);
+        let held = std::panic::catch_unwind(|| {
+            aliases::expect(
+                row,
+                aliases::Consumer::RedirectionTrust,
+                untrusted_under_the_name,
+            );
+        });
+        if held.is_err() {
+            failures.push(row.kind);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "redirections through these rows left the file trusted under the other name: {failures:?}"
+    );
 }
 
 /// `> cafe\u{301}.md 2> caf\u{e9}.md` names one file twice wherever the volume opens a file under
@@ -66119,6 +66984,306 @@ fn a_checkout_with_changes_carries_only_recorded_writes_where_the_status_is_not_
                     && body.contains("status could not be read")),
             "{who} was not told the status could not be read"
         );
+    }
+}
+
+/// TOOL-6. A checkout `spawn_agent` refuses to make, under the state directory, names `read_git`
+/// as the reader that would have opened the repository only where this turn's own list holds it,
+/// and a stand-in otherwise: the turn asking `spawn_agent` for a checkout is not the turn that
+/// would have called `read_git` itself, and may not be offered it.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_spawn_agent_state_checkout_refusal_names_the_reader_this_turn_holds() {
+    for (tag, tools_line, holds_read_git) in [
+        (
+            "without-read-git",
+            "spawn_agent, write_file, apply_checkout, ask_user",
+            false,
+        ),
+        (
+            "with-read-git",
+            "spawn_agent, write_file, apply_checkout, ask_user, read_git",
+            true,
+        ),
+    ] {
+        let scratch = Scratch::new(&format!("spawn-state-checkout-reader-{tag}"));
+        let home = Scratch::new(&format!("spawn-state-checkout-reader-{tag}-home"));
+        repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        define(
+            &home,
+            "operator",
+            &format!("kind: worker\ntools: {tools_line}\n"),
+            "ASK-FOR-A-CHECKOUT",
+        );
+
+        let (endpoint, received) = serve_by_marker(vec![(
+            "ASK-FOR-A-CHECKOUT",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"DO-SOMETHING","isolation":"checkout"}"#,
+                ),
+                reply_with("noted"),
+            ],
+        )]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        // No trust rule at all, so the repository is declined and no checkout is made.
+        let trust = bravebot_core::trust::TrustStore::new(workspace.root());
+
+        turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &addressed("ASK-FOR-A-CHECKOUT", &home, "operator"),
+            &mut RecordingConfirmer::approving(),
+            &mut sink,
+            trust,
+        )
+        .expect("turn runs");
+
+        let asked = every_request(&received);
+        assert!(
+            asked
+                .iter()
+                .any(|body| body.contains("would not open the repository")),
+            "{tag}: the checkout refusal never reached the planner: {asked:#?}"
+        );
+        match holds_read_git {
+            true => assert!(
+                asked
+                    .iter()
+                    .any(|body| body.contains("because read_git would not open the repository")),
+                "{tag}: {asked:#?}"
+            ),
+            false => {
+                assert!(
+                    !asked.iter().any(|body| body.contains("read_git")),
+                    "{tag}: named a tool the list does not hold: {asked:#?}"
+                );
+                assert!(
+                    asked.iter().any(|body| body
+                        .contains("because the repository reader would not open the repository")),
+                    "{tag}: {asked:#?}"
+                );
+            }
+        }
+    }
+}
+
+/// TOOL-6. As [`a_spawn_agent_state_checkout_refusal_names_the_reader_this_turn_holds`], for a
+/// session with no home and so no state directory: the checkout `spawn_agent` refuses to make is
+/// the one made under the system temporary directory, a different call site from the one the
+/// state directory takes.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_spawn_agent_temporary_checkout_refusal_names_the_reader_this_turn_holds() {
+    for (tag, tools_line, holds_read_git) in [
+        (
+            "without-read-git",
+            "spawn_agent, write_file, apply_checkout, ask_user",
+            false,
+        ),
+        (
+            "with-read-git",
+            "spawn_agent, write_file, apply_checkout, ask_user, read_git",
+            true,
+        ),
+    ] {
+        let scratch = Scratch::new(&format!("spawn-temporary-checkout-reader-{tag}"));
+        // No commit, so the workspace has no `.git`: the repository is declined for that reason,
+        // and never for being untrusted, so the project's own definition is still read.
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        std::fs::create_dir_all(scratch.path.join(".bravebot/agents")).unwrap();
+        std::fs::write(
+            scratch.path.join(".bravebot/agents/operator.md"),
+            format!(
+                "---\nname: operator\ndescription: Does something.\nkind: worker\ntools: \
+                 {tools_line}\n---\n\nDO-SOMETHING\n"
+            ),
+        )
+        .unwrap();
+
+        let (endpoint, received) = serve_by_marker(vec![(
+            "ASK-FOR-A-CHECKOUT-NO-HOME",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"DO-SOMETHING","isolation":"checkout"}"#,
+                ),
+                reply_with("noted"),
+            ],
+        )]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        // No home, so a checkout `spawn_agent` is refused would have been made under the system
+        // temporary directory.
+        let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+        trust.trust(".");
+
+        turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("ASK-FOR-A-CHECKOUT-NO-HOME").addressing(Some("operator".to_string())),
+            &mut RecordingConfirmer::approving(),
+            &mut sink,
+            trust,
+        )
+        .expect("turn runs");
+
+        let asked = every_request(&received);
+        assert!(
+            asked
+                .iter()
+                .any(|body| body.contains("would not open the repository")),
+            "{tag}: the checkout refusal never reached the planner: {asked:#?}"
+        );
+        match holds_read_git {
+            true => assert!(
+                asked
+                    .iter()
+                    .any(|body| body.contains("because read_git would not open the repository")),
+                "{tag}: {asked:#?}"
+            ),
+            false => {
+                assert!(
+                    !asked.iter().any(|body| body.contains("read_git")),
+                    "{tag}: named a tool the list does not hold: {asked:#?}"
+                );
+                assert!(
+                    asked.iter().any(|body| body
+                        .contains("because the repository reader would not open the repository")),
+                    "{tag}: {asked:#?}"
+                );
+            }
+        }
+    }
+}
+
+/// TOOL-6. Where a kept checkout's status cannot be read, `apply_checkout` (the `offered` helper
+/// it shares with `apply_kept_checkout`) names `read_git` as the reader that would have read it
+/// only where this turn's own list holds it, and a stand-in otherwise: the turn calling
+/// `apply_checkout` is not the turn that would have called `read_git` itself, and may not be
+/// offered it.
+#[test]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_apply_checkout_status_refusal_names_the_reader_this_turn_holds() {
+    for (tag, tools_line, holds_read_git) in [
+        (
+            "without-read-git",
+            "spawn_agent, write_file, apply_checkout, ask_user",
+            false,
+        ),
+        (
+            "with-read-git",
+            "spawn_agent, write_file, apply_checkout, ask_user, read_git",
+            true,
+        ),
+    ] {
+        let scratch = Scratch::new(&format!("apply-checkout-reader-{tag}"));
+        let home = Scratch::new(&format!("apply-checkout-reader-{tag}-home"));
+        repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        define(
+            &home,
+            "operator",
+            &format!("kind: worker\ntools: {tools_line}\n"),
+            "MAKE-A-CHECKOUT-THEN-APPLY",
+        );
+        // The checkout's own path, trusted beneath the workspace by `copy_beneath` as it is made:
+        // distrusted here, from the start, so that copy never raises it (CHECKOUT-8), and the
+        // status `apply_checkout` reads over the checkout, rather than the repository the
+        // checkout was made of, is the one declined.
+        let checkout_path = home
+            .path
+            .canonicalize()
+            .expect("home")
+            .join("checkouts")
+            .join(bravebot_agent::home::key_for(workspace.root()))
+            .join("c1");
+
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                "MAKE-A-CHECKOUT-THEN-APPLY",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"WRITE-FOR-APPLY","isolation":"checkout"}"#,
+                    ),
+                    reply_with("waiting"),
+                    tool_request("apply_checkout", r#"{"checkout":"c1"}"#),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "WRITE-FOR-APPLY",
+                vec![
+                    tool_request(
+                        "write_file",
+                        r#"{"path":"out.txt","contents":"from the worker"}"#,
+                    ),
+                    reply_with("wrote it"),
+                ],
+            ),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+        trust.trust(".");
+        trust.distrust(checkout_path.to_str().expect("utf8"));
+
+        turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &addressed("MAKE-A-CHECKOUT-THEN-APPLY", &home, "operator"),
+            &mut RecordingConfirmer::approving(),
+            &mut sink,
+            trust,
+        )
+        .expect("turn runs");
+
+        // The addressed turn's own requests, which hold its own task throughout: the nested
+        // worker's begin fresh with its own and never widen to this one, so this excludes the
+        // worker's requests without naming its task.
+        let received = every_request(&received);
+        let asked: Vec<&String> = received
+            .iter()
+            .filter(|body| body.contains("MAKE-A-CHECKOUT-THEN-APPLY"))
+            .collect();
+        assert!(
+            asked
+                .iter()
+                .any(|body| body.contains("The status could not be read")),
+            "{tag}: the status refusal never reached the planner: {asked:#?}"
+        );
+        match holds_read_git {
+            true => assert!(
+                asked
+                    .iter()
+                    .any(|body| body.contains("so read_git does not read its status")),
+                "{tag}: {asked:#?}"
+            ),
+            false => {
+                assert!(
+                    !asked.iter().any(|body| body.contains("read_git")),
+                    "{tag}: named a tool the list does not hold: {asked:#?}"
+                );
+                assert!(
+                    asked
+                        .iter()
+                        .any(|body| body
+                            .contains("so the repository reader does not read its status")),
+                    "{tag}: {asked:#?}"
+                );
+            }
+        }
     }
 }
 

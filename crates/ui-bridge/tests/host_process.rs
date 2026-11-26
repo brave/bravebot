@@ -233,6 +233,29 @@ impl Host {
         })
     }
 
+    /// As [`Host::start`], told to listen on a port of loopback the system picks, with its startup
+    /// question answered.
+    fn start_listening(scratch: &Scratch, endpoint: &str) -> Self {
+        let mut host = Self::launch_with(
+            Start {
+                home: &scratch.home(),
+                sessions_root: &scratch.root(),
+                workspace: &scratch.project(),
+                relay: &scratch.directory.path().join("relay.sock"),
+                settings: None,
+                current_dir: None,
+                environment: &model_service(endpoint),
+                stdout: Stdio::null(),
+                stderr: support::discarded(),
+                clients: support::ONE_CLIENT,
+            },
+            &[],
+            &[OsStr::new("--listen"), OsStr::new("127.0.0.1:0")],
+        );
+        host.decline_at_startup();
+        host
+    }
+
     /// As [`Host::start`], given `clients`, each a name and its answers.
     fn start_giving(scratch: &Scratch, endpoint: &str, clients: &[(&str, &str)]) -> Self {
         Self::launch(Start {
@@ -1627,6 +1650,79 @@ fn a_host_serving_a_turn_has_no_socket_another_program_can_find() {
         found.is_empty(),
         "the host has a socket another program can find: {found:?}"
     );
+}
+
+/// Given an address to listen on, the host holds a socket there and no other that a program could
+/// find: no other TCP port, no UDP port and no Unix socket with a name. The port is the one it says
+/// it listens on, and it accepts a connection. Where it is not given one, the test above holds.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn a_host_given_listen_holds_that_one_address_and_no_other_socket_a_program_can_find() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let found;
+    let port;
+    #[cfg(target_os = "macos")]
+    {
+        let host = Host::start_listening(&scratch, &endpoint);
+        let said = host.says("listening on");
+        port = listening_port(&said);
+        let _client = host.client();
+        assert!(
+            std::net::TcpStream::connect(("127.0.0.1", port)).is_ok(),
+            "nothing accepted a connection at the address the host named"
+        );
+        let (all, _) = findable_sockets_of(host.child.id());
+        let (inherited, _) = findable_sockets_of(std::process::id());
+        found = all
+            .into_iter()
+            .filter(|(device, _)| !inherited.contains_key(device))
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let before = findable_sockets_now();
+        let mut host = Host::start_listening(&scratch, &endpoint);
+        let said = host.says("listening on");
+        port = listening_port(&said);
+        let _client = host.client();
+        assert!(
+            std::net::TcpStream::connect(("127.0.0.1", port)).is_ok(),
+            "nothing accepted a connection at the address the host named"
+        );
+        let held = sockets_other_readable_processes_hold(host.child.id());
+        let now = findable_sockets_now();
+        host.child.kill().unwrap();
+        host.child.wait().unwrap();
+        let after = findable_sockets_now();
+        found = now
+            .into_iter()
+            .filter(|(inode, line)| {
+                !before.contains_key(inode)
+                    && !after.contains_key(inode)
+                    && !held.contains(inode)
+                    && !line.contains("relay.sock")
+            })
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>();
+    }
+    assert_eq!(
+        found.len(),
+        1,
+        "the host holds sockets beside its address: {found:?}"
+    );
+    assert!(
+        found[0].contains(&format!(":{port}")) || found[0].contains(&format!("{port:04X}")),
+        "the one socket is not the address the host named: {found:?}"
+    );
+}
+
+/// The port in `listening on 127.0.0.1:PORT, host key ...`.
+fn listening_port(said: &str) -> u16 {
+    let address = said.split("listening on ").nth(1).unwrap();
+    let address = address.split(',').next().unwrap();
+    address.rsplit(':').next().unwrap().parse().unwrap()
 }
 
 /// The directory a session opens in is the one that was checked, not a name that leads to it.

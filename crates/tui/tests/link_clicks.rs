@@ -815,6 +815,8 @@ fn a_click_on_the_panel_and_a_click_on_the_transcript_each_open_their_own_addres
                 .or_else(|| panel_link_at(&session, row, column));
             session.last_click = None;
             let acted = click_with(&mut session, row, column, KeyModifiers::CONTROL);
+            // A click on the Sandbox row opens its picker, which would take the clicks after it.
+            session.press_in_picking(KeyCode::Esc, KeyModifiers::NONE);
             match expected {
                 Some(address) => {
                     assert_eq!(acted, Action::OpenUrl(address.clone()), "{row},{column}");

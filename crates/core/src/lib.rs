@@ -38,6 +38,7 @@ pub mod command;
 mod compare;
 pub mod credentials;
 pub mod delegate;
+pub mod device;
 pub mod event;
 pub mod fence;
 pub mod file_authority;

@@ -4435,7 +4435,20 @@ impl Workspace {
         state: &Path,
         made_for: bravebot_core::delegate::DelegateId,
     ) -> Result<Workspace, (CheckoutRefusal, String)> {
-        self.checkout_in(policy, Some(state), made_for)
+        self.checkout_for_cause_as(policy, state, made_for, "read_git")
+    }
+
+    /// [`Workspace::checkout_for_cause`], naming the reader that would have opened the repository
+    /// as `reader` rather than always as `read_git`, where the turn asking for the checkout is
+    /// not the turn that would have called `read_git` and may not be offered it (TOOL-6).
+    pub fn checkout_for_cause_as<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        state: &Path,
+        made_for: bravebot_core::delegate::DelegateId,
+        reader: &str,
+    ) -> Result<Workspace, (CheckoutRefusal, String)> {
+        self.checkout_in(policy, Some(state), made_for, reader)
     }
 
     /// [`Workspace::checkout_for_cause`] for a session with no state directory to make checkouts
@@ -4446,15 +4459,30 @@ impl Workspace {
         policy: &Policy<'_, S>,
         made_for: bravebot_core::delegate::DelegateId,
     ) -> Result<Workspace, (CheckoutRefusal, String)> {
-        self.checkout_in(policy, None, made_for)
+        self.checkout_in_temporary_directory_cause_as(policy, made_for, "read_git")
+    }
+
+    /// [`Workspace::checkout_in_temporary_directory_cause`], naming the reader that would have
+    /// opened the repository as `reader` rather than always as `read_git` (TOOL-6).
+    pub fn checkout_in_temporary_directory_cause_as<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        made_for: bravebot_core::delegate::DelegateId,
+        reader: &str,
+    ) -> Result<Workspace, (CheckoutRefusal, String)> {
+        self.checkout_in(policy, None, made_for, reader)
     }
 
     /// `state` is where the checkout is made, or `None` for the session's temporary directory.
+    /// `reader` names, in the refusal's sentence, the tool that would have opened the repository:
+    /// `"read_git"` for its own caller, or a stand-in where the asking turn may not be offered it
+    /// (TOOL-6).
     fn checkout_in<S: Sink>(
         &self,
         policy: &Policy<'_, S>,
         state: Option<&Path>,
         made_for: bravebot_core::delegate::DelegateId,
+        reader: &str,
     ) -> Result<Workspace, (CheckoutRefusal, String)> {
         let refused =
             |cause: CheckoutRefusal, why: &str| (cause, format!("No checkout was made: {why}"));
@@ -4519,7 +4547,7 @@ impl Workspace {
                 Err(WorkspaceError::Checkout { refused: why, .. }) => {
                     return Err((
                         CheckoutRefusal::RepositoryRefused,
-                        why.describe("the working directory"),
+                        why.describe_as("the working directory", reader),
                     ));
                 }
                 Err(WorkspaceError::Denied(_)) => {
@@ -4894,6 +4922,15 @@ impl Workspace {
     /// it (TRUST-10), so it is refused before anything reads it, and reducing it here would be
     /// guessing at which file it named. One that climbs out of the root is the absolute path it
     /// lands on by here, and is keyed as that.
+    ///
+    /// A redirection in a `run` line reaches this function without that refusal, since the line
+    /// is confined by where the destination lands (`Workspace::confines_writing`), so a `..` that
+    /// lands inside the root is keyed as typed and is read under that key by no file tool. The
+    /// line therefore records the destination under that key and under each name
+    /// [`Workspace::names_reached`] gives, which for `d/../dd.txt` includes `dd.txt`, with one
+    /// reservation for all of them (TRUST-4). Those names are the spelling with each `..` taken
+    /// out, where no link is on the way, and the place the path lands, beside the file's other
+    /// names (`other_trust_keys`).
     ///
     /// Whatever the reduction leaves is spelled from `/`, which is how a key arrives spelled
     /// (TRUST-18) on a host that separates with something else, a drive letter included: a name
@@ -6127,6 +6164,40 @@ mod tests {
             applied(&workspace),
             [("c1".to_string(), false), ("c2".to_string(), true)]
         );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// OPEN-1. The open loops count a kept checkout whose delegate ended and that was not
+    /// applied, and leave out one that was applied and one whose size is not known yet.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the scratch directory may not exist yet"
+    )]
+    #[test]
+    fn open_loops_keep_only_checkouts_that_ended_and_were_not_applied() {
+        let root = crate::testutil::scratch_dir("open-loops-kept-checkouts");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        for id in ["c1", "c2", "c3"] {
+            std::fs::create_dir(root.join(id)).unwrap();
+            keep_checkout(&workspace, id, root.join(id));
+        }
+        for made in locked(&workspace.kept.session_checkouts)
+            .iter()
+            .filter(|made| made.id != "c3")
+        {
+            *locked(&made.record.size) = Some(crate::git::checkout::Size {
+                bytes: 1,
+                whole: true,
+            });
+        }
+        workspace.checkout_applied("c2");
+        let kept: Vec<String> = crate::open_loops::kept_checkouts(&workspace)
+            .into_iter()
+            .map(|checkout| checkout.id)
+            .collect();
+        assert_eq!(kept, ["c1"]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

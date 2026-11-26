@@ -138,6 +138,31 @@ fn clearing_the_session_ends_the_program_a_kept_job_was_running() {
     );
 }
 
+/// RUN-15, through the route `/clear` takes. `clear_session` is what the command calls, and it is
+/// what ends the programs of the conversation it replaces: a command that reset the context and
+/// the record without calling `Session::clear` would leave the program running with nothing in
+/// the session that lists it or can stop it.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_clear_command_ends_the_program_a_kept_job_was_running() {
+    let root = a_checkout("kept-job-ended-by-clear-command");
+    let mut session = Session::new("none");
+    let pid = a_turn_that_started_a_job(&mut session, &root);
+    session.complete("started", Vec::new(), 0);
+    assert!(is_alive(&pid), "the job did not outlive its turn");
+    assert_eq!(session.jobs_running(), 1);
+    let mut workspace = Workspace::new(&root).expect("workspace");
+
+    let _ = clear_session(&mut session, &mut workspace, None);
+
+    assert_eq!(session.jobs().count(), 0);
+    assert_eq!(session.jobs_running(), 0);
+    assert!(
+        !is_alive(&pid),
+        "`/clear` left the program of the conversation it ended running"
+    );
+}
+
 /// WATCH-22. The next turn's first round reports the finish of a job stopped between turns, and
 /// what the job printed lands on its row; neither that report nor a later look adds a row. The
 /// next turn's list starts past a job that is no longer running, so a search for the row within

@@ -108,6 +108,8 @@ ahead of what came of it. A reason of several lines is cut to its first. A call 
 headed by the call itself. The reason stays once the call is over, and a resumed session draws it
 too. The desktop window draws the reason after the call on the call's own row.
 
+A look at a background job (`job_output`) is drawn with the job's name and the command line it runs, as a `run` call is, so a long wait says what it is waiting for. A job whose line declares a credential is drawn by name alone, and so is a job in a resumed session.
+
 A `run` call shows its command line, so a command that needs no prompt is still visible. A command
 of several lines is shown as its first line and `...`. A command line that carries a credential you
 declared, on any of its lines, is shown as the verb alone, because `run` refuses such a line before
@@ -294,7 +296,7 @@ to what it is set to. `NO_COLOR=0` is somebody who set it.
 | Variable | What it does |
 |---|---|
 | `NO_COLOR` | every role is drawn in your terminal's own ink, and none is added |
-| `NO_MOTION` | the glyph beside a running turn stands still instead of cycling, and the face on the opening screen stops blinking and glancing |
+| `NO_MOTION` | the glyph beside a running turn stands still instead of cycling, and the face on the opening screen stops blinking and glancing, and no longer answers a click |
 
 `NO_COLOR` outranks the theme in force: the background, the mixed shades, the named slots, the
 gradient across the wordmark and the pixel face beside it are all given up, and the terminal is not asked about its background
@@ -309,6 +311,10 @@ than a fill, since a list you cannot see your place in cannot be walked.
 Under `NO_MOTION` the glyph is still drawn, and the elapsed time and the token counts still change: a
 figure that moves when the thing it measures moves is information rather than animation. A row with
 nothing in it would be indistinguishable from a program that had hung.
+
+## The face on the opening screen
+
+A click on the pixel face beside the wordmark makes it blink, the next click makes it look to the other side, and the clicks alternate after that. The face goes back to its own schedule after a moment. Where `NO_MOTION` is set, or the face is not drawn (no colour, or a screen too narrow for it), a click does nothing.
 
 ## In Apple's Terminal
 
@@ -577,6 +583,7 @@ the rest.
 |---|---|---|
 | the session's name | puts `/rename` and the name in the box, for you to edit and send. It leaves a line you have begun alone, and says so | `/rename` |
 | the model row, the effort row | opens the `/model` or `/effort` picker | `/model`, `/effort` |
+| the sandbox row | opens the list of sandbox modes, as a bare `/sandbox` does | `/sandbox` |
 | the context reading | says what `/context` says | `/context` |
 | a started MCP server | lists the servers, as `/mcp` does | `/mcp` |
 | a started language server | says which are running, as `/lsp` does | `/lsp` |
@@ -611,7 +618,7 @@ Parts of the row that only report, such as the context reading and what a copy t
 
 | Click | What it does | The same from the keyboard |
 |---|---|---|
-| a row of the `/effort`, `/config`, `/theme` and `/model` pickers | the first click moves the cursor to it, and `/theme` shows the theme under it. The second takes it, when it is on the same row | Up, Down and Enter |
+| a row of the `/effort`, `/config`, `/theme`, `/model` and `/sandbox` pickers | the first click moves the cursor to it, and `/theme` shows the theme under it. The second takes it, when it is on the same row | Up, Down and Enter |
 | a row of the `/sidebar` checklist | turns that section of the info panel on or off, on the one click | Up, Down, Space and Enter |
 | a prompt in the search over earlier prompts | the first click moves the cursor to it and the second puts it in the box, sending nothing | Up, Down and Enter |
 | a session in the [Sessions screen](sessions-screen.md#the-mouse) or the list `bravebot sessions` opens | the first click moves the cursor to it and the second opens it as Enter does, or attaches to it. A click on a tab of the Sessions screen chooses it | Up, Down and Enter |

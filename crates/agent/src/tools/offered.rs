@@ -391,10 +391,11 @@ fn read_output_description(beside: &dyn Fn(&str) -> bool) -> String {
     )
 }
 
-/// The description of `fetch_url`, naming only the tools `beside` says are on the list. See
-/// [`spawn_processor_description`].
-fn fetch_url_description(beside: &dyn Fn(&str) -> bool) -> String {
-    let moves = match (beside("spawn_processor"), beside("write_file")) {
+/// The sentence, with its leading space, that says what to do with the reference a quarantined
+/// result comes back as, naming only the tools `beside` says are on the list. Empty where neither
+/// `spawn_processor` nor `write_file` is.
+fn quarantined_reference_moves(beside: &dyn Fn(&str) -> bool) -> &'static str {
+    match (beside("spawn_processor"), beside("write_file")) {
         (true, true) => {
             " Hand the reference to spawn_processor to have a question answered about it, or to \
              write_file as contents_ref to save it."
@@ -404,12 +405,24 @@ fn fetch_url_description(beside: &dyn Fn(&str) -> bool) -> String {
         }
         (false, true) => " Hand the reference to write_file as contents_ref to save it.",
         (false, false) => "",
-    };
-    let reading = if beside("vet_content") {
-        " Where you have to read the page yourself, vet_content is the question to ask."
+    }
+}
+
+/// The sentence, with its leading space, that names `vet_content` as the way to read `what` a
+/// quarantined result holds. Empty where `beside` says `vet_content` is not on the list.
+fn read_it_yourself(beside: &dyn Fn(&str) -> bool, what: &str) -> String {
+    if beside("vet_content") {
+        format!(" Where you have to read the {what} yourself, vet_content is the question to ask.")
     } else {
-        ""
-    };
+        String::new()
+    }
+}
+
+/// The description of `fetch_url`, naming only the tools `beside` says are on the list. See
+/// [`spawn_processor_description`].
+fn fetch_url_description(beside: &dyn Fn(&str) -> bool) -> String {
+    let moves = quarantined_reference_moves(beside);
+    let reading = read_it_yourself(beside, "page");
     format!(
         "Fetch an http or https URL. Not the way to read a github.com pull request or issue \
          where the prompt says the GitHub CLI is on PATH, which names the commands that are. \
@@ -2720,22 +2733,8 @@ pub fn offer_web_search(tools: &mut Vec<Tool>) {
 /// The description of `web_search`, naming only the tools `beside` says are on the list. See
 /// [`spawn_processor_description`].
 fn web_search_description(beside: &dyn Fn(&str) -> bool) -> String {
-    let moves = match (beside("spawn_processor"), beside("write_file")) {
-        (true, true) => {
-            " Hand the reference to spawn_processor to have a question answered about it, or to \
-             write_file as contents_ref to save it."
-        }
-        (true, false) => {
-            " Hand the reference to spawn_processor to have a question answered about it."
-        }
-        (false, true) => " Hand the reference to write_file as contents_ref to save it.",
-        (false, false) => "",
-    };
-    let reading = if beside("vet_content") {
-        " Where you have to read the results yourself, vet_content is the question to ask."
-    } else {
-        ""
-    };
+    let moves = quarantined_reference_moves(beside);
+    let reading = read_it_yourself(beside, "results");
     format!(
         "Search the web with the Brave Search API. 'service' picks what is asked: web, news, \
          videos, images, llm_context (pre-extracted page text for grounding), suggest, \
