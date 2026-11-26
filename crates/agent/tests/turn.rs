@@ -1811,39 +1811,9 @@ fn serve_by_marker_in(
                 let body = String::from_utf8_lossy(&body).to_string();
                 let _ = sender.send(body.clone());
 
-                // A check belongs to no run: it carries content rather than a task, so a rule's
-                // marker found in its body would be the content saying the word and not the run.
-                let reply = if body.contains(A_CHECK_ASKING) {
-                    a_check_finding_nothing()
-                } else {
-                    // Which run this is, settled before anything waits. A turn replays the
-                    // arguments it called with, so its own requests hold every task it handed out:
-                    // the rule that answers is what says whose request this is, never the text
-                    // alone.
-                    let answering = {
-                        let mut held = waiting.lock().expect("not poisoned");
-                        held.iter_mut()
-                            .find(|(marker, replies)| body.contains(marker) && !replies.is_empty())
-                            .map(|(marker, replies)| (*marker, replies.pop_front()))
-                    };
-                    // A request no rule has a reply left for is told so, as `out_of_script` says,
-                    // so a turn that makes one more request than its test scripted fails at the
-                    // assertion about the count and not at a transport error in `expect`.
-                    let Some((marker, Some(reply))) = answering else {
-                        stream.write_all(out_of_script().as_bytes()).ok();
-                        stream.flush().ok();
-                        return;
-                    };
-                    {
-                        let (counts, told) = &*asked;
-                        *counts
-                            .lock()
-                            .expect("not poisoned")
-                            .entry(marker)
-                            .or_default() += 1;
-                        told.notify_all();
-                    }
-
+                // Holds a request of the run `marker` names until the run an `Order::After` or
+                // `Order::Staged` says it waits for has been asked often enough.
+                let hold_for_order = |marker: &str| {
                     let stages: Vec<(&str, &str, usize)> = match order {
                         Order::After { held, after, asked } => vec![(held, after, asked)],
                         Order::Staged(stages) => stages.to_vec(),
@@ -1867,6 +1837,54 @@ fn serve_by_marker_in(
                             met.store(true, Ordering::SeqCst);
                         }
                     }
+                };
+
+                // A check belongs to no run: it carries content rather than a task, so a rule's
+                // marker found in its body would be the content saying the word and not the run.
+                let reply = if body.contains(A_CHECK_ASKING) {
+                    a_check_finding_nothing()
+                } else {
+                    // Which run this is, settled before anything waits. A turn replays the
+                    // arguments it called with, so its own requests hold every task it handed out:
+                    // the rule that answers is what says whose request this is, never the text
+                    // alone.
+                    let answering = {
+                        let mut held = waiting.lock().expect("not poisoned");
+                        held.iter_mut()
+                            .find(|(marker, replies)| body.contains(marker) && !replies.is_empty())
+                            .map(|(marker, replies)| (*marker, replies.pop_front()))
+                    };
+                    // A request no rule has a reply left for is told so, as `out_of_script` says,
+                    // so a turn that makes one more request than its test scripted fails at the
+                    // assertion about the count and not at a transport error in `expect`.
+                    let Some((marker, Some(reply))) = answering else {
+                        // A run whose rule has nothing left to say is still the run that rule
+                        // names, and an order that holds it holds its refusal too. This is how a
+                        // test says a delegate fails only once the planner has asked again.
+                        let named = waiting
+                            .lock()
+                            .expect("not poisoned")
+                            .iter()
+                            .map(|(marker, _)| *marker)
+                            .find(|marker| body.contains(marker));
+                        if let Some(marker) = named {
+                            hold_for_order(marker);
+                        }
+                        stream.write_all(out_of_script().as_bytes()).ok();
+                        stream.flush().ok();
+                        return;
+                    };
+                    {
+                        let (counts, told) = &*asked;
+                        *counts
+                            .lock()
+                            .expect("not poisoned")
+                            .entry(marker)
+                            .or_default() += 1;
+                        told.notify_all();
+                    }
+
+                    hold_for_order(marker);
 
                     // Held until every run the test named is waiting here at the same moment. A
                     // marker is taken out again on the way past, so what the flag records is runs
@@ -71676,9 +71694,11 @@ fn a_delegate_that_failed_gives_its_place_back() {
     let scratch = Scratch::new("delegate-place-returned-after-failure");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     // Nothing answers the first delegate, so its own first request fails and its run ends with it.
-    // The second delegate's reply is held until the planner's fourth request has arrived, which is
-    // made after the turn last looked for finished delegates, so the planner's "waiting" is
-    // answered with that delegate still outstanding and the turn waits for it.
+    // The refusal is held until the planner's second request has arrived, and the second
+    // delegate's reply until its fourth. Each of those requests is made after the turn last looked
+    // for finished delegates, so the planner's "waiting" is answered with the delegate still
+    // outstanding however fast the machine fails the first one, and the turn waits for it instead
+    // of ending on "waiting".
     let (endpoint, received, held) = serve_by_marker_in(
         vec![
             (
@@ -71697,13 +71717,14 @@ fn a_delegate_that_failed_gives_its_place_back() {
                     reply_with("done"),
                 ],
             ),
+            // No reply, so the delegate's requests are refused, after the order has held them.
+            ("NOBODY-ANSWERS-THIS", vec![]),
             ("ANSWERED-LATER", vec![reply_with("second")]),
         ],
-        Order::After {
-            held: "ANSWERED-LATER",
-            after: "REUSE-THE-PLACE-AFTER-A-FAILURE",
-            asked: 4,
-        },
+        Order::Staged(&[
+            ("NOBODY-ANSWERS-THIS", "REUSE-THE-PLACE-AFTER-A-FAILURE", 2),
+            ("ANSWERED-LATER", "REUSE-THE-PLACE-AFTER-A-FAILURE", 4),
+        ]),
     );
     let mut config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     config.max_running_delegates = Some(1);
