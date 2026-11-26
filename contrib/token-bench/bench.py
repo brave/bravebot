@@ -16,6 +16,7 @@ Standard library only. matplotlib is imported by `report --plot` and nowhere els
 
 import argparse
 import hashlib
+import http.client
 import http.server
 import json
 import math
@@ -29,8 +30,9 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 HERE = pathlib.Path(__file__).resolve().parent
 
@@ -93,6 +95,9 @@ class Turn:
     min_delegates: int = 0
     # A skill the turn has to load with `load_skill`. Applied only where the tool reports its calls.
     loads: str = ""
+    # Whether the run waits `resume_gap` seconds before this turn, so the turn starts after the
+    # prompt cache has expired.
+    gap: bool = False
 
 
 @dataclass
@@ -111,6 +116,12 @@ class Scenario:
     # Flags added to every bravebot command of the scenario, such as `--goal`. Other tools never run a
     # scenario that has them, since `tools` limits it to bravebot.
     bravebot_args: tuple = ()
+    # (mode, request) for a scenario run against the bench's own fake endpoint, which fails the
+    # request with that number once: `mode` is an HTTP status such as "429", "stream" for a reply cut
+    # part way, or "none" for the run with no failure. None for every other scenario.
+    fault: object = None
+    # Environment variables set for every command of the scenario, over the contestant's own.
+    env: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -400,6 +411,122 @@ def _check_refactor(workdir, reply):
     return done.returncode == 0 and "OK" in done.stdout
 
 
+# The scenarios of #4603 that need no endpoint of the bench's own: compaction, a tool result larger
+# than a page, a resume after the prompt cache expired, and a delegate that starts a delegate.
+#
+# compaction_recall: bravebot is given a context budget low enough that the conversation passes it
+# while the four files are read, so it is summarised before the last turn asks for a value that only
+# the first file's text held (COMPACT-7, COMPACT-8). Each of the first four turns asks for the file's
+# line count, which only a read or a program can give, and no reply holds a key, so the last turn's
+# answer is either kept by the summary or read again.
+COMPACT_BUDGET = 20000
+COMPACT_FILES = 4
+BIG_LINES = 451
+
+
+def _big_key(n):
+    return _digest(f"big-key-{n}")
+
+
+def _setup_big_files(workdir):
+    """Four files of 451 lines, each line a run of hex digits, with one `key:` line in the middle."""
+    for n in range(1, COMPACT_FILES + 1):
+        lines = [f"entry {i:03d} " + "".join(_digest(f"big-{n}-{i}-{k}") for k in range(4)) + "\n"
+                 for i in range(BIG_LINES - 1)]
+        lines.insert(225, f"key: {_big_key(n)}\n")
+        (workdir / f"big_{n}.txt").write_text("".join(lines))
+
+
+COMPACT_TURNS = [
+    Turn(f"Read big_{n}.txt and reply with the number of lines in it and nothing else.",
+         _says(str(BIG_LINES)))
+    for n in range(1, COMPACT_FILES + 1)
+] + [Turn("What is the value on the 'key:' line of big_1.txt? Reply with the value only.",
+           _says(_big_key(1)))]
+
+# large_output: a log whose `key:` line is past the 500 lines and the 100,000 characters of the
+# first page of a read (READ-2), so only a tool that reads further pages, searches the file or runs
+# a program that prints the line gets the value.
+LARGE_FILE = "large.log"
+LARGE_LINES = 2600
+LARGE_KEY_LINE = 2400
+LARGE_KEY = _digest("large-key")
+LARGE_PROMPT = (f"Read {LARGE_FILE} and reply with the value on its line starting with 'key:'. "
+                f"Reply with that value only.")
+
+
+def _setup_large(workdir):
+    lines = [f"{i:05d} request handled in {i % 97} ms, session {_digest(f'large-{i}')}"
+             f"{_digest(f'large-{i}-b')}\n" for i in range(1, LARGE_LINES + 1)]
+    lines[LARGE_KEY_LINE - 1] = f"key: {LARGE_KEY}\n"
+    (workdir / LARGE_FILE).write_text("".join(lines))
+
+
+# resume_after_gap: two turns of one conversation with a wait between them that is longer than the
+# five minutes an Anthropic prompt cache holds, so the second turn finds the cache expired.
+# resume_warm is the same two turns with no wait. The wait is the contestant's `resume_gap` in
+# seconds, so the selftest runs it against a clock that costs nothing.
+CACHE_LIFETIME = 300
+RESUME_GAP = 330
+
+
+def _resume_turns(gap):
+    return [Turn("Read notes.txt and reply with the single word ok.", _says("ok")),
+            replace(_asks_value(88), gap=gap)]
+
+
+# delegate_nested: the value is in a file that only the delegate two levels down is told to read.
+# The result object lists every `spawn_agent` call of the run, whichever level made it, so two
+# calls are the least a nested delegate leaves (DELEGATE-7 allows three levels below the turn). Two
+# sibling delegates also make two calls and a call in `--json` carries no depth, so the floor counts
+# delegates only and the nesting rests on the prompt wording.
+NESTED_KEY = _digest("nested-key")
+NESTED_PROMPT = (
+    "Start one delegate (a separate sub-agent) and tell it to start one delegate of its own. The "
+    "inner delegate reads deep.txt and reports the value on its line starting with 'key:', and the "
+    "outer delegate passes it up. Do not read deep.txt yourself. Reply with that value only.")
+
+
+def _setup_nested(workdir):
+    lines = [f"deep filler line {i}: nothing to report\n" for i in range(150)]
+    lines.insert(75, f"key: {NESTED_KEY}\n")
+    (workdir / "deep.txt").write_text("".join(lines))
+
+
+# The retry scenarios. The prompt asks for a value that is only in a file. The fake endpoint's model
+# asks to read the file (chat request 1) and answers from what the tool returned (chat request 2),
+# and the endpoint fails request 2 once, so the retry sends the whole prompt, tool result included.
+RETRY_FILE = "notes.txt"
+RETRY_KEY = _digest("retry-key")
+RETRY_FAIL_AT = 2
+RETRY_SCENARIOS = ("retry_baseline", "retry_429", "retry_stream")
+# The tools that can be pointed at an endpoint of the bench's own: bravebot through a provider entry,
+# and the reference loop through its `base_url`. Claude Code, Codex and opencode take their route from
+# their own settings, which bench.py does not change.
+FAKE_ENDPOINT_TOOLS = ("bravebot", "reference")
+RETRY_PROMPT = (f"Read {RETRY_FILE} and reply with the value on its line starting with 'key:'. "
+                f"Reply with that value only.")
+
+
+def _setup_retry(workdir):
+    lines = [f"notes line {i}: nothing to report\n" for i in range(40)]
+    lines.insert(20, f"key: {RETRY_KEY}\n")
+    (workdir / RETRY_FILE).write_text("".join(lines))
+
+
+def _retry_scenario(name, mode, description):
+    return Scenario(name, "retries", description, _setup_retry,
+                    [Turn(RETRY_PROMPT, _says(RETRY_KEY))], tools=FAKE_ENDPOINT_TOOLS,
+                    fault=(mode, RETRY_FAIL_AT))
+
+
+# The scenarios left out of the overall score. The retry scenarios run only for a contestant with
+# `fake_endpoint`, whose prompt is the tool's own fixed one against a model that answers with a
+# key, so their per-scenario score ranks the tools by that prompt and says nothing of retries. The
+# retry cost lines are what they are for.
+UNSCORED = RETRY_SCENARIOS
+
+
 def scenarios():
     two_word_turns = [
         Turn("Reply with exactly the word: ok", _says("ok")),
@@ -473,6 +600,39 @@ def scenarios():
             [_delegate_one(1), _delegate_one(2), _delegate_one(3)],
         ),
         Scenario(
+            "delegate_nested", "delegates",
+            "One turn that starts a delegate, which starts a delegate of its own to read the file. "
+            "Measures what two levels of delegation spend together.",
+            _setup_nested, [Turn(NESTED_PROMPT, _says(NESTED_KEY), min_delegates=2)],
+        ),
+        Scenario(
+            "compaction_recall", "compaction",
+            "Five turns, four of them reading a file of about nineteen thousand characters, under a "
+            "context budget the conversation passes, then a turn that asks for a value only the "
+            "first read held. Measures what a compaction costs and whether the value survives it.",
+            _setup_big_files, COMPACT_TURNS, tools=("bravebot",),
+            env={"BRAVEBOT_CONTEXT_BUDGET": str(COMPACT_BUDGET)},
+        ),
+        Scenario(
+            "large_output", "output",
+            "Find one value in a log of 2,600 lines whose `key:` line is past the first page of a "
+            "read. Rewards paging, searching or a program over reading only what the first read "
+            "returns.",
+            _setup_large, [Turn(LARGE_PROMPT, _says(LARGE_KEY))],
+        ),
+        Scenario(
+            "resume_warm", "resume",
+            "Two turns over one conversation with no wait between them. The baseline for "
+            "resume_after_gap.",
+            _setup_notes, _resume_turns(False),
+        ),
+        Scenario(
+            "resume_after_gap", "resume",
+            "The turns of resume_warm with a wait longer than the prompt cache lifetime before the "
+            "second. Shows what a resume after the cache expired costs.",
+            _setup_notes, _resume_turns(True),
+        ),
+        Scenario(
             "configured_hello", "configured",
             "One trivial turn with eight skills and eight MCP tool schemas loaded, without --safe. "
             "The report gives the difference from the --safe baseline contestant's hello.",
@@ -521,6 +681,19 @@ def scenarios():
             "script. Shows how edits are sent and whether files already read are read again.",
             _setup_refactor, [Turn(REFACTOR_PROMPT, _check_refactor)],
         ),
+        _retry_scenario(
+            "retry_baseline", "none",
+            "Read a file and answer from it, against the bench's fake endpoint with no failure. The "
+            "baseline for retry_429 and retry_stream."),
+        _retry_scenario(
+            "retry_429", "429",
+            "The task of retry_baseline, with the fake endpoint answering the answering request with "
+            "HTTP 429 once. The difference from the baseline is the cost of the retry."),
+        _retry_scenario(
+            "retry_stream", "stream",
+            "The task of retry_baseline, with the fake endpoint closing the connection part way "
+            "through the answering reply once. The difference from the baseline is the cost of the "
+            "retry."),
         Scenario(
             "sysprompt_short", "system_prompt",
             "Two turns with a ten-rule addition to the system prompt.",
@@ -783,8 +956,75 @@ def ref_messages(system, history):
     return out
 
 
+# What the reference loop does when a request fails. A request that failed in the transport (a closed
+# connection, a timeout, a body cut short) or with a status that means not now is sent again, at most
+# `retries` times (default 2, so three requests in all, the count bravebot's client uses for these
+# failures, crates/aichat/src/lib.rs ATTEMPTS). The wait before retry n is `retry_wait` seconds
+# (default 1) doubled for each retry after the first and held at a minute, or the whole seconds a 429's
+# `Retry-After` asked for if that is longer, as bravebot's pause is (crates/aichat/src/lib.rs
+# pause_after_failure). A wait asked for beyond two minutes is not taken and the request fails. Any other
+# status ends the request at once. `retry_wait` and `retries` are contestant fields, so a run that does
+# not want to wait sets them low, and the wait goes through `_sleep` so the selftest never sleeps.
+REF_RETRIES = 2
+REF_RETRY_WAIT = 1.0
+REF_LONGEST_PAUSE = 60.0
+REF_LONGEST_WAIT = 120.0
+REF_TRANSIENT = (408, 429, 500, 502, 503, 504)
+
+
+def _sleep(seconds):
+    time.sleep(seconds)
+
+
+def _idle(seconds):
+    """The wait of a turn that starts after the cache expired. Apart from `_sleep` so the selftest
+    replaces it with a clock that costs nothing."""
+    time.sleep(seconds)
+
+
+def retry_after_of(value):
+    """The whole seconds a `Retry-After` header asked for, or 0 where it is absent or not a number."""
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def ref_pause(contestant, failures, asked=0):
+    """Seconds to wait after `failures` failed requests, or None where the wait asked for is too long."""
+    if asked > REF_LONGEST_WAIT:
+        return None
+    base = float(contestant.get("retry_wait", REF_RETRY_WAIT))
+    return max(float(asked), min(base * 2 ** (failures - 1), REF_LONGEST_PAUSE))
+
+
+def ref_post(contestant, request):
+    """One chat request and its JSON answer, sent again after a failure worth another attempt."""
+    retries = contestant.get("retries", REF_RETRIES)
+    failures = 0
+    while True:
+        asked = 0
+        try:
+            with urllib.request.urlopen(request, timeout=180) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as error:
+            error.close()
+            if error.code not in REF_TRANSIENT:
+                raise BenchError(f"request failed: {error}") from error
+            if error.code == 429:
+                asked = retry_after_of(error.headers.get("Retry-After"))
+            failure = error
+        except (OSError, http.client.HTTPException, json.JSONDecodeError) as error:
+            failure = error
+        failures += 1
+        pause = ref_pause(contestant, failures, asked)
+        if failures > retries or pause is None:
+            raise BenchError(f"request failed: {failure}") from failure
+        _sleep(pause)
+
+
 def ref_turn(contestant, workdir, prompt, state, extra_system):
-    key = os.environ.get(contestant.get("key_env", "OPENROUTER_API_KEY"), "")
+    key = contestant.get("_key") or os.environ.get(contestant.get("key_env", "OPENROUTER_API_KEY"), "")
     if not key:
         raise BenchError("the reference contestant needs its API key variable set")
     base = contestant.get("base_url", "https://openrouter.ai/api/v1").rstrip("/")
@@ -798,11 +1038,7 @@ def ref_turn(contestant, workdir, prompt, state, extra_system):
         request = urllib.request.Request(
             base + "/chat/completions", json.dumps(body).encode(),
             {"Authorization": "Bearer " + key, "Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(request, timeout=180) as response:
-                answer = json.load(response)
-        except OSError as error:
-            raise BenchError(f"request failed: {error}") from error
+        answer = ref_post(contestant, request)
         u = answer.get("usage", {})
         details = u.get("prompt_tokens_details") or {}
         read = details.get("cached_tokens") or 0
@@ -980,12 +1216,16 @@ def applies(contestant, scenario):
     tools is not run by the others, which have no skills or MCP servers of this kind to load. A
     scenario with `bravebot_args` is a goal run or a manifest run, which refuse some flags
     (`REFUSED_BY_PLANNED_RUNS`), so a contestant that passes one would fail every turn and is not
-    run on it.
+    run on it. A scenario with a `fault` runs against the bench's own endpoint, so it is run only by
+    a contestant with `fake_endpoint` set, and that contestant runs only those scenarios, since the
+    endpoint is its whole route.
     """
     if scenario.bravebot_args and any(a in REFUSED_BY_PLANNED_RUNS
                                       for a in contestant.get("args", [])):
         return False
     if scenario.tools and contestant["tool"] not in scenario.tools:
+        return False
+    if bool(scenario.fault) != bool(contestant.get("fake_endpoint")):
         return False
     return bool(scenario.home) == bool(contestant.get("configured"))
 
@@ -1000,6 +1240,191 @@ def with_home(contestant, home):
     return dict(contestant, env=dict(contestant.get("env", {}), BRAVEBOT_HOME=str(home)))
 
 
+# ---------------------------------------------------------------------------------------------
+# The fake endpoint of the retry scenarios
+# ---------------------------------------------------------------------------------------------
+
+FAKE_MODEL = "bench-model"
+# What the 429 asks for. A 429 with no `Retry-After` puts bravebot on its rate limit schedule, whose
+# first wait is 8 seconds (BACKEND-54), so a run would wait that long. One that names a wait of a
+# second keeps bravebot's two retries and waits that second. The reference loop waits the same.
+FAKE_RETRY_AFTER = 1
+
+
+class FaultState:
+    """What the fake endpoint was asked, and the one failure it is to inject.
+
+    `mode` is `none` for no failure, a status such as `429` to answer one request with it, or
+    `stream` to cut one reply off part way. The failure goes to chat request number `fail_at`,
+    counted from 1 over every chat request the run makes, and only once.
+    """
+
+    def __init__(self, mode, fail_at, retry_after=FAKE_RETRY_AFTER):
+        self.mode, self.fail_at, self.retry_after = mode, fail_at, retry_after
+        self.lock = threading.Lock()
+        self.chat_requests = 0
+        self.request_bytes = 0
+        self.injected = False
+        self.failed_body = None
+        self.resent_identical = None
+
+    def stats(self):
+        with self.lock:
+            return {"mode": self.mode, "fail_at": self.fail_at, "chat_requests": self.chat_requests,
+                    "request_bytes": self.request_bytes, "injected": self.injected,
+                    "resent_identical": self.resent_identical}
+
+
+def fake_message(body):
+    """What the fake's model says to a request: ask to read the file, then answer from its text.
+
+    The key is taken from the tool result in the request, so a tool that never sent the file's text
+    back gets no key.
+    """
+    results = [json.dumps(m.get("content")) for m in body.get("messages", [])
+               if m.get("role") == "tool"]
+    if not results:
+        return {"role": "assistant", "content": None, "tool_calls": [{
+            "id": "call-1", "type": "function",
+            "function": {"name": "read_file", "arguments": json.dumps({"path": RETRY_FILE})}}]}
+    found = re.search(r"key: ([0-9a-f]{8})", " ".join(results))
+    return {"role": "assistant", "content": found.group(1) if found else "no key in the file"}
+
+
+def fake_frames(body, message, usage):
+    """The reply as server-sent frames, in the shape of a chat completions stream. The reply text
+    comes in two frames so that a cut between them leaves part of it."""
+    model = body.get("model", FAKE_MODEL)
+
+    def frame(delta, finish=None, more=None):
+        choice = {"index": 0, "delta": delta}
+        if finish:
+            choice["finish_reason"] = finish
+        chunk = {"id": "bench", "object": "chat.completion.chunk", "model": model,
+                 "choices": [choice]}
+        chunk.update(more or {})
+        return f"data: {json.dumps(chunk)}\n\n"
+
+    frames = [frame({"role": "assistant"})]
+    if message.get("tool_calls"):
+        for index, call in enumerate(message["tool_calls"]):
+            frames.append(frame({"tool_calls": [dict(call, index=index)]}))
+        frames.append(frame({}, "tool_calls", {"usage": usage}))
+    else:
+        text = message["content"]
+        half = len(text) // 2
+        frames += [frame({"content": text[:half]}), frame({"content": text[half:]}),
+                   frame({}, "stop", {"usage": usage})]
+    frames.append("data: [DONE]\n\n")
+    return frames
+
+
+class RetryEndpoint(http.server.BaseHTTPRequestHandler):
+    """A chat completions endpoint that fails one chosen request once.
+
+    It speaks what bravebot's gateway client sends and what the reference loop sends: a request with
+    `stream: true` is answered as server-sent frames and any other as one JSON body, and a `GET` is
+    answered with a roster of one model. Usage is the request's size in bytes over four, with no
+    cache. `self.server.state` is the `FaultState`.
+    """
+
+    def _send(self, status, payload, content_type="application/json", headers=(), declared=None):
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(payload) if declared is None else declared))
+            for name, value in headers:
+                self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(payload)
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def do_GET(self):
+        self._send(200, json.dumps({"data": [{
+            "id": FAKE_MODEL, "context_length": 200000, "supported_parameters": ["tools"]}]}).encode())
+
+    def do_POST(self):
+        raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if not self.path.split("?")[0].endswith("/chat/completions"):
+            return self._send(404, b"{}")
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            return self._send(400, b"{}")
+        state = self.server.state
+        with state.lock:
+            state.chat_requests += 1
+            state.request_bytes += len(raw)
+            if state.failed_body is not None and state.resent_identical is None:
+                state.resent_identical = raw == state.failed_body
+            fail = state.mode != "none" and state.chat_requests == state.fail_at
+            if fail:
+                state.injected, state.failed_body = True, raw
+        if fail and state.mode.isdigit():
+            wait = [("Retry-After", str(state.retry_after))] if (
+                state.mode == "429" and state.retry_after) else []
+            return self._send(int(state.mode), b'{"error": {"message": "bench"}}', headers=wait)
+        message = fake_message(body)
+        tokens = len(json.dumps(message)) // 4 + 1
+        usage = {"prompt_tokens": -(-len(raw) // 4), "completion_tokens": tokens}
+        if body.get("stream"):
+            frames = fake_frames(body, message, usage)
+            whole = "".join(frames).encode()
+            sent = "".join(frames[:2]).encode() if fail else whole
+            return self._send(200, sent, "text/event-stream", declared=len(whole))
+        whole = json.dumps({"model": body.get("model", FAKE_MODEL),
+                            "choices": [{"message": message}], "usage": usage}).encode()
+        self._send(200, whole[:len(whole) // 2] if fail else whole, declared=len(whole))
+
+    def log_message(self, *args):
+        pass
+
+
+def start_endpoint(mode, fail_at):
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), RetryEndpoint)
+    server.state = FaultState(mode, fail_at)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def at_endpoint(contestant, server, home):
+    """The contestant pointed at the fake endpoint.
+
+    The reference loop gets the address as its `base_url`. bravebot gets a provider entry in the
+    settings file of its fixture state directory, which names the address and no credential, and
+    the same address as `BRAVE_AI_CHAT_ENDPOINT`, so no request goes anywhere else. The model is the
+    fake's, and `--safe` is added so nothing else in the contestant's setup is loaded.
+    """
+    host = f"http://127.0.0.1:{server.server_port}"
+    if contestant["tool"] == "reference":
+        return dict(contestant, base_url=host + "/v1", model=FAKE_MODEL, _key="bench")
+    (home / "settings.json").write_text(json.dumps({"provider": {"bench": {
+        "env": [], "options": {"baseURL": host + "/v1"}}}}))
+    args = list(contestant.get("args", []))
+    if "--safe" not in args:
+        args.append("--safe")
+    env = dict(contestant.get("env", {}), BRAVE_AI_CHAT_ENDPOINT=host, SERVICES_KEY_AICHAT="bench",
+               BRAVE_SERVICES_KEY_ID="bench")
+    return dict(contestant, model="bench/" + FAKE_MODEL, args=args, env=env)
+
+
+def fault_ok(fault, stats):
+    """Whether the endpoint saw what the scenario is about.
+
+    The baseline run has to have asked more than once, so the file was read and sent back, and to
+    have had no failure. A failing run has to have been failed once and then asked again. A run
+    that never reached the request to fail, or never sent another, did not do the work.
+    """
+    mode, at = fault
+    if stats is None:
+        return False
+    if mode == "none":
+        return not stats["injected"] and stats["chat_requests"] >= 2
+    return stats["injected"] and stats["chat_requests"] > at
+
+
 def run_scenario(contestant, scenario, rep, sink):
     # The path is the same on every run: tools put the working directory in the system prompt, and
     # a path that changed would change the cached prefix and hide cross-run cache reuse.
@@ -1009,6 +1434,8 @@ def run_scenario(contestant, scenario, rep, sink):
     state = {}
     single = len(scenario.turns) == 1
     weights = weights_of(contestant)
+    if scenario.env:
+        contestant = dict(contestant, env=dict(contestant.get("env", {}), **scenario.env))
     home = None
     if scenario.home:
         # The fixture state directory replaces the person's own for every command of the run,
@@ -1017,20 +1444,41 @@ def run_scenario(contestant, scenario, rep, sink):
         shutil.rmtree(home, ignore_errors=True)
         home.mkdir(parents=True)
         contestant = with_home(contestant, home)
+    endpoint = None
+    if scenario.fault:
+        # The fake endpoint is the contestant's whole route. bravebot reads it from the settings
+        # file of a fixture state directory, so that directory is made here and is not the person's.
+        endpoint = start_endpoint(*scenario.fault)
+        if contestant["tool"] == "bravebot":
+            home = home_path(scenario)
+            shutil.rmtree(home, ignore_errors=True)
+            home.mkdir(parents=True)
+            contestant = with_home(contestant, home)
+        contestant = at_endpoint(contestant, endpoint, home)
     try:
-        if home:
+        if home and scenario.home:
             scenario.home(home)
         scenario.setup(workdir)
         for index, turn in enumerate(scenario.turns):
+            waited = None
+            if turn.gap:
+                # Before the clock starts, so the wait is not part of the turn's wall time.
+                waited = float(contestant.get("resume_gap", RESUME_GAP))
+                _idle(waited)
             started = time.monotonic()
             record = {"contestant": contestant["name"], "scenario": scenario.name,
                       "category": scenario.category, "rep": rep, "turn": index}
+            if waited is not None:
+                record["gap_s"] = waited
             if contestant.get("baseline"):
                 record["baseline"] = contestant["baseline"]
+            if contestant.get("versus"):
+                record["versus"] = contestant["versus"]
             try:
                 result = run_turn(contestant, workdir, turn.prompt, state,
                                   scenario.system_extra, single, scenario.bravebot_args)
-                ok = turn_ok(turn, result, workdir)
+                ok = turn_ok(turn, result, workdir) and (
+                    endpoint is None or fault_ok(scenario.fault, endpoint.state.stats()))
                 record.update(ok=ok, reply=result.reply[:200], tool_calls=result.tool_calls,
                               delegates=result.delegates, loaded=result.loaded,
                               by_tool=result.by_tool, reads=result.reads,
@@ -1043,6 +1491,8 @@ def run_scenario(contestant, scenario, rep, sink):
                               loaded=None, by_tool=None, reads=None, fresh=0,
                               cache_read=0,
                               cache_write=0, output=0, requests=0, cost=0.0, cost_usd=0.0)
+            if endpoint is not None:
+                record["endpoint"] = endpoint.state.stats()
             record["wall_s"] = round(time.monotonic() - started, 2)
             sink(record)
             if "error" in record:
@@ -1057,6 +1507,9 @@ def run_scenario(contestant, scenario, rep, sink):
                            env=dict(os.environ, **{k: expand(v) for k, v in
                                                    contestant.get("env", {}).items()}))
         shutil.rmtree(workdir, ignore_errors=True)
+        if endpoint is not None:
+            endpoint.shutdown()
+            endpoint.server_close()
         if home:
             shutil.rmtree(home, ignore_errors=True)
 
@@ -1124,6 +1577,12 @@ def summarize(records):
 
 
 def standings(table):
+    """One row per contestant: the mean score, the mean of each category, and the totals.
+
+    The scenarios in `UNSCORED` stay in their category's mean and in the success and cost columns
+    and are left out of the overall score. A contestant that ran only those has no overall score,
+    which is NaN and ranks last.
+    """
     names = sorted({c for c, _ in table})
     out = []
     for name in names:
@@ -1132,16 +1591,17 @@ def standings(table):
         for v in mine.values():
             by_category.setdefault(v["category"], []).append(v["score"])
         prompt = sum(v["prompt"] for v in mine.values())
+        scored = [v["score"] for s, v in mine.items() if s not in UNSCORED]
         out.append({
             "contestant": name,
-            "score": statistics.mean(v["score"] for v in mine.values()),
+            "score": statistics.mean(scored) if scored else float("nan"),
             "categories": {k: statistics.mean(x) for k, x in by_category.items()},
             "scenarios": len(mine),
             "success": statistics.mean(v["success"] for v in mine.values()),
             "cost": sum(v["cost"] for v in mine.values()),
             "hit": sum(v["cache_read"] for v in mine.values()) / prompt if prompt else 0.0,
         })
-    return sorted(out, key=lambda row: -row["score"])
+    return sorted(out, key=lambda row: (math.isnan(row["score"]), -row["score"]))
 
 
 def render_report(table):
@@ -1236,6 +1696,166 @@ def render_extra(records):
         if lines:
             lines.append("")
         lines.append(more)
+    more = render_retries(records)
+    if more:
+        if lines:
+            lines.append("")
+        lines.append(more)
+    for more in (render_resume(records), render_routes(records)):
+        if more:
+            if lines:
+                lines.append("")
+            lines.append(more)
+    return "\n".join(lines)
+
+
+# How far apart two routes' gaps may be for the report to call them the same, in percentage points.
+SAME_WITHIN = 5.0
+# The scenarios a route comparison reports. `multi_turn` is the one measured in #4524, so the others
+# are read against it.
+ROUTE_SCENARIOS = ("multi_turn", "delegate_fanout", "delegate_serial", "delegate_nested")
+
+
+def render_routes(records):
+    """Each contestant that names a `versus` contestant against that one, and that one against it.
+
+    For `multi_turn` and the delegate scenarios, the median cost of one route over the other as a
+    percentage, in both directions, and whether the gap of each delegate scenario is larger, smaller
+    or about the same (within `SAME_WITHIN` points) as the gap of `multi_turn` of the same pair. A
+    scenario one of the two did not run is left out, and one a contestant did not solve every time
+    is marked, since its cost is then of a run that did not do the work. Empty where no record names
+    a `versus`.
+    """
+    pairs = {r["contestant"]: r["versus"] for r in records if r.get("versus")}
+    if not pairs:
+        return ""
+    table = summarize(records)
+    lines = []
+    for name in sorted(pairs):
+        other = pairs[name]
+        gaps, marks, forward, backward = {}, {}, [], []
+        for scenario in ROUTE_SCENARIOS:
+            mine, theirs = table.get((name, scenario)), table.get((other, scenario))
+            if not mine or not theirs or mine["cost"] <= 0 or theirs["cost"] <= 0:
+                continue
+            gaps[scenario] = (mine["cost"] / theirs["cost"] - 1) * 100
+            back = (theirs["cost"] / mine["cost"] - 1) * 100
+            marks[scenario] = "" if mine["success"] == 1 and theirs["success"] == 1 else (
+                " (not solved every time)")
+            forward.append(f"{scenario} {gaps[scenario]:+.0f}%{marks[scenario]}")
+            backward.append(f"{scenario} {back:+.0f}%{marks[scenario]}")
+        if not forward:
+            lines.append(f"  {name}: no scenario run by both it and {other}")
+            continue
+        lines.append(f"  {name} against {other}: cost of {', '.join(forward)}")
+        lines.append(f"  {other} against {name}: cost of {', '.join(backward)}")
+        base = gaps.get("multi_turn")
+        for scenario in ROUTE_SCENARIOS[1:]:
+            if scenario not in gaps:
+                continue
+            if base is None:
+                lines.append(f"  {name} on {scenario}: no multi_turn run of both routes to compare with")
+                continue
+            if abs(gaps[scenario] - base) <= SAME_WITHIN:
+                size = "about the same as"
+            else:
+                size = "larger than" if gaps[scenario] > base else "smaller than"
+            lines.append(f"  {name} on {scenario}: the gap, {gaps[scenario]:+.0f}%, is {size} the "
+                         f"multi_turn gap, {base:+.0f}%{marks[scenario]}")
+    lines.insert(0, "route comparison: the median cost of a contestant over its `versus` contestant, "
+                    "and each delegate scenario's gap against the multi_turn gap (#4524)")
+    return "\n".join(lines)
+
+
+def render_resume(records):
+    """The second turn of `resume_after_gap` against the second turn of `resume_warm`.
+
+    The two have the same turns, and only the first waited past the cache lifetime before the second,
+    so the difference is what a resume after the cache expired costs: what was read from the cache
+    when it was warm is written or sent fresh when it was not. Empty where the records hold neither.
+    """
+    turns = {}
+    for r in records:
+        if r["scenario"] in ("resume_warm", "resume_after_gap") and r["turn"] == 1 and "error" not in r:
+            turns.setdefault((r["contestant"], r["scenario"]), []).append(r)
+    med = lambda rs, key: statistics.median(r[key] for r in rs)
+    prompt = lambda rs: med(rs, "fresh") + med(rs, "cache_read") + med(rs, "cache_write")
+    hit = lambda rs: med(rs, "cache_read") / prompt(rs) * 100 if prompt(rs) else 0.0
+    lines = []
+    for name in sorted({c for c, _ in turns}):
+        cold, warm = turns.get((name, "resume_after_gap")), turns.get((name, "resume_warm"))
+        if not cold:
+            continue
+        if not warm:
+            lines.append(f"  {name}: resume_after_gap has no resume_warm run to compare with")
+            continue
+        waited = statistics.median(r.get("gap_s", 0) for r in cold)
+        lines.append(
+            f"  {name}: turn 2 after a {waited:.0f} s wait against none: cache read {med(cold, 'cache_read'):.0f} "
+            f"against {med(warm, 'cache_read'):.0f}, cache write {med(cold, 'cache_write'):.0f} against "
+            f"{med(warm, 'cache_write'):.0f}, fresh {med(cold, 'fresh'):.0f} against {med(warm, 'fresh'):.0f}, "
+            f"hit {hit(cold):.0f}% against {hit(warm):.0f}%, cost {med(cold, 'cost'):.0f} against "
+            f"{med(warm, 'cost'):.0f} ({med(cold, 'cost') - med(warm, 'cost'):+.0f}), solved "
+            f"{sum(r['ok'] for r in cold) / len(cold) * 100:.0f}%")
+    if lines:
+        lines.insert(0, "resume after the cache expired: turn 2 of resume_after_gap against turn 2 of "
+                        "resume_warm (the wait is not in the wall time)")
+    return "\n".join(lines)
+
+
+def render_retries(records):
+    """The cost of a retry, as the difference between a failing run and the baseline run.
+
+    For each contestant that ran `retry_baseline` and a failing scenario, over the medians of its
+    repeats: the extra requests the endpoint received, the extra request bytes it received (the
+    prompt sent again), the extra cost units from the usage the tool reported, and the extra wall
+    seconds. A 429 bills nothing and a cut reply reports no usage, so the cost difference is expected
+    to be near zero and the first two numbers are the cost. A run that ended in an error (retries
+    exhausted, or a tool with no retry) has no figures, so a row says that it did not finish, with
+    the start of its error, instead of leaving the contestant out. Empty where the records hold none.
+    """
+    runs, errors = {}, {}
+    for r in records:
+        if r["scenario"] not in RETRY_SCENARIOS:
+            continue
+        if "error" in r:
+            errors.setdefault((r["contestant"], r["scenario"]), []).append(r)
+        if "error" not in r and r.get("endpoint"):
+            runs.setdefault((r["contestant"], r["scenario"]), []).append(r)
+    med = lambda rs, get: statistics.median(get(r) for r in rs)
+    lines = []
+    for name in sorted({c for c, _ in runs} | {c for c, _ in errors}):
+        for scenario in RETRY_SCENARIOS:
+            failed = errors.get((name, scenario))
+            if failed:
+                total = len(failed) + len(runs.get((name, scenario), []))
+                lines.append(f"  {name}: {scenario} did not finish in {len(failed)} of {total} runs, "
+                             f"so those runs have no retry cost (error: {failed[0]['error'][:120]})")
+        base = runs.get((name, "retry_baseline"))
+        for scenario in ("retry_429", "retry_stream"):
+            mine = runs.get((name, scenario))
+            if not mine:
+                continue
+            if not base:
+                lines.append(f"  {name}: {scenario} has no retry_baseline run to compare with")
+                continue
+            requests = lambda r: r["endpoint"]["chat_requests"]
+            sent = lambda r: r["endpoint"]["request_bytes"]
+            injected = sum(1 for r in mine if r["endpoint"]["injected"])
+            same = sum(1 for r in mine if r["endpoint"]["resent_identical"])
+            lines.append(
+                f"  {name}: {scenario} extra requests {med(mine, requests) - med(base, requests):+.0f} "
+                f"({med(mine, requests):.0f} against {med(base, requests):.0f}), extra prompt bytes "
+                f"seen by the endpoint {med(mine, sent) - med(base, sent):+.0f} "
+                f"({med(mine, sent):.0f} against {med(base, sent):.0f}), extra cost "
+                f"{med(mine, lambda r: r['cost']) - med(base, lambda r: r['cost']):+.0f} units, "
+                f"extra wall {med(mine, lambda r: r['wall_s']) - med(base, lambda r: r['wall_s']):+.1f} s, "
+                f"failure injected in {injected} of {len(mine)} runs, request sent again unchanged "
+                f"in {same}, solved "
+                f"{sum(r['ok'] for r in mine) / len(mine) * 100:.0f}%")
+    if lines:
+        lines.insert(0, "retry cost: a run with one request failed once, minus the run with no failure "
+                        "(extra requests and prompt bytes are counted by the fake endpoint)")
     return "\n".join(lines)
 
 
@@ -1384,7 +2004,25 @@ def load_config(path):
                 sys.exit(f"contestant {c['name']} is configured, which only bravebot can be")
             if "--safe" in c.get("args", []):
                 sys.exit(f"contestant {c['name']} is configured and passes --safe")
+        if c.get("fake_endpoint"):
+            if c["tool"] not in FAKE_ENDPOINT_TOOLS:
+                sys.exit(f"contestant {c['name']} has fake_endpoint, which only bravebot and the "
+                         f"reference loop can have, since the other tools cannot be pointed at one")
+            if c.get("configured"):
+                sys.exit(f"contestant {c['name']} is configured and has fake_endpoint")
+    for c in config["contestants"]:
+        if c.get("versus") and (c["versus"] not in seen or c["versus"] == c["name"]):
+            sys.exit(f"contestant {c['name']} names {c['versus']} as its versus, which is not another "
+                     f"contestant of the file")
     return config["contestants"]
+
+
+def left_out(contestants, chosen):
+    """One line for each contestant and scenario that is not run because the tool cannot be pointed
+    at an endpoint, so the report of a run says what was left out and does not count it as failed."""
+    return [f"left out: {c['name']} on {s.name}, {c['tool']} cannot be pointed at an endpoint"
+            for s in chosen if s.fault for c in contestants
+            if c["tool"] not in FAKE_ENDPOINT_TOOLS]
 
 
 def pick(items, names, label):
@@ -1404,6 +2042,8 @@ def cmd_run(args):
     out = pathlib.Path(args.out or HERE / "results" / time.strftime("%Y%m%d-%H%M%S.jsonl"))
     out.parent.mkdir(parents=True, exist_ok=True)
     handle = open(out, "a")
+    for line in left_out(contestants, chosen):
+        print(line, file=sys.stderr)
 
     def sink(record):
         handle.write(json.dumps(record) + "\n")
@@ -1416,7 +2056,7 @@ def cmd_run(args):
     if not args.no_warmup:
         for c in contestants:
             first = next((s for s in scenarios() if applies(c, s)), None)
-            if first:
+            if first and not first.fault:
                 run_scenario(c, first, -1, lambda record: None)
     for rep in range(args.repeats):
         for scenario in chosen:
@@ -1875,6 +2515,656 @@ def selftest_modes():
     assert "c                      calls 3, not reported per tool" in text, text
 
 
+FAKE_RETRY_BRAVEBOT = '''#!%(python)s
+import json, os, pathlib, sys, urllib.request
+args = sys.argv[1:]
+if args[:1] == ["sessions"]:
+    sys.exit(0)
+home = pathlib.Path(os.environ["BRAVEBOT_HOME"])
+base = json.loads((home / "settings.json").read_text())["provider"]["bench"]["options"]["baseURL"]
+assert os.environ["BRAVE_AI_CHAT_ENDPOINT"] == base[:-len("/v1")], os.environ
+assert args[args.index("--model") + 1] == "bench/bench-model" and "--safe" in args, args
+
+
+def ask(messages):
+    body = json.dumps({"model": "bench-model", "stream": False, "messages": messages}).encode()
+    for _ in range(2):
+        try:
+            request = urllib.request.Request(base + "/chat/completions", body,
+                                             {"Content-Type": "application/json"})
+            with urllib.request.urlopen(request) as response:
+                return json.load(response)["choices"][0]["message"]
+        except Exception:
+            pass
+    sys.exit(1)
+
+
+user = {"role": "user", "content": "read it"}
+if os.environ.get("FAKE_SKIP_ENDPOINT") == "1":
+    key = [l for l in pathlib.Path("notes.txt").read_text().splitlines() if l.startswith("key:")][0]
+    print(json.dumps({"schema": 1, "ok": True, "status": 0, "reply": key.split()[-1], "session": None,
+                      "steps": 1, "tokens": {"total": 100, "output": 10, "context": 1,
+                      "cache_read": 0, "cache_written": 0}, "calls": []}))
+    sys.exit(0)
+first = ask([user])
+text = pathlib.Path("notes.txt").read_text()
+second = ask([user, first, {"role": "tool", "tool_call_id": "call-1", "content": text}])
+print(json.dumps({"schema": 1, "ok": True, "status": 0, "reply": second["content"], "session": None,
+                  "steps": 1, "tokens": {"total": 100, "output": 10, "context": 1,
+                  "cache_read": 0, "cache_written": 0},
+                  "calls": [{"tool": "read_file", "target": "notes.txt", "refused": False}]}))
+'''
+
+
+def selftest_retries():
+    """The retry scenarios: the fake endpoint, the reference loop's retry, the pairing and the report."""
+    global _sleep
+    real_sleep = _sleep
+    slept = []
+    _sleep = slept.append
+    try:
+        _selftest_retries(slept)
+    finally:
+        _sleep = real_sleep
+
+
+def _selftest_retries(slept):
+    by_name = {s.name: s for s in scenarios()}
+    baseline, rate, stream = (by_name[n] for n in RETRY_SCENARIOS)
+
+    # The three scenarios differ in the failure alone: one fixture, one prompt, one request failed
+    # and the same one in each, and the baseline fails none. Only the tools that can be pointed at
+    # an endpoint run them.
+    assert baseline.fault == ("none", RETRY_FAIL_AT) and rate.fault == ("429", RETRY_FAIL_AT)
+    assert stream.fault == ("stream", RETRY_FAIL_AT) and RETRY_FAIL_AT == 2
+    assert baseline.setup is rate.setup is stream.setup
+    assert baseline.turns[0].prompt == rate.turns[0].prompt == stream.turns[0].prompt
+    assert all(s.tools == FAKE_ENDPOINT_TOOLS == ("bravebot", "reference") and not s.home
+               for s in (baseline, rate, stream))
+    assert all(s.category == "retries" for s in (baseline, rate, stream))
+    assert not any(s.fault for s in scenarios() if s.name not in RETRY_SCENARIOS)
+
+    # The fixture holds the key once, among filler, and the prompt does not give it away, so a run
+    # that never read the file cannot answer.
+    work = pathlib.Path(tempfile.mkdtemp())
+    try:
+        baseline.setup(work)
+        text = (work / RETRY_FILE).read_text()
+        assert text.count(RETRY_KEY) == 1 and len(text.splitlines()) > 30
+    finally:
+        shutil.rmtree(work)
+    assert RETRY_KEY not in baseline.turns[0].prompt
+    check = baseline.turns[0].check
+    assert check(None, RETRY_KEY) and not check(None, "no key in the file")
+
+    # What the endpoint has to have seen. A failing run that was never failed, or never asked again,
+    # did not exercise a retry, and a baseline that was failed measured the failure, so it is no baseline.
+    clean = {"injected": False, "chat_requests": 2}
+    failed = {"injected": True, "chat_requests": 3}
+    assert fault_ok(("none", 2), clean) and not fault_ok(("none", 2), failed)
+    assert not fault_ok(("none", 2), {"injected": False, "chat_requests": 1})
+    assert fault_ok(("429", 2), failed) and fault_ok(("stream", 2), failed)
+    assert not fault_ok(("429", 2), clean), "a failure that was never injected must not pass"
+    assert not fault_ok(("429", 2), {"injected": True, "chat_requests": 2}), "never asked again"
+    assert not fault_ok(("429", 2), {"injected": False, "chat_requests": 3}), "never injected"
+    assert not fault_ok(("429", 2), None)
+
+    # The wait before a retry: the doubling from the configured base, held at a minute, or the whole
+    # seconds a 429 asked for where that is longer, and none where more than two minutes was asked.
+    me = {"retry_wait": 2}
+    assert [ref_pause(me, n) for n in (1, 2, 3, 8)] == [2.0, 4.0, 8.0, 60.0]
+    assert ref_pause(me, 1, 5) == 5.0 and ref_pause(me, 3, 5) == 8.0
+    assert ref_pause(me, 1, 120) == 120.0 and ref_pause(me, 1, 121) is None
+    assert ref_pause({}, 1) == REF_RETRY_WAIT == 1.0
+    assert [retry_after_of(v) for v in ("3", "0", "-4", "soon", None)] == [3, 0, 0, 0, 0]
+
+    # The endpoint's wire format. A streamed request is answered as frames that end in [DONE] with
+    # the usage on the frame that finishes, a tool call before the answer. A request that is failed
+    # with a status carries the Retry-After the endpoint was told to send, and one failed as a
+    # stream is cut part way, so a reader that trusts the declared length gets a short body.
+    def post(server, body):
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+        conn.request("POST", "/v1/chat/completions", json.dumps(body),
+                     {"Content-Type": "application/json"})
+        return conn.getresponse()
+
+    def frames_of(raw):
+        return [line[len("data: "):] for line in raw.decode().splitlines() if line.startswith("data: ")]
+
+    ask = {"model": FAKE_MODEL, "stream": True, "messages": [{"role": "user", "content": "x"}]}
+    sent_back = dict(ask, messages=ask["messages"] + [
+        {"role": "tool", "tool_call_id": "call-1", "content": f"21\tkey: {RETRY_KEY}\n"}])
+    server = start_endpoint("stream", 2)
+    try:
+        listing = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+        listing.request("GET", "/v1/models")
+        roster = json.loads(listing.getresponse().read())
+        assert roster["data"][0]["id"] == FAKE_MODEL
+        assert server.state.chat_requests == 0, "a roster is not a chat request"
+
+        first = frames_of(post(server, ask).read())
+        assert first[-1] == "[DONE]" and json.loads(first[0])["choices"][0]["delta"]["role"]
+        call = json.loads(first[1])["choices"][0]["delta"]["tool_calls"][0]
+        assert call["function"]["name"] == "read_file" and call["id"] == "call-1"
+        assert json.loads(call["function"]["arguments"]) == {"path": RETRY_FILE}
+        finish = json.loads(first[-2])
+        assert finish["choices"][0]["finish_reason"] == "tool_calls"
+        assert finish["usage"]["prompt_tokens"] > 0 and finish["usage"]["completion_tokens"] > 0
+
+        cut = post(server, sent_back)
+        try:
+            cut.read()
+            raise AssertionError("the cut reply was read whole")
+        except http.client.IncompleteRead as error:
+            assert b"[DONE]" not in error.partial and b"finish_reason" not in error.partial
+        assert server.state.injected and server.state.chat_requests == 2
+
+        whole = frames_of(post(server, sent_back).read())
+        deltas = [json.loads(f)["choices"][0] for f in whole[:-1]]
+        said = "".join(c["delta"].get("content", "") for c in deltas)
+        assert said == RETRY_KEY and deltas[-1]["finish_reason"] == "stop" and whole[-1] == "[DONE]"
+        stats = server.state.stats()
+        assert stats["chat_requests"] == 3 and stats["resent_identical"] is True
+        assert stats["request_bytes"] > 2 * len(json.dumps(sent_back)) - 2
+        # Once: a fourth request is not failed.
+        assert frames_of(post(server, sent_back).read())[-1] == "[DONE]"
+        # The key comes from the tool result in the request. A request whose tool result lacks it
+        # gets no key, so a tool that did not send the file's text back cannot be answered.
+        empty = dict(ask, messages=ask["messages"] + [
+            {"role": "tool", "tool_call_id": "call-1", "content": "nothing here"}])
+        said = "".join(json.loads(f)["choices"][0]["delta"].get("content", "")
+                       for f in frames_of(post(server, empty).read())[1:-2])
+        assert RETRY_KEY not in said and said, said
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    # A 429 carries the wait it was told to ask for, none where that is zero, and the request is
+    # answered whole the next time. A reply that is not streamed is one JSON body with usage.
+    for asked, header in ((7, "7"), (0, None)):
+        server = start_endpoint("429", 1)
+        server.state.retry_after = asked
+        try:
+            refused = post(server, dict(ask, stream=False))
+            assert refused.status == 429 and refused.getheader("Retry-After") == header
+            refused.read()
+            answered = json.loads(post(server, dict(ask, stream=False)).read())
+            assert answered["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "read_file"
+            assert answered["usage"]["prompt_tokens"] > 0
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    # The reference loop retries. After a 429 it waits what was asked for and sends the request
+    # again, once, and its answer is the second one. It waits through `_sleep`, which the selftest
+    # replaced, so nothing here slept.
+    def request_to(server):
+        return urllib.request.Request(
+            f"http://127.0.0.1:{server.server_port}/v1/chat/completions",
+            json.dumps(dict(ask, stream=False)).encode(), {"Content-Type": "application/json"})
+
+    me = {"name": "r", "tool": "reference", "retry_wait": 0.5}
+    for mode, asked, waited in (("429", 5, [5.0]), ("429", 0, [0.5]), ("503", 0, [0.5]),
+                                ("stream", 0, [0.5])):
+        server = start_endpoint(mode, 1)
+        server.state.retry_after = asked
+        del slept[:]
+        try:
+            answer = ref_post(me, request_to(server))
+            assert answer["choices"][0]["message"]["tool_calls"], (mode, answer)
+            assert slept == waited and server.state.chat_requests == 2, (mode, slept)
+        finally:
+            server.shutdown()
+            server.server_close()
+    # Not worth sending again: a status that is not one of those that mean not now, a wait that was
+    # asked for beyond two minutes, and a count of retries that is spent.
+    for mode, asked, contestant in (("400", 0, me), ("429", 121, me),
+                                    ("429", 0, dict(me, retries=0)), ("429", 0, dict(me, retries=1))):
+        server = start_endpoint(mode, 1)
+        server.state.retry_after = asked
+        del slept[:]
+        try:
+            answer = ref_post(contestant, request_to(server))
+            assert contestant.get("retries") == 1 and mode == "429" and not asked, (mode, asked)
+            assert slept == [0.5] and server.state.chat_requests == 2
+        except BenchError:
+            assert slept == [] and server.state.chat_requests == 1, (mode, asked, slept)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    # A whole scenario for the reference loop, against the fake endpoint, with nothing slept. The
+    # baseline sends two chat requests and each failing run three, the third carrying the same body
+    # as the one that failed, so the extra bytes are the prompt sent again. The record carries the
+    # endpoint's counters, and the run is solved.
+    reference = {"name": "ref", "tool": "reference", "fake_endpoint": True, "retry_wait": 0.5}
+    seen = {}
+    for scenario in (baseline, rate, stream):
+        records = []
+        del slept[:]
+        run_scenario(reference, scenario, 0, records.append)
+        assert [r["ok"] for r in records] == [True], records
+        seen[scenario.name] = (records[0]["endpoint"], list(slept))
+        assert records[0]["requests"] == 2, "usage counts the requests that were answered"
+    assert seen["retry_baseline"][0]["chat_requests"] == 2 and seen["retry_baseline"][1] == []
+    assert not seen["retry_baseline"][0]["injected"]
+    for name, wait in (("retry_429", [1.0]), ("retry_stream", [0.5])):
+        stats, waits = seen[name]
+        assert stats["injected"] and stats["chat_requests"] == 3 and waits == wait, (name, seen[name])
+        assert stats["resent_identical"] is True
+        assert stats["request_bytes"] > seen["retry_baseline"][0]["request_bytes"]
+    # With no retries the reference loop's turn fails and is recorded as an error, which is a failed
+    # run with no cost, and the run is not left half started.
+    for scenario in (rate, stream):
+        records = []
+        run_scenario(dict(reference, retries=0), scenario, 0, records.append)
+        assert [r["ok"] for r in records] == [False] and "error" in records[0], records
+        assert records[0]["endpoint"]["chat_requests"] == 2
+        assert "  ref: %s did not finish in 1 of 1 runs" % scenario.name in render_retries(records)
+    assert not home_path(rate).exists()
+
+    # bravebot: a stand-in for it gets the endpoint through what the real one reads, a provider entry
+    # in the settings file of its own state directory and the endpoint variable, with `--safe`, the
+    # model the fake serves, and one retry of its own. The state directory is gone afterwards.
+    scratch = pathlib.Path(tempfile.mkdtemp())
+    try:
+        fake = scratch / "bravebot"
+        fake.write_text(FAKE_RETRY_BRAVEBOT % {"python": sys.executable})
+        fake.chmod(0o755)
+        brave = {"name": "b", "tool": "bravebot", "fake_endpoint": True, "bin": str(fake),
+                 "args": ["--settings", "x.json"]}
+        for scenario in (baseline, rate, stream):
+            records = []
+            run_scenario(brave, scenario, 0, records.append)
+            assert [r["ok"] for r in records] == [True], (scenario.name, records)
+            stats = records[0]["endpoint"]
+            assert stats["chat_requests"] == (2 if scenario is baseline else 3), stats
+            assert records[0]["reads"] == [RETRY_FILE]
+            assert not home_path(scenario).exists()
+        # The endpoint is part of the contestant, so a contestant that was left as the config wrote it
+        # is not changed by a run.
+        assert brave["args"] == ["--settings", "x.json"] and "env" not in brave
+        # A stand-in that gives the right answer without asking the endpoint anything did not do the
+        # work, so the run is not solved, whatever the reply says.
+        for scenario in (baseline, rate, stream):
+            records = []
+            run_scenario(dict(brave, env={"FAKE_SKIP_ENDPOINT": "1"}), scenario, 0, records.append)
+            assert records[0]["reply"] == RETRY_KEY and not records[0]["ok"], records
+            assert records[0]["endpoint"]["chat_requests"] == 0
+    finally:
+        shutil.rmtree(scratch)
+
+    # Which contestant runs which scenario. A contestant with a fake endpoint runs the three and
+    # nothing else, one without runs none of them, and a tool that cannot be pointed at an endpoint
+    # runs none whatever it says. The run says what it left out.
+    plain = {"name": "p", "tool": "bravebot", "args": ["--safe"]}
+    pointed = dict(plain, name="q", fake_endpoint=True)
+    ref = {"name": "r", "tool": "reference", "fake_endpoint": True}
+    claude = {"name": "c", "tool": "claude", "args": ["--bare"]}
+    codex = {"name": "x", "tool": "codex"}
+    opencode = {"name": "o", "tool": "opencode"}
+    mine = (baseline, rate, stream)
+    assert [applies(pointed, s) for s in mine + (by_name["hello"],)] == [True, True, True, False]
+    assert [applies(ref, s) for s in mine + (by_name["hello"],)] == [True, True, True, False]
+    assert [applies(plain, s) for s in mine + (by_name["hello"],)] == [False, False, False, True]
+    for other in (claude, codex, opencode, dict(claude, fake_endpoint=True)):
+        assert not any(applies(other, s) for s in mine), other
+    assert applies(claude, by_name["hello"])
+    said = left_out([plain, pointed, claude, codex, opencode], list(scenarios()))
+    assert len(said) == 9 and all(" on retry_" in line for line in said), said
+    assert {line.split()[2] for line in said} == {"c", "x", "o"}, said
+    assert left_out([claude], [by_name["hello"]]) == []
+    scratch = pathlib.Path(tempfile.mkdtemp())
+    try:
+        path = scratch / "c.json"
+        path.write_text(json.dumps({"contestants": [dict(claude, fake_endpoint=True)]}))
+        try:
+            load_config(path)
+            raise AssertionError("a tool that cannot be pointed at an endpoint was given one")
+        except SystemExit:
+            pass
+        path.write_text(json.dumps({"contestants": [plain, pointed, ref]}))
+        assert [c["name"] for c in load_config(path)] == ["p", "q", "r"]
+    finally:
+        shutil.rmtree(scratch)
+
+    # The report. Each failing run is set against the baseline of the same contestant: the extra
+    # requests and prompt bytes are the endpoint's counters, the extra cost is the usage the tool
+    # reported, and a failing run with no baseline says so.
+    def row(name, scenario, requests, sent, cost, wall=1.0, injected=False, ok=True):
+        return {"contestant": name, "scenario": scenario, "category": "retries", "rep": 0, "turn": 0,
+                "ok": ok, "fresh": 0, "cache_read": 0, "cache_write": 0, "output": 0,
+                "requests": 2, "tool_calls": 1, "cost": cost, "cost_usd": 0.0, "wall_s": wall,
+                "endpoint": {"mode": "x", "fail_at": 2, "chat_requests": requests,
+                             "request_bytes": sent, "injected": injected,
+                             "resent_identical": injected}}
+
+    records = [row("r", "retry_baseline", 2, 3000, 400.0, 1.0),
+               row("r", "retry_429", 3, 4800, 400.0, 3.5, injected=True),
+               row("r", "retry_stream", 3, 4900, 410.0, 2.5, injected=True),
+               row("b", "retry_429", 3, 9000, 800.0, 3.0, injected=True)]
+    text = render_retries(records)
+    assert text.splitlines()[0].startswith("retry cost: "), text
+    assert ("  r: retry_429 extra requests +1 (3 against 2), extra prompt bytes seen by the endpoint "
+            "+1800 (4800 against 3000), extra cost +0 units, extra wall +2.5 s, failure injected in "
+            "1 of 1 runs, request sent again unchanged in 1, solved 100%") in text, text
+    assert "r: retry_stream extra requests +1 (3 against 2), extra prompt bytes seen by the endpoint " \
+           "+1900" in text and "extra cost +10 units" in text, text
+    assert "  b: retry_429 has no retry_baseline run to compare with" in text, text
+    assert render_retries(records[:1]) == "" and render_retries([]) == ""
+    # A run that ended in an error has no endpoint figures to subtract, and the contestant still gets a
+    # row that says so, with or without a baseline. Leaving it out reads as a tool with no retry cost.
+    failed = dict(row("e", "retry_429", 2, 3000, 0.0), ok=False, error="HTTP 429 after 2 retries")
+    for given in ([row("e", "retry_baseline", 2, 3000, 400.0), failed], [failed]):
+        text = render_retries(given)
+        assert ("  e: retry_429 did not finish in 1 of 1 runs, so those runs have no retry cost "
+                "(error: HTTP 429 after 2 retries)") in text, text
+    assert render_extra(records).count("retry cost: ") == 1
+    assert "retries" in render_report(summarize(records))
+
+
+FAKE_LONG_BRAVEBOT = '''#!%(python)s
+import json, os, pathlib, re, sys
+args = sys.argv[1:]
+if args[:1] == ["sessions"]:
+    sys.exit(0)
+prompt = args[args.index("-p") + 1]
+with open(os.environ["FAKE_LOG"], "a") as log:
+    log.write(json.dumps({"args": args, "budget": os.environ.get("BRAVEBOT_CONTEXT_BUDGET")}) + "\\n")
+
+
+def lines(name):
+    return pathlib.Path(name).read_text().splitlines()
+
+
+def key_of(name):
+    return [l for l in lines(name) if l.startswith("key:")][0].split()[-1]
+
+
+def read(name):
+    return {"tool": "read_file", "target": name, "refused": False}
+
+
+calls, reply = [], "ok"
+asked = re.search(r"Read (big_\\d\\.txt)", prompt)
+if asked:
+    reply = str(len(lines(asked.group(1))))
+    calls = [read(asked.group(1))]
+elif "big_1.txt" in prompt:
+    reply = key_of("big_1.txt") if os.environ.get("FAKE_RECALL") == "1" else "I no longer have it"
+elif "large.log" in prompt:
+    page = lines("large.log")[:(None if os.environ.get("FAKE_PAGE") == "1" else 500)]
+    found = [l for l in page if l.startswith("key:")]
+    reply = found[0].split()[-1] if found else "the key is past the first page"
+    calls = [read("large.log")]
+elif "deep.txt" in prompt:
+    reply = key_of("deep.txt")
+    spawn = {"tool": "spawn_agent", "target": "reader", "refused": False}
+    calls = [spawn] * int(os.environ.get("FAKE_DELEGATES", "0"))
+elif "item-" in prompt:
+    item = re.search(r"item-\\d+", prompt).group(0)
+    reply = [l for l in lines("notes.txt") if l.startswith(item + ":")][0].split("=")[-1]
+print(json.dumps({"schema": 1, "ok": True, "status": 0, "reply": reply, "session": "s-1",
+                  "steps": 1, "tokens": {"total": 1000, "output": 10, "context": 1,
+                  "cache_read": 500, "cache_written": 0}, "calls": calls}))
+'''
+
+
+# What `--json` lists for a run with a nested delegate: the turn's `spawn_agent`, the one its delegate
+# made, and the delegate's own read. The reporter the command line builds records every call it is
+# told of and does not look at whose it is (crates/cli/src/progress.rs `tool_finished`), and the
+# handle a delegate reports through forwards each call to the one above it (crates/agent/src/shared.rs
+# `reports!`), so the nested delegate's call is in the list.
+BRAVEBOT_NESTED_SAMPLE = json.dumps({
+    "schema": 1, "ok": True, "status": 0, "reply": "k", "session": "b-5", "steps": 2,
+    "tokens": {"total": 120000, "output": 600, "context": 30000,
+               "cache_read": 70000, "cache_written": 40000},
+    "calls": [{"tool": "spawn_agent", "target": "reader", "refused": False},
+              {"tool": "spawn_agent", "target": "reader", "refused": False},
+              {"tool": "read_file", "target": "deep.txt", "refused": False}]})
+
+
+def selftest_long_runs():
+    """The compaction, large output, resume and nested delegate scenarios, and the route report."""
+    global _idle
+    real_idle = _idle
+    try:
+        _selftest_long_runs()
+    finally:
+        _idle = real_idle
+
+
+def _selftest_long_runs():
+    global _idle
+    by_name = {s.name: s for s in scenarios()}
+    compact, large, warm, cold, nested = (by_name[n] for n in (
+        "compaction_recall", "large_output", "resume_warm", "resume_after_gap", "delegate_nested"))
+
+    # compaction_recall: four files, each with its own key once among filler and a known line count,
+    # and no prompt gives a key away. The first four turns ask for a line count, which a reply can
+    # only give after reading, and the last asks for the first file's key, so a tool that dropped
+    # the first read for good cannot answer.
+    work = pathlib.Path(tempfile.mkdtemp())
+    try:
+        compact.setup(work)
+        for n in range(1, COMPACT_FILES + 1):
+            text = (work / f"big_{n}.txt").read_text()
+            assert len(text.splitlines()) == BIG_LINES and len(text) > 15000, n
+            assert [l for l in text.splitlines() if l.startswith("key:")] == [f"key: {_big_key(n)}"]
+    finally:
+        shutil.rmtree(work)
+    assert len({_big_key(n) for n in range(1, COMPACT_FILES + 1)}) == COMPACT_FILES
+    assert len(compact.turns) == COMPACT_FILES + 1 and compact.tools == ("bravebot",)
+    assert compact.env == {"BRAVEBOT_CONTEXT_BUDGET": str(COMPACT_BUDGET)} and COMPACT_BUDGET > 0
+    assert not any(_big_key(n) in t.prompt for t in compact.turns for n in range(1, COMPACT_FILES + 1))
+    for turn in compact.turns[:-1]:
+        assert turn.check(None, f"{BIG_LINES} lines") and not turn.check(None, str(BIG_LINES - 1))
+    last = compact.turns[-1].check
+    assert last(None, _big_key(1)) and not last(None, _big_key(2)) and not last(None, "I do not know")
+
+    # large_output: the key line is past the 500 lines and the 100,000 characters of a first page
+    # (READ-2), and nowhere in the first page.
+    work = pathlib.Path(tempfile.mkdtemp())
+    try:
+        large.setup(work)
+        text = (work / LARGE_FILE).read_text()
+        rows = text.splitlines(keepends=True)
+        assert len(rows) == LARGE_LINES and rows[LARGE_KEY_LINE - 1] == f"key: {LARGE_KEY}\n"
+        assert text.count("key:") == 1 and text.count(LARGE_KEY) == 1
+        assert LARGE_KEY_LINE > 500 and len("".join(rows[:LARGE_KEY_LINE - 1])) > 100000
+    finally:
+        shutil.rmtree(work)
+    assert LARGE_KEY not in large.turns[0].prompt and len(large.turns) == 1
+    assert large.turns[0].check(None, LARGE_KEY) and not large.turns[0].check(None, "no key")
+
+    # resume: the same two turns, and only the cold one waits, before its second turn, for longer
+    # than the cache lives.
+    assert RESUME_GAP > CACHE_LIFETIME == 300
+    assert [t.prompt for t in warm.turns] == [t.prompt for t in cold.turns]
+    assert warm.setup is cold.setup and warm.category == cold.category == "resume"
+    assert [t.gap for t in warm.turns] == [False, False] and [t.gap for t in cold.turns] == [False, True]
+    assert cold.turns[1].check(None, _note_value(88)) and not cold.turns[1].check(None, _note_value(87))
+
+    # nested: the value is only in deep.txt, which the prompt does not give away, and the turn has to
+    # start two delegates.
+    work = pathlib.Path(tempfile.mkdtemp())
+    try:
+        nested.setup(work)
+        text = (work / "deep.txt").read_text()
+        assert text.count(NESTED_KEY) == 1 and text.count("key:") == 1
+    finally:
+        shutil.rmtree(work)
+    turn = nested.turns[0]
+    assert NESTED_KEY not in turn.prompt and turn.min_delegates == 2 and nested.category == "delegates"
+    brave, _ = parse_bravebot(BRAVEBOT_NESTED_SAMPLE)
+    assert brave.delegates == 2, brave
+    assert turn_ok(turn, TurnResult(Usage(), NESTED_KEY, 0, delegates=2), None)
+    assert not turn_ok(turn, TurnResult(Usage(), NESTED_KEY, 0, delegates=1), None)
+    assert not turn_ok(turn, TurnResult(Usage(), NESTED_KEY, 0, delegates=0), None)
+    assert not turn_ok(turn, TurnResult(Usage(), "wrong", 0, delegates=2), None)
+    assert turn_ok(turn, TurnResult(Usage(), NESTED_KEY, 0, delegates=None), None)
+
+    # Whole runs against a stand-in bravebot that reads the fixtures the way the scenario asks.
+    scratch = pathlib.Path(tempfile.mkdtemp())
+    try:
+        fake = scratch / "bravebot"
+        fake.write_text(FAKE_LONG_BRAVEBOT % {"python": sys.executable})
+        fake.chmod(0o755)
+        log = scratch / "calls.jsonl"
+        waits = []
+
+        def idle(seconds):
+            waits.append((seconds, len(log.read_text().splitlines())))
+
+        _idle = idle
+
+        def run(scenario, **env):
+            log.write_text("")
+            del waits[:]
+            contestant = {"name": "b", "tool": "bravebot", "bin": str(fake), "args": ["--safe"],
+                          "versus": "p", "env": dict(FAKE_LOG=str(log), **env)}
+            records = []
+            run_scenario(contestant, scenario, 0, records.append)
+            assert {r.get("versus") for r in records} == {"p"}, records
+            return records, [json.loads(line) for line in log.read_text().splitlines()]
+
+        # compaction_recall: the budget is the scenario's and replaces the contestant's, the first turn
+        # starts the conversation and the rest resume it.
+        records, seen = run(compact, FAKE_RECALL="1", BRAVEBOT_CONTEXT_BUDGET="999999")
+        assert [r["ok"] for r in records] == [True] * 5, records
+        assert {s["budget"] for s in seen} == {str(COMPACT_BUDGET)}, seen
+        assert "--resume" not in seen[0]["args"] and "--incognito" not in seen[0]["args"]
+        assert all(s["args"][s["args"].index("--resume") + 1] == "s-1" for s in seen[1:]), seen
+        assert [r["reads"] for r in records] == [[f"big_{n}.txt"] for n in range(1, 5)] + [[]]
+        assert waits == []
+        records, _ = run(compact)
+        assert [r["ok"] for r in records] == [True] * 4 + [False], "a tool that forgot the key passed"
+        # A scenario with no environment of its own leaves the contestant's alone.
+        records, seen = run(large, BRAVEBOT_CONTEXT_BUDGET="7", FAKE_PAGE="1")
+        assert {s["budget"] for s in seen} == {"7"} and "--incognito" in seen[0]["args"], seen
+        assert [r["ok"] for r in records] == [True], records
+        # large_output: a tool that only reads the first page does not find the key.
+        records, _ = run(large)
+        assert [r["ok"] for r in records] == [False] and "past the first page" in records[0]["reply"]
+
+        # resume: the wait comes between the two turns, is the contestant's `resume_gap` where it names
+        # one, is recorded on the turn that followed it, and the warm run makes none.
+        records, seen = run(cold)
+        assert [r["ok"] for r in records] == [True, True], records
+        assert waits == [(float(RESUME_GAP), 1)], waits
+        assert [r.get("gap_s") for r in records] == [None, float(RESUME_GAP)], records
+        records, _ = run(warm)
+        assert waits == [] and [r.get("gap_s") for r in records] == [None, None], waits
+        log.write_text("")
+        del waits[:]
+        slow = {"name": "b", "tool": "bravebot", "bin": str(fake), "args": ["--safe"],
+                "resume_gap": 1000, "env": {"FAKE_LOG": str(log)}}
+        run_scenario(slow, cold, 0, lambda record: None)
+        assert waits == [(1000.0, 1)], waits
+
+        # nested: two `spawn_agent` calls pass and fewer do not, whatever the reply says.
+        for count, passes in (("2", True), ("1", False), ("0", False)):
+            records, _ = run(nested, FAKE_DELEGATES=count)
+            assert records[0]["reply"] == NESTED_KEY and records[0]["ok"] is passes, (count, records)
+            assert records[0]["delegates"] == int(count)
+    finally:
+        shutil.rmtree(scratch)
+
+    # The report of a resume: turn 2 of the cold run against turn 2 of the warm run, with the wait
+    # that was made. The first turn is left out, and so is a pair with no warm run.
+    def row(name, scenario, turn, fresh, read, write, ok=True, rep=0, **extra):
+        record = {"contestant": name, "scenario": scenario, "category": "x", "rep": rep, "turn": turn,
+                  "ok": ok, "fresh": fresh, "cache_read": read, "cache_write": write, "output": 0,
+                  "requests": 2, "tool_calls": 0, "cost": float(fresh), "cost_usd": 0.0,
+                  "wall_s": 1.0}
+        return dict(record, **extra)
+
+    records = [row("r", "resume_warm", 0, 50, 0, 5000), row("r", "resume_warm", 1, 50, 5000, 100),
+               row("r", "resume_after_gap", 0, 50, 0, 5000),
+               row("r", "resume_after_gap", 1, 50, 0, 5200, gap_s=330.0)]
+    text = render_resume(records)
+    assert text.splitlines()[0].startswith("resume after the cache expired: "), text
+    assert ("  r: turn 2 after a 330 s wait against none: cache read 0 against 5000, cache write 5200 "
+            "against 100, fresh 50 against 50, hit 0% against 97%, cost 50 against 50 (+0), solved 100%"
+            ) in text, text
+    assert render_extra(records).count("resume after the cache expired") == 1
+    assert "r: resume_after_gap has no resume_warm run to compare with" in render_resume(records[2:])
+    assert render_resume(records[:2]) == "" and render_resume([]) == ""
+
+    # The report of two routes: each against the other, and each delegate scenario's gap against the
+    # gap of multi_turn as larger, smaller or about the same. a is the contestant that names b.
+    def cost(name, scenario, units, ok=True, **extra):
+        # One row for each turn the scenario has, the first holding the cost, so the cost is the
+        # whole scenario's.
+        turns = len(by_name[scenario].turns)
+        return [row(name, scenario, t, units if t == 0 else 0, 0, 0, ok=ok, **extra)
+                for t in range(turns)]
+
+    records = [r for pair in (
+        cost("a", "multi_turn", 130, versus="b"), cost("b", "multi_turn", 100),
+        cost("a", "delegate_fanout", 110, versus="b"), cost("b", "delegate_fanout", 100),
+        cost("a", "delegate_serial", 131, versus="b"), cost("b", "delegate_serial", 100),
+        cost("a", "delegate_nested", 160, ok=False, versus="b"), cost("b", "delegate_nested", 100),
+    ) for r in pair]
+    first = lambda *names: [r for r in records if r["scenario"] in names]
+    text = render_routes(records)
+    assert text.splitlines()[0].startswith("route comparison: "), text
+    assert ("  a against b: cost of multi_turn +30%, delegate_fanout +10%, delegate_serial +31%, "
+            "delegate_nested +60% (not solved every time)") in text, text
+    assert ("  b against a: cost of multi_turn -23%, delegate_fanout -9%, delegate_serial -24%, "
+            "delegate_nested -38% (not solved every time)") in text, text
+    assert "a on delegate_fanout: the gap, +10%, is smaller than the multi_turn gap, +30%" in text
+    assert "a on delegate_serial: the gap, +31%, is about the same as the multi_turn gap, +30%" in text
+    assert ("a on delegate_nested: the gap, +60%, is larger than the multi_turn gap, +30% "
+            "(not solved every time)") in text, text
+    assert render_extra(records).count("route comparison: ") == 1
+    # With no multi_turn run there is nothing to read the delegate gaps against, and with no scenario
+    # in common there is no comparison. Nothing is printed for a file that names no `versus`.
+    assert ("a on delegate_fanout: no multi_turn run of both routes to compare with"
+            in render_routes(first("delegate_fanout")))
+    assert "a: no scenario run by both it and b" in render_routes(
+        [r for r in records if (r["contestant"], r["scenario"]) in (("a", "multi_turn"),
+                                                                    ("b", "delegate_fanout"))])
+    assert render_routes([dict(r, versus=None) for r in records]) == ""
+    assert render_routes([]) == ""
+
+    # The overall score leaves the retry scenarios out and the category keeps them. `x` is as cheap as
+    # `y` on hello and dearer on the retry baseline, which is the fixed prompt of the tool, so only the
+    # category line shows it. A contestant that ran only retry scenarios has no
+    # overall score and ranks last.
+    def scored(name, scenario, units, category):
+        return dict(row(name, scenario, 0, units, 0, 0), category=category)
+
+    table = summarize([scored("x", "hello", 100, "overhead"), scored("y", "hello", 100, "overhead"),
+                       scored("x", "retry_baseline", 1000, "retries"),
+                       scored("y", "retry_baseline", 100, "retries"),
+                       scored("a", "retry_baseline", 100, "retries")])
+    ranked = {row["contestant"]: row for row in standings(table)}
+    assert ranked["x"]["score"] == 100.0 and ranked["y"]["score"] == 100.0, ranked
+    assert ranked["x"]["categories"]["retries"] == 10.0 and ranked["y"]["categories"]["retries"] == 100.0
+    assert math.isnan(ranked["a"]["score"]) and standings(table)[-1]["contestant"] == "a"
+    assert ranked["x"]["scenarios"] == 2 and ranked["x"]["success"] == 1.0
+    assert "nan" in render_report(table)
+
+    # A `versus` that names no other contestant of the file is refused when it is read.
+    scratch = pathlib.Path(tempfile.mkdtemp())
+    try:
+        path = scratch / "c.json"
+        one = {"name": "p", "tool": "bravebot", "args": ["--safe"]}
+        two = dict(one, name="q", versus="p")
+        path.write_text(json.dumps({"contestants": [one, two]}))
+        assert [c["name"] for c in load_config(path)] == ["p", "q"]
+        for bad in (dict(two, versus="nobody"), dict(two, versus="q")):
+            path.write_text(json.dumps({"contestants": [one, bad]}))
+            try:
+                load_config(path)
+                raise AssertionError("a versus that names no other contestant was accepted")
+            except SystemExit:
+                pass
+    finally:
+        shutil.rmtree(scratch)
+
+
 def codex_events(thread, tool_items, input_tokens, cached, output):
     events = [{"type": "thread.started", "thread_id": thread}, {"type": "turn.started"}]
     events += [{"type": "item.completed", "item": {"id": f"i{n}", "type": "command_execution"}}
@@ -2114,6 +3404,8 @@ def selftest():
         shutil.rmtree(work)
     selftest_configuration()
     selftest_modes()
+    selftest_retries()
+    selftest_long_runs()
     print("selftest ok")
 
 
