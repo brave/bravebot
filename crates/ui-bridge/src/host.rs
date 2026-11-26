@@ -57,11 +57,14 @@ pub const MAX_LINE: usize = 8 * 1024 * 1024;
 struct Attached {
     /// The answers the person let this connection give.
     answers: Vec<Answer>,
-    /// The most a session this connection is shown may reach, which the person approved, or `None`
-    /// for a connection held to none.
+    /// The most a session this connection is shown may reach, which the person approved when the
+    /// device was paired, or `None` for a connection held to none. An approval never changes it.
     ceiling: Option<Scope>,
-    /// The sessions that went past `ceiling`, which this connection is not shown and cannot act on
-    /// until the person approves it again.
+    /// The scope the person approved this connection for in each session that went past `ceiling`,
+    /// which holds it in that session alone, in place of the ceiling.
+    approved: HashMap<String, Scope>,
+    /// The sessions that went past what this connection is held to there, which it is not shown and
+    /// cannot act on until the person approves it again.
     suspended: HashSet<String>,
     lines: mpsc::SyncSender<String>,
     /// The bytes of the lines in `lines` that the writer has not yet taken.
@@ -71,6 +74,13 @@ struct Attached {
 }
 
 impl Attached {
+    /// What this connection is held to in the session `handle`: the scope the person approved it
+    /// for there, else its ceiling, or `None` for a connection held to none.
+    fn held_in(&self, handle: &str) -> Option<&Scope> {
+        let ceiling = self.ceiling.as_ref()?;
+        Some(self.approved.get(handle).unwrap_or(ceiling))
+    }
+
     /// Start writing `channel`'s queue, giving up on it in `output` when a write fails or waits
     /// more than `patience`.
     fn start(
@@ -106,6 +116,7 @@ impl Attached {
         Ok(Self {
             answers: answers.to_vec(),
             ceiling,
+            approved: HashMap::new(),
             suspended: HashSet::new(),
             lines,
             waiting,
@@ -601,34 +612,21 @@ impl Served {
         self.output.lock().ok()?.get(&connection)?.ceiling.clone()
     }
 
-    /// Refuse to let a connection held to a ceiling open or join a session whose scope the ceiling
-    /// does not cover, whose scope cannot be read, or in which a grant for one turn was approved.
-    /// Refused before anything of the session reaches it, so it is never shown a session past its
-    /// ceiling.
-    fn within_ceiling(&self, connection: u64, standing: Seen) -> Result<(), Failure> {
-        let Some(ceiling) = self.ceiling_of(connection) else {
-            return Ok(());
-        };
-        let mut reasons =
-            past(&ceiling, &Widening::TurnStarting(standing.scope)).unwrap_or_default();
-        for grant in standing.granted {
-            reasons.extend(past(&ceiling, &Widening::Granted(grant)).unwrap_or_default());
-        }
-        match reasons.is_empty() {
-            true => Ok(()),
-            false => Err(Failure::new(
-                ErrorCode::NotAllowed,
-                format!(
-                    "that session reaches more than this connection was approved for: {}",
-                    reasons.join(", ")
-                ),
-            )),
-        }
+    /// What `connection` is held to in the session `handle`: the scope the person approved it for
+    /// there, else its ceiling, or `None` for one held to none.
+    fn held_in(&self, connection: u64, handle: &str) -> Option<Scope> {
+        self.output
+            .lock()
+            .ok()?
+            .get(&connection)?
+            .held_in(handle)
+            .cloned()
     }
 
     /// Lift the stop on `connection` for `handle`, which the person approved on the host. The
-    /// ceiling becomes the session's scope now, or the one the host was last told of while a turn
-    /// holds the session's state. The connection is sent the session's view again and counts again
+    /// connection is held in that session alone to the session's scope now, or the one the host was
+    /// last told of while a turn holds the session's state; its ceiling, which holds it in every
+    /// other session, does not change. The connection is sent the session's view again and counts again
     /// among those that can answer in it.
     fn approve(&mut self, connection: u64, handle: &str) -> Result<(), Failure> {
         let scope = self.standing_of(handle).scope.ok_or_else(|| {
@@ -657,7 +655,7 @@ impl Served {
                 Failure::new(ErrorCode::NotAllowed, "no connection has that number")
             })?;
             attached.suspended.remove(&session);
-            attached.ceiling = Some(scope);
+            attached.approved.insert(session, scope);
             Ok(())
         };
         if !self
@@ -783,8 +781,8 @@ impl Served {
                 std::path::Path::new(directory),
                 &bravebot_agent::servers::Machine::current(),
             );
-            self.within_ceiling(
-                connection,
+            within_ceiling(
+                self.ceiling_of(connection),
                 Seen {
                     scope,
                     granted: Vec::new(),
@@ -813,7 +811,7 @@ impl Served {
     /// Attach `connection` to a session beside any connections already attached.
     fn attach(&mut self, connection: u64, handle: &str) -> Result<Value, Failure> {
         if self.ceiling_of(connection).is_some() {
-            self.within_ceiling(connection, self.standing_of(handle))?;
+            within_ceiling(self.held_in(connection, handle), self.standing_of(handle))?;
         }
         let seen = self.stops.load(Ordering::SeqCst);
         let attached = self.attached_to(handle);
@@ -878,6 +876,7 @@ impl Served {
             if let Ok(mut output) = output.lock() {
                 for attached in output.values_mut() {
                     attached.suspended.remove(&session);
+                    attached.approved.remove(&session);
                 }
             }
             if let Ok(mut latest) = latest.lock() {
@@ -1025,6 +1024,30 @@ fn write_event(output: &Sink, owners: &Owners, dispatching: &AtomicU64, event: &
     }
 }
 
+/// Refuse to let a connection held to a ceiling open or join a session whose scope the ceiling
+/// does not cover, whose scope cannot be read, or in which a grant for one turn was approved.
+/// Refused before anything of the session reaches it, so it is never shown a session past its
+/// ceiling.
+fn within_ceiling(held: Option<Scope>, standing: Seen) -> Result<(), Failure> {
+    let Some(ceiling) = held else {
+        return Ok(());
+    };
+    let mut reasons = past(&ceiling, &Widening::TurnStarting(standing.scope)).unwrap_or_default();
+    for grant in standing.granted {
+        reasons.extend(past(&ceiling, &Widening::Granted(grant)).unwrap_or_default());
+    }
+    match reasons.is_empty() {
+        true => Ok(()),
+        false => Err(Failure::new(
+            ErrorCode::NotAllowed,
+            format!(
+                "that session reaches more than this connection was approved for: {}",
+                reasons.join(", ")
+            ),
+        )),
+    }
+}
+
 /// Whether `attached` is stopped for the session `event` belongs to. A session that closes is
 /// still said to have closed, which shows nothing of it.
 fn stopped_for(attached: &Attached, event: &Event) -> bool {
@@ -1122,7 +1145,7 @@ fn on_widening(
         let Some(served) = output.get_mut(connection) else {
             continue;
         };
-        let Some(ceiling) = &served.ceiling else {
+        let Some(ceiling) = served.held_in(handle) else {
             continue;
         };
         if served.suspended.contains(handle) {
@@ -1933,7 +1956,8 @@ mod tests {
         host.viewed.lock().unwrap().clear();
         host.approve(1, "s1").unwrap();
         assert!(host.not_stopped(1, "s1").is_ok());
-        assert_eq!(host.ceiling_of(1), Some(wider.clone()));
+        assert_eq!(host.held_in(1, "s1"), Some(wider.clone()));
+        assert_eq!(host.ceiling_of(1), Some(a_ceiling_and_a_wider_scope().0));
         assert_eq!(
             host.approve(1, "s1").unwrap_err().code,
             ErrorCode::BadRequest
@@ -2278,5 +2302,79 @@ mod tests {
         ];
         let kinds: Vec<Kind> = decided.iter().map(|(kind, _)| *kind).collect();
         assert_eq!(allowlist::answerable(&Answer::ALL), kinds);
+    }
+
+    /// A host with connection 1 held to `ceiling` and attached to two sessions, `s1` and `s2`, whose
+    /// views have not started, and the end its client reads, which is kept open while it is held.
+    fn a_held_connection_in_two_sessions(ceiling: Scope) -> (Served, BufReader<UnixStream>) {
+        let host = a_host_with_a_session_attached_to_connection_one();
+        let held = a_reading_client(&host.output, 1, &[Answer::Confirm], Some(ceiling));
+        host.owners
+            .lock()
+            .unwrap()
+            .insert("s2".into(), BTreeSet::from([1]));
+        (host, held)
+    }
+
+    fn widen(host: &Served, handle: &str, widening: &Widening) {
+        on_widening(
+            &host.output,
+            &host.owners,
+            &host.viewed,
+            &host.latest,
+            &host.stops,
+            handle,
+            widening,
+        );
+    }
+
+    /// An approval holds the connection to the session's scope in that session alone. Another
+    /// session that goes as far is still measured against the ceiling set at pairing, and stops
+    /// the connection, so approving one session the person saw lets the device into no other.
+    #[test]
+    fn an_approval_for_one_session_does_not_widen_another() {
+        let (ceiling, wider) = a_ceiling_and_a_wider_scope();
+        let (mut host, _held) = a_held_connection_in_two_sessions(ceiling.clone());
+        host.sessions.insert("s2".into(), None);
+        widen(&host, "s1", &Widening::TurnStarting(Some(wider.clone())));
+        host.approve(1, "s1").unwrap();
+
+        widen(&host, "s2", &Widening::TurnStarting(Some(wider.clone())));
+        assert!(
+            host.not_stopped(1, "s2").is_err(),
+            "s2 was let past the ceiling"
+        );
+        assert!(host.not_stopped(1, "s1").is_ok());
+        assert_eq!(host.held_in(1, "s2"), Some(ceiling));
+        assert_eq!(host.held_in(1, "s1"), Some(wider));
+    }
+
+    /// An approval for a session whose scope is narrower than the ceiling stops nothing elsewhere:
+    /// another session inside the ceiling goes on being shown. An approval that replaced the ceiling
+    /// would stop sessions the person never looked at.
+    #[test]
+    fn an_approval_for_one_session_does_not_stop_another() {
+        let (narrow, wider) = a_ceiling_and_a_wider_scope();
+        let mut middle = narrow.clone();
+        middle.programs = vec!["\"git\"".into()];
+        // The ceiling holds `wider`. `s1` goes past it in a way `middle` holds, and is approved
+        // there; `s2` stays at `wider`, inside the ceiling.
+        let (mut host, _held) = a_held_connection_in_two_sessions(wider.clone());
+        let mut past_the_ceiling = middle.clone();
+        past_the_ceiling.directories = vec!["\"/elsewhere\"".into()];
+        widen(
+            &host,
+            "s1",
+            &Widening::TurnStarting(Some(past_the_ceiling.clone())),
+        );
+        assert!(host.not_stopped(1, "s1").is_err());
+        host.approve(1, "s1").unwrap();
+        assert_eq!(host.held_in(1, "s1"), Some(past_the_ceiling));
+
+        widen(&host, "s2", &Widening::TurnStarting(Some(wider)));
+        assert!(
+            host.not_stopped(1, "s2").is_ok(),
+            "s2 was stopped by s1's approval"
+        );
     }
 }
