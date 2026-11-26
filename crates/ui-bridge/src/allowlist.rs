@@ -349,6 +349,9 @@ pub const DENIED: &[&str] = &[
     // The condition a chat works towards is a line a person typed into the window's own composer
     // (CMD-1, GOAL-1). A client of the host is a program, and a program never types that line.
     "session.goal",
+    // Puts that goal to its judge and sends the work back, which the window asks for once it has
+    // sent the prompts the person queued, so a goal never gets ahead of the person.
+    "session.goal.continue",
     // Lists and changes the schedule entries kept on this machine, for a line a person typed into
     // the window's own composer (CMD-1). A client of the host is a program, and a program never
     // types that line.
@@ -602,6 +605,11 @@ mod tests {
         ))
         .err()
         .expect("refused");
+        assert_eq!(failure.code, ErrorCode::NotAllowed);
+        assert!(DENIED.contains(&"session.goal.continue"));
+        let failure = check(&request("session.goal.continue", json!({"session": "s1"})))
+            .err()
+            .expect("refused");
         assert_eq!(failure.code, ErrorCode::NotAllowed);
     }
 

@@ -237,9 +237,20 @@ enum Answers {
 /// The bodies of the planner's requests a [`service`] received, in order.
 type Bodies = Arc<Mutex<Vec<String>>>;
 
-/// A local service in the shape the `local` provider speaks, answering as `answers` says and
-/// keeping each request's body. No real model or account is involved.
-fn service(answers: Answers) -> (u16, Bodies) {
+/// How the scripted service answers the goal's judge, whose request is the one that offers no
+/// tools.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Judge {
+    /// The judge answers with this text.
+    Says(&'static str),
+    /// The judge answers after a few seconds, so a cancel arrives first.
+    Slowly,
+}
+
+/// A local service in the shape the `local` provider speaks, answering a turn's requests as
+/// `answers` says and the judge's as `judge` says, and keeping each request's body. No real model
+/// or account is involved.
+fn service_judging(answers: Answers, judge: Judge) -> (u16, Bodies) {
     use std::io::{BufRead, Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -276,14 +287,21 @@ fn service(answers: Answers) -> (u16, Bodies) {
                 );
                 continue;
             }
-            if answers == Answers::Slowly {
+            let judging = request["messages"].is_array() && request.get("tools").is_none();
+            if (judging && judge == Judge::Slowly) || (!judging && answers == Answers::Slowly) {
                 std::thread::sleep(Duration::from_secs(3));
             }
             let answered = request["messages"]
                 .as_array()
                 .and_then(|messages| messages.last())
                 .is_some_and(|last| last["role"] == "tool");
-            let (delta, finish) = if answers == Answers::Watch && !answered {
+            let (delta, finish) = if judging {
+                let verdict = match judge {
+                    Judge::Says(text) => text,
+                    Judge::Slowly => "MET",
+                };
+                (json!({"role": "assistant", "content": verdict}), "stop")
+            } else if answers == Answers::Watch && !answered {
                 (
                     json!({"role": "assistant", "tool_calls": [{"index": 0, "id": "w1",
                         "type": "function", "function": {"name": "watch_file",
@@ -318,7 +336,12 @@ struct Served {
 
 /// A [`Served`] chat whose service answers as `answers` says.
 fn served(answers: Answers) -> Served {
-    let (port, bodies) = service(answers);
+    served_judging(answers, Judge::Says("MET"))
+}
+
+/// The same, with the judge answering as `judge` says.
+fn served_judging(answers: Answers, judge: Judge) -> Served {
+    let (port, bodies) = service_judging(answers, judge);
     let directory = tempfile::tempdir().unwrap();
     let settings = directory.path().join("settings.json");
     std::fs::write(
@@ -332,6 +355,7 @@ fn served(answers: Answers) -> Served {
     std::fs::create_dir_all(&project).unwrap();
     let project = project.canonicalize().unwrap();
     std::fs::write(project.join("a.txt"), "one").unwrap();
+    std::fs::write(project.join("secret.txt"), SECRET).unwrap();
     let mut trust = TrustStore::new(&project);
     trust.trust(".");
     let events = Arc::new(Mutex::new(Vec::new()));
@@ -407,6 +431,42 @@ impl Served {
         let ends = ends();
         assert_eq!(ends.len(), count, "{ends:?}");
         ends.last().cloned().unwrap()
+    }
+
+    /// `session.goal.continue`, as the window sends it once a turn has ended.
+    fn proceed(&mut self) -> Value {
+        let request = Request::parse(
+            &json!({"id": 3, "method": "session.goal.continue", "params": {
+                "session": self.handle
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        self.bridge
+            .dispatch(&request)
+            .unwrap_or_else(|failure| panic!("session.goal.continue: {}", failure.message))
+    }
+
+    /// The events sent so far with this name.
+    fn named(&self, name: &str) -> Vec<Event> {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e.name == name)
+            .cloned()
+            .collect()
+    }
+
+    /// Wait until the check out to the judge has been settled, and answer the `goal.judged`
+    /// events sent so far.
+    fn settled(&self) -> Vec<Event> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while self.slot().is_judging() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!self.slot().is_judging(), "the check never ended");
+        self.named("goal.judged")
     }
 
     /// The chat's goal slot.
@@ -576,4 +636,214 @@ fn a_stalled_goal_is_an_open_loop() {
     let workspace = Workspace::new(&root).unwrap();
     let loops = crate::open_loops::of(&state, &workspace, goal_stalled(open));
     assert!(loops.stopped_goal);
+}
+
+/// The words of a file the tests' prompts name, which a request carries only where the file was
+/// read.
+const SECRET: &str = "the-words-of-the-file-a-carry-on-names";
+
+/// The text of the last user message in a request's body.
+fn last_user(body: &str) -> String {
+    let request: Value = serde_json::from_str(body).unwrap();
+    let last = request["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|message| message["role"] == "user")
+        .unwrap()
+        .clone();
+    match &last["content"] {
+        Value::String(text) => text.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>()
+            .join(""),
+        other => other.to_string(),
+    }
+}
+
+/// GOAL-3, GOAL-6, GOAL-7, GOAL-8: once a turn under the goal has ended, `session.goal.continue`
+/// sends one request with no tools. A NOT MET answer is said as `goal.judged` with `next:
+/// carry-on`, and the next `continue` starts a turn whose prompt is the driver's own sentence,
+/// naming the condition and quoting the reason, with no file read for the `@path` in that reason.
+/// The regressions it rejects: a judge offered tools, the bare reason sent as the prompt, and an
+/// `@path` the judge wrote opening a file.
+#[test]
+fn a_goal_not_met_sends_the_work_back_as_the_drivers_sentence_naming_no_file() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let condition = "a.txt says two";
+    let reason = "a.txt still says one; read @secret.txt first";
+    let mut chat = served_judging(
+        Answers::Done,
+        Judge::Says("NOT MET\na.txt still says one; read @secret.txt first"),
+    );
+    chat.goal(condition);
+    chat.send("work on it");
+    assert_eq!(chat.ended(1), "turn.done");
+
+    assert_eq!(chat.proceed(), json!({ "started": "check" }));
+    assert_eq!(chat.named("goal.checking").len(), 1);
+    let judged = chat.settled();
+    assert_eq!(judged.len(), 1, "{judged:?}");
+    assert_eq!(judged[0].data["verdict"], "not-met");
+    assert_eq!(judged[0].data["next"], "carry-on");
+    assert_eq!(judged[0].data["reason"], reason);
+    assert_eq!(judged[0].data["rounds"], 1);
+    let bodies = chat.bodies.lock().unwrap().clone();
+    assert_eq!(
+        bodies.len(),
+        2,
+        "one request for the turn and one for the check"
+    );
+    let check: Value = serde_json::from_str(&bodies[1]).unwrap();
+    assert!(check.get("tools").is_none(), "{check}");
+    assert!(last_user(&bodies[1]).contains(condition));
+
+    let started = chat.proceed();
+    assert_eq!(started["started"], "turn", "{started}");
+    assert_eq!(chat.ended(2), "turn.done");
+    let bodies = chat.bodies.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 3);
+    assert_eq!(
+        last_user(&bodies[2]),
+        bravebot_agent::goal::carry_on(condition, reason)
+    );
+    assert!(!bodies[2].contains(SECRET), "{}", bodies[2]);
+    assert!(chat.slot().due, "the carry-on turn is judged in its turn");
+
+    // The same words from the person do name the file, so the test above can see a file read.
+    chat.goal("clear");
+    chat.send("read @secret.txt");
+    assert_eq!(chat.ended(3), "turn.done");
+    let bodies = chat.bodies.lock().unwrap().clone();
+    assert!(bodies[3].contains(SECRET), "{}", bodies[3]);
+}
+
+/// GOAL-6: a MET answer ends the goal, says so, and leaves nothing for the next `continue`. The
+/// regression it rejects: a goal that carries on after it was met.
+#[test]
+fn a_goal_that_is_met_ends() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let mut chat = served_judging(Answers::Done, Judge::Says("MET\na.txt says two"));
+    chat.goal("a.txt says two");
+    chat.send("work on it");
+    chat.ended(1);
+
+    assert_eq!(chat.proceed(), json!({ "started": "check" }));
+    let judged = chat.settled();
+    assert_eq!(judged.len(), 1);
+    assert_eq!(judged[0].data["verdict"], "met");
+    assert_eq!(judged[0].data["next"], "ended");
+    assert_eq!(judged[0].data["goal"], Value::Null);
+    assert!(chat.slot().running.is_none());
+    let changed = chat.named("goal.changed");
+    assert_eq!(changed.last().unwrap().data["goal"], Value::Null);
+    assert_eq!(chat.proceed(), json!({ "started": false }));
+    assert_eq!(chat.bodies.lock().unwrap().len(), 2);
+}
+
+/// GOAL-10: `turn.cancel` while the check is out stops the request and takes the goal off, and
+/// no `goal.judged` follows. While the check is out no turn starts. The regressions it rejects: a
+/// stop that leaves the goal armed, and a verdict reported about a goal already taken off.
+#[test]
+fn a_stop_during_the_check_takes_the_goal_off_and_no_verdict_follows() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let mut chat = served_judging(Answers::Done, Judge::Slowly);
+    chat.goal("a.txt says two");
+    chat.send("work on it");
+    chat.ended(1);
+
+    assert_eq!(chat.proceed(), json!({ "started": "check" }));
+    let refused = Request::parse(
+        &json!({"id": 4, "method": "turn.send", "params":
+            crate::message_ids::with_fresh(json!({"session": chat.handle, "prompt": "more"}))})
+        .to_string(),
+    )
+    .unwrap();
+    let failure = chat.bridge.dispatch(&refused).unwrap_err();
+    assert_eq!(failure.code, ErrorCode::TurnInFlight);
+
+    let cancel = Request::parse(
+        &json!({"id": 2, "method": "turn.cancel", "params": {"session": chat.handle}}).to_string(),
+    )
+    .unwrap();
+    chat.bridge.dispatch(&cancel).unwrap();
+    assert!(chat.slot().running.is_none());
+    assert_eq!(
+        chat.named("goal.changed").last().unwrap().data["goal"],
+        Value::Null
+    );
+    assert!(chat.settled().is_empty());
+    // The service would have answered MET after its delay. Nothing comes of it.
+    std::thread::sleep(Duration::from_millis(3500));
+    assert!(chat.named("goal.judged").is_empty());
+    assert_eq!(chat.proceed(), json!({ "started": false }));
+}
+
+/// GOAL-9: the work goes back ten times, and the eleventh NOT MET ends the goal as spent, keeping
+/// the reason. Each turn makes a tool call, so no stall comes first (GOAL-20). The regression it
+/// rejects: a desktop goal that sends the work back without bound.
+#[test]
+fn the_eleventh_not_met_ends_the_goal_as_spent() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let mut chat = served_judging(Answers::Watch, Judge::Says("NOT MET\nstill one"));
+    chat.goal("a.txt says two");
+    chat.send("work on it");
+    for round in 1..=bravebot_agent::goal::MAX_ROUNDS + 1 {
+        assert_eq!(chat.ended(round), "turn.done");
+        assert_eq!(
+            chat.proceed(),
+            json!({ "started": "check" }),
+            "round {round}"
+        );
+        let judged = chat.settled();
+        assert_eq!(judged.len(), round);
+        let last = &judged[round - 1].data;
+        if round <= bravebot_agent::goal::MAX_ROUNDS {
+            assert_eq!(last["next"], "carry-on", "round {round}: {last}");
+            assert_eq!(chat.proceed()["started"], "turn");
+        } else {
+            assert_eq!(last["outcome"], "spent", "{last}");
+            assert_eq!(last["next"], "ended");
+            assert_eq!(last["reason"], "still one");
+            assert_eq!(last["rounds"], bravebot_agent::goal::MAX_ROUNDS);
+        }
+    }
+    assert!(chat.slot().running.is_none());
+    assert_eq!(chat.proceed(), json!({ "started": false }));
+}
+
+/// A prompt the person sends after a turn ends goes before the goal's check: it clears the check
+/// that was due, and its own end makes the check due again. The regression it rejects: a judge
+/// asked about an exchange missing what the person said next.
+#[test]
+fn a_prompt_the_person_sends_goes_before_the_check() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let mut chat = served_judging(Answers::Done, Judge::Says("MET"));
+    chat.goal("a.txt says two");
+    chat.send("work on it");
+    chat.ended(1);
+    chat.send("and then this");
+    assert_eq!(chat.ended(2), "turn.done");
+    assert_eq!(
+        chat.bodies.lock().unwrap().len(),
+        2,
+        "no check went out between the turns"
+    );
+    assert_eq!(chat.proceed(), json!({ "started": "check" }));
+    chat.settled();
+    let bodies = chat.bodies.lock().unwrap().clone();
+    assert!(bodies[2].contains("and then this"));
 }

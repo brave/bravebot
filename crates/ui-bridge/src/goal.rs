@@ -14,7 +14,8 @@
 //! The slot sits on the open chat beside its watches and never in the session's state, so
 //! nothing that writes the session record can reach it (GOAL-12). Closing the chat drops it.
 
-use bravebot_agent::goal::{Asked, Running};
+use bravebot_agent::goal::{Asked, Running, Settled};
+use bravebot_core::cancel::Cancel;
 use bravebot_i18n::t;
 use serde_json::{Value, json};
 use std::time::Instant;
@@ -32,6 +33,19 @@ pub(crate) struct GoalSlot {
     pub(crate) calls: usize,
     /// The driver's sentence that sends the work back, kept until the chat is idle to start it.
     pub(crate) carry_on: Option<String>,
+    /// The check out to the judge, while one is. The chat takes no turn until its worker has
+    /// settled it and cleared this.
+    pub(crate) judging: Option<Judging>,
+}
+
+/// A check of the goal, from when it is sent until its worker has settled it.
+#[derive(Debug)]
+pub(crate) struct Judging {
+    /// Stops the request. `turn.cancel` presses it and takes the goal off (GOAL-10).
+    pub(crate) cancel: Cancel,
+    /// When the goal the check judges was set. A verdict is for that goal alone: one that arrives
+    /// after it was cleared, or replaced by another `/goal`, is neither acted on nor reported.
+    pub(crate) goal_started: Instant,
 }
 
 impl GoalSlot {
@@ -66,6 +80,192 @@ impl GoalSlot {
     pub(crate) fn stalled(&self) -> bool {
         self.running.as_ref().is_some_and(Running::is_stalled)
     }
+
+    /// Whether a check is out to the judge.
+    pub(crate) fn is_judging(&self) -> bool {
+        self.judging.is_some()
+    }
+
+    /// What `session.goal.continue` does next, for a chat that is idle. A stored carry-on goes
+    /// first, then a check that is due. Taking either clears it, so each happens once.
+    pub(crate) fn step(&mut self) -> Step {
+        if self.judging.is_some() {
+            return Step::Nothing;
+        }
+        if let Some(prompt) = self.carry_on.take() {
+            return Step::CarryOn(prompt);
+        }
+        if !std::mem::take(&mut self.due) {
+            return Step::Nothing;
+        }
+        match self.running.as_ref().filter(|running| !running.is_paused()) {
+            Some(running) => Step::Check {
+                condition: running.condition().to_string(),
+                record: running.record(),
+                goal_started: running.started(),
+            },
+            None => Step::Nothing,
+        }
+    }
+
+    /// Take what the check came back with, as its worker does once the request has ended, and
+    /// answer the `goal.judged` event's data, or `None` where nothing is to be reported.
+    ///
+    /// Nothing is reported for a check that was stopped, since the stop took the goal off, nor
+    /// for one whose goal was cleared, replaced or paused while it was out (GOAL-10, GOAL-18).
+    /// Otherwise [`bravebot_agent::goal::settle`] decides, and a carry-on is kept for the next
+    /// `session.goal.continue`. `tokens` is the chat's token total, with the check charged.
+    pub(crate) fn judged(
+        &mut self,
+        judged: Result<bravebot_agent::goal::Verdict, String>,
+        stopped: bool,
+        tokens: u64,
+        now: Instant,
+    ) -> Option<Value> {
+        let judging = self.judging.take()?;
+        let same_goal = self
+            .running
+            .as_ref()
+            .is_some_and(|running| running.started() == judging.goal_started);
+        if stopped || !same_goal {
+            return None;
+        }
+        // The figures as the goal ends, which a goal that ends here still says (GOAL-13).
+        let (elapsed, spent) = self.running.as_ref().map_or((0, 0), |running| {
+            (running.elapsed(now).as_secs(), running.spent(tokens))
+        });
+        let settled = bravebot_agent::goal::settle(&mut self.running, judged, self.calls);
+        let said = said(&settled)?;
+        if let Settled::CarryOn { prompt, .. } = &settled {
+            self.carry_on = Some(prompt.clone());
+        }
+        let (rounds, left) = match (&settled, self.running.as_ref()) {
+            (Settled::Spent { rounds, .. }, _) => (*rounds, 0),
+            (_, Some(running)) => (running.rounds(), running.left()),
+            (_, None) => (0, 0),
+        };
+        Some(json!({
+            "verdict": said.verdict,
+            "outcome": said.outcome,
+            "next": said.next,
+            "reason": said.reason.map(|reason| bravebot_agent::confirm::printable(&reason)),
+            "line": bravebot_agent::confirm::printable(&said.line),
+            "rounds": rounds,
+            "left": left,
+            "elapsedSeconds": elapsed,
+            "spentTokens": spent,
+            "goal": snapshot(self, tokens, now),
+        }))
+    }
+}
+
+/// What `session.goal.continue` found to do.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Step {
+    /// Start the turn that carries the work on, with the driver's sentence as its prompt.
+    CarryOn(String),
+    /// Put the goal to the judge.
+    Check {
+        condition: String,
+        record: bravebot_agent::Work,
+        goal_started: Instant,
+    },
+    /// Nothing is waiting.
+    Nothing,
+}
+
+/// How a settled check is told to the window.
+struct Said {
+    /// What the judge answered.
+    verdict: &'static str,
+    /// Which outcome of [`Settled`] it came to.
+    outcome: &'static str,
+    /// What the goal does next: send the work back, end, or stay set and stop sending it.
+    next: &'static str,
+    reason: Option<String>,
+    /// The bridge's sentence for the notice row.
+    line: String,
+}
+
+/// The words for `settled`, or `None` for a verdict that is not reported.
+fn said(settled: &Settled) -> Option<Said> {
+    let with = |reason: &str, said: String, unsaid: String| {
+        if reason.is_empty() { unsaid } else { said }
+    };
+    let said = |verdict, outcome, next, reason: Option<&String>, line| Said {
+        verdict,
+        outcome,
+        next,
+        reason: reason.cloned(),
+        line,
+    };
+    Some(match settled {
+        Settled::Ignored => return None,
+        Settled::CarryOn { reason, .. } => said(
+            "not-met",
+            "carry-on",
+            "carry-on",
+            Some(reason),
+            with(
+                reason,
+                t!(desktop_goal_not_met, reason = reason).to_string(),
+                t!(desktop_goal_not_met_unsaid).to_string(),
+            ),
+        ),
+        Settled::Met { reason } => said(
+            "met",
+            "met",
+            "ended",
+            Some(reason),
+            with(
+                reason,
+                t!(desktop_goal_met, reason = reason).to_string(),
+                t!(desktop_goal_met_unsaid).to_string(),
+            ),
+        ),
+        Settled::Impossible { reason } => said(
+            "impossible",
+            "impossible",
+            "ended",
+            Some(reason),
+            t!(desktop_goal_impossible, reason = reason).to_string(),
+        ),
+        Settled::Unreadable => said(
+            "unreadable",
+            "unreadable",
+            "ended",
+            None,
+            t!(desktop_goal_unreadable).to_string(),
+        ),
+        Settled::Quarantined => said(
+            "quarantined",
+            "quarantined",
+            "ended",
+            None,
+            t!(desktop_goal_quarantined).to_string(),
+        ),
+        Settled::Failed { problem } => said(
+            "failed",
+            "failed",
+            "ended",
+            None,
+            t!(desktop_goal_failed, problem = problem).to_string(),
+        ),
+        Settled::Spent { rounds, reason } => said(
+            "not-met",
+            "spent",
+            "ended",
+            Some(reason),
+            t!(desktop_goal_spent, rounds = *rounds).to_string(),
+        ),
+        Settled::Stalled { reason } => said(
+            "not-met",
+            "stalled",
+            "stalled",
+            Some(reason),
+            t!(desktop_goal_stalled).to_string(),
+        ),
+    })
 }
 
 /// What `session.goal` did: the lines the window shows, and whether the goal changed, which is

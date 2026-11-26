@@ -3726,6 +3726,26 @@ desktop-goal-none =
 desktop-goal-active = Objectif : { $condition }
 desktop-goal-last-check = La dernière vérification a dit : { $reason }
 desktop-goal-never-checked = Rien n'a encore été jugé par rapport à lui.
+desktop-goal-not-met = L'objectif n'est pas encore atteint : { $reason }
+desktop-goal-not-met-unsaid =
+    L'objectif n'est pas encore atteint, et la vérification n'a pas dit ce qui manque.
+desktop-goal-met = L'objectif est atteint : { $reason }
+desktop-goal-met-unsaid = L'objectif est atteint.
+desktop-goal-impossible = L'objectif ne peut pas être atteint, il est donc retiré : { $reason }
+desktop-goal-unreadable =
+    La vérification n'a pas répondu par un verdict : il n'y a donc rien sur quoi agir et
+    l'objectif est retiré.
+desktop-goal-quarantined =
+    Cette discussion a rencontré du contenu non fiable. Un verdict à son sujet n'est donc pas
+    quelque chose sur quoi ce programme a le droit d'agir, et l'objectif est retiré.
+desktop-goal-spent =
+    L'objectif a renvoyé le travail { $rounds } fois sans être atteint, et s'est arrêté plutôt que
+    de continuer.
+desktop-goal-stalled =
+    L'objectif a renvoyé le travail sans qu'un tour appelle un outil, et a cessé de le renvoyer.
+    Il reste défini, et votre prochain message sera jugé par rapport à lui.
+desktop-goal-failed = L'objectif n'a pas pu être vérifié ({ $problem }), il est donc retiré.
+desktop-goal-ended-unexpectedly = La vérification de l'objectif s'est terminée de façon inattendue.
 
 
 ## Être averti quand un fichier change

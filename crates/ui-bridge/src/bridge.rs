@@ -236,6 +236,14 @@ impl Open {
                 "a turn is already running in this session",
             ));
         }
+        // The check holds no state, but the turn after it is the one its verdict decides, so
+        // nothing starts until it has been settled.
+        if self.goal.lock().map_or(true, |slot| slot.is_judging()) {
+            return Err(Failure::new(
+                ErrorCode::TurnInFlight,
+                "Wait for the goal's check to finish.",
+            ));
+        }
         self.not_compacting()
     }
 
@@ -250,6 +258,15 @@ impl Open {
         }
         Ok(())
     }
+}
+
+/// Whose line a turn's prompt is, which decides whether an `@path` in it names a file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Wrote {
+    /// The person sent it, and each `@path` they could read in it names a file (NAME-9).
+    Person,
+    /// The bridge wrote it, so no `@path` in it names anything (GOAL-8).
+    Driver,
 }
 
 /// A question asked beside the work, from when it is sent until its worker has settled it.
@@ -606,6 +623,7 @@ impl Bridge {
             "changelog.read" => Ok(crate::help::changelog()),
             "schedule.command" => self.schedule_command(request),
             "session.goal" => self.goal_command(request),
+            "session.goal.continue" => self.goal_continue(request),
             "caffeinate.confirmed" => {
                 Ok(json!({"confirmed": bravebot_session::store::load_caffeinate_confirmed()}))
             }
@@ -2139,7 +2157,7 @@ impl Bridge {
         // back to recognising them by their wording; what it may not do is claim one of the
         // agent's, which is [`wire::composed`]'s whole job.
         let answer = crate::wire::composed(request.params.get("composed"))
-            .and_then(|composed| self.start_turn(request, composed));
+            .and_then(|composed| self.start_turn(request, composed, Wrote::Person));
         if let Some(open) = self.open.get_mut(&handle) {
             open.sends.record(id, &request.params, answer.clone());
         }
@@ -2153,10 +2171,14 @@ impl Bridge {
     /// have a transcript draw a file's row, or a watch's, around a line a person typed, which is
     /// the thing the tag exists to stop anyone doing. The tag for a prompt the front end composed
     /// itself is a different claim, and [`wire::composed`] is where a request may make it.
+    ///
+    /// `wrote` says whose line the prompt is. Only a line the person sent names a file with `@`
+    /// (NAME-9): the driver's own sentences, such as a goal's carry-on, name none (GOAL-8).
     fn start_turn(
         &mut self,
         request: &Request,
         composed: Option<bravebot_agent::conversation::Composed>,
+        wrote: Wrote,
     ) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         let prompt = request.string("prompt")?;
@@ -2232,7 +2254,7 @@ impl Bridge {
         // showed it, each folded paste behind its marker, and the names are read there, since the
         // pasted words name no file (NAME-12).
         let mut files = files;
-        if composed.is_none() {
+        if composed.is_none() && wrote == Wrote::Person {
             let shown = request.params.get("shown").and_then(Value::as_str);
             for named in crate::mentions::named_as_shown(&workspace, &prompt, shown)? {
                 if !files.contains(&named) {
@@ -3465,6 +3487,25 @@ impl Bridge {
         {
             compacting.cancel.cancel();
         }
+        // During the goal's check the stop takes the goal off with the request, so the next round
+        // is not sent after it (GOAL-10, INPUT-4). The verdict that may still arrive is dropped.
+        let mut goal_cleared = false;
+        if expected.is_none()
+            && let Ok(mut slot) = open.goal.lock()
+            && let Some(judging) = &slot.judging
+        {
+            judging.cancel.cancel();
+            slot.running = None;
+            slot.carry_on = None;
+            goal_cleared = true;
+        }
+        if goal_cleared {
+            self.emitter.send(Event::new(
+                "goal.changed",
+                &handle,
+                json!({ "goal": Value::Null }),
+            ));
+        }
         if let Ok(mut watches) = open.watches.lock() {
             watches.stop_firing();
         }
@@ -4087,6 +4128,141 @@ impl Bridge {
         Ok(crate::goal::answered(&answer, goal))
     }
 
+    /// Take the goal's next step, which the window asks for once a turn has ended and the prompts
+    /// the person queued are sent, so a goal never gets ahead of the person.
+    ///
+    /// Where a carry-on is waiting, its turn starts, with the driver's sentence as the prompt and
+    /// no `@path` in it read (GOAL-7, GOAL-8). Where a check is due, the goal is put to the judge
+    /// with no tools over a copy of the exchange (GOAL-3), `goal.checking` is sent and the answer
+    /// returns before the judge has; `goal.judged` says what it decided. Otherwise nothing starts.
+    /// Refused, as a turn is, while the chat is not free for work.
+    fn goal_continue(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        open.ready_for_work()?;
+        let step = open
+            .goal
+            .lock()
+            .map_err(|_| Failure::bad_request("Goal unavailable."))?
+            .step();
+        match step {
+            crate::goal::Step::Nothing => Ok(json!({ "started": false })),
+            crate::goal::Step::CarryOn(prompt) => {
+                // Not recall: the person did not type it, so it neither joins their history nor
+                // names the chat.
+                let request = Request {
+                    id: 0,
+                    method: "turn.send".into(),
+                    params: json!({ "session": handle, "prompt": prompt, "recall": false }),
+                };
+                let started = self.start_turn(&request, None, Wrote::Driver)?;
+                Ok(
+                    json!({ "started": "turn", "turn": started["turn"], "target": started["target"] }),
+                )
+            }
+            crate::goal::Step::Check {
+                condition,
+                record,
+                goal_started,
+            } => self.check_goal(&handle, &condition, record, goal_started),
+        }
+    }
+
+    /// Put the goal to the judge on a worker, as `goal_continue` found due.
+    fn check_goal(
+        &mut self,
+        handle: &str,
+        condition: &str,
+        record: bravebot_agent::Work,
+        goal_started: std::time::Instant,
+    ) -> Result<Value, Failure> {
+        let open = self.open.get(handle).ok_or_else(Failure::no_such_session)?;
+        let (model, config) = crate::models::chosen(
+            None,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
+        let state = Arc::clone(&open.state);
+        let goal = Arc::clone(&open.goal);
+        // Taken here, on the thread that holds the state, because a conversation is not `Clone`
+        // and what crosses to the worker is the request and not the exchange.
+        let (check, account, trust) = {
+            let state = state.lock().map_err(|_| {
+                Failure::new(ErrorCode::Internal, "the session's state is unavailable")
+            })?;
+            (
+                bravebot_agent::goal::Check::of(&state.conversation, condition, record),
+                state.account.clone(),
+                state.answers.trust.clone(),
+            )
+        };
+        let cancel = Cancel::new();
+        goal.lock()
+            .map_err(|_| Failure::bad_request("Goal unavailable."))?
+            .judging = Some(crate::goal::Judging {
+            cancel: cancel.clone(),
+            goal_started,
+        });
+        self.emitter
+            .send(Event::new("goal.checking", handle, json!({})));
+        let emitter = self.emitter.clone();
+        let session = handle.to_string();
+        self.workers_of(handle).spawn(move || {
+            let egress = Egress::new();
+            let mut sink = bravebot_session::audit::Trail::new();
+            let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                agent_turn::goal(
+                    &config,
+                    &egress,
+                    &account,
+                    check,
+                    model.as_deref(),
+                    &mut sink,
+                    trust,
+                    &cancel,
+                )
+                .map_err(|error| error.to_string())
+            }))
+            .unwrap_or_else(|_| {
+                Err(bravebot_i18n::t!(desktop_goal_ended_unexpectedly).to_string())
+            });
+            // Charged as the terminal charges it: the request was made and spent what it spent,
+            // whatever it decided.
+            let spent = done.as_ref().map_or(0, |assessed| assessed.usage.total());
+            let tokens = match state.lock() {
+                Ok(mut state) => {
+                    state.tokens += spent;
+                    state.tokens
+                }
+                Err(_) => 0,
+            };
+            let judged = done.map(|assessed| assessed.verdict);
+            let now = std::time::Instant::now();
+            let said = goal.lock().ok().and_then(|mut slot| {
+                let said = slot.judged(judged, cancel.is_cancelled(), tokens, now)?;
+                Some((said, crate::goal::snapshot(&slot, tokens, now)))
+            });
+            // Cleared on every path, so a stopped or settled check frees the chat for work.
+            if let Ok(mut slot) = goal.lock() {
+                slot.judging = None;
+            }
+            if let Some((said, snapshot)) = said {
+                emitter.send(Event::new("goal.judged", &session, said));
+                emitter.send(Event::new(
+                    "goal.changed",
+                    &session,
+                    json!({ "goal": snapshot }),
+                ));
+            }
+        });
+        Ok(json!({ "started": "check" }))
+    }
+
     fn watches(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         self.reap(&handle);
@@ -4263,6 +4439,7 @@ impl Bridge {
                     number,
                     path: path.to_string(),
                 }),
+                Wrote::Driver,
             )
         {
             if let Some(open) = self.open.get(handle)
