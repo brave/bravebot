@@ -477,7 +477,7 @@ CASES = (
     ("crates/core/src/spec.rs", {"rust", "ui", "fuzz", "sdk", "verus"}),
     ("crates/ui-files/src/short_name.rs", {"rust", "sdk", "verus"}),
     ("verify/mutations.txt", {"verus"}),
-    ("crates/sandbox-rules/src/quote.rs", {"rust", "verus"}),
+    ("crates/sandbox-rules/src/quote.rs", {"rust", "sdk", "verus"}),
     ("verify/contracts.txt", {"verus"}),
     ("verify/history.rs", {"verus"}),
     ("contrib/check-verus.py", {"verus"}),
