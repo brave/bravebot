@@ -126,5 +126,5 @@ it writes that to somebody who then believes a watch exists that nothing is keep
 `verified-by: bravebot_agent::tools::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
 `verified-by: bravebot_agent::tools::a_delegates_descriptions_do_not_name_schedule_next`
 `verified-by: bravebot_cli::running::a_one_shot_run_offers_no_way_to_arrange_a_later_look`
-`verified-by: bravebot_tui::app::only_a_turn_whose_wait_would_be_kept_is_offered_a_later_look`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::only_a_turn_whose_wait_would_be_kept_is_offered_a_later_look`
 `verified-by: bravebot_agent::turn::stop_from_a_turn_arranging_a_look_is_not_read_in_a_whole_turn`

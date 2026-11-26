@@ -63,6 +63,10 @@ struct Open {
     /// What the session carries between turns. Behind a mutex because a worker takes it
     /// for the length of a turn.
     state: Arc<Mutex<State>>,
+    /// The state's account session, the same handle (a clone shares the identifier and the level
+    /// the session began with), so `effort.get` reports the starting level while a turn holds the
+    /// state. Set when the session is built, after the state's own is, and never replaced.
+    account: bravebot_agent::chatgpt::AccountSession,
     /// Whether the user has answered the trust question for this session.
     ///
     /// `None` means unanswered, and a turn is refused until it is. Not a bool with a
@@ -171,6 +175,7 @@ impl Open {
             reports: Arc::new(Mutex::new(crate::reports::Held::of(&state, 0))),
             spend_limit: state.spend_limit.clone(),
             tokens_at_turn: state.tokens,
+            account: state.account.clone(),
             state: Arc::new(Mutex::new(state)),
             answered_trust,
             keeping,
@@ -568,12 +573,12 @@ impl Bridge {
                 let directory = request.optional_string("directory").map(PathBuf::from);
                 let settings =
                     crate::settings::layers(directory.as_deref(), self.settings.as_deref());
-                // The lock is held only to clone the handle on the session's account session.
+                // Read from the handle `Open` keeps, not through the state, which a turn holds for
+                // its whole length and which the dispatch thread does not wait for.
                 let began = request
                     .optional_string("session")
                     .and_then(|handle| self.open.get(&handle))
-                    .and_then(|open| Some(open.state.lock().ok()?.account.clone()))
-                    .map(|account| account.effort());
+                    .map(|open| open.account.effort());
                 Ok(crate::effort::get(&settings, began))
             }
             "effort.set" => crate::effort::set(request),

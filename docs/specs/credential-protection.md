@@ -797,7 +797,7 @@ owns the tree and is the one who can say which it is.
 `verified-by: bravebot_agent::turn::the_read_prompt_says_which_value_it_is_asking_about`
 `verified-by: bravebot_agent::turn::a_file_agreed_to_once_is_not_asked_about_again_this_session`
 `verified-by: bravebot_agent::turn::a_file_agreed_to_in_an_earlier_turn_is_not_asked_about_again`
-`verified-by: bravebot_tui::app::an_answer_to_show_a_file_does_not_cover_the_file_by_that_name_after_moving`
+`verified-by: bravebot_tui::app::tests::permissions::an_answer_to_show_a_file_does_not_cover_the_file_by_that_name_after_moving`
 `verified-by: bravebot_agent::turn::a_read_of_a_file_nobody_vouched_for_is_not_scanned`
 `verified-by: bravebot_agent::turn::a_read_of_a_file_holding_no_credential_is_not_asked_about`
 `verified-by: bravebot_agent::turn::a_credential_in_history_is_held_back_until_the_person_agrees`

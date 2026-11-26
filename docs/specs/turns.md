@@ -495,7 +495,7 @@ outside the turn; it is not kept when a session is resumed, and `/clear` starts 
 `verified-by: bravebot_agent::turn::a_credential_a_delegate_spends_is_counted`
 `verified-by: bravebot_agent::turn::two_questions_about_the_same_figures_are_different_questions`
 `verified-by: bravebot_agent::turn::a_session_with_no_limit_is_never_asked`
-`verified-by: bravebot_tui::app::a_turn_shares_the_sessions_limit_and_carries_what_was_spent`
+`verified-by: bravebot_tui::app::tests::remainder::a_turn_shares_the_sessions_limit_and_carries_what_was_spent`
 `verified-by: bravebot_ui_bridge::spend_limit::a_desktop_session_held_to_its_limit_asks_before_the_next_request`
 `verified-by: bravebot_ui_bridge::spend_limit::stopping_at_the_limit_ends_the_turn_as_a_stop`
 `verified-by: bravebot_ui_bridge::spend_limit::going_on_without_a_limit_sends_the_request`
@@ -682,7 +682,7 @@ used, so nothing untrusted a tool returned reaches the decision ([LABEL-8](label
 `verified-by: bravebot_core::policy::a_rejoined_refusal_stands_whatever_runs_after_it`
 `verified-by: bravebot_agent::turn::a_refusal_a_later_call_to_the_same_tool_got_past_is_not_left_standing`
 `verified-by: bravebot_agent::turn::a_refusal_no_later_call_to_its_tool_got_past_stays_standing`
-`verified-by: bravebot_tui::app::a_refusal_a_later_call_got_past_is_not_drawn_and_one_left_standing_is_counted_and_named`
+`verified-by: bravebot_tui::app::tests::remainder::a_refusal_a_later_call_got_past_is_not_drawn_and_one_left_standing_is_counted_and_named`
 
 <a id="TURN-12"></a>
 ### TURN-12: a turn that answers with tasks still open asks about the list

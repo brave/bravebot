@@ -112,8 +112,8 @@ and since two actions never share one ([terminal-input.md](terminal-input.md#INP
 is back on its default until the file moves the panel too.
 
 `verified-by: bravebot_tui::keybindings::the_panel_chord_is_ctrl_x_and_can_be_moved`
-`verified-by: bravebot_tui::app::the_panel_key_and_the_panel_command_both_toggle_it`
-`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::tests::panel::the_panel_key_and_the_panel_command_both_toggle_it`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 `verified-by: bravebot_tui::persist::whether_the_panel_was_left_open_is_read_back_next_session`
 `verified-by: bravebot_tui::persist::a_press_opens_the_next_session_too_and_a_corrupt_choice_leaves_it_closed`
 `verified-by: bravebot_session::store::only_the_two_panel_words_are_a_choice`
@@ -121,7 +121,7 @@ is back on its default until the file moves the panel too.
 `verified-by: bravebot_tui::persist::the_dragged_width_is_read_back_next_session_and_a_corrupt_one_leaves_36`
 `verified-by: bravebot_tui::persist::a_press_that_closes_the_panel_is_read_back_next_session`
 `verified-by: bravebot_tui::persist::the_sections_turned_off_are_read_back_next_session_and_turning_them_on_replaces_them`
-`verified-by: bravebot_tui::app::a_resumed_session_opens_the_panel_as_the_files_say_and_not_as_the_record_does`
+`verified-by: bravebot_tui::app::tests::panel::a_resumed_session_opens_the_panel_as_the_files_say_and_not_as_the_record_does`
 `verified-by: bravebot_session::store::the_sidebar_file_is_its_trimmed_nonblank_lines_and_nothing_else`
 `verified-by: bravebot_session::store::an_oversize_sidebar_file_is_no_choice_and_one_at_the_bound_is_read`
 `verified-by: bravebot_session::store::a_pipe_where_the_sidebar_file_should_be_is_no_choice_and_holds_nothing_up`
@@ -214,9 +214,9 @@ and the hit rate, and the token total and the two cache rows are not drawn.
 `verified-by: bravebot_tui::panel::the_context_reading_moves_into_the_panel_in_each_state`
 `verified-by: bravebot_tui::panel::the_cache_read_and_written_are_two_figures`
 `verified-by: bravebot_tui::panel::the_panel_says_when_the_breakpoints_were_given_up`
-`verified-by: bravebot_tui::app::a_first_turn_in_flight_draws_the_cache_figures_after_its_first_round`
-`verified-by: bravebot_tui::app::each_round_of_a_turn_replaces_the_cache_figures_with_the_turns_running_totals`
-`verified-by: bravebot_tui::app::a_report_with_no_completed_request_leaves_the_cache_figures_where_they_were`
+`verified-by: bravebot_tui::app::tests::panel::a_first_turn_in_flight_draws_the_cache_figures_after_its_first_round`
+`verified-by: bravebot_tui::app::tests::panel::each_round_of_a_turn_replaces_the_cache_figures_with_the_turns_running_totals`
+`verified-by: bravebot_tui::app::tests::panel::a_report_with_no_completed_request_leaves_the_cache_figures_where_they_were`
 `verified-by: bravebot_tui::panel::the_loop_stays_on_the_hint_line_while_the_panel_is_drawn`
 `verified-by: bravebot_tui::panel::the_context_reading_stays_on_the_hint_line_where_the_panel_is_too_short_for_it`
 `verified-by: bravebot_tui::panel::the_context_reading_and_the_hit_rate_stay_on_the_hint_line_while_the_context_section_is_off`
@@ -320,23 +320,23 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::panel::the_model_section_names_a_tier_rather_than_the_tail_of_its_arn`
 `verified-by: bravebot_tui::panel::the_info_panel_marks_a_session_only_pick_and_names_the_model_either_way`
 `verified-by: bravebot_tui::panel::the_info_panel_marks_a_session_only_level_and_names_it_either_way`
-`verified-by: bravebot_tui::app::a_level_the_command_line_named_or_the_files_settled_is_not_marked_as_this_sessions`
+`verified-by: bravebot_tui::app::tests::commands_effort::a_level_the_command_line_named_or_the_files_settled_is_not_marked_as_this_sessions`
 `verified-by: bravebot_tui::panel::only_the_drawn_model_and_effort_rows_are_click_targets`
 `verified-by: bravebot_tui::panel::the_sandbox_section_follows_the_model_and_names_the_mode_in_force`
 `verified-by: bravebot_tui::panel::the_sandbox_row_is_a_click_target`
 `verified-by: bravebot_tui::status::the_status_line_names_a_session_only_pick_as_it_names_a_recorded_one`
 `verified-by: bravebot_tui::status::the_status_line_says_a_session_only_level_is_for_this_session_only`
 `verified-by: bravebot_tui::status::on_the_account_a_session_only_level_is_said_to_apply_from_clear_and_not_the_next_session`
-`verified-by: bravebot_tui::app::the_status_of_a_session_names_the_scope_of_a_level_chosen_with_effort_session`
+`verified-by: bravebot_tui::app::tests::backends_effort::the_status_of_a_session_names_the_scope_of_a_level_chosen_with_effort_session`
 `verified-by: bravebot_tui::status::the_model_line_names_a_tier_and_keeps_its_arn_beneath`
 `verified-by: bravebot_tui::status::a_name_a_provider_block_chose_is_shown_without_a_service_added`
 `verified-by: bravebot_config::lib::a_request_name_finds_its_entry_in_either_kind_of_account`
 `verified-by: bravebot_tui::panel::the_token_total_is_a_context_row_that_sums_the_session`
 `verified-by: bravebot_agent::turn::the_token_total_moves_while_a_delegate_works_and_counts_it_once`
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
-`verified-by: bravebot_tui::app::a_new_name_reaches_an_open_panel_on_the_next_pass_with_no_key`
-`verified-by: bravebot_tui::app::the_id_on_an_open_panel_follows_a_branch_and_a_clear_on_the_next_pass`
-`verified-by: bravebot_tui::app::the_directory_on_an_open_panel_is_written_from_the_home_directory`
+`verified-by: bravebot_tui::app::tests::panel::a_new_name_reaches_an_open_panel_on_the_next_pass_with_no_key`
+`verified-by: bravebot_tui::app::tests::panel::the_id_on_an_open_panel_follows_a_branch_and_a_clear_on_the_next_pass`
+`verified-by: bravebot_tui::app::tests::panel::the_directory_on_an_open_panel_is_written_from_the_home_directory`
 `verified-by: bravebot_tui::panel::the_files_section_has_the_totals_and_leaves_the_plan_its_rows`
 `verified-by: bravebot_tui::app::tests::herdr::sending_the_first_prompt_gives_the_panel_an_id_before_the_turn_ends`
 `verified-by: bravebot_tui::panel::a_section_turned_off_is_not_drawn_and_no_other_section_goes_with_it`
@@ -476,7 +476,7 @@ No click on the panel changes this ([MOUSE-33](mouse.md#MOUSE-33)).
 `verified-by: bravebot_tui::panel::nothing_a_turn_returned_reaches_the_panel`
 `verified-by: bravebot_tui::panel::nothing_the_session_holds_from_outside_reaches_the_panel`
 `verified-by: bravebot_tui::panel::control_characters_in_a_link_row_are_drawn_as_pictures`
-`verified-by: bravebot_tui::app::a_click_on_any_target_of_the_panel_never_draws_what_a_tool_returned`
+`verified-by: bravebot_tui::app::tests::mouse_controls::a_click_on_any_target_of_the_panel_never_draws_what_a_tool_returned`
 `verified-by: bravebot_tui::panel::a_line_of_the_file_that_names_no_section_is_never_drawn`
 
 <a id="PANEL-12"></a>
@@ -520,13 +520,13 @@ A click on a row opens the address that was set in the person's browser, as `/op
 address does ([MOUSE-41](mouse.md#MOUSE-41), [CMD-30](commands.md#CMD-30)), and on a row for an item
 the session met opens the address built from the item's validated parts.
 
-`verified-by: bravebot_tui::app::the_issue_and_pr_commands_show_set_and_clear_their_own_link`
-`verified-by: bravebot_tui::app::a_link_with_a_newline_an_escape_or_another_scheme_sets_nothing`
-`verified-by: bravebot_tui::app::a_link_set_mid_turn_is_set_as_it_is_typed`
+`verified-by: bravebot_tui::app::tests::panel::the_issue_and_pr_commands_show_set_and_clear_their_own_link`
+`verified-by: bravebot_tui::app::tests::panel::a_link_with_a_newline_an_escape_or_another_scheme_sets_nothing`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_link_set_mid_turn_is_set_as_it_is_typed`
 `verified-by: bravebot_session::sessions::setting_a_link_neither_makes_nor_gives_up_a_rewind_point`
-`verified-by: bravebot_tui::app::a_link_set_cleared_or_refused_gives_up_no_rewind_point_during_a_turn_or_at_rest`
-`verified-by: bravebot_tui::app::links_from_the_command_line_replace_what_it_names_and_leave_the_other`
-`verified-by: bravebot_tui::app::the_command_line_links_and_prompt_reach_the_session_once_its_record_is_open`
+`verified-by: bravebot_tui::app::tests::panel::a_link_set_cleared_or_refused_gives_up_no_rewind_point_during_a_turn_or_at_rest`
+`verified-by: bravebot_tui::app::tests::panel::links_from_the_command_line_replace_what_it_names_and_leave_the_other`
+`verified-by: bravebot_tui::app::tests::panel::the_command_line_links_and_prompt_reach_the_session_once_its_record_is_open`
 `verified-by: bravebot_cli::main::issue_and_pr_flags_are_taken_out_and_set_their_own_link`
 `verified-by: bravebot_cli::main::a_value_that_is_not_one_web_address_is_refused_and_not_repeated`
 `verified-by: bravebot_cli::main::only_a_line_that_opens_a_session_takes_links`
@@ -601,9 +601,9 @@ produced ([PANEL-11](#PANEL-11)). [PANEL-4](#PANEL-4) holds: no marker is writte
 `verified-by: bravebot_tui::title::a_state_is_written_before_the_session_has_a_name`
 `verified-by: bravebot_tui::title::the_marker_leads_the_title_and_counts_toward_sixty_columns`
 `verified-by: bravebot_tui::title::no_state_is_written_when_the_title_is_turned_off`
-`verified-by: bravebot_tui::app::a_question_turns_the_title_to_waiting_and_other_messages_do_not`
-`verified-by: bravebot_tui::app::every_approval_a_manifest_step_draws_turns_the_title_to_waiting`
-`verified-by: bravebot_tui::app::a_manifest_step_marks_the_title_waiting_while_it_asks_and_working_after`
+`verified-by: bravebot_tui::app::tests::panel::a_question_turns_the_title_to_waiting_and_other_messages_do_not`
+`verified-by: bravebot_tui::app::tests::panel::every_approval_a_manifest_step_draws_turns_the_title_to_waiting`
+`verified-by: bravebot_tui::app::tests::panel::a_manifest_step_marks_the_title_waiting_while_it_asks_and_working_after`
 
 <a id="PANEL-16"></a>
 ### PANEL-16: the issues and pull requests a session names are collected from what the person and the planner wrote
@@ -717,7 +717,7 @@ reads cannot decide anything.
 `verified-by: bravebot_tui::state::references::an_item_met_again_keeps_its_place_and_a_named_kind_settles_an_assumed_one`
 `verified-by: bravebot_tui::state::references::the_session_keeps_the_first_five_hundred_it_met_in_order`
 `verified-by: bravebot_tui::state::references::the_list_of_a_kind_starts_with_the_own_link_and_leaves_out_what_is_not_one`
-`verified-by: bravebot_tui::app::the_addresses_the_command_line_gave_are_in_the_list_when_the_session_opens`
+`verified-by: bravebot_tui::app::tests::panel::the_addresses_the_command_line_gave_are_in_the_list_when_the_session_opens`
 `verified-by: bravebot_tui::from_worker::the_references_a_turn_reports_are_taken_by_both_loops_and_never_handed_back`
 `verified-by: bravebot_tui::remote_confirm::references_a_turn_found_travel_when_found_without_an_answer`
 `verified-by: bravebot_tui::sessions::a_turn_that_fails_after_naming_an_item_has_already_given_the_session_the_item`
@@ -787,7 +787,7 @@ migration.
 `verified-by: bravebot_tui::app::tests::pickers::the_bare_word_sidebar_opens_the_checklist_and_nothing_else_happens`
 `verified-by: bravebot_tui::app::tests::pickers::the_panel_follows_each_toggle_at_once_and_escape_keeps_them_at_rest_and_while_a_turn_runs`
 `verified-by: bravebot_tui::app::tests::pickers::a_press_on_a_row_of_the_checklist_turns_its_section_off_and_a_press_outside_keeps_that`
-`verified-by: bravebot_tui::app::a_section_turned_off_mid_turn_is_saved_at_once_and_the_turn_is_not_touched`
+`verified-by: bravebot_tui::app::tests::panel::a_section_turned_off_mid_turn_is_saved_at_once_and_the_turn_is_not_touched`
 `verified-by: bravebot_tui::panel::each_section_has_a_fixed_id_and_a_bit_of_its_own`
 `verified-by: bravebot_tui::panel::a_section_turned_off_is_not_drawn_and_no_other_section_goes_with_it`
 `verified-by: bravebot_tui::panel::a_section_turned_off_has_no_click_target`

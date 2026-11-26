@@ -286,7 +286,7 @@ Before a planned turn, the person's prompt is ranked against the project's facts
 `verified-by: bravebot_agent::turn::a_failed_turn_still_reports_what_it_injected`
 `verified-by: bravebot_agent::turn::a_prompt_the_driver_wrote_or_composed_injects_nothing`
 `verified-by: bravebot_agent::turn::a_body_cannot_start_a_line_of_its_own_and_the_block_is_closed`
-`verified-by: bravebot_tui::app::clearing_empties_the_injected_set`
+`verified-by: bravebot_tui::app::tests::instructions::clearing_empties_the_injected_set`
 
 <a id="RECALL-10"></a>
 ### RECALL-10: recall ranks by BM25, says when probably nothing is stored, and is a tool too
@@ -319,14 +319,14 @@ A query answers with at most eight live facts, from the project's facts and the 
 
 `/memory` adds two sections to what [MEMORY-12](definition-memory.md#MEMORY-12) lists: the rule layers a turn here reads, by the same tests the turn applies (so none in a safe session, and a link is followed where the turn follows it), with each file's path and line count, and the facts in scope, each with its key, `source`, `label`, `verified` date and whether it is live or superseded. It reads the front matter of fact files, which are trusted ([RECALL-8](#RECALL-8)). It still reads no definition's memory.
 
-`verified-by: bravebot_tui::app::the_memory_listing_shows_rules_and_facts_with_their_standing`
+`verified-by: bravebot_tui::app::tests::instructions::the_memory_listing_shows_rules_and_facts_with_their_standing`
 `verified-by: bravebot_agent::recall::overview::a_linked_rules_file_is_listed_as_a_turn_reads_it_and_a_pipe_is_not_read`
 `verified-by: bravebot_agent::recall::overview::a_long_rules_file_is_counted_up_to_a_cap_and_the_working_directorys_own_is_listed`
 `verified-by: bravebot_agent::agents::a_pointer_lists_its_target`
 `verified-by: bravebot_agent::agents::a_file_a_deny_rule_covers_is_not_listed`
 `verified-by: bravebot_agent::safe::a_safe_session_lists_no_project_rules_file`
 `verified-by: bravebot_agent::safe::a_safe_session_lists_no_state_rule_layers`
-`verified-by: bravebot_tui::app::hostile_front_matter_is_drawn_as_harmless_text`
+`verified-by: bravebot_tui::app::tests::instructions::hostile_front_matter_is_drawn_as_harmless_text`
 
 ## What this changes in other specs
 

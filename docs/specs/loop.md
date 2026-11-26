@@ -54,7 +54,7 @@ say what the next tick asks.
 own instructions, and the whole point of a loop is that it asks the same question again. The
 person endorsed a line; every tick has to be that line.
 
-`verified-by: bravebot_tui::app::the_loop_command_sends_what_is_left_after_the_interval`
+`verified-by: bravebot_tui::app::tests::commands_words::the_loop_command_sends_what_is_left_after_the_interval`
 `verified-by: bravebot_tui::state::the_first_tick_of_a_loop_goes_immediately`
 `verified-by: bravebot_agent::turn::a_tick_of_a_self_paced_loop_says_when_to_run_again`
 
@@ -105,7 +105,7 @@ word that only begins with those five letters, such as `everything`, is not the 
 `verified-by: bravebot_tui::loops::a_word_that_merely_ends_with_every_is_not_an_interval`
 `verified-by: bravebot_tui::loops::a_count_too_large_to_be_a_duration_is_not_an_interval`
 `verified-by: bravebot_tui::loops::an_interval_with_nothing_to_send_is_not_a_request`
-`verified-by: bravebot_tui::app::an_interval_with_nothing_after_it_says_what_the_command_needs`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::an_interval_with_nothing_after_it_says_what_the_command_needs`
 
 ## When a tick fires
 
@@ -265,19 +265,19 @@ holds nothing of the loop, so the line does not wait in the queue with the rest
 nothing: a tick is offered no later look of its own, its loop being what asks again, so a wait
 arriving after its loop has gone would otherwise start a new loop on the line just stopped.
 
-`verified-by: bravebot_tui::app::the_loop_command_ends_the_loop_when_asked_to_stop`
-`verified-by: bravebot_tui::app::asking_to_stop_a_loop_during_a_turn_ends_it_as_it_is_typed`
-`verified-by: bravebot_tui::app::interrupting_ends_every_loop_when_several_are_live`
-`verified-by: bravebot_tui::app::a_tick_whose_loop_was_stopped_mid_turn_starts_no_loop`
-`verified-by: bravebot_tui::app::asking_to_stop_a_loop_that_is_not_running_says_so`
-`verified-by: bravebot_tui::app::interrupting_stops_the_loop_before_it_leaves`
-`verified-by: bravebot_tui::app::interrupting_clears_the_line_before_it_stops_the_loop`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_loop_command_ends_the_loop_when_asked_to_stop`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::asking_to_stop_a_loop_during_a_turn_ends_it_as_it_is_typed`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::interrupting_ends_every_loop_when_several_are_live`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_tick_whose_loop_was_stopped_mid_turn_starts_no_loop`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::asking_to_stop_a_loop_that_is_not_running_says_so`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::interrupting_stops_the_loop_before_it_leaves`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::interrupting_clears_the_line_before_it_stops_the_loop`
 `verified-by: bravebot_tui::state::clearing_the_session_ends_the_loop`
 `verified-by: bravebot_tui::state::stopping_a_loop_says_so_and_says_nothing_when_there_was_none`
 `verified-by: bravebot_tui::state::clearing_a_session_with_no_loop_says_nothing_of_one`
 `verified-by: bravebot_tui::state::a_loop_past_its_age_ends_and_says_so_instead_of_ticking`
-`verified-by: bravebot_tui::app::stopping_a_tick_ends_the_loop_and_says_so`
-`verified-by: bravebot_tui::app::stopping_a_prompt_typed_during_a_loop_ends_the_loop_and_says_so`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::stopping_a_tick_ends_the_loop_and_says_so`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::stopping_a_prompt_typed_during_a_loop_ends_the_loop_and_says_so`
 `verified-by: bravebot_tui::loops::a_loop_older_than_a_week_has_aged_out`
 `verified-by: bravebot_tui::loops::a_turn_that_says_the_loop_is_finished_ends_it_without_a_keepalive`
 `verified-by: bravebot_tui::state::a_turn_that_says_the_loop_is_finished_ends_it_and_says_so`
@@ -337,11 +337,11 @@ to `next in 0s` and sitting there reads as a loop that has stalled rather than o
 that has nothing to do, and without it a long watch is twenty identical answers nobody reads.
 
 `verified-by: bravebot_tui::status::the_report_lists_an_after_line_as_sent_later_and_not_as_a_loop`
-`verified-by: bravebot_tui::app::the_bare_loop_command_says_an_after_line_is_sending_later`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_bare_loop_command_says_an_after_line_is_sending_later`
 `verified-by: bravebot_tui::render::the_hint_line_says_a_loop_is_live`
 `verified-by: bravebot_tui::render::the_hint_line_says_a_loop_is_live_in_shell_mode_too`
 `verified-by: bravebot_tui::render::the_loop_part_names_a_moment_only_while_one_is_still_ahead`
-`verified-by: bravebot_tui::app::a_session_is_owed_a_frame_once_a_second_and_only_while_something_is_active`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_session_is_owed_a_frame_once_a_second_and_only_while_something_is_active`
 `verified-by: bravebot_tui::render::the_hint_line_says_nothing_about_a_loop_in_a_session_with_none`
 `verified-by: bravebot_tui::state::the_loop_report_says_what_is_repeating_and_how_to_end_it`
 `verified-by: bravebot_tui::state::a_session_with_no_loop_says_so_when_asked`
@@ -377,7 +377,7 @@ and the turn chooses only when it is sent again.
 there is nowhere for a turn to give one. What it gives is the wait until the next look, and it is
 asked again then, which is exactly what [LOOP-9](#LOOP-9) already bounds.
 
-`verified-by: bravebot_tui::app::only_a_line_the_person_wrote_becomes_a_watch_the_turn_asked_for`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::only_a_line_the_person_wrote_becomes_a_watch_the_turn_asked_for`
 `verified-by: bravebot_tui::state::a_watch_a_turn_arranged_sends_nothing_until_the_wait_is_up`
 `verified-by: bravebot_tui::state::a_watch_a_turn_arranged_does_not_replace_a_goal`
 `verified-by: bravebot_tui::loops::a_loop_a_turn_asked_for_starts_a_wait_away_rather_than_now`
@@ -430,14 +430,14 @@ ending and not taken as one becomes a loop sending `Stop` until somebody presses
 `verified-by: bravebot_tui::loops::an_interval_beside_the_word_still_ends_the_loop`
 `verified-by: bravebot_tui::loops::a_line_that_begins_with_stop_is_still_a_line_to_repeat`
 `verified-by: bravebot_tui::loops::an_interval_with_nothing_to_send_is_not_a_request`
-`verified-by: bravebot_tui::app::the_bare_loop_command_says_what_is_repeating`
-`verified-by: bravebot_tui::app::a_loop_over_a_line_beginning_with_stop_is_still_a_loop`
-`verified-by: bravebot_tui::app::an_interval_with_nothing_after_it_says_what_the_command_needs`
+`verified-by: bravebot_tui::app::tests::commands_words::the_bare_loop_command_says_what_is_repeating`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_loop_over_a_line_beginning_with_stop_is_still_a_loop`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::an_interval_with_nothing_after_it_says_what_the_command_needs`
 `verified-by: bravebot_tui::loops::stop_and_a_number_ends_that_loop`
 `verified-by: bravebot_tui::loops::a_number_with_words_around_it_is_still_a_line_to_repeat`
 `verified-by: bravebot_tui::state::stopping_a_loop_by_number_ends_only_that_one`
 `verified-by: bravebot_tui::state::a_bare_stop_with_several_loops_ends_none_of_them`
-`verified-by: bravebot_tui::app::the_loop_command_ends_the_loop_it_names`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_loop_command_ends_the_loop_it_names`
 
 ## Several loops
 
@@ -512,15 +512,15 @@ of them a tick belongs to, and the person asked for neither.
 `verified-by: bravebot_tui::state::an_after_line_is_sent_once_when_its_delay_is_up_and_leaves_no_schedule`
 `verified-by: bravebot_tui::state::a_prompt_typed_while_an_after_line_waits_does_not_use_it_up`
 `verified-by: bravebot_tui::state::an_after_line_joins_the_loops_with_a_number_and_counts_towards_the_cap`
-`verified-by: bravebot_tui::app::the_after_command_holds_the_line_and_sends_nothing_now`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_after_command_holds_the_line_and_sends_nothing_now`
 `verified-by: bravebot_tui::render::the_hint_line_says_a_held_after_line_is_sending_later_and_not_looping`
 `verified-by: bravebot_tui::render::the_hint_line_counts_loops_and_not_a_held_after_line`
-`verified-by: bravebot_tui::app::a_loop_stop_typed_behind_a_waiting_after_waits_behind_it`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_loop_stop_typed_behind_a_waiting_after_waits_behind_it`
 `verified-by: bravebot_tui::app::tests::pasting::what_an_after_line_named_is_held_as_words_and_names_and_not_as_markers`
-`verified-by: bravebot_tui::app::an_after_line_typed_during_a_turn_is_due_at_once_when_its_delay_passed_before_the_turn_ended`
-`verified-by: bravebot_tui::app::an_after_line_typed_during_a_turn_waits_for_what_is_left_of_its_delay`
-`verified-by: bravebot_tui::app::an_after_line_typed_at_rest_counts_its_delay_from_now`
-`verified-by: bravebot_tui::app::an_after_line_queued_by_the_command_path_counts_its_delay_from_now`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::an_after_line_typed_during_a_turn_is_due_at_once_when_its_delay_passed_before_the_turn_ended`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::an_after_line_typed_during_a_turn_waits_for_what_is_left_of_its_delay`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::an_after_line_typed_at_rest_counts_its_delay_from_now`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::an_after_line_queued_by_the_command_path_counts_its_delay_from_now`
 `verified-by: bravebot_tui::state::the_note_for_an_after_line_typed_earlier_says_the_time_left`
 
 ## Known costs

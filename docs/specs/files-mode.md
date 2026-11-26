@@ -105,16 +105,16 @@ the state (FILES-4) it answers with a note saying how wide the terminal has to b
 [PANEL-6](info-panel.md#PANEL-6) does. It runs at once while a turn works, as `/panel` does
 ([CMD-8](commands.md#CMD-8)). `/files` is not a command ([CMD-2](commands.md#CMD-2)).
 
-`verified-by: bravebot_tui::app::diff_opens_the_panel_in_its_files_state_and_q_puts_it_back`
-`verified-by: bravebot_tui::app::leaving_the_state_closes_a_panel_it_opened`
-`verified-by: bravebot_tui::app::a_typed_diff_cannot_end_the_state_and_a_queued_one_does`
-`verified-by: bravebot_tui::app::entering_and_leaving_the_state_writes_no_panel_choice`
-`verified-by: bravebot_tui::app::the_panel_chord_ends_the_state_with_the_panel`
+`verified-by: bravebot_tui::app::tests::view::diff_opens_the_panel_in_its_files_state_and_q_puts_it_back`
+`verified-by: bravebot_tui::app::tests::view::leaving_the_state_closes_a_panel_it_opened`
+`verified-by: bravebot_tui::app::tests::view::a_typed_diff_cannot_end_the_state_and_a_queued_one_does`
+`verified-by: bravebot_tui::app::tests::view::entering_and_leaving_the_state_writes_no_panel_choice`
+`verified-by: bravebot_tui::app::tests::view::the_panel_chord_ends_the_state_with_the_panel`
 `verified-by: bravebot_tui::files_mode::a_click_on_the_files_totals_row_opens_the_state_and_one_on_the_heading_does_not`
 `verified-by: bravebot_tui::files_mode::a_click_on_the_close_control_ends_the_state_as_q_does`
-`verified-by: bravebot_tui::app::diff_with_nothing_written_answers_with_a_note`
-`verified-by: bravebot_tui::app::diff_is_the_command_and_files_is_not_one`
-`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::tests::view::diff_with_nothing_written_answers_with_a_note`
+`verified-by: bravebot_tui::app::tests::view::diff_is_the_command_and_files_is_not_one`
+`verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 
 <a id="FILES-4"></a>
 ### FILES-4: the state has its own width and draws none of the ordinary sections
@@ -282,10 +282,10 @@ A click on a list row highlights it ([MOUSE-18](mouse.md#MOUSE-18)), as the keys
 highlight do. The wheel scrolls the edits as PageUp and PageDown do, and scrolls the list without
 moving the highlight, which no key does ([MOUSE-19](mouse.md#MOUSE-19)).
 
-`verified-by: bravebot_tui::app::a_typed_character_does_not_reach_the_box_while_the_files_state_is_open`
-`verified-by: bravebot_tui::app::a_key_the_state_does_not_name_does_nothing`
-`verified-by: bravebot_tui::app::the_line_comes_back_untouched_when_the_state_ends`
-`verified-by: bravebot_tui::app::ctrl_c_ends_the_state_and_leaves_the_turn_running`
+`verified-by: bravebot_tui::app::tests::view::a_typed_character_does_not_reach_the_box_while_the_files_state_is_open`
+`verified-by: bravebot_tui::app::tests::view::a_key_the_state_does_not_name_does_nothing`
+`verified-by: bravebot_tui::app::tests::view::the_line_comes_back_untouched_when_the_state_ends`
+`verified-by: bravebot_tui::app::tests::view::ctrl_c_ends_the_state_and_leaves_the_turn_running`
 `verified-by: bravebot_tui::render::the_box_is_drawn_without_its_caret_while_the_state_is_open`
 `verified-by: bravebot_tui::files_mode::the_last_row_of_the_panel_names_the_keys_of_the_state`
 `verified-by: bravebot_tui::files_mode::the_hint_line_keeps_the_reading_and_the_cache_rate_and_no_key_while_the_panel_is_drawn`
@@ -312,7 +312,7 @@ Every word the state says is in the catalogue ([localization.md](localization.md
 `verified-by: by-construction (the state holds only indexes into the transcript's entries and draws from them, and nothing in it is passed to a request or the record; bravebot_tui::files_mode::the_state_holds_only_indexes_and_diff_is_an_interface_command asserts that the held state names no file and that /diff is in the interface's command table, and does not capture a request or the record)`
 `verified-by: bravebot_tui::files_mode::a_resumed_session_lists_only_the_edits_made_since`
 `verified-by: bravebot_tui::files_mode::clearing_ends_the_files_state_and_forgets_its_edits`
-`verified-by: bravebot_tui::app::undoing_a_turn_removes_its_edits_from_the_list`
+`verified-by: bravebot_tui::app::tests::view::undoing_a_turn_removes_its_edits_from_the_list`
 `verified-by: bravebot_tui::files_mode::the_state_draws_only_catalogue_words`
 
 ## Known costs

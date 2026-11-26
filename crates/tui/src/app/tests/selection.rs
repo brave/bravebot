@@ -224,7 +224,7 @@ fn escape_puts_a_held_selection_away_before_it_stops_a_request_or_a_goal_check()
 fn functions_of_the_code() -> Vec<(&'static str, &'static str)> {
     let source = include_str!("../../app.rs");
     let code = source
-        .split("\n#[cfg(test)]\nmod tests {")
+        .split("\n#[cfg(test)]\nmod tests;")
         .next()
         .expect("the code comes before the tests");
     let starts: Vec<usize> = std::iter::once(0)

@@ -133,12 +133,12 @@ and does not start one either.
 that may start unwatched work, so the only thing that may is a person, and the line they typed is
 the whole of what they asked for.
 
-`verified-by: bravebot_tui::app::the_background_command_is_never_a_prompt_and_waits_for_the_turn`
-`verified-by: bravebot_tui::app::the_background_command_carries_the_record_and_the_mode`
-`verified-by: bravebot_tui::app::the_background_command_is_refused_in_bypass`
-`verified-by: bravebot_tui::app::the_background_command_is_refused_without_a_record_or_with_work_it_would_drop`
-`verified-by: bravebot_tui::app::the_background_command_is_refused_after_an_option_it_cannot_pass_on`
-`verified-by: bravebot_tui::app::the_background_command_is_refused_after_sandbox_moved_the_mode`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_background_command_is_never_a_prompt_and_waits_for_the_turn`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_background_command_carries_the_record_and_the_mode`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_background_command_is_refused_in_bypass`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_background_command_is_refused_without_a_record_or_with_work_it_would_drop`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_background_command_is_refused_after_an_option_it_cannot_pass_on`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_background_command_is_refused_after_sandbox_moved_the_mode`
 `verified-by: bravebot_cli::background::the_host_is_started_with_the_mode_it_runs_in`
 `verified-by: bravebot_cli::running::a_handed_over_session_runs_in_the_mode_it_was_given`
 `verified-by: bravebot_cli::running::bg_is_refused_with_what_it_cannot_carry_and_without_a_terminal`
@@ -341,8 +341,8 @@ warned about for.
 `verified-by: bravebot_cli::background::the_mode_line_names_each_mode_a_background_session_runs_in`
 `verified-by: bravebot_cli::plain::a_standing_vetting_answer_does_not_reach_a_hosted_session`
 `verified-by: bravebot_cli::running::an_allow_rule_does_not_answer_a_write_a_background_session_holds`
-`verified-by: bravebot_tui::app::the_background_command_is_refused_in_auto`
-`verified-by: bravebot_tui::app::the_background_command_is_refused_in_bypass`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_background_command_is_refused_in_auto`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_background_command_is_refused_in_bypass`
 `verified-by: bravebot_cli::auto_start::only_the_terminal_client_and_the_windows_bridge_read_the_setting`
 
 <a id="BG-9"></a>

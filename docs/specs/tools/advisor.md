@@ -167,12 +167,12 @@ person typed the name for this session, and a tool that failed on every call wou
 the only thing a turn can be told, and the answer says as much rather than reporting the advisor
 gone.
 
-`verified-by: bravebot_tui::app::the_advisor_command_takes_a_model_or_nothing`
-`verified-by: bravebot_tui::app::a_model_named_to_the_advisor_command_reaches_the_next_turn`
-`verified-by: bravebot_tui::app::a_session_naming_no_advisor_leaves_the_task_without_one`
-`verified-by: bravebot_tui::app::an_advisor_this_machine_may_not_request_is_refused`
-`verified-by: bravebot_tui::app::an_advisor_nothing_is_configured_to_answer_is_refused_and_the_held_one_stays`
-`verified-by: bravebot_tui::app::an_advisor_needing_a_sign_in_is_refused_and_the_held_one_stays`
-`verified-by: bravebot_tui::app::dropping_the_advisor_says_whether_the_setting_still_names_one`
-`verified-by: bravebot_tui::app::the_bare_advisor_command_says_which_advisor_is_in_force`
-`verified-by: bravebot_tui::app::a_session_advisor_is_not_written_to_the_record_and_a_resume_starts_from_the_setting`
+`verified-by: bravebot_tui::app::tests::instructions::the_advisor_command_takes_a_model_or_nothing`
+`verified-by: bravebot_tui::app::tests::instructions::a_model_named_to_the_advisor_command_reaches_the_next_turn`
+`verified-by: bravebot_tui::app::tests::instructions::a_session_naming_no_advisor_leaves_the_task_without_one`
+`verified-by: bravebot_tui::app::tests::backends_models::an_advisor_this_machine_may_not_request_is_refused`
+`verified-by: bravebot_tui::app::tests::instructions::an_advisor_nothing_is_configured_to_answer_is_refused_and_the_held_one_stays`
+`verified-by: bravebot_tui::app::tests::instructions::an_advisor_needing_a_sign_in_is_refused_and_the_held_one_stays`
+`verified-by: bravebot_tui::app::tests::instructions::dropping_the_advisor_says_whether_the_setting_still_names_one`
+`verified-by: bravebot_tui::app::tests::instructions::the_bare_advisor_command_says_which_advisor_is_in_force`
+`verified-by: bravebot_tui::app::tests::instructions::a_session_advisor_is_not_written_to_the_record_and_a_resume_starts_from_the_setting`

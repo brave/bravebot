@@ -200,7 +200,7 @@ and a turn that died is exactly when they want telling.
 `verified-by: bravebot_agent::turn::a_conversation_with_nothing_to_cut_fires_no_hook`
 `verified-by: bravebot_agent::turn::a_summary_that_could_not_be_made_fires_no_hook`
 `verified-by: bravebot_agent::turn::a_delegate_s_compaction_fires_no_compacted_hook`
-`verified-by: bravebot_tui::app::the_thread_that_summarises_fires_the_hooks_in_the_sessions_directory`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_thread_that_summarises_fires_the_hooks_in_the_sessions_directory`
 `verified-by: bravebot_config::hooks::the_list_of_moments_names_each_once_in_a_spelling_a_file_accepts`
 `verified-by: bravebot_config::hooks::a_session_moment_fires_only_the_hooks_written_for_it`
 `verified-by: bravebot_config::hooks::a_tool_named_on_a_session_moment_fires_for_nothing`
@@ -475,7 +475,7 @@ A check is announced the same way, for the same reason.
 `verified-by: bravebot_agent::turn::a_reporter_is_told_which_hook_holds_the_turn`
 `verified-by: bravebot_ui_bridge::reporting::a_running_hook_crosses_as_a_pair_naming_the_moment_and_the_program`
 `verified-by: bravebot_tui::state::a_running_hook_names_the_indicator_and_gives_it_back`
-`verified-by: bravebot_tui::app::a_hook_running_after_a_summary_is_named_and_its_trouble_said`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::a_hook_running_after_a_summary_is_named_and_its_trouble_said`
 `verified-by: bravebot_agent::hooks::a_session_start_hook_is_announced_once_however_often_it_is_asked`
 `verified-by: bravebot_ui_bridge::session_hooks::a_start_hook_holding_the_first_turn_is_announced_while_it_runs`
 
