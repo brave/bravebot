@@ -154,7 +154,7 @@ DESKTOP = ("ui-bridge", "ui-files")
 # What the Verus job reads: the crates whose contracts contrib/check-verus.py verifies, the file
 # bravebot-core includes by path, the copies and lists under verify/, and the scripts that run them.
 # The Makefile and the workflows need every job already.
-VERUS_UNDER = ("crates/core/", "verify/")
+VERUS_UNDER = ("crates/core/", "crates/sandbox-rules/", "verify/")
 VERUS_FILES = frozenset({
     "crates/ui-files/src/short_name.rs",
     "contrib/check-verus.py",
@@ -466,6 +466,7 @@ CASES = (
     ("crates/core/src/spec.rs", {"rust", "ui", "fuzz", "verus"}),
     ("crates/ui-files/src/short_name.rs", {"rust", "verus"}),
     ("verify/mutations.txt", {"verus"}),
+    ("crates/sandbox-rules/src/quote.rs", {"rust", "verus"}),
     ("verify/contracts.txt", {"verus"}),
     ("verify/history.rs", {"verus"}),
     ("contrib/check-verus.py", {"verus"}),

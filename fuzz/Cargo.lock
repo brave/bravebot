@@ -249,11 +249,16 @@ dependencies = [
 name = "bravebot-sandbox"
 version = "0.24.0"
 dependencies = [
+ "bravebot-sandbox-rules",
  "landlock",
  "libc",
  "rustix",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "bravebot-sandbox-rules"
+version = "0.24.0"
 
 [[package]]
 name = "bravebot-signing"

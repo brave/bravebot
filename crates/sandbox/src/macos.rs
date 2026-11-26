@@ -16,6 +16,7 @@ use crate::policy::{
 };
 use crate::process::{ConfinedChild, Environment, Streams};
 use crate::{Sandbox, SandboxError};
+use bravebot_sandbox_rules::quote::seatbelt_literal as quote;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -655,15 +656,6 @@ fn depth(path: &Path) -> usize {
     path.components()
         .filter(|part| matches!(part, std::path::Component::Normal(_)))
         .count()
-}
-
-/// Quote a path as a Seatbelt string literal.
-///
-/// Escapes backslashes and quotes so a path containing either cannot terminate the
-/// literal early and inject profile syntax.
-fn quote(value: &str) -> String {
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
 }
 
 /// What `sandbox-exec` is given after the profile: the program to confine, its arguments,

@@ -849,7 +849,7 @@ fn reaching_out(source: &str) -> Vec<String> {
 /// naming them, read off the source with the tests left out.
 #[test]
 fn the_kernel_and_the_file_type_crate_do_no_io_and_print_nothing() {
-    for krate in ["core", "filetype", "choice", "qr"] {
+    for krate in ["core", "filetype", "choice", "qr", "sandbox-rules"] {
         let files = rust_files(&workspace().join("crates").join(krate).join("src"));
         assert!(
             files.len() > 1,
@@ -874,11 +874,12 @@ fn the_kernel_and_the_file_type_crate_do_no_io_and_print_nothing() {
 /// and opens nothing. A dependency is added here by deciding that the crate it names does no I/O,
 /// which is the question the manifests test cannot ask: it holds a row's list to the manifest and
 /// grants whatever the row grants.
-const IO_FREE: [(&str, &[&str]); 4] = [
+const IO_FREE: [(&str, &[&str]); 5] = [
     ("core", &[]),
     ("filetype", &[]),
     ("choice", &["bravebot-core", "serde_json"]),
     ("qr", &[]),
+    ("sandbox-rules", &[]),
 ];
 
 /// The crates a manifest asks for in the tables its own targets link, `[dependencies]` and the

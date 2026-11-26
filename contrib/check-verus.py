@@ -32,8 +32,11 @@ MUTATIONS = ROOT / "verify" / "mutations.txt"
 
 # The crates Verus reads, by directory, with the name rustc gives each. `bravebot-core` includes a
 # file from `ui-files` by path, so the copy a mutation runs in holds that crate too.
-CRATES = {"crates/core": "bravebot_core"}
-COPIED = ("crates/core", "crates/ui-files/src")
+CRATES = {
+    "crates/core": "bravebot_core",
+    "crates/sandbox-rules": "bravebot_sandbox_rules",
+}
+COPIED = ("crates/core", "crates/sandbox-rules", "crates/ui-files/src")
 
 RESULTS = re.compile(r"^verification results:: (\d+) verified, (\d+) errors", re.M)
 
