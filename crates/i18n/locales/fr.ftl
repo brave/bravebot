@@ -3002,6 +3002,8 @@ home-skills-reached-through-the-workspace =
 # Le ~/.bravebot/AGENTS.md de la personne quand il n'a pas été lu, parce que le chemin vers le fichier passe
 # par le répertoire de travail ou un répertoire ouvert à côté, où un tour peut écrire.
 home-agents-file-reached-through-the-workspace = ~/.bravebot/AGENTS.md n'a pas été lu : le chemin vers ce fichier passe par un répertoire où cette session peut écrire
+# Le même fichier quand le répertoire de travail est le répertoire personnel de la personne. La cause et le remède sont ceux de delegate-memory-in-home.
+home-agents-file-in-working-directory = ~/.bravebot/AGENTS.md n'a pas été lu parce que le répertoire de travail de cette session est votre répertoire personnel. Lancez bravebot dans un répertoire de projet pour qu'il soit lu
 # Les règles de la personne pour ce projet quand elles n'ont pas été lues, pour la même raison.
 project-rules-reached-through-the-workspace = Les règles conservées dans ~/.bravebot pour ce projet n'ont pas été lues : le chemin vers elles passe par un répertoire où cette session peut écrire
 # Les règles de la personne pour ce projet quand le fichier existe et n'a pas pu être lu.
@@ -3814,6 +3816,7 @@ checkouts-worked-from =
     la copie de travail { $id } dans { $path } est gardée, car le répertoire de travail ou un répertoire ajouté avec /add-dir s'y trouve
 checkouts-kept = la copie de travail { $id } est gardée
 memory-none = aucune définition chargée ici ne garde de mémoire
+memory-left-in-home = Définitions qui ne gardent aucune mémoire parce que le répertoire de travail de cette session est votre répertoire personnel, ou est ~/.bravebot ou se trouve dedans : { $names }. Lancez bravebot dans un répertoire de projet pour leur en donner une
 memory-withheld = { $name } : { $path }, retenue, car la carte ne fait pas confiance à ce chemin
 memory-withheld-recorded =
     { $name } : { $path }, retenue, car une écriture a laissé ce chemin non fiable et le registre en garde encore le chemin
@@ -4147,7 +4150,10 @@ delegate-memory-not-kept =
 delegate-memory-not-a-slug =
     { $definition } ne garde aucune mémoire : une définition qui en garde une doit avoir un nom fait de lettres minuscules et de chiffres, en suites reliées par des tirets simples, de 64 caractères au plus
 delegate-memory-in-home =
-    { $definition } ne garde aucune mémoire ici : dans ce répertoire, sa mémoire serait dans ~/.bravebot, qu'aucune écriture ne peut laisser non fiable
+    { $count ->
+        [one] 1 définition d'agent ne garde aucune mémoire parce que le répertoire de travail de cette session est votre répertoire personnel, ou est ~/.bravebot ou se trouve dedans. Lancez bravebot dans un répertoire de projet pour lui en donner une
+       *[other] { $count } définitions d'agent ne gardent aucune mémoire parce que le répertoire de travail de cette session est votre répertoire personnel, ou est ~/.bravebot ou se trouve dedans. Lancez bravebot dans un répertoire de projet pour leur en donner une
+    }
 delegate-isolation-not-read =
     { $definition } est chargé sans copie de travail à part : sa ligne isolation indique { $value }, et seuls checkout et worktree en demandent une
 delegate-effort-not-a-level =

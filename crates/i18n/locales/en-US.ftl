@@ -4993,6 +4993,10 @@ checkouts-kept = checkout { $id } is kept
 ## The memory each definition keeps
 
 memory-none = no definition loaded here keeps a memory
+# The definitions that keep no memory because the working directory is the home directory or
+# inside it, for the terminal client's /memory. The names are the definitions' own, joined with a
+# comma.
+memory-left-in-home = Definitions that keep no memory because this session's working directory is your home directory, or is ~/.bravebot or inside it: { $names }. Start bravebot in a project directory to give them one
 # The path is where the memory is kept, and is left as it is.
 memory-withheld = { $name }: { $path }, withheld, since the map does not trust that path
 memory-withheld-recorded =
@@ -5506,10 +5510,16 @@ delegate-memory-not-kept = { $definition } keeps no memory: its memory line says
 # A definition asked to keep a memory and its name is not one its memory file can be named after.
 # The definition is its file's path.
 delegate-memory-not-a-slug = { $definition } keeps no memory: a definition keeping one needs a name of lowercase letters and digits in runs joined by single hyphens, 64 characters at most
-# A definition asked to keep a memory in a working directory where the memory would fall inside the
-# person's own ~/.bravebot, as it does for a session in the home directory. The definition is its
-# file's path, and ~/.bravebot stays as it is.
-delegate-memory-in-home = { $definition } keeps no memory here: in this directory its memory would be inside ~/.bravebot, which no write can leave untrusted
+# Definitions asked to keep a memory in a working directory where the memory would fall inside the
+# person's own ~/.bravebot, as it does for a session in the home directory or in ~/.bravebot
+# itself. One message for all of them, and $count is how many. The cause is said as the working
+# directory being the home directory or ~/.bravebot or inside it, and the remedy as starting in a
+# project directory.
+delegate-memory-in-home =
+    { $count ->
+        [one] 1 agent definition keeps no memory because this session's working directory is your home directory, or is ~/.bravebot or inside it. Start bravebot in a project directory to give it one
+       *[other] { $count } agent definitions keep no memory because this session's working directory is your home directory, or is ~/.bravebot or inside it. Start bravebot in a project directory to give them one
+    }
 # A definition's isolation line named a value other than checkout or worktree, so the definition
 # loads and its delegate works in the working directory. The definition is its file's path and the
 # value is that file's own words, both from a vouched-for file. "isolation", "checkout" and
@@ -5617,6 +5627,10 @@ doctor-skills-shared-not-read = { $directory } exists and is not read: name it i
 # The person's own ~/.bravebot/AGENTS.md when it was not read, because the way to the file goes
 # through the working directory or a directory opened beside it, where a turn can write.
 home-agents-file-reached-through-the-workspace = ~/.bravebot/AGENTS.md was not read: the way to it goes through a directory this session can write to
+# The same file when the working directory is the person's home directory, so the way to the file
+# goes through a directory a turn can write. The cause and the remedy are those of
+# delegate-memory-in-home.
+home-agents-file-in-working-directory = ~/.bravebot/AGENTS.md was not read because this session's working directory is your home directory. Start bravebot in a project directory to have it read
 # The person's rules for this project when they were not read, for the same reason.
 project-rules-reached-through-the-workspace = The rules kept in ~/.bravebot for this project were not read: the way to them goes through a directory this session can write to
 # The person's rules for this project when the file exists and could not be read.

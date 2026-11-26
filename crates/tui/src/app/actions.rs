@@ -499,21 +499,27 @@ impl Held<'_> {
     }
 
     pub(super) fn list_memories(&mut self) {
-        let memories = bravebot_agent::agents::memories(
+        self.list_memories_in(bravebot_agent::home::directory().as_deref());
+    }
+
+    /// `/memory` for a state directory `home`: each memory, the definitions left without one in
+    /// the home directory, and the rule files, from one reading of the definitions (MEMORY-12).
+    pub(super) fn list_memories_in(&mut self, home: Option<&std::path::Path>) {
+        let (memories, left) = bravebot_agent::agents::memories_with_left(
             self.workspace,
-            bravebot_agent::home::directory().as_deref(),
+            home,
             &self.answers.trust,
             self.answers.rules.permissions.clone(),
             &mut Trail::new(),
         );
         self.session.report_memories(&memories);
-        let home = bravebot_agent::home::directory();
+        self.session.report_memories_left(&left);
         let own = bravebot_agent::agents::project_rules_file(
             self.workspace,
             self.recorded_trust(),
             self.answers.rules.permissions.clone(),
         );
-        let overview = home.as_deref().map(|home| {
+        let overview = home.map(|home| {
             bravebot_agent::recall::overview::overview(
                 home,
                 self.workspace,

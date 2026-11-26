@@ -1162,8 +1162,9 @@ read** means the path is a link, is reached through one, or is not a file. Other
 nothing is kept there yet, or that a file is.
 
 The command shows paths and standings and never the file's bytes, so it reads nothing from a memory
-and has nothing to show of one that is withheld. Open the file yourself to read it. The word takes
-no argument: `/memory` followed by words is a prompt.
+and has nothing to show of one that is withheld. Open the file yourself to read it. In a session
+started in your home directory, definitions that ask for a memory keep none, and `/memory` names
+them in one line. The word takes no argument: `/memory` followed by words is a prompt.
 
 It also lists the rule files you keep, each with its path and line count, and each fact in scope with
 its key, whether it is for this project or every project, who asked for it, its label, the date it

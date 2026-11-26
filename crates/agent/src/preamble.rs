@@ -140,6 +140,9 @@ pub struct Preamble {
     /// for, and this is one line of prompt against an eighth parameter on a function twenty callers
     /// already pass seven to.
     pub for_a_person: String,
+    /// Whether `~/.bravebot/AGENTS.md` was left unread because the working directory is the home
+    /// directory, for the turn to say so to the planner beside the notice the person is given.
+    pub home_agents_file_left_in_home: bool,
     /// Lines for the person watching: what loaded, and what did not and why.
     pub notices: Vec<Notice>,
     /// The rule files a touched file has brought in (INSTR-16), in the order they came.
@@ -281,8 +284,13 @@ pub fn compose_in<S: Sink>(
     };
     if !safe
         && let Some(home) = home
-        && let Some(text) =
-            read_home_agents(policy, &[sources, workspace], home, &mut preamble.notices)
+        && let Some(text) = read_home_agents(
+            policy,
+            &[sources, workspace],
+            home,
+            &mut preamble.notices,
+            &mut preamble.home_agents_file_left_in_home,
+        )
     {
         let origin = format!("~/.bravebot/{AGENTS_FILE}");
         admit_by_size(&origin, &text, &mut standing_bytes, &mut preamble.notices);
@@ -1002,6 +1010,7 @@ fn read_home_agents<S: Sink>(
     workspaces: &[&Workspace],
     home: &Path,
     notices: &mut Vec<Notice>,
+    left_in_home: &mut bool,
 ) -> Option<String> {
     let file = home.join(AGENTS_FILE);
     if !holds_file_named(home, AGENTS_FILE) {
@@ -1011,7 +1020,17 @@ fn read_home_agents<S: Sink>(
         .iter()
         .any(|workspace| crate::skills::goes_through_the_workspace(workspace, &file))
     {
-        notices.push(Notice::home_agents_file_reached_through_the_workspace());
+        // Said as the working directory being the home directory where it is, since that is the
+        // case a person can act on by starting somewhere else.
+        let in_home = workspaces.iter().any(|workspace| {
+            crate::skills::same_directory(&workspace.root().join(".bravebot"), home)
+        });
+        *left_in_home = in_home;
+        notices.push(if in_home {
+            Notice::home_agents_file_in_working_directory()
+        } else {
+            Notice::home_agents_file_reached_through_the_workspace()
+        });
         return None;
     }
     let text = std::fs::read_to_string(file).ok()?;

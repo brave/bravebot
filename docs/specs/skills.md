@@ -108,7 +108,10 @@ itself one of the project skill directories read, whose own notices already acco
 The two are compared as directories, so no entry's name is held or compared.
 
 The same holds for the other files read from `~/.bravebot`. `~/.bravebot/AGENTS.md` whose path goes
-through the workspace is not put in the system prompt, and the person is told it was not read.
+through the workspace is not put in the system prompt, and the person is told it was not read. Where
+the working directory is the home directory, the notice says that is the cause and to start in a
+project directory, the cause and remedy the memory notice of
+[MEMORY-2](definition-memory.md#MEMORY-2) gives.
 A file in `~/.bravebot/agents` whose path goes through it is not a definition, and those passed
 over are counted as skills are ([DELEGATE-20](delegation.md#DELEGATE-20)). A file in
 `~/.bravebot/styles` whose path goes through it is not a style, is not offered by `/style` and is
@@ -124,6 +127,7 @@ not found by name.
 `verified-by: bravebot_agent::skills::a_home_directory_spelled_in_another_case_is_inside_the_workspace_it_is`
 `verified-by: bravebot_agent::skills::a_home_skill_passed_over_is_counted_beside_a_project_skill_of_the_same_name`
 `verified-by: bravebot_agent::preamble::a_home_agents_file_inside_the_working_directory_is_not_read_as_the_persons_own`
+`verified-by: bravebot_agent::preamble::an_unread_home_agents_file_in_the_home_directory_says_why_and_what_to_do`
 `verified-by: bravebot_agent::agents::a_definition_in_a_working_directory_that_holds_the_home_directory_is_not_loaded`
 `verified-by: bravebot_agent::styles::a_style_file_the_workspace_can_write_is_not_read_as_the_persons_own`
 

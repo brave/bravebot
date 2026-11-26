@@ -151,10 +151,27 @@ A definition with `memory: project` or `memory: local` keeps its memory in one f
 definition with no `memory:` key, or an empty one, keeps none. Any other value, `user` included, is
 a definition that loads and keeps no memory, and the turn says so, naming the definition's file and
 the value. Where that path falls inside the person's own directory, `~/.bravebot`, as it does for a
-session in the home directory, no memory is kept either, and the turn says so. A definition there
-loads only as the project's own, through the trust map ([DELEGATE-20](delegation.md#DELEGATE-20),
-[SKILL-3](skills.md#SKILL-3)), never from `~/.bravebot` itself, since its path goes through the
-working directory.
+session in the home directory, no memory is kept either, and the turn says so once for all the
+definitions that ask for one. The same holds where the working directory is `~/.bravebot` or is
+inside it, or reaches it through a link. The notice gives their count, says the cause is that the
+session's working directory is the home directory, or is `~/.bravebot` or inside it, and that
+starting in a project directory gives them a memory. It names none of them and no command, since
+every front end draws it and only the terminal client has `/memory`
+([MEMORY-12](#MEMORY-12)). A definition there loads only as the project's own, through the
+trust map ([DELEGATE-20](delegation.md#DELEGATE-20), [SKILL-3](skills.md#SKILL-3)), never from
+`~/.bravebot` itself, since its path goes through the working directory.
+
+The turn a person is watching is told the same in its system prompt, so it can say what the notice
+means when asked: how many definitions keep no memory and why, and that `~/.bravebot/AGENTS.md` was
+not read where the working directory is the home directory ([SKILL-3](skills.md#SKILL-3)), with the
+remedy. The words are the driver's own, written from a count and a flag, and name no command. No
+definition's name, file or word is in them. The count is of definitions that loaded through the
+trust gate, so a directory nobody vouched for gives a count of zero, and nothing is said where the
+working directory is not in the home directory. The flag is one bit: the comparison of the working
+directory's path with the home directory's path, both held by the driver, and whether the home
+directory lists an entry spelled `AGENTS.md` that is a file. That is a measurement of the kind
+[reviewing-for-the-rule.md](../development/reviewing-for-the-rule.md) says is not a branch on
+untrusted content: no file is opened, the name compared is the fixed one, and one fact comes out.
 
 `project` and `local` are one file. In Claude Code they differ over whether the file is meant to be
 committed, and whether a file is committed is decided by the person and their ignore rules rather
@@ -185,6 +202,12 @@ one, since the file is named after the name.
 `verified-by: bravebot_agent::agents::a_memory_value_nothing_here_keeps_loads_the_definition_and_says_it_keeps_none`
 `verified-by: bravebot_agent::agents::a_memory_that_would_sit_in_the_state_directory_is_kept_in_home`
 `verified-by: bravebot_agent::agents::a_memory_that_would_sit_inside_the_state_directory_is_not_kept_and_is_said`
+`verified-by: bravebot_agent::agents::definitions_that_keep_no_memory_in_the_home_directory_are_said_once_with_the_cause`
+`verified-by: bravebot_agent::turn::the_planner_is_told_what_the_home_directory_notices_mean_and_only_in_the_home_directory`
+`verified-by: bravebot_agent::turn::prompts::the_planner_is_told_what_the_home_directory_notices_mean_only_where_they_were_shown`
+`verified-by: bravebot_agent::agents::a_working_directory_inside_the_state_directory_is_said_to_be_inside_it`
+`verified-by: bravebot_agent::agents::definitions_in_an_untrusted_agents_directory_are_not_counted_as_keeping_no_memory`
+`verified-by: bravebot_agent::turn::the_planner_is_told_no_count_for_definitions_in_an_untrusted_agents_directory`
 `verified-by: bravebot_core::delegate::a_later_definition_takes_over_whether_a_memory_is_kept`
 `verified-by: bravebot_core::delegate::keeping_no_memory_clears_it_from_every_definition_and_nothing_else`
 
@@ -810,8 +833,10 @@ listed on a page of their own, reached from the conversation's header.
 ([MEMORY-2](#MEMORY-2)): its name, the path [MEMORY-4](#MEMORY-4) tells a run, and the standing
 that table gives the path. A withheld memory says the map does not trust the path, and says a write
 left it untrusted where the record [MEMORY-5](#MEMORY-5) keeps names it. Where no definition keeps a
-memory, it says so. The word takes no argument, so `/memory` followed by words is a prompt
-([CMD-2](commands.md#CMD-2)).
+memory, it says so. Where a session left definitions without one because its working directory is
+the home directory or inside it ([MEMORY-2](#MEMORY-2)), it names them in one note. The notice of
+MEMORY-2 does not point at this command, since only the terminal client has it. The word takes no
+argument, so `/memory` followed by words is a prompt ([CMD-2](commands.md#CMD-2)).
 
 The set is resolved afresh, as a turn starting now resolves it, and the map is the one that turn
 works from: the session's, with every path the record names distrusted. The standing is the one a
@@ -833,6 +858,9 @@ definitions keep one, where it is, or that it is withheld.
 `verified-by: bravebot_agent::memory::a_listed_memory_is_withheld_when_the_map_does_not_trust_it_whatever_is_on_disk`
 `verified-by: bravebot_tui::app::tests::instructions::the_memory_command_lists_and_takes_no_argument`
 `verified-by: bravebot_tui::app::tests::instructions::the_memory_listing_says_each_standing_with_its_path`
+`verified-by: bravebot_agent::agents::the_definitions_left_without_a_memory_in_the_home_directory_are_named_on_request`
+`verified-by: bravebot_tui::app::tests::instructions::the_memory_listing_names_the_definitions_left_without_one_in_one_note`
+`verified-by: bravebot_tui::app::tests::instructions::the_memory_command_names_the_definitions_left_without_a_memory_in_the_home_directory`
 
 ## Open questions
 

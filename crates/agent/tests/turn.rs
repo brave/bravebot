@@ -112483,6 +112483,144 @@ fn first_system_prompt(tag: &str, definition: Option<&str>, task: Task) -> Strin
     system_prompt_of(&received.recv().expect("a request"))
 }
 
+/// MEMORY-2, SKILL-3: a session in the home directory tells the planner, beside the notice the
+/// person is shown, how many definitions keep no memory and that `~/.bravebot/AGENTS.md` was not
+/// read, the cause and the remedy, and names none of them. The same files with the state directory
+/// elsewhere tell it nothing, and so do they with the state directory nested below the working
+/// directory, where `~/.bravebot/AGENTS.md` is left unread for another reason and the cause the
+/// planner is told would be false.
+///
+/// Rejects: a planner with no account of the notice the person asks about, one told in every
+/// session, one told a name, one told only of the definitions or only of the file, one told the
+/// working directory is the home directory where the state directory is nested below it, and one
+/// told to point at `/memory`, which only the terminal client has.
+#[test]
+fn the_planner_is_told_what_the_home_directory_notices_mean_and_only_in_the_home_directory() {
+    let mut said = Vec::new();
+    for tag in ["in-home", "elsewhere", "nested"] {
+        let scratch = Scratch::new(&format!("home-notice-planner-{tag}"));
+        let beside = Scratch::new(&format!("home-notice-planner-{tag}-state"));
+        let state = match tag {
+            "in-home" => scratch.path.join(".bravebot"),
+            "nested" => scratch
+                .path
+                .join("people")
+                .join("somebody")
+                .join(".bravebot"),
+            _ => beside.path.clone(),
+        };
+        std::fs::create_dir_all(state.join("agents")).unwrap();
+        for name in ["notes-keeper", "tally-clerk"] {
+            std::fs::write(
+                state.join("agents").join(format!("{name}.md")),
+                format!(
+                    "---\nname: {name}\ndescription: Keeps notes.\nkind: worker\nmemory: project\n---\n\nbody\n"
+                ),
+            )
+            .unwrap();
+        }
+        std::fs::write(state.join("AGENTS.md"), "HOME-CONVENTION").unwrap();
+        let workspace = Workspace::new(&scratch.path).unwrap();
+        let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+        run_turn_saying_notices(
+            &config_for(&endpoint),
+            &workspace,
+            &mut bravebot_agent::Conversation::new(),
+            &Task::new("SAY-HELLO").with_home(Some(state)),
+        );
+        said.push(system_prompt_of(&received.recv().unwrap()));
+    }
+    let [inside, elsewhere, nested] = &said[..] else {
+        unreachable!("three sessions")
+    };
+    assert!(
+        inside.contains("2 agent definitions that ask for a memory keep none")
+            && inside.contains("~/.bravebot/AGENTS.md was not read"),
+        "the planner was not told what the notices mean: {inside}"
+    );
+    assert!(
+        inside.contains("starting bravebot in a project directory"),
+        "{inside}"
+    );
+    assert!(
+        !inside.contains("/memory"),
+        "the planner was pointed at a command only one front end has: {inside}"
+    );
+    for name in ["notes-keeper", "tally-clerk"] {
+        assert!(
+            !inside.contains(name),
+            "a definition's name reached the planner: {inside}"
+        );
+    }
+    for (which, prompt) in [("elsewhere", elsewhere), ("nested", nested)] {
+        assert!(
+            !prompt.contains("keep none") && !prompt.contains("AGENTS.md was not read"),
+            "a session with the state directory {which} was told of a notice: {prompt}"
+        );
+    }
+}
+
+/// MEMORY-2: the count in the planner's account of the home directory notices is of definitions
+/// that loaded. Where nobody vouched for `.bravebot/agents`, the files ask for a memory and none
+/// loads, so the planner is told nothing about definitions keeping none and no name reaches it.
+///
+/// Rejects: a count taken from the definition files found before the trust gate decides whether
+/// they load, and a planner pointed at `/memory`.
+#[test]
+fn the_planner_is_told_no_count_for_definitions_in_an_untrusted_agents_directory() {
+    let scratch = Scratch::new("home-notice-planner-untrusted");
+    let state = scratch.path.join(".bravebot");
+    std::fs::create_dir_all(state.join("agents")).unwrap();
+    for name in ["notes-keeper", "tally-clerk"] {
+        std::fs::write(
+            state.join("agents").join(format!("{name}.md")),
+            format!(
+                "---\nname: {name}\ndescription: Keeps notes.\nkind: worker\nmemory: project\n---\n\nbody\n"
+            ),
+        )
+        .unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+    let egress = bravebot_net::Egress::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("SAY-HELLO").with_home(Some(state)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .unwrap();
+    let prompt = system_prompt_of(&received.recv().unwrap());
+    assert!(
+        !prompt.contains("keep none") && !prompt.contains("The /memory command names"),
+        "the planner was told definitions in an untrusted directory keep no memory: {prompt}"
+    );
+    for name in ["notes-keeper", "tally-clerk"] {
+        assert!(
+            !prompt.contains(name),
+            "a definition's name reached the planner: {prompt}"
+        );
+    }
+    assert!(
+        reporter
+            .notices
+            .iter()
+            .all(|said| !said.contains("keep no memory") && !said.contains("keeps no memory")),
+        "the person was told untrusted definitions keep no memory: {:?}",
+        reporter.notices
+    );
+}
+
 /// INSTR-9: the planner's system prompt says which front end the person is using, once, in the
 /// words of the front end the caller named, and says nothing about one where the caller named none.
 ///

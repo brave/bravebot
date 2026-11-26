@@ -2988,8 +2988,8 @@ where
     // no file can say what one may do. Resolved afresh every turn, as every other standing
     // instruction is, and installed into the kernel, which is what a planner's name is compared
     // against.
-    let (delegates, delegate_notices) =
-        crate::agents::discover(policy, sources, task.home.as_deref());
+    let (delegates, delegate_notices, memories_left) =
+        crate::agents::discover_naming_memories_left(policy, sources, task.home.as_deref());
     notices.extend(delegate_notices);
     notices.extend(crate::agents::skills_not_found(&delegates, &catalogue));
     let reached = task
@@ -3105,7 +3105,7 @@ where
     // Built once and put in front of every round of this turn. Nothing here is stored in the
     // conversation, so a session running many turns holds one copy of AGENTS.md rather than one
     // per turn.
-    let preamble = crate::preamble::compose_in(
+    let mut preamble = crate::preamble::compose_in(
         policy,
         sources,
         workspace,
@@ -3122,6 +3122,13 @@ where
     if let Some(rooted) = rooted {
         policy.exchange_file_authority(rooted);
     }
+    // Counts and a flag only, so the planner can say what the notices the person was shown mean
+    // (MEMORY-2, SKILL-3). The count is of definitions that loaded through the trust gate and the
+    // flag is a comparison of two paths the driver holds. No name or file word is in it.
+    preamble.for_a_person.push_str(&prompts::left_in_home(
+        memories_left.len(),
+        preamble.home_agents_file_left_in_home,
+    ));
     notices.extend(preamble.notices.iter().cloned());
     notices.extend(rule_notices(
         workspace,

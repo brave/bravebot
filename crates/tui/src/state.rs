@@ -4108,6 +4108,15 @@ impl Session {
         }
     }
 
+    /// Say which definitions keep no memory because the working directory is the home directory,
+    /// one note for all of them, naming each (MEMORY-12). Nothing is said where there are none.
+    pub fn report_memories_left(&mut self, names: &[String]) {
+        if names.is_empty() {
+            return;
+        }
+        self.note(t!(memory_left_in_home, names = names.join(", ")));
+    }
+
     /// Say which rule files are kept and each fact in scope with its standing (RECALL-11). Front
     /// matter and line counts only: a fact's text is not shown. What a file says of itself is
     /// untrusted text, so each value is made printable and cut short before it is drawn.

@@ -289,7 +289,9 @@ memory, and the turn says so:
 
 A definition keeping a memory needs a name of lowercase letters and digits in runs joined by single
 hyphens, at most 64 characters, since the file is named after it. A session in your home directory
-keeps none, because the file would be inside `~/.bravebot`.
+keeps none, because the file would be inside `~/.bravebot`. The session says so once for all of
+them, with the count and the cause, and tells you to start bravebot in a project directory to give
+them a memory. In the terminal client, `/memory` names them.
 
 **A memory is read on the [trust map](../security/trust.md)'s terms.** In a directory you did not
 vouch for, the run is told its memory is withheld, and reading it is a quarantined read like any
