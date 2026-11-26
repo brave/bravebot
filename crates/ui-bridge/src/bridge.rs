@@ -83,6 +83,10 @@ struct Open {
     /// The goal this chat works towards, set by a `/goal` the person typed. Beside the watches and
     /// never in `state`, so nothing that writes the session record reaches it (GOAL-12).
     goal: Arc<Mutex<crate::goal::GoalSlot>>,
+    /// The loops `/loop` started in this session, up to five (LOOP-16). Held here and nowhere
+    /// else: never in the state or the session's record, so a loop ends with the session
+    /// (LOOP-12).
+    loops: Arc<Mutex<bravebot_agent::repeat::Loops>>,
     /// Settled once, when the session opened, as the terminal does: a session that opened with
     /// the mode on said so at the top, and a later change to the file would make that untrue.
     auto_vetting: bool,
@@ -186,6 +190,7 @@ impl Open {
             model: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             goal: Arc::new(Mutex::new(crate::goal::GoalSlot::default())),
+            loops: Arc::new(Mutex::new(bravebot_agent::repeat::Loops::default())),
             auto_vetting,
             // Set with the rules, which are read once the session is minted.
             reads_stay_in_workspace: false,
@@ -695,6 +700,8 @@ impl Bridge {
             "schedule.command" => self.schedule_command(request),
             "session.goal" => self.goal_command(request),
             "session.goal.continue" => self.goal_continue(request),
+            "loop.command" => self.loop_command(request),
+            "loops.list" => self.loops_list(request),
             "caffeinate.confirmed" => {
                 Ok(json!({"confirmed": bravebot_session::store::load_caffeinate_confirmed()}))
             }
@@ -4392,6 +4399,47 @@ impl Bridge {
             }
         });
         Ok(json!({ "started": "check" }))
+    }
+
+    /// `loop.command`: `/loop <argument>` typed into the composer of a session.
+    ///
+    /// `files` and `pictures`, both optional, name the markers on the line, as for
+    /// `schedule.command`, and are put back as names and sentences (DROP-4). The window sends it
+    /// only for a line a person typed (CMD-1).
+    fn loop_command(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let argument = request.string("argument")?;
+        let argument = crate::attached::in_words_for_a_command(request, &argument)?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let mut loops = open
+            .loops
+            .lock()
+            .map_err(|_| Failure::bad_request("Loops unavailable."))?;
+        crate::loop_command::command(
+            &argument,
+            &mut loops,
+            open.running.is_some(),
+            std::time::Instant::now(),
+        )
+    }
+
+    /// `loops.list`: the session's loops, for the row beside the composer and the status view.
+    fn loops_list(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let loops = open
+            .loops
+            .lock()
+            .map_err(|_| Failure::bad_request("Loops unavailable."))?;
+        Ok(crate::loop_command::list(&loops, std::time::Instant::now()))
     }
 
     fn watches(&mut self, request: &Request) -> Result<Value, Failure> {
@@ -8402,6 +8450,10 @@ mod open_loops_tests;
 #[cfg(test)]
 #[path = "goal_tests.rs"]
 mod goal_tests;
+
+#[cfg(test)]
+#[path = "loop_command_tests.rs"]
+mod loop_command_tests;
 
 // Beside the turn worker rather than the store, because one of them runs a turn.
 #[cfg(test)]
