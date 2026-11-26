@@ -1712,6 +1712,7 @@ mod tests {
 
     /// What is left under the directory the files are made in, once an edit is over: the directories
     /// above the one made for each file stay, and each file's own goes with it.
+    #[cfg(unix)]
     #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn left_under(place: &Path) -> Vec<PathBuf> {
         std::fs::read_dir(place.join("bravebot").join("editor"))
