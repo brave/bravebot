@@ -48,8 +48,10 @@ mod task;
 pub use hooked::Hooked;
 pub(crate) use hooked::trouble_sentences;
 use hooked::{fire_checkout_made, fire_hooks, say_prompt_notices, say_stopped_plugins};
+#[cfg(test)]
+pub(crate) use prompts::PLANNING;
+pub(crate) use prompts::planning;
 use prompts::{KEPT_FACTS, KEPT_FACTS_END, OPENING, for_a_person};
-pub(crate) use prompts::{PLANNING, planning};
 pub use result::*;
 pub use task::*;
 

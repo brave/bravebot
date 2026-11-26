@@ -368,6 +368,10 @@ pub(super) fn left_in_home(definitions: usize, agents_file: bool) -> String {
 
 /// [`PLANNING`] built against `beside`, naming each tool only where the turn's list holds it
 /// (TOOL-6). A list holding every tool produces the exact bytes of [`PLANNING`].
+#[expect(
+    clippy::too_many_lines,
+    reason = "builds the multi-paragraph PLANNING prompt conditionally from Beside"
+)]
 pub(crate) fn planning(beside: crate::tools::Beside) -> String {
     use crate::tools::Named;
 
@@ -424,8 +428,8 @@ pub(crate) fn planning(beside: crate::tools::Beside) -> String {
              lines you got and the offset to continue from, so asking for all of it loses \
              nothing. A window is for stepping through something genuinely long. Three windows \
              of one file cost three rounds and more of the conversation than the file would have, \
-             and every later round re-ends the lot."
-                .replace("re-ends", "re-sends"),
+             and every later round re-sends the lot."
+                .to_string(),
         );
     }
 
@@ -447,6 +451,64 @@ pub(crate) fn planning(beside: crate::tools::Beside) -> String {
                 .to_string(),
         );
     }
+
+    planning_quarantine(beside, &mut paragraphs);
+
+    paragraphs.push(
+        "Never end a turn saying what you are about to do. Either do it in this turn or say \
+         plainly that you have not. Ending a turn on the words now I will write the results back \
+         leaves someone watching a session that has stopped, with the last thing on the screen \
+         being a promise, and no way to tell that from a hang."
+            .to_string(),
+    );
+
+    if beside.holds(Named::Run) {
+        for p in [
+            "When you have changed code, build it and run its tests before you say you are done. \
+             A change that has not been compiled is a guess about whether it compiles, and saying \
+             the work is finished is a claim you have not checked. Look for how this project does \
+             it rather than guessing at a command: a Makefile, a CONTRIBUTING or AGENTS file, or \
+             the configuration the continuous integration runs. If the project says which command \
+             to use, that is the one. Where a build or a test fails on what you changed, fix it \
+             and run it again; where it fails on something you did not touch, say so rather than \
+             repairing it silently.",
+            "A warning counts. Many projects build with warnings promoted to errors, so a change \
+             that compiles with one still fails for the person who lands it, and a linter is part \
+             of building rather than a tidiness pass afterwards.",
+            "Vouching is what makes this cheap. The first run of a command asks the user, and \
+             they may answer in a way that vouches for it; from then on that exact command runs \
+             without asking and its output comes back to you as text rather than as a reference. \
+             So ask to run the build once and read what it said, rather than deciding beforehand \
+             that running things is too expensive to be worth it.",
+        ] {
+            paragraphs.push(p.to_string());
+        }
+    }
+
+    if beside.holds(Named::ReadFile) && beside.holds(Named::Run) {
+        paragraphs.push(
+            "Read files with read_file, not through a program. A read names one path, and the \
+             trust map answers for that path, so the lines come back visible where the user \
+             vouched for it. A command is only a command that ran: whatever cat, sed or grep \
+             printed could have come from anywhere those programs can reach, and nothing here can \
+             tell which, so it is quarantined until a person vouches for the exact line. That is \
+             the whole of the difference, and it is not a verdict on the shell. Where you want \
+             four files, ask for four reads in one round rather than one program to print them \
+             all: you get the same bytes visibly, and each one gated on its own."
+                .to_string(),
+        );
+    }
+
+    format!("\n\n{}", paragraphs.join("\n\n"))
+}
+
+/// The quarantine, listing, and processor paragraphs of [`planning`], gated on `beside`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "holds the static processor and listing guidance paragraphs for PLANNING"
+)]
+fn planning_quarantine(beside: crate::tools::Beside, paragraphs: &mut Vec<String>) {
+    use crate::tools::Named;
 
     let mut quarantined = "Some content is quarantined. Instead of the text you are given a \
          reference such as ref:0, with where it came from and how big it is. Another read or a \
@@ -579,58 +641,6 @@ pub(crate) fn planning(beside: crate::tools::Beside) -> String {
             paragraphs.push(p.to_string());
         }
     }
-
-    paragraphs.push(
-        "Never end a turn saying what you are about to do. Either do it in this turn or say \
-         plainly that you have not. Ending a turn on the words now I will write the results back \
-         leaves someone watching a session that has stopped, with the last thing on the screen \
-         being a promise, and no way to tell that from a hang."
-            .to_string(),
-    );
-
-    if beside.holds(Named::Run) {
-        paragraphs.push(
-            "When you have changed code, build it and run its tests before you say you are done. \
-             A change that has not been compiled is a guess about whether it compiles, and saying \
-             the work is finished is a claim you have not checked. Look for how this project does \
-             it rather than guessing at a command: a Makefile, a CONTRIBUTING or AGENTS file, or \
-             the configuration the continuous integration runs. If the project says which command \
-             to use, that is the one. Where a build or a test fails on what you changed, fix it \
-             and run it again; where it fails on something you did not touch, say so rather than \
-             repairing it silently."
-                .to_string(),
-        );
-        paragraphs.push(
-            "A warning counts. Many projects build with warnings promoted to errors, so a change \
-             that compiles with one still fails for the person who lands it, and a linter is part \
-             of building rather than a tidiness pass afterwards."
-                .to_string(),
-        );
-        paragraphs.push(
-            "Vouching is what makes this cheap. The first run of a command asks the user, and \
-             they may answer in a way that vouches for it; from then on that exact command runs \
-             without asking and its output comes back to you as text rather than as a reference. \
-             So ask to run the build once and read what it said, rather than deciding beforehand \
-             that running things is too expensive to be worth it."
-                .to_string(),
-        );
-    }
-
-    if beside.holds(Named::ReadFile) && beside.holds(Named::Run) {
-        paragraphs.push(
-            "Read files with read_file, not through a program. A read names one path, and the \
-             trust map answers for that path, so the lines come back visible where the user \
-             vouched for it. A command is only a command that ran: whatever cat, sed or grep \
-             printed could have come from anywhere those programs can reach, and nothing here can \
-             tell which, so it is quarantined until a person vouches for the exact line. That is \
-             the whole of the difference, and it is not a verdict on the shell. Where you want \
-             four files, ask for four reads in one round rather than one program to print them \
-             all: you get the same bytes visibly, and each one gated on its own."
-                .to_string(),
-        );
-    }
-
-    format!("\n\n{}", paragraphs.join("\n\n"))
 }
 
 /// [`FOR_A_PERSON`] built against `beside`, naming each tool only where the turn's list holds it
@@ -689,6 +699,15 @@ pub(super) fn for_a_person(beside: crate::tools::Beside) -> String {
          result does not stop you asking a question afterwards, so look first and ask about what \
          is left."
     ));
+
+    for_a_person_tools(beside, &mut paragraphs);
+
+    format!("\n\n{}", paragraphs.join("\n\n"))
+}
+
+/// The `ask_user`, `todo_write`, narration, and `spawn_agent` paragraphs of [`for_a_person`].
+fn for_a_person_tools(beside: crate::tools::Beside, paragraphs: &mut Vec<String>) {
+    use crate::tools::Named;
 
     if beside.holds(Named::AskUser) {
         paragraphs.push(
@@ -784,8 +803,6 @@ pub(super) fn for_a_person(beside: crate::tools::Beside) -> String {
             paragraphs.push(p.to_string());
         }
     }
-
-    format!("\n\n{}", paragraphs.join("\n\n"))
 }
 
 #[cfg(test)]

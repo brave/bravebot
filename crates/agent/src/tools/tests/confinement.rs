@@ -2308,6 +2308,10 @@ fn pointing_a_refused_write_at_the_unconfined_line_records_no_refusal_of_it() {
 }
 
 /// TOOL-6: a refused write omits the `'unconfined': true` `run` hint when `run` is withheld.
+#[expect(
+    clippy::expect_used,
+    reason = "test fixture creates a temporary workspace and policy"
+)]
 #[test]
 fn a_refused_write_without_run_omits_unconfined_way_out() {
     let scratch = Scratch::new("write-refused-without-run");

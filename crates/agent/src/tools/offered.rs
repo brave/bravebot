@@ -876,24 +876,8 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
                         tool.function.description.replacen(&full, &narrowed, 1);
                 }
             }
-            "load_skill" => {
-                tool.function.description = load_skill_description(&beside);
-                if let Some(name) = tool
-                    .function
-                    .parameters
-                    .pointer_mut("/properties/name/description")
-                {
-                    *name = json!(load_skill_name_description(&beside));
-                }
-            }
-            "search_skills" => {
-                tool.function.description = search_skills_description(&beside);
-            }
-            "download_url" => {
-                tool.function.description = download_url_description(&beside);
-            }
-            "ask_user" => {
-                tool.function.description = ask_user_description(&beside);
+            "load_skill" | "search_skills" | "download_url" | "ask_user" => {
+                state_skill_or_ask_beside(tool, &beside);
             }
             "run" => state_run_beside(tool, &beside),
             "read_file" => {
@@ -945,6 +929,26 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
             }
             _ => {}
         }
+    }
+}
+
+/// [`state_what_is_beside`] for `load_skill`, `search_skills`, `download_url`, and `ask_user`.
+fn state_skill_or_ask_beside(tool: &mut Tool, beside: &dyn Fn(&str) -> bool) {
+    match tool.function.name.as_str() {
+        "load_skill" => {
+            tool.function.description = load_skill_description(beside);
+            if let Some(name) = tool
+                .function
+                .parameters
+                .pointer_mut("/properties/name/description")
+            {
+                *name = json!(load_skill_name_description(beside));
+            }
+        }
+        "search_skills" => tool.function.description = search_skills_description(beside),
+        "download_url" => tool.function.description = download_url_description(beside),
+        "ask_user" => tool.function.description = ask_user_description(beside),
+        _ => {}
     }
 }
 
@@ -3233,6 +3237,10 @@ mod tests {
     use super::*;
     use crate::exec::Deadlines;
 
+    #[expect(
+        clippy::panic,
+        reason = "test helper fails fast when an expected tool is absent"
+    )]
     fn tool_named<'a>(tools: &'a [Tool], name: &str) -> &'a Tool {
         tools
             .iter()

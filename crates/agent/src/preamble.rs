@@ -1963,13 +1963,17 @@ mod tests {
     }
 
     /// TOOL-6: `environment` and `missing_dependency_guidance` name `run` only when offered.
+    #[expect(
+        clippy::expect_used,
+        reason = "test fixture creates a temporary workspace directory"
+    )]
     #[test]
     fn environment_and_missing_dependency_name_run_only_where_offered() {
         use crate::tools::{Beside, Named};
 
         let temp = std::env::temp_dir().join(format!("bravebot-env-beside-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&temp);
-        std::fs::create_dir_all(&temp).unwrap();
+        drop(std::fs::remove_dir_all(&temp));
+        std::fs::create_dir_all(&temp).expect("temp dir");
         let workspace = Workspace::new(&temp).expect("workspace");
 
         let with_run = environment(&workspace, false, false, Beside::every());
@@ -1988,7 +1992,7 @@ mod tests {
             ""
         );
 
-        let _ = std::fs::remove_dir_all(&temp);
+        drop(std::fs::remove_dir_all(&temp));
     }
 
     #[test]
