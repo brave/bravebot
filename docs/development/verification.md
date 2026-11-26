@@ -94,9 +94,11 @@ that restores it. That is the regression test that holds for every input.
 
 ## Writing one
 
-Only `bravebot-core` is set up for Verus today. `crates/core/src/lib.rs` imports the Verus prelude
-behind `cfg(verus_keep_ghost)`, which Verus sets and nothing else does, so a build without Verus
-compiles none of what follows.
+`bravebot-core` and `bravebot-sandbox-rules` are set up for Verus. Verus reads a crate from its
+root with no dependencies, so a decision in a crate that has some, such as how `bravebot-sandbox`
+quotes a path into a profile, is moved to a crate that has none before it gets a contract. Each
+crate's `lib.rs` imports the Verus prelude behind `cfg(verus_keep_ghost)`, which Verus sets and
+nothing else does, so a build without Verus compiles none of what follows.
 
 A function's contract is an attribute on it:
 
