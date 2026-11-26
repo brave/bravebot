@@ -1979,8 +1979,8 @@ impl Bridge {
     }
 
     /// Whether a question of `kind` can be put in the session `handle` now, for a test of who can
-    /// answer.
-    #[cfg(test)]
+    /// answer. The host's tests are its only callers, and the host is built on Unix alone.
+    #[cfg(all(test, unix))]
     pub(crate) fn can_be_asked(&mut self, handle: &str, kind: Kind) -> bool {
         self.answerers_of(handle).can_answer(kind)
     }
