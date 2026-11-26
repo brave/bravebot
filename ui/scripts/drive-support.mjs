@@ -7,6 +7,7 @@
 //
 // `playwright-core` is loaded when a launch happens, so the helpers that only take a page can be
 // tested without a browser driver installed.
+import assert from 'node:assert/strict'
 
 /** The directory the drivers write their screenshots to. */
 export const SHOTS_DIR = '/tmp/bravebot-ui'
@@ -129,6 +130,34 @@ export async function openFirstSession(app, page, { settle = 1500 } = {}) {
   await page.locator('.session').first().click()
   await page.waitForTimeout(settle)
   await approveTrustIfAsked(page)
+}
+
+/**
+ * The held-turn helpers of a driver whose model service holds a reply until the driver lets it go.
+ * `hold()` returns a promise for the service handler to await, `release()` settles every promise
+ * held so far, and `waiting` lists the ones still held, so `waiting.length > 0` says a turn has
+ * reached the model.
+ */
+export function heldTurns() {
+  const waiting = []
+  const hold = () => new Promise((resolve) => waiting.push(resolve))
+  const release = () => waiting.splice(0).forEach((resolve) => resolve())
+  return { hold, release, waiting }
+}
+
+/**
+ * A polling wait on `page`: `until(check, what)` runs `check` now and then every 50 ms, returns when
+ * it is truthy, and fails with `what` after `tries` checks, which is `defaultTries` unless the call
+ * gives its own.
+ */
+export function untilIn(page, defaultTries = 200) {
+  return async (check, what, tries = defaultTries) => {
+    for (let n = 0; n < tries; n++) {
+      if (await check()) return
+      await page.waitForTimeout(50)
+    }
+    assert.fail(what)
+  }
 }
 
 /** The `check` helper every driver prints with, and the list of what failed. */

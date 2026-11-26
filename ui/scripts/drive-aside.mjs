@@ -11,15 +11,13 @@ import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { approveTrustIfAsked, COMPOSER_NAME, SHOTS_DIR, showSessions } from './drive-support.mjs'
+import { approveTrustIfAsked, COMPOSER_NAME, heldTurns, SHOTS_DIR, showSessions, untilIn } from './drive-support.mjs'
 
 const theme = process.argv.includes('--theme') ? process.argv[process.argv.indexOf('--theme') + 1] : 'light'
 const RECAP = 'We looked around the project and found three files.'
 const BTW = 'It is waiting for the model to answer.'
 
-let waiting = []
-const hold = () => new Promise((resolve) => waiting.push(resolve))
-const release = () => waiting.splice(0).forEach((resolve) => resolve())
+const { hold, release, waiting } = heldTurns()
 
 const { service, rounds: requests } = await startModelService(async ({ messages }) => {
   const last = JSON.stringify(messages.at(-1) ?? '')
@@ -41,10 +39,7 @@ try {
   const composer = page.getByRole('textbox', { name: COMPOSER_NAME })
   const stop = page.locator('.composer .stop')
   const transcript = () => page.locator('.entries').innerText()
-  const until = async (check, what) => {
-    for (let tries = 0; tries < 200; tries++) { if (await check()) return; await page.waitForTimeout(50) }
-    assert.fail(what)
-  }
+  const until = untilIn(page)
 
   await composer.fill('Look around')
   await composer.press('Enter')

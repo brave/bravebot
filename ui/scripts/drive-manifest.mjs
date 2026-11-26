@@ -17,13 +17,11 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { APPROVE_BUTTON, COMPOSER_NAME, REJECT_BUTTON, SHOTS_DIR, showSessions } from './drive-support.mjs'
+import { APPROVE_BUTTON, COMPOSER_NAME, heldTurns, REJECT_BUTTON, SHOTS_DIR, showSessions, untilIn } from './drive-support.mjs'
 
 const theme = process.argv.includes('--theme') ? process.argv[process.argv.indexOf('--theme') + 1] : 'light'
 
-let waiting = []
-const hold = () => new Promise((resolve) => waiting.push(resolve))
-const release = () => waiting.splice(0).forEach((resolve) => resolve())
+const { hold, release, waiting } = heldTurns()
 
 // A run asks the planner twice: once for the plan in words, then for its steps. Each task names an
 // id, and the plan for it writes `plan-<id>.md`.
@@ -59,10 +57,7 @@ try {
   const stop = page.locator('.composer .stop')
   const card = page.locator('.confirm.manifest').last()
   const transcript = () => page.locator('.entries').innerText()
-  const until = async (check, what, tries = 400) => {
-    for (let n = 0; n < tries; n++) { if (await check()) return; await page.waitForTimeout(50) }
-    assert.fail(what)
-  }
+  const until = untilIn(page, 400)
   // A yes stays shut until the rows the card rests on have been on screen (PROMPT-4), so the card is
   // read top to bottom first, as drive-manual-walkthrough.mjs does.
   const OPEN_APPROVE = `${APPROVE_BUTTON}:not([aria-disabled="true"])`
