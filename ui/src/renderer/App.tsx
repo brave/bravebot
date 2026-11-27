@@ -41,7 +41,7 @@ import { bannerShown, parseUpdateStatus, type UpdateStatus } from '../shared/upd
 import { pickModel, pickedModel, rememberPickedModel, reopenedModel } from './models'
 import { canSend, canStart } from './can-send'
 import { planPrefill } from '../shared/manifest'
-import { useCommandRouter, usePublishedState } from './commands'
+import { useCommandRouter, usePublishedQueue, usePublishedState } from './commands'
 import { useWindowTitle } from './window-title'
 import { type Fork, forkedSessions } from '../shared/forks'
 import { activeBots, type Bot } from '../shared/bots'
@@ -66,7 +66,8 @@ import { useExperience, conversationPreferences, setConversation, setExperience,
 import { showToast } from './toasts'
 import { planRewind } from './rewind'
 import { call } from './rpc'
-import { contextNotice, costNotice, statusNotice, type ContextReport, type CostReport, type RequestReport, type StatusReport } from './reports'
+import type { LoopList } from '../shared/loop'
+import { contextNotice, costNotice, statusNotice, type ContextReport, type CostReport, type NoticeRow, type RequestReport, type StatusReport } from './reports'
 import { RequestDialog } from './components/RequestDialog'
 import { RewindConfirm } from './components/Rewind'
 import { PurgeProject } from './components/PurgeProject'
@@ -134,7 +135,7 @@ export function App(): React.JSX.Element {
     } catch { setBackendReady(false) }
   }, [live?.handle])
   useEffect(() => { void checkBackend() }, [checkBackend])
-  const [notice, setNotice] = useState<{ title: string; subtitle?: string; body: string } | null>(null)
+  const [notice, setNotice] = useState<{ title: string; subtitle?: string; body: string; rows?: NoticeRow[] } | null>(null)
   const [requestReport, setRequestReport] = useState<RequestReport | null>(null)
   const [aboutInfo, setAboutInfo] = useState<AboutInfo | null>(null)
   const [bugReportOpen, setBugReportOpen] = useState(false)
@@ -707,7 +708,11 @@ export function App(): React.JSX.Element {
     const session = liveRef.current?.handle
     if (!session) return
     try {
-      setNotice(statusNotice(await call<StatusReport>('session.report.status', { session })))
+      const [report, loops] = await Promise.all([
+        call<StatusReport>('session.report.status', { session }),
+        call<LoopList>('loops.list', { session }),
+      ])
+      setNotice(statusNotice(report, loops.loops))
     } catch (error) {
       setProblem(String(error))
     }
@@ -1189,6 +1194,8 @@ export function App(): React.JSX.Element {
     [live, draft, collapsed, canExport, includeTools, backendReady, caffeinated],
   )
   usePublishedState(menuState)
+  // Read on every render: a line joins or leaves a queue through `updateSession`, which renders.
+  usePublishedQueue([...openedLives.current.values()].filter((item) => (item.queued?.length ?? 0) > 0).map((item) => item.handle).sort())
   useWindowTitle(live)
 
   // Stable, so the memoised columns either side of the transcript are not re-drawn by typing.
@@ -1425,7 +1432,7 @@ export function App(): React.JSX.Element {
         onReportBug={() => { setAboutInfo(null); setBugReportOpen(true) }} onClose={() => setAboutInfo(null)} />}
       {bugReportOpen && <BugReport onClose={() => setBugReportOpen(false)} />}
       {notice && (
-        <Notice title={notice.title} subtitle={notice.subtitle} body={notice.body} onClose={() => setNotice(null)} />
+        <Notice title={notice.title} subtitle={notice.subtitle} body={notice.body} rows={notice.rows} onClose={() => setNotice(null)} />
       )}
       {requestReport && <RequestDialog report={requestReport} onClose={() => setRequestReport(null)} />}
       {projectAction?.kind === 'purge' && (

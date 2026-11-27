@@ -38,6 +38,10 @@ fn final_events_find_the_session_ready_for_another_request() {
     );
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "most of it is the one literal that names every field a worker takes"
+)]
 fn check_completion(ending: &str) -> (bool, bool) {
     let directory = tempfile::tempdir().unwrap();
     let workspace = Workspace::new(directory.path()).unwrap();
@@ -93,6 +97,9 @@ fn check_completion(ending: &str) -> (bool, bool) {
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             goal: Arc::default(),
             working_towards: None,
+            loops: Default::default(),
+            tick: None,
+            looking_again: false,
             model: None,
             addressing: None,
             addressing_standing: false,

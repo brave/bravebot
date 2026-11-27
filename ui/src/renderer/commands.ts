@@ -228,6 +228,20 @@ export function useCommandRouter(actions: CommandActions): void {
  * keystroke on a channel whose only reader repaints a menu bar. The comparison is a
  * `JSON.stringify` of six fields, which is cheaper than the message it avoids.
  */
+/**
+ * Tell the main process which sessions have lines waiting in the queue, so the loop clock there
+ * holds their ticks back (LOOP-6). Sent only when the list changes.
+ */
+export function usePublishedQueue(sessions: string[]): void {
+  const sent = useRef<string | null>(null)
+  const encoded = JSON.stringify(sessions)
+  useEffect(() => {
+    if (encoded === sent.current) return
+    sent.current = encoded
+    window.bravebot.publishQueued(JSON.parse(encoded) as string[])
+  }, [encoded])
+}
+
 export function usePublishedState(state: WindowState): void {
   const sent = useRef<string | null>(null)
   useEffect(() => {

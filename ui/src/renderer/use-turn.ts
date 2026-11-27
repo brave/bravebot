@@ -12,6 +12,7 @@ import { conversationPreferences, setConversation } from './experience'
 import { Unconfigurable, METHOD, call, callBot, callSummon } from './rpc'
 import { RequestFailed } from './rewind'
 import type { ScheduleAnswer } from '../shared/schedule'
+import { LOOPS_CHANGED, type LoopAnswer, type LoopKind } from '../shared/loop'
 import type { AsideStarted } from '../shared/aside'
 import { manifestTask } from '../shared/manifest'
 import { planRun as startPlanRun } from './plan-run'
@@ -250,6 +251,44 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
   }, [])
 
   /**
+   * Carry out `/loop <argument>` for a line a person typed into the composer (CMD-1, LOOP-3).
+   *
+   * The bridge reads the argument with the code the terminal's `/loop` uses. Its answer is drawn as
+   * a row of the transcript and is never sent to the model. A start sends the loop's first tick at
+   * once (LOOP-4), so the tick's row and turn may arrive before the answer, which `loopAnswered`
+   * places ahead of them. A start is refused by the bridge while a turn runs (`turn_in_flight`, the
+   * bridge's decision and not a reading of the line here), and the line then waits in the queue to
+   * be asked again when the turn ends (LOOP-6, CMD-8). A line typed while a `/loop` line already
+   * waits waits behind it, whatever it is, so a `/loop stop` does not end the loops before the
+   * `/loop` typed first has started its own (LOOP-11, CMD-8).
+   *
+   * `kind` is `after` for a `/after` line (LOOP-18), which goes to `after.command` and takes a place
+   * among the same loops. The bridge takes it while a turn runs, since it sends nothing until its
+   * delay is up, so it waits in the queue only behind a `/loop` or `/after` line already waiting.
+   *
+   * `staged` is what the line names. Only its markers and file names are sent, and the bridge puts
+   * each back as the file's name, or as the sentence that a picture cannot join (DROP-4).
+   */
+  const loopCommand = useCallback(async (handle: string, kind: LoopKind, argument: string, line: string, staged: Staged[], queuedAlready = false) => {
+    const waiting = !queuedAlready && openedLives.current.get(handle)?.queued?.some((item) => item.loop !== undefined)
+    if (waiting) {
+      updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged, loop: argument, loopKind: kind }] } : old)
+      return
+    }
+    try {
+      const answer = await call<LoopAnswer>(`${kind}.command`, { session: handle, argument, ...markersOf(staged) })
+      updateSession(handle, (old) => old ? { ...old, entries: t.loopAnswered(old.entries, answer, queuedAlready) } : old)
+      window.dispatchEvent(new CustomEvent(LOOPS_CHANGED, { detail: handle }))
+    } catch (error) {
+      if (error instanceof RequestFailed && error.code === 'turn_in_flight' && !queuedAlready) {
+        updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged, loop: argument, loopKind: kind }] } : old)
+        return
+      }
+      updateSession(handle, (old) => old ? { ...old, entries: [...old.entries, t.errored(error instanceof RequestFailed ? error.reason : String(error))] } : old)
+    }
+  }, [])
+
+  /**
    * Ask a typed `/btw <question>` or `/recap` of the bridge (CMD-1, CMD-8, CMD-16). The line is never
    * sent as a prompt, and its answer arrives as `aside.done`, drawn as a row and never part of the
    * conversation.
@@ -333,24 +372,27 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       if (!message) continue
       const handle = item.handle
       dequeuing.current.add(handle)
-      // A waiting `/schedule` or `/recap` line is asked again and starts no turn, a waiting
-      // `/manifest` line starts its run with what was dropped on it (DROP-4), and a waiting `/plan`
-      // line sets plan mode and then sends its task alone.
+      // A waiting `/schedule` or `/recap` line is asked again and starts no turn, a waiting `/loop`
+      // line is asked again and its first tick is the bridge's to send, a waiting `/manifest` line
+      // starts its run with what was dropped on it (DROP-4), and a waiting `/plan` line sets plan
+      // mode and then sends its task alone.
       const settled = message.aside === 'recap'
         ? askAside(handle, 'recap', '', message.prompt, [], true)
-        : message.schedule !== undefined
-          ? schedule(handle, message.schedule, message.prompt, message.staged, true)
-          : message.manifest !== undefined
-            ? planRun(handle, message.manifest, message.prompt, true, message.staged)
-            : message.plan !== undefined
-              ? plan(handle, message.plan, message.prompt, message.staged, true)
-              : send(message.prompt, handle, message.attachments, message.staged)
+        : message.loop !== undefined
+          ? loopCommand(handle, message.loopKind ?? 'loop', message.loop, message.prompt, message.staged, true)
+          : message.schedule !== undefined
+            ? schedule(handle, message.schedule, message.prompt, message.staged, true)
+            : message.manifest !== undefined
+              ? planRun(handle, message.manifest, message.prompt, true, message.staged)
+              : message.plan !== undefined
+                ? plan(handle, message.plan, message.prompt, message.staged, true)
+                : send(message.prompt, handle, message.attachments, message.staged)
       void settled.finally(() => {
         dequeuing.current.delete(handle)
         refreshLives((revision) => revision + 1)
       })
     }
-  }, [live, livesRevision, send, askAside, planRun, plan, updateSession])
+  }, [live, livesRevision, send, askAside, loopCommand, planRun, plan, updateSession])
 
   /**
    * Send a line into the turn that is running (INPUT-10), or say it was not taken.
@@ -449,6 +491,13 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       void goal(handleRef.current, exit.argument, exit.staged)
       return
     }
+    if (exit.to === 'loop' && handleRef.current) {
+      const handle = handleRef.current
+      setDraft('')
+      setLive((old) => old ? { ...old, attachments: [], staging: sent(old.staging) } : old)
+      void loopCommand(handle, exit.kind, exit.argument, exit.line, exit.staged)
+      return
+    }
     if (exit.to === 'aside' && handleRef.current) {
       setDraft('')
       void askAside(handleRef.current, exit.kind, exit.question, exit.line, exit.staged)
@@ -490,6 +539,12 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       void schedule(handleRef.current, exit.argument, exit.line, exit.staged)
       return
     }
+    if (exit.to === 'loop') {
+      setDraft('')
+      setLive((old) => old ? { ...old, attachments: [], staging: sent(old.staging) } : old)
+      void loopCommand(handleRef.current, exit.kind, exit.argument, exit.line, exit.staged)
+      return
+    }
     const task = exit.to === 'prompt' ? planTask(exit.line) : null
     if (task !== null) {
       setDraft('')
@@ -519,7 +574,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     setDraft('')
     // A refused send puts `exit.line` back in the composer, which is the words.
     void send(exit.line, undefined, undefined, exit.staged)
-  }, [draft, live?.staging, live?.running, live?.askingTrust, live?.rulesQuestion, live?.folderQuestion, send, schedule, askAside, planRun, plan, backendReady, goal])
+  }, [draft, live?.staging, live?.running, live?.askingTrust, live?.rulesQuestion, live?.folderQuestion, send, schedule, loopCommand, askAside, planRun, plan, backendReady, goal])
 
   /** What the composer's interject key does: queue the line behind the turn, or send it into the turn. */
   const interjectDraft = () => {
@@ -531,6 +586,14 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       setDraft('')
       setLive((old) => old ? { ...old, attachments: [], staging: sent(old.staging) } : old)
       void schedule(handle, exit.argument, exit.line, exit.staged)
+      return
+    }
+    // Never interjected: a `/loop` line is asked of the bridge, and waits for the turn where it
+    // starts a loop (LOOP-6).
+    if (exit.to === 'loop') {
+      setDraft('')
+      setLive((old) => old ? { ...old, attachments: [], staging: sent(old.staging) } : old)
+      void loopCommand(handle, exit.kind, exit.argument, exit.line, exit.staged)
       return
     }
     // Never interjected: a plan line waits for the running turn (MODE-12).

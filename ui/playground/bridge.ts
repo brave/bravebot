@@ -658,6 +658,7 @@ const bridge: BravebotApi = {
   onCommand: () => () => undefined,
   popupContext: () => undefined,
   publishState: () => undefined,
+  publishQueued: () => undefined,
   onBotConsolidation: () => () => undefined,
   onDrop: () => () => undefined,
   onPaste: () => () => undefined,

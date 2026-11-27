@@ -16,6 +16,15 @@ governs:
   - crates/tui/src/render.rs
   - crates/tui/src/render/hint.rs
   - crates/tui/src/command_table.rs
+  - crates/agent/src/repeat.rs
+  - crates/ui-bridge/src/loop_command.rs
+  - crates/ui-bridge/src/bridge.rs
+  - ui/src/shared/loop.ts
+  - ui/src/renderer/staging.ts
+  - ui/src/renderer/use-turn.ts
+  - ui/src/renderer/transcript.ts
+  - ui/src/renderer/components/LoopStatus.tsx
+  - ui/src/main/index.ts
 guards:
   - symbol: Session::start_loop
   - symbol: Session::watch_again
@@ -57,6 +66,8 @@ person endorsed a line; every tick has to be that line.
 `verified-by: bravebot_tui::app::tests::commands_words::the_loop_command_sends_what_is_left_after_the_interval`
 `verified-by: bravebot_tui::state::the_first_tick_of_a_loop_goes_immediately`
 `verified-by: bravebot_agent::turn::a_tick_of_a_self_paced_loop_says_when_to_run_again`
+`verified-by: bravebot_ui_bridge::loop_command_tests::the_first_tick_goes_at_once`
+`verified-by: bravebot_ui_bridge::loop_command_tests::a_dropped_file_is_put_back_as_its_name`
 
 <a id="LOOP-2"></a>
 ### LOOP-2: a tick is a prompt, never a command
@@ -70,6 +81,7 @@ nobody was watching, with each firing endorsed by a keystroke made once, long ag
 
 `verified-by: bravebot_tui::state::a_loop_whose_prompt_looks_like_a_command_still_sends_it_as_a_prompt`
 `verified-by: bravebot_tui::state::a_later_tick_of_a_loop_over_a_command_is_sent_as_a_prompt_and_runs_nothing`
+`verified-by: bravebot_ui_bridge::loop_command_tests::a_loop_over_a_command_sends_it_as_a_prompt`
 
 <a id="LOOP-3"></a>
 ### LOOP-3: an interval is read off the front of the argument, or off an `every` clause at its end
@@ -106,6 +118,7 @@ word that only begins with those five letters, such as `everything`, is not the 
 `verified-by: bravebot_tui::loops::a_count_too_large_to_be_a_duration_is_not_an_interval`
 `verified-by: bravebot_tui::loops::an_interval_with_nothing_to_send_is_not_a_request`
 `verified-by: bravebot_tui::app::tests::loops_and_goals::an_interval_with_nothing_after_it_says_what_the_command_needs`
+`verified-by: bravebot_ui_bridge::loop_command_tests::an_interval_alone_is_unreadable`
 
 ## When a tick fires
 
@@ -125,6 +138,9 @@ person had read the first answer and come back with the same look twice. See
 
 `verified-by: bravebot_tui::state::the_first_tick_of_a_loop_goes_immediately`
 `verified-by: bravebot_tui::state::a_watch_a_turn_arranged_sends_nothing_until_the_wait_is_up`
+`verified-by: bravebot_ui_bridge::loop_command_tests::the_first_tick_goes_at_once`
+`verified-by: bravebot_ui_bridge::loop_command_tests::a_typed_turn_that_asks_to_look_again_starts_an_armed_loop`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/loop-command.test.mjs holds the answer to a start to being drawn above the first tick it sent, whichever of the two arrived first, and make check-ui runs it)`
 
 <a id="LOOP-5"></a>
 ### LOOP-5: the gap is measured from the end of a tick, not from its start
@@ -138,6 +154,8 @@ how often somebody wants to be told something, and telling them takes time too.
 `verified-by: bravebot_tui::loops::a_tick_in_flight_is_not_due_again`
 `verified-by: bravebot_tui::loops::the_gap_is_measured_from_the_end_of_a_tick_and_not_its_start`
 `verified-by: bravebot_tui::state::a_tick_that_says_when_to_wake_arms_the_next_one`
+`verified-by: bravebot_ui_bridge::loop_command_tests::the_next_tick_is_an_interval_after_the_turn_ends`
+`verified-by: bravebot_ui_bridge::loop_command_tests::a_self_paced_tick_arms_the_wait_its_turn_asked_for`
 
 <a id="LOOP-6"></a>
 ### LOOP-6: a tick waits for an idle session, and never interrupts
@@ -152,6 +170,12 @@ still the one using this session.
 `verified-by: bravebot_tui::state::a_tick_waits_for_the_turn_in_flight_and_for_what_is_queued`
 `verified-by: bravebot_tui::state::a_due_tick_is_held_for_a_running_turn_and_a_queued_prompt_and_then_goes`
 `verified-by: bravebot_tui::state::a_prompt_typed_during_a_loop_is_not_a_tick_of_it`
+`verified-by: bravebot_ui_bridge::loop_command_tests::a_start_waits_for_the_turn_in_flight`
+`verified-by: bravebot_ui_bridge::loop_command_tests::a_start_is_refused_where_no_turn_could_start`
+`verified-by: bravebot_ui_bridge::loop_command_tests::nothing_fires_while_the_session_is_busy`
+`verified-by: bravebot_ui_bridge::loop_command_tests::nothing_fires_while_the_window_holds_a_queue`
+`verified-by: bravebot_ui_bridge::loop_command_tests::a_typed_turn_between_ticks_leaves_the_loops_alone`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/loop-command.test.mjs holds a start the bridge refuses while a turn runs to waiting in the window's queue and being asked again from it, and make check-ui runs it)`
 
 <a id="LOOP-7"></a>
 ### LOOP-7: how fast a loop may go, and how slow
@@ -185,6 +209,8 @@ can say so in its answer, where somebody reads it, rather than by going quiet fo
 `verified-by: bravebot_tui::loops::a_wait_a_turn_asked_for_is_held_to_the_bounds`
 `verified-by: bravebot_tui::state::an_interval_outside_the_bounds_is_reported_as_the_one_that_will_happen`
 `verified-by: bravebot_agent::tools::tests::scheduling::a_wait_outside_the_bounds_is_reported_as_the_one_that_will_happen`
+`verified-by: bravebot_ui_bridge::loop_command_tests::an_interval_under_the_floor_is_raised_and_said`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/loop-command.test.mjs holds an interval the bridge held to the bounds to being said in the answer row, and make check-ui runs it)`
 
 <a id="LOOP-8"></a>
 ### LOOP-8: where the person gave an interval, the driver keeps it and no turn can change it
@@ -210,6 +236,8 @@ silence: it ends the loop at once, with the fallback wake unspent ([LOOP-11](#LO
 `verified-by: bravebot_tui::loops::a_self_paced_turn_that_says_nothing_is_woken_once_more_and_then_the_loop_ends`
 `verified-by: bravebot_tui::loops::a_turn_that_says_when_to_wake_restores_the_fallback`
 `verified-by: bravebot_tui::loops::a_turn_that_says_the_loop_is_finished_ends_it_without_a_keepalive`
+`verified-by: bravebot_ui_bridge::loop_command_tests::two_silent_self_paced_turns_end_the_loop`
+`verified-by: bravebot_ui_bridge::loop_command_tests::a_tick_that_says_it_is_finished_ends_the_loop`
 
 <a id="LOOP-10"></a>
 ### LOOP-10: a tick is told that it is one, and which kind of loop it is in
@@ -226,6 +254,7 @@ never has and tells the user it is missing. Both were observed before this claus
 
 `verified-by: bravebot_agent::turn::a_tick_is_told_that_it_is_one_and_which_kind_of_loop_it_is_in`
 `verified-by: bravebot_agent::turn::a_tick_is_told_what_its_kind_of_loop_lasts_on`
+`verified-by: bravebot_ui_bridge::loop_command_tests::the_first_tick_goes_at_once`
 
 ## What ends one
 
@@ -240,6 +269,11 @@ never has and tells the user it is missing. Both were observed before this claus
 | the turn says it is finished | a tick of a self-paced loop that calls `schedule_next` with `stop`, which ends the loop with no further tick |
 | the session moves on | `/clear`, and leaving, which end every loop; so does setting a goal |
 | age | seven days after it started, counted for each loop from its own start |
+
+**On the desktop.** The window's Stop is the interrupt and the stopped turn at once: it cancels the
+turn in flight and ends every loop. The desktop has no goal and no `/clear`, so the goal clause has
+nothing to attach to there, and the session moves on by being closed, which ends every loop. A new
+chat is a session of its own and leaves the loops of the one before it running.
 
 **Why a key ends all of them.** Ctrl-C and a cancelled turn mean "stop what is happening", and a
 key that left some loops running would send the next prompt as though nothing had been said. Ending
@@ -284,6 +318,15 @@ arriving after its loop has gone would otherwise start a new loop on the line ju
 `verified-by: bravebot_tui::state::stopping_every_loop_says_how_many_went`
 `verified-by: bravebot_tui::state::a_goal_and_a_clear_end_every_loop`
 `verified-by: bravebot_tui::state::every_loop_past_its_age_ends_and_says_which`
+`verified-by: bravebot_ui_bridge::loop_command_tests::stop_takes_a_number_where_several_are_live`
+`verified-by: bravebot_ui_bridge::loop_command_tests::cancelling_a_turn_ends_every_loop`
+`verified-by: bravebot_ui_bridge::loop_command_tests::cancelling_a_tick_ends_every_loop_and_says_so_once`
+`verified-by: bravebot_ui_bridge::loop_command_tests::cancelling_a_typed_prompt_ends_every_loop_and_says_so_once`
+`verified-by: bravebot_ui_bridge::loop_command_tests::closing_a_session_ends_every_loop_and_says_so`
+`verified-by: bravebot_ui_bridge::loop_command_tests::a_tick_that_says_it_is_finished_ends_the_loop`
+`verified-by: bravebot_ui_bridge::loop_command_tests::a_loop_ends_after_seven_days`
+`verified-by: bravebot_ui_bridge::loop_command_tests::only_a_line_offered_a_later_look_starts_a_loop`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/loop-command.test.mjs holds an ending to saying which loop ended or how many a stop ended, and a /loop stop typed behind a waiting /loop line to waiting behind it, and make check-ui runs it)`
 
 <a id="LOOP-12"></a>
 ### LOOP-12: a loop is never written down
@@ -297,6 +340,7 @@ explain it. The gesture that starts a loop is the gesture that keeps it: while t
 open.
 
 `verified-by: by-construction (the loop is a private field of the interface's session state and is not among the fields written to a session record)`
+`verified-by: bravebot_ui_bridge::loop_command_tests::a_reopened_session_has_no_loops`
 
 <a id="LOOP-13"></a>
 ### LOOP-13: what is going to happen is on the screen
@@ -308,10 +352,13 @@ of them:
 
 | Where | What it says |
 |---|---|
-| the row under the input box, whichever mode it is in | that a loop is live, or how many are, and when the next tick is due where a moment is known |
-| the row above the box, once a turn has ended ([WATCH-25](watching.md#WATCH-25)) | the same words, with the other things still active and a light that changes every second |
+| the row under the input box, whichever mode it is in; on the desktop, the loop row docked on the composer | that a loop is live, or how many are, and when the next tick is due where a moment is known |
+| the row above the box, once a turn has ended ([WATCH-25](watching.md#WATCH-25)); the desktop has no such row, and its composer row stands for both | the same words, with the other things still active and a light that changes every second |
 | `/loop`, with no argument | each loop under its number: the repeated line, the pacing, when its next tick is due, and how to end one |
-| `/status` | a row for each loop under its number where there are several: the repeated line, the pacing, and when its next tick is due |
+| `/status`; on the desktop, Session Status… | a row for each loop under its number where there are several: the repeated line, the pacing, and when its next tick is due |
+
+On the desktop a tick is announced as a row in the transcript, and the answer to the `/loop` that
+started it is drawn above that tick's row.
 
 The row counts down to the soonest next tick while one is ahead, and says only that a loop is live,
 or how many, where no moment is known or the moment has passed. It is redrawn at least once a second for as long as a loop
@@ -353,6 +400,11 @@ that has nothing to do, and without it a long watch is twenty identical answers 
 `verified-by: bravebot_tui::state::the_report_lists_every_loop_with_its_number`
 `verified-by: bravebot_tui::render::the_loop_part_counts_the_loops_where_several_are_live`
 `verified-by: bravebot_tui::status::the_report_has_a_row_per_loop_under_its_number`
+`verified-by: bravebot_ui_bridge::loop_command_tests::a_start_is_numbered_and_listed`
+`verified-by: bravebot_ui_bridge::loop_command_tests::the_bare_command_reports`
+`verified-by: bravebot_ui_bridge::loop_command_tests::each_listed_loop_says_how_long_it_has_left`
+`verified-by: bravebot_ui_bridge::loop_command_tests::the_first_tick_goes_at_once`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/loop-status.test.mjs holds the composer row to saying nothing with no loops, counting down to the soonest tick while one is ahead, saying only that a loop is live once the moment has passed, counting several loops, being mounted on the composer and redrawn every second, and Session Status… to listing each loop under its number; ui/scripts/loop-command.test.mjs holds a tick row to carrying its loop's number, its own and its quiet count; make check-ui runs both)`
 
 <a id="LOOP-14"></a>
 ### LOOP-14: a turn may start a loop over the person's line, and over no other
@@ -377,11 +429,17 @@ and the turn chooses only when it is sent again.
 there is nowhere for a turn to give one. What it gives is the wait until the next look, and it is
 asked again then, which is exactly what [LOOP-9](#LOOP-9) already bounds.
 
+**On the desktop.** The desktop has no goal, so it writes no goal sentence and there is no goal for
+a loop to get past: the two goal rows above have nothing to attach to there, and every other row
+holds as written.
+
 `verified-by: bravebot_tui::app::tests::loops_and_goals::only_a_line_the_person_wrote_becomes_a_watch_the_turn_asked_for`
 `verified-by: bravebot_tui::state::a_watch_a_turn_arranged_sends_nothing_until_the_wait_is_up`
 `verified-by: bravebot_tui::state::a_watch_a_turn_arranged_does_not_replace_a_goal`
 `verified-by: bravebot_tui::loops::a_loop_a_turn_asked_for_starts_a_wait_away_rather_than_now`
 `verified-by: bravebot_tui::loops::a_loop_a_turn_asked_for_is_paced_by_the_turns`
+`verified-by: bravebot_ui_bridge::loop_command_tests::a_typed_turn_that_asks_to_look_again_starts_an_armed_loop`
+`verified-by: bravebot_ui_bridge::loop_command_tests::only_a_line_offered_a_later_look_starts_a_loop`
 
 ## What the argument may be
 
@@ -438,6 +496,10 @@ ending and not taken as one becomes a loop sending `Stop` until somebody presses
 `verified-by: bravebot_tui::state::stopping_a_loop_by_number_ends_only_that_one`
 `verified-by: bravebot_tui::state::a_bare_stop_with_several_loops_ends_none_of_them`
 `verified-by: bravebot_tui::app::tests::loops_and_goals::the_loop_command_ends_the_loop_it_names`
+`verified-by: bravebot_ui_bridge::loop_command_tests::the_bare_command_reports`
+`verified-by: bravebot_ui_bridge::loop_command_tests::stop_takes_a_number_where_several_are_live`
+`verified-by: bravebot_ui_bridge::loop_command_tests::stop_with_more_words_is_a_line_to_repeat`
+`verified-by: bravebot_ui_bridge::loop_command_tests::an_interval_alone_is_unreadable`
 
 ## Several loops
 
@@ -459,6 +521,8 @@ being asked is one more turn on every tick that nobody chose to stop.
 `verified-by: bravebot_tui::state::a_loop_past_the_cap_is_refused_and_no_loop_is_dropped`
 `verified-by: bravebot_tui::state::a_number_that_was_used_is_not_given_to_a_later_loop`
 `verified-by: bravebot_tui::loops::a_number_is_never_issued_twice`
+`verified-by: bravebot_ui_bridge::loop_command_tests::a_start_is_numbered_and_listed`
+`verified-by: bravebot_ui_bridge::loop_command_tests::a_sixth_loop_is_refused_and_numbers_are_not_reused`
 
 <a id="LOOP-17"></a>
 ### LOOP-17: due ticks go one at a time, soonest first
@@ -474,6 +538,7 @@ one behind it for longer than its own turn.
 `verified-by: bravebot_tui::state::due_ticks_go_one_at_a_time_soonest_first`
 `verified-by: bravebot_tui::state::a_turn_ending_arms_only_the_loop_whose_tick_it_was`
 `verified-by: bravebot_tui::loops::the_soonest_due_loop_goes_next_and_a_tie_goes_to_the_older`
+`verified-by: bravebot_ui_bridge::loop_command_tests::the_loop_due_soonest_goes_first`
 
 <a id="LOOP-18"></a>
 ### LOOP-18: `/after` sends a line once, after a delay, and keeps nothing
@@ -522,6 +587,10 @@ of them a tick belongs to, and the person asked for neither.
 `verified-by: bravebot_tui::app::tests::loops_and_goals::an_after_line_typed_at_rest_counts_its_delay_from_now`
 `verified-by: bravebot_tui::app::tests::loops_and_goals::an_after_line_queued_by_the_command_path_counts_its_delay_from_now`
 `verified-by: bravebot_tui::state::the_note_for_an_after_line_typed_earlier_says_the_time_left`
+`verified-by: bravebot_ui_bridge::loop_command_tests::an_after_line_is_sent_once_after_its_delay_and_leaves_no_loop`
+`verified-by: bravebot_ui_bridge::loop_command_tests::an_after_line_counts_towards_the_cap`
+`verified-by: bravebot_ui_bridge::loop_command_tests::an_after_line_is_taken_during_a_turn_and_needs_a_leading_delay`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/loop-command.test.mjs holds /after to taking the loop exit, waiting only behind a waiting loop line and drawing its answer as its own row, and ui/scripts/loop-status.test.mjs holds the composer row to naming a held /after line only where no loop is live and not counting it as one; make check-ui runs both)`
 
 ## Known costs
 

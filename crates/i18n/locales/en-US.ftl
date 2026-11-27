@@ -4932,6 +4932,43 @@ after-hint-next = sending in { $next }
 after-delay-raised = the delay was raised to { $delay }, which is as short as /after goes
 after-delay-capped = the delay was capped at { $delay }, which is as long as /after waits
 
+# The same answers as the desktop window draws them: rows of the transcript, in sentence case, and
+# naming the window's own controls. There, a turn is stopped with Stop, and a session ends when its
+# chat is closed.
+desktop-loop-needs-a-prompt =
+    /loop needs something to repeat, as in /loop 5m check the deploy, or /loop watch the build to
+    let each turn say when to run again.
+desktop-loop-started-every =
+    Loop { $number } repeats every { $every }. /loop stop { $number } ends it, and so does Stop or closing the chat.
+desktop-loop-started-self-paced =
+    Loop { $number } repeats at a pace each turn sets. /loop stop { $number } ends it, and so does Stop or closing the chat.
+desktop-loop-active = Loop { $number }: { $pace } · { $when } · { $prompt }
+desktop-after-active = Loop { $number }: sent once · { $when } · { $prompt }
+desktop-loop-ends-with =
+    /loop stop <number> ends one, /loop stop alone ends the only one, and Stop or closing the chat ends them all.
+desktop-loop-none =
+    Nothing is repeating. /loop 5m check the deploy sends a line every five minutes, /loop watch the
+    build lets each turn say when to run again, and /loop stop <number> ends one of them.
+desktop-loop-interval-raised = The interval was raised to { $every }, which is as fast as a loop goes.
+desktop-loop-interval-capped = The interval was capped at { $every }, which is as long as a loop lives.
+desktop-loop-full = { $count } loops are already running, which is as many as a session holds. Type /loop stop <number> to end one.
+# `which` is every stop that would work, as in "/loop stop 1 or /loop stop 2".
+desktop-loop-stop-which = { $count ->
+    [2] Two loops are running. Type { $which } to end one, or /loop to list them.
+    [3] Three loops are running. Type { $which } to end one, or /loop to list them.
+    [4] Four loops are running. Type { $which } to end one, or /loop to list them.
+    [5] Five loops are running. Type { $which } to end one, or /loop to list them.
+   *[other] { $count } loops are running. Type { $which } to end one, or /loop to list them.
+    }
+desktop-loop-stop-or = { $some } or { $last }
+desktop-loop-no-such = No loop is numbered { $number }. Type /loop to list what is running.
+desktop-loop-stopped-numbered = Loop { $number } stopped.
+desktop-after-needs-a-delay = /after needs a delay and something to send, as in /after 5m check the deploy.
+desktop-after-started =
+    Sending once in { $delay } as loop { $number }. /loop stop { $number } cancels it, and so does Stop or closing the chat.
+desktop-after-delay-raised = The delay was raised to { $delay }, which is as short as /after goes.
+desktop-after-delay-capped = The delay was capped at { $delay }, which is as long as /after waits.
+
 
 ## Working towards a condition
 

@@ -208,9 +208,23 @@ impl Emitter {
 
     /// Publish completion and make the next turn eligible under the same output lock.
     pub fn finish(&self, event: Event, finished: &std::sync::atomic::AtomicBool) {
+        self.finish_then(event, Vec::new(), finished);
+    }
+
+    /// As [`Self::finish`], with `then` published straight after the completion under the same
+    /// lock, so nothing the next turn sends comes between them.
+    pub fn finish_then(
+        &self,
+        event: Event,
+        then: Vec<Event>,
+        finished: &std::sync::atomic::AtomicBool,
+    ) {
         if let Ok(mut output) = self.0.lock() {
             finished.store(true, std::sync::atomic::Ordering::Release);
             output.send(event);
+            for event in then {
+                output.send(event);
+            }
         } else {
             finished.store(true, std::sync::atomic::Ordering::Release);
         }

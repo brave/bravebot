@@ -93,7 +93,7 @@ const TAKES_NO_DIRECTORY = [
   // window names only the question it answers.
   'folder.reply',
   'permissions.list', 'permissions.check', 'permissions.revoke',
-  'doctor', 'changelog.read', 'window.title', 'schedule.command', 'hooks.inspect', 'language.get', 'language.set', 'usage_ping.get', 'usage_ping.set',
+  'doctor', 'changelog.read', 'window.title', 'schedule.command', 'loop.command', 'after.command', 'loops.list', 'hooks.inspect', 'language.get', 'language.set', 'usage_ping.get', 'usage_ping.set',
   'usage_ping.notice_due', 'usage_ping.mark_notice_shown', 'crash_reports.get', 'crash_reports.set',
   'crash_reports.notice_due', 'crash_reports.mark_notice_shown', 'connectors.list', 'connectors.disconnect',
   'connectors.remove',

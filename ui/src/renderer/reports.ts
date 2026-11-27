@@ -8,6 +8,8 @@
  * test can call it without a window.
  */
 
+import type { LoopRow } from '../shared/loop'
+
 /** What `session.report.cost` answers. */
 export interface CostReport {
   total: number
@@ -40,7 +42,20 @@ export type ContextSection ='system' | 'instructions' | 'skills' | 'tools' | 'ty
 export interface ReportNotice {
   title: string
   subtitle?: string
+  /** The report as plain text, for copying and for a notice drawn as text. */
   body: string
+  /** The same report as label and value pairs, where it is drawn as a two-column list. */
+  rows?: NoticeRow[]
+}
+
+/**
+ * One pair of a notice drawn as a list. An empty label continues the row above. `value` is kept on
+ * one line where it fits; `rest`, where set, follows it and is cut to the line.
+ */
+export interface NoticeRow {
+  label: string
+  value: string
+  rest?: string
 }
 
 const SECTION_NAMES: Record<ContextSection, string> = {
@@ -217,7 +232,7 @@ const HELD_BY_THE_TURN = 'held by the running turn'
  * The notice Session Status… opens, the desktop's `/status` (CMD-8). While a turn runs, the trust
  * map and the vouched programs are said to be held by it, and neither is stated.
  */
-export function statusNotice(report: StatusReport): ReportNotice {
+export function statusNotice(report: StatusReport, loops: readonly LoopRow[] = []): ReportNotice {
   const rows: Row[] = [['Session', report.title || 'untitled, nothing sent yet']]
   if (report.sessionId) rows.push(['Session id', report.sessionId])
   rows.push(['Directory', report.project])
@@ -230,13 +245,22 @@ export function statusNotice(report: StatusReport): ReportNotice {
   rows.push(['Sandbox', SANDBOX_NAMES[report.sandboxMode] ?? report.sandboxMode])
   rows.push(['Spent', `${turns(report.turns)} · ${tokens(report.tokens)}`])
   if (report.goal) rows.push(...goalRows(report.goal))
+  // One row per loop under its number, from `loops.list` (LOOP-13); none where the session has none.
+  // The times come first and the line last, so a long line is what the row cuts.
+  const lines = new Map<number, string>()
+  for (const loop of loops) {
+    lines.set(rows.length, loop.prompt)
+    rows.push([`Loop ${loop.number}`, `${loop.once ? 'sent once' : loop.pace} · ${loop.when}`])
+  }
+  const shown = (subtitle?: string): ReportNotice => ({
+    title: 'Session status',
+    ...(subtitle ? { subtitle } : {}),
+    body: table(rows.map(([label, value], at) => [label, lines.has(at) ? `${value} · ${lines.get(at)}` : value])),
+    rows: rows.map(([label, value], at) => ({ label, value, ...(lines.has(at) ? { rest: lines.get(at)! } : {}) })),
+  })
   if (report.rulesHeldByTurn || !report.rules) {
     rows.push(['Trust', HELD_BY_THE_TURN], ['Programs', HELD_BY_THE_TURN])
-    return {
-      title: 'Session status',
-      subtitle: 'The running turn holds the trust and the vouched programs. They are shown once it ends.',
-      body: table(rows),
-    }
+    return shown('The running turn holds the trust and the vouched programs. They are shown once it ends.')
   }
   const { paths, commands } = report.rules
   if (paths.length === 0) rows.push(['Trust', 'nothing vouched for'])
@@ -248,7 +272,7 @@ export function statusNotice(report: StatusReport): ReportNotice {
   for (const [index, command] of commands.entries()) {
     rows.push([index === 0 ? 'Trusted commands' : '', `${command.display} · in ${command.shownDirectory}`])
   }
-  return { title: 'Session status', body: table(rows) }
+  return shown()
 }
 
 /** The figures `session.stats` answers for its total and for each model row (CLI-37). */

@@ -180,6 +180,22 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* A report of labels and values, such as Session status: two columns, so a value that wraps stays
+   in its own column. A value with a rest (a loop's times, then its line) keeps the value on one
+   line and cuts the rest. */
+.notice-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: var(--leo-spacing-xl);
+  white-space: normal;
+  font-variant-numeric: tabular-nums;
+}
+.notice-grid > div { display: contents; }
+.notice-grid dt { color: var(--ink-secondary); }
+.notice-grid dd { margin: 0; overflow-wrap: anywhere; user-select: text; }
+.notice-grid dd:has(.notice-rest) { display: flex; min-width: 0; white-space: pre; }
+.notice-grid .notice-value { flex: none; }
+.notice-grid .notice-rest { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------------------------------------------------------- spend across chats */
 

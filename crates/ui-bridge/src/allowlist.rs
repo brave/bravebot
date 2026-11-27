@@ -366,6 +366,15 @@ pub const DENIED: &[&str] = &[
     // the window's own composer (CMD-1). A client of the host is a program, and a program never
     // types that line.
     "schedule.command",
+    // Starts, lists and ends the loops of a session, for a `/loop` line a person typed into the
+    // window's own composer (CMD-1). A program never types that line.
+    "loop.command",
+    // A `/after` line, which takes a place among the same loops (LOOP-18).
+    "after.command",
+    "loops.list",
+    // The loop clock, which sends a due tick as a turn. Called by the desktop's main process and
+    // by nothing else, as `watches.poll` is.
+    "loops.poll",
     "manifest.run",
     "manifest.read",
     "manifest.reply",

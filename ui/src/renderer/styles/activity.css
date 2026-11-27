@@ -232,7 +232,7 @@
 /* Line breaks are kept: a manifest run narrates its goal and its plan as several lines. */
 .narration { font-style: italic; white-space: pre-wrap; }
 /* A refusal says so in the status ink, and the text says what was refused, so colour is not alone. */
-.narration.refused { color: var(--status-error); }
+.narration.refused { color: var(--status-error-ink); --leo-icon-color: var(--status-error); }
 /* A command a notice names is code, in the code type role like the rest of the window's code. */
 .narration code { font: var(--type-code); overflow-wrap: anywhere; }
 .attached {
@@ -295,6 +295,11 @@
 .goal-notice.refused { color: var(--status-error); --leo-icon-color: var(--status-error); }
 /* A whole command, at the size of the sentence around it. */
 .goal-notice code { font-family: var(--font-mono); font-size: inherit; line-height: inherit; }
+/* A loop's tick: its number and count, then the line it sends on one line, cut where it is long. */
+.loop-turn { flex-wrap: nowrap; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.loop-turn strong { flex: none; font-variant-numeric: tabular-nums; }
+.loop-turn-prompt { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink-secondary); }
+.loop-turn-quiet { flex: none; }
 
 /* A message between two background sessions: a heading, then the words quoted. Line breaks are kept. */
 .session-message {

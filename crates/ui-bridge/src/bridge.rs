@@ -83,6 +83,10 @@ struct Open {
     /// The goal this chat works towards, set by a `/goal` the person typed. Beside the watches and
     /// never in `state`, so nothing that writes the session record reaches it (GOAL-12).
     goal: Arc<Mutex<crate::goal::GoalSlot>>,
+    /// The loops `/loop` started in this session, up to five (LOOP-16). Held here and nowhere
+    /// else: never in the state or the session's record, so a loop ends with the session
+    /// (LOOP-12).
+    loops: Arc<Mutex<bravebot_agent::repeat::Loops>>,
     /// Settled once, when the session opened, as the terminal does: a session that opened with
     /// the mode on said so at the top, and a later change to the file would make that untrue.
     auto_vetting: bool,
@@ -186,6 +190,7 @@ impl Open {
             model: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             goal: Arc::new(Mutex::new(crate::goal::GoalSlot::default())),
+            loops: Arc::new(Mutex::new(bravebot_agent::repeat::Loops::default())),
             auto_vetting,
             // Set with the rules, which are read once the session is minted.
             reads_stay_in_workspace: false,
@@ -695,6 +700,13 @@ impl Bridge {
             "schedule.command" => self.schedule_command(request),
             "session.goal" => self.goal_command(request),
             "session.goal.continue" => self.goal_continue(request),
+            "loop.command" => self.loop_command(request),
+            "after.command" => self.after_command(request),
+            "loops.list" => self.loops_list(request),
+            "loops.poll" => {
+                self.poll_loops(request)?;
+                Ok(json!({}))
+            }
             "caffeinate.confirmed" => {
                 Ok(json!({"confirmed": bravebot_session::store::load_caffeinate_confirmed()}))
             }
@@ -2100,6 +2112,16 @@ impl Bridge {
             .remove(&handle)
             .ok_or_else(Failure::no_such_session)?;
 
+        // Leaving a session ends every loop it holds, and says how many went (LOOP-11). Said
+        // before the view goes, so the clients of the session still hear it.
+        let stopped_loops = open
+            .loops
+            .lock()
+            .map(|mut loops| loops.stop_all())
+            .unwrap_or(0);
+        for (name, data) in crate::loop_command::stopped(stopped_loops) {
+            self.emitter.send(Event::new(name, &handle, data));
+        }
         self.emitter.detach_view(&handle);
         self.answerers.remove(&handle);
         let begun = self.begun.remove(&handle);
@@ -2420,6 +2442,23 @@ impl Bridge {
         // The condition this turn works towards, read when it starts as the terminal reads it: a
         // paused goal's turns are not told of it (GOAL-14).
         let working_towards = goal.lock().ok().and_then(|slot| slot.in_force());
+        let loops = Arc::clone(&open.loops);
+        // Which tick of a loop this turn is, where it is one: the loop `fire_loop` has just
+        // dispatched is the one in flight (LOOP-10). A prompt typed while loops wait is no tick.
+        //
+        // And whether a wait this turn asks for would become a later look at its line, which
+        // decides whether it is offered a way to ask for one (LOOP-14, SCHED-6). Only a line the
+        // person typed, in a session with no loop and no watch of its own already running.
+        let (tick, looking_again) = {
+            let loops = loops.lock().map_err(|_| {
+                Failure::new(ErrorCode::Internal, "the session's loops are unavailable")
+            })?;
+            let watching = watches.lock().map(|w| !w.is_empty()).unwrap_or(true);
+            (
+                loops.in_flight().and_then(|running| running.tick()),
+                composed.is_none() && recall && loops.is_empty() && !watching,
+            )
+        };
         let (turn_number, tokens_at_turn) = state
             .lock()
             .map(|s| (s.turns + 1, s.tokens))
@@ -2515,6 +2554,9 @@ impl Bridge {
                 watches,
                 goal,
                 working_towards,
+                loops,
+                tick,
+                looking_again,
                 emitter,
                 session,
                 project,
@@ -3613,6 +3655,19 @@ impl Bridge {
         if let Ok(mut watches) = open.watches.lock() {
             watches.stop_firing();
         }
+        // Stopping a turn ends every loop, whether or not the turn was a tick of one (LOOP-11).
+        // Said here, once, with how many went; the worker then finds none to end.
+        let stopped_loops = match stopping {
+            Some(running) if !running.is_finished() => open
+                .loops
+                .lock()
+                .map(|mut loops| loops.stop_all())
+                .unwrap_or(0),
+            _ => 0,
+        };
+        for (name, data) in crate::loop_command::stopped(stopped_loops) {
+            self.emitter.send(Event::new(name, &handle, data));
+        }
         // Cancelling when nothing is running is not an error: the turn may have finished
         // between the user pressing the key and this arriving.
         Ok(if expected.is_some() {
@@ -4392,6 +4447,206 @@ impl Bridge {
             }
         });
         Ok(json!({ "started": "check" }))
+    }
+
+    /// `loop.command`: `/loop <argument>` typed into the composer of a session.
+    ///
+    /// `files` and `pictures`, both optional, name the markers on the line, as for
+    /// `schedule.command`, and are put back as names and sentences (DROP-4). The window sends it
+    /// only for a line a person typed (CMD-1).
+    fn loop_command(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let argument = request.string("argument")?;
+        let argument = crate::attached::in_words_for_a_command(request, &argument)?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let (answer, started) = {
+            let mut loops = open
+                .loops
+                .lock()
+                .map_err(|_| Failure::bad_request("Loops unavailable."))?;
+            crate::loop_command::command(
+                &argument,
+                &mut loops,
+                open.running.is_some(),
+                open.ready_for_work(),
+                std::time::Instant::now(),
+            )?
+        };
+        // The first tick goes at once rather than an interval later (LOOP-4).
+        if let Some(number) = started {
+            self.fire_loop(&handle, number);
+        }
+        Ok(answer)
+    }
+
+    /// `after.command`: `/after <argument>` typed into the composer of a session (LOOP-18).
+    ///
+    /// Takes `files` and `pictures` as `loop.command` does (DROP-4). Sends nothing now: the line's
+    /// one tick goes from the loop clock once its delay is up and the session is idle.
+    fn after_command(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let argument = request.string("argument")?;
+        let argument = crate::attached::in_words_for_a_command(request, &argument)?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let mut loops = open
+            .loops
+            .lock()
+            .map_err(|_| Failure::bad_request("Loops unavailable."))?;
+        Ok(crate::loop_command::after(
+            &argument,
+            &mut loops,
+            std::time::Instant::now(),
+        ))
+    }
+
+    /// Called by the desktop's clock: send the tick of every idle session's loop that is due.
+    ///
+    /// `held` names the sessions whose window has lines queued. The main process sends it, since
+    /// this crate cannot see that queue, and a tick waits behind what the person queued (LOOP-6).
+    fn poll_loops(&mut self, request: &Request) -> Result<(), Failure> {
+        let held = if request.param("held").is_null() {
+            Vec::new()
+        } else {
+            strings(request, "held")?
+        };
+        self.poll_loops_holding(std::time::Instant::now(), &held);
+        Ok(())
+    }
+
+    /// The loop clock, read at `now`, with no session held for a queue.
+    #[cfg(test)]
+    fn poll_loops_at(&mut self, now: std::time::Instant) {
+        self.poll_loops_holding(now, &[]);
+    }
+
+    /// The loop clock, read at `now`.
+    ///
+    /// A session is passed over while a turn runs, while it is being compacted, before its trust
+    /// question is answered, while a question about its settings waits, while a worker still
+    /// holds its state, and while it is in `held`, the sessions the main process says have lines
+    /// queued in the window: a tick waits for an idle session and never interrupts (LOOP-6). Loops
+    /// past their age end first, whether or not the session is idle (LOOP-11).
+    fn poll_loops_holding(&mut self, now: std::time::Instant, held: &[String]) {
+        let handles: Vec<_> = self.open.keys().cloned().collect();
+        for handle in handles {
+            self.reap(&handle);
+            let Some(open) = self.open.get(&handle) else {
+                continue;
+            };
+            let due = {
+                let Ok(mut loops) = open.loops.lock() else {
+                    continue;
+                };
+                for number in loops.age_out(now) {
+                    self.emitter.send(Event::new(
+                        "loop.ended",
+                        &handle,
+                        json!({"number": number, "reason": "aged"}),
+                    ));
+                }
+                loops.next_due(now)
+            };
+            let Some(number) = due else {
+                continue;
+            };
+            if open.running.is_some()
+                || open.compacting.is_some()
+                || !open.answered_trust
+                || open.questions.reply_method().is_some()
+                || held.contains(&handle)
+            {
+                continue;
+            }
+            // A tick starts a turn, which takes the state. Where a worker still holds it the tick
+            // waits for the next poll, and the dispatch thread never waits on the worker.
+            if matches!(
+                open.state.try_lock(),
+                Err(std::sync::TryLockError::WouldBlock)
+            ) {
+                continue;
+            }
+            self.fire_loop(&handle, number);
+        }
+    }
+
+    /// Send a tick of loop `number` as a turn, announcing it first, and end the loop where the
+    /// turn cannot start.
+    ///
+    /// The line is the loop's own, sent as a prompt and never handed to a command (LOOP-2). The
+    /// worker reads the loop's tick off the loops when the turn starts, so the planner is told it
+    /// is one (LOOP-10).
+    fn fire_loop(&mut self, handle: &str, number: usize) {
+        let Some(open) = self.open.get(handle) else {
+            return;
+        };
+        let dispatched = open.loops.lock().ok().and_then(|mut loops| {
+            let running = loops.get_mut(number)?;
+            let (prompt, ()) = running.dispatching();
+            Some((prompt, running.ticks(), running.quiet(), running.once()))
+        });
+        let Some((prompt, tick, quiet, once)) = dispatched else {
+            return;
+        };
+        // Announced before the worker starts, so the turn's own events follow it (LOOP-13). The
+        // row names the line it sends, its first line pictured, and whether it is sent only once
+        // (LOOP-18).
+        self.emitter.send(Event::new(
+            "loop.tick",
+            handle,
+            json!({
+                "number": number,
+                "tick": tick,
+                "quiet": quiet,
+                "once": once,
+                "prompt": crate::loop_command::first_line(&prompt),
+            }),
+        ));
+        // Not recalled: the person typed `/loop`, and the tick is the program sending their line
+        // again, which is not a line to scroll back to or to name the session after.
+        let request = Request::parse(
+            &json!({"id": 0, "method": "turn.send", "params": {"session": handle, "prompt": prompt, "recall": false}})
+                .to_string(),
+        );
+        let failed = match request {
+            // The person's own line, so an `@path` in it names a file as it did when they typed it.
+            Ok(request) => self.start_turn(&request, None, Wrote::Person).err(),
+            Err(_) => Some(Failure::bad_request("The loop's line could not be sent.")),
+        };
+        if let Some(error) = failed {
+            if let Some(open) = self.open.get(handle)
+                && let Ok(mut loops) = open.loops.lock()
+            {
+                loops.stop(number);
+            }
+            self.emitter.send(Event::new(
+                "loop.ended",
+                handle,
+                json!({"number": number, "reason": "failed", "message": error.message}),
+            ));
+        }
+    }
+
+    /// `loops.list`: the session's loops, for the row beside the composer and the status view.
+    fn loops_list(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let loops = open
+            .loops
+            .lock()
+            .map_err(|_| Failure::bad_request("Loops unavailable."))?;
+        Ok(crate::loop_command::list(&loops, std::time::Instant::now()))
     }
 
     fn watches(&mut self, request: &Request) -> Result<Value, Failure> {
@@ -5306,6 +5561,10 @@ impl RunSettings {
 ///
 /// A struct rather than a dozen arguments, because the list was the kind that grows one
 /// parameter at a time until nobody can read the call.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate fact about the turn, and no two of them are states of one thing"
+)]
 struct Work {
     emitter: Emitter,
     session: String,
@@ -5347,6 +5606,12 @@ struct Work {
     /// The condition of the goal in force when the turn started, which the planner is told of
     /// (GOAL-14). `None` where no goal is set or it is paused.
     working_towards: Option<String>,
+    /// The session's loops, whose next tick is armed from this turn's end (LOOP-5).
+    loops: Arc<Mutex<bravebot_agent::repeat::Loops>>,
+    /// Which tick of a loop this turn is, where it is one (LOOP-10).
+    tick: Option<bravebot_agent::turn::Tick>,
+    /// Whether a wait this turn asks for starts a loop over its line (LOOP-14).
+    looking_again: bool,
     model: Option<String>,
     /// The definition this turn is addressed to, where it is a turn in a bot's conversation
     /// (MEMORY-10).
@@ -5477,6 +5742,9 @@ fn work(work: Work) {
         watches,
         goal,
         working_towards,
+        loops,
+        tick,
+        looking_again,
         model,
         addressing,
         addressing_standing,
@@ -5620,7 +5888,11 @@ fn work(work: Work) {
         .with_open_loops(state.open_loops.for_the_planner())
         // The goal in force, which the planner is told it works towards (GOAL-14, GOAL-15,
         // GOAL-16), as the terminal tells it.
-        .working_towards(working_towards);
+        .working_towards(working_towards)
+        // Told it is a tick of a loop and which kind, where it is one (LOOP-10), and a self-paced
+        // tick is offered the tool that says when to run again.
+        .ticking(tick)
+        .looking_again(looking_again);
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }
@@ -5780,6 +6052,8 @@ fn work(work: Work) {
     });
     let open_line = say_open_loops(&mut state, &workspace, stopped_goal);
 
+    // What the turn's end did to the session's loops, said once the turn has.
+    let mut loop_events = Vec::new();
     let event = match outcome {
         Ok(outcome) => {
             if let Ok(mut watches) = watches.lock() {
@@ -5794,6 +6068,21 @@ fn work(work: Work) {
                         );
                     }
                 }
+            }
+            // After the watches: a turn that asked for both a watch and a later look meant the
+            // watch. The next tick is measured from here, the end of the turn (LOOP-5).
+            let watching = watches.lock().map(|w| !w.is_empty()).unwrap_or(true);
+            if let Ok(mut held) = loops.lock() {
+                loop_events = crate::loop_command::turn_ended(
+                    &mut held,
+                    crate::loop_command::TurnEnd {
+                        wakeup: outcome.wakeup,
+                        cancelled: false,
+                        looking_again: looking_again.then(|| prompt.clone()),
+                        watching,
+                    },
+                    std::time::Instant::now(),
+                );
             }
             state.tokens += outcome.tokens;
             state
@@ -5884,6 +6173,21 @@ fn work(work: Work) {
             )
         }
         Err(error) => {
+            // A stopped turn ends every loop, whether or not it was a tick (LOOP-11). Any other
+            // failure is a tick that said nothing, so a self-paced loop falls back to the driver's
+            // own wait and ends on the second silence rather than on one failed request (LOOP-9).
+            if let Ok(mut held) = loops.lock() {
+                loop_events = crate::loop_command::turn_ended(
+                    &mut held,
+                    crate::loop_command::TurnEnd {
+                        wakeup: None,
+                        cancelled: cancel.is_cancelled(),
+                        looking_again: None,
+                        watching: false,
+                    },
+                    std::time::Instant::now(),
+                );
+            }
             let charged = &mut *state;
             bravebot_session::sessions::charge_failed_turn(
                 &mut charged.tokens,
@@ -5936,7 +6240,13 @@ fn work(work: Work) {
     // so the window has the list it is to draw when it hears the end (VIEW-35).
     reporter.turn_ended();
     drop(state);
-    emitter.finish(event, &finished);
+    // A loop that this turn ended is said after the turn's reply, so the tick's row stays directly
+    // above the answer it produced (LOOP-13).
+    let loop_events = loop_events
+        .into_iter()
+        .map(|(name, data)| Event::new(name, &session, data))
+        .collect();
+    emitter.finish_then(event, loop_events, &finished);
 }
 
 /// Fire `session-ended` for a session that has been closed, once the last of its work has ended
@@ -8402,6 +8712,10 @@ mod open_loops_tests;
 #[cfg(test)]
 #[path = "goal_tests.rs"]
 mod goal_tests;
+
+#[cfg(test)]
+#[path = "loop_command_tests.rs"]
+mod loop_command_tests;
 
 // Beside the turn worker rather than the store, because one of them runs a turn.
 #[cfg(test)]

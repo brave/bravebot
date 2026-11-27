@@ -83,6 +83,7 @@ pub mod reach;
 pub mod recall;
 pub mod regex;
 pub mod remembered;
+pub mod repeat;
 mod repeated_call;
 pub mod replace;
 pub mod repo_map;

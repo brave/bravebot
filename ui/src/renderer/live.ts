@@ -4,6 +4,7 @@ import type { RetryDue } from './retry'
 import type { FileAttachment } from '../shared/files'
 import type { AsideRow } from '../shared/aside'
 import type { GoalSnapshot } from '../shared/goal'
+import type { LoopKind } from '../shared/loop'
 import type { Staged, Staging } from './staging'
 import type {
   Checking,
@@ -42,6 +43,13 @@ export interface Queued {
    * bridge when the turn ends and is never sent as a prompt (CMD-8).
    */
   schedule?: string
+  /**
+   * Set for a typed `/loop` line that waits for the turn: its argument. It is asked of the bridge
+   * when the turn ends and is never sent as a prompt (LOOP-6, CMD-8).
+   */
+  loop?: string
+  /** Which command the waiting `loop` line is: `/loop`, or `/after` (LOOP-18). */
+  loopKind?: LoopKind
   /**
    * Set for a typed `/recap` line that waits for the turn, which the bridge refused while it ran
    * (CMD-16). It is asked of the bridge when the turn ends and is never sent as a prompt.

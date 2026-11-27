@@ -1,4 +1,5 @@
 import { Watches } from './Watches'
+import { LoopStatus } from './LoopStatus'
 import type { Enhancement } from '../enhancing'
 import type { Handoff } from '../handoff'
 import type { FileAttachment } from '../../shared/files'
@@ -628,6 +629,10 @@ export function Transcript({
   }, [live?.running, entries, faces, bot])
   // A plan card waiting for its answer, during which the working row is not shown.
   const awaitingPlan = useMemo(() => entries.some((entry) => entry.kind === 'manifest' && entry.decision === null), [entries])
+  // Made again only when the session or whether it is busy changes, so the memoised composer is
+  // not drawn again for it. A line `/after` holds waits for a running turn and for queued lines.
+  const loopsBusy = Boolean(live?.running) || queued.length > 0
+  const loopRow = useMemo(() => live ? <LoopStatus session={live.handle} busy={loopsBusy} /> : null, [live?.handle, loopsBusy])
   // Entered and left once per element crossed, so counted rather than toggled.
   const dragDepth = useRef(0)
   const [dragging, setDragging] = useState(false)
@@ -1041,6 +1046,7 @@ export function Transcript({
           onCheckBackend={checkBackend}
           onDiagnostics={diagnostics}
           notice={notice}
+          loops={loopRow}
           footer={footer}
         />
       </div>
@@ -2285,7 +2291,7 @@ function Card({
       return <OpenLoopsLine text={entry.text} />
 
     case 'narration':
-      return <div className={entry.refused ? 'narration refused' : 'narration'}><Icon name="file-text" /><span><FailureSentence text={entry.text} command={entry.command} /></span></div>
+      return <div className={entry.refused ? 'narration refused' : 'narration'}><Icon name={entry.refused ? 'warning-triangle-outline' : 'file-text'} /><span><FailureSentence text={entry.text} command={entry.command} /></span></div>
 
     case 'ask-settled':
       // The kernel's words for each question and what became of it, in the register of the other
@@ -2352,6 +2358,18 @@ function Card({
       return (
         <div className={`goal-notice ${entry.tone}`} data-test="goal-notice">
           <Icon name={GOAL_ICONS[entry.tone]} /><span><GoalSentence text={entry.text} /></span>
+        </div>
+      )
+    case 'loop-tick':
+      // The line the tick sends, cut to one line with the whole of it in the tooltip, then how
+      // many ticks in a row found nothing.
+      return (
+        <div className="watch-turn loop-turn" data-test="loop-tick">
+          <Icon name="clock" />
+          <strong>{entry.head}</strong>
+          <span aria-hidden="true">·</span>
+          <span className="loop-turn-prompt" data-tooltip={entry.line}>{entry.line}</span>
+          {entry.quiet && <span className="loop-turn-quiet">· {entry.quiet}</span>}
         </div>
       )
     case 'error':

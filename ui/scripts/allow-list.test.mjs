@@ -27,6 +27,20 @@ test('model discovery is on the allow-list', () => {
   assert.ok(allowed().includes('models.list'), 'the model picker asks for models.list')
 })
 
+// LOOP-4, LOOP-6: a loop's tick is sent by the main process's clock, so the window can start, stop
+// and list loops but cannot send a tick, early or at all.
+test('the window may start and list loops, and only the main process sends a tick', () => {
+  const names = allowed()
+  assert.ok(names.includes('loop.command'), 'a typed /loop line goes to the bridge')
+  assert.ok(names.includes('after.command'), 'a typed /after line goes to the bridge')
+  assert.ok(names.includes('loops.list'), 'the row under the composer lists the loops')
+  assert.ok(!names.includes('loops.poll'), 'a tick is not the window\'s to send')
+  assert.ok(!names.includes('watches.poll'), 'nor is a watch\'s poll')
+  const index = readFileSync('src/main/index.ts', 'utf8')
+  const clock = index.slice(index.indexOf('watchClock = setInterval('))
+  assert.match(clock.slice(0, clock.indexOf('}, 1000)')), /request\('loops\.poll', \{ held: queuedSessions \}\)/, 'the clock polls the loops, holding back the sessions with a queue')
+})
+
 test('no method is listed twice', () => {
   const names = allowed()
   assert.deepEqual(names.filter((name, at) => names.indexOf(name) !== at), [], 'a set keeps one of two equal names, so a repeat is a line that does nothing')

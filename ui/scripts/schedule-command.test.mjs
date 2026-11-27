@@ -73,7 +73,7 @@ test('the row is plain text that keeps its line breaks and is not an entry the m
   assert.equal(row.text, `${markup}\n**b**`)
   // `narration` is the kind the transcript draws as text; no markdown or HTML path is taken for it.
   const drawn = readFileSync('src/renderer/components/Transcript.tsx', 'utf8')
-  assert.match(drawn, /case 'narration':\s*return <div className=\{entry\.refused \? 'narration refused' : 'narration'\}><Icon name="file-text" \/><span><FailureSentence/)
+  assert.match(drawn, /case 'narration':\s*return <div className=\{entry\.refused \? 'narration refused' : 'narration'\}><Icon name=\{entry\.refused \? 'warning-triangle-outline' : 'file-text'\} \/><span><FailureSentence/)
 })
 
 test('the composer asks for the command only from the text a person typed, through one function', () => {

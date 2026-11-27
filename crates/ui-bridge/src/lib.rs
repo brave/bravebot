@@ -73,6 +73,7 @@ pub mod host;
 pub mod host_trust;
 mod key_entry;
 pub mod language;
+mod loop_command;
 pub mod manifest;
 pub mod mentions;
 pub mod models;
