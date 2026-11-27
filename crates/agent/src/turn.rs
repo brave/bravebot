@@ -5702,11 +5702,140 @@ mod tests {
             tools::Scheduling::NoLaterLook
         );
 
+        // A line the person typed while the session's own loop, goal or watch is live is told
+        // which of the three takes the next look, and is not told that nothing will. A tick and
+        // an addressed turn keep what they had, whatever the caller says.
+        for (later_look, scheduling) in [
+            (LaterLook::UnderALoop, tools::Scheduling::UnderALoop),
+            (LaterLook::UnderAGoal, tools::Scheduling::UnderAGoal),
+            (LaterLook::UnderAWatch, tools::Scheduling::UnderAWatch),
+        ] {
+            let under = Task::new("x").later_look(later_look);
+            assert_eq!(
+                setup::scheduling_for(&plain(under.clone())),
+                scheduling,
+                "{later_look:?}"
+            );
+            assert_eq!(
+                setup::scheduling_for(&addressed(under.clone())),
+                tools::Scheduling::NoLaterLook,
+                "{later_look:?}"
+            );
+            assert_eq!(
+                setup::scheduling_for(&plain(under.ticking(tick(false)))),
+                tools::Scheduling::TheirInterval,
+                "{later_look:?}"
+            );
+        }
+        assert_eq!(
+            setup::scheduling_for(&plain(Task::new("x").later_look(LaterLook::Nothing))),
+            tools::Scheduling::NoLaterLook
+        );
+
         assert_eq!(
             setup::arming_for(&addressed(Task::new("x"))),
             crate::watch::Arming::Unavailable
         );
         assert_eq!(setup::arming_for(&plain(Task::new("x"))), allowed);
+    }
+
+    /// SCHED-6: the one rule every client asks for what takes the next look at a line. A line
+    /// this program wrote is one nothing sends again whatever the session holds; then a loop, a
+    /// goal and a watch, in that order; a paused goal sends nothing back; and only a session
+    /// holding none of them leaves the answer to whether the caller sends the line again.
+    /// Rejects: who wrote the line checked after the loop, goal or watch; the goal checked ahead
+    /// of the loop; a paused goal answered as a goal in force or handed on to the watches; and a
+    /// caller that sends nothing again offered a later look of its own.
+    #[test]
+    fn what_takes_the_next_look_at_a_line_follows_one_order() {
+        let persons = AboutTheLine {
+            the_persons: true,
+            sent_again_after_a_wait: true,
+            ..AboutTheLine::default()
+        };
+        let everything = AboutTheLine {
+            loop_live: true,
+            goal: GoalHeld::InForce,
+            watch_live: true,
+            ..persons
+        };
+        for (line, expected, case) in [
+            (persons, LaterLook::ThisTurnArranges, "an idle session"),
+            (
+                AboutTheLine {
+                    sent_again_after_a_wait: false,
+                    ..persons
+                },
+                LaterLook::Nothing,
+                "a caller that sends nothing again",
+            ),
+            (
+                AboutTheLine {
+                    the_persons: false,
+                    ..everything
+                },
+                LaterLook::Nothing,
+                "this program's line under everything",
+            ),
+            (
+                everything,
+                LaterLook::UnderALoop,
+                "a loop beside a goal and a watch",
+            ),
+            (
+                AboutTheLine {
+                    loop_live: false,
+                    ..everything
+                },
+                LaterLook::UnderAGoal,
+                "a goal beside a watch",
+            ),
+            (
+                AboutTheLine {
+                    loop_live: false,
+                    goal: GoalHeld::Paused,
+                    ..everything
+                },
+                LaterLook::Nothing,
+                "a paused goal beside a watch",
+            ),
+            (
+                AboutTheLine {
+                    goal: GoalHeld::Paused,
+                    ..persons
+                },
+                LaterLook::Nothing,
+                "a paused goal on a caller that sends the line again",
+            ),
+            (
+                AboutTheLine {
+                    watch_live: true,
+                    ..persons
+                },
+                LaterLook::UnderAWatch,
+                "a watch",
+            ),
+            (
+                AboutTheLine {
+                    watch_live: true,
+                    sent_again_after_a_wait: false,
+                    ..persons
+                },
+                LaterLook::UnderAWatch,
+                "a watch on a caller that sends nothing again",
+            ),
+            (
+                AboutTheLine {
+                    goal: GoalHeld::InForce,
+                    sent_again_after_a_wait: false,
+                    ..persons
+                },
+                LaterLook::UnderAGoal,
+                "a goal on a caller that sends nothing again",
+            ),
+        ] {
+            assert_eq!(LaterLook::for_line(line), expected, "{case}");
+        }
     }
 
     /// DELEGATE-17: a `wake_after` above the number of delegates a call starts asks for all of

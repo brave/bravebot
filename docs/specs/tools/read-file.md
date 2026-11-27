@@ -266,7 +266,21 @@ to watch something or to be told when it changes, and a look has been taken and 
 the description must have the planner say so, or no change reads as a promise to report the next one.
 The sentence opens with that condition, and the description must say that any other request gets no
 sentence about a later look. A turn nothing will ask again is told to say plainly that no later look
-is coming under the same condition.
+is coming under the same condition. A line the person typed while the session's own loop, goal or
+standing watch is live is not such a turn, and is not told that nothing will ask again. The
+description says which of the three starts the next turn and that this turn does not set the wait.
+Under the same condition it has the planner say what that next turn looks at, and say plainly that
+no later look at what was asked about is coming where that is not what the loop's line or the goal's
+condition asks about. The turn is not told which files the session's watches cover, so under a
+watch the description says that the watches report only on the files they cover and asks for no
+comparison: where the turn is offered `watch_file` it has the planner arm a watch of a file asked
+about, and say plainly that no later look is coming only for something that is not a file or a
+watch that could not be armed; where it is not, it has the planner say that no later look at
+anything but the watched files is coming. Under a loop or a watch it says not to wait in this turn for
+the look the loop or the watch takes. Under a goal it does not, because
+[GOAL-15](../goal.md#GOAL-15) has a turn under a goal wait inside the turn. The description names
+no tool the turn is not offered: not `schedule_next`, and `watch_file` only where the turn is
+offered it.
 
 **Why the line is conditional.** An unconditional statement that no later look was scheduled, on a
 request that has nothing to do with watching or being told of a change, reads as if a first look had
@@ -309,6 +323,7 @@ to a technique has to say which end of it happens in the turn that read it.
 `verified-by: bravebot_agent::tools::tests::run_and_read_file_text::inside_a_loop_read_file_says_there_is_nothing_to_arrange`
 `verified-by: bravebot_agent::tools::tests::run_and_read_file_text::no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_change`
 `verified-by: bravebot_agent::tools::tests::run_and_read_file_text::a_turn_nothing_asks_again_announces_no_later_look_only_for_a_watch_request`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::what_a_watch_request_is_told_about_the_next_look_matches_what_this_turn_can_arrange`
 
 <a id="READ-7"></a>
 ### READ-7: a read carries a token that differs once the file has been written

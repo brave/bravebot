@@ -2393,7 +2393,7 @@ fn a_tick_whose_loop_was_stopped_mid_turn_starts_no_loop() {
         Vec::new(),
         crate::state::NamesFrom::nothing(),
     );
-    let offered = will_look_again(&ticking, Wrote::ThePerson);
+    let offered = will_look_again(&ticking, Wrote::ThePerson).this_turn_arranges();
     ticking.stop_loops();
 
     assert_eq!(

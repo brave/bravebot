@@ -1545,7 +1545,9 @@ to watch something or to be told when it changes, and no further look has been s
 says so. The sentence opens with that condition, and the description must say that any other request
 gets no sentence about a later look. A turn nothing will ask again is told to say plainly that no
 later look is coming under the same condition, as [READ-6](read-file.md#READ-6) has it for
-`read_file`.
+`read_file`. A line the person typed while the session's own loop, goal or standing watch is live
+is told instead which of the three starts the next turn and what it looks at, under the same
+condition and in the same words.
 
 **Why the file branch names no command.** The recipe this clause first shipped was `tail -f`, and it
 was wrong twice over. It is not in the read-proven table, so every watch of a file cost an approval
@@ -1558,6 +1560,14 @@ output would come back quarantined.
 look is the next tick, so the description has such a turn report what this tick saw and leave the rest
 to the next one, and arrange nothing. Without that sentence a tick reads the instruction above and
 schedules a second look on top of the one its loop is already taking.
+
+**A line the person typed under the session's own loop, goal or watch is a fourth case.** The
+session drops the wait such a turn would ask for, so it is offered no `schedule_next`, but the live
+loop, goal or watch does start another turn. The description says which one, says that this turn
+does not set the wait, and does not say that nothing will ask again. Under a loop or a watch it has
+the turn take this look and not wait in the foreground for the look the loop or the watch takes.
+A turn told that nothing will ask again tells the person no later look is coming while the
+session's loop is about to take one, and waits in the foreground in place of that look.
 
 **The window, never a time of day.** The description must have the answer name the window it watched,
 or the looks it compared, rather than date either, and must say why: the planner has no clock. It is told today's date and told not
@@ -1590,6 +1600,7 @@ without even the file. Hence the first look happens in the turn that was asked.
 `verified-by: bravebot_agent::tools::tests::run_and_read_file_text::the_run_description_routes_a_watch_request_to_one_of_the_two_techniques`
 `verified-by: bravebot_agent::tools::tests::run_and_read_file_text::no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_change`
 `verified-by: bravebot_agent::tools::tests::run_and_read_file_text::a_turn_nothing_asks_again_announces_no_later_look_only_for_a_watch_request`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::what_a_watch_request_is_told_about_the_next_look_matches_what_this_turn_can_arrange`
 
 <a id="RUN-19"></a>
 ### RUN-19: a prompt may record its answer past the session, and it stops only the asking

@@ -591,11 +591,6 @@ pub(super) fn run_turn_animated(
     let worker_workspace = workspace.clone();
     // No round limit: the person reading this screen is the bound, and a stop reaches a turn
     // mid-round. A number here would only interrupt work that was going fine.
-    // Whether a wait this turn asks for would become a later look at this line, which decides
-    // whether it is offered a way to ask for one. Read here for the reason `arming` is: only the
-    // session knows what it is already doing, and a tool answering out of a stale reading would
-    // tell the planner a watch exists that the session then declines to keep.
-    let looking_again = will_look_again(session, wrote);
     // The session's own handle rather than a copy of its value: the person may press the key while
     // this turn runs, and the planner, the tools and the confirmer all read what they pressed last
     // (MODE-8).
@@ -617,8 +612,10 @@ pub(super) fn run_turn_animated(
         prompt,
         wrote,
         addressed.as_ref(),
-        looking_again,
     );
+    // Whether the turn was offered a later look of its own, which decides whether a wait it asks
+    // for starts a watch once it ends. Read off the task, so the two cannot disagree.
+    let offered_a_later_look = task.later_look().this_turn_arranges();
     // The same map, for a `/btw` typed beside the turn to read the decisions the turn is making.
     session.set_turn_files(Some(file_authority.clone()));
     let retained = RetainedTurn {
@@ -843,7 +840,7 @@ pub(super) fn run_turn_animated(
         Line {
             text: prompt,
             addressed: addressed.as_ref(),
-            offered_a_later_look: looking_again,
+            offered_a_later_look,
         },
         finished,
         retained,
@@ -1389,26 +1386,35 @@ pub(super) fn watch_to_start(wakeup: Option<turn::Wakeup>, offered: bool) -> Opt
     wakeup.filter(|_| offered)
 }
 
-/// Whether a wait this turn asks for would become a later look at its own line.
+/// Whether a wait this turn asks for would become a later look at its own line, and where it would
+/// not, whether something of the session's own takes the next look instead.
 ///
 /// Asked before the turn rather than after it, because it decides whether the turn is offered a
-/// way to ask for one at all (SCHED-6). Where the answer is no the wait is discarded, and a tool
-/// whose confirmation says a later look is arranged and needs nothing from the person would be
-/// describing a watch nothing is keeping.
+/// way to ask for one at all (SCHED-6). Where the answer is anything but
+/// [`turn::LaterLook::ThisTurnArranges`] the wait is discarded, and a tool whose confirmation says
+/// a later look is arranged and needs nothing from the person would be describing a watch nothing
+/// is keeping.
 ///
 /// The same refusals [`crate::state::Session::watch_again`] makes once the turn has ended, in one
-/// place ahead of it, and the answer [`watch_to_start`] reads then: the line has to be the
-/// person's, which `/init`, `/review` and `/help` are not, since the person's keystroke sends a prompt this
-/// program wrote; and the session has to have nothing else of its own already running, since it
-/// does one of a watch, a loop and a goal at a time. A turn that is a tick of a loop is not this
-/// question at all, the loop being already the thing that asks again, and the agent reads this
-/// only where there is no tick.
-pub(super) fn will_look_again(session: &Session, wrote: Wrote) -> bool {
-    wrote == Wrote::ThePerson
-        && !session.driver_prompt_is_pending()
-        && session.looping().is_none()
-        && session.goal().is_none()
-        && session.watches().is_empty()
+/// place ahead of it, and the answer [`watch_to_start`] reads then. The rule is
+/// [`turn::LaterLook::for_line`]; this reads the session's own state for it. The line is the
+/// person's only where they wrote it and no prompt this program wrote is pending: `/init`,
+/// `/review` and `/help` send a prompt this program wrote on the person's keystroke. This
+/// terminal sends the person's line again after a wait. A turn that is a tick of a loop is not
+/// this question at all, the loop being already the thing that asks again, and the agent reads
+/// this only where there is no tick.
+pub(super) fn will_look_again(session: &Session, wrote: Wrote) -> turn::LaterLook {
+    turn::LaterLook::for_line(turn::AboutTheLine {
+        the_persons: wrote == Wrote::ThePerson && !session.driver_prompt_is_pending(),
+        sent_again_after_a_wait: true,
+        loop_live: session.looping().is_some(),
+        goal: match (session.goal(), session.goal_in_force()) {
+            (None, _) => turn::GoalHeld::None,
+            (Some(_), Some(_)) => turn::GoalHeld::InForce,
+            (Some(_), None) => turn::GoalHeld::Paused,
+        },
+        watch_live: !session.watches().is_empty(),
+    })
 }
 
 /// What a prompt names with `@`: the files it vouches for and the past sessions it quotes.
@@ -1444,8 +1450,13 @@ pub(super) fn the_turn_task(
     prompt: &str,
     wrote: Wrote,
     addressed: Option<&crate::state::Addressed>,
-    looking_again: bool,
 ) -> TurnTask {
+    // Whether a wait this turn asks for would become a later look at this line, which decides
+    // whether it is offered a way to ask for one. Read here for the reason `arming` is: only the
+    // session knows what it is already doing, and a tool answering out of a stale reading would
+    // tell the planner a watch exists that the session then declines to keep. Read first, before
+    // the driver's pending prompt is taken below.
+    let looking_again = will_look_again(session, wrote);
     // Whether the name is the one the session stands under and not one a `/agent` line named for
     // this turn alone, which the record keeps beside the prompt (ADDRESS-12).
     let addressing_standing = addressed.is_some_and(|addressed| {
@@ -1485,7 +1496,7 @@ pub(super) fn the_turn_task(
         .with_auto_vetting(session.auto_vetting())
         .ticking(tick)
         .arming(arming)
-        .looking_again(looking_again)
+        .later_look(looking_again)
         // This front end writes the links `set_link` records to the session record (SETLINK-2).
         .keeping_links(true)
         // And the files this session has already agreed the planner may be given, so a planner
@@ -1535,16 +1546,21 @@ pub(super) fn the_turn_task(
 /// A task [`the_turn_task`] built: its files and session excerpts are the ones the turn's line
 /// names and no code after the builder has added to them.
 ///
-/// The field is private to this module and the type has no accessor but [`TurnTask::into_task`], so
-/// a line in `run_turn_animated` that pushes a file onto the task it holds does not compile. The
-/// plain task comes out where the worker is started, and a change that takes it out earlier to edit
-/// it is the one thing left that the compiler does not refuse.
+/// The field is private to this module and the type has no accessor that hands out the task but
+/// [`TurnTask::into_task`], so a line in `run_turn_animated` that pushes a file onto the task it
+/// holds does not compile. The plain task comes out where the worker is started, and a change that
+/// takes it out earlier to edit it is the one thing left that the compiler does not refuse.
 pub(super) struct TurnTask(Task);
 
 impl TurnTask {
     /// The task to hand to the worker.
     pub(super) fn into_task(self) -> Task {
         self.0
+    }
+
+    /// What the task says takes the next look at its line.
+    pub(super) fn later_look(&self) -> turn::LaterLook {
+        self.0.later_look
     }
 }
 

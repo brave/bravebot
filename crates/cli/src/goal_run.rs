@@ -173,8 +173,11 @@ pub(crate) struct Ended {
 /// The files, excerpts, pictures and piped input belong to the line the person typed. Attached to
 /// the driver's sentence they would be read again every round, and the piped bytes (CLI-3) would be
 /// presented again as well. Made once, so a large attachment is not copied to be dropped each round.
+/// The person's line was answered by the goal sending the work back; the driver's sentence is one
+/// nothing sends again, as a session's carry-on is (SCHED-6).
 fn without_the_prompts_extras(task: &Task) -> Task {
     let mut bare = task.clone();
+    bare.later_look = turn::LaterLook::Nothing;
     bare.composed = None;
     bare.files.clear();
     bare.attachments.clear();
@@ -341,7 +344,8 @@ mod tests {
             .with_file("notes.txt")
             .with_session_excerpt("abc", "an earlier question")
             .with_piped_input("a build log")
-            .working_towards(Some("the build is green".to_string()));
+            .working_towards(Some("the build is green".to_string()))
+            .later_look(turn::LaterLook::UnderAGoal);
 
         let next = without_the_prompts_extras(&first);
 
@@ -358,10 +362,16 @@ mod tests {
             "a later round is not told what it is judged against"
         );
         assert_eq!(
+            next.later_look,
+            turn::LaterLook::Nothing,
+            "the driver's sentence was told the goal sends it again (SCHED-6)"
+        );
+        assert_eq!(
             first.prompt, "get the build green",
             "the first round's task changed"
         );
         assert_eq!(first.files, ["notes.txt"]);
+        assert_eq!(first.later_look, turn::LaterLook::UnderAGoal);
     }
 
     /// CHATGPT-10: the rounds of a goal run are made from the first round's task, and they are one

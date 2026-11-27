@@ -624,11 +624,14 @@ fn a_help_question_typed_while_a_turn_runs_waits_and_then_starts_its_own_turn() 
 fn a_help_turn_is_the_drivers_prompt_and_is_offered_no_later_look() {
     let mut ordinary = Session::new("none");
     enter_line(&mut ordinary, "how do I stop a background job?");
-    assert!(will_look_again(&ordinary, Wrote::ThePerson));
+    assert!(will_look_again(&ordinary, Wrote::ThePerson).this_turn_arranges());
 
     let mut helped = Session::new("none");
     enter_line(&mut helped, "/help how do I stop a background job?");
-    assert!(!will_look_again(&helped, Wrote::ThePerson));
+    assert_eq!(
+        will_look_again(&helped, Wrote::ThePerson),
+        turn::LaterLook::Nothing
+    );
 }
 
 /// CMD-24: only the question contributes a person's file names. The driver-written flag
@@ -646,7 +649,10 @@ fn a_help_questions_file_names_are_the_persons_while_its_prompt_is_the_drivers()
         named_by_the_person(&session, Wrote::ThePerson, std::path::Path::new("."), &[]).files,
         vec!["crates/core/src/policy.rs".to_string()]
     );
-    assert!(!will_look_again(&session, Wrote::ThePerson));
+    assert_eq!(
+        will_look_again(&session, Wrote::ThePerson),
+        turn::LaterLook::Nothing
+    );
     assert!(session.take_driver_prompt());
     assert!(!crate::help_command::prompt("").contains('@'));
 }

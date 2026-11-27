@@ -104,24 +104,36 @@ fn any_turn_may_arrange_the_next_look_and_is_told_which_case_it_is() {
 /// line to send it again. A tool offered there invites a call whose confirmation tells
 /// somebody a watch now exists and needs nothing from them, which is a sentence the
 /// planner then writes into the answer of a run that is about to exit.
+///
+/// A line the person typed while the session's own loop, goal or watch is live is withheld it
+/// too: the session does one of those at a time and drops the wait, though something of its own
+/// does start another turn.
 #[test]
-fn a_turn_nothing_will_ask_again_is_offered_no_way_to_schedule_one() {
-    let offered = available(
+fn a_turn_that_cannot_keep_a_wait_is_offered_no_way_to_schedule_one() {
+    for scheduling in [
         Scheduling::NoLaterLook,
-        Arming::Allowed { free: 1 },
-        Deadlines::BUILT_IN,
-        Running::Offered,
-    );
-    assert!(
-        !offered.iter().any(|t| t.function.name == "schedule_next"),
-        "a turn nothing will ask again was offered a way to arrange a later look"
-    );
-    // And the rest of the table is still there, so the absence above is this tool being
-    // withheld rather than a turn offered nothing at all.
-    assert!(
-        offered.iter().any(|t| t.function.name == "read_file"),
-        "the table itself went missing"
-    );
+        Scheduling::UnderALoop,
+        Scheduling::UnderAGoal,
+        Scheduling::UnderAWatch,
+    ] {
+        let offered = available(
+            scheduling,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        assert!(
+            !offered.iter().any(|t| t.function.name == "schedule_next"),
+            "{scheduling:?}: a turn whose wait would be dropped was offered a way to arrange a \
+             later look"
+        );
+        // And the rest of the table is still there, so the absence above is this tool being
+        // withheld rather than a turn offered nothing at all.
+        assert!(
+            offered.iter().any(|t| t.function.name == "read_file"),
+            "{scheduling:?}: the table itself went missing"
+        );
+    }
 }
 
 /// The one turn with nothing to decide. Its loop is already running on an interval a
@@ -183,6 +195,9 @@ fn a_call_from_a_turn_this_was_withheld_from_is_answered_as_an_unknown_name() {
         (Scheduling::ArrangingALook, false, false),
         (Scheduling::ArrangingALook, true, true),
         (Scheduling::TheirInterval, false, true),
+        (Scheduling::UnderALoop, false, true),
+        (Scheduling::UnderAGoal, false, true),
+        (Scheduling::UnderAWatch, false, true),
         (Scheduling::NoLaterLook, false, true),
     ] {
         let mut sink = RecordingSink::new();

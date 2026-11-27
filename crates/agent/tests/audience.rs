@@ -76,6 +76,9 @@ fn tools_as_sent() -> Vec<Value> {
         Scheduling::ArrangingALook,
         Scheduling::PacingALoop,
         Scheduling::TheirInterval,
+        Scheduling::UnderALoop,
+        Scheduling::UnderAGoal,
+        Scheduling::UnderAWatch,
         Scheduling::NoLaterLook,
     ] {
         for arming in [

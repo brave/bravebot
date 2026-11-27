@@ -387,6 +387,9 @@ fn every_tool_offered_asks_why_it_is_being_called() {
         Scheduling::ArrangingALook,
         Scheduling::PacingALoop,
         Scheduling::TheirInterval,
+        Scheduling::UnderALoop,
+        Scheduling::UnderAGoal,
+        Scheduling::UnderAWatch,
         Scheduling::NoLaterLook,
     ] {
         for arming in [
@@ -458,6 +461,9 @@ fn no_tool_offered_installs_or_changes_a_plugin() {
         Scheduling::ArrangingALook,
         Scheduling::PacingALoop,
         Scheduling::TheirInterval,
+        Scheduling::UnderALoop,
+        Scheduling::UnderAGoal,
+        Scheduling::UnderAWatch,
         Scheduling::NoLaterLook,
     ] {
         for arming in [
@@ -745,6 +751,9 @@ fn every_list_a_turn_can_offer() -> Vec<Tool> {
         Scheduling::ArrangingALook,
         Scheduling::PacingALoop,
         Scheduling::TheirInterval,
+        Scheduling::UnderALoop,
+        Scheduling::UnderAGoal,
+        Scheduling::UnderAWatch,
         Scheduling::NoLaterLook,
     ] {
         for arming in [

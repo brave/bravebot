@@ -87,13 +87,22 @@ and the wait it gives starts a loop over the line the person typed
 ([LOOP-14](../loop.md#LOOP-14)). A tick of a self-paced loop is offered it and sets the pace of the
 next tick.
 
-Three turns are offered nothing, and a call from any of them is answered the way any other name
-nobody offered is: no such tool. A tick of a loop the person gave an interval for. A delegate. And
-a turn nothing will ask again, which is a surface that runs one turn and exits, or a line the
-driver wrote rather than the person: the wait it names is discarded when the turn ends.
+Four turns are offered nothing, and a call from any of them is answered the way any other name
+nobody offered is: no such tool. A tick of a loop the person gave an interval for. A delegate. A
+turn nothing will ask again, which is a surface that runs one turn and exits, a line the driver
+wrote rather than the person, or a line the person typed under a goal they paused: the wait it
+names is discarded when the turn ends. And a line the person typed while the session's own loop,
+goal or standing watch is live: the session keeps one of the three at a time, so the wait this
+turn names is discarded, and the one already live starts another turn. That turn is not one
+nothing will ask again, and is not described as one. The desktop application keeps loops, a goal
+and standing watches too, so a line typed there under any of them is this case. In a one-shot
+`--goal` run the person's line is this case too, since the goal sends the work back while its
+condition is unmet; each round it sends back is the driver's sentence, a turn nothing will ask
+again.
 
-Which caller that is, the caller says: a turn carries whether its line will be sent again, and a
-caller that says nothing is one that will not.
+Which caller that is, the caller says: a turn carries whether its line will be sent again and,
+where it will not, whether the session's own loop, goal or watch starts the next turn. A caller
+that says nothing is one whose line nothing sends again.
 
 The confirmation says which of the two offered cases happened, because the answer the turn is
 writing differs: a tick reports what this look found and leaves the rest to the next one, while a
@@ -102,7 +111,9 @@ nothing from them.
 
 The two descriptions that route a request to be told when something changes, the read whose change
 token is compared and the run whose output is watched, say where the next look comes from, and say
-the same thing this clause does about the turn they are offered to.
+the same thing this clause does about the turn they are offered to. For a line typed under the
+session's loop, goal or watch they name which of the three starts the next turn and what that turn
+looks at, say that this turn does not set the wait, and do not say that nothing will ask again.
 
 **Why.** A request to be told when something changes cannot be answered inside one turn, and a rule
 withholding the tool from every turn but a tick leaves the only honest answer a single read and a
@@ -111,11 +122,17 @@ with nothing to decide: the interval already says when it runs, so a wait asked 
 dropped, and a tool present but inert is one the planner has to be told to ignore. A turn nothing
 will ask again has the same wait dropped for the opposite reason, and the confirmation is why it
 matters more: the planner is told a later look is arranged and needs nothing from the person, and
-it writes that to somebody who then believes a watch exists that nothing is keeping.
+it writes that to somebody who then believes a watch exists that nothing is keeping. A line the
+person typed under the session's own loop, goal or watch has the wait dropped for a third reason:
+the session runs one of the three at a time, and the one already live starts the next turn. A turn
+told that nothing will ask again tells the person no later look is coming while the session's loop
+is about to take one, and waits in the foreground in place of that look. So it is told which of the
+three takes the next look and what that look covers. A goal the person paused sends nothing back
+until it is resumed, so a line typed under one is a turn nothing will ask again.
 
 `verified-by: bravebot_agent::tools::tests::scheduling::any_turn_may_arrange_the_next_look_and_is_told_which_case_it_is`
 `verified-by: bravebot_agent::tools::tests::scheduling::a_tick_the_person_timed_is_offered_no_way_to_schedule_one`
-`verified-by: bravebot_agent::tools::tests::scheduling::a_turn_nothing_will_ask_again_is_offered_no_way_to_schedule_one`
+`verified-by: bravebot_agent::tools::tests::scheduling::a_turn_that_cannot_keep_a_wait_is_offered_no_way_to_schedule_one`
 `verified-by: bravebot_agent::tools::tests::scheduling::a_turn_outside_a_loop_is_told_the_next_look_is_already_arranged`
 `verified-by: bravebot_agent::tools::tests::scheduling::a_call_from_a_turn_this_was_withheld_from_is_answered_as_an_unknown_name`
 `verified-by: bravebot_agent::tools::tests::run_and_read_file_text::what_a_watch_request_is_told_about_the_next_look_matches_what_this_turn_can_arrange`
@@ -127,4 +144,11 @@ it writes that to somebody who then believes a watch exists that nothing is keep
 `verified-by: bravebot_agent::tools::tests::delegate_offers::a_delegates_descriptions_do_not_name_schedule_next`
 `verified-by: bravebot_cli::running::a_one_shot_run_offers_no_way_to_arrange_a_later_look`
 `verified-by: bravebot_tui::app::tests::loops_and_goals::only_a_turn_whose_wait_would_be_kept_is_offered_a_later_look`
+`verified-by: bravebot_tui::app::tests::loops_and_goals::the_task_a_turn_is_built_with_says_what_takes_the_next_look`
+`verified-by: bravebot_agent::turn::what_takes_the_next_look_at_a_line_follows_one_order`
+`verified-by: bravebot_agent::turn::an_addressed_turn_is_offered_no_later_look_and_no_watch`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_change`
+`verified-by: bravebot_ui_bridge::goal_tests::a_line_typed_under_a_goal_or_a_watch_is_told_which_one_takes_the_next_look`
+`verified-by: bravebot_cli::running::the_first_round_of_a_goal_run_is_told_the_goal_takes_the_next_look`
+`verified-by: bravebot_cli::goal_run::the_work_sent_back_keeps_the_run_and_drops_what_came_with_the_prompt`
 `verified-by: bravebot_agent::turn::stop_from_a_turn_arranging_a_look_is_not_read_in_a_whole_turn`

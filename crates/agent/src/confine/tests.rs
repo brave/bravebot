@@ -4572,6 +4572,9 @@ fn the_sentences_about_loopback_and_listing_processes_name_no_tool() {
         Scheduling::ArrangingALook,
         Scheduling::PacingALoop,
         Scheduling::TheirInterval,
+        Scheduling::UnderALoop,
+        Scheduling::UnderAGoal,
+        Scheduling::UnderAWatch,
         Scheduling::NoLaterLook,
     ] {
         for running in [Running::Offered, Running::Withheld] {

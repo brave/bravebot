@@ -73,7 +73,7 @@ fn take_a_turn_at(
         working_towards: None,
         loops: Default::default(),
         tick: None,
-        looking_again: false,
+        later_look: bravebot_agent::turn::LaterLook::Nothing,
         model: Some(ACCOUNT_MODEL.into()),
         addressing: None,
         addressing_standing: false,

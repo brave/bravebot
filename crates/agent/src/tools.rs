@@ -8599,11 +8599,18 @@ fn schedule_next<S: Sink>(
     // Which of the two happened is worth telling the planner apart, because the answer it is
     // writing differs: a tick reports what this look found and leaves the rest to the next one,
     // while a turn that has just started a watch is telling somebody a watch now exists.
-    // The two withheld cases do not reach here: dispatch answers a call from either as an unknown
-    // name, for want of anything a confirmation could truthfully say about a wait nothing keeps.
+    // The withheld cases do not reach here: a tick the person timed, a line typed under the
+    // session's own loop, goal or watch, and a turn nothing will ask again. Dispatch answers a
+    // call from any of them as an unknown name, for want of anything a confirmation could
+    // truthfully say about a wait nothing keeps.
     let confirmation = match scheduling {
         _ if stopping => "scheduled: this loop has ended and no further tick will run".to_string(),
-        Scheduling::PacingALoop | Scheduling::TheirInterval | Scheduling::NoLaterLook => format!(
+        Scheduling::PacingALoop
+        | Scheduling::TheirInterval
+        | Scheduling::UnderALoop
+        | Scheduling::UnderAGoal
+        | Scheduling::UnderAWatch
+        | Scheduling::NoLaterLook => format!(
             "scheduled: this loop runs again in {held} seconds, sending the user's own prompt \
              unchanged"
         ),

@@ -2445,20 +2445,26 @@ impl Bridge {
         let loops = Arc::clone(&open.loops);
         // Which tick of a loop this turn is, where it is one: the loop `fire_loop` has just
         // dispatched is the one in flight (LOOP-10). A prompt typed while loops wait is no tick.
-        //
-        // And whether a wait this turn asks for would become a later look at its line, which
-        // decides whether it is offered a way to ask for one (LOOP-14, SCHED-6). Only a line the
-        // person typed, in a session with no loop and no watch of its own already running.
-        let (tick, looking_again) = {
+        let (tick, loop_live) = {
             let loops = loops.lock().map_err(|_| {
                 Failure::new(ErrorCode::Internal, "the session's loops are unavailable")
             })?;
-            let watching = watches.lock().map(|w| !w.is_empty()).unwrap_or(true);
             (
                 loops.in_flight().and_then(|running| running.tick()),
-                composed.is_none() && recall && loops.is_empty() && !watching,
+                !loops.is_empty(),
             )
         };
+        // What takes the next look at this line, read when it starts from what the chat holds,
+        // which decides whether it is offered a way to ask for one and what it is told about the
+        // next look (LOOP-14, SCHED-6). Only a recalled line is sent again after a wait: a loop's
+        // tick and a line a front-end sent on its own account are not recalled.
+        let later_look = later_look_of(
+            wrote == Wrote::Person && composed.is_none(),
+            recall,
+            loop_live,
+            &goal,
+            &watches,
+        );
         let (turn_number, tokens_at_turn) = state
             .lock()
             .map(|s| (s.turns + 1, s.tokens))
@@ -2556,7 +2562,7 @@ impl Bridge {
                 working_towards,
                 loops,
                 tick,
-                looking_again,
+                later_look,
                 emitter,
                 session,
                 project,
@@ -5566,10 +5572,6 @@ impl RunSettings {
 ///
 /// A struct rather than a dozen arguments, because the list was the kind that grows one
 /// parameter at a time until nobody can read the call.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "each flag is a separate fact about the turn, and no two of them are states of one thing"
-)]
 struct Work {
     emitter: Emitter,
     session: String,
@@ -5615,8 +5617,9 @@ struct Work {
     loops: Arc<Mutex<bravebot_agent::repeat::Loops>>,
     /// Which tick of a loop this turn is, where it is one (LOOP-10).
     tick: Option<bravebot_agent::turn::Tick>,
-    /// Whether a wait this turn asks for starts a loop over its line (LOOP-14).
-    looking_again: bool,
+    /// What takes the next look at this turn's line once it ends ([`later_look_of`]). Where the
+    /// turn arranges it, a wait it asks for starts a loop over its line (LOOP-14).
+    later_look: bravebot_agent::turn::LaterLook,
     model: Option<String>,
     /// The definition this turn is addressed to, where it is a turn in a bot's conversation
     /// (MEMORY-10).
@@ -5720,6 +5723,40 @@ fn shown_path(path: &Path, project: &Path) -> String {
         .to_string()
 }
 
+/// What takes the next look at a turn's line once it ends, which decides what the turn is told
+/// about a later look (SCHED-6). The rule is [`bravebot_agent::turn::LaterLook::for_line`]; this
+/// reads the chat's own goal slot and watches for it, never the line.
+///
+/// The bridge sends a line the person typed and recalled again after a wait the turn asks for, by
+/// starting a loop over it (LOOP-14), and keeps loops of its own beside the goal and the watches.
+/// Every line the bridge wrote, such as a goal's carry-on or a watch's firing, is not the
+/// person's. A watch slot that cannot be read counts as live, so a wait is not kept beside a
+/// watch nobody can see, as the bridge read it before.
+fn later_look_of(
+    typed_by_the_person: bool,
+    sent_again_after_a_wait: bool,
+    loop_live: bool,
+    goal: &Mutex<crate::goal::GoalSlot>,
+    watches: &Mutex<bravebot_agent::watch::Watches>,
+) -> bravebot_agent::turn::LaterLook {
+    use bravebot_agent::turn::{AboutTheLine, GoalHeld, LaterLook};
+    let paused = goal
+        .lock()
+        .ok()
+        .and_then(|slot| slot.running.as_ref().map(|running| running.is_paused()));
+    LaterLook::for_line(AboutTheLine {
+        the_persons: typed_by_the_person,
+        sent_again_after_a_wait,
+        loop_live,
+        goal: match paused {
+            None => GoalHeld::None,
+            Some(false) => GoalHeld::InForce,
+            Some(true) => GoalHeld::Paused,
+        },
+        watch_live: watches.lock().map_or(true, |live| !live.is_empty()),
+    })
+}
+
 /// Run one turn to its end, whatever that end is.
 ///
 /// The worker owns the whole of it: the call, writing the record afterwards, and saying
@@ -5749,7 +5786,7 @@ fn work(work: Work) {
         working_towards,
         loops,
         tick,
-        looking_again,
+        later_look,
         model,
         addressing,
         addressing_standing,
@@ -5897,7 +5934,7 @@ fn work(work: Work) {
         // Told it is a tick of a loop and which kind, where it is one (LOOP-10), and a self-paced
         // tick is offered the tool that says when to run again.
         .ticking(tick)
-        .looking_again(looking_again);
+        .later_look(later_look);
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }
@@ -6083,7 +6120,7 @@ fn work(work: Work) {
                     crate::loop_command::TurnEnd {
                         wakeup: outcome.wakeup,
                         cancelled: false,
-                        looking_again: looking_again.then(|| prompt.clone()),
+                        looking_again: later_look.this_turn_arranges().then(|| prompt.clone()),
                         watching,
                     },
                     std::time::Instant::now(),

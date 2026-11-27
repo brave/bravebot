@@ -84,6 +84,104 @@ pub struct RunLimits {
     pub tokens: Option<u64>,
 }
 
+/// What takes the next look at a turn's line once the turn ends, as the caller says it.
+///
+/// More than a flag, because "nothing asks again" and "something else of this session's asks
+/// again" are both reasons the turn may not arrange a look itself, and they want different words:
+/// a turn told nothing will ask again says so to the person, which is false where the session's
+/// own loop, goal or watch is about to start another turn. Read only where the turn is not a tick.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LaterLook {
+    /// Nothing will ask this turn's line again: a caller that runs a turn and stops, or a line
+    /// this program wrote rather than the person.
+    #[default]
+    Nothing,
+    /// The caller sends this turn's line again after a wait the turn asks for, so the turn
+    /// arranges its own later look.
+    ThisTurnArranges,
+    /// The person typed the line while this session's loop is running. The loop starts its next
+    /// tick on its own line, and a wait this turn asked for would be dropped.
+    UnderALoop,
+    /// The person typed the line while this session works towards a goal. The goal sends the
+    /// work back on its own, and a wait this turn asked for would be dropped.
+    UnderAGoal,
+    /// The person typed the line while this session holds a standing watch. The watch starts a
+    /// turn when its file changes, and a wait this turn asked for would be dropped.
+    UnderAWatch,
+}
+
+impl LaterLook {
+    /// What takes the next look at a line, from what the caller knows of the line and of the
+    /// session it was typed into. The one place the rule is written, so the terminal, the desktop
+    /// bridge and a one-shot `--goal` run cannot drift apart on it (SCHED-6).
+    ///
+    /// The order is the rule. A line this program wrote is one nothing sends again, whatever the
+    /// session holds: a loop, goal or watch repeats or answers the person's line, never the
+    /// driver's sentence. Then a loop, a goal and a watch, in that order: a session keeps one of
+    /// the three at a time, and the order settles a state that holds more than one. A goal the
+    /// person paused sends nothing back until it is resumed, so a line under one is answered as
+    /// one nothing sends again. Only where the session holds none of the three does the caller's
+    /// own habit decide: a caller that sends the line again after a wait has the turn arrange it.
+    ///
+    /// Every input is the session's own state or who wrote the line, never the line itself.
+    pub fn for_line(line: AboutTheLine) -> Self {
+        if !line.the_persons {
+            LaterLook::Nothing
+        } else if line.loop_live {
+            LaterLook::UnderALoop
+        } else {
+            match line.goal {
+                GoalHeld::InForce => LaterLook::UnderAGoal,
+                GoalHeld::Paused => LaterLook::Nothing,
+                GoalHeld::None if line.watch_live => LaterLook::UnderAWatch,
+                GoalHeld::None if line.sent_again_after_a_wait => LaterLook::ThisTurnArranges,
+                GoalHeld::None => LaterLook::Nothing,
+            }
+        }
+    }
+
+    /// Whether the turn arranges its own later look, which is the one case a wait it asks for is
+    /// kept.
+    pub fn this_turn_arranges(self) -> bool {
+        self == LaterLook::ThisTurnArranges
+    }
+}
+
+/// What [`LaterLook::for_line`] is told: who wrote the line, what the caller does with a wait,
+/// and what the session holds as the line is sent. Each client reads these from its own state.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate fact about the line or the session, set by the client and \
+              read once by `LaterLook::for_line`"
+)]
+pub struct AboutTheLine {
+    /// The person wrote the line, rather than this program (`/init`, `/review`, a goal's
+    /// carry-on, a watch's firing).
+    pub the_persons: bool,
+    /// The caller sends the line again after a wait the turn asks for, which the terminal and the
+    /// desktop bridge do for a line the person typed, and a one-shot run does not.
+    pub sent_again_after_a_wait: bool,
+    /// A loop is live in the session.
+    pub loop_live: bool,
+    /// What the session holds of a goal.
+    pub goal: GoalHeld,
+    /// A standing watch is live in the session.
+    pub watch_live: bool,
+}
+
+/// Whether a session holds a goal, and whether the person paused it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GoalHeld {
+    /// No goal is set.
+    #[default]
+    None,
+    /// A goal is set and sends the work back while its condition is unmet.
+    InForce,
+    /// A goal is set and the person paused it, so it sends nothing back until it is resumed.
+    Paused,
+}
+
 /// What a turn is asked to do.
 #[derive(Debug, Clone)]
 pub struct Task {
@@ -452,13 +550,17 @@ pub struct Task {
     /// says how many slots are free, because the bound is the session's and only the session can
     /// count it.
     pub arming: crate::watch::Arming,
-    /// Whether this caller will send this turn's line again after a wait the turn asks for.
+    /// What takes the next look at this turn's line once it ends.
     ///
-    /// `false` by default, which is every caller that runs a turn and stops: a one-shot run, the
-    /// desktop bridge, anything with nothing holding the line afterwards. Such a turn is offered
-    /// no way to arrange a later look and a call to that tool is answered as an unknown name,
-    /// because the wait would be discarded and the confirmation would be telling somebody a
-    /// watch exists that does not (SCHED-6).
+    /// [`LaterLook::Nothing`] by default, which is every caller that runs a turn and stops and
+    /// says nothing: a delegate, a one-shot run without `--goal`, anything with nothing holding
+    /// the line afterwards. A caller that keeps a goal or watches says so through
+    /// [`LaterLook::for_line`], as the terminal, the desktop bridge and a `--goal` run do. Only
+    /// [`LaterLook::ThisTurnArranges`] offers the turn a way to arrange a later look. Every other
+    /// answer withholds it and a call to that tool is answered as an unknown name, because the
+    /// wait would be discarded and the confirmation would be telling somebody a watch exists that
+    /// does not (SCHED-6). Those answers differ in what the turn is told about the next look: none
+    /// at all, or the one this session's loop, goal or watch takes on its own.
     ///
     /// Supplied per turn rather than per session, because the answer differs turn by turn on a
     /// caller that keeps a line at all: a loop repeats a line somebody endorsed, so a turn
@@ -466,7 +568,7 @@ pub struct Task {
     ///
     /// Read only where `tick` is `None`. A tick is already the thing being asked again, and what
     /// it may say about the next one is the loop's own question.
-    pub looking_again: bool,
+    pub later_look: LaterLook,
     /// The condition this session is working towards, where a person set one.
     ///
     /// `None` for a turn with no goal. It changes one thing: the planner is told what the session
@@ -653,7 +755,7 @@ impl Task {
             arming: crate::watch::Arming::Unavailable,
             // And nothing will ask again unless a caller says it will, for the same reason: a
             // default cannot know whether anything is still holding the line once this returns.
-            looking_again: false,
+            later_look: LaterLook::Nothing,
             working_towards: None,
             // Bounded unless a caller says otherwise. The unbounded case needs somebody watching,
             // and a default cannot know whether anybody is, so the default is the one that is
@@ -1156,9 +1258,22 @@ impl Task {
         self
     }
 
-    /// Say whether this caller will send this turn's line again after a wait the turn asks for.
+    /// Say whether this caller will send this turn's line again after a wait the turn asks for:
+    /// [`LaterLook::ThisTurnArranges`] where it will and [`LaterLook::Nothing`] where nothing
+    /// asks again. A caller whose own loop, goal or watch takes the next look says so with
+    /// [`Task::later_look`] instead.
     pub fn looking_again(mut self, looking_again: bool) -> Self {
-        self.looking_again = looking_again;
+        self.later_look = if looking_again {
+            LaterLook::ThisTurnArranges
+        } else {
+            LaterLook::Nothing
+        };
+        self
+    }
+
+    /// Say what takes the next look at this turn's line once it ends.
+    pub fn later_look(mut self, later_look: LaterLook) -> Self {
+        self.later_look = later_look;
         self
     }
 
