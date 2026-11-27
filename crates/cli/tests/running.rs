@@ -22137,6 +22137,99 @@ fn a_one_shot_run_records_its_cache_figures_and_a_continued_one_adds_to_them() {
     assert_eq!(second["timing"]["2"]["activity"], one_request, "{second}");
 }
 
+/// SESSION-11: a one-shot run records the backend that answered it, and a run that continues the
+/// session writes the backend that answered the continued turn over the word the record held.
+///
+/// The faults this rejects are a new record with no service and a continued run that keeps the
+/// record's word. The record is edited to name Bedrock between the runs, so the continued run's
+/// word is told apart from the first run's.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_one_shot_run_records_its_service_and_a_continued_one_writes_its_own() {
+    let gateway = a_gateway_reporting_its_cache("done");
+    let scratch = Scratch::new("cli-running-service").with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+
+    let id = a_writing_run(&scratch, &project, &["-p", "FIRST-QUESTION"]);
+    let mut first = the_record(&scratch, &id);
+    assert_eq!(first["service"], "gateway", "{first}");
+
+    first["service"] = serde_json::json!("bedrock");
+    std::fs::write(
+        the_record_file(&scratch, &id),
+        serde_json::to_vec(&first).expect("encode"),
+    )
+    .expect("write the record");
+    assert_eq!(
+        a_writing_run(&scratch, &project, &["-p", "SECOND-QUESTION", "--continue"]),
+        id
+    );
+    let second = the_record(&scratch, &id);
+    assert_eq!(second["service"], "gateway", "{second}");
+}
+
+/// SESSION-11 in a session in lines: a turn that reached a backend records which one answered it.
+///
+/// The fault this rejects is a session in lines that saves its record without the service, which the
+/// one-shot test above cannot see because the two interfaces keep the record by separate code. A
+/// session in lines keeps a record only in a background session's process, so the turn is run
+/// there.
+#[cfg(unix)]
+#[test]
+fn a_session_in_lines_records_the_service_that_answered_its_turn() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    a_stopped_session_with_one_turn(&home, &gateway);
+
+    let record = saved_record_in(&home.0, SESSION_ID);
+    assert_eq!(record["turns"], 1, "{record}");
+    assert_eq!(record["service"], "gateway", "{record}");
+}
+
+/// CLI-37, LOCALE-2: the hit rate is written with the catalog's decimal separator and percent
+/// form, as the terminal's own cache rate is, so a French run prints `50,0 %` where an English one
+/// prints `50.0%`. The fault this rejects is a hit rate written in the English form whatever the
+/// catalog.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn stats_writes_the_hit_rate_in_the_number_form_of_its_catalog() {
+    let scratch = Scratch::new("cli-running-stats-hit-rate-french");
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    let canonical = project.canonicalize().expect("canonical project");
+    let store = scratch
+        .path
+        .join(".bravebot/sessions")
+        .join(bravebot_agent::home::key_for(&canonical));
+    std::fs::create_dir_all(&store).expect("a store");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("a clock after the epoch")
+        .as_secs();
+    let cached = serde_json::json!({
+        "id": "cached", "title": "work", "directory": canonical.display().to_string(),
+        "updated": now, "turns": 1, "tokens": 250, "model": "m", "service": "bedrock",
+        "split": {"read": 200, "written": 50, "cache": {"read_tokens": 100, "written_tokens": 0}},
+    });
+    std::fs::write(store.join("cached.json"), cached.to_string()).expect("seed the record");
+
+    let french = bravebot_started_in(
+        &scratch.path,
+        &project,
+        &[("BRAVEBOT_LOCALE", "fr")],
+        &["stats"],
+    );
+    let (stdout, stderr) = said(&french);
+    assert!(french.status.success(), "{stderr}");
+    assert!(stdout.contains("50,0 %"), "{stdout}");
+
+    let english = bravebot_started_in(&scratch.path, &project, &[], &["stats"]);
+    let (stdout, stderr) = said(&english);
+    assert!(english.status.success(), "{stderr}");
+    assert!(stdout.contains("50.0%"), "{stdout}");
+}
+
 /// CLI-25 and SESSION-19: a continued task leaves a point to rewind it to, behind the points the
 /// record already held. Without one the newest point is the one before the record's previous turn,
 /// and an undo in the session resumed next takes the conversation back past both turns while
@@ -29745,14 +29838,14 @@ fn stats_rows(stdout: &str) -> Vec<Vec<String>> {
 }
 
 /// The figures on the last row of a `stats` table, which is the total: sessions, turns, tokens,
-/// read, written and unsplit.
+/// read, written, unsplit, cache read and cache written. The hit rate after them is not a count.
 fn stats_total(stdout: &str) -> Vec<u64> {
     let rows = stats_rows(stdout);
     let total = rows
         .last()
         .unwrap_or_else(|| panic!("no total in: {stdout}"));
     assert_eq!(total[0], "Total", "{stdout}");
-    total[1..]
+    total[1..total.len() - 1]
         .iter()
         .map(|figure| figure.parse().expect("a figure"))
         .collect()
@@ -29776,7 +29869,7 @@ fn stats_adds_up_every_projects_sessions_and_the_day_and_project_narrow_the_tota
     assert!(everything.status.success(), "{stderr}");
     assert_eq!(
         stats_total(&stdout),
-        [3, 15, 1_280, 700, 300, 280],
+        [3, 15, 1_280, 700, 300, 280, 0, 0],
         "{stdout}"
     );
     assert!(
@@ -29803,7 +29896,7 @@ fn stats_adds_up_every_projects_sessions_and_the_day_and_project_narrow_the_tota
     assert!(recent.status.success(), "{stderr}");
     assert_eq!(
         stats_total(&stdout),
-        [2, 10, 1_030, 700, 300, 30],
+        [2, 10, 1_030, 700, 300, 30, 0, 0],
         "{stdout}"
     );
     assert!(stdout.contains("last 3 days"), "{stdout}");
@@ -29814,7 +29907,7 @@ fn stats_adds_up_every_projects_sessions_and_the_day_and_project_narrow_the_tota
     assert!(here.status.success(), "{stderr}");
     assert_eq!(
         stats_total(&stdout),
-        [2, 8, 1_250, 700, 300, 250],
+        [2, 8, 1_250, 700, 300, 250, 0, 0],
         "{stdout}"
     );
     assert!(stdout.contains(&one.display().to_string()), "{stdout}");
@@ -29823,11 +29916,14 @@ fn stats_adds_up_every_projects_sessions_and_the_day_and_project_narrow_the_tota
     let named = spending.stats(&one, &["--project", &two.display().to_string()]);
     let (stdout, stderr) = said(&named);
     assert!(named.status.success(), "{stderr}");
-    assert_eq!(stats_total(&stdout), [1, 7, 30, 0, 0, 30], "{stdout}");
+    assert_eq!(stats_total(&stdout), [1, 7, 30, 0, 0, 30, 0, 0], "{stdout}");
 
     // Both narrowings at once leave what is in both.
     let both = spending.stats(&one, &["--days", "3", "--project"]);
-    assert_eq!(stats_total(&said(&both).0), [1, 3, 1_000, 700, 300, 0]);
+    assert_eq!(
+        stats_total(&said(&both).0),
+        [1, 3, 1_000, 700, 300, 0, 0, 0]
+    );
 
     assert_eq!(spending.records(), before, "a stats run changed a record");
 }
@@ -29851,10 +29947,16 @@ fn stats_by_model_has_a_row_for_each_model_and_one_for_a_record_that_names_none(
     assert_eq!(
         stats_rows(&stdout),
         [
-            words(&["unknown", "1", "8", "8000", "0", "0", "8000"]),
-            words(&["small", "1", "4", "400", "0", "0", "400"]),
-            words(&["big", "2", "3", "30", "0", "0", "30"]),
-            words(&["Total", "4", "15", "8430", "0", "0", "8430"]),
+            words(&[
+                "unknown", "unknown", "1", "8", "8000", "0", "0", "8000", "0", "0", "-"
+            ]),
+            words(&[
+                "small", "unknown", "1", "4", "400", "0", "0", "400", "0", "0", "-"
+            ]),
+            words(&[
+                "big", "unknown", "2", "3", "30", "0", "0", "30", "0", "0", "-"
+            ]),
+            words(&["Total", "4", "15", "8430", "0", "0", "8430", "0", "0", "-"]),
         ],
         "{stdout}"
     );
@@ -29886,7 +29988,7 @@ fn stats_reports_how_the_tokens_of_one_shot_runs_divided() {
         &["-p", "write out.txt"],
     );
     assert_eq!(first.status.code(), Some(4), "{:?}", said(&first));
-    assert_eq!(stats(), [1, 1, 51, 42, 9, 0], "the first run's split");
+    assert_eq!(stats(), [1, 1, 51, 42, 9, 0, 0, 0], "the first run's split");
 
     let second = bravebot_started_in(
         &scratch.path,
@@ -29897,7 +29999,7 @@ fn stats_reports_how_the_tokens_of_one_shot_runs_divided() {
     assert!(second.status.success(), "{:?}", said(&second));
     assert_eq!(
         stats(),
-        [1, 2, 85, 72, 13, 0],
+        [1, 2, 85, 72, 13, 0, 0, 0],
         "the continued turn's split was not added to the record's"
     );
 
@@ -29929,6 +30031,196 @@ fn stats_reports_how_the_tokens_of_one_shot_runs_divided() {
     );
 }
 
+/// CLI-37: a `--models` table names the service beside the model and adds the cache figures up.
+///
+/// Two one-shot runs at a gateway that says 6 of each request's 10 prompt tokens came from its
+/// cache and 2 were written to it, a record of the same model from Bedrock with a cache block, and a
+/// record from before the cache block and the service were kept. The hit rate is taken over the
+/// tokens the three cache-carrying sessions read, 6 + 6 + 100 served of 10 + 10 + 200, 50.9%, and
+/// not over the 620 read with the older record's 400, which would make it 18.0%. The older record
+/// is counted apart on stderr, and stdout is the table alone (CLI-5).
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn stats_names_the_service_and_takes_the_hit_rate_over_the_sessions_with_cache_figures() {
+    let gateway = a_gateway_reporting_its_cache("done");
+    let scratch = Scratch::new("cli-running-stats-cache").with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    let first = a_writing_run(&scratch, &project, &["-p", "FIRST-QUESTION"]);
+    let second = a_writing_run(&scratch, &project, &["-p", "SECOND-QUESTION"]);
+    assert_ne!(first, second, "the second run continued the first");
+    assert_eq!(
+        the_record(&scratch, &first)["service"],
+        "gateway",
+        "the record does not name the service that answered"
+    );
+
+    let store = scratch
+        .path
+        .join(".bravebot/sessions")
+        .join(bravebot_agent::home::key_for(
+            &project.canonicalize().expect("canonical project"),
+        ));
+    let directory = project
+        .canonicalize()
+        .expect("canonical project")
+        .display()
+        .to_string();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("a clock after the epoch")
+        .as_secs();
+    let bedrock = serde_json::json!({
+        "id": "bedrock", "title": "work", "directory": directory, "updated": now,
+        "turns": 1, "tokens": 250, "model": "reasons-only", "service": "bedrock",
+        "split": {"read": 200, "written": 50, "cache": {"read_tokens": 100, "written_tokens": 0}},
+    });
+    let older = serde_json::json!({
+        "id": "older", "title": "work", "directory": directory, "updated": now,
+        "turns": 1, "tokens": 450, "model": "reasons-only",
+        "split": {"read": 400, "written": 50},
+    });
+    std::fs::write(store.join("bedrock.json"), bedrock.to_string()).expect("seed bedrock");
+    std::fs::write(store.join("older.json"), older.to_string()).expect("seed the older record");
+
+    let output = bravebot_started_in(&scratch.path, &project, &[], &["stats", "--models"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    let words = |row: &[&str]| row.iter().map(|word| word.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        stats_rows(&stdout),
+        [
+            words(&[
+                "reasons-only",
+                "unknown",
+                "1",
+                "1",
+                "450",
+                "400",
+                "50",
+                "0",
+                "0",
+                "0",
+                "-"
+            ]),
+            words(&[
+                "reasons-only",
+                "bedrock",
+                "1",
+                "1",
+                "250",
+                "200",
+                "50",
+                "0",
+                "100",
+                "0",
+                "50.0%"
+            ]),
+            words(&[
+                "reasons-only",
+                "gateway",
+                "2",
+                "2",
+                "22",
+                "20",
+                "2",
+                "0",
+                "12",
+                "4",
+                "60.0%"
+            ]),
+            words(&[
+                "Total", "4", "4", "722", "620", "102", "0", "112", "4", "50.9%"
+            ]),
+        ],
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains(
+            "1 session carries no cache figures and is left out of the hit rate. On a service that \
+             states none: 0. Naming no service, so possibly older than the cache figures: 1."
+        ),
+        "{stderr}"
+    );
+    assert!(!stdout.contains("left out"), "{stdout}");
+}
+
+/// A gateway that answers `done` to every request with `usage` as the reply's usage block.
+fn a_gateway_stating_usage(usage: serde_json::Value) -> Gateway {
+    a_gateway(r#"["tools"]"#, move |_| {
+        let frame = serde_json::json!({"model":"reasons-only","choices":[{
+            "index":0,"delta":{"role":"assistant","content":"done"},"finish_reason":"stop"}],
+            "usage":usage.clone()});
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    })
+}
+
+/// SESSION-11, CLI-37: a gateway that states a cache read of zero is a miss, and its record keeps a
+/// cache block of zeros, so `stats` counts it in the hit rate. A gateway that states no cache figure
+/// leaves no block, and `stats` counts its session as one on a service that states none. The silent
+/// gateway sends a details object with no cache figure in it, as a service that states other details
+/// does.
+///
+/// The faults this rejects: a record that leaves out a block of zeros, which makes the hit rate
+/// `-` and counts the miss as silent, and a reader that takes a details object for a stated cache
+/// figure, which writes a block for a silent service and makes it a miss.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_stated_cache_miss_is_kept_and_counted_and_a_silent_service_is_counted_apart() {
+    let missing = a_gateway_stating_usage(serde_json::json!({
+        "prompt_tokens":10,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":0}}));
+    let silent = a_gateway_stating_usage(serde_json::json!({
+        "prompt_tokens":10,"completion_tokens":1,"prompt_tokens_details":{"audio_tokens":0}}));
+    let scratch =
+        Scratch::new("cli-running-stats-cache-miss").with_settings(&settings_for(&missing));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+
+    let missed = a_writing_run(&scratch, &project, &["-p", "FIRST-QUESTION"]);
+    std::fs::write(scratch.settings(), settings_for(&silent)).expect("point at the silent one");
+    let unstated = a_writing_run(&scratch, &project, &["-p", "SECOND-QUESTION"]);
+
+    let missed_record = the_record(&scratch, &missed);
+    assert_eq!(
+        missed_record["split"],
+        serde_json::json!({"read": 10, "written": 1,
+                           "cache": {"read_tokens": 0, "written_tokens": 0}}),
+        "{missed_record}"
+    );
+    let unstated_record = the_record(&scratch, &unstated);
+    assert_eq!(
+        unstated_record["split"],
+        serde_json::json!({"read": 10, "written": 1}),
+        "{unstated_record}"
+    );
+    assert_eq!(unstated_record["service"], "gateway", "{unstated_record}");
+
+    let output = bravebot_started_in(&scratch.path, &project, &[], &["stats"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    let words = |row: &[&str]| row.iter().map(|word| word.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        stats_rows(&stdout),
+        [words(&[
+            "Total", "2", "2", "22", "20", "2", "0", "0", "0", "0.0%"
+        ])],
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains(
+            "1 session carries no cache figures and is left out of the hit rate. On a service that \
+             states none: 1. Naming no service, so possibly older than the cache figures: 0."
+        ),
+        "{stderr}"
+    );
+}
+
 /// CLI-37: a file in the store that is not a record is counted and not named, and adds to no
 /// figure. Nothing about the file but how many reaches either stream.
 #[test]
@@ -29946,7 +30238,7 @@ fn stats_counts_a_record_it_cannot_read_without_naming_it() {
 
     let (stdout, stderr) = said(&output);
     assert!(output.status.success(), "{stderr}");
-    assert_eq!(stats_total(&stdout), [1, 2, 20, 0, 0, 20], "{stdout}");
+    assert_eq!(stats_total(&stdout), [1, 2, 20, 0, 0, 20, 0, 0], "{stdout}");
     assert!(
         stderr.contains(
             "2 entries in the sessions directory could not be read as records and are not counted."
@@ -30020,7 +30312,7 @@ fn stats_runs_under_incognito_and_counts_the_records_written_before() {
 
     let (stdout, stderr) = said(&output);
     assert!(output.status.success(), "{stderr}");
-    assert_eq!(stats_total(&stdout), [1, 2, 20, 0, 0, 20], "{stdout}");
+    assert_eq!(stats_total(&stdout), [1, 2, 20, 0, 0, 20, 0, 0], "{stdout}");
     assert_eq!(spending.records(), before);
 }
 

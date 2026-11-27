@@ -2041,8 +2041,8 @@ mod tests {
             usage: Some(protocol::BedrockUsage {
                 input_tokens: 100,
                 output_tokens: 42,
-                cache_read_input_tokens: 800,
-                cache_write_input_tokens: 100,
+                cache_read_input_tokens: Some(800),
+                cache_write_input_tokens: Some(100),
             }),
         });
 
@@ -2074,8 +2074,8 @@ mod tests {
             usage: Some(protocol::BedrockUsage {
                 input_tokens: 0,
                 output_tokens: 99,
-                cache_read_input_tokens: 0,
-                cache_write_input_tokens: 0,
+                cache_read_input_tokens: Some(0),
+                cache_write_input_tokens: Some(0),
             }),
         });
         assert_eq!(reply.usage.completion_tokens, 99);
@@ -2114,8 +2114,8 @@ mod tests {
             usage: Some(protocol::BedrockUsage {
                 input_tokens: 0,
                 output_tokens: 99,
-                cache_read_input_tokens: 0,
-                cache_write_input_tokens: 0,
+                cache_read_input_tokens: Some(0),
+                cache_write_input_tokens: Some(0),
             }),
         });
         reply.absorb(StreamEvent::ContentBlockDelta {

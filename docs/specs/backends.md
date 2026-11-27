@@ -2148,10 +2148,14 @@ completions route, and what has been seen of them, is under "What OpenAI's own A
 Responses API states the read in `input_tokens_details.cached_tokens` and the write in
 `input_tokens_details.cache_write_tokens`, both counted inside `input_tokens`, and the ChatGPT account is
 read as the Responses API is ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)). A service stating neither
-leaves both at zero, and a figure Anthropic states as `null` is one it did not state.
+leaves both at zero, and a figure Anthropic states as `null` is one it did not state. The usage also
+says whether the reply stated either figure as a number, which each protocol's reader decides from
+whether the numeric field is present and from nothing else in the reply, so a round that stated a
+read of zero is told from a service that stated nothing; a session record keeps the figures for the
+first and not the second ([SESSION-11](sessions.md#SESSION-11)).
 
 A turn sums them over its rounds, as it sums the total, and a delegate's are added to the turn that
-spawned it. A sum of the two figures stops at the largest number a count holds, since a gateway states them and
+spawned it, and the sum is stated where any of them was. A sum of the two figures stops at the largest number a count holds, since a gateway states them and
 one may state that number.
 
 **What OpenAI's own API reports.**
@@ -2290,6 +2294,9 @@ says which turn it speaks for, the counts beside it being the session's.
 `verified-by: bravebot_aichat::client::a_reply_as_openai_sends_it_reports_its_cache_figures_whole_and_streamed`
 `verified-by: bravebot_aichat::protocol::a_usage_object_without_cache_figures_still_parses`
 `verified-by: bravebot_aichat::protocol::a_null_cache_figure_reads_as_silence_rather_than_failing_the_reply`
+`verified-by: bravebot_aichat::protocol::a_stated_zero_is_a_cache_figure_and_an_absent_or_null_one_is_not`
+`verified-by: bravebot_aichat::responses::protocol::a_stated_zero_is_a_cache_figure_and_an_absent_or_null_one_is_not`
+`verified-by: bravebot_aichat::generate_content::protocol::a_stated_zero_is_a_cache_figure_and_an_absent_or_null_one_is_not`
 `verified-by: bravebot_agent::turn::a_turn_sums_what_its_rounds_read_out_of_the_cache`
 `verified-by: bravebot_agent::turn::a_turn_against_a_server_that_says_nothing_about_a_cache_reports_nothing`
 `verified-by: bravebot_agent::turn::a_turn_counts_what_its_delegates_read_out_of_the_cache`

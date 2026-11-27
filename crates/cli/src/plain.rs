@@ -1149,6 +1149,9 @@ impl Kept {
         if !outcome.model.is_empty() {
             self.model = Some(outcome.model.clone());
         }
+        if let Some(service) = outcome.backend {
+            self.handle.set_service(service);
+        }
         self.write(prompt, conversation, trust, programs);
     }
 

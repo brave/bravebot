@@ -1621,6 +1621,7 @@ fn a_suggestions_cost_is_charged_to_the_session() {
         cached: bravebot_aichat::protocol::Cached {
             read_tokens: 60,
             written_tokens: 0,
+            stated: true,
         },
     });
     assert_eq!(session.tokens, 120);
@@ -1633,6 +1634,7 @@ fn a_suggestions_cost_is_charged_to_the_session() {
             cache: bravebot_aichat::protocol::Cached {
                 read_tokens: 60,
                 written_tokens: 0,
+                stated: true,
             },
         },
         "a suggestion's request was charged without how it divided"

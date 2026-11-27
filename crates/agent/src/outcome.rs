@@ -10,7 +10,7 @@ use bravebot_aichat::protocol::{Cached, Usage};
 /// Chosen by this program from the variant of [`crate::backend::Backend`] that made the request,
 /// so it names no host, address or account and nothing the service wrote
 /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BackendKind {
     /// The Brave endpoint.
     Aichat,
@@ -22,6 +22,36 @@ pub enum BackendKind {
     Chatgpt,
     /// An xAI account.
     Xai,
+}
+
+impl BackendKind {
+    /// Every kind, in the order [`BackendKind::as_str`] lists them.
+    pub const ALL: [BackendKind; 5] = [
+        BackendKind::Aichat,
+        BackendKind::Bedrock,
+        BackendKind::Gateway,
+        BackendKind::Chatgpt,
+        BackendKind::Xai,
+    ];
+
+    /// The fixed word a session record keeps for this kind ([SESSION-11](../../../docs/specs/sessions.md#SESSION-11)).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BackendKind::Aichat => "aichat",
+            BackendKind::Bedrock => "bedrock",
+            BackendKind::Gateway => "gateway",
+            BackendKind::Chatgpt => "chatgpt",
+            BackendKind::Xai => "xai",
+        }
+    }
+
+    /// The kind a record's word names, or `None` for a word that names none, as in a record edited
+    /// by hand.
+    pub fn named(word: &str) -> Option<BackendKind> {
+        BackendKind::ALL
+            .into_iter()
+            .find(|kind| kind.as_str() == word)
+    }
 }
 
 /// Fixed failure categories, distinguished by what the user can do about them.
@@ -421,6 +451,7 @@ mod tests {
             cached: Cached {
                 read_tokens: read,
                 written_tokens: written,
+                stated: true,
             },
         }
     }
@@ -440,6 +471,7 @@ mod tests {
             cached: Cached {
                 read_tokens: 10,
                 written_tokens: 20,
+                stated: true,
             },
             requests: 4,
             timing,
@@ -470,6 +502,7 @@ mod tests {
             cached: Cached {
                 read_tokens: 100,
                 written_tokens: 200,
+                stated: true,
             },
             requests: 3,
             timing: Timing {

@@ -523,6 +523,8 @@ impl WireUsage {
 
 impl From<WireUsage> for Usage {
     fn from(usage: WireUsage) -> Self {
+        let stated =
+            usage.cache_read_input_tokens.is_some() || usage.cache_creation_input_tokens.is_some();
         let read = usage.cache_read_input_tokens.unwrap_or(0);
         let written = usage.cache_creation_input_tokens.unwrap_or(0);
         Self {
@@ -545,6 +547,7 @@ impl From<WireUsage> for Usage {
             cached: Cached {
                 read_tokens: read,
                 written_tokens: written,
+                stated,
             },
         }
     }
@@ -1326,6 +1329,18 @@ mod tests {
         let usage = Usage::from(usage);
         assert_eq!(usage.prompt_tokens, 12);
         assert!(!usage.cached.any());
+        assert!(
+            !usage.cached.stated,
+            "a figure stated as null read as stated"
+        );
+
+        let missed = Usage::from(WireUsage {
+            input_tokens: Some(12),
+            cache_read_input_tokens: Some(0),
+            ..WireUsage::default()
+        });
+        assert!(!missed.cached.any());
+        assert!(missed.cached.stated, "a stated zero read as no figure");
     }
 
     /// The prompt is stated at the start of a stream and the reply's count at the end, and a later

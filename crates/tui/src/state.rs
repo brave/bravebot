@@ -13002,6 +13002,7 @@ mod tests {
             bravebot_aichat::protocol::Cached {
                 read_tokens: 900,
                 written_tokens: 100,
+                stated: true,
             },
             1_000,
         );
@@ -13025,12 +13026,14 @@ mod tests {
         let first = bravebot_aichat::protocol::Cached {
             read_tokens: 400,
             written_tokens: 50,
+            stated: true,
         };
         s.served_from_cache(first, 500);
         s.served_from_cache(
             bravebot_aichat::protocol::Cached {
                 read_tokens: 900,
                 written_tokens: 100,
+                stated: true,
             },
             1_000,
         );
@@ -16705,6 +16708,7 @@ mod tests {
                 cached: bravebot_aichat::protocol::Cached {
                     read_tokens: 120,
                     written_tokens: 30,
+                    stated: true,
                 },
             });
 
@@ -16717,6 +16721,7 @@ mod tests {
                     cache: bravebot_aichat::protocol::Cached {
                         read_tokens: 120,
                         written_tokens: 30,
+                        stated: true,
                     },
                 }
             );
@@ -16737,6 +16742,7 @@ mod tests {
                 cached: bravebot_aichat::protocol::Cached {
                     read_tokens: 120,
                     written_tokens: 30,
+                    stated: true,
                 },
             });
 
@@ -16754,6 +16760,7 @@ mod tests {
                     cache: bravebot_aichat::protocol::Cached {
                         read_tokens: 120,
                         written_tokens: 30,
+                        stated: true,
                     },
                 }
             );
@@ -16782,6 +16789,7 @@ mod tests {
                 cached: bravebot_aichat::protocol::Cached {
                     read_tokens: 120,
                     written_tokens: 30,
+                    stated: true,
                 },
             });
 
@@ -16802,6 +16810,7 @@ mod tests {
                 bravebot_aichat::protocol::Cached {
                     read_tokens: 250,
                     written_tokens: 20,
+                    stated: true,
                 },
             ));
 
@@ -16822,6 +16831,7 @@ mod tests {
                 cache: bravebot_aichat::protocol::Cached {
                     read_tokens: 500,
                     written_tokens: 40,
+                    stated: true,
                 },
             });
 
@@ -16832,6 +16842,7 @@ mod tests {
                 bravebot_aichat::protocol::Cached {
                     read_tokens: 30,
                     written_tokens: 5,
+                    stated: true,
                 },
             ));
 
@@ -16843,6 +16854,7 @@ mod tests {
                     cache: bravebot_aichat::protocol::Cached {
                         read_tokens: 530,
                         written_tokens: 45,
+                        stated: true,
                     },
                 }
             );
@@ -16886,6 +16898,7 @@ mod tests {
                 bravebot_aichat::protocol::Cached {
                     read_tokens: 50,
                     written_tokens: 10,
+                    stated: true,
                 },
                 "the cache totals did not come back from the record"
             );

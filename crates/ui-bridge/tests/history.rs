@@ -558,6 +558,28 @@ fn a_turn_records_its_cache_figures_inside_the_split_and_a_resumed_one_adds_to_t
     assert_eq!(twice["timing"]["2"]["activity"], one_request, "{twice}");
 }
 
+/// A turn taken in the desktop records the backend that answered it beside the model
+/// (SESSION-11).
+///
+/// The faults this rejects: a turn that does not keep the backend it was answered by, and a save
+/// that does not write it. Either leaves a record that names no service, which `bravebot stats`
+/// counts under `unknown`. The service is the Brave endpoint, whose word is `aichat`.
+#[test]
+fn a_desktop_turn_records_the_service_that_answered_it() {
+    let scratch = Scratch::new("bridge-history-service");
+    let (endpoint, _) = stub_service(Chat::Answers);
+
+    take_turn(
+        &scratch.home(),
+        &scratch.project(),
+        &endpoint,
+        None,
+        "first question",
+    );
+    let saved = record(&scratch.home());
+    assert_eq!(saved["service"], "aichat", "{saved}");
+}
+
 /// Undoing a turn in the desktop takes its split back with its tokens, so the record saved after
 /// the undo does not say the session wrote more than it spent (SESSION-11, SESSION-19). The cache
 /// figures go back with the rest of the split.

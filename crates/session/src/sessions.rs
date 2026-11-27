@@ -136,15 +136,33 @@ pub struct Split {
     /// Of [`Split::read`], the tokens the service served out of its prompt cache and the tokens it
     /// wrote into the cache. The cache hit rate of the session is `cache.read_tokens / read`.
     ///
-    /// Zero for a charge whose service stated no cache figure, which reads the same as a charge
-    /// whose cache missed ([`bravebot_aichat::protocol::Cached`]). Left out of the record while
-    /// both are zero, and zero for a record written before it was kept.
-    #[serde(default, skip_serializing_if = "no_cache_figure")]
+    /// Zero for a charge whose service stated no cache figure, and zero with
+    /// [`Cached::stated`](bravebot_aichat::protocol::Cached::stated) set for one whose cache missed.
+    /// Written whenever a charge of the session stated a figure, zeros included, and left out of
+    /// the record where none did, so a record without it is a service that stated nothing or a
+    /// record written before it was kept. A block read back is stated, so a resume keeps writing it.
+    #[serde(
+        default,
+        skip_serializing_if = "no_cache_figure",
+        deserialize_with = "cache_figures_kept"
+    )]
     pub cache: Cached,
 }
 
 fn no_cache_figure(cache: &Cached) -> bool {
-    !cache.any()
+    !cache.stated
+}
+
+/// The cache figures a record holds, which were written because a reply stated them.
+fn cache_figures_kept<'de, D>(deserializer: D) -> Result<Cached, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let kept = Cached::deserialize(deserializer)?;
+    Ok(Cached {
+        stated: true,
+        ..kept
+    })
 }
 
 impl Split {
@@ -414,6 +432,15 @@ pub struct Record {
     /// server.
     #[serde(default)]
     pub model: Option<String>,
+    /// Which backend answered the last turn that reached one, as the word of
+    /// [`bravebot_agent::BackendKind::as_str`]: a closed set this program chooses from the backend
+    /// it sent the request to, never a word the service wrote.
+    ///
+    /// `None` for a record written before this was kept, or one whose turns never reached a
+    /// server. A reader takes the word through [`bravebot_agent::BackendKind::named`], so a word
+    /// that names no backend reads as none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
     /// The reasoning effort the last turn was sent with, as the word of [`Effort::as_str`].
     ///
     /// The level in force when the turn ran, which is nothing where the model reads none. Kept as
@@ -1858,6 +1885,9 @@ pub fn record_manifest_run(
         .map(|timing| BTreeMap::from([(1, timing)]))
         .unwrap_or_default();
     let mut handle = Handle::begin(project, front, build);
+    if let Some(service) = outcome.as_ref().ok().and_then(|o| o.backend) {
+        handle.set_service(service);
+    }
     handle.save(
         prompt,
         Standing {
@@ -2449,6 +2479,8 @@ pub struct Handle {
     skill_mode: Option<String>,
     /// The level the last turn was sent with, for the record to carry.
     effort: Option<Effort>,
+    /// The backend that answered the last turn that reached one, for the record to carry.
+    service: Option<bravebot_agent::BackendKind>,
     /// What the session's file tools reached as of the last save that gave it, written again by a
     /// save that gives none (INSTR-14, INSTR-16).
     touched: bravebot_agent::workspace::TouchedRecord,
@@ -2634,6 +2666,7 @@ impl Handle {
             agent: None,
             skill_mode: None,
             effort: None,
+            service: None,
             touched: bravebot_agent::workspace::TouchedRecord::default(),
             references: Vec::new(),
             wrote: false,
@@ -2711,6 +2744,10 @@ impl Handle {
             agent: record.agent.clone(),
             skill_mode: record.skill_mode.clone(),
             effort: record.effort.as_deref().and_then(Effort::named),
+            service: record
+                .service
+                .as_deref()
+                .and_then(bravebot_agent::BackendKind::named),
             touched: record.touched.clone(),
             references: read_references(&record.references),
             // The record it came from is the one being written back to.
@@ -2895,6 +2932,17 @@ impl Handle {
     /// The level the last turn was sent with.
     pub fn effort(&self) -> Option<Effort> {
         self.effort
+    }
+
+    /// Record which backend answered the turn just finished. Written with the next save, and kept
+    /// by a resume until a turn that reaches a backend replaces it, as the model is.
+    pub fn set_service(&mut self, service: bravebot_agent::BackendKind) {
+        self.service = Some(service);
+    }
+
+    /// The backend the next save names, or `None` where no turn has reached one.
+    pub fn service(&self) -> Option<bravebot_agent::BackendKind> {
+        self.service
     }
 
     /// Record what the session's file tools have reached, for the next save to write when it
@@ -3121,6 +3169,7 @@ impl Handle {
             tokens: standing.tokens,
             split: standing.split,
             model: standing.model.map(str::to_string),
+            service: self.service.map(|kind| kind.as_str().to_string()),
             effort: self.effort.map(|level| level.as_str().to_string()),
             spend: standing.spend.clone(),
             timing: standing.timing.clone(),
@@ -3261,6 +3310,7 @@ impl Handle {
         record.agent = self.agent.clone();
         record.skill_mode = self.skill_mode.clone();
         record.effort = self.effort.map(|level| level.as_str().to_string());
+        record.service = self.service.map(|kind| kind.as_str().to_string());
         record.touched = self.touched.clone();
         // The handle holds every note typed on this session, including ones added after the record
         // this continuation was read from.
@@ -4462,6 +4512,7 @@ mod tests {
             cached: Cached {
                 read_tokens: 60,
                 written_tokens: 10,
+                stated: true,
             },
             timing: Timing {
                 wall_ms: 999_999,
@@ -4506,6 +4557,7 @@ mod tests {
                 cache: Cached {
                     read_tokens: 60,
                     written_tokens: 10,
+                    stated: true,
                 },
             },
             "the failed turn's split was not charged with its total and its cache figures"
@@ -4545,6 +4597,7 @@ mod tests {
             cached: Cached {
                 read_tokens: 60,
                 written_tokens: 10,
+                stated: true,
             },
             requests: 3,
             timing: Timing {
@@ -7127,6 +7180,7 @@ mod tests {
             Cached {
                 read_tokens: 60,
                 written_tokens: 10,
+                stated: true,
             },
         );
         assert_eq!(
@@ -7136,7 +7190,8 @@ mod tests {
                 written: 30,
                 cache: Cached {
                     read_tokens: 60,
-                    written_tokens: 10
+                    written_tokens: 10,
+                    stated: true
                 },
             }
         );
@@ -7147,6 +7202,7 @@ mod tests {
             Cached {
                 read_tokens: 25,
                 written_tokens: 5,
+                stated: true,
             },
         );
         assert_eq!(second.tokens, 130);
@@ -7157,7 +7213,8 @@ mod tests {
                 written: 50,
                 cache: Cached {
                     read_tokens: 85,
-                    written_tokens: 15
+                    written_tokens: 15,
+                    stated: true
                 },
             },
             "the second turn's split did not add to the first's"
@@ -7177,6 +7234,7 @@ mod tests {
             cache: Cached {
                 read_tokens: 45,
                 written_tokens: 5,
+                stated: true,
             },
         };
         let mut record = a_record();
@@ -7193,7 +7251,8 @@ mod tests {
                 written: 20,
                 cache: Cached {
                     read_tokens: 45,
-                    written_tokens: 5
+                    written_tokens: 5,
+                    stated: true
                 },
             }
         );
@@ -7244,6 +7303,7 @@ mod tests {
             cached: Cached {
                 read_tokens: 40,
                 written_tokens: 8,
+                stated: true,
             },
             ..Default::default()
         });
@@ -7265,18 +7325,59 @@ mod tests {
                 written: 25,
                 cache: Cached {
                     read_tokens: 40,
-                    written_tokens: 8
+                    written_tokens: 8,
+                    stated: true
                 },
             }
         );
     }
 
-    /// The cache figures are written inside the split, and only when the split has some. A split
-    /// written with the key always would change every record whose service states no cache, and one
-    /// that never wrote it would lose the figures this field exists to keep. The names are what
-    /// somebody reading the file looks for.
+    /// The record keeps the service as the fixed word of the backend that answered, beside the
+    /// model, and reads it back into the handle on a resume so a later save keeps it. A record
+    /// from before it was kept has none and writes none, and a word that names no backend reads as
+    /// none rather than as text a later save would copy forward.
     #[test]
-    fn a_split_writes_its_cache_figures_only_when_it_has_some() {
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_service_is_kept_as_a_fixed_word_and_an_unknown_word_reads_as_none() {
+        use bravebot_agent::BackendKind;
+
+        let mut record = a_record();
+        assert_eq!(
+            serde_json::to_value(&record).expect("serialises")["service"],
+            serde_json::Value::Null,
+            "a record with no service wrote the key"
+        );
+        assert!(
+            !serde_json::to_string(&record)
+                .expect("serialises")
+                .contains("\"service\""),
+            "a record with no service wrote the key"
+        );
+
+        record.service = Some(BackendKind::Bedrock.as_str().to_string());
+        let written = serde_json::to_value(&record).expect("serialises");
+        assert_eq!(written["service"], "bedrock");
+        let back: Record = serde_json::from_value(written).expect("reads back");
+        let handle = Handle::resumed_unlocked(Path::new("/w"), &back, Front::Terminal, "0");
+        assert_eq!(handle.service, Some(BackendKind::Bedrock));
+
+        record.service = Some("evil\u{1b}[2J".to_string());
+        let handle = Handle::resumed_unlocked(Path::new("/w"), &record, Front::Terminal, "0");
+        assert_eq!(handle.service, None);
+
+        for kind in BackendKind::ALL {
+            assert_eq!(BackendKind::named(kind.as_str()), Some(kind));
+        }
+    }
+
+    /// The cache figures are written inside the split whenever a reply stated them, zeros included,
+    /// and left out where none did. A split that left out a stated zero would read as a service that
+    /// states nothing, and one written with the key always would read a silent service as a miss.
+    /// A block read back is stated, so a resume writes it again. The names are what somebody
+    /// reading the file looks for.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_split_writes_its_cache_figures_whenever_the_service_stated_them() {
         let without = Split {
             read: 600,
             written: 300,
@@ -7287,9 +7388,26 @@ mod tests {
             serde_json::json!({"read": 600, "written": 300})
         );
 
+        let missed = without.with_cache(Cached {
+            stated: true,
+            ..Cached::default()
+        });
+        let written = serde_json::to_value(missed).expect("serialises");
+        assert_eq!(
+            written["cache"],
+            serde_json::json!({"read_tokens": 0, "written_tokens": 0}),
+            "a stated miss was left out of the record"
+        );
+        assert_eq!(
+            serde_json::from_value::<Split>(written).expect("reads back"),
+            missed,
+            "a block read back was not stated"
+        );
+
         let with = without.with_cache(Cached {
             read_tokens: 500,
             written_tokens: 40,
+            stated: true,
         });
         let written = serde_json::to_value(with).expect("serialises");
         assert_eq!(
@@ -7315,6 +7433,7 @@ mod tests {
             cache: Cached {
                 read_tokens: 500,
                 written_tokens: 40,
+                stated: true,
             },
         };
         let mut written = serde_json::to_value(record).expect("serialises");
@@ -7342,7 +7461,8 @@ mod tests {
             split.cache,
             Cached {
                 read_tokens: 7,
-                written_tokens: 0
+                written_tokens: 0,
+                stated: true
             }
         );
     }
@@ -7355,29 +7475,34 @@ mod tests {
         let mut total = Split::of(100, 30).with_cache(Cached {
             read_tokens: 40,
             written_tokens: 5,
+            stated: true,
         });
         total.add(Split::of(50, 10).with_cache(Cached {
             read_tokens: 25,
             written_tokens: 0,
+            stated: true,
         }));
         assert_eq!((total.read, total.written), (110, 40));
         assert_eq!(
             total.cache,
             Cached {
                 read_tokens: 65,
-                written_tokens: 5
+                written_tokens: 5,
+                stated: true
             }
         );
 
         total.add(Split::default().with_cache(Cached {
             read_tokens: u64::MAX,
             written_tokens: u64::MAX,
+            stated: true,
         }));
         assert_eq!(
             total.cache,
             Cached {
                 read_tokens: u64::MAX,
-                written_tokens: u64::MAX
+                written_tokens: u64::MAX,
+                stated: true
             }
         );
     }
@@ -7392,6 +7517,7 @@ mod tests {
             cache: Cached {
                 read_tokens: 3,
                 written_tokens: 1,
+                stated: true,
             },
         }
         .within(100);
@@ -7401,7 +7527,8 @@ mod tests {
             cut.cache,
             Cached {
                 read_tokens: 3,
-                written_tokens: 1
+                written_tokens: 1,
+                stated: true
             }
         );
     }
@@ -8293,6 +8420,7 @@ mod tests {
             tokens: 0,
             split: Default::default(),
             model: None,
+            service: None,
             effort: None,
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
@@ -10257,6 +10385,28 @@ mod tests {
 
         assert_eq!(copy.notes.len(), 1);
         assert_eq!(copy.notes[0].text, "carry me");
+    }
+
+    /// SESSION-11: a fork in the terminal starts with the service that answered the session it was
+    /// cut from, written into its own record, until a turn of its own replaces it. A fork whose
+    /// record named no service would be counted by `bravebot stats` under the `unknown` service and
+    /// as a record that may be older than the cache figures.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_fork_keeps_the_service_that_answered_its_source() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-service-fork");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        handle.set_service(bravebot_agent::BackendKind::Bedrock);
+        save_a_turn_session(&mut handle);
+
+        let copy = fork(&root, handle.id()).expect("a fork");
+
+        assert_eq!(copy.service.as_deref(), Some("bedrock"));
+        let written = load(&root, &copy.id).expect("the fork's own record");
+        assert_eq!(written.service.as_deref(), Some("bedrock"));
     }
 
     /// SESSION-36: a record written before notes were kept has no field for them, and reads as

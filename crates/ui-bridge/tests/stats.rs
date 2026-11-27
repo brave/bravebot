@@ -138,16 +138,22 @@ impl Drop for Fixture {
     }
 }
 
+/// The figures of sessions whose records carry no cache figures, as every record [`Fixture::new`]
+/// writes.
 fn figures(sessions: u64, turns: u64, tokens: u64, read: u64, written: u64) -> Value {
     json!({
         "sessions": sessions, "turns": turns, "tokens": tokens,
         "read": read, "written": written, "unsplit": tokens - read - written,
+        "cacheRead": 0, "cacheWritten": 0, "hitRatePermille": null, "hitRate": "-",
     })
 }
 
+/// A row of sessions whose records name no service, as every record [`Fixture::new`] writes.
 fn row(model: Value, spent: Value) -> Value {
     let mut row = spent;
     row["model"] = model;
+    row["service"] = Value::Null;
+    row["serviceWord"] = json!("unknown");
     row
 }
 
@@ -176,6 +182,150 @@ fn no_parameters_total_every_project_with_a_row_for_each_model() {
         row(Value::Null, figures(1, 1, 50, 0, 0)),
         "a record that names no model is the null row: {answer}"
     );
+}
+
+/// One model answered by Bedrock and by a gateway is two rows, each naming its service by the
+/// record's fixed word and by the word the terminal shows for it, and a word that is no backend is
+/// the row for no service. The cache figures and the hit rate count only the records that carry a
+/// cache block, a stated miss included, and the sessions without one are counted apart as the
+/// command counts them. The hit rate and the note on those sessions arrive in the terminal's words.
+///
+/// Rejects an answer grouped by model alone, which would draw one row for two services, a row
+/// named by whatever word the record holds, a hit rate taken over every session's reads, and a
+/// shown word, rate or note that differs from what `bravebot stats` prints.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_model_answered_by_two_services_is_a_row_for_each_with_its_cache_figures() {
+    let (fixture, c) = fixture_with_one_model_on_three_services();
+    let answer = fixture.stats(json!({"directory": c.display().to_string()}));
+    let ok = &answer["ok"];
+    let rows: Vec<(&Value, &Value, &Value, &Value, &Value, &Value)> = ok["models"]
+        .as_array()
+        .expect("model rows")
+        .iter()
+        .map(|row| {
+            (
+                &row["model"],
+                &row["service"],
+                &row["tokens"],
+                &row["cacheRead"],
+                &row["cacheWritten"],
+                &row["hitRatePermille"],
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (
+                &json!("shared"),
+                &json!("bedrock"),
+                &json!(1100),
+                &json!(600),
+                &json!(200),
+                &json!(600)
+            ),
+            (
+                &json!("shared"),
+                &json!("gateway"),
+                &json!(900),
+                &json!(0),
+                &json!(0),
+                &json!(0)
+            ),
+            (
+                &json!("shared"),
+                &Value::Null,
+                &json!(30),
+                &json!(5),
+                &json!(0),
+                &json!(500)
+            ),
+        ],
+        "{answer}"
+    );
+    // 605 served of the 1510 read by the three records that carry a cache block.
+    assert_eq!(ok["total"]["cacheRead"], 605, "{answer}");
+    assert_eq!(ok["total"]["cacheWritten"], 200, "{answer}");
+    assert_eq!(ok["total"]["hitRatePermille"], 400, "{answer}");
+    assert_eq!(ok["total"]["hitRate"], "40.0%", "{answer}");
+    let shown: Vec<(&Value, &Value)> = ok["models"]
+        .as_array()
+        .expect("model rows")
+        .iter()
+        .map(|row| (&row["serviceWord"], &row["hitRate"]))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            (&json!("bedrock"), &json!("60.0%")),
+            (&json!("gateway"), &json!("0.0%")),
+            (&json!("unknown"), &json!("50.0%")),
+        ],
+        "{answer}"
+    );
+    assert_eq!(
+        ok["withoutCache"],
+        json!({"sessions": 2, "silent": 1, "older": 1,
+               "note": "2 sessions carry no cache figures and are left out of the hit rate. \
+                        On a service that states none: 1. Naming no service, so possibly \
+                        older than the cache figures: 1."}),
+        "{answer}"
+    );
+    assert!(!answer.to_string().contains('\u{1b}'), "{answer}");
+}
+
+/// A project `c`, in a fixture of its own, whose records are one model answered by Bedrock, by a
+/// gateway that stated a miss, by a gateway that stated no cache figure, by a word that names no
+/// backend and by a record that names no service.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn fixture_with_one_model_on_three_services() -> (Fixture, PathBuf) {
+    let fixture = Fixture::new("bravebot-ui-bridge-stats-services");
+    let c = fixture.root.join("c");
+    std::fs::create_dir_all(&c).expect("project c");
+    let recent = now();
+    // Bedrock: 1000 read, 600 of them out of the cache.
+    fixture.record(
+        &c,
+        "20260101T000000-dddd",
+        json!({"updated": recent, "turns": 1, "tokens": 1100, "model": "shared",
+               "service": "bedrock",
+               "split": {"read": 1000, "written": 100,
+                         "cache": {"read_tokens": 600, "written_tokens": 200}}}),
+    );
+    // The gateway stated a miss on every request: in the hit rate, at zero.
+    fixture.record(
+        &c,
+        "20260101T000000-eeee",
+        json!({"updated": recent, "turns": 1, "tokens": 600, "model": "shared",
+               "service": "gateway",
+               "split": {"read": 500, "written": 100,
+                         "cache": {"read_tokens": 0, "written_tokens": 0}}}),
+    );
+    // The gateway stated no cache figure: left out of the hit rate and counted as silent.
+    fixture.record(
+        &c,
+        "20260101T000000-ffff",
+        json!({"updated": recent, "turns": 1, "tokens": 300, "model": "shared",
+               "service": "gateway", "split": {"read": 300, "written": 0}}),
+    );
+    // A word that names no backend, with a cache block: 5 of 10 out of the cache.
+    fixture.record(
+        &c,
+        "20260101T000000-gggg",
+        json!({"updated": recent, "turns": 1, "tokens": 10, "model": "shared",
+               "service": "\u{1b}]0;owned\u{7}",
+               "split": {"read": 10, "written": 0,
+                         "cache": {"read_tokens": 5, "written_tokens": 0}}}),
+    );
+    // No service and no cache block: possibly older than the cache figures.
+    fixture.record(
+        &c,
+        "20260101T000000-hhhh",
+        json!({"updated": recent, "turns": 1, "tokens": 20, "model": "shared",
+               "split": {"read": 20, "written": 0}}),
+    );
+    (fixture, c)
 }
 
 /// The escape the server's model name carried never reaches the answer, and what is left of the

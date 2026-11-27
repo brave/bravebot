@@ -61,6 +61,21 @@ try {
       if (method === 'watches.list') return { ok: { busy: false, watches: [{ number: 1, path: 'src/store.ts', state: 'watching', remainingSeconds: 86400, armedBy: null }] } }
       if (method === 'settings.inspect') return { ok: { build: '0.9.0 (abc1234)', configured: true, problem: null, model: 'sample/fast', brave: false, bedrock: false, providers: [], selected: null, layers: [], overrides: [], managed: { path: null, keys: [] }, network: { roots: [], problem: null, trustsNothing: false, proxy: null, authenticated: false, unusableProxy: null, noProxy: null } } }
       if (method === 'about') return { ok: { version: '1.0.0', build: '0.9.0 (abc1234)', home: '/Users/example/.bravebot' } }
+      if (method === 'session.stats') {
+        const figures = (sessions, turns, tokens, read, written, cacheRead, cacheWritten, hitRatePermille, hitRate) =>
+          ({ sessions, turns, tokens, read, written, unsplit: tokens - read - written, cacheRead, cacheWritten, hitRatePermille, hitRate })
+        return { ok: {
+          directory: null, days: p.days ?? null,
+          total: figures(9, 41, 1846200, 1652400, 61800, 1209300, 98400, 801, '80.1%'),
+          models: [
+            { model: 'anthropic.claude-sonnet-4-5-20250929-v1:0', service: 'bedrock', serviceWord: 'bedrock', ...figures(4, 22, 1204500, 1120000, 38500, 942000, 71200, 841, '84.1%') },
+            { model: 'anthropic.claude-sonnet-4-5-20250929-v1:0', service: 'gateway', serviceWord: 'gateway', ...figures(3, 12, 512300, 489000, 18300, 267300, 27200, 687, '68.7%') },
+            { model: null, service: null, serviceWord: 'unknown', ...figures(2, 7, 129400, 43400, 5000, 0, 0, null, '-') },
+          ],
+          unreadable: 0,
+          withoutCache: { sessions: 3, silent: 1, older: 2, note: '3 sessions carry no cache figures and are left out of the hit rate. On a service that states none: 1. Naming no service, so possibly older than the cache figures: 2.' },
+        } }
+      }
       return { ok: {} }
     })
     replace('bravebot:files:list', (_, session, path) => ({ path, rows: path === '' ? [
@@ -122,6 +137,63 @@ try {
   await page.getByRole('button', { name: 'Open project', exact: true }).waitFor()
 
   await scene('01-welcome', () => variants('01-welcome'))
+
+  // CLI-37: Token Spend Across Chats… with the model rows on: one model answered by two services,
+  // the row for no model and no service, and the note on the sessions without cache figures.
+  await scene('01b-spend-report', async () => {
+    // One left text edge: the first column's text starts where the controls and the notes do, and
+    // where the table is not scrolled its last column ends where the notes do.
+    const onePersistentLeftEdge = async (width) => {
+      const edges = await page.evaluate(() => {
+        const head = document.querySelector('.spend-report-table th:first-child')
+        const last = document.querySelector('.spend-report-table th:last-child')
+        const note = document.querySelector('[data-test="spend-report-incognito"]').getBoundingClientRect()
+        return {
+          column: Math.round(head.getBoundingClientRect().left + parseFloat(getComputedStyle(head).paddingLeft)),
+          note: Math.round(note.left),
+          lastEnd: Math.round(last.getBoundingClientRect().right - parseFloat(getComputedStyle(last).paddingRight)),
+          noteEnd: Math.round(note.right),
+        }
+      })
+      if (edges.column !== edges.note) throw new Error(`the spend report's first column starts at ${edges.column}px and its notes at ${edges.note}px at ${width} wide`)
+      if (width === 1440 && edges.lastEnd !== edges.noteEnd) throw new Error(`the spend report's last column ends at ${edges.lastEnd}px and its notes at ${edges.noteEnd}px at ${width} wide`)
+    }
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:command', 'spend.report'))
+    await page.locator('[data-test="spend-report-table"]').waitFor()
+    await page.locator('[data-test="spend-report-by-model"]').click()
+    await page.locator('[data-test="spend-report-without-cache"]').waitFor()
+    if (await page.locator('[data-test="spend-report-row"]').count() !== 4) throw new Error('the spend report did not draw three rows and the total')
+    await variants('01b-spend-report')
+    // The dialog sits inside the window and the table is not cut at its right edge at the default size.
+    const fits = await page.evaluate(() => {
+      const dialog = document.querySelector('[data-test="spend-report-done"]').getBoundingClientRect()
+      const scroll = document.querySelector('.spend-report-scroll')
+      const box = scroll.getBoundingClientRect()
+      return { inside: box.left >= 0 && box.right <= innerWidth && dialog.bottom <= innerHeight, clipped: scroll.scrollWidth > scroll.clientWidth }
+    })
+    if (!fits.inside || fits.clipped) throw new Error(`the spend report does not fit the 1440x900 window: ${JSON.stringify(fits)}`)
+    await onePersistentLeftEdge(1440)
+    await page.setViewportSize({ width: 900, height: 560 })
+    await variants('01b-spend-report-minimum')
+    await onePersistentLeftEdge(900)
+    // At the minimum window the hit rate is in the first view with no sideways scroll, the dialog
+    // stays inside the window, and the body scrolls so the last note is reached.
+    const first = await page.evaluate(() => {
+      const scroll = document.querySelector('.spend-report-scroll')
+      const view = scroll.getBoundingClientRect()
+      const hit = [...document.querySelectorAll('.spend-report-table thead th')].find((th) => th.textContent.trim() === 'Hit rate').getBoundingClientRect()
+      const done = document.querySelector('[data-test="spend-report-done"]').getBoundingClientRect()
+      return { scrolledSideways: scroll.scrollLeft, hitRight: Math.round(hit.right), visibleRight: Math.round(view.left + scroll.clientWidth), doneInside: done.bottom <= innerHeight && done.right <= innerWidth }
+    })
+    if (first.scrolledSideways !== 0 || first.hitRight > first.visibleRight) throw new Error(`the spend report's Hit rate column is cut at 900x560: ${JSON.stringify(first)}`)
+    if (!first.doneInside) throw new Error(`the spend report's Done button is outside the 900x560 window: ${JSON.stringify(first)}`)
+    const last = page.locator('[data-test="spend-report-incognito"]')
+    await last.scrollIntoViewIfNeeded()
+    const box = await last.boundingBox()
+    if (!box || box.y < 0 || box.y + box.height > 560) throw new Error('the last note of the spend report cannot be scrolled into the window')
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await escape()
+  })
 
   await scene('02-conversation', async () => {
     await open('Refactor the session store')

@@ -281,6 +281,9 @@ pub struct Outcome {
     pub answer: Labelled<String>,
     /// The model the server reported using.
     pub model: String,
+    /// Which backend answered the last request, chosen by this program from the backend that sent
+    /// it and never from anything the service wrote. `None` where no request was sent.
+    pub backend: Option<crate::outcome::BackendKind>,
     /// How many tool-calling rounds the turn took.
     pub steps: usize,
     /// Whether no gate refused anything during the turn.

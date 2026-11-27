@@ -1306,7 +1306,7 @@ fn the_search_answers_the_stop_keys_before_the_goal_check_does() {
 
 /// A loopback model answering every request with `words`, streamed the way the real one is.
 #[cfg(unix)]
-fn a_model_answering_every_request(words: &'static str) -> String {
+pub(super) fn a_model_answering_every_request(words: &'static str) -> String {
     use std::io::{BufRead, BufReader, Read, Write};
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");

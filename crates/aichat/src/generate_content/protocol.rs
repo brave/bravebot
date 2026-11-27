@@ -477,6 +477,7 @@ impl From<WireUsage> for Usage {
             cached: Cached {
                 read_tokens: usage.cached_content_token_count.unwrap_or(0),
                 written_tokens: 0,
+                stated: usage.cached_content_token_count.is_some(),
             },
         }
     }
@@ -916,6 +917,26 @@ mod tests {
         assert_eq!(usage.prompt_tokens, 100);
         assert_eq!(usage.completion_tokens, 37);
         assert_eq!(usage.cached.read_tokens, 60);
+    }
+
+    /// BACKEND-31: a cache figure stated as zero is a round that missed, and a usage block that
+    /// leaves it out, or states it as `null`, is a service that said nothing. A session record keeps
+    /// a block for the first and none for the second, so the reader has to tell them apart.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_stated_zero_is_a_cache_figure_and_an_absent_or_null_one_is_not() {
+        for (cached, stated) in [
+            (r#","cachedContentTokenCount": 0"#, true),
+            ("", false),
+            (r#","cachedContentTokenCount": null"#, false),
+        ] {
+            let reply = response(&format!(
+                r#"{{"candidates": [], "usageMetadata": {{"promptTokenCount": 9{cached}}}}}"#
+            ));
+            let usage = Usage::from(reply.usage_metadata.expect("usage"));
+            assert_eq!(usage.cached.stated, stated, "{cached}");
+            assert_eq!(usage.cached.read_tokens, 0, "{cached}");
+        }
     }
 
     /// A call with no arguments is `{}`, which the turn loop can parse, and every call made up in

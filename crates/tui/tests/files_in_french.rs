@@ -134,6 +134,7 @@ fn the_hint_line_of_the_state_is_cut_with_an_ellipsis_in_french_where_the_row_is
         bravebot_aichat::protocol::Cached {
             read_tokens: 12_000,
             written_tokens: 3_000,
+            stated: true,
         },
         20_000,
     );

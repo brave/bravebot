@@ -2872,6 +2872,7 @@ mod tests {
             bravebot_aichat::protocol::Cached {
                 read_tokens: 12_000,
                 written_tokens: 3_000,
+                stated: true,
             },
             20_000,
         );
@@ -2952,6 +2953,7 @@ mod tests {
             Cached {
                 read_tokens: 0,
                 written_tokens: 3_000,
+                stated: true,
             },
             20_000,
         );
@@ -2968,6 +2970,7 @@ mod tests {
         let figures = Cached {
             read_tokens: 12_000,
             written_tokens: 3_000,
+            stated: true,
         };
         let ending = || bravebot_agent::Ending::Stopped { attempts: None };
         for fail in [false, true] {
@@ -6628,6 +6631,7 @@ mod tests {
             bravebot_aichat::protocol::Cached {
                 read_tokens: 12_000,
                 written_tokens: 3_000,
+                stated: true,
             },
             20_000,
         );

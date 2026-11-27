@@ -225,6 +225,8 @@ fn record_of(project: &Path, found: &Found) -> Record {
         agent: None,
         skill_mode: None,
         effort: None,
+        // Copied in from another program, which this one sent no request for.
+        service: None,
     }
 }
 

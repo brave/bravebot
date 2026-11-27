@@ -690,6 +690,7 @@ mod tests {
             cached: bravebot_aichat::protocol::Cached {
                 read_tokens: 300,
                 written_tokens: 20,
+                stated: true,
             },
             requests: 5,
             ..Default::default()

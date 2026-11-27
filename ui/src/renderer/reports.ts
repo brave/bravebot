@@ -284,40 +284,58 @@ export interface StatsSpent {
   written: number
   /** Tokens of sessions that kept no split into read and written. */
   unsplit: number
+  /** What the service read out of its cache and wrote into it, over the sessions that carry the figures. */
+  cacheRead: number
+  cacheWritten: number
+  /** Cache read over the tokens those sessions read, in tenths of a percent; null where they read nothing. */
+  hitRatePermille: number | null
+  /** The same as the terminal prints it, `-` where it is null. The bridge words it. */
+  hitRate: string
 }
+
+/** The fixed word a record keeps for the backend that answered (SESSION-11), or null for none. */
+export type StatsService = 'aichat' | 'bedrock' | 'gateway' | 'chatgpt' | 'xai'
 
 /**
  * What `session.stats` answers: what the recorded sessions spent, as `bravebot stats --models`
- * totals it (CLI-37). The bridge has already grouped and cleaned the model rows. `model` is null
- * for the sessions whose record names no model.
+ * totals it (CLI-37). The bridge has already grouped and cleaned the model rows. A row is one model
+ * and the service that answered it; `model` is null for the sessions whose record names no model,
+ * and `service` for those whose record names no service. `serviceWord` is the word the terminal
+ * shows for the service, and `withoutCache.note` the terminal's note on the sessions the hit rate
+ * leaves out, null where there are none; the bridge words both.
  */
 export interface StatsReport {
   directory: string | null
   days: number | null
   total: StatsSpent
-  models: (StatsSpent & { model: string | null })[]
+  models: (StatsSpent & { model: string | null; service: StatsService | null; serviceWord: string })[]
   unreadable: number
+  /** The sessions the hit rate leaves out: those on a service that states none, and those naming no service. */
+  withoutCache: { sessions: number; silent: number; older: number; note: string | null }
 }
 
-/** A row of the spend table: a label, its six figures, and whether it is the Total row. */
+/** A row of the spend table: a label, the service word (empty on Total), its figures, and whether it is the Total row. */
 export interface StatsRow extends StatsSpent {
   label: string
+  service: string
   total: boolean
 }
 
 function spent(figures: StatsSpent): StatsSpent {
-  const { sessions, turns, tokens, read, written, unsplit } = figures
-  return { sessions, turns, tokens, read, written, unsplit }
+  const { sessions, turns, tokens, read, written, unsplit, cacheRead, cacheWritten, hitRatePermille, hitRate } = figures
+  return { sessions, turns, tokens, read, written, unsplit, cacheRead, cacheWritten, hitRatePermille, hitRate }
 }
 
 /**
- * The rows of the spend table in the order the terminal prints them: each model in the order the
- * bridge sent, a model of null labelled `unknown` (`stats-model-unknown`), then `Total`
- * (`stats-row-total`).
+ * The rows of the spend table in the order the terminal prints them: each model and service in the
+ * order the bridge sent, with the service's word as the bridge sent it, a model of null labelled
+ * `unknown` (`stats-model-unknown`), then `Total` (`stats-row-total`).
  */
 export function statsRows(report: StatsReport): StatsRow[] {
-  const rows: StatsRow[] = report.models.map((row) => ({ label: row.model ?? 'unknown', total: false, ...spent(row) }))
-  rows.push({ label: 'Total', total: true, ...spent(report.total) })
+  const rows: StatsRow[] = report.models.map((row) => ({
+    label: row.model ?? 'unknown', service: row.serviceWord, total: false, ...spent(row),
+  }))
+  rows.push({ label: 'Total', service: '', total: true, ...spent(report.total) })
   return rows
 }
 

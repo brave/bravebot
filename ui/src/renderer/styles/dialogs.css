@@ -200,34 +200,48 @@
 /* ---------------------------------------------------------- spend across chats */
 
 /* What the recorded sessions spent (CLI-37): a days choice and a by-model toggle over a table of
-   six figures per row, the Total row last. The label column truncates a long model name. */
+   nine figures per row, the Total row last. The label column truncates a long model name; the
+   service column, shown with the model rows, holds one fixed word. Each column is as wide as its
+   longest figure, which is never cut. The table and the notes under it scroll inside one box
+   that leaves the head, the controls and the footer on screen, with a bar that is always drawn, so at the minimum window
+   the notes are reached by scrolling down and the table's own width fits. Sideways scrolling is
+   the fallback for figures wider than the dialog. */
 .spend-report-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--leo-spacing-l);
-  margin-bottom: var(--leo-spacing-l);
+  margin-bottom: var(--leo-spacing-m);
 }
 .spend-report-by-model { display: flex; align-items: center; gap: var(--leo-spacing-m); font: var(--type-body); color: var(--ink-primary); }
+.spend-report-scroll { max-height: calc(100vh - 24em); overflow: auto; }
+.spend-report-scroll::-webkit-scrollbar { width: 12px; height: 12px; }
+.spend-report-scroll::-webkit-scrollbar-track { background-color: var(--surface-sunken); border-radius: var(--radius-pill); }
+.spend-report-scroll::-webkit-scrollbar-thumb { background-color: var(--ink-tertiary); border-width: 2px; }
+.spend-report-scroll::-webkit-scrollbar-thumb:hover { background-color: var(--ink-secondary); }
 .spend-report-table {
   width: 100%;
-  table-layout: fixed;
   border-collapse: collapse;
   font: var(--type-body);
   font-variant-numeric: tabular-nums;
   user-select: text;
 }
 .spend-report-table th, .spend-report-table td {
-  padding: var(--leo-spacing-m);
+  padding: var(--leo-spacing-s);
   border-bottom: 1px solid var(--border-hairline);
   text-align: right;
 }
-.spend-report-table thead th { font: var(--type-meta-strong); color: var(--ink-secondary); }
-.spend-report-table th:first-child { width: 28%; text-align: left; }
-.spend-report-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: normal; color: var(--ink-primary); }
+.spend-report-table td { white-space: nowrap; }
+.spend-report-table thead th { font: var(--type-meta-strong); color: var(--ink-secondary); white-space: nowrap; }
+/* The first and last columns meet the dialog's text edges. */
+.spend-report-table th:first-child { text-align: left; padding-left: 0; }
+.spend-report-table tr > :last-child { padding-right: 0; }
+.spend-report-table .spend-report-service { text-align: left; }
+.spend-report-label { font-weight: normal; color: var(--ink-primary); }
+.spend-report-name { display: block; max-width: 10em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .spend-report-total th, .spend-report-total td { border-bottom: none; font: var(--type-body-strong); font-variant-numeric: tabular-nums; }
-.modal .spend-report-note { margin: var(--leo-spacing-l) 0 0; font: var(--type-meta); color: var(--ink-secondary); text-wrap: pretty; }
+.modal .spend-report-note { margin: var(--leo-spacing-m) 0 0; font: var(--type-meta); color: var(--ink-secondary); text-wrap: pretty; }
 
 /* ---------------------------------------------------------- last request */
 

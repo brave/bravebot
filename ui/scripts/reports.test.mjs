@@ -223,8 +223,12 @@ test('each empty state of the context is named rather than shown as an empty tab
 })
 
 // Token Spend Across Chats… (CLI-37), from what session.stats answers.
-const figures = (tokens) => ({ sessions: 1, turns: 2, tokens, read: 0, written: 0, unsplit: tokens })
-const stats = (models) => ({ directory: null, days: null, total: figures(900), models, unreadable: 0 })
+const figures = (tokens) => ({
+  sessions: 1, turns: 2, tokens, read: 0, written: 0, unsplit: tokens, cacheRead: 0, cacheWritten: 0, hitRatePermille: null, hitRate: '-',
+})
+const stats = (models) => ({
+  directory: null, days: null, total: figures(900), models, unreadable: 0, withoutCache: { sessions: 0, silent: 0, older: 0, note: null },
+})
 
 test('the spend rows keep the model order the bridge sent and put Total last', () => {
   const rows = statsRows(stats([{ model: 'big', ...figures(600) }, { model: 'small', ...figures(300) }]))
@@ -244,6 +248,29 @@ test('a model row of null is labelled unknown, and Total still comes last', () =
 
 test('with no model rows the table is the Total row alone', () => {
   assert.deepEqual(statsRows(stats([])).map((row) => [row.label, row.total]), [['Total', true]])
+})
+
+// A model answered by two services is two rows the bridge sent, and the dialog must say which is
+// which: a row drawn by model name alone would show two rows of the same name. The service's word
+// and the hit rate are the ones the bridge sent: the gateway row carries a word and a rate in
+// another catalog's form, so a renderer that worded either itself from `service` or
+// `hitRatePermille` would show `gateway` or `0.0%` there instead.
+test('a model served by two services is two rows that name the service as the bridge words it, and Total names none', () => {
+  const rows = statsRows(stats([
+    { model: 'shared', service: 'bedrock', serviceWord: 'bedrock', ...figures(600), cacheRead: 300, cacheWritten: 40, hitRatePermille: 500, hitRate: '50.0%' },
+    { model: 'shared', service: 'gateway', serviceWord: 'passerelle', ...figures(200), hitRatePermille: 0, hitRate: '0,0 %' },
+    { model: 'shared', service: 'aichat', serviceWord: 'brave', ...figures(60) },
+    { model: null, service: null, serviceWord: 'unknown', ...figures(40) },
+  ]))
+  assert.deepEqual(rows.map((row) => [row.label, row.service, row.hitRate]), [
+    ['shared', 'bedrock', '50.0%'], ['shared', 'passerelle', '0,0 %'], ['shared', 'brave', '-'], ['unknown', 'unknown', '-'], ['Total', '', '-'],
+  ])
+  const shown = rows.filter((row) => !row.total).map((row) => `${row.label} ${row.service}`)
+  assert.equal(new Set(shown).size, shown.length, 'no two rows read alike')
+  assert.equal(rows[0].cacheRead, 300)
+  assert.equal(rows[0].cacheWritten, 40)
+  assert.equal(rows[0].hitRatePermille, 500)
+  assert.equal(rows[4].service, '')
 })
 
 test('the scope sentence says which sessions and which projects are counted', () => {

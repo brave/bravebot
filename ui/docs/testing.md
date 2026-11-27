@@ -419,7 +419,8 @@ unset, as `<scene>-light.png` and `<scene>-dark.png`. The scenes are numbered, a
 markdown, tables and code, a running turn with tool calls, each decision card (trusted and
 untrusted), a command's output and the vouch question, a series of questions, a finished and a
 failed turn, the inspector's file tree, the model and export menus, the find bar, Permissions,
-File watches, Appearance, About, Agent settings, Bots, the queue with attachments, and the
+File watches, Appearance, About, Agent settings, Bots, Token Spend Across Chats (by model, at both
+window sizes), the queue with attachments, and the
 minimum-size window (900×560; the others use 1440×900).
 
 Two things make it more than a folder of images:

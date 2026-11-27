@@ -755,6 +755,8 @@ pub fn run_recording<S: Sink, C: Confirmer, R: Reporter>(
 struct Accounting {
     spent: crate::Spent,
     elapsed: crate::timing::Elapsed,
+    /// The backend the planning calls were sent to, set by the client that sent them.
+    answered_by: Option<crate::BackendKind>,
 }
 
 impl Accounting {
@@ -1349,6 +1351,7 @@ fn ask<S: Sink, R: Reporter>(
         if let Some(subscription) = subscription {
             client = client.with_subscription(subscription);
         }
+        accounting.answered_by = Some(client.kind());
         client.complete_streaming(policy, &request, |progress| {
             reporter.output_tokens(written_before + progress.output_tokens);
         })
@@ -1669,6 +1672,8 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         addressed: None,
         compared_the_model_itself: false,
         model,
+        // The backend both planning calls were sent to, as the client that sent them reported it.
+        backend: accounting.answered_by,
         steps: plan.len(),
         standing_refusals: policy.refusals().to_vec(),
         worked_around: 0,

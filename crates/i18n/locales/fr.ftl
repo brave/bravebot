@@ -4647,6 +4647,32 @@ stats-column-written = Écrits
 # Les jetons qu'un enregistrement contient et que sa répartition entre lus et écrits ne couvre pas :
 # chaque jeton d'une session écrite avant que cette répartition soit conservée.
 stats-column-unsplit = Non répartis
+# Les jetons que le service a servis depuis son cache et ceux qu'il y a écrits, additionnés sur les
+# sessions dont l'enregistrement porte ces chiffres.
+stats-column-cache-read = Lus en cache
+stats-column-cache-written = Écrits en cache
+# Lus en cache sur les jetons lus par les sessions dont l'enregistrement porte les chiffres du
+# cache, en pourcentage, ou un tiret quand ces sessions n'ont rien lu.
+stats-column-hit-rate = Taux de succès
+# Un taux sous cet en-tête. Le français sépare le nombre du signe pour cent.
+stats-hit-rate = { $rate } %
+# Le service qui a répondu aux sessions d'une ligne, un mot fixe par sorte de service.
+stats-column-service = Service
+stats-service-aichat = brave
+stats-service-bedrock = bedrock
+stats-service-gateway = passerelle
+stats-service-chatgpt = chatgpt
+stats-service-xai = xai
+# Une session dont l'enregistrement ne nomme aucun service : une session écrite avant que le service
+# soit conservé.
+stats-service-unknown = inconnu
+# Combien de sessions ne portent aucun chiffre de cache, et que le taux de succès laisse donc de
+# côté ; combien d'entre elles ont tourné sur un service qui n'en indique aucun ; et combien ne
+# nomment aucun service.
+stats-without-cache = { $count ->
+    [one] 1 session ne porte aucun chiffre de cache et n'entre pas dans le taux de succès. Sur un service qui n'en indique aucun : { $silent }. Sans service nommé, donc peut-être antérieures aux chiffres du cache : { $older }.
+   *[other] { $count } sessions ne portent aucun chiffre de cache et n'entrent pas dans le taux de succès. Sur un service qui n'en indique aucun : { $silent }. Sans service nommé, donc peut-être antérieures aux chiffres du cache : { $older }.
+    }
 stats-row-total = Total
 # Une session dont l'enregistrement ne nomme aucun modèle : une session écrite avant que le modèle
 # soit conservé, une dont les tours n'ont jamais atteint un serveur, et une copiée depuis un autre
