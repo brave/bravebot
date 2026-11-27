@@ -8,10 +8,12 @@
 //!
 //! A device is sent only the events named in [`EVENTS`], and its copy of the view has every row the
 //! bridge marked as coming from somewhere nobody vouched for replaced by a placeholder that keeps
-//! the row's place. A question marked so is not offered to it, and is answered on the computer.
+//! the row's place. A question that holds such content is not offered to it, and is answered on the
+//! computer, and so is a question of a kind a device does not answer.
 //!
-//! What decides is the bridge's own: an event's name, a row's kind, and the `untrusted` flag the
-//! agent sets from a value's label. No text of a row is read.
+//! What decides is the bridge's own: an event's name, a row's kind, the `untrusted` flag the agent
+//! sets from a value's label, and whether a field that only ever holds such content is there. No
+//! text of a row is read.
 
 use crate::turn::Kind;
 use crate::view::{Row, RowKind, Update};
@@ -48,12 +50,32 @@ fn untrusted(data: &Value) -> bool {
     data.get("untrusted").and_then(Value::as_bool) == Some(true)
 }
 
+/// The kinds of question a device can be offered, which are the ones a client of the host can
+/// answer. Any other, such as reading a command's output or vouching for a file, holds content
+/// nobody vouched for by what it is, and is answered on the computer.
+const OFFERED: &[&str] = &["confirm", "run", "fetch", "ask"];
+
+/// Whether a device is not offered the question of `kind` that `data` describes: one of a kind it is
+/// not offered, one the agent marked `untrusted`, a write with the remark an isolated processor
+/// wrote, which is always untrusted, and a fetch a redirect led to, whose address a remote server
+/// chose. Only the kind, the flag and whether those fields are there are read.
+pub fn question_withheld(kind: &str, data: &Value) -> bool {
+    let present = |field: &str| data.get(field).is_some_and(|value| !value.is_null());
+    !OFFERED.contains(&kind) || untrusted(data) || present("remark") || present("redirectedFrom")
+}
+
 /// Whether a device is shown `row` only as a placeholder: a quarantined preview, an activity whose
-/// target came from content nobody vouched for, and a question whose body did.
+/// target came from content nobody vouched for, and a question it is not offered.
 fn withheld(row: &Row) -> bool {
     match row.kind {
         RowKind::Quarantined => true,
-        RowKind::Activity | RowKind::Approval => untrusted(&row.data),
+        RowKind::Activity => untrusted(&row.data),
+        // A row with no question's name is no question a device can be offered.
+        RowKind::Approval => row
+            .event
+            .as_deref()
+            .and_then(|event| event.strip_suffix(".request"))
+            .is_none_or(|kind| question_withheld(kind, &row.data)),
         RowKind::Prompt | RowKind::Narration | RowKind::Reply | RowKind::Error => false,
     }
 }
@@ -68,8 +90,8 @@ fn placeholder(row: &Row) -> Value {
 }
 
 /// The view as a device is shown it: each withheld row's content replaced by a placeholder with
-/// the same id, turn, kind, event and resolution, and a question whose body nobody vouched for left
-/// out of what waits on it. Returns the number of that question, which the device may not answer.
+/// the same id, turn, kind, event and resolution, and a question it is not offered left out of what
+/// waits on it. Returns the number of that question, which the device may not answer.
 pub fn for_a_device(update: &mut Update) -> Option<u64> {
     for row in update.rows.iter_mut().filter(|row| withheld(row)) {
         row.data = placeholder(row);
@@ -77,7 +99,7 @@ pub fn for_a_device(update: &mut Update) -> Option<u64> {
     let question = update
         .pending
         .as_ref()
-        .filter(|pending| untrusted(&pending.data))
+        .filter(|pending| question_withheld(&pending.kind, &pending.data))
         .map(|pending| pending.request);
     if question.is_some() {
         update.pending = None;
@@ -196,6 +218,7 @@ mod tests {
             vec![row(1, RowKind::Approval, pending.data.clone())],
             Some(pending),
         );
+        update.rows[0].event = Some("run.request".into());
         assert_eq!(for_a_device(&mut update), None);
         assert_eq!(
             update.pending.as_ref().map(|pending| pending.request),
@@ -240,6 +263,74 @@ mod tests {
         );
         for view in VIEWS {
             assert!(EVENTS.contains(view), "{view}");
+        }
+    }
+
+    /// A question a device is not offered is withheld whole, as a row and from what waits: one of a
+    /// kind a client of the host does not answer, which holds untrusted content by what it is; a
+    /// write with an isolated processor's remark; and a fetch a redirect led to. A question nothing
+    /// marks, of a kind a device answers, is offered.
+    #[test]
+    fn each_question_a_device_is_not_offered_is_withheld() {
+        for (event, data, withholds) in [
+            (
+                "output.request",
+                json!({"request": 1, "output": SENTINEL}),
+                true,
+            ),
+            (
+                "vouch.request",
+                json!({"request": 1, "preview": [SENTINEL]}),
+                true,
+            ),
+            (
+                "vet.request",
+                json!({"request": 1, "content": SENTINEL}),
+                true,
+            ),
+            (
+                "confirm.request",
+                json!({"request": 1, "untrusted": false, "remark": {"preview": [SENTINEL]}}),
+                true,
+            ),
+            (
+                "fetch.request",
+                json!({"request": 1, "url": SENTINEL, "redirectedFrom": "example.com"}),
+                true,
+            ),
+            (
+                "fetch.request",
+                json!({"request": 1, "url": "https://a.example/", "redirectedFrom": null}),
+                false,
+            ),
+            (
+                "confirm.request",
+                json!({"request": 1, "untrusted": false, "remark": null}),
+                false,
+            ),
+            (
+                "run.request",
+                json!({"request": 1, "line": "git status"}),
+                false,
+            ),
+        ] {
+            let kind = event.trim_end_matches(".request");
+            let mut update = an_update(
+                vec![row(1, RowKind::Approval, data.clone())],
+                Some(Pending {
+                    row: 1,
+                    request: 1,
+                    kind: kind.into(),
+                    supported: true,
+                    data: data.clone(),
+                }),
+            );
+            update.rows[0].event = Some(event.into());
+            let question = for_a_device(&mut update);
+            assert_eq!(question.is_some(), withholds, "{event} {data}");
+            assert_eq!(update.pending.is_none(), withholds, "{event} {data}");
+            let sent = serde_json::to_string(&update).unwrap();
+            assert!(!sent.contains(SENTINEL), "{event}: {sent}");
         }
     }
 }
