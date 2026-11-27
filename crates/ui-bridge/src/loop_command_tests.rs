@@ -491,8 +491,70 @@ fn the_next_tick_is_an_interval_after_the_turn_ends() {
     assert_eq!(named(&events, "turn.started").len(), 2);
 }
 
-/// LOOP-6. Rejects a due tick sent while a turn runs, while the conversation is compacted, or
-/// while a worker holds the session's state; and one held after the session is idle again.
+/// LOOP-6. Rejects a due tick sent while the conversation is compacted, before the trust question
+/// is answered, or while a settings question waits; and one held once each is over.
+#[test]
+fn nothing_fires_while_the_session_cannot_take_a_turn() {
+    let (mut bridge, handle, events, _bodies, _held) = opened();
+    typed(&mut bridge, &handle, "5s x");
+    let later = Instant::now() + Duration::from_secs(60);
+    let ticks = |events: &Events| named(events, "loop.tick").len();
+
+    let (compacting, _finished) = crate::compaction::Compacting::start();
+    bridge.open.get_mut(&handle).unwrap().compacting = Some(compacting);
+    bridge.poll_loops_at(later);
+    assert_eq!(ticks(&events), 1, "a tick went while compacting");
+    bridge.open.get_mut(&handle).unwrap().compacting = None;
+    bridge.poll_loops_at(later);
+    assert_eq!(ticks(&events), 2, "no tick once compacting was over");
+    settle(&mut bridge, &handle);
+
+    let later = Instant::now() + Duration::from_secs(60);
+    bridge.open.get_mut(&handle).unwrap().answered_trust = false;
+    bridge.poll_loops_at(later);
+    assert_eq!(ticks(&events), 2, "a tick went before trust was answered");
+    bridge.open.get_mut(&handle).unwrap().answered_trust = true;
+    bridge.poll_loops_at(later);
+    assert_eq!(ticks(&events), 3, "no tick once trust was answered");
+    settle(&mut bridge, &handle);
+
+    let later = Instant::now() + Duration::from_secs(60);
+    bridge.open.get_mut(&handle).unwrap().questions = Questions::Folder {
+        request: 1,
+        folder: crate::project_questions::Named {
+            directory: "/elsewhere".to_string(),
+            names: vec!["elsewhere".to_string()],
+        },
+        rest: Default::default(),
+        settings: Box::default(),
+    };
+    bridge.poll_loops_at(later);
+    assert_eq!(ticks(&events), 3, "a tick went while a question waited");
+    bridge.open.get_mut(&handle).unwrap().questions = Questions::Settled;
+    bridge.poll_loops_at(later);
+    assert_eq!(ticks(&events), 4, "no tick once the question was answered");
+    settle(&mut bridge, &handle);
+}
+
+/// LOOP-6. Rejects a loop kept, or ended without saying so, when its tick's turn cannot start.
+#[test]
+fn a_tick_whose_turn_cannot_start_ends_its_loop() {
+    let (mut bridge, handle, events, _bodies, _held) = opened();
+    typed(&mut bridge, &handle, "5m x");
+    // Past the poll's own refusal, so the turn's start is what refuses.
+    bridge.open.get_mut(&handle).unwrap().answered_trust = false;
+    bridge.fire_loop(&handle, 1);
+
+    assert!(numbers(&mut bridge, &handle).is_empty());
+    let ended = named(&events, "loop.ended");
+    assert_eq!(ended.len(), 1, "{ended:?}");
+    assert_eq!(ended[0]["number"], 1);
+    assert_eq!(ended[0]["reason"], "failed");
+    assert!(ended[0]["message"].as_str().is_some_and(|m| !m.is_empty()));
+}
+
+/// LOOP-6. Rejects a due tick sent while a turn runs, or while a worker holds the session's
+/// state; and one held after the session is idle again.
 #[test]
 fn nothing_fires_while_the_session_is_busy() {
     let (mut bridge, handle, events, _bodies, _held) = opened();
