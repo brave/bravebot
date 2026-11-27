@@ -1668,6 +1668,19 @@ fn a_stated_gap_does_not_end_a_stream_from_this_machine_that_asks_to_be_waited_o
                 matches!(read, Err(EgressError::Transport { .. })),
                 "without the ask a stated gap still cuts the silence: {read:?}"
             );
+            // The same silence without the ask is the gap, told by the kind of error the
+            // transport raised. With the ask the stream ended without any error, so it is never
+            // told as having met the gap (BACKEND-37).
+            assert!(
+                matches!(
+                    read,
+                    Err(EgressError::Transport {
+                        cause: Some(bravebot_net::TransportCause::IdleGap),
+                        ..
+                    })
+                ),
+                "the silence the stated gap cut was not told as the gap: {read:?}"
+            );
         }
     }
 }

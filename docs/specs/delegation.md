@@ -367,8 +367,14 @@ that no refusal came is made because a planner left without a cause has written 
 refused call might be it, and a transport or incomplete ending carries no refusal. The sentence does
 not say that starting again will succeed or that the task need not change. A planner told only that
 the delegate did not finish takes it for bad luck and starts the same delegate again, which makes
-the same requests into the same ending. The sentence is written by this driver for each of the four
-categories from the closed name the trail records ([TRACE-8](trace.md#TRACE-8)), so nothing the
+the same requests into the same ending. A transport ending also says which part of the request
+ended: the connection could not be made or failed, the reply did not begin within the time it was
+given, or the reply went quiet for longer than the gap allowed. One that ended on the connection is
+not told to split the task, because smaller replies do not help a connection that failed. An
+incomplete ending whose reply began and then went quiet past the gap says so. The person's note
+names the same cause beside the category. The sentence is written by this driver for each of the four
+categories from the closed name the trail records ([TRACE-8](trace.md#TRACE-8)), and for each cause
+from the closed name the network layer chose from the kind of error the transport raised, so nothing the
 service answered is carried ([BACKEND-37](backends.md#BACKEND-37)). Every other category, a stop and
 a lost thread are still told as only that the delegate did not finish. What the delegate had read or
 written before it failed is not handed back: the planner is told the counts of commands and writes
@@ -391,6 +397,8 @@ untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
 `verified-by: bravebot_agent::turn::a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply`
 `verified-by: bravebot_agent::turn::a_delegate_that_ended_on_a_limit_an_outage_a_silence_or_a_stopped_reply_is_told_to_the_planner`
 `verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_the_category_only_where_a_repeat_ends_the_same_way`
+`verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_which_part_of_a_request_a_delegate_s_transport_failure_ended`
+`verified-by: bravebot_agent::turn::delegate_end::how_a_delegate_ended_carries_the_cause_of_a_transport_failure`
 
 <a id="DELEGATE-29"></a>
 ### DELEGATE-29: a delegate may also be bounded in tokens, by its definition or its call, and the call can only lower it

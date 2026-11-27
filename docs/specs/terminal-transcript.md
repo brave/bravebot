@@ -713,7 +713,10 @@ that sent it, the model the turn ran on and the request fields the retries left 
 with the next step ([BACKEND-37](backends.md#BACKEND-37)); those words are the program's own,
 except the model, which is the name the person configured and is written with control characters
 made visible. A rate-limited request also ends with the next step ([BACKEND-37](backends.md#BACKEND-37)), in the
-program's own words. It remains visible with the audit expanded
+program's own words. A request that did not get through says whether it could not connect, its
+reply did not begin, or its reply went quiet past the gap in force, names the settings that change
+it where the backend has a place for them, and ends by saying that a new message continues from what
+was already done ([BACKEND-37](backends.md#BACKEND-37)), in the program's own words. It remains visible with the audit expanded
 or collapsed, after resizing, and while reading older scrollback. Long reasons wrap within the
 available space. Terminal control characters are not drawn.
 
@@ -735,6 +738,8 @@ The live session's export includes its failure and cancellation entries.
 `verified-by: bravebot_tui::frame::an_export_attaches_each_reason_to_the_turn_that_had_it`
 `verified-by: bravebot_tui::frame::an_export_of_a_cancelled_turn_says_it_was_cancelled`
 `verified-by: bravebot_tui::app::tests::backends_models::a_rejected_request_is_said_with_the_configured_model_in_the_transcript`
+`verified-by: bravebot_session::sessions::a_transport_failure_says_its_cause_the_gap_in_force_and_the_setting_that_changes_it`
+`verified-by: bravebot_session::sessions::a_transport_failure_says_last_that_a_new_message_continues_the_turn`
 `verified-by: bravebot_tui::failure_history::turn_endings_keep_the_visible_history_anchor`
 `verified-by: bravebot_tui::outcome_colours::what_a_successful_turn_cost_is_not_drawn_in_the_failure_colour`
 `verified-by: bravebot_tui::outcome_colours::failure_label_uses_failure_colour`

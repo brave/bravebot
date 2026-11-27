@@ -707,6 +707,7 @@ fn a_refused_command_is_not_taken_for_the_failure_of_the_turn_around_it() {
         conceded: Default::default(),
         backend: None,
         retry_setting: bravebot_agent::RetrySetting::None,
+        idle_gap: None,
         attempts: 2,
         cause: Box::new(bravebot_agent::backend::BackendError::from(
             ChatError::Account(AccountFailure::NotSignedIn),
@@ -928,6 +929,7 @@ fn failure_reporting_uses_safe_fields_in_the_transcript_and_status() {
         conceded: Default::default(),
         backend: None,
         retry_setting: bravebot_agent::RetrySetting::None,
+        idle_gap: None,
         attempts: 3,
         cause: Box::new(bravebot_agent::backend::BackendError::from(
             bravebot_aichat::ChatError::Egress(bravebot_net::EgressError::Status {

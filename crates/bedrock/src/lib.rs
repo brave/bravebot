@@ -67,13 +67,20 @@ pub enum BedrockError {
     ThoughtOnly,
     /// The stream stopped without the service saying the reply was over.
     Incomplete,
+    /// The stream began and then went quiet for longer than the gap allowed between two pieces of
+    /// it, which the network layer told from the kind of error the transport raised.
+    ///
+    /// The reply stopping, as [`BedrockError::Incomplete`] is, and asked for again like it, kept
+    /// apart so the failure can name the gap and the setting that changes it.
+    WentQuiet,
     /// The reply began and then stopped arriving, on a request that let the service hold a tool's
     /// arguments back until the model had finished writing them.
     ///
     /// The reply stopping, as [`BedrockError::Incomplete`] is, and unlike it never asked for again:
     /// the silence may be the model still writing, and a second request writes the same argument
-    /// into the same silence and is billed for it.
-    Stalled,
+    /// into the same silence and is billed for it. `went_quiet` says the transport ended it at the
+    /// gap allowed between two pieces of the reply, rather than the connection failing.
+    Stalled { went_quiet: bool },
     /// The service said, part way through the reply, that it was not going to finish it.
     ///
     /// Named by the failure the service reported rather than by a status: the status was sent and
@@ -122,7 +129,11 @@ impl fmt::Display for BedrockError {
             Self::Incomplete => {
                 f.write_str("the reply stopped before the service said it was finished")
             }
-            Self::Stalled => f.write_str(
+            Self::WentQuiet => f.write_str(
+                "the reply went quiet for longer than the gap allowed before the service said it \
+                 was finished",
+            ),
+            Self::Stalled { .. } => f.write_str(
                 "the reply stopped arriving while the service may still have been holding a tool \
                  call back",
             ),
@@ -424,13 +435,14 @@ impl From<EgressError> for BedrockError {
 /// asked for and the service had the request.
 fn not_sent_again(error: EgressError) -> BedrockError {
     match error {
-        EgressError::Transport { url, detail, .. } => {
-            BedrockError::Egress(EgressError::Transport {
-                url,
-                detail,
-                transient: false,
-            })
-        }
+        EgressError::Transport {
+            url, detail, cause, ..
+        } => BedrockError::Egress(EgressError::Transport {
+            url,
+            detail,
+            transient: false,
+            cause,
+        }),
         other => other.into(),
     }
 }
@@ -703,14 +715,22 @@ impl<'a> BedrockClient<'a> {
     /// Never as the request failing to get through, since some of the reply is here. Whether it is
     /// worth asking for again turns on what the silence could have been: where arguments stream as
     /// they are written, or there is no tool to write one for, nothing the model does is silent that
-    /// long and the connection is what died.
-    fn stopped_part_way(&self, request: &ChatRequest) -> BedrockError {
+    /// long and the connection is what died. Whether it went quiet past the gap is `cause`, which
+    /// the network layer chose from the kind of error the transport raised.
+    fn stopped_part_way(
+        &self,
+        request: &ChatRequest,
+        cause: Option<bravebot_net::TransportCause>,
+    ) -> BedrockError {
+        let went_quiet = cause == Some(bravebot_net::TransportCause::IdleGap);
         let offers_tools = request
             .tools
             .as_deref()
             .is_some_and(|tools| !tools.is_empty());
         if offers_tools && !self.streams_arguments(request, true) {
-            BedrockError::Stalled
+            BedrockError::Stalled { went_quiet }
+        } else if went_quiet {
+            BedrockError::WentQuiet
         } else {
             BedrockError::Incomplete
         }
@@ -924,7 +944,9 @@ impl<'a> BedrockClient<'a> {
             let piece = match arriving.next(&self.call.pace) {
                 Arrived::Piece(piece) => piece,
                 Arrived::Ended => break,
-                Arrived::StoppedPartWay => return Err(self.stopped_part_way(request)),
+                Arrived::StoppedPartWay(cause) => {
+                    return Err(self.stopped_part_way(request, cause));
+                }
                 Arrived::Failed(e) => return Err(not_sent_again(e)),
                 Arrived::Cancelled => return Err(BedrockError::Cancelled),
             };
@@ -1354,7 +1376,7 @@ fn worth_another_attempt(allowed: u32, attempt: u32, error: &BedrockError) -> bo
         // A reply that stopped early is a request that did not complete, whatever the socket
         // thought. The partial is thrown away for the same reason: half a reply cannot be continued
         // by a second stream.
-        BedrockError::Incomplete => true,
+        BedrockError::Incomplete | BedrockError::WentQuiet => true,
         // Corrupt framing means the position in the stream is lost, and the whole reply has to be
         // asked for again. The cause is a damaged connection, which is worth another attempt.
         BedrockError::Frame(_) => true,
@@ -3111,7 +3133,8 @@ mod tests {
     /// Once any of the reply has arrived, the request got through: a reply that then goes quiet
     /// has stopped, and saying it did not get through sends a person to check their network. With
     /// arguments streamed as they are written, a silence that long is a dead connection, so it is
-    /// asked for again like any reply that stopped early.
+    /// asked for again like any reply that stopped early. The silence ran past the gap, so it is
+    /// reported as the reply going quiet, which names the gap and the setting that changes it.
     #[test]
     fn a_reply_that_went_quiet_after_it_began_is_reported_as_stopping_and_asked_for_again() {
         let model = "a-model-whose-reply-went-quiet";
@@ -3127,7 +3150,7 @@ mod tests {
         );
 
         assert!(
-            matches!(result, Err(BedrockError::Incomplete)),
+            matches!(result, Err(BedrockError::WentQuiet)),
             "a reply that began was reported as {result:?}"
         );
         assert_eq!(sent.len() as u32, ATTEMPTS, "each attempt the server read");
@@ -3210,7 +3233,7 @@ mod tests {
         );
 
         assert!(
-            matches!(result, Err(BedrockError::Stalled)),
+            matches!(result, Err(BedrockError::Stalled { went_quiet: true })),
             "a reply that went quiet without the ask was reported as {result:?}"
         );
         assert_eq!(sent.len(), 1, "the held-back argument was asked for again");
@@ -3218,32 +3241,65 @@ mod tests {
     }
 
     /// Only a request offering a tool has an argument for the service to hold back, so only there
-    /// is a silence without the ask possibly the model still writing.
+    /// is a silence without the ask possibly the model still writing. Whichever it is, a reply the
+    /// transport ended at the gap says so, and one whose connection failed does not, since only the
+    /// gap has a setting that lengthens it.
+    ///
+    /// The faults this rejects: a connection failure told as the gap, and the gap dropped on the
+    /// way to either ending.
     #[test]
     fn only_a_request_whose_arguments_are_held_back_stalls_rather_than_stopping() {
+        use bravebot_net::TransportCause::{Begin, Connection, IdleGap};
         let config = config();
         let egress = Egress::new();
         let mut client = BedrockClient::new(&config, &egress);
         let offering = writing_a_file("opus-arn");
         let bare = ChatRequest::new("opus-arn", vec![Message::user("hello")]);
 
-        assert!(matches!(
-            client.stopped_part_way(&offering),
-            BedrockError::Incomplete
-        ));
-        assert!(
-            matches!(client.stopped_part_way(&bare), BedrockError::Incomplete),
-            "a reply with no tool to hold back was not asked for again"
-        );
+        for request in [&offering, &bare] {
+            for cause in [Some(Connection), Some(Begin), None] {
+                assert!(matches!(
+                    client.stopped_part_way(request, cause),
+                    BedrockError::Incomplete
+                ));
+            }
+            assert!(
+                matches!(
+                    client.stopped_part_way(request, Some(IdleGap)),
+                    BedrockError::WentQuiet
+                ),
+                "a reply that went quiet past the gap was not told as one"
+            );
+        }
         client.call.refusals.arguments_as_written = true;
         assert!(matches!(
-            client.stopped_part_way(&offering),
-            BedrockError::Stalled
+            client.stopped_part_way(&offering, Some(Connection)),
+            BedrockError::Stalled { went_quiet: false }
+        ));
+        assert!(matches!(
+            client.stopped_part_way(&offering, Some(IdleGap)),
+            BedrockError::Stalled { went_quiet: true }
         ));
         assert!(
-            matches!(client.stopped_part_way(&bare), BedrockError::Incomplete),
+            matches!(
+                client.stopped_part_way(&bare, Some(Connection)),
+                BedrockError::Incomplete
+            ),
             "a reply with no tool to hold back was not asked for again"
         );
+        assert!(
+            matches!(
+                client.stopped_part_way(&bare, Some(IdleGap)),
+                BedrockError::WentQuiet
+            ),
+            "a reply with no tool to hold back was not asked for again"
+        );
+        assert!(worth_another_attempt(ATTEMPTS, 1, &BedrockError::WentQuiet));
+        assert!(!worth_another_attempt(
+            ATTEMPTS,
+            1,
+            &BedrockError::Stalled { went_quiet: true }
+        ));
     }
 
     /// A model that does not define the beta refuses the request on it, as a model from another

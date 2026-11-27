@@ -9,8 +9,16 @@ import type { CutOff } from '../shared/protocol'
  * catalog, and this window keeps no table of the words (SHARE-001). The command it names arrives as
  * `accountCommand` and the card draws it as code. The title is one for both accounts, since a title that
  * named the service would be a table of service names here, and the sentence under it names the service.
+ *
+ * `failureMessage` is the bridge's sentence for any other failure it has one for: the agent's own line,
+ * the one the terminal shows, which says the cause, the figure and the setting that changes it. It is
+ * the description under the category's title, so these words too are said once, in the agent's catalog.
+ * Where the line is for a request whose reply did not begin or went quiet, `failureCause` names that
+ * cause and the title says it, since the category's title says the service could not be reached and
+ * it was. The title is chosen from the closed name and never from the line.
+ * The table below is what a failure with neither sentence is described by.
  */
-export function failureSummary(category: string, cutOff?: CutOff | null, accountMessage?: string | null): { title: string; description: string } {
+export function failureSummary(category: string, cutOff?: CutOff | null, accountMessage?: string | null, failureMessage?: string | null, failureCause?: string | null): { title: string; description: string } {
   if (accountMessage) return { title: 'The account could not be used', description: accountMessage }
   const rows: Record<string, [string, string]> = {
     cancelled: ['Task stopped', 'Completed changes remain in the project. You can continue from here.'],
@@ -32,6 +40,11 @@ export function failureSummary(category: string, cutOff?: CutOff | null, account
     'plan-mode': ['Could not switch to Plan mode', 'Nothing was sent, so try again or choose Plan from the mode menu.'],
   }
   const [title, description] = rows[category] ?? ['The turn could not finish', 'Your conversation is preserved. Review the details before continuing.']
+  const causes: Record<string, string> = {
+    begin: 'The model reply did not begin in time',
+    'idle-gap': 'The model reply went quiet',
+  }
+  if (failureMessage) return { title: (failureCause && causes[failureCause]) || title, description: failureMessage }
   if (category === 'too-long' && cutOff) return { title, description: ceilingStop(cutOff) }
   return { title, description }
 }

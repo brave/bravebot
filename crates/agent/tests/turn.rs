@@ -64511,9 +64511,10 @@ fn serve_failing_delegate(
 #[test]
 fn a_delegate_that_ended_on_a_limit_an_outage_a_silence_or_a_stopped_reply_is_told_to_the_planner()
 {
-    for (status, category, said) in [
+    for (status, category, noted, said) in [
         (
             429,
+            "rate-limited",
             "rate-limited",
             "It ended because the service asked for fewer requests (rate-limited), so starting \
              the same delegate again meets the same limit.",
@@ -64521,19 +64522,23 @@ fn a_delegate_that_ended_on_a_limit_an_outage_a_silence_or_a_stopped_reply_is_to
         (
             503,
             "unavailable",
+            "unavailable",
             "It ended because the service could not answer (unavailable), so starting the same \
              delegate again meets the same limit.",
         ),
+        // A server that hangs up without a word is a connection that failed, which the network
+        // layer tells from the kind of error the transport raised.
         (
             0,
             "transport",
-            "It ended because a request to the service did not get through or went quiet \
-             (transport), and the service sent no refusal. Starting the same delegate again on \
-             the same task may meet the same silence. Split the task so that each delegate \
-             makes smaller replies or writes.",
+            "transport: the connection failed",
+            "It ended because the connection to the service could not be made or failed \
+             (transport), and the service sent no refusal. Starting the same delegate again may \
+             meet the same failed connection.",
         ),
         (
             200,
+            "incomplete",
             "incomplete",
             "It ended because the service's reply stopped before it was finished \
              (incomplete), and the service sent no refusal. Starting the same delegate again \
@@ -64594,7 +64599,7 @@ fn a_delegate_that_ended_on_a_limit_an_outage_a_silence_or_a_stopped_reply_is_to
         assert_eq!(
             note,
             &format!(
-                "the delegate could not finish ({category}); it ran 0 commands and made 0 writes in the project"
+                "the delegate could not finish ({noted}); it ran 0 commands and made 0 writes in the project"
             )
         );
 
@@ -85996,6 +86001,83 @@ fn a_turn_that_ends_on_a_failed_request_leaves_the_planner_a_note_of_it() {
             "the service's words were sent back: {next}"
         );
     }
+}
+
+/// TURN-13, BACKEND-37: a turn whose requests the service hung up on, after a round that read a
+/// file, ends in transport, and the next prompt is sent with the note in front of it saying the
+/// connection could not be made and that a new message continues from what was already done. The
+/// cause is the driver's word for the kind of error the transport raised, so none of what the
+/// service did reaches the note.
+///
+/// The fault this rejects: a cause put in the person's line and the interface but not in the note
+/// the next request carries, which leaves the planner unable to say why the turn failed.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_request_after_a_failed_connection_carries_the_cause_in_the_note() {
+    let scratch = Scratch::new("failed-connection-note");
+    std::fs::write(scratch.path.join("target.txt"), "the file body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // One round that reads the file, and then every connection is dropped unanswered.
+    let (endpoint, received) = serve_script(vec![Served::Reply(tool_request(
+        "read_file",
+        r#"{"path":"target.txt"}"#,
+    ))]);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let error = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("what does target.txt say?"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("the service hung up on every request after the first");
+    let why = why_it_failed(&error);
+    assert_eq!(why.category, bravebot_agent::Category::Transport, "{why:?}");
+    assert_eq!(
+        why.cause,
+        Some(bravebot_agent::outcome::TransportCause::Connection),
+        "{why:?}"
+    );
+
+    take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("what went wrong?"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("the service still hangs up");
+
+    let bodies = every_request(&received);
+    let next = bodies
+        .iter()
+        .find(|body| body.contains("what went wrong?"))
+        .expect("the next prompt was sent");
+    let (noted, asked) = (
+        next.find("Cause: the connection could not be made."),
+        next.find("what went wrong?"),
+    );
+    assert!(
+        noted.is_some() && noted < asked,
+        "the request does not carry the cause in front of the prompt: {next}"
+    );
+    assert!(
+        next.contains("A new message from the person continues from what was already done."),
+        "{next}"
+    );
+    assert!(
+        bodies
+            .iter()
+            .filter(|body| !body.contains("what went wrong?"))
+            .all(|body| !body.contains(FAILED_TURN_NOTE)),
+        "the note was sent before the turn had failed"
+    );
 }
 
 /// TURN-13: only a failure leaves the note. A turn that answered and a turn the person stopped

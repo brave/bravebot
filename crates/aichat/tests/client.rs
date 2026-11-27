@@ -4704,8 +4704,8 @@ fn a_gateway_stating_a_shorter_idle_gap_gives_up_on_a_quiet_reply_sooner() {
     let stated = gateway_stating(&endpoint, model, r#""maxRetries": 0, "idleTimeoutMs": 300"#);
     let (result, _) = asked_of(&stated, &config, &egress, model, true);
     assert!(
-        matches!(result, Err(ChatError::Incomplete)),
-        "a quiet reply was waited on past the stated 300 ms: {result:?}"
+        matches!(result, Err(ChatError::WentQuiet)),
+        "a quiet reply was waited on past the stated 300 ms, or not told as the gap: {result:?}"
     );
 }
 

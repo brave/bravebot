@@ -11677,6 +11677,7 @@ mod tests {
             took,
             rounds: 3,
             why: "timeout",
+            cause: None,
         };
 
         let (note, body) = delegate_end::unfinished_account(&failed, Some((took, 3)), 3, id);
@@ -11704,6 +11705,7 @@ mod tests {
             took,
             rounds: 3,
             why: "rate-limited",
+            cause: None,
         };
         let (note, body) = delegate_end::unfinished_account(&limited, Some((took, 3)), 3, id);
         assert_eq!(

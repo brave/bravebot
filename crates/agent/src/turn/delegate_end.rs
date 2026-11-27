@@ -28,15 +28,34 @@ pub(super) fn finish_of<T>(
         (Ok(_), Some((took, rounds))) => Finish::Answered { took, rounds },
         (Err(error), Some((took, rounds))) => match error.ending() {
             crate::outcome::Ending::Stopped { .. } => Finish::Stopped { took, rounds },
-            ending => Finish::Failed {
-                took,
-                rounds,
-                why: ending
-                    .diagnosis()
-                    .map_or("internal", |diagnosis| diagnosis.category.name()),
-            },
+            ending => {
+                let diagnosis = ending.diagnosis();
+                Finish::Failed {
+                    took,
+                    rounds,
+                    why: diagnosis.map_or("internal", |diagnosis| diagnosis.category.name()),
+                    // Which part of the request ended, as the network layer chose it from the kind
+                    // of error the transport raised. Said to the planner and the person, and left
+                    // out of the trail (TRACE-8).
+                    cause: diagnosis
+                        .and_then(|diagnosis| diagnosis.cause)
+                        .map(crate::outcome::TransportCause::name),
+                }
+            }
         },
     }
+}
+
+/// The cause a [`Finish::Failed`] names, read back from its fixed name.
+fn cause_named(name: &str) -> Option<crate::outcome::TransportCause> {
+    use crate::outcome::TransportCause;
+    [
+        TransportCause::Connection,
+        TransportCause::Begin,
+        TransportCause::IdleGap,
+    ]
+    .into_iter()
+    .find(|cause| cause.name() == name)
 }
 
 /// The three sentences around a delegate's report: the person's note, the driver's account of a
@@ -121,6 +140,7 @@ pub(super) fn unfinished_account(
     bound: usize,
     id: DelegateId,
 ) -> (String, String) {
+    use crate::outcome::TransportCause;
     // The same comparison the answering arm makes, on the same two driver-held counts.
     // A delegate that spent its whole budget and then failed to answer is the common
     // way the bound is reached rather than a corner of it, and the planner told only
@@ -137,8 +157,14 @@ pub(super) fn unfinished_account(
     // A delegate whose requests met a limit, an outage, a silence or a reply that stopped
     // meets it again when the same delegate is started again, and the planner told only that
     // it did not finish starts another (DELEGATE-26). The sentence is chosen from the closed
-    // category name the trail records, so no word of the failure reaches the planner
-    // (BACKEND-37).
+    // category name the trail records and the closed name of which part of the request ended,
+    // so no word of the failure reaches the planner (BACKEND-37).
+    let cause = match finish {
+        Finish::Failed {
+            cause: Some(cause), ..
+        } => cause_named(cause),
+        _ => None,
+    };
     let cause_text = match finish {
         Finish::Failed { why, .. } if *why == Category::RateLimited.name() => {
             " It ended because the service asked for fewer requests (rate-limited), so \
@@ -148,11 +174,44 @@ pub(super) fn unfinished_account(
             " It ended because the service could not answer (unavailable), so starting the \
              same delegate again meets the same limit."
         }
+        // A connection that could not be made is not helped by smaller replies, so the task is
+        // not said to need splitting.
+        Finish::Failed { why, .. }
+            if *why == Category::Transport.name() && cause == Some(TransportCause::Connection) =>
+        {
+            " It ended because the connection to the service could not be made or failed \
+             (transport), and the service sent no refusal. Starting the same delegate again may \
+             meet the same failed connection."
+        }
+        Finish::Failed { why, .. }
+            if *why == Category::Transport.name() && cause == Some(TransportCause::Begin) =>
+        {
+            " It ended because the service's reply did not begin within the time it was given \
+             (transport), and the service sent no refusal. Starting the same delegate again on \
+             the same task may meet the same silence. Split the task so that each delegate \
+             makes smaller replies or writes."
+        }
+        Finish::Failed { why, .. }
+            if *why == Category::Transport.name() && cause == Some(TransportCause::IdleGap) =>
+        {
+            " It ended because the service's reply went quiet for longer than the gap allowed \
+             (transport), and the service sent no refusal. Starting the same delegate again on \
+             the same task may meet the same silence. Split the task so that each delegate \
+             makes smaller replies or writes."
+        }
         Finish::Failed { why, .. } if *why == Category::Transport.name() => {
             " It ended because a request to the service did not get through or went quiet \
              (transport), and the service sent no refusal. Starting the same delegate again \
              on the same task may meet the same silence. Split the task so that each delegate \
              makes smaller replies or writes."
+        }
+        Finish::Failed { why, .. }
+            if *why == Category::Incomplete.name() && cause == Some(TransportCause::IdleGap) =>
+        {
+            " It ended because the service's reply began and then went quiet for longer than the \
+             gap allowed (incomplete), and the service sent no refusal. Starting the same \
+             delegate again on the same task may stop the same way. Split the task so that each \
+             delegate makes smaller replies or writes."
         }
         Finish::Failed { why, .. } if *why == Category::Incomplete.name() => {
             " It ended because the service's reply stopped before it was finished \
@@ -162,10 +221,19 @@ pub(super) fn unfinished_account(
         }
         _ => "",
     };
-    // The same fixed name the trail records, and never the error's own text.
-    let note = match finish {
-        Finish::Failed { why, .. } => format!("the delegate could not finish ({why})"),
-        Finish::Stopped { .. } => "the delegate was stopped".to_string(),
+    // The same fixed name the trail records, and never the error's own text, with which part of
+    // the request ended where the driver knows it.
+    let note = match (finish, cause) {
+        (Finish::Failed { why, .. }, Some(cause)) => format!(
+            "the delegate could not finish ({why}: {})",
+            match cause {
+                TransportCause::Connection => "the connection failed",
+                TransportCause::Begin => "the reply did not begin",
+                TransportCause::IdleGap => "the reply went quiet",
+            }
+        ),
+        (Finish::Failed { why, .. }, None) => format!("the delegate could not finish ({why})"),
+        (Finish::Stopped { .. }, _) => "the delegate was stopped".to_string(),
         _ => "the delegate could not finish".to_string(),
     };
     let note = match reached {
@@ -517,7 +585,8 @@ mod tests {
                 Finish::Failed {
                     took,
                     rounds: 4,
-                    why: "unavailable"
+                    why: "unavailable",
+                    cause: None,
                 },
                 spent(4),
                 9
@@ -535,7 +604,8 @@ mod tests {
                 Finish::Failed {
                     took,
                     rounds: 9,
-                    why: "transport"
+                    why: "transport",
+                    cause: None,
                 },
                 spent(9),
                 9
@@ -555,7 +625,12 @@ mod tests {
         let took = Duration::from_secs(3);
         let body = |why: &'static str, rounds, bound| {
             unfinished_account(
-                &Finish::Failed { took, rounds, why },
+                &Finish::Failed {
+                    took,
+                    rounds,
+                    why,
+                    cause: None,
+                },
                 Some((took, rounds)),
                 bound,
                 DelegateId::nth(1),
@@ -650,6 +725,145 @@ mod tests {
         assert_eq!(
             unfinished_account(&Finish::Lost, None, 9, DelegateId::nth(1)).1,
             head
+        );
+    }
+
+    /// BACKEND-37, DELEGATE-26. A delegate whose request failed in transport is told to the planner
+    /// by which part of the request ended: a connection that could not be made is not told to split
+    /// the task, since smaller replies do not help it, and a reply that did not begin or went quiet
+    /// is. An incomplete reply that went quiet past the gap says so. The person's note names the
+    /// part beside the category. Each sentence is the driver's and none holds anything the service
+    /// sent.
+    ///
+    /// The faults this rejects: one sentence for every transport failure, the connection told to
+    /// split the task, the cause dropped from the person's note, and a cause name that is not one of
+    /// the three taken for one.
+    #[test]
+    fn the_planner_is_told_which_part_of_a_request_a_delegate_s_transport_failure_ended() {
+        let took = Duration::from_secs(3);
+        let account = |why: &'static str, cause: Option<&'static str>| {
+            unfinished_account(
+                &Finish::Failed {
+                    took,
+                    rounds: 2,
+                    why,
+                    cause,
+                },
+                Some((took, 2)),
+                9,
+                DelegateId::nth(1),
+            )
+        };
+        let head = format!(
+            "{} The delegate d1 did not finish.",
+            super::TOOL_BUDGET_SPENT
+        );
+
+        let (note, body) = account("transport", Some("connection"));
+        assert_eq!(
+            body,
+            format!(
+                "{head} It ended because the connection to the service could not be made or \
+                 failed (transport), and the service sent no refusal. Starting the same delegate \
+                 again may meet the same failed connection."
+            )
+        );
+        assert!(!body.contains("Split the task"), "{body}");
+        assert_eq!(
+            note,
+            "the delegate could not finish (transport: the connection failed)"
+        );
+
+        let (note, body) = account("transport", Some("idle-gap"));
+        assert_eq!(
+            body,
+            format!(
+                "{head} It ended because the service's reply went quiet for longer than the gap \
+                 allowed (transport), and the service sent no refusal. Starting the same delegate \
+                 again on the same task may meet the same silence. Split the task so that each \
+                 delegate makes smaller replies or writes."
+            )
+        );
+        assert_eq!(
+            note,
+            "the delegate could not finish (transport: the reply went quiet)"
+        );
+
+        let (note, body) = account("transport", Some("begin"));
+        assert!(
+            body.contains("reply did not begin within the time it was given (transport)"),
+            "{body}"
+        );
+        assert!(body.contains("Split the task"), "{body}");
+        assert_eq!(
+            note,
+            "the delegate could not finish (transport: the reply did not begin)"
+        );
+
+        let (note, body) = account("incomplete", Some("idle-gap"));
+        assert!(
+            body.contains(
+                "reply began and then went quiet for longer than the gap allowed (incomplete)"
+            ),
+            "{body}"
+        );
+        assert_eq!(
+            note,
+            "the delegate could not finish (incomplete: the reply went quiet)"
+        );
+
+        // A cause name outside the three is no cause, and the sentence is the category's alone.
+        let (note, body) = account("transport", Some("idle"));
+        assert_eq!(body, account("transport", None).1);
+        assert_eq!(note, "the delegate could not finish (transport)");
+    }
+
+    /// TRACE-8, DELEGATE-26. How a delegate's run ended carries which part of the request a
+    /// transport failure ended, as the fixed name of the cause the network layer chose, and no cause
+    /// for a failure that has none.
+    ///
+    /// The fault this rejects: the cause dropped between the turn's error and the record of how
+    /// the delegate ended, which leaves the planner's sentence the category's alone.
+    #[test]
+    fn how_a_delegate_ended_carries_the_cause_of_a_transport_failure() {
+        use crate::backend::BackendError;
+        use bravebot_aichat::ChatError;
+        let took = Duration::from_secs(1);
+        let failed = |cause| {
+            let error = super::TurnError::Chat(BackendError::from(ChatError::Egress(
+                bravebot_net::EgressError::Transport {
+                    url: "https://example.invalid".to_string(),
+                    detail: "PRIVATE-DETAIL".to_string(),
+                    transient: true,
+                    cause: Some(cause),
+                },
+            )));
+            super::finish_of::<()>(&Err(error), Some((took, 2)))
+        };
+        for (cause, name) in [
+            (bravebot_net::TransportCause::Connection, "connection"),
+            (bravebot_net::TransportCause::Begin, "begin"),
+            (bravebot_net::TransportCause::IdleGap, "idle-gap"),
+        ] {
+            assert_eq!(
+                failed(cause),
+                Finish::Failed {
+                    took,
+                    rounds: 2,
+                    why: "transport",
+                    cause: Some(name),
+                }
+            );
+        }
+        let refused = super::TurnError::Chat(BackendError::from(ChatError::NoContent));
+        assert_eq!(
+            super::finish_of::<()>(&Err(refused), Some((took, 2))),
+            Finish::Failed {
+                took,
+                rounds: 2,
+                why: "undecodable",
+                cause: None,
+            }
         );
     }
 

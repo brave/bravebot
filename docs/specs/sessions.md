@@ -1348,14 +1348,19 @@ wrote ([NAME-13](naming-files.md#NAME-13)). A prompt handed back to the editor o
 cancellation stays out of the transcript on resume while that turn's spend and timing stay with its
 number; whether those words remain available to recall is SESSION-6, and the two are independent of
 each other. None of this is sent to the planner. What the planner is told of a failure is the note
-of [TURN-13](turns.md#TURN-13), which holds no more than the category and the request count.
+of [TURN-13](turns.md#TURN-13), which holds the category and the request count, for a transport
+failure the cause, the gap, the settings and that a new message continues the turn, and for an
+incomplete reply that went quiet past the gap the same cause, gap and settings.
 A recorded unauthorized failure ends with the commands [BACKEND-37](backends.md#BACKEND-37) names,
 since the reason is the line the interface showed. A recorded refused failure holds the backend
 that sent the requests, the model the turn ran on, the request fields the retries left out and the
 next step [BACKEND-37](backends.md#BACKEND-37) names, for the same reason. A recorded rate-limited
 failure ends with the next step [BACKEND-37](backends.md#BACKEND-37) names, which is `maxRetries` and `fallbackModel` for a
 request to a `provider` entry and `fallbackModel` alone for any other backend and for a wait past
-the two minutes the client sits through. The model is the name
+the two minutes the client sits through. A recorded transport failure says which part of the
+request it ended, the gap in force where the reply went quiet past it, the settings that change it
+where the backend has a place for them, and that a new message continues from what was already
+done, as [BACKEND-37](backends.md#BACKEND-37) names them. The model is the name
 the person configured or chose, written with control characters made visible; the rest are words of
 this program's, chosen from closed sets. Nothing the service sent is among them.
 Accepted corrections remain within the cancelled turn through reload, export and later turns.
@@ -1383,6 +1388,9 @@ closes.
 `verified-by: bravebot_ui_bridge::history::a_failed_turn_is_recorded_with_the_reason_the_interface_composed`
 `verified-by: bravebot_ui_bridge::history::a_stopped_turn_is_recorded_as_cancelled_under_its_own_number`
 `verified-by: bravebot_session::sessions::an_unauthorized_failure_names_the_commands_that_show_the_credential_and_the_endpoint`
+`verified-by: bravebot_session::sessions::a_transport_failure_says_its_cause_the_gap_in_force_and_the_setting_that_changes_it`
+`verified-by: bravebot_session::sessions::a_transport_failure_says_last_that_a_new_message_continues_the_turn`
+`verified-by: bravebot_ui_bridge::failure_tests::a_transport_failure_is_stored_with_the_terminals_line_naming_its_cause`
 
 <a id="SESSION-24"></a>
 ### SESSION-24: a resumed transcript puts the prompt back where it was sent

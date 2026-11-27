@@ -1573,6 +1573,21 @@ is the service refusing the model of the turn because the account does not offer
 so and that another model can be chosen, `accountCommand` and `status` are `null`, and the sign-in is
 untouched.
 
+`failureMessage` is the agent's own line for a request that did not get through, and for a reply that went
+quiet past the gap, and `null` for every other failure and for a failure of an account: the line the
+terminal shows, made by the same function, joined into one sentence in sentence case with no backticks. It
+says the cause, the gap in force, the setting that changes it and that a new message continues. `failureCodes` is the setting names it holds, in order, and
+`null` where it is. A client draws the line as the description under the category's title, with each
+code in a code element, and words the failure from its category only where no line arrived. Neither holds
+text from a reply. `manifest.error` carries both, as it carries `accountMessage`.
+
+`failureCause` is the closed name of which part of the request a transport failure ended, sent beside
+`failureMessage` for a request that did not get through and for a reply that went quiet past the gap:
+`connection`, `begin` or `idle-gap`. It is `null` for every other failure and where no cause is known. A
+client titles the card from it, since the category's title says the service could not be reached and a
+reply that did not begin or went quiet came from a service that was reached, and does not read the line
+to choose the title. It holds nothing from a reply. `manifest.error` carries it too.
+
 `cutOff` is set where a reply stopped at the output ceiling is what failed, and `null`
 otherwise. That is `category: "too-long"`, or `"internal"` where the stop was in a plan's
 step (`kind: "manifest"`). `ceiling` is the limit in tokens. `call` is the tool call the

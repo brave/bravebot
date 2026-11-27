@@ -2630,20 +2630,107 @@ pub const FAILED_TURN: &str = "The previous turn failed and ended before it fini
 pause, and nothing is carrying it on. What it had already done is above in this conversation.";
 
 /// The note for a turn that ended in a failure: [`FAILED_TURN`], then the category and the request
-/// count the driver holds. A count that is not known is left out rather than said as zero.
+/// count the driver holds. A count that is not known is left out rather than said as zero. A
+/// transport failure also says which part of the request it ended, the gap in force where the reply
+/// went quiet past it, and the settings a person changes it with (TURN-13).
 ///
 /// The category is a fixed name and the count is the driver's own, so nothing the service sent
 /// reaches the planner through this. The status of the reply is left out, as it is from every
-/// other failure text the planner is given: the category is what the driver made of it.
+/// other failure text the planner is given: the category is what the driver made of it. The cause
+/// is a kind of error the transport raised, the gap is the person's setting or the network layer's
+/// default, and the setting names are chosen from the backend's variant, so none of them is
+/// anything the service sent.
 fn failed_turn(diagnosis: Diagnosis) -> String {
+    use crate::outcome::{Category, TransportCause};
+    // A reply that began and then went quiet past the gap is incomplete, and its cause is the same
+    // gap a transport failure meets, so it is told the same way (BACKEND-37).
+    let caused = diagnosis.category == Category::Transport
+        || (diagnosis.category == Category::Incomplete
+            && diagnosis.cause == Some(TransportCause::IdleGap));
     let mut note = format!(
         "{FAILED_TURN} Failure category: {}.",
         diagnosis.category.name()
     );
+    if caused && let Some(cause) = transport_cause(diagnosis) {
+        note.push_str(&format!(" Cause: {cause}."));
+    }
     if let Some(attempts) = diagnosis.attempts {
         note.push_str(&format!(" Requests sent for the failed call: {attempts}."));
     }
+    if caused && let Some(settings) = transport_settings(diagnosis) {
+        note.push_str(&format!(" {settings}"));
+    }
+    // The note is written only where the turn put something in the conversation, so there is
+    // always something to continue from.
+    if diagnosis.category == Category::Transport {
+        note.push_str(" A new message from the person continues from what was already done.");
+    }
     note
+}
+
+/// Which part of the request a transport failure ended, in the driver's words, with the gap in
+/// force where the reply went quiet past it.
+fn transport_cause(diagnosis: Diagnosis) -> Option<String> {
+    use crate::outcome::{Span, TransportCause, span_of};
+    let counted = |count: u64, unit: &str| {
+        if count == 1 {
+            format!("{count} {unit}")
+        } else {
+            format!("{count} {unit}s")
+        }
+    };
+    Some(match (diagnosis.cause?, diagnosis.idle_gap) {
+        (TransportCause::Connection, _) => "the connection could not be made".to_string(),
+        (TransportCause::Begin, _) => {
+            "the reply did not begin within the time it was given".to_string()
+        }
+        (TransportCause::IdleGap, Some(gap)) => format!(
+            "the reply went quiet for longer than the gap allowed, which is {}",
+            match span_of(gap) {
+                Span::Milliseconds(milliseconds) => counted(milliseconds, "millisecond"),
+                Span::Seconds(seconds) => counted(seconds, "second"),
+                Span::Minutes(minutes) => counted(minutes, "minute"),
+            }
+        ),
+        (TransportCause::IdleGap, None) => {
+            "the reply went quiet for longer than the gap allowed".to_string()
+        }
+    })
+}
+
+/// The settings a person changes a transport failure with, where the backend that sent the request
+/// has a place for them, as [`Diagnosis::transport_remedy`] chooses them for the failure line too.
+fn transport_settings(diagnosis: Diagnosis) -> Option<&'static str> {
+    use crate::outcome::Remedy;
+    Some(match diagnosis.transport_remedy()? {
+        Remedy::EntryWindowOrRetries => {
+            "The person can keep a failed connection tried for longer with `retryWindowMs` or \
+             `maxRetries` in the options of the provider entry."
+        }
+        Remedy::EntryGapOrRetries => {
+            "The person can wait longer on a quiet reply with `idleTimeoutMs`, or send the \
+             request again more times with `maxRetries`, in the options of the provider entry."
+        }
+        Remedy::EntryGap => {
+            "The person can wait longer on a quiet reply with `idleTimeoutMs` in the options of \
+             the provider entry. This request is not sent again, so a retry count does not change \
+             it."
+        }
+        Remedy::VariableRetries => {
+            "The person can try a failed connection more times with \
+             `BRAVEBOT_BEDROCK_MAX_RETRIES`."
+        }
+        Remedy::VariableGapOrRetries => {
+            "The person can wait longer on a quiet reply with \
+             `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS`, or send the request again more times with \
+             `BRAVEBOT_BEDROCK_MAX_RETRIES`."
+        }
+        Remedy::VariableGap => {
+            "The person can wait longer on a quiet reply with \
+             `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS`. This request is not sent again, so a retry count \
+             does not change it."
+        }
+    })
 }
 
 /// How the summary standing in for a compacted exchange begins.
@@ -3376,9 +3463,11 @@ mod tests {
         );
     }
 
-    /// TURN-13: the note carries the category and the request count where it is known, and no other
-    /// field of the diagnosis, the status of the reply included. A count that is not known is not
-    /// said as zero, and a count of zero, which means no request was sent, is said.
+    /// TURN-13: the note about a failure that is not a transport failure carries the category and
+    /// the request count where it is known, and no other field of the diagnosis, the status of the
+    /// reply included. A count that is not known is not said as zero, and a count of zero, which
+    /// means no request was sent, is said. A transport failure with no cause known says the category
+    /// and that a new message continues, and nothing else.
     #[test]
     fn the_note_about_a_failed_turn_holds_the_category_and_request_count_and_nothing_else() {
         use crate::outcome::Category;
@@ -3403,7 +3492,10 @@ mod tests {
 
         let category_only = failed_turn(Diagnosis::of(Category::Transport));
         assert!(
-            category_only.ends_with("Failure category: transport."),
+            category_only.ends_with(
+                "Failure category: transport. A new message from the person continues from what \
+                 was already done."
+            ),
             "{category_only}"
         );
         assert!(!category_only.contains("Requests sent"), "{category_only}");
@@ -3452,6 +3544,235 @@ mod tests {
             !note.contains("Bedrock") && !note.contains("effort"),
             "{note}"
         );
+    }
+
+    /// TURN-13, BACKEND-37: the note about a transport failure says which part of the request it
+    /// ended, the gap in force where the reply went quiet past it, and the settings that change it
+    /// where the backend has a place for them. All of it is the driver's: a kind of error the
+    /// transport raised, the person's own figure, and setting names chosen from the backend's
+    /// variant. The status and the backend are still left out.
+    ///
+    /// The faults this rejects: one note for every transport failure, the gap or `idleTimeoutMs`
+    /// said for a refused connection, a setting named for a backend with no place for it, and a
+    /// cause or a setting given for a failure that is not a transport failure.
+    #[test]
+    #[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
+    fn the_note_about_a_failed_turn_says_why_the_transport_failed_and_what_changes_it() {
+        use crate::outcome::{Category, RetrySetting, TransportCause};
+        use std::time::Duration;
+
+        let quiet = failed_turn(
+            Diagnosis::of(Category::Transport)
+                .with_cause(TransportCause::IdleGap)
+                .with_idle_gap(Duration::from_secs(300))
+                .with_retry_setting(RetrySetting::Entry)
+                .on_backend(crate::BackendKind::Gateway)
+                .with_status(504)
+                .after(2),
+        );
+        assert!(
+            quiet.contains(
+                "Failure category: transport. Cause: the reply went quiet for longer than the gap \
+                 allowed, which is 5 minutes. Requests sent for the failed call: 2."
+            ),
+            "{quiet}"
+        );
+        assert!(
+            quiet.contains("`idleTimeoutMs`") && quiet.contains("`maxRetries`"),
+            "{quiet}"
+        );
+        assert!(
+            !quiet.contains("gateway") && !quiet.contains("504"),
+            "{quiet}"
+        );
+
+        let refused = failed_turn(
+            Diagnosis::of(Category::Transport)
+                .with_cause(TransportCause::Connection)
+                .with_idle_gap(Duration::from_secs(300))
+                .with_retry_setting(RetrySetting::Entry)
+                .after(9),
+        );
+        assert!(
+            refused.contains("Cause: the connection could not be made."),
+            "{refused}"
+        );
+        assert!(
+            refused.contains("`retryWindowMs`") && refused.contains("`maxRetries`"),
+            "{refused}"
+        );
+        assert!(
+            !refused.contains("idleTimeoutMs") && !refused.contains("gap"),
+            "{refused}"
+        );
+
+        let variable = failed_turn(
+            Diagnosis::of(Category::Transport)
+                .with_cause(TransportCause::IdleGap)
+                .with_idle_gap(Duration::from_secs(45))
+                .with_retry_setting(RetrySetting::Variable),
+        );
+        assert!(variable.contains("which is 45 seconds"), "{variable}");
+        assert!(
+            variable.contains("`BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS`")
+                && variable.contains("`BRAVEBOT_BEDROCK_MAX_RETRIES`"),
+            "{variable}"
+        );
+        assert!(!variable.contains("`idleTimeoutMs`"), "{variable}");
+
+        let nowhere = failed_turn(
+            Diagnosis::of(Category::Transport)
+                .with_cause(TransportCause::IdleGap)
+                .with_idle_gap(Duration::from_secs(120)),
+        );
+        assert!(
+            nowhere.ends_with(
+                "which is 2 minutes. A new message from the person continues from what was \
+                 already done."
+            ),
+            "{nowhere}"
+        );
+        // After the settings where there are any, so the note ends with what happens next.
+        assert!(
+            quiet.ends_with(
+                "in the options of the provider entry. A new message from the person continues \
+                 from what was already done."
+            ),
+            "{quiet}"
+        );
+        assert!(
+            !failed_turn(Diagnosis::of(Category::Unavailable).after(2)).contains("continues from"),
+            "a failure that is not a transport failure was told it continues"
+        );
+
+        // A reply that began and then went quiet past the gap is incomplete, and is told the gap and
+        // the settings as a transport failure is. One that stopped another way is told neither, and
+        // neither is told that a new message continues, which only a transport failure says.
+        let began_then_quiet = failed_turn(
+            Diagnosis::of(Category::Incomplete)
+                .with_cause(TransportCause::IdleGap)
+                .with_idle_gap(Duration::from_secs(300))
+                .with_retry_setting(RetrySetting::Entry)
+                .after(3),
+        );
+        assert!(
+            began_then_quiet.contains(
+                "Failure category: incomplete. Cause: the reply went quiet for longer than the gap \
+                 allowed, which is 5 minutes. Requests sent for the failed call: 3."
+            ),
+            "{began_then_quiet}"
+        );
+        assert!(
+            began_then_quiet.contains("`idleTimeoutMs`"),
+            "{began_then_quiet}"
+        );
+        let stopped = failed_turn(
+            Diagnosis::of(Category::Incomplete)
+                .with_retry_setting(RetrySetting::Entry)
+                .after(3),
+        );
+        assert!(
+            stopped
+                .ends_with("Failure category: incomplete. Requests sent for the failed call: 3."),
+            "{stopped}"
+        );
+
+        // A cause and a setting on a failure that is not a transport failure say nothing.
+        let not_transport = Diagnosis::of(Category::Refused)
+            .with_cause(TransportCause::Connection)
+            .with_retry_setting(RetrySetting::Entry)
+            .after(1);
+        assert_eq!(
+            failed_turn(not_transport),
+            failed_turn(Diagnosis::of(Category::Refused).after(1))
+        );
+
+        // A Bedrock reply that went quiet while the service may have been holding a tool's
+        // arguments back is never sent again, so the note names the gap's setting and no count.
+        for (setting, gap, count) in [
+            (RetrySetting::Entry, "`idleTimeoutMs`", "maxRetries"),
+            (
+                RetrySetting::Variable,
+                "`BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS`",
+                "MAX_RETRIES",
+            ),
+        ] {
+            let stalled = failed_turn(
+                Diagnosis::of(Category::Incomplete)
+                    .with_cause(TransportCause::IdleGap)
+                    .with_idle_gap(Duration::from_secs(300))
+                    .with_retry_setting(setting)
+                    .not_sent_again()
+                    .after(1),
+            );
+            assert!(stalled.contains(gap), "{stalled}");
+            assert!(!stalled.contains(count), "{stalled}");
+            assert!(stalled.contains("not sent again"), "{stalled}");
+        }
+
+        // A gap under a second is said in milliseconds.
+        let short = failed_turn(
+            Diagnosis::of(Category::Transport)
+                .with_cause(TransportCause::IdleGap)
+                .with_idle_gap(Duration::from_millis(300)),
+        );
+        assert!(short.contains("which is 300 milliseconds."), "{short}");
+    }
+
+    /// TURN-13, BACKEND-37: the note to the planner and the person's failure line name the same
+    /// settings for every cause, place and whether the request is sent again, because both take
+    /// them from [`Diagnosis::transport_remedy`]. The setting names a note holds between backticks
+    /// are exactly the ones the remedy says.
+    ///
+    /// The fault this rejects: the note keeping a table of its own that names a setting the remedy
+    /// does not, such as `maxRetries` for a request that is not sent again.
+    #[test]
+    fn the_note_names_exactly_the_settings_of_the_remedy() {
+        use crate::outcome::{Category, Remedy, RetrySetting, TransportCause};
+        let named = |remedy: Option<Remedy>| -> Vec<&'static str> {
+            match remedy {
+                None => vec![],
+                Some(Remedy::EntryWindowOrRetries) => vec!["retryWindowMs", "maxRetries"],
+                Some(Remedy::EntryGapOrRetries) => vec!["idleTimeoutMs", "maxRetries"],
+                Some(Remedy::EntryGap) => vec!["idleTimeoutMs"],
+                Some(Remedy::VariableRetries) => vec!["BRAVEBOT_BEDROCK_MAX_RETRIES"],
+                Some(Remedy::VariableGapOrRetries) => vec![
+                    "BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS",
+                    "BRAVEBOT_BEDROCK_MAX_RETRIES",
+                ],
+                Some(Remedy::VariableGap) => vec!["BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS"],
+            }
+        };
+        for category in [Category::Transport, Category::Incomplete] {
+            for cause in [
+                TransportCause::Connection,
+                TransportCause::Begin,
+                TransportCause::IdleGap,
+            ] {
+                for setting in [
+                    RetrySetting::None,
+                    RetrySetting::Entry,
+                    RetrySetting::Variable,
+                ] {
+                    for sent_again in [true, false] {
+                        let diagnosis = Diagnosis::of(category)
+                            .with_cause(cause)
+                            .with_retry_setting(setting);
+                        let diagnosis = match sent_again {
+                            true => diagnosis,
+                            false => diagnosis.not_sent_again(),
+                        };
+                        let note = failed_turn(diagnosis);
+                        let codes: Vec<&str> = note.split('`').skip(1).step_by(2).collect();
+                        assert_eq!(
+                            codes,
+                            named(diagnosis.transport_remedy()),
+                            "{category:?} {cause:?} {setting:?} {sent_again}: {note}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// Four exchanges, the shape most of the compaction tests need.

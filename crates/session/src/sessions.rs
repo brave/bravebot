@@ -912,16 +912,56 @@ pub fn failure_reason_with_model(
     cut_off: Option<&bravebot_aichat::CutOff>,
     model: Option<&str>,
 ) -> String {
+    t!(
+        session_error,
+        problem = failure_words(diagnosis, cut_off, model, Joined::Sentences)
+    )
+}
+
+/// How the steps a failure line names are joined to what happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Joined {
+    /// Each step a sentence of its own, as the terminal says it.
+    Sentences,
+    /// Each step after a semicolon, so the line is one sentence, as the desktop window's error card
+    /// says a failure.
+    OneSentence,
+}
+
+impl Joined {
+    fn next(self, what: String, next: &str) -> String {
+        match self {
+            Self::Sentences => t!(failure_with_next, what = what, next = next),
+            Self::OneSentence => {
+                let mut chars = next.chars();
+                let next = match chars.next() {
+                    Some(first) => format!("{}{}", first.to_lowercase(), chars.as_str()),
+                    None => String::new(),
+                };
+                t!(failure_with_next_in_one, what = what, next = next)
+            }
+        }
+    }
+}
+
+/// The words of [`failure_reason_with_model`] without the `error:` the terminal puts before them,
+/// for a front end that marks a failure in its own way, with the steps joined as `joined` says. The
+/// desktop bridge sends them to the window as one sentence
+/// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)), so both say one failure in the same
+/// words.
+pub fn failure_words(
+    diagnosis: bravebot_agent::Diagnosis,
+    cut_off: Option<&bravebot_aichat::CutOff>,
+    model: Option<&str>,
+    joined: Joined,
+) -> String {
     use bravebot_agent::Category;
     // A failure of a ChatGPT account is said in the sentence of its own step (CHATGPT-8), with the
     // status of a refusal that came with one after it, as the one-shot run says it: from the one
     // function both call. No count of tries follows, since the sentence says what to do and the
     // category beside it says only what class the failure was.
     if let Some(account) = diagnosis.account {
-        return t!(
-            session_error,
-            problem = bravebot_agent::chatgpt::told_of_failure(account)
-        );
+        return bravebot_agent::chatgpt::told_of_failure(account);
     }
     let what: std::borrow::Cow<'_, str> = match diagnosis.category {
         Category::Unauthorized => t!(failure_unauthorized).into(),
@@ -937,7 +977,10 @@ pub fn failure_reason_with_model(
         },
         Category::Unavailable => t!(failure_unavailable).into(),
         Category::Refused => t!(failure_refused).into(),
-        Category::Transport => t!(failure_transport).into(),
+        Category::Transport => transport_words(diagnosis),
+        // A reply that began and then went quiet past the gap says the gap, as a transport
+        // failure does, since the gap and its setting are what a person can change (BACKEND-37).
+        Category::Incomplete if went_quiet_past_the_gap(diagnosis) => transport_words(diagnosis),
         Category::Incomplete => t!(failure_incomplete).into(),
         Category::Undecodable => t!(failure_undecodable).into(),
         Category::Unrecognised => t!(failure_unrecognised).into(),
@@ -997,11 +1040,7 @@ pub fn failure_reason_with_model(
         diagnosis.category,
         Category::Refused | Category::Unrecognised
     ) {
-        said = t!(
-            failure_with_next,
-            what = said,
-            next = t!(failure_refused_next)
-        );
+        said = joined.next(said, t!(failure_refused_next));
     }
     // A rate limit ends with the settings that lengthen the wait or move the turn to another model.
     // Which of the three sentences is chosen by where the backend that sent the request lets a person
@@ -1022,7 +1061,26 @@ pub fn failure_reason_with_model(
             }
             _ => t!(failure_rate_limited_next),
         };
-        said = t!(failure_with_next, what = said, next = next);
+        said = joined.next(said, next);
+    }
+    // A transport failure ends with the settings that change it, chosen by which part of the
+    // request it ended (a kind of error the transport raised) and by where the backend lets a
+    // person state them, both facts the driver set. Nothing the service wrote is in any of them
+    // (BACKEND-37). A backend with no place for the figures, and a reply that did not begin, which
+    // no setting lengthens, name none.
+    if (diagnosis.category == Category::Transport || went_quiet_past_the_gap(diagnosis))
+        && let Some(next) = transport_next(diagnosis)
+    {
+        said = joined.next(said, next);
+    }
+    // Then that a new message continues the turn, since what it did stays in the conversation and
+    // nothing carries it on (TURN-13). The prompt is in the conversation before the turn sends a
+    // request that can fail this way (`push_from` in `bravebot_agent::turn::one_turn` comes before
+    // the first round, and a summary made inside the turn comes after it), and a summary asked for
+    // with `/compact` is not a turn and is not said with this line, so a transport failure always
+    // leaves something to continue from.
+    if diagnosis.category == Category::Transport {
+        said = joined.next(said, t!(failure_transport_continue));
     }
     // After the status and the count, so a refused credential says what was refused first and
     // what to do about it last. The commands are this program's own words, chosen by the category
@@ -1034,9 +1092,53 @@ pub fn failure_reason_with_model(
         } else {
             t!(failure_unauthorized_next).into()
         };
-        said = t!(failure_with_next, what = said, next = next);
+        said = joined.next(said, &next);
     }
-    t!(session_error, problem = said)
+    said
+}
+
+/// Whether an incomplete reply ended because it went quiet past the gap, with the gap in force
+/// known. The cause is the kind of error the transport raised and the gap is the person's setting
+/// or the default, so nothing the service wrote decides it.
+pub fn went_quiet_past_the_gap(diagnosis: bravebot_agent::Diagnosis) -> bool {
+    diagnosis.category == bravebot_agent::Category::Incomplete
+        && diagnosis.cause == Some(bravebot_agent::outcome::TransportCause::IdleGap)
+        && diagnosis.idle_gap.is_some()
+}
+
+/// The sentence for a transport failure: which part of the request it ended, with the gap in force
+/// where the reply went quiet past it. See [`failure_reason_with_model`].
+fn transport_words(diagnosis: bravebot_agent::Diagnosis) -> std::borrow::Cow<'static, str> {
+    use bravebot_agent::outcome::{Span, TransportCause, span_of};
+    match (diagnosis.cause, diagnosis.idle_gap) {
+        (Some(TransportCause::Connection), _) => t!(failure_transport_connection).into(),
+        (Some(TransportCause::Begin), _) => t!(failure_transport_begin).into(),
+        (Some(TransportCause::IdleGap), Some(gap)) => match span_of(gap) {
+            Span::Milliseconds(milliseconds) => t!(
+                failure_transport_idle_milliseconds,
+                milliseconds = milliseconds
+            )
+            .into(),
+            Span::Seconds(seconds) => t!(failure_transport_idle_seconds, seconds = seconds).into(),
+            Span::Minutes(minutes) => t!(failure_transport_idle_minutes, minutes = minutes).into(),
+        },
+        _ => t!(failure_transport).into(),
+    }
+}
+
+/// The settings that change a transport failure, where the backend that sent the request has a
+/// place for them, as [`bravebot_agent::Diagnosis::transport_remedy`] chooses them for the
+/// planner's note too. See [`failure_reason_with_model`].
+fn transport_next(diagnosis: bravebot_agent::Diagnosis) -> Option<&'static str> {
+    use bravebot_agent::outcome::Remedy;
+    Some(match diagnosis.transport_remedy()? {
+        Remedy::EntryWindowOrRetries => t!(failure_transport_connection_entry_next),
+        Remedy::EntryGapOrRetries => t!(failure_transport_idle_entry_next),
+        Remedy::EntryGap => t!(failure_transport_idle_entry_gap_next),
+        Remedy::VariableRetries => t!(failure_transport_connection_variable_next),
+        Remedy::VariableGapOrRetries => t!(failure_transport_idle_variable_next),
+        Remedy::VariableGap => t!(failure_transport_idle_variable_gap_next),
+    })
 }
 
 /// The sentence for a reply that spent its ceiling, naming the ceiling where it is known and what
@@ -4729,6 +4831,257 @@ mod tests {
         assert!(!unavailable.contains("MAX_RETRIES"), "{unavailable}");
     }
 
+    /// BACKEND-37, BACKEND-55: a transport failure says which part of the request it ended. A
+    /// connection error names `retryWindowMs` and `maxRetries` and no gap; a reply that went quiet
+    /// names the gap in force for the backend, `idleTimeoutMs` and `maxRetries`. A tier-variable AWS
+    /// account is told the two variables and no window, and a backend with no place for the figures
+    /// is told no setting.
+    ///
+    /// The faults this rejects: one sentence for every transport failure, the default gap said when
+    /// another was in force, `idleTimeoutMs` named for a refused connection, and a setting named for
+    /// the Brave endpoint.
+    #[test]
+    #[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
+    fn a_transport_failure_says_its_cause_the_gap_in_force_and_the_setting_that_changes_it() {
+        use bravebot_agent::outcome::TransportCause;
+        use bravebot_agent::{Category, Diagnosis, RetrySetting};
+        use std::time::Duration;
+
+        let failed = |cause| {
+            Diagnosis::of(Category::Transport)
+                .with_cause(cause)
+                .after(3)
+        };
+
+        let quiet = failure_reason(
+            failed(TransportCause::IdleGap)
+                .with_idle_gap(Duration::from_secs(300))
+                .with_retry_setting(RetrySetting::Entry),
+            None,
+        );
+        assert!(quiet.contains("went quiet"), "{quiet}");
+        assert!(quiet.contains("5 minute gap"), "{quiet}");
+        assert!(quiet.contains("`idleTimeoutMs`"), "{quiet}");
+        assert!(quiet.contains("`maxRetries`"), "{quiet}");
+        assert!(!quiet.contains("retryWindowMs"), "{quiet}");
+        assert!(quiet.contains("after 3 attempts"), "{quiet}");
+
+        let short = failure_reason(
+            failed(TransportCause::IdleGap).with_idle_gap(Duration::from_millis(30_400)),
+            None,
+        );
+        assert!(short.contains("30 second gap"), "{short}");
+        // Below a second the gap is said in milliseconds, not rounded to a second.
+        let shorter = failure_reason(
+            failed(TransportCause::IdleGap).with_idle_gap(Duration::from_millis(300)),
+            None,
+        );
+        assert!(shorter.contains("300 millisecond gap"), "{shorter}");
+
+        // A Bedrock reply that went quiet while the service may have been holding a tool's
+        // arguments back is never sent again, so the line names the gap's setting and no count.
+        for (setting, gap, count) in [
+            (RetrySetting::Entry, "`idleTimeoutMs`", "maxRetries"),
+            (
+                RetrySetting::Variable,
+                "`BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS`",
+                "MAX_RETRIES",
+            ),
+        ] {
+            let stalled = failure_reason(
+                Diagnosis::of(Category::Incomplete)
+                    .with_cause(TransportCause::IdleGap)
+                    .with_idle_gap(Duration::from_secs(300))
+                    .with_retry_setting(setting)
+                    .not_sent_again()
+                    .after(1),
+                None,
+            );
+            assert!(stalled.contains("5 minute gap"), "{stalled}");
+            assert!(stalled.contains(gap), "{stalled}");
+            assert!(!stalled.contains(count), "{stalled}");
+        }
+        // A connection that failed in a way no client sends again is told no count either.
+        let once = failure_reason(
+            failed(TransportCause::Connection)
+                .with_retry_setting(RetrySetting::Entry)
+                .not_sent_again(),
+            None,
+        );
+        assert!(once.contains("could not connect"), "{once}");
+        assert!(
+            !once.contains("maxRetries") && !once.contains("retryWindowMs"),
+            "{once}"
+        );
+        // A transport failure with no cause known says no cause and no setting.
+        let unknown = failure_reason(
+            Diagnosis::of(Category::Transport)
+                .with_retry_setting(RetrySetting::Entry)
+                .after(1),
+            None,
+        );
+        assert!(unknown.contains("did not get through"), "{unknown}");
+        assert!(
+            !unknown.contains("connect") && !unknown.contains("maxRetries"),
+            "{unknown}"
+        );
+
+        let refused = failure_reason(
+            failed(TransportCause::Connection)
+                .with_idle_gap(Duration::from_secs(300))
+                .with_retry_setting(RetrySetting::Entry),
+            None,
+        );
+        assert!(refused.contains("could not connect"), "{refused}");
+        assert!(refused.contains("`retryWindowMs`"), "{refused}");
+        assert!(refused.contains("`maxRetries`"), "{refused}");
+        assert!(!refused.contains("idleTimeoutMs"), "{refused}");
+        assert!(!refused.contains("gap"), "{refused}");
+
+        let variable = failure_reason(
+            failed(TransportCause::IdleGap)
+                .with_idle_gap(Duration::from_secs(120))
+                .with_retry_setting(RetrySetting::Variable),
+            None,
+        );
+        assert!(variable.contains("2 minute gap"), "{variable}");
+        assert!(
+            variable.contains("`BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS`"),
+            "{variable}"
+        );
+        assert!(
+            variable.contains("`BRAVEBOT_BEDROCK_MAX_RETRIES`"),
+            "{variable}"
+        );
+        assert!(!variable.contains("`idleTimeoutMs`"), "{variable}");
+        let variable = failure_reason(
+            failed(TransportCause::Connection).with_retry_setting(RetrySetting::Variable),
+            None,
+        );
+        assert!(!variable.contains("retryWindowMs"), "{variable}");
+        assert!(
+            variable.contains("`BRAVEBOT_BEDROCK_MAX_RETRIES`"),
+            "{variable}"
+        );
+
+        for cause in [TransportCause::IdleGap, TransportCause::Connection] {
+            let nowhere =
+                failure_reason(failed(cause).with_idle_gap(Duration::from_secs(120)), None);
+            for setting in ["idleTimeoutMs", "maxRetries", "retryWindowMs", "BRAVEBOT_"] {
+                assert!(!nowhere.contains(setting), "{nowhere}");
+            }
+        }
+
+        let begin = failure_reason(
+            failed(TransportCause::Begin).with_retry_setting(RetrySetting::Entry),
+            None,
+        );
+        assert!(begin.contains("did not begin"), "{begin}");
+        assert!(!begin.contains("gap"), "{begin}");
+
+        // A reply that began and then went quiet past the gap is incomplete, and names the gap and
+        // its settings as a transport failure does. One that stopped another way names neither.
+        let began_then_quiet = failure_reason(
+            Diagnosis::of(Category::Incomplete)
+                .with_cause(TransportCause::IdleGap)
+                .with_idle_gap(Duration::from_secs(300))
+                .with_retry_setting(RetrySetting::Entry)
+                .after(3),
+            None,
+        );
+        assert!(
+            began_then_quiet.contains("went quiet for longer than the 5 minute gap"),
+            "{began_then_quiet}"
+        );
+        assert!(
+            began_then_quiet.contains("`idleTimeoutMs`"),
+            "{began_then_quiet}"
+        );
+        assert!(
+            !began_then_quiet.contains("continues from"),
+            "{began_then_quiet}"
+        );
+        let stopped = failure_reason(
+            Diagnosis::of(Category::Incomplete)
+                .with_retry_setting(RetrySetting::Entry)
+                .after(3),
+            None,
+        );
+        assert!(
+            stopped.contains("stopped before it was finished"),
+            "{stopped}"
+        );
+        assert!(!stopped.contains("idleTimeoutMs"), "{stopped}");
+    }
+
+    /// TURN-13, BACKEND-37: a transport failure ends with the sentence that a new message continues
+    /// from what was already done, after the settings that change it, whatever its cause and whether
+    /// or not the backend has a place for the settings. No other category says it.
+    ///
+    /// The faults this rejects: the sentence left out, said before the settings, said only for one
+    /// cause or one backend, and said for a failure that is not a transport failure.
+    #[test]
+    fn a_transport_failure_says_last_that_a_new_message_continues_the_turn() {
+        use bravebot_agent::outcome::TransportCause;
+        use bravebot_agent::{Category, Diagnosis, RetrySetting};
+        use std::time::Duration;
+
+        let continues = ". A new message continues from what was already done";
+        for cause in [
+            None,
+            Some(TransportCause::Connection),
+            Some(TransportCause::Begin),
+            Some(TransportCause::IdleGap),
+        ] {
+            for setting in [
+                RetrySetting::None,
+                RetrySetting::Entry,
+                RetrySetting::Variable,
+            ] {
+                let diagnosis = Diagnosis::of(Category::Transport).after(4);
+                let diagnosis = match cause {
+                    Some(cause) => diagnosis.with_cause(cause),
+                    None => diagnosis,
+                };
+                let said = failure_reason(
+                    diagnosis
+                        .with_idle_gap(Duration::from_secs(300))
+                        .with_retry_setting(setting),
+                    None,
+                );
+                assert!(said.ends_with(continues), "{cause:?} {setting:?}: {said}");
+                assert_eq!(
+                    said.matches("continues from").count(),
+                    1,
+                    "{cause:?} {setting:?}: {said}"
+                );
+            }
+        }
+        for category in [
+            Category::Unauthorized,
+            Category::RateLimited,
+            Category::Unavailable,
+            Category::Refused,
+            Category::Incomplete,
+            Category::Undecodable,
+            Category::Unrecognised,
+            Category::TooLong,
+            Category::Unconfigured,
+            Category::Blocked,
+            Category::Workspace,
+            Category::Internal,
+        ] {
+            let said = failure_reason(
+                Diagnosis::of(category)
+                    .with_cause(TransportCause::Connection)
+                    .with_retry_setting(RetrySetting::Entry)
+                    .after(4),
+                None,
+            );
+            assert!(!said.contains("continues from"), "{category:?}: {said}");
+        }
+    }
+
     /// BACKEND-37, BACKEND-54: a 429 that asked for a wait past the longest one the client sits
     /// through ends the call on its first request, so a rate-limited line for it never tells the
     /// person to raise `maxRetries`, even for a request to a provider entry. A wait the client
@@ -4945,6 +5298,7 @@ mod tests {
                 conceded: Default::default(),
                 backend: None,
                 retry_setting: bravebot_agent::RetrySetting::None,
+                idle_gap: None,
                 cause: Box::new(BackendError::from(ChatError::Account(failure))),
             };
             failure_reason(error.diagnosis(), None)
@@ -5057,7 +5411,8 @@ mod tests {
         );
         assert_eq!(
             failure_reason(Diagnosis::of(Category::Transport).after(0), None),
-            "error: the request did not get through"
+            "error: the request did not get through. A new message continues from what was already \
+             done"
         );
     }
 
@@ -5212,7 +5567,11 @@ mod tests {
         assert!(!generic.contains("auth login brave"), "{generic}");
         // A premium key on a failure of another category adds nothing.
         let other = failure_reason(Diagnosis::of(Category::Transport).with_premium_key(), None);
-        assert_eq!(other, "error: the request did not get through");
+        assert_eq!(
+            other,
+            "error: the request did not get through. A new message continues from what was \
+             already done"
+        );
     }
 
     /// A reply stopped part way through a call and one stopped while it was thinking want

@@ -4655,6 +4655,29 @@ failure-conceded-ceiling = the assumed reply limit (BRAVEBOT_OUTPUT_BUDGET)
 failure-conceded-arguments = streamed tool arguments
 failure-conceded-thinking = shown thinking
 failure-transport = the request did not get through
+# A transport failure by which part of the request it ended (BACKEND-37). Chosen from the kind of
+# error the transport raised, never from its text. The gap is the figure in force for the backend:
+# the one the person stated, or the default.
+failure-transport-connection = the request could not connect
+failure-transport-begin = the reply did not begin within the time it was given
+failure-transport-idle-milliseconds = the reply went quiet for longer than the { $milliseconds } millisecond gap allowed
+failure-transport-idle-seconds = the reply went quiet for longer than the { $seconds } second gap allowed
+failure-transport-idle-minutes = the reply went quiet for longer than the { $minutes } minute gap allowed
+# Said last after a transport failure, naming the settings that change it. The first two are for a
+# request to a provider entry, the last two for an AWS account reached through the tier variables,
+# which has no setting for the window a failed connection is tried again in. The setting names are
+# not a translator's to reword.
+failure-transport-connection-entry-next = Raise `retryWindowMs` or `maxRetries` in the options of this provider entry to keep trying a failed connection for longer
+failure-transport-idle-entry-next = Raise `idleTimeoutMs` in the options of this provider entry to wait longer on a quiet reply, or `maxRetries` to send the request again more times
+failure-transport-connection-variable-next = Raise `BRAVEBOT_BEDROCK_MAX_RETRIES` to try a failed connection more times
+failure-transport-idle-variable-next = Raise `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS` to wait longer on a quiet reply, or `BRAVEBOT_BEDROCK_MAX_RETRIES` to send the request again more times
+# The same two, for a reply that went quiet on a request the client never sends again, so no retry
+# count changes it and only the gap is named.
+failure-transport-idle-entry-gap-next = Raise `idleTimeoutMs` in the options of this provider entry to wait longer on a quiet reply. This request is not sent again, so the retry count does not change it
+failure-transport-idle-variable-gap-next = Raise `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS` to wait longer on a quiet reply. This request is not sent again, so the retry count does not change it
+# Said last after a transport failure. What the turn did stays in the conversation and nothing carries
+# the turn on, so the next message the person sends starts from there (TURN-13).
+failure-transport-continue = A new message continues from what was already done
 failure-incomplete = the reply stopped before it was finished
 failure-undecodable = the reply could not be read
 # A failure the service reported that this build has no name for (BACKEND-37). Said with the next
@@ -4676,6 +4699,9 @@ failure-with-attempts = { $what }, after { $attempts } attempts
 # Said after the status and the count of an unauthorized failure, so the commands come last. The
 # first is for every credential but the premium key, and the second for a request that carried it.
 failure-with-next = { $what }. { $next }
+# The same steps joined into one sentence, for the desktop window's error card, which says a failure
+# in one sentence. The step begins in lower case here.
+failure-with-next-in-one = { $what }; { $next }
 failure-unauthorized-next = Run `bravebot auth status` to see the sign-in or key in use, and `bravebot doctor` to see the endpoint
 failure-premium-key-next = Run `bravebot auth login brave` to replace the premium key, or `bravebot auth logout brave` to send requests to the free endpoint instead. `bravebot auth status` shows the key in use
 # Said last after a rate limit. The first is for a request to a provider entry, which can state

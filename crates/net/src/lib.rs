@@ -137,6 +137,11 @@ pub enum EgressError {
         /// Decided from what the transport reported, never from anything a server sent: a
         /// timeout, a reset, or a name that did not resolve are facts about the connection.
         transient: bool,
+        /// Which part of the request the failure ended, chosen from the kind of error the
+        /// transport raised and never from `detail` or anything a server sent. `None` where the
+        /// failure was none of the three: a reply larger than a reply is read to, or a request
+        /// whose thread ended without a reply.
+        cause: Option<TransportCause>,
     },
     /// The reply was still arriving when the time it was given ran out.
     ///
@@ -166,6 +171,35 @@ pub enum EgressError {
     },
     /// The caller asked to stop while the request was still being waited on.
     Stopped { url: String },
+}
+
+/// Which part of a request a transport failure ended.
+///
+/// One of a closed set, chosen from the kind of error the transport raised: the variant of ureq's
+/// error, or the kind of an I/O error. Never from the transport's text, a reply, a header or an
+/// address, so a caller may say it back in its own words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportCause {
+    /// The connection could not be made, or failed: a name that did not resolve, a refused or
+    /// reset connection, a failed TLS handshake, or a bound on resolving, connecting or sending.
+    Connection,
+    /// The reply did not begin within the bound on the wait for it.
+    Begin,
+    /// The reply went quiet for longer than the gap allowed between two pieces of it
+    /// ([`Timeouts::idle`], or the gap the request stated with [`Request::idle_within`]).
+    IdleGap,
+}
+
+impl TransportCause {
+    /// The cause's fixed name, for a record that holds names and no types, such as how a
+    /// delegate's run ended.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Connection => "connection",
+            Self::Begin => "begin",
+            Self::IdleGap => "idle-gap",
+        }
+    }
 }
 
 impl fmt::Display for EgressError {
@@ -266,10 +300,13 @@ impl EgressError {
             // branch on a string a server chose. So the cost is paid instead: a timeout or a
             // refused connection on a hop reads as this sentence, and `transient` still carries
             // the part of it anything decides on.
-            Self::Transport { transient, .. } => Self::Transport {
+            Self::Transport {
+                transient, cause, ..
+            } => Self::Transport {
                 url,
                 detail: "a request after a redirect did not complete".to_string(),
                 transient,
+                cause,
             },
         }
     }
@@ -784,6 +821,12 @@ impl Egress {
         Self::with_timeouts(Timeouts::default())
     }
 
+    /// The gap between two pieces of a reply this egress allows where a request states none
+    /// ([`Request::idle_within`]).
+    pub fn idle(&self) -> Duration {
+        self.timeouts.idle
+    }
+
     /// As [`Egress::new`], with different bounds on how long a request may take.
     ///
     /// Exists so the bounds can be exercised in a test at a scale a test can wait for, and for the
@@ -1265,6 +1308,7 @@ impl Egress {
                         url: url.to_string(),
                         detail: "the request ended without a reply".to_string(),
                         transient: false,
+                        cause: None,
                     });
                 }
             }
@@ -1387,6 +1431,7 @@ fn send(
                 url: url.to_string(),
                 detail: call_failure(&e).to_string(),
                 transient: is_transient_call(&e),
+                cause: Some(cause_of_call(&e)),
             });
         }
     };
@@ -1588,6 +1633,21 @@ fn body_failure(url: &str, error: &std::io::Error) -> EgressError {
             .map_or_else(|| io_failure(error), call_failure)
             .to_string(),
         transient: is_transient_io(error) || cause.is_some_and(is_transient_call),
+        cause: Some(cause.map_or(TransportCause::Connection, cause_of_call)),
+    }
+}
+
+/// Which part of a request a failed call ended, by the variant of the transport's error and
+/// never its text.
+///
+/// ureq names the bound on the wait for a reply to begin [`ureq::Timeout::RecvResponse`] and the
+/// gap between two pieces of a reply that is arriving [`ureq::Timeout::RecvBody`]. Every other
+/// failure, the bounds on resolving, connecting and sending among them, is the connection's.
+fn cause_of_call(error: &ureq::Error) -> TransportCause {
+    match error {
+        ureq::Error::Timeout(ureq::Timeout::RecvResponse) => TransportCause::Begin,
+        ureq::Error::Timeout(ureq::Timeout::RecvBody) => TransportCause::IdleGap,
+        _ => TransportCause::Connection,
     }
 }
 
@@ -2165,6 +2225,7 @@ mod tests {
             url: "https://example.com".into(),
             detail: "timeout".into(),
             transient: true,
+            cause: Some(TransportCause::Connection),
         };
         assert!(dead.is_transient());
 
@@ -2172,6 +2233,7 @@ mod tests {
             url: "https://example.com".into(),
             detail: "malformed http".into(),
             transient: false,
+            cause: Some(TransportCause::Connection),
         };
         assert!(!wrong.is_transient());
 
@@ -2232,6 +2294,16 @@ mod tests {
             matches!(&quiet, EgressError::Transport { detail, .. } if detail == "the request timed out"),
             "a quiet body was worded as {quiet:?}"
         );
+        assert!(
+            matches!(
+                &quiet,
+                EgressError::Transport {
+                    cause: Some(TransportCause::IdleGap),
+                    ..
+                }
+            ),
+            "a quiet body was not told as the gap running out: {quiet:?}"
+        );
 
         let late = body_failure(
             url,
@@ -2251,6 +2323,69 @@ mod tests {
             !malformed.is_transient(),
             "a wrapped error that is not the connection was sent again: {malformed:?}"
         );
+    }
+
+    /// BACKEND-37: which part of a request a transport failure ended is chosen from the variant of
+    /// the transport's error and the kind of an I/O error, never from the text, which is the same
+    /// "the request timed out" for every timeout. The gap running out, the wait for a reply to
+    /// begin, and every other timeout or connection failure are told apart.
+    ///
+    /// The faults this rejects: every timeout told as one cause, a cause read from the detail text,
+    /// and a refused or reset connection told as the gap.
+    #[test]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn a_transport_failure_is_told_by_the_kind_of_error_the_transport_raised() {
+        use std::io::ErrorKind::*;
+        let url = "https://example.com/";
+        let cause_of = |error: EgressError| match error {
+            EgressError::Transport {
+                cause: Some(cause), ..
+            } => cause,
+            other => panic!("not a transport failure with a cause: {other:?}"),
+        };
+        assert_eq!(
+            cause_of(body_failure(
+                url,
+                &std::io::Error::other(ureq::Error::Timeout(ureq::Timeout::RecvBody))
+            )),
+            TransportCause::IdleGap
+        );
+        assert_eq!(
+            cause_of_call(&ureq::Error::Timeout(ureq::Timeout::RecvBody)),
+            TransportCause::IdleGap
+        );
+        assert_eq!(
+            cause_of_call(&ureq::Error::Timeout(ureq::Timeout::RecvResponse)),
+            TransportCause::Begin
+        );
+        for timeout in [
+            ureq::Timeout::Connect,
+            ureq::Timeout::Resolve,
+            ureq::Timeout::SendRequest,
+            ureq::Timeout::Global,
+        ] {
+            assert_eq!(
+                cause_of_call(&ureq::Error::Timeout(timeout)),
+                TransportCause::Connection,
+                "{timeout:?}"
+            );
+        }
+        assert_eq!(
+            cause_of_call(&ureq::Error::ConnectionFailed),
+            TransportCause::Connection
+        );
+        for kind in [ConnectionRefused, ConnectionReset, TimedOut, UnexpectedEof] {
+            assert_eq!(
+                cause_of(body_failure(url, &std::io::Error::from(kind))),
+                TransportCause::Connection,
+                "{kind:?}"
+            );
+            assert_eq!(
+                cause_of_call(&ureq::Error::Io(std::io::Error::from(kind))),
+                TransportCause::Connection,
+                "{kind:?}"
+            );
+        }
     }
 
     /// How a lookup fails. An I/O error is what ureq reports for the system's: its kind is

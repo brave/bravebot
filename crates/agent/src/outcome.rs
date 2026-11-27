@@ -4,6 +4,7 @@ use crate::timing::Timing;
 use bravebot_aichat::AccountFailure;
 use bravebot_aichat::call::Conceded;
 use bravebot_aichat::protocol::{Cached, Usage};
+pub use bravebot_net::TransportCause;
 
 /// Which backend a request was sent to, as a closed set of words.
 ///
@@ -141,8 +142,33 @@ pub struct Diagnosis {
     /// Set from the variant that sent the request and the configuration it was selected with, and
     /// never from a reply or an address. A front end uses it to name that setting in the next step of
     /// a rate-limited failure. [`RetrySetting::None`] for the Brave endpoint, the Vertex service the
-    /// environment names and the two sign-in accounts. Never given to the planner.
+    /// environment names and the two sign-in accounts. Given to the planner only to name the setting
+    /// a transport failure is changed by ([TURN-13](../../../docs/specs/turns.md#TURN-13)).
     pub retry_setting: RetrySetting,
+    /// Which part of the request a transport failure ended: the connection, the wait for the reply
+    /// to begin, or the gap between two pieces of it.
+    ///
+    /// Chosen by the network layer from the kind of error the transport raised, never from its
+    /// text, a reply, a header or an address. Absent for every other category and for a transport
+    /// failure that was not one of the three, such as a redirect chain that ran too long, a reply
+    /// larger than a reply is read to, or a request whose thread ended without a reply.
+    pub cause: Option<TransportCause>,
+    /// Whether the client that sent the request does not send it again after this failure, whatever
+    /// `maxRetries` and `retryWindowMs` say.
+    ///
+    /// Set from the kind of error: a transport failure the network layer marked as not worth
+    /// another attempt, and a Bedrock reply that went quiet while the service may have been holding
+    /// a tool's arguments back. Never from a reply. A front end uses it so that a failure no count
+    /// sends again is not told to raise one.
+    pub not_sent_again: bool,
+    /// The gap between two pieces of a reply that was in force, where the reply went quiet for
+    /// longer than it.
+    ///
+    /// The figure the person stated for the backend (`idleTimeoutMs`,
+    /// `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS`), or the default the network layer applies where they
+    /// stated none. This program's own configuration, never anything the service said. Absent
+    /// unless [`Diagnosis::cause`] is [`TransportCause::IdleGap`].
+    pub idle_gap: Option<std::time::Duration>,
 }
 
 /// Where a person states how many times a request is sent again for the backend that failed.
@@ -166,6 +192,51 @@ pub fn minutes_to_wait(wait: std::time::Duration) -> u64 {
     wait.as_secs().div_ceil(60).max(1)
 }
 
+/// How long a gap is said: in milliseconds below a second, in whole seconds below two minutes, and in
+/// whole minutes otherwise.
+///
+/// Each is rounded down, because the gap is said as one a reply went quiet for longer than, and a
+/// figure rounded up would claim a longer silence than the one measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Span {
+    Milliseconds(u64),
+    Seconds(u64),
+    Minutes(u64),
+}
+
+/// `gap` as it is said. See [`Span`].
+pub fn span_of(gap: std::time::Duration) -> Span {
+    if gap < std::time::Duration::from_secs(1) {
+        Span::Milliseconds(u64::from(gap.subsec_millis()))
+    } else if gap < std::time::Duration::from_secs(120) {
+        Span::Seconds(gap.as_secs())
+    } else {
+        Span::Minutes(gap.as_secs() / 60)
+    }
+}
+
+/// The settings that change a failure that could not connect or went quiet, and where the backend
+/// that sent the request states them ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+///
+/// One of a closed set, chosen by [`Diagnosis::transport_remedy`]. Each front end words it in its
+/// own way, the failure line from the catalog and the planner's note in fixed words, and both take
+/// the choice from here so they name the same settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Remedy {
+    /// `retryWindowMs` or `maxRetries` in the options of the provider entry.
+    EntryWindowOrRetries,
+    /// `idleTimeoutMs` or `maxRetries` in the options of the provider entry.
+    EntryGapOrRetries,
+    /// `idleTimeoutMs` in the options of the provider entry, for a request no count sends again.
+    EntryGap,
+    /// `BRAVEBOT_BEDROCK_MAX_RETRIES`.
+    VariableRetries,
+    /// `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS` or `BRAVEBOT_BEDROCK_MAX_RETRIES`.
+    VariableGapOrRetries,
+    /// `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS`, for a request no count sends again.
+    VariableGap,
+}
+
 impl Diagnosis {
     /// A failure of this kind, with nothing else known about it.
     pub fn of(category: Category) -> Self {
@@ -180,7 +251,66 @@ impl Diagnosis {
             conceded: Conceded::default(),
             backend: None,
             retry_setting: RetrySetting::None,
+            cause: None,
+            not_sent_again: false,
+            idle_gap: None,
         }
+    }
+
+    /// The same, marked as a failure the client that sent the request does not send again.
+    pub fn not_sent_again(mut self) -> Self {
+        self.not_sent_again = true;
+        self
+    }
+
+    /// The settings that change this failure, where it is a transport failure or an incomplete
+    /// reply that went quiet past the gap, and the backend has a place for them.
+    ///
+    /// Chosen from which part of the request ended, where the backend states its figures and
+    /// whether the request is sent again, all set by this program from the kind of error and the
+    /// configuration. A reply that did not begin has no setting that lengthens the wait, and a
+    /// failure no count sends again is told no count: a connection that failed that way is told
+    /// nothing, and a reply that went quiet is told the gap alone.
+    pub fn transport_remedy(self) -> Option<Remedy> {
+        let caused = self.category == Category::Transport
+            || (self.category == Category::Incomplete
+                && self.cause == Some(TransportCause::IdleGap));
+        if !caused {
+            return None;
+        }
+        let sent_again = !self.not_sent_again;
+        match (self.cause?, self.retry_setting, sent_again) {
+            (TransportCause::Begin, _, _)
+            | (_, RetrySetting::None, _)
+            | (TransportCause::Connection, _, false) => None,
+            (TransportCause::Connection, RetrySetting::Entry, true) => {
+                Some(Remedy::EntryWindowOrRetries)
+            }
+            (TransportCause::Connection, RetrySetting::Variable, true) => {
+                Some(Remedy::VariableRetries)
+            }
+            (TransportCause::IdleGap, RetrySetting::Entry, true) => Some(Remedy::EntryGapOrRetries),
+            (TransportCause::IdleGap, RetrySetting::Entry, false) => Some(Remedy::EntryGap),
+            (TransportCause::IdleGap, RetrySetting::Variable, true) => {
+                Some(Remedy::VariableGapOrRetries)
+            }
+            (TransportCause::IdleGap, RetrySetting::Variable, false) => Some(Remedy::VariableGap),
+        }
+    }
+
+    /// The same, with which part of the request a transport failure ended.
+    pub fn with_cause(mut self, cause: TransportCause) -> Self {
+        self.cause = Some(cause);
+        self
+    }
+
+    /// The same, with the gap between two pieces of a reply that was in force, kept only where the
+    /// failure was that gap running out.
+    pub fn with_idle_gap(mut self, gap: std::time::Duration) -> Self {
+        if self.cause == Some(TransportCause::IdleGap) {
+            self.idle_gap = Some(gap);
+        }
+        self
     }
 
     /// The same, with the request fields the call left out after the service refused them.
@@ -561,6 +691,124 @@ mod tests {
             (11, 1, 2),
             "a request adds its usage as well"
         );
+    }
+
+    /// BACKEND-37: a gap is said in milliseconds below a second, in seconds below two minutes and
+    /// in minutes from there, each rounded down, since the line says the reply went quiet for longer
+    /// than it.
+    ///
+    /// The faults this rejects: a gap under a second said as one second, and minutes rounded up
+    /// while seconds are rounded down.
+    #[test]
+    fn a_gap_is_said_in_milliseconds_seconds_or_minutes_each_rounded_down() {
+        use std::time::Duration;
+        for (gap, said) in [
+            (Duration::from_millis(1), Span::Milliseconds(1)),
+            (Duration::from_millis(300), Span::Milliseconds(300)),
+            (Duration::from_millis(999), Span::Milliseconds(999)),
+            (Duration::from_millis(1_000), Span::Seconds(1)),
+            (Duration::from_millis(30_400), Span::Seconds(30)),
+            (Duration::from_millis(119_999), Span::Seconds(119)),
+            (Duration::from_secs(120), Span::Minutes(2)),
+            (Duration::from_secs(179), Span::Minutes(2)),
+            (Duration::from_secs(180), Span::Minutes(3)),
+        ] {
+            assert_eq!(span_of(gap), said, "{gap:?}");
+        }
+    }
+
+    /// BACKEND-37, TURN-13: the settings named for a failure that could not connect or went quiet
+    /// are chosen in one place, from the cause, where the backend states its figures and whether
+    /// the request is sent again. A request no count sends again is told no count: a reply that went
+    /// quiet is told the gap alone and a connection that failed is told nothing.
+    ///
+    /// The faults this rejects: `maxRetries` named for a Bedrock reply that stalled and is never
+    /// sent again, a setting named for a reply that did not begin or for a backend with no place
+    /// for one, and a remedy given for a failure that is neither a transport failure nor a reply
+    /// that went quiet past the gap.
+    #[test]
+    fn the_settings_named_follow_the_cause_the_place_and_whether_the_request_is_sent_again() {
+        use Category::{Incomplete, Refused, Transport};
+        use RetrySetting::{Entry, None as Nowhere, Variable};
+        use TransportCause::{Begin, Connection, IdleGap};
+        let remedy = |category, cause, setting, sent_again: bool| {
+            let diagnosis = Diagnosis::of(category)
+                .with_cause(cause)
+                .with_retry_setting(setting);
+            match sent_again {
+                true => diagnosis,
+                false => diagnosis.not_sent_again(),
+            }
+            .transport_remedy()
+        };
+        for (category, cause, setting, sent_again, named) in [
+            (
+                Transport,
+                Connection,
+                Entry,
+                true,
+                Some(Remedy::EntryWindowOrRetries),
+            ),
+            (
+                Transport,
+                Connection,
+                Variable,
+                true,
+                Some(Remedy::VariableRetries),
+            ),
+            (Transport, Connection, Entry, false, None),
+            (Transport, Connection, Variable, false, None),
+            (
+                Transport,
+                IdleGap,
+                Entry,
+                true,
+                Some(Remedy::EntryGapOrRetries),
+            ),
+            (
+                Transport,
+                IdleGap,
+                Variable,
+                true,
+                Some(Remedy::VariableGapOrRetries),
+            ),
+            (Transport, IdleGap, Entry, false, Some(Remedy::EntryGap)),
+            (
+                Transport,
+                IdleGap,
+                Variable,
+                false,
+                Some(Remedy::VariableGap),
+            ),
+            (
+                Incomplete,
+                IdleGap,
+                Entry,
+                true,
+                Some(Remedy::EntryGapOrRetries),
+            ),
+            (Incomplete, IdleGap, Entry, false, Some(Remedy::EntryGap)),
+            (
+                Incomplete,
+                IdleGap,
+                Variable,
+                false,
+                Some(Remedy::VariableGap),
+            ),
+            (Incomplete, Connection, Entry, true, None),
+            (Transport, Begin, Entry, true, None),
+            (Transport, Begin, Variable, true, None),
+            (Transport, IdleGap, Nowhere, true, None),
+            (Transport, Connection, Nowhere, true, None),
+            (Refused, Connection, Entry, true, None),
+        ] {
+            assert_eq!(
+                remedy(category, cause, setting, sent_again),
+                named,
+                "{category:?} {cause:?} {setting:?} sent again: {sent_again}"
+            );
+        }
+        assert_eq!(Diagnosis::of(Transport).transport_remedy(), None);
     }
 
     #[test]

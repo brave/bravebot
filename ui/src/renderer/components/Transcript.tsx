@@ -2149,12 +2149,14 @@ function PlanEnded({ ended }: { ended: ManifestError }): React.JSX.Element {
     ? 'You stopped this run'
     : ended.problem
       ? 'The run stopped'
-      : failureSummary(ended.category ?? ended.kind, null, ended.accountMessage).title
+      : failureSummary(ended.category ?? ended.kind, null, ended.accountMessage, ended.failureMessage, ended.failureCause).title
   const detail: React.ReactNode = ended.stopped
     ? 'Steps that finished before the stop remain in the project. The run was not saved.'
     : ended.problem ?? (ended.accountMessage
       ? <FailureSentence text={ended.accountMessage} command={ended.accountCommand} />
-      : failureSummary(ended.category ?? ended.kind).description)
+      : ended.failureMessage
+        ? <FailureSentence text={ended.failureMessage} codes={ended.failureCodes} />
+        : failureSummary(ended.category ?? ended.kind).description)
   const attempt = ended.attempt
   return (
     <div className={`plan-ended ${ended.stopped ? 'quiet' : 'failed'}`}>
@@ -2424,7 +2426,7 @@ function Card({
         </div>
       )
     case 'error':
-      return <ErrorCard category={entry.category} accountMessage={entry.accountMessage} accountCommand={entry.accountCommand} attempts={entry.attempts} status={entry.status} cutOff={entry.cutOff} detail={entry.text} onRetry={onRecover} onModel={onChooseModel} />
+      return <ErrorCard category={entry.category} accountMessage={entry.accountMessage} accountCommand={entry.accountCommand} failureMessage={entry.failureMessage} failureCodes={entry.failureCodes} failureCause={entry.failureCause} attempts={entry.attempts} status={entry.status} cutOff={entry.cutOff} detail={entry.text} onRetry={onRecover} onModel={onChooseModel} />
 
     case 'replayed-tool':
       // No outcome, because the record does not keep one. Drawn quietly for the same

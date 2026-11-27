@@ -793,7 +793,14 @@ When a turn ends as a failure ([TURN-5](#TURN-5)) after it has added messages to
 the driver adds one more after them, so the next prompt follows it. The note says that the turn
 failed and ended before it finished, that it did not pause, and that nothing is continuing it. It
 gives the failure's category and, where it is known, the number of requests sent for the call that
-failed. The backend, the model and the request fields a refused call left out ([BACKEND-37](backends.md#BACKEND-37))
+failed. A transport failure also gives which part of the request it ended (the connection, the wait
+for the reply to begin, or the gap between two pieces of the reply), the gap in force where the reply
+went quiet past it, and the settings a person changes it with where the backend has a place for them
+([BACKEND-37](backends.md#BACKEND-37)), and ends by saying that a new message from the person
+continues from what was already done. An incomplete reply that began and then went quiet past the gap
+gives the same cause, gap and settings. A request the client does not send again whatever its retry
+count says is given no retry count among the settings. The note and the person's failure line take
+the settings from one choice, so they name the same ones. The backend, the model and the request fields a refused call left out ([BACKEND-37](backends.md#BACKEND-37))
 are for the person alone and are not in the note, and neither is the next step that ends a rate-limited
 or refused failure. A turn that answered, a turn that failed before it added anything to the conversation, and
 a turn the person stopped add no note. A stop is the person's own pause, and the next prompt usually
@@ -802,7 +809,12 @@ continues the turn ([TURN-3](#TURN-3)).
 **The words are the driver's.** They are fixed, and the category and the request count are fields
 of the diagnosis ([BACKEND-37](backends.md#BACKEND-37)). The category is a fixed name and the count
 is the driver's own, so nothing the service sent is in the note: not its reply, its headers, its
-URL, its error text or the status of its reply. The category is what the driver made of that
+URL, its error text or the status of its reply. The cause of a transport failure is one of three
+fixed names the network layer chose from the kind of error the transport raised, the gap is the
+person's own setting or the network layer's default, and the setting names are fixed words chosen
+from the variant of the backend that sent the request, so none of them is anything the service
+sent either. The continuation sentence is fixed, and is said only where the note is written, which
+is only where the turn added something to the conversation to continue from. The category is what the driver made of that
 status, and it is all the planner is given of any other failure ([BACKEND-37](backends.md#BACKEND-37)
 says the same of a processor's). A failure that ended on the read of a file the person named with
 `@` is also given the category alone: the name the person is shown ([NAME-13](naming-files.md#NAME-13))
@@ -826,10 +838,12 @@ writes no record, so no later prompt follows its conversation.
 conversation. Nothing in the conversation says they stop because of a failure, so a planner asked
 "what happened?" cannot tell a failed turn from one it paused itself, and can answer that it will
 carry on. The failure is recorded for the person alone. A turn that added nothing leaves nothing
-for a note to refer to.
+for a note to refer to. A planner told only that a transport failure happened cannot answer a person
+who asks why, or say what would change it, so the note names the cause and the settings.
 
 **Known costs.** Each failed turn adds its own note and a later turn that succeeds does not remove
-it, so a session that fails repeatedly holds one for each failure. A note is about fifty tokens.
+it, so a session that fails repeatedly holds one for each failure. A note is about fifty tokens, and
+a transport failure's note about a hundred.
 
 `verified-by: bravebot_agent::turn::a_turn_that_ends_on_a_failed_request_leaves_the_planner_a_note_of_it`
 `verified-by: bravebot_agent::backend::the_fields_given_up_and_the_backend_reach_the_diagnosis_of_a_counted_failure`
@@ -839,6 +853,10 @@ it, so a session that fails repeatedly holds one for each failure. A note is abo
 `verified-by: bravebot_agent::turn::a_turn_that_compacted_and_then_failed_leaves_the_note_of_the_failure`
 `verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_is_sent_and_kept_and_is_not_drawn`
 `verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_holds_the_category_and_request_count_and_nothing_else`
+`verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_says_why_the_transport_failed_and_what_changes_it`
+`verified-by: bravebot_agent::conversation::the_note_names_exactly_the_settings_of_the_remedy`
+`verified-by: bravebot_agent::turn::the_request_after_a_failed_connection_carries_the_cause_in_the_note`
+`verified-by: bravebot_agent::backend::a_reply_gone_quiet_past_a_stated_gap_is_diagnosed_with_that_gap`
 `verified-by: bravebot_tui::sessions::a_failed_turn_leaves_a_note_the_transcript_does_not_draw_and_a_resume_still_sends`
 `verified-by: bravebot_ui_bridge::history::a_failed_turn_leaves_the_planner_a_note_in_the_saved_conversation`
 `verified-by: bravebot_cli::running::a_session_in_lines_tells_the_planner_that_the_turn_before_it_failed`

@@ -3476,6 +3476,7 @@ failure-internal = un problème est survenu ici
 failure-with-status = { $what } (HTTP { $status })
 failure-with-attempts = { $what }, après { $attempts } tentatives
 failure-with-next = { $what }. { $next }
+failure-with-next-in-one = { $what } ; { $next }
 failure-unauthorized-next = Lancez `bravebot auth status` pour voir la connexion ou la clé utilisée, et `bravebot doctor` pour voir le point d'accès
 failure-premium-key-next = Lancez `bravebot auth login brave` pour remplacer la clé premium, ou `bravebot auth logout brave` pour envoyer les requêtes au point d'accès gratuit à la place. `bravebot auth status` montre la clé utilisée
 # Dit en dernier après une limite de débit. La première phrase est pour une requête vers une entrée

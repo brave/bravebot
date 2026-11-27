@@ -6385,7 +6385,13 @@ fn start_mcp(
 }
 
 /// How a failure is reported to a front end: `kind`, `message`, `category`, `attempts`, `status`,
-/// `account`, `accountMessage`, `accountCommand`.
+/// `account`, `accountMessage`, `accountCommand`, `failureCause`.
+///
+/// `failureCause` is the closed name of which part of the request a transport failure ended
+/// (`connection`, `begin` or `idle-gap`), sent beside the agent's line for a request that did not
+/// get through and for a reply that went quiet past the gap, so the window titles the card from
+/// the cause without reading the line. It is chosen by the network layer from the kind of error the
+/// transport raised, and is `null` for every other failure and where no cause is known.
 ///
 /// The category, the counts and the account's failure come from the agent's diagnosis. Raw backend
 /// text is not sent. `account` is the fixed name of which failure of a ChatGPT account it was, or
@@ -6394,10 +6400,39 @@ fn start_mcp(
 /// `accountCommand` the words of it that are a command to run, so the window draws the words and
 /// keeps no table of them, and draws the command as code without reading the sentence for it. Both
 /// are `null` otherwise. `chosen` is the model that was asked for, which decides one category below.
+///
+/// `failureMessage` is the agent's own failure line for a request that did not get through, and for
+/// a reply that went quiet past the gap, from the one function the terminal's line is made by
+/// ([`bravebot_session::sessions::failure_words`]), so the window says the cause, the gap, the
+/// setting and the next step in the same words and keeps no table of them (BACKEND-37). It is
+/// joined into one sentence, as the card says a failure, and is composed from the closed category,
+/// cause, gap and setting names, and holds nothing a service sent. The names the line writes between
+/// backticks are sent as `failureCodes`, and the backticks are left out of the line, so the window
+/// draws those words as code without reading the line for them. Both are `null` for every other
+/// failure, which the window words from its category.
 pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -> Value {
     let ending = error.ending();
     let diagnosis = ending.diagnosis();
+    let line = diagnosis
+        .filter(|d| d.account.is_none() && says_the_agents_line(*d))
+        .map(|d| {
+            window_sentence(&bravebot_session::sessions::failure_words(
+                d,
+                error.cut_off(),
+                None,
+                bravebot_session::sessions::Joined::OneSentence,
+            ))
+        });
     let category = diagnosis.map(|d| d.category.name());
+    // Beside the line, for the card's title, and only where the line says a cause.
+    let cause = diagnosis
+        .filter(|d| {
+            d.account.is_none()
+                && (d.category == bravebot_agent::Category::Transport
+                    || bravebot_session::sessions::went_quiet_past_the_gap(*d))
+        })
+        .and_then(|d| d.cause)
+        .map(bravebot_agent::outcome::TransportCause::name);
     // A configured gateway does not serve the built-in Brave default. Keep this
     // distinct from a missing token: re-entering the gateway key cannot fix routing.
     let category = if category == Some("unconfigured")
@@ -6433,7 +6468,38 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
         "attempts": attempts, "status": diagnosis.and_then(|d| d.status),
         "account": account.map(AccountFailure::name),
         "accountMessage": said.as_ref().map(|said| &said.sentence),
-        "accountCommand": said.as_ref().and_then(|said| said.command) })
+        "accountCommand": said.as_ref().and_then(|said| said.command),
+        "failureCause": cause,
+        "failureMessage": line.as_ref().map(|(sentence, _)| sentence),
+        "failureCodes": line.as_ref().map(|(_, codes)| codes) })
+}
+
+/// Whether the window is sent the agent's line for a failure, chosen by its closed category and
+/// cause: a request that did not get through, and a reply that went quiet past the gap.
+fn says_the_agents_line(diagnosis: bravebot_agent::Diagnosis) -> bool {
+    diagnosis.category == bravebot_agent::Category::Transport
+        || bravebot_session::sessions::went_quiet_past_the_gap(diagnosis)
+}
+
+/// The terminal's words as the window draws them, and the words they write between backticks. The
+/// first letter is in upper case and a full stop follows the last word, since the card has no
+/// `error:` before them, and the backticks are left out, since a paragraph would print them. The
+/// words are this program's own catalog's, so reading them decides nothing about content.
+fn window_sentence(words: &str) -> (String, Vec<String>) {
+    let mut sentence = String::with_capacity(words.len() + 1);
+    let mut codes = Vec::new();
+    for (at, part) in words.split('`').enumerate() {
+        if at % 2 == 1 {
+            codes.push(part.to_string());
+        }
+        sentence.push_str(part);
+    }
+    let mut chars = sentence.chars();
+    let sentence = match chars.next() {
+        Some(first) => format!("{}{}.", first.to_uppercase(), chars.as_str()),
+        None => sentence,
+    };
+    (sentence, codes)
 }
 
 /// Keep the links a turn recorded with `set_link` on the session's record, as `/issue` and `/pr`

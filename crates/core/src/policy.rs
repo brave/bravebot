@@ -6663,7 +6663,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 rounds,
                 "it was stopped before it answered".to_string(),
             ),
-            Finish::Failed { took, rounds, why } => {
+            Finish::Failed {
+                took, rounds, why, ..
+            } => {
                 let spent_up = match out_of_tokens {
                     Some((budget, _)) => format!(", having spent its token budget of {budget}"),
                     None => String::new(),
@@ -25966,6 +25968,7 @@ five
                     took,
                     rounds: 9,
                     why: "unavailable",
+                    cause: None,
                 },
             );
             let said: Vec<String> = sink
@@ -26928,6 +26931,20 @@ five
                     took,
                     rounds: 37,
                     why: "unavailable",
+                    cause: None,
+                },
+            );
+            // Which part of the request a transport failure ended is told to the planner and the
+            // person, and the trail keeps the category alone.
+            turn.record_delegate_end_within(
+                id,
+                120,
+                None,
+                Finish::Failed {
+                    took,
+                    rounds: 37,
+                    why: "transport",
+                    cause: Some("idle-gap"),
                 },
             );
             turn.record_delegate_end_within(id, 120, None, Finish::Lost);
@@ -26952,6 +26969,7 @@ five
                     "d1: ended after 1563.0s and 12 of 120 rounds: it was stopped before it \
                      answered",
                     "d1: ended after 1563.0s and 37 of 120 rounds: it did not finish (unavailable)",
+                    "d1: ended after 1563.0s and 37 of 120 rounds: it did not finish (transport)",
                     "d1: ended without handing anything back, so how long it ran and how many of \
                      its 120 rounds it made are not known",
                 ]

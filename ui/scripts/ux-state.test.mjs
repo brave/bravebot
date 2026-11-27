@@ -660,6 +660,50 @@ test('a turn the output limit ended says the limit and what the reply was writin
   assert.doesNotMatch(failed('unavailable', { ceiling: 8192, call: null, thought: false }), /tokens/)
 })
 
+// BACKEND-37: a turn that failed in transport arrives with the agent's own line beside the category,
+// the one the terminal shows, and the setting names in it beside that.
+// Folded by the window's reducer and drawn through the real row, because the line arriving on
+// `turn.error` and going undrawn is the fault: the card would then say the window's own table,
+// which names no cause, no gap and no setting. Without the line the table is what the card says.
+test('a failed turn draws the line the agent sent, with its settings as code, and the table without it', () => {
+  const React = require('react')
+  const { renderToStaticMarkup } = require('react-dom/server')
+  const source = buildSync({ entryPoints: ['src/renderer/components/Transcript.tsx'], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react', 'react-dom', 'react/jsx-runtime'] }).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)(require, module, module.exports)
+  const { Row } = module.exports
+
+  const session = liveSession()
+  let turn = 0
+  const failed = (category, failureMessage, failureCodes, cutOff = null) => {
+    turn += 1
+    session.send('turn.started', { turn })
+    session.send('turn.error', { kind: 'chat', message: category, category, failureMessage, failureCodes, cutOff, turn, prompt: 0, contextTokens: 0 })
+    const entry = session.live.entries.at(-1)
+    return renderToStaticMarkup(React.createElement(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
+  }
+
+  const quiet = 'The reply went quiet for longer than the 5 minute gap allowed, after 3 attempts; raise idleTimeoutMs in the options of this provider entry to wait longer on a quiet reply, or maxRetries to send the request again more times; a new message continues from what was already done.'
+  const drawn = failed('transport', quiet, ['idleTimeoutMs', 'maxRetries'])
+  assert.match(drawn, /<span slot="title">The model service could not be reached<\/span>/, drawn)
+  assert.match(drawn, /<p>The reply went quiet for longer than the 5 minute gap allowed, after 3 attempts; raise <code>idleTimeoutMs<\/code> in the options of this provider entry to wait longer on a quiet reply, or <code>maxRetries<\/code> to send the request again more times; a new message continues from what was already done\.<\/p>/, drawn)
+  assert.doesNotMatch(drawn, /proxy and certificate/, 'the table was said beside the line')
+
+  // A reply that did not begin names no setting, and is a plain paragraph.
+  const silent = failed('transport', 'The reply did not begin within the time it was given; a new message continues from what was already done.', [])
+  assert.match(silent, /<p>The reply did not begin within the time it was given; a new message continues from what was already done\.<\/p>/, silent)
+
+  // Both are text: markup in the line or a code is drawn as the characters it is made of.
+  const hostile = failed('transport', 'Raise <b>x</b> now <img src=x>.', ['<b>x</b>'])
+  assert.doesNotMatch(hostile, /<img|<b>/, hostile)
+  assert.match(hostile, /<code>&lt;b&gt;x&lt;\/b&gt;<\/code>/, hostile)
+
+  // Without a line the card says what its category's row says.
+  for (const none of [null, undefined, '']) {
+    assert.match(failed('transport', none, null), /Check the connection, proxy and certificate settings in Agent settings\./)
+  }
+})
+
 // CHATGPT-8: a turn the ChatGPT account failed arrives with the bridge's sentence for it beside the
 // category and the command it names. Folded by the window's reducer and drawn through the real row,
 // because the sentence arriving on `turn.error` and going undrawn is the fault, and the card saying
@@ -927,4 +971,35 @@ test('a bot is thinking only while no tool of the turn is running, whatever foll
   assert.equal(live.thinking(at([t.turnStarted(1), landed, card])), true, 'once it lands the model is writing again')
   assert.equal(live.thinking(at([running, t.turnStarted(2), t.narrated('Next')])), true, 'a tool left from an earlier turn does not count')
   assert.equal(live.thinking(at([t.turnStarted(1), running], 'working')), false)
+})
+
+// BACKEND-37: the card of a transport failure is titled from the closed name of the cause the bridge
+// sends beside the line, and never from the line. A reply that went quiet or did not begin came from a
+// service that was reached, so the category title, which says it could not be reached, is not said
+// for it. Folded by the reducer and drawn through the real row, because a cause that arrives and is
+// dropped before the card is the fault.
+test('a transport card is titled from the cause the bridge sent beside the line', () => {
+  const React = require('react')
+  const { renderToStaticMarkup } = require('react-dom/server')
+  const source = buildSync({ entryPoints: ['src/renderer/components/Transcript.tsx'], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react', 'react-dom', 'react/jsx-runtime'] }).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)(require, module, module.exports)
+  const { Row } = module.exports
+  const session = liveSession()
+  let turn = 0
+  const titled = (cause) => {
+    turn += 1
+    session.send('turn.started', { turn })
+    session.send('turn.error', { kind: 'chat', message: 'transport', category: 'transport', failureMessage: 'The reply went quiet for longer than the 5 minute gap allowed; a new message continues from what was already done.', failureCodes: [], failureCause: cause, turn, prompt: 0, contextTokens: 0 })
+    const drawn = renderToStaticMarkup(React.createElement(Row, { entry: session.live.entries.at(-1), onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
+    return drawn.match(/<span slot="title">([^<]*)<\/span>/)[1]
+  }
+  assert.equal(titled('idle-gap'), 'The model reply went quiet')
+  assert.equal(titled('begin'), 'The model reply did not begin in time')
+  assert.equal(titled('connection'), 'The model service could not be reached')
+  assert.equal(titled(null), 'The model service could not be reached', 'no cause keeps the category title')
+  assert.equal(titled('not-a-cause'), 'The model service could not be reached', 'a name the window does not know keeps the category title')
+  const { failureSummary } = load('src/renderer/failure.ts')
+  assert.equal(failureSummary('incomplete', null, null, 'The reply went quiet.', 'idle-gap').title, 'The model reply went quiet', 'a plan card and an incomplete reply are titled the same way')
+  assert.equal(failureSummary('transport', null, null, null, 'idle-gap').title, 'The model service could not be reached', 'without a line the card is the category row')
 })
