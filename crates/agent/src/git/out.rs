@@ -7,7 +7,12 @@ use std::time::Instant;
 use gix_object::Kind;
 use gix_object::tree::EntryKind;
 
+use bravebot_core::paging::within;
+
 use super::{BINARY_PROBE, Listing, MAX_COUNT, MAX_LINE_CHARS, MAX_LINES, Request};
+
+/// What [`Text::add`] writes after a line it shortened.
+const LINE_CUT: &str = " [line cut]";
 
 /// Lines of one file, as an answer printed them.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -120,16 +125,13 @@ impl Text {
             self.cut = true;
             return None;
         }
-        let end = match line.char_indices().nth(MAX_LINE_CHARS) {
-            Some((end, _)) => {
-                self.cut = true;
-                end
-            }
-            None => line.len(),
-        };
+        let (end, shortened) = Self::end_of(line);
+        if shortened {
+            self.cut = true;
+        }
         self.body.push_str(&line[..end]);
-        if end < line.len() {
-            self.body.push_str(" [line cut]");
+        if shortened {
+            self.body.push_str(LINE_CUT);
         }
         self.body.push('\n');
         if !content {
@@ -147,6 +149,43 @@ impl Text {
 
     pub(super) fn full(&self) -> bool {
         self.lines >= MAX_LINES
+    }
+
+    /// Where [`Text::add`] stops a line, at a char boundary past [`MAX_LINE_CHARS`], and whether
+    /// that is short of its end.
+    fn end_of(line: &str) -> (usize, bool) {
+        match line.char_indices().nth(MAX_LINE_CHARS) {
+            Some((end, _)) => (end, true),
+            None => (line.len(), false),
+        }
+    }
+
+    /// The bytes [`Text::add`] puts in the body for `line`: what it keeps of it, the mark of a
+    /// cut, and the newline.
+    fn bytes_of(line: &str) -> usize {
+        let (end, shortened) = Self::end_of(line);
+        let mark = if shortened { LINE_CUT.len() } else { 0 };
+        end.saturating_add(mark).saturating_add(1)
+    }
+
+    /// Whether the body with `lines` added is at most `most` bytes.
+    pub(super) fn fits(&self, lines: &[String], most: usize) -> bool {
+        let mut used = Some(self.body.len());
+        for line in lines {
+            used = used.and_then(|used| within(used, Self::bytes_of(line), most));
+        }
+        used.is_some()
+    }
+
+    /// Add a line that is not a file's contents where the body is then at most `most` bytes; false,
+    /// with the answer cut, where it would be more or the answer is full. The line is added as
+    /// [`Text::add`] prints it, or not at all.
+    pub(super) fn line_within(&mut self, line: &str, most: usize) -> bool {
+        if within(self.body.len(), Self::bytes_of(line), most).is_none() {
+            self.cut = true;
+            return false;
+        }
+        self.line(line)
     }
 }
 

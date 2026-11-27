@@ -97366,6 +97366,80 @@ fn read_git_pages_through_a_log_and_shows_whole_messages_when_asked() {
     );
 }
 
+/// GIT-12. A log of long messages fits under 2,000 lines and is over 100,000 bytes, which every
+/// later request in the turn would send again. The planner is given a page held to
+/// `MAX_LOG_PAGE_BYTES` of whole commits and the skip that lists the next of them, and asking with
+/// that skip lists the commit the first page left out.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn read_git_bounds_a_log_of_long_messages_by_bytes_and_names_the_skip() {
+    use bravebot_agent::git::MAX_LOG_PAGE_BYTES;
+    let scratch = Scratch::new("read-git-message-bytes");
+    for i in 0..40 {
+        let body = (0..40)
+            .map(|j| format!("{:x<70}", format!("line {j} of commit {i} ")))
+            .collect::<Vec<_>>()
+            .join("\n");
+        repository::commit_files_at(
+            &scratch.path,
+            &[("README", "hello\n")],
+            &format!("SUBJECT-{i:02}\n\n{body}"),
+            1_700_000_000 + i64::from(i) * 86_400,
+        );
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"log","count":40,"messages":true}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("why was the newest commit made"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let told = newest_tool_result(received.recv().expect("second request"));
+    let told: String = serde_json::from_str(&told).expect("the tool result is a string");
+    let note = told.find("\n\n(this log stopped");
+    assert!(
+        note.is_some(),
+        "a page of {} bytes named no skip",
+        told.len()
+    );
+    let note = note.unwrap_or_default();
+    assert!(
+        note <= MAX_LOG_PAGE_BYTES,
+        "the planner was sent {note} bytes of messages"
+    );
+    let rest = told.get(note..).unwrap_or_default();
+    let skip: Option<usize> = rest
+        .split("ask again with skip ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|n| n.parse().ok());
+    assert!(skip.is_some(), "the note named no skip: {rest}");
+    let skip = skip.unwrap_or_default();
+    assert!(
+        told.contains("SUBJECT-39"),
+        "the newest commit was not listed"
+    );
+    assert!(
+        told.contains(&format!("SUBJECT-{:02}", 40 - skip)),
+        "the last commit before the skip was not listed"
+    );
+    assert!(
+        !told.contains(&format!("SUBJECT-{:02}", 39 - skip)),
+        "the commit the skip lists was on the page already"
+    );
+}
+
 /// The newest tool result in one request the planner was sent.
 fn newest_tool_result(request: String) -> String {
     let parsed: serde_json::Value = serde_json::from_str(&request).expect("a request");

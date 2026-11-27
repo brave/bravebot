@@ -47,6 +47,7 @@ pub mod invisible;
 pub mod label;
 pub mod manifest;
 pub mod message;
+pub mod paging;
 pub mod permissions;
 pub mod policy;
 pub mod processor;

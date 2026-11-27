@@ -57,6 +57,7 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | `credentials::hex_value`, `credentials::sextet_of` | Each gives the value of a hexadecimal or base64 character exactly where the byte is one, and nothing for any other byte |
 | `credentials::escape_at`, `credentials::percent_bytes` | Every offset read is inside the text, a whole `%` escape is always decoded, including one that ends the text, and the output is never longer than the input and is shorter where an escape was decoded |
 | `credentials::base64_bytes` | Fewer than eight bits are held between characters and the bits held are below two to the power of how many are held, so no shift is by 32 or more, no mask underflows, and there is at most one byte out for each character in |
+| `paging::within` | Adding the bytes a line takes to the bytes a page holds never wraps, and it returns the new count exactly when that is at most the bound. Which lines `read_git` counts, and what it does with the answer, are not proved |
 
 `verify/mutations.txt` lists a defect for each, and `make check-verus` requires Verus to refuse
 every one.

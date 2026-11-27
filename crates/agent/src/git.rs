@@ -78,6 +78,12 @@ const MAX_LINES: usize = 2000;
 /// Characters one line carries before it is cut: a minified file is one line.
 const MAX_LINE_CHARS: usize = 2000;
 
+/// Bytes one page of a log with messages carries, about 5,000 tokens. A page of whole messages
+/// under [`MAX_LINES`] can still be over 100,000 bytes, and every later request in the turn sends
+/// the answer again. A log without messages is one line per commit, and [`MAX_COUNT`] of those is
+/// already about this size.
+pub const MAX_LOG_PAGE_BYTES: usize = 20_000;
+
 /// How many symbolic refs a name is followed through, as git does.
 const SYMBOLIC_DEPTH: usize = 5;
 
@@ -1534,14 +1540,15 @@ mod tests {
     /// A page of messages holds whole commits: one that would not fit waits for the next page,
     /// which the skip names, rather than being cut short where the planner would take its message
     /// for the whole of it. A single message longer than a page is the exception, shown as far as
-    /// it fits so that the next skip moves past it.
+    /// it fits so that the next skip moves past it. The lines are short, so a page reaches its
+    /// lines before its bytes.
     #[test]
     fn a_page_of_messages_ends_at_a_whole_commit() {
         let repo = Repo::new("log-message-pages");
         let tree = repo.tree(&[("100644", "README", repo.blob("hello\n"))]);
         let body = |lines: usize| {
             (0..lines)
-                .map(|i| format!("line {i}"))
+                .map(|i| format!("{i:x}"))
                 .collect::<Vec<_>>()
                 .join("\n")
         };
@@ -1569,6 +1576,7 @@ mod tests {
         let first = page(0);
         assert!(first.text.starts_with(&short(made[3], 10)));
         assert_eq!(first.text.lines().count(), MAX_LINES);
+        assert!(first.text.len() < MAX_LOG_PAGE_BYTES);
         assert!(!first.text.contains(&short(made[2], 10)));
         assert_eq!(
             (first.next, first.cut),
@@ -1578,7 +1586,7 @@ mod tests {
 
         let second = page(1);
         assert_eq!(second.text.lines().count(), 2 * 901);
-        assert!(second.text.ends_with("    line 899\n"));
+        assert!(second.text.ends_with("    383\n"));
         assert!(
             !second.text.contains(&short(made[0], 10)),
             "a commit that did not fit was started on the page anyway"
@@ -1588,6 +1596,214 @@ mod tests {
         let third = page(3);
         assert_eq!(third.text.lines().count(), 301);
         assert_eq!((third.next, third.cut), (None, false));
+    }
+
+    /// 40 commits whose subjects are 600 characters and whose bodies are 40 lines of 70, so a page
+    /// of their messages is about 145,000 bytes and fits under [`MAX_LINES`]. `made` is oldest
+    /// first; a log lists it newest first.
+    fn long_messages(repo: &Repo) -> Vec<ObjectId> {
+        let tree = repo.tree(&[("100644", "README", repo.blob("hello\n"))]);
+        let mut parent = Vec::new();
+        let mut made = Vec::new();
+        for i in 0..40_u32 {
+            let subject = format!("{:y<600}", format!("subject {i} "));
+            let body = (0..40)
+                .map(|j| body_line(i, j))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let id = repo.commit(
+                tree,
+                &parent,
+                T1 + i64::from(i) * DAY,
+                &format!("{subject}\n\n{body}"),
+            );
+            parent = vec![id];
+            made.push(id);
+        }
+        repo.point("refs/heads/main", made[39]);
+        made
+    }
+
+    /// Line `j` of the body of commit `i` in [`long_messages`], 70 characters.
+    fn body_line(i: impl std::fmt::Display, j: u32) -> String {
+        format!("{:x<70}", format!("line {j} of commit {i} "))
+    }
+
+    /// A page of messages is bounded by its bytes as well as its lines, because every later
+    /// request in the turn sends the answer again: 40 commits of long messages fit under 2,000
+    /// lines and are over 100,000 bytes. The page still holds whole commits, as full as the bound
+    /// lets it be, and names the skip that lists the next one, so paging through it lists every
+    /// commit once. A log without messages is one line a commit and is not held to the bound.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_page_of_messages_stops_at_its_bytes_on_a_whole_commit() {
+        let repo = Repo::new("log-message-bytes");
+        let made = long_messages(&repo);
+        let repository = repo.opened().expect("opened");
+        let page = |skip: usize, messages: bool| {
+            let mut asked = request(Query::Log, None, None);
+            asked.count = 40;
+            asked.messages = messages;
+            asked.skip = skip;
+            repository.answer(&asked, &|_| false).expect("answered")
+        };
+        // The commit a log lists at `at`, counting from the newest.
+        let listed = |at: usize| made[39 - at];
+
+        let first = page(0, true);
+        assert!(
+            first.next.is_some(),
+            "a page of {} bytes of messages named no skip",
+            first.text.len()
+        );
+        let k = first.next.unwrap_or_default();
+        assert!(
+            first.cut,
+            "a page that stopped with commits left was not cut"
+        );
+        assert!(
+            first.text.len() <= MAX_LOG_PAGE_BYTES,
+            "a page of messages held {} bytes",
+            first.text.len()
+        );
+        assert!((1..40).contains(&k), "the skip named was {k}");
+        assert!(first.text.starts_with(&short(listed(0), 10)));
+        assert!(
+            first
+                .text
+                .ends_with(&format!("    {}\n", body_line(40 - k, 39))),
+            "the page did not end with the last line of a whole commit"
+        );
+        assert!(
+            !first.text.contains(&short(listed(k), 10)),
+            "a commit that did not fit was started on the page anyway"
+        );
+
+        let rest = page(k, true);
+        assert!(
+            rest.text.starts_with(&short(listed(k), 10)),
+            "the skip named did not list the next commit first"
+        );
+        let entry = rest
+            .text
+            .find(&short(listed(k + 1), 10))
+            .expect("the next page holds more than one commit");
+        assert!(
+            first.text.len() + entry > MAX_LOG_PAGE_BYTES,
+            "the page stopped with room for the next commit: {} bytes and one of {entry}",
+            first.text.len()
+        );
+
+        let mut seen = Vec::new();
+        let mut skip = 0;
+        loop {
+            let answer = page(skip, true);
+            assert!(answer.text.len() <= MAX_LOG_PAGE_BYTES);
+            assert!(answer.text.starts_with(&short(listed(skip), 10)));
+            let commits = answer
+                .text
+                .lines()
+                .filter(|line| !line.starts_with("    "))
+                .count();
+            seen.extend((skip..skip + commits).map(listed));
+            match answer.next {
+                Some(next) => {
+                    assert_eq!(next, skip + commits);
+                    assert!(answer.cut);
+                    skip = next;
+                }
+                None => {
+                    assert!(!answer.cut, "the last page said it was cut");
+                    break;
+                }
+            }
+        }
+        assert_eq!(
+            seen.iter().rev().copied().collect::<Vec<_>>(),
+            made,
+            "paging by the skips named did not list every commit once"
+        );
+
+        let lines = page(0, false);
+        assert!(lines.text.len() > MAX_LOG_PAGE_BYTES);
+        assert_eq!(
+            (lines.text.lines().count(), lines.next, lines.cut),
+            (40, None, false),
+            "a log without messages was held to the bound on a page of messages"
+        );
+    }
+
+    /// A commit whose message alone is over a page's bytes cannot wait for a page it fits on, so
+    /// it is shown as far as it fits, cut at a whole line, and the next skip moves past it. A page
+    /// that holds exactly its bytes is not cut.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_message_over_a_page_of_bytes_is_shown_as_far_as_it_fits() {
+        let repo = Repo::new("log-message-over-bytes");
+        let tree = repo.tree(&[("100644", "README", repo.blob("hello\n"))]);
+        // Its line is the id, the day, the author and "exact": 37 bytes with the newline, and
+        // each line of its body is 75 bytes as shown.
+        let header = format!("{} 2023-11-14 A U Thor exact\n", "0".repeat(10)).len();
+        let body_bytes = MAX_LOG_PAGE_BYTES - header;
+        let mut body: Vec<String> = (0..body_bytes / 75 - 1)
+            .map(|j| format!("{j:x<70}"))
+            .collect();
+        let used = body.len() * 75;
+        body.push("z".repeat(body_bytes - used - 5));
+        let exact = repo.commit(tree, &[], T1, &format!("exact\n\n{}", body.join("\n")));
+        let over_lines = (0..400).map(|j| format!("{j:w<70}")).collect::<Vec<_>>();
+        let over = repo.commit(
+            tree,
+            &[exact],
+            T1 + DAY,
+            &format!("over\n\n{}", over_lines.join("\n")),
+        );
+        repo.point("refs/heads/main", over);
+        let repository = repo.opened().expect("opened");
+        let page = |skip: usize| {
+            let mut asked = request(Query::Log, None, None);
+            asked.messages = true;
+            asked.skip = skip;
+            repository.answer(&asked, &|_| false).expect("answered")
+        };
+
+        let first = page(0);
+        assert!(first.text.starts_with(&short(over, 10)));
+        assert!(
+            first.text.len() <= MAX_LOG_PAGE_BYTES,
+            "a message over a page of bytes was shown whole: {} bytes",
+            first.text.len()
+        );
+        assert!(!first.text.contains(&short(exact, 10)));
+        assert_eq!(
+            (first.next, first.cut),
+            (Some(1), true),
+            "a message over a page of bytes was not moved past"
+        );
+        let shown = first.text.lines().count() - 1;
+        assert!(
+            shown < over_lines.len(),
+            "every line of the message was shown"
+        );
+        assert!(
+            first
+                .text
+                .ends_with(&format!("    {}\n", over_lines[shown - 1])),
+            "the message was not cut at a whole line"
+        );
+        assert!(
+            first.text.len() + 75 > MAX_LOG_PAGE_BYTES,
+            "the message stopped with room for another line"
+        );
+
+        let second = page(1);
+        assert_eq!(second.text.len(), MAX_LOG_PAGE_BYTES);
+        assert!(second.text.starts_with(&short(exact, 10)));
+        assert_eq!(
+            (second.next, second.cut),
+            (None, false),
+            "a page that held exactly its bytes said it was cut"
+        );
     }
 
     /// `show` is how a planner reads what one commit did, so it prints the commit and its
