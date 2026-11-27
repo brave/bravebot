@@ -93,3 +93,44 @@ test("the publish workflow builds one package per platform, on that platform's o
     );
   }
 });
+
+/**
+ * The canonical file has one trigger. A tag whose commit carries a copy can still run
+ * that copy; the environment reviewer is the control, so this test only pins this file.
+ */
+test("the publish workflow starts only on a released final release", () => {
+  const workflow = read("../../.github/workflows/publish-npm.yml");
+  const onBlock = workflow.slice(
+    workflow.indexOf("\non:\n"),
+    workflow.indexOf("\nrun-name:")
+  );
+  assert.match(onBlock, /^\non:\n {2}release:\n {4}types: \[released\]/);
+  for (const trigger of [
+    "workflow_dispatch",
+    "push",
+    "workflow_call",
+    "schedule",
+    "repository_dispatch",
+  ]) {
+    assert.ok(!onBlock.includes(trigger), `unexpected trigger ${trigger}`);
+  }
+
+  assert.ok(workflow.includes("run-name: Publish npm ${{ github.event.release.tag_name }}"));
+
+  const releaseJob = workflow.slice(
+    workflow.indexOf("  release:\n    name: Check the GitHub release"),
+    workflow.indexOf("  platform:\n")
+  );
+  assert.ok(
+    releaseJob.includes('release="$(gh release view "$TAG" --json isPrerelease,isDraft)"')
+  );
+  assert.ok(releaseJob.includes("jq -r '.isPrerelease or .isDraft'"));
+  assert.ok(releaseJob.includes("bootstrap-platform-packages.js --check"));
+
+  const makefile = read("../../Makefile");
+  const recipe = makefile.slice(
+    makefile.indexOf("\npublish-npm:"),
+    makefile.indexOf("\n.PHONY: package-manifests")
+  );
+  assert.ok(recipe.includes('gh run rerun "$$run_id" --failed'));
+});

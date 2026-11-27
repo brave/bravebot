@@ -46,8 +46,8 @@ are not here. All are governed here. Learning from a running copy that a newer r
 
 GitHub Actions compiles and tests. It does not create a GitHub release. Signed, configured
 binaries are built and published by the Jenkins job `bravebot-build` in the devops repository.
-The npm package is published afterwards, from a manually dispatched GitHub Actions workflow,
-once that release exists.
+The npm package is published afterwards, from a GitHub Actions workflow triggered when that
+release is published.
 
 Most of this is not pinned by a Rust test. Those rules are enforced by a refusal in the tagging
 path, the Jenkins publish path, or the npm publish workflow rather than by anything the test
@@ -204,33 +204,43 @@ are what check that.
 `verified-by: by-construction (install.sh and the package script each hash what they downloaded, compare it against the published value, and exit without writing when they differ or the published value is not sixty-four hex digits)`
 
 <a id="RELEASE-10"></a>
-### RELEASE-10: the npm packages are published by hand, after that version's GitHub release exists
+### RELEASE-10: publishing a GitHub release publishes its npm packages
 
-A branch push, a pull request, and a tag push do not publish to the registry. Someone dispatches
-`publish-npm.yml` with the version tag after Jenkins has created the GitHub release of that name.
-What is published is the tree that tag names, and a branch of the same name does not supply it.
-Seven packages are published: the six platform packages, and the wrapper only after all six are on
-the registry. A dispatch is refused before anything is published when its tag is not `v` plus the
-version in the tree, when the wrapper runs an install script or depends on anything but the six
-platform packages at its own version, when its GitHub release is missing any platform asset, any
-checksum, or the signature beside a Linux checksum, or when a Linux signature does not verify
-against the key the tree carries. A macOS or Windows binary that is not signed by Brave is refused
-by the job for that platform, which can be after other platforms have been published. A package
-already on the registry at that version is left alone, so a dispatch after a partial failure
-publishes what is missing. A package name the registry has never held is created first, by
-[RELEASE-21](#RELEASE-21), and not by this workflow.
+A branch push, a pull request, and a tag push do not publish to the registry. Publishing a final
+GitHub release of a version does: `publish-npm.yml` runs on `release: released`; GitHub runs the
+workflow file at the tagged commit, which checks out the tag the release names, and publishes the
+seven packages. A prerelease or draft is refused before anything is published. The `released`
+event also fires when a prerelease is changed to a release, so promoting one publishes it. There
+is no manual dispatch: the event is the only trigger. A failed run is retried by rerunning that
+release run, which GitHub allows for 30 days; after that, or for a bad build, the patch version is
+bumped and a new release is published. `make publish-npm` reruns the release run.
+What is published is the tree that tag names,
+and a branch of the same name does not supply it. Seven packages are published: the six platform
+packages, and the wrapper only after all six are on the registry. A run is refused before anything
+is published when its tag is not `v` plus the version in the tree, when the registry has no package
+of one of the platform names, when the wrapper runs an install script or depends on anything but
+the six platform packages at its own version, when its GitHub
+release is missing any platform asset, any checksum, or the signature beside a Linux checksum, or
+when a Linux signature does not verify against the key the tree carries. A macOS or Windows binary
+that is not signed by Brave is refused by the job for that platform, which can be after other
+platforms have been published. A package already on the registry at that version is left alone, so
+a run after a partial failure publishes what is missing. A package name the registry has never held
+is created first, by [RELEASE-21](#RELEASE-21), and not by this workflow.
 
 **Why.** A platform package is built from the release, so it cannot exist before it. npm skips an
 optional dependency it cannot find without a message, so a wrapper published ahead of its packages
-installs and then has no binary until they exist, which reads as the tool being broken. Jenkins is
-started by hand, days later if need be, so npm publish is the same kind of step: it happens when
-somebody chooses, not when the tag lands. Publishing from a branch puts an unreviewed version on
-the registry. A version cannot be published twice, and the signature checks need a macOS and a
-Windows machine, so a failure on one platform can follow successes on others; leaving a published
-package alone lets the next dispatch finish the release rather than fail on the first package it
-finds.
+installs and then has no binary until they exist, which reads as the tool being broken. The release
+pipeline creates the release only after all its signed assets are uploaded, so publishing that
+release is the point the packages can be built; no person has to remember a second command. The
+event runs the workflow file at the tagged commit, so a tag whose commit carries a modified copy
+runs that copy; the environment's required reviewer is the control. A failed run is retried by
+rerunning it, and a bad build is fixed by bumping the patch version; immutable releases keep a
+published release from being rewritten. A version cannot be published twice, and the
+signature checks need a macOS and a Windows machine, so a failure on one platform can follow
+successes on others; leaving a published package alone lets the next run finish the release rather
+than fail on the first package it finds.
 
-`verified-by: by-construction (publish-npm.yml runs only on workflow_dispatch; its lint job refuses a wrapper that runs an install script or depends on anything but the six platform packages at its own version; its release job checks out refs/tags/ the given tag so a branch of that name cannot supply the tree and a tag that does not exist fails the run, refuses unless that tag is v plus the version in both files, and refuses unless each named asset and its checksum, and each Linux checksum's signature, are on the GitHub release and each of those signatures verifies against the key in npm/scripts/stage-platform-package.js; each platform job needs the release job and skips a package the registry already has, and the wrapper's job needs every platform job; make check-security faults a checkout of a bare name, and npm/tests/package.test.mjs holds the matrix of platform jobs to the six platforms, each on a runner of the system its signature check runs on)`
+`verified-by: by-construction (publish-npm.yml runs only on release: released, and its release job refuses a prerelease or draft and runs bootstrap-platform-packages.js --check before the platform jobs; its lint job refuses a wrapper that runs an install script or depends on anything but the six platform packages at its own version; its release job checks out refs/tags/ the tag the release names, so a branch of that name cannot supply the tree and a tag that does not exist fails the run, refuses unless that tag is v plus the version in both files, and refuses unless each named asset and its checksum, and each Linux checksum's signature, are on the GitHub release and each of those signatures verifies against the key in npm/scripts/stage-platform-package.js; each platform job needs the release job and skips a package the registry already has, and the wrapper's job needs every platform job; make check-security faults a checkout of a bare name and a publish job that names no environment, and npm/tests/package.test.mjs holds the trigger, the absence of a dispatch path and the matrix of platform jobs to the six platforms, each on a runner of the system its signature check runs on)`
 
 <a id="RELEASE-11"></a>
 ### RELEASE-11: the registry authenticates the workflow, not a stored token
@@ -241,8 +251,8 @@ for that run. No dependency of this repository is installed or run in a job that
 the grant is declared on the jobs that publish rather than for the whole workflow, and the
 lockfile lint and the checks of the release are jobs of their own that hold only `contents: read`.
 Each of those jobs names the GitHub environment `npm-publish`, which has a required reviewer who is
-not the person who dispatched, so a dispatch of any ref waits for a second person before a token
-exists.
+not the person who published the release, so a release event waits for a second person before a
+token exists. The environment name is part of the OIDC claim.
 
 **Why.** A token in GitHub secrets is a credential that publishes if it leaks, and it outlives
 the run that needed it. OIDC binds the publish to this file on this repository, so a different
@@ -252,12 +262,12 @@ boundary it has: a dependency installed or run in the publishing job could mint 
 publish a tarball with this repository's provenance on it, while under `contents: read` the
 identical compromise reaches a green check and nothing else. The wrapper depends on nothing but
 the platform packages this workflow publishes, so the job that lints holds the lower grant to keep that true of whatever is added. The trusted publisher on npmjs.com keys on the repository and the workflow filename rather
-than a job name, so which job publishes is this repository's to choose. `workflow_dispatch` runs the
-file at the ref it is dispatched on and the record does not check the ref, so a person with write
-access could push a branch holding a copy of this file without its refusals and dispatch that. The
-dispatcher writes that copy, so nothing inside the file can stop it; the environment's reviewer is a
-setting of the repository, which a copy cannot remove, and npm compares the environment claim once a
-job declares one.
+than a job name, so which job publishes is this repository's to choose. The release event runs the
+workflow file at the tagged commit. A person with write access can push a tag whose commit carries
+a copy of this file without its refusals and publish a release for it. The environment's required
+reviewer is a setting of the repository, which a copy cannot remove, and npm compares the
+environment claim once a job declares one. There is no dispatch path, but removing it does not
+close this tag-copy path; the reviewer does.
 
 `verified-by: by-construction (the platform and wrapper publish jobs grant id-token: write, set no NPM_TOKEN or NODE_AUTH_TOKEN, and call npm publish --access public --provenance; make check-security faults a step that installs or runs an npm dependency in a job holding the grant, and faults a job holding the grant that names no environment:, which pins the key and not the environment's reviewer)`
 
@@ -566,20 +576,21 @@ of, so that a trusted publisher can be added to it on npmjs.com. The placeholder
 binary, no script and no dependency. The publish is made with the maintainer's own `npm login`, and
 nothing in the tree or in a workflow holds a credential for it. The target does nothing when every
 name exists, when npm is not logged in, or when the registry answers a lookup with anything but a
-package or a 404. `make publish-npm` runs the same script with `--check` before it dispatches, and
-stops naming each platform package the registry lacks.
+package or a 404. The release job of `publish-npm.yml` runs the same script with `--check` before
+the platform jobs, and `make publish-npm` runs it before it reruns a failed release run; both stop
+naming each platform package the registry lacks.
 
 **Why.** A trusted publisher is a record on a package, and a package that has never been published
 has none. OIDC then has nothing to match, and the registry answers the workflow's publish with a
 404. The first version of a name has to come from somewhere other than the workflow. Making it a
 placeholder keeps every version with a binary on the path [RELEASE-11](#RELEASE-11) describes:
-published by the workflow, with provenance, after the environment's reviewer approves. The wrapper
-pins each platform package at its own exact version, and the placeholder is a prerelease of `0.0.0`
+published by the workflow, with provenance, after the environment's required reviewer approves. The wrapper pins
+each platform package at its own exact version, and the placeholder is a prerelease of `0.0.0`
 under another tag, so no install of the wrapper resolves to it. The check runs where it fails in a
-second at the maintainer's terminal. Without it, the dispatch costs a second person's approval and
-six runner jobs before it fails on the 404.
+second: in the release job before the six platform jobs, and at the maintainer's terminal before a
+rerun. Without it, a rerun costs six runner jobs before it fails on the 404.
 
-`verified-by: by-construction (npm/tests/bootstrap-platform-packages.test.mjs runs the script against a fake npm: it publishes a placeholder for each name the registry answers 404 for and for none it holds, never one with more than a manifest and the licence, never at the version of a release or under latest, nothing without a login, and nothing when the registry does not answer with a package or a 404; the check names every missing package and publishes nothing; the script reads no environment value and starts npm alone; and the recipe of make publish-npm is held to run the check before gh workflow run. make check-npm runs it)`
+`verified-by: by-construction (npm/tests/bootstrap-platform-packages.test.mjs runs the script against a fake npm: it publishes a placeholder for each name the registry answers 404 for and for none it holds, never one with more than a manifest and the licence, never at the version of a release or under latest, nothing without a login, and nothing when the registry does not answer with a package or a 404; the check names every missing package and publishes nothing; the script reads no environment value and starts npm alone; the release job of publish-npm.yml is held to run the check before the platform job, and the recipe of make publish-npm is held to run it before gh run rerun. make check-npm runs it)`
 
 <a id="RELEASE-22"></a>
 ### RELEASE-22: the apt and dnf repositories are checked by the client against the release key
@@ -731,13 +742,14 @@ package's key does not decide what is trusted for this one.
 
 - **The `npm-publish` environment's reviewer is configured on GitHub, not here.** `make
   check-security` faults a job holding `id-token: write` with no `environment:` key, and that is all
-  a checkout can read. Whether the environment exists, has a required reviewer who is not the
-  dispatcher, and is named on each of the seven trusted-publisher records is recorded in
-  [branch-protection.md](../development/branch-protection.md#the-npm-publish-environment). An
-  environment with no reviewer, or a record that omits it, passes every check here and leaves a
-  dispatch of a branch's copy of the workflow unheld. A deployment rule limited to `v*` tags would
-  narrow that and does not replace the reviewer, since the tag ruleset refuses an update or a
-  deletion and not the creation of a tag.
+  a checkout can read. Whether the environment exists, has the required reviewer, and is named on
+  each of the seven trusted-publisher records is recorded in
+  [branch-protection.md](../development/branch-protection.md#the-npm-publish-environment). The
+  release event runs the workflow file at the tagged commit, so a tag whose commit carries a
+  modified copy runs that copy; the environment's required reviewer is the control, because a copy
+  cannot remove a repository setting. An environment with no reviewer passes every check here and
+  lets that copy publish with this repository's provenance. A deployment rule limited to `v*` tags
+  narrows the ref; the tag ruleset refuses an update or a deletion and not the creation of a tag.
 
 - **The trusted publisher is configured on npmjs.com, not here.** OIDC will refuse until that
   record names this repository and `publish-npm.yml` exactly. A mismatch looks like a 404 from
@@ -760,13 +772,30 @@ package's key does not decide what is trusted for this one.
 - **A refused platform can come after others are published.** The macOS and Windows signatures are
   checked by the job for that platform, which holds the grant and publishes its own package, so a
   binary the check refuses is found after the packages of the other platforms may be on the
-  registry. The wrapper is not published until every platform is, and the next dispatch publishes
-  what is missing. A version on the registry cannot be taken back.
+  registry. The wrapper is not published until every platform is, and the next run publishes what
+  is missing. A version on the registry cannot be taken back.
 
-- **A second dispatch for a published version fails at the wrapper.** The registry will not take a
-  version twice, and the platform jobs before it leave a published package alone. Dispatching
-  before Jenkins has created the GitHub release fails the asset check instead. A delayed Jenkins
-  run does not start npm publish on its own.
+- **A second run for a published version fails at the wrapper.** The registry will not take a
+  version twice, and the platform jobs before it leave a published package alone. A release whose
+  assets are not uploaded yet fails the asset check instead. A delayed release starts npm publish
+  when it is published, which is the point.
+
+- **A release created with `GITHUB_TOKEN` does not start the publish.** GitHub does not create
+  workflow runs for events triggered by the repository's `GITHUB_TOKEN`, so the release pipeline
+  must publish the release with a PAT or a GitHub App token. The workflow cannot tell the two
+  apart; a release that triggers nothing leaves the packages unpublished until a new patch release
+  is published.
+
+- **A release event runs the workflow file at the tagged commit, not the default branch.** A tag
+  whose commit has no `release` trigger in `publish-npm.yml` starts nothing when its release is
+  published; a fix to the workflow needs a new tag.
+
+- **A rerun is available for 30 days.** GitHub refuses `gh run rerun` on an older run; after that,
+  the fix is a new patch release.
+
+- **A prerelease is not published until it is changed to a release.** `released` fires when the
+  release is published, or when a prerelease is changed to a release; a prerelease that stays a
+  prerelease publishes nothing.
 
 - **Nothing at install time checks a code signature.** npm checks the integrity hash the registry
   serves, which covers the bytes that were published and not who made them. Those bytes were
@@ -782,5 +811,5 @@ package's key does not decide what is trusted for this one.
   dependency it cannot find, so an install from a checkout or a git ref at a version that has not
   been published succeeds, and the launcher says the binary is missing.
 
-- **OIDC trusted publishing does not support Jenkins.** That is why this one publication step
-  is in GitHub Actions while the signed binaries stay in Jenkins.
+- **OIDC trusted publishing does not support the release pipeline.** That is why this one
+  publication step is in GitHub Actions while the signed binaries stay in the release pipeline.

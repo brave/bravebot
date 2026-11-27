@@ -76,8 +76,8 @@ function missingKeys(npm) {
   return Object.keys(PLATFORMS).filter((key) => !registryHolds(packageName(key), npm));
 }
 
-// Fails naming each platform package that does not exist, for the step that is about to dispatch
-// the publish workflow.
+// Fails naming each platform package that does not exist, for the workflow's release job and for
+// the manual rerun.
 function check({ npm = runNpm } = {}) {
   const missing = missingKeys(npm).map(packageName);
   if (missing.length > 0) {
