@@ -7985,6 +7985,7 @@ mod tests {
     /// compared in both cases, so a write over a file whose revision moved is refused either way and
     /// the refusal for the unasked case does not say a person was asked. Rejects comparing the whole
     /// stamp for every write, and rejects dropping the comparison for the unasked case.
+    #[cfg(unix)]
     #[test]
     #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_run_line_voids_only_a_write_a_person_was_asked_about_and_the_revision_voids_both() {
