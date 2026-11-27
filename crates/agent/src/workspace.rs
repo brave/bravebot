@@ -137,7 +137,7 @@ pub use results::{
 };
 use results::{
     MAX_CONTEXT_LINES, MAX_LINE, MAX_MAP_BYTES, MAX_MAP_FILE_BYTES, MAX_MATCH_LINE, MAX_MATCHES,
-    MAX_PAGE_CHARS, MAX_PAGE_LINES, MAX_SEARCH_TIME, MAX_TALLIED_FILES,
+    MAX_PAGE_CHARS, MAX_PAGE_LINES, MAX_SEARCH_TIME, MAX_TALLIED_FILES, MIN_SEARCH_READS,
 };
 pub(crate) use results::{MAX_ENTRIES, MAX_FILES_PER_DIRECTORY, MAX_SUBDIRECTORIES_PER_DIRECTORY};
 pub use touched::TouchedRecord;
@@ -261,6 +261,9 @@ pub struct Workspace {
     while_reading: Arc<Mutex<Option<ReadingHook>>>,
     #[cfg(test)]
     while_backing_up: Arc<Mutex<Option<ReadingHook>>>,
+    /// How many entries a listing's walk takes before its clock reads as run out, for a test.
+    #[cfg(test)]
+    clock_runs_out_after: Arc<Mutex<Option<usize>>>,
     root: PathBuf,
     /// Absolute directories the user named, each canonical.
     ///
@@ -310,13 +313,19 @@ pub struct Workspace {
     /// monorepo holds more files than the default walks, and a test reaches the cap without
     /// writing a hundred thousand files.
     search_files: usize,
-    /// How long a search may spend opening files. [`MAX_SEARCH_TIME`] unless the settings named
-    /// another.
+    /// How long a search may spend opening files, and how long a listing may spend walking.
+    /// [`MAX_SEARCH_TIME`] unless the settings named another.
     ///
     /// A field for the same reason as `search_files`, and a separate one because the two bound
     /// different things: a tree large enough to need a wider walk is not always slow enough to
     /// need a longer read.
     search_time: Duration,
+    /// How many files a search tries before `search_time` may stop it. [`MIN_SEARCH_READS`], and
+    /// not a setting: a person who wants a search to stop sooner lowers `search.maxFiles`.
+    ///
+    /// A field so a test of the clock itself can spend it before the first file, which the default
+    /// would not let a tree of a few files do.
+    search_floor: usize,
     /// Whether a settings layer asked for the file tools to stay inside the primary root
     /// (PERM-16).
     ///
@@ -547,6 +556,8 @@ impl Workspace {
             while_reading: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             while_backing_up: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            clock_runs_out_after: Arc::new(Mutex::new(None)),
             root_made: ScratchDirectory::observed(canonical.clone()),
             root: canonical,
             left: Vec::new(),
@@ -555,6 +566,7 @@ impl Workspace {
             memories: None,
             search_files: MAX_SEARCH_FILES,
             search_time: MAX_SEARCH_TIME,
+            search_floor: MIN_SEARCH_READS,
             reads_stay_inside: false,
             #[cfg(unix)]
             identity: directory_identity,
@@ -690,6 +702,15 @@ impl Workspace {
     pub fn with_search_caps(mut self, files: Option<usize>, time: Option<Duration>) -> Self {
         self.search_files = files.unwrap_or(self.search_files);
         self.search_time = time.unwrap_or(self.search_time);
+        self
+    }
+
+    /// Let a search's clock stop it after `files` files rather than [`MIN_SEARCH_READS`], so a test
+    /// can spend the clock before the first file without a tree of that many.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_search_floor(mut self, files: usize) -> Self {
+        self.search_floor = files;
         self
     }
 
@@ -2204,6 +2225,25 @@ impl Workspace {
         *locked(&self.while_backing_up) = Some(ReadingHook(Arc::new(hook)));
     }
 
+    /// Make the clock of every listing from here on read as run out once its walk has taken
+    /// `entries` entries, so a test can have part of a tree collected and the rest not. A real
+    /// budget gives that only by waiting, and never at the same entry twice.
+    #[cfg(test)]
+    pub(crate) fn stop_listings_after(&self, entries: usize) {
+        *locked(&self.clock_runs_out_after) = Some(entries);
+    }
+
+    /// The clock of a listing's walk: the search time, so `search.maxSeconds` applies (LIST-4).
+    fn listing_clock(&self) -> Clock {
+        #[cfg(test)]
+        return Clock {
+            entries_left: *locked(&self.clock_runs_out_after),
+            ..Clock::from_now(self.search_time)
+        };
+        #[cfg(not(test))]
+        Clock::from_now(self.search_time)
+    }
+
     #[cfg(test)]
     fn hold_while_backing_up(&self, path: &Path) {
         let hook = locked(&self.while_backing_up).clone();
@@ -2963,6 +3003,75 @@ struct Collected<'a> {
     /// A number and never a name. It is not part of [`Collected::len`], so the cap is spent only on
     /// files the caller may open.
     unvouched: usize,
+    /// When the walk stops, and whether it did. A listing's alone: a search's walk and a
+    /// repository map's are bounded by their caps on files and bytes and have no clock (SEARCH-9).
+    clock: Clock,
+}
+
+/// The time budget of a listing's walk (LIST-4).
+///
+/// Compared with the time and with nothing out of the tree, so what it decides is when the walk
+/// stops and never which names it keeps.
+struct Clock {
+    /// When the walk stops, or `None` for no clock.
+    deadline: Option<Instant>,
+    /// Whether the walk stopped at the deadline with part of the tree not walked. A fact about the
+    /// walk and never a name, released the way the cap is.
+    timed_out: bool,
+    /// How many more entries the walk takes before the clock reads as run out, for a test that needs
+    /// part of a tree collected and the rest not, which a real budget gives only by waiting and
+    /// never at the same entry twice.
+    #[cfg(test)]
+    entries_left: Option<usize>,
+}
+
+impl Clock {
+    /// No clock: the walk is stopped by its caps alone.
+    fn none() -> Self {
+        Self {
+            deadline: None,
+            timed_out: false,
+            #[cfg(test)]
+            entries_left: None,
+        }
+    }
+
+    /// A clock that runs out `budget` from now. A budget too large to add to the time is no budget.
+    fn from_now(budget: Duration) -> Self {
+        Self {
+            deadline: Instant::now().checked_add(budget),
+            ..Self::none()
+        }
+    }
+
+    /// Whether the walk is to stop before the entry it is about to take, recording that it did.
+    ///
+    /// Asked before each file and each subdirectory is taken, so the walk stops at the next entry
+    /// and not at the end, and only where an entry is left, so a walk that reached the end of the
+    /// tree never reports a clock. A budget of nothing stops the walk before its first entry. The
+    /// entries are in sorted order, a directory's files before its subdirectories, so the part
+    /// walked is the head of that order and is the same part whenever the clock stops at the same
+    /// entry.
+    fn ran_out(&mut self) -> bool {
+        if self.deadline.is_none() {
+            return false;
+        }
+        #[cfg(test)]
+        if let Some(left) = self.entries_left.as_mut() {
+            if *left == 0 {
+                self.timed_out = true;
+            } else {
+                *left -= 1;
+            }
+        }
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            self.timed_out = true;
+        }
+        self.timed_out
+    }
 }
 
 impl Collected<'_> {
@@ -3138,9 +3247,27 @@ struct Wanted<'a> {
     patterns: &'a [String],
     /// The walked directory as [`Workspace::relative_display`] spells it: empty for the root.
     under: &'a str,
+    /// Whether the walk skips a directory no admitted path can be beneath (LIST-3). Set by a
+    /// listing alone: a search's `include` and a repository map's extensions skip no directory.
+    skips_directories: bool,
 }
 
 impl Wanted<'_> {
+    /// Whether a file beneath the directory `relative` could be admitted, read the two ways
+    /// [`Wanted::admits`] reads a path.
+    ///
+    /// Decided from the patterns and the directory's name, which the walk already compares in
+    /// `admits`, and it reads no file and no entry the walk had not met. `true` wherever a
+    /// directory is not to be skipped, so a walk that skips nothing asks nothing of the pattern.
+    fn could_hold_an_admitted_path(&self, relative: &str) -> bool {
+        !self.skips_directories
+            || crate::glob::could_match_beneath(self.patterns, relative)
+            || relative
+                .strip_prefix(self.under)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .is_some_and(|rest| crate::glob::could_match_beneath(self.patterns, rest))
+    }
+
     fn admits(&self, relative: &str) -> bool {
         crate::glob::matches_any(self.patterns, relative)
             || relative
@@ -3161,6 +3288,11 @@ impl Workspace {
     ///
     /// A path a `deny` rule covers is left out of the listing, whether the call named it or the
     /// walk reached it from a directory above it.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one pass that resolves the call, walks, labels what the walk found and shapes the \
+                  listing, in the order the trust map needs each step"
+    )]
     pub fn list<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -3209,6 +3341,7 @@ impl Workspace {
             let wanted = patterns.as_deref().map(|patterns| Wanted {
                 patterns,
                 under: &under,
+                skips_directories: true,
             });
             let walk_names = other_names::WalkNames::of(self);
             let rules = WalkRules::of(policy, &walk_names);
@@ -3224,6 +3357,8 @@ impl Workspace {
                 subdirectories_per_directory: depth.map(|_| MAX_SUBDIRECTORIES_PER_DIRECTORY),
                 partly_listed: Vec::new(),
                 unvouched: 0,
+                // The same budget as a search's, so `search.maxSeconds` applies.
+                clock: self.listing_clock(),
             };
             // The name the root is reported under if the per-directory cap cuts it: `.` for the
             // workspace root, whose relative name is empty, and its relative name otherwise. Taken
@@ -3245,6 +3380,7 @@ impl Workspace {
             )?;
             let unreadable = collected.unreadable;
             let links = collected.links;
+            let timed_out = collected.clock.timed_out;
             let mut partly_listed = std::mem::take(&mut collected.partly_listed);
             found.sort();
             stopped_at.sort();
@@ -3307,6 +3443,7 @@ impl Workspace {
                     unreadable,
                     links,
                     partly_listed,
+                    timed_out,
                 },
                 label,
             ))
@@ -3359,6 +3496,7 @@ impl Workspace {
             let wanted = Some(Wanted {
                 patterns: &patterns,
                 under: &under,
+                skips_directories: false,
             });
             let mut paths = Vec::new();
             let mut ignored = Vec::new();
@@ -3378,6 +3516,7 @@ impl Workspace {
                 subdirectories_per_directory: None,
                 partly_listed: Vec::new(),
                 unvouched: 0,
+                clock: Clock::none(),
             };
             let hit_the_cap = self.walk_filtered(
                 &root,
@@ -3673,6 +3812,7 @@ impl Workspace {
                 let wanted = expanded.as_deref().map(|patterns| Wanted {
                     patterns,
                     under: &under,
+                    skips_directories: false,
                 });
                 let rules = WalkRules::of(policy, &walk_names);
                 let mut collected = Collected {
@@ -3685,6 +3825,7 @@ impl Workspace {
                     subdirectories_per_directory: None,
                     partly_listed: Vec::new(),
                     unvouched: 0,
+                    clock: Clock::none(),
                 };
                 let unvisited = self.walk_filtered(
                     &root,
@@ -3735,7 +3876,11 @@ impl Workspace {
                 }
                 // Checked per file rather than per line: the clock is here to bound a walk over a
                 // large tree, and a single file cannot be large enough to matter beside that.
-                if started.elapsed() >= self.search_time {
+                //
+                // Not before `search_floor` files have been tried (SEARCH-3): the clock counts
+                // seconds, and a busy machine turns them into fewer files. `index` is the position
+                // in the walk's sorted list of paths, so what a file holds does not move the stop.
+                if index >= self.search_floor && started.elapsed() >= self.search_time {
                     timed_out = true;
                     reached = index;
                     break;
@@ -4793,7 +4938,9 @@ impl Workspace {
         let mut taken = 0;
         let mut left_out = 0;
         for path in files {
-            if collected.len() > limit {
+            // The clock is asked here and before each subdirectory below, and only a listing has
+            // one: a search and a map are never stopped by it (SEARCH-9).
+            if collected.len() > limit || collected.clock.ran_out() {
                 return Ok(true);
             }
             let relative = self.relative_display(&path);
@@ -4850,7 +4997,7 @@ impl Workspace {
         // count alone and a directory a rule fences is neither kept nor counted as left out.
         let mut taken_directories = 0;
         for path in directories {
-            if collected.len() > limit {
+            if collected.len() > limit || collected.clock.ran_out() {
                 return Ok(true);
             }
             let relative = self.relative_display(&path);
@@ -4879,6 +5026,13 @@ impl Workspace {
             taken_directories += 1;
             if remaining.is_some_and(|left| left <= 1) {
                 collected.stopped_at.push(relative);
+                continue;
+            }
+            // A directory the include cannot reach anything beneath is not opened (LIST-3). Decided
+            // after the rules and after the bounds above, so what a rule withholds and which
+            // directories a bounded walk takes, stops at and counts are the same as with no pattern:
+            // only the descent is skipped, and nothing in the directory is read, counted or listed.
+            if wanted.is_some_and(|wanted| !wanted.could_hold_an_admitted_path(&relative)) {
                 continue;
             }
             // Propagated rather than left to the next iteration's check, which a directory

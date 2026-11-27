@@ -201,6 +201,19 @@ A **bounded** listing names the directories it did not descend into alongside th
 comes back describes the shape of the tree. The pattern does not hide those directories: it says
 which files are wanted, and a directory is where the answer might be rather than an answer.
 
+A pattern that names a subdirectory reads only that subdirectory. `src/**` or `crates/agent-*/src/**`
+opens `src` or the `crates` directories whose names the pattern can match, and no other directory,
+so a call in a large tree finishes quickly and does not report an unreadable directory elsewhere.
+A pattern with no `/`, or one that starts with a wildcard such as `*/profile.json` or `**/*.rs`,
+can match under any directory and skips none.
+
+A listing stops at the search time budget, `search.maxSeconds` (10 seconds unless the settings name
+another), and says so: the result says that the listing ran out of time, that it is incomplete, and
+that a directory, a pattern or a depth narrows it. What it collected is the first part of the walk's
+sorted order, and how much that is depends on how fast the disk was. Where the walk ran out of time
+before it found any file, the result does not say the directory is empty or that the pattern matched
+no file. The sentence comes beside the references when the names are quarantined.
+
 A listing of a directory nobody vouched for is quarantined, because a filename is content. Where a
 mode or a check answers `vet_content` for you, the result says that repeating the call with `read: true`
 returns the listing in one call; where you answer `vet_content`, `read` changes nothing and the result
@@ -323,7 +336,12 @@ matcher does not have is named for the same reason.
 
 There are three ways to come back partial, and all three say so: stopping at the match cap, stopping
 before every file was opened, and running out of time. The last two are the dangerous ones, because
-with nothing found there is nothing that looks incomplete. Which files a capped search kept does not
+with nothing found there is nothing that looks incomplete. A search that ran out of time says how many
+files it opened and that `search.maxSeconds` sets the time. It also says that a directory or an
+include glob gives it fewer files to read but does not make the clock longer, since a narrowed search
+on a busy machine can run out again. A search is not held to the clock until it has tried its first
+1,000 files, so under load the same query covers at least that many files of the sorted order, and a
+tree of 1,000 files or fewer is read whole whatever `search.maxSeconds` says. Which files a capped search kept does not
 depend on the order the filesystem handed them over: each directory is sorted and its own files are
 taken before descending, so a partial answer is the shallow part of the tree and is the same answer
 on every machine.
@@ -354,13 +372,16 @@ bound, and so does a list cut at its own cap of 200 files.
 ### The caps are configurable
 
 `search.maxFiles` and `search.maxSeconds` set how many files a search may walk and how long it may
-spend opening them. Either can be raised as well as lowered, and the two are independent. The built-in
+spend opening them. `search.maxSeconds` is also how long a [`list_files`](#list_files) walk may run.
+Either can be raised as well as lowered, and the two are independent. The built-in
 caps are past what an ordinary repository holds; a monorepo, a tree of generated sources, or a
 checkout on a network filesystem is where they are not, and there every search comes back partial.
 See [Configuration](../customize/configuration.md).
 
 Raising a cap does not unbound a search. The walk still stops at `search.maxFiles`, the reading still
-stops at `search.maxSeconds`, and the match cap holds regardless of both.
+stops at `search.maxSeconds` once it has tried 1,000 files, and the match cap holds regardless of
+both. A search's walk is not
+stopped by the clock, and a listing's is.
 
 ## `read_git`
 
@@ -822,7 +843,9 @@ your previous instructions" says it to a processor with no tools.
 
 The one exception is a call with `read: true`. Where permissions are bypassed with no screening, or
 auto-vetting is on and its check says the page is safe, the page comes back in that result, released
-the way a `vet_content` call would release it. Anything else keeps the reference. It is described under
+the way a `vet_content` call would release it. Anything else keeps the reference, and so does a page
+longer than 16 KiB, or the size `run.maxOutput` sets. The result then says the size and about how many
+tokens `vet_content` would add, and names `run` with `curl` and a filter where `run` is offered. It is described under
 [Asking for the result in the same call](../security/vetting.md#asking-for-the-result-in-the-same-call).
 
 It is untrusted but **public**, unlike a file of your own: a fetched page is not your data, so writing

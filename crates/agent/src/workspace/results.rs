@@ -75,7 +75,8 @@ pub(super) const MAX_CONTEXT_LINES: usize = 1_000;
 /// name a hundred thousand files. A count's total is exact past it; the listing is what stops.
 pub(super) const MAX_TALLIED_FILES: usize = 200;
 
-/// How long a search may spend opening files, where nothing configured otherwise.
+/// How long a search may spend opening files, and a listing walking, where nothing configured
+/// otherwise. A search's walk has no clock (SEARCH-9); a listing's stops at this (LIST-4).
 ///
 /// The match cap already stops a *productive* search early. This is for the other one: a
 /// pattern that matches nothing is read to the end of the tree, so on a large repository the
@@ -87,6 +88,17 @@ pub(super) const MAX_TALLIED_FILES: usize = 200;
 /// [`Workspace::with_search_caps`] exists: a network mount reads an order of magnitude slower
 /// than a local disk, and nothing here can tell which it is on.
 pub(super) const MAX_SEARCH_TIME: Duration = Duration::from_secs(10);
+
+/// How many files a search tries to open before [`MAX_SEARCH_TIME`] may stop it (SEARCH-3).
+///
+/// The time cap counts seconds, and under load seconds buy fewer files: other searches sharing the
+/// machine slow every file read, so the same query covered a dozen files on one run and the whole
+/// tree on another. This counts the work, so a search covers at least this many files of its sorted
+/// order whatever the load, and the clock bounds what comes after them. The count is of files the
+/// loop tried, taken from the walk's list of paths, so no file's bytes decide it.
+///
+/// Searches only. A listing's walk, `read_git` and a status keep the clock alone.
+pub(super) const MIN_SEARCH_READS: usize = 1_000;
 
 /// Caps on a single paged read.
 ///
@@ -220,6 +232,11 @@ pub struct ContextLine {
 /// with no notice will reason as though it saw the whole tree. Silent truncation is worse
 /// than a short answer: it looks like completeness.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate fact about what the walk left out, and each is read on its own \
+              by a sentence of its own"
+)]
 pub struct Listing {
     pub files: Vec<String>,
     /// Directories the walk stopped at because it had reached the depth it was given.
@@ -253,6 +270,13 @@ pub struct Listing {
     /// does not apply. The counts come from directory entries and no file's bytes. Empty for an
     /// unbounded walk, which the per-directory caps do not apply to.
     pub partly_listed: Vec<(String, usize, usize)>,
+    /// Whether the walk stopped at the time budget ([`MAX_SEARCH_TIME`] unless the settings named
+    /// another) with part of the tree not walked, so the listing is the head of the walk's order
+    /// and not the whole of what it would have named (LIST-4).
+    ///
+    /// A fact about the walk and never a name, released the way `truncated` is. Not part of
+    /// `truncated`, which is the caps, so a sentence about a cap is not said for a clock.
+    pub timed_out: bool,
 }
 
 /// The result of a repository map.

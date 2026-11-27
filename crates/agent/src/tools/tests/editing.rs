@@ -1075,6 +1075,123 @@ fn a_quarantined_listing_carries_the_link_count_beside_its_references() {
     assert_eq!(produced.links, 1);
 }
 
+/// LIST-4: a listing whose walk ran out of time says so in its body and says how to narrow it, and
+/// carries the clock as a flag apart from the caps. The regression it rejects: a listing cut by the
+/// clock that reads as the whole directory, which is how a planner concludes a file is not there.
+/// A listing that finished says nothing about time, or the sentence is noise.
+#[test]
+fn a_listing_that_ran_out_of_time_says_so_and_how_to_narrow_it() {
+    let scratch = Scratch::new("list-timed-out");
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        std::fs::write(scratch.path.join(name), "x").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).unwrap();
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_vouching(&mut sink);
+    let produced = list_files(&mut policy, &workspace, &json!({"directory": "."}));
+    let told = super::arguments::told(&mut policy, &produced.text);
+    assert!(!produced.timed_out && !produced.incomplete, "{told}");
+    assert!(
+        !told.contains("ran out of time"),
+        "a listing that finished made a claim about time: {told}"
+    );
+
+    workspace.stop_listings_after(1);
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_vouching(&mut sink);
+    let produced = list_files(&mut policy, &workspace, &json!({"directory": "."}));
+    assert!(produced.timed_out, "the clock ran out and was not reported");
+    assert!(
+        !produced.incomplete,
+        "the clock was reported as a cap: the time has its own flag and sentence"
+    );
+    let told = super::arguments::told(&mut policy, &produced.text);
+    assert!(told.contains("a.txt"), "the part walked was lost: {told}");
+    assert!(
+        !told.contains("c.txt"),
+        "the listing went past the clock: {told}"
+    );
+    assert!(
+        told.contains("ran out of time and is incomplete")
+            && told.contains("narrow it with a directory, a pattern or a depth"),
+        "the listing did not say it ran out of time and how to narrow it: {told}"
+    );
+    assert!(
+        !told.contains("stopped at"),
+        "the clock was reported as the cap on entries: {told}"
+    );
+}
+
+/// LIST-4: a listing that ran out of time before it found any file does not read as an empty
+/// directory, and a pattern that selected nothing is not blamed for it. The regression it
+/// rejects: `(no files)` for a walk that never looked, and the sentence that no file matched the
+/// pattern, which sends the planner to rewrite a glob that was right.
+#[test]
+fn a_listing_that_ran_out_of_time_before_finding_a_file_is_not_an_empty_directory() {
+    let scratch = Scratch::new("list-timed-out-empty");
+    std::fs::write(scratch.path.join("a.txt"), "x").unwrap();
+    let workspace = Workspace::new(&scratch.path)
+        .unwrap()
+        .with_search_caps(None, Some(std::time::Duration::ZERO));
+
+    for arguments in [
+        json!({"directory": "."}),
+        json!({"directory": ".", "pattern": "zz*"}),
+    ] {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_vouching(&mut sink);
+        let produced = list_files(&mut policy, &workspace, &arguments);
+        assert!(produced.timed_out && !produced.incomplete);
+        let told = super::arguments::told(&mut policy, &produced.text);
+        assert_ne!(told, "(no files)", "an unwalked directory read as empty");
+        assert!(
+            told.contains("ran out of time")
+                && told.contains("does not say the directory is empty")
+                && told.contains("narrow it with a directory, a pattern or a depth"),
+            "{arguments}: {told}"
+        );
+        assert!(
+            !told.contains("no file matched the pattern"),
+            "{arguments}: the pattern was blamed for the clock: {told}"
+        );
+    }
+}
+
+/// LIST-4 for a listing the planner may not read: the clock travels beside the references, since a
+/// sentence written into the quarantined body reaches nobody. The regression it rejects: the flag
+/// kept only for the readable rendering.
+#[test]
+fn a_quarantined_listing_carries_the_time_out_beside_its_references() {
+    let scratch = Scratch::new("list-timed-out-quarantined");
+    std::fs::create_dir(scratch.path.join("d")).unwrap();
+    std::fs::write(scratch.path.join("d/a.txt"), "x").unwrap();
+    std::fs::write(scratch.path.join("d/b.txt"), "x").unwrap();
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    workspace.stop_listings_after(1);
+
+    let mut store = TrustStore::new("/work");
+    store.trust(".");
+    store.distrust("d");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+        &mut sink,
+    )
+    .unwrap()
+    .with_trust(store);
+    let produced = list_files(&mut policy, &workspace, &json!({"directory": "d"}));
+
+    assert!(produced.entries.is_some(), "the listing was not reserved");
+    assert!(produced.timed_out, "the clock was not carried");
+    assert!(
+        !produced.incomplete,
+        "the clock was carried as a cap, which says a sentence about entries"
+    );
+}
+
 /// LIST-7: a pattern that selects no file says so, and says that matching is
 /// case-sensitive. The regression it rejects: an empty answer that reads the same as an
 /// empty directory, so `readme*` against `README.md` is taken for proof that no readme

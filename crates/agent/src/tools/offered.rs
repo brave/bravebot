@@ -1055,7 +1055,10 @@ fn table(
                  it. A listing does not enter a symbolic link, to a file or to a directory, and \
                  does not name it: it says how many it did not enter, so a directory made of \
                  links lists as that count and not as empty. List the directory a link points \
-                 to, by its own name, to see what is behind it. In a directory you may not \
+                 to, by its own name, to see what is behind it. A listing stops at a time \
+                 limit and says so: a directory, a depth, or a pattern that starts with the \
+                 directory it wants (src/**) narrows it, and the walk skips the directories \
+                 such a pattern cannot reach. In a directory you may not \
                  read, the names are quarantined and you get a reference for each file, and for \
                  the directories the walk stopped at a count with the first and last reference \
                  of each run, instead: use a file's as path_ref to read it, process it, and \
@@ -2175,8 +2178,9 @@ fn table(
                         "description": "Ask to have the page checked and released in this \
                                         result, as vet_content would, so there is no \
                                         vet_content call to make. Where it would be kept \
-                                        back, or the page is too long for one result, it \
-                                        still comes back as a reference. Defaults to false."
+                                        back, or the page is longer than one result may \
+                                        hold, 16 KiB by default, it still comes back as a \
+                                        reference. Defaults to false."
                     }
                 },
                 "required": ["url"]
@@ -2815,9 +2819,9 @@ fn web_search_schema() -> serde_json::Value {
                 "type": "boolean",
                 "description": "Ask to have the results checked and released in this result, \
                                 as vet_content would, so there is no vet_content call to make. \
-                                Where it would be kept back, or the results are too long for \
-                                one result, they still come back as a reference. Defaults to \
-                                false."
+                                Where it would be kept back, or the results are longer than one \
+                                result may hold, 16 KiB by default, they still come back as a \
+                                reference. Defaults to false."
             }
         },
         "required": ["service"]

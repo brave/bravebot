@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/agent/src/glob.rs
   - crates/agent/src/regex.rs
+  - crates/agent/src/tools.rs
   - crates/agent/src/workspace.rs
   - crates/agent/src/workspace/results.rs
   - crates/config/src/settings.rs
@@ -138,6 +139,38 @@ The time cap is the one cap this does not hold for. It stops the search at a mom
 count, so a search it stops may have read more or fewer files on a slower or busier machine, and on
 a second run of the same call. The planner is told the search is incomplete either way.
 
+The clock is not read until a search has tried `MIN_SEARCH_READS` files (1,000), counted in the
+walk's sorted order. Under load every file read is slower, so a clock alone lets the same query
+cover very different numbers of files from run to run. The cap therefore counts work as well as
+seconds: a search covers the first 1,000 files whatever the machine is doing, and the clock bounds
+what comes after. The count is of files tried, from the list of paths the walk made, and what a file
+holds does not move it. A tree of at most that many files is read whole whatever the time cap says.
+The floor is not
+bounded by time, so on a slow disk the first 1,000 files can take longer than `search.maxSeconds`
+before the clock is read; that is a known cost of counting work and not seconds. The floor is not a
+setting and `search.maxSeconds` does not change it ([SEARCH-9](#SEARCH-9)); `search.maxFiles` still
+lowers how many files a search may reach. A listing's walk, `read_git` and a `read_git` status keep
+the clock alone ([LIST-4](list-files.md#LIST-4), [GIT-9](read-git.md#GIT-9)).
+
+**Not taken: a clock that lengthens while other searches run.** It needs a count of searches in
+flight that every delegate's workspace shares. A workspace clone shares its checkout handles through
+`KeptBetweenTurns` and nothing else for searches, so the count would be new shared state, and the
+clock would still be a wall clock: a search that happens to run alone on a slow disk gets no more
+files. A floor in files opened gives the same coverage under load without that state, and it holds
+when the load is not other searches. Measured on a repository of 2,430 readable files with 50 searches
+running in threads of one process, a search took 3.0 to 3.6 seconds against 0.83 seconds alone. About
+2.3 seconds of that was the per-file trust capture waiting for the lock that all searches of one
+session share, and the rest was slower reading and matching on a loaded CPU. Both costs are per file,
+so a count of files tried is unaffected by them. Taking that lock once per search would lower the
+second cost, and it is a change to the trust kernel that this does not need.
+
+The notice a search that ran out of time writes into its body says how many files were opened and
+names `search.maxSeconds` as the setting that sets the time ([SEARCH-9](#SEARCH-9)), as a `read_git`
+status's does ([GIT-9](read-git.md#GIT-9)). It offers a directory or an include glob as a way to give
+the search fewer files, and does not offer it as the whole remedy: the clock is wall time, so a search
+narrowed on a busy machine can run out again. The words are fixed and the only number in them is the
+count of files the workspace opened.
+
 `verified-by: bravebot_agent::turn::a_truncated_search_tells_the_model_it_is_incomplete`
 `verified-by: bravebot_agent::turn::a_complete_search_makes_no_truncation_claim`
 `verified-by: bravebot_agent::turn::a_quarantined_search_still_tells_the_model_it_is_incomplete`
@@ -145,6 +178,9 @@ a second run of the same call. The planner is told the search is incomplete eith
 `verified-by: bravebot_agent::turn::a_quarantined_search_that_ran_out_of_time_still_says_it_is_incomplete`
 `verified-by: bravebot_agent::workspace::a_search_that_could_not_reach_every_file_says_so`
 `verified-by: bravebot_agent::workspace::a_search_that_ran_out_of_time_says_so`
+`verified-by: bravebot_agent::workspace::a_search_tries_a_floor_of_files_before_its_clock_can_stop_it`
+`verified-by: bravebot_agent::workspace::the_built_in_floor_holds_a_small_tree_whole_under_a_spent_clock`
+`verified-by: bravebot_agent::workspace::the_built_in_floor_is_a_thousand_files`
 `verified-by: bravebot_agent::workspace::a_search_that_reached_every_file_makes_no_claim`
 `verified-by: bravebot_agent::workspace::a_capped_search_keeps_the_same_files_every_time`
 `verified-by: bravebot_agent::workspace::a_capped_search_prefers_a_directorys_own_files`
@@ -281,7 +317,9 @@ offset returns the matches from there.
 
 Only the match cap can be asked past. A walk that stopped short of the tree or ran out of time
 reached neither the end of the matches nor a count of them, so it offers no later page and asks for
-a narrower search as before.
+a narrower search as before. The floor of files [SEARCH-3](#SEARCH-3) gives a search before its
+clock is read does not change this: a search that the clock stopped after the floor is still a
+search that ran out of time.
 
 An offset past the last match returns nothing and says how many matches there were, so that an
 empty page cannot be read as the pattern having gone from the tree between two calls. A pattern that
@@ -324,7 +362,8 @@ file again is the cost of not keeping one.
 ### SEARCH-9: the caps a search runs under are configurable
 
 `search.maxFiles` and `search.maxSeconds`, in the settings files, name how many files a search may
-walk and how long it may spend opening them. Either may be raised as well as lowered, and a key
+walk and how long it may spend opening them. `search.maxSeconds` also bounds the walk of a listing
+([LIST-4](list-files.md#LIST-4)), which opens no file. Either may be raised as well as lowered, and a key
 nobody set leaves the built-in cap in force. The two are independent, so a file naming one says
 nothing about the other, in any layer.
 
@@ -340,14 +379,19 @@ tells it which kind of tree it is in, which makes this configuration rather than
 better.
 
 Raising a cap does not unbound a search. The walk still stops at `maxFiles`, the reading still
-stops at `maxSeconds`, and the match cap holds regardless of both, so the result is still the
-bounded, deterministic, partial answer the clauses above describe.
+stops at `maxSeconds` once it has tried the floor of files [SEARCH-3](#SEARCH-3) gives, and the
+match cap holds regardless of both, so the result is still the bounded, deterministic, partial
+answer the clauses above describe. `maxSeconds` sets the clock and nothing else: the floor of files
+a search tries before the clock is read is the same whatever it names.
 
-The clock bounds the reading and not the walk, so `maxFiles` is what a very large tree is paid for
-in: a walk of a million paths on a slow filesystem is a slow search rather than a truncated one,
-and it is the number a person chose. That is the right way round, because a walk cut off by a clock
-would keep a different part of the tree on every run, which is what the determinism above rules
-out.
+The clock bounds the reading and not a search's walk, so `maxFiles` is what a very large tree is
+paid for in: a walk of a million paths on a slow filesystem is a slow search rather than a truncated
+one, and it is the number a person chose. That is the right way round, because a walk cut off by a
+clock would keep a different part of the tree on every run, which is what the determinism above
+rules out. A listing's walk is the exception, since it has no reading to bound and no cap on the
+files it meets that a narrow pattern reaches: it stops at the clock, and says so
+([LIST-4](list-files.md#LIST-4)), and the part it kept is the head of the same order on every run.
+The walk of a search and the walk of a repository map stay unclocked.
 
 The caps are handed to the workspace by the caller that read the settings, rather than read by the
 workspace itself. A workspace that consulted them would answer differently on a machine whose owner

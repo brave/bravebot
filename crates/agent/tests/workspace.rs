@@ -3608,14 +3608,16 @@ fn a_search_that_reached_every_file_makes_no_claim() {
 ///
 /// No wall clock is waited on. A budget of nothing is spent before the first file, which is the
 /// same state a real timeout leaves the search in and is the only one a test can reach without
-/// a tree slow enough to take ten seconds.
+/// a tree slow enough to take ten seconds. The floor of files tried before the clock counts
+/// (SEARCH-3) is set to nothing so that the spent clock is read at the first file.
 #[test]
 fn a_search_that_ran_out_of_time_says_so() {
     let scratch = Scratch::new("search-timed-out");
     std::fs::write(scratch.path.join("f.txt"), "needle\n").unwrap();
     let workspace = Workspace::new(&scratch.path)
         .expect("workspace")
-        .with_search_caps(None, Some(Duration::ZERO));
+        .with_search_caps(None, Some(Duration::ZERO))
+        .with_search_floor(0);
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -3651,6 +3653,538 @@ fn a_search_that_ran_out_of_time_says_so() {
         found.matches.is_empty(),
         "nothing was read, so nothing matched"
     );
+}
+
+/// SEARCH-3: the clock counts seconds and a busy machine turns them into fewer files, so a search
+/// is held to its time only after it has tried a floor of files. With the clock already spent and
+/// a floor of three, the search reads the first three files of its sorted order and then says it ran
+/// out of time; the same query on a tree that fits in the floor reads every file and makes no claim.
+/// No wall clock is waited on: a budget of nothing stands for any load, since it is spent at the
+/// first file the floor allows.
+///
+/// The regressions it rejects: a floor that is not applied, so the spent clock stops the search
+/// before the first file (`searched` 0); a floor that stops the clock for good,
+/// so the search reads the whole tree and never reports a timeout (`timed_out` false at three of
+/// five); and a floor counted past the files tried, which reads four or more.
+#[test]
+fn a_search_tries_a_floor_of_files_before_its_clock_can_stop_it() {
+    let scratch = Scratch::new("search-floor");
+    for n in 0..5 {
+        std::fs::write(scratch.path.join(format!("f{n:05}.txt")), "needle\n").unwrap();
+    }
+    let searched_under = |floor: usize| {
+        let workspace = Workspace::new(&scratch.path)
+            .unwrap()
+            .with_search_caps(None, Some(Duration::ZERO))
+            .with_search_floor(floor);
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .unwrap();
+        let found = workspace
+            .grep(
+                &mut policy,
+                std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+                &Labelled::trusted(".".to_string()),
+                None,
+                true,
+                1,
+            )
+            .unwrap();
+        let proof = policy.authorise_content_release("test", "matches");
+        let found = found.declassify(&proof);
+        (found.searched, found.timed_out, found.matches.len())
+    };
+
+    assert_eq!(
+        searched_under(3),
+        (3, true, 3),
+        "a floor of three files with a spent clock did not read exactly three"
+    );
+    assert_eq!(
+        searched_under(5),
+        (5, false, 5),
+        "a floor covering the tree still reported a timeout"
+    );
+    assert_eq!(
+        searched_under(0),
+        (0, true, 0),
+        "no floor must leave the clock alone in charge"
+    );
+}
+
+/// A cap nobody named leaves the floor at its built-in number, which holds a tree of a dozen files
+/// whole under a spent clock, and `search.maxSeconds` does not name the floor: a settings layer can
+/// move the time and not the floor (SEARCH-9). The regression it rejects: a built-in floor of zero,
+/// which lets the clock alone stop a search.
+#[test]
+fn the_built_in_floor_holds_a_small_tree_whole_under_a_spent_clock() {
+    let (searched, timed_out) =
+        search_under_a_spent_clock_at_the_built_in_floor("search-built-in-floor", 12, "needle\n");
+
+    assert_eq!(searched, 12, "the built-in floor stopped a small tree");
+    assert!(
+        !timed_out,
+        "a search that read every file claimed a timeout"
+    );
+}
+
+/// `(searched, timed_out)` of a search for `needle` over `files` files of `contents` under a spent
+/// clock, with no floor named, so the built-in one applies.
+fn search_under_a_spent_clock_at_the_built_in_floor(
+    name: &str,
+    files: usize,
+    contents: &str,
+) -> (usize, bool) {
+    let scratch = Scratch::new(name);
+    for n in 0..files {
+        std::fs::write(scratch.path.join(format!("f{n:05}.txt")), contents).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path)
+        .unwrap()
+        .with_search_caps(None, Some(Duration::ZERO));
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .unwrap();
+    let found = workspace
+        .grep(
+            &mut policy,
+            std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+            &Labelled::trusted(".".to_string()),
+            None,
+            true,
+            1,
+        )
+        .unwrap();
+    let proof = policy.authorise_content_release("test", "matches");
+    let found = found.declassify(&proof);
+    (found.searched, found.timed_out)
+}
+
+/// SEARCH-3: the built-in floor is exactly 1,000 files. A tree of 1,001 files that match nothing,
+/// searched under a spent clock, is read for its first 1,000 files and then reported as out of
+/// time. The test above holds for any floor of twelve or more, so it cannot tell a floor of 1,000
+/// from one of 500 or one of 5,000; this one can.
+///
+/// The regressions it rejects: a floor below 1,000 (`searched` is that many), and one above it,
+/// which reads the thousand-and-first file and makes no claim about time.
+#[test]
+fn the_built_in_floor_is_a_thousand_files() {
+    assert_eq!(
+        search_under_a_spent_clock_at_the_built_in_floor(
+            "search-floor-thousand",
+            1_001,
+            "filler\n"
+        ),
+        (1_000, true),
+        "the built-in floor is not 1,000 files"
+    );
+}
+
+/// LIST-4: a listing's walk is bound by the same clock as a search, so `search.maxSeconds` applies
+/// to it, and a walk that ran out says so in the flag the readable and the quarantined renderings
+/// both read. A budget of nothing is spent before the first entry, the state a real timeout leaves
+/// the walk in. A listing that fitted its clock does not set the flag.
+///
+/// The regression it rejects: a listing with no clock, which walks a tree for as long as the tree
+/// is large (a home directory), and one that sets the flag when it
+/// reached the end.
+#[test]
+fn a_listing_that_ran_out_of_time_says_so() {
+    let scratch = Scratch::new("list-timed-out");
+    std::fs::create_dir(scratch.path.join("sub")).unwrap();
+    std::fs::write(scratch.path.join("sub/f.txt"), "x").unwrap();
+    std::fs::write(scratch.path.join("f.txt"), "x").unwrap();
+
+    for (budget, spent) in [
+        (std::time::Duration::ZERO, true),
+        (std::time::Duration::from_secs(60), false),
+    ] {
+        let workspace = Workspace::new(&scratch.path)
+            .unwrap()
+            .with_search_caps(None, Some(budget));
+        let listing = bounded_listing(&workspace, &[], ".", None, None);
+
+        assert_eq!(
+            listing.timed_out, spent,
+            "{budget:?}: the flag did not follow the clock"
+        );
+        if spent {
+            assert!(
+                listing.files.is_empty(),
+                "no entry can be taken out of a spent clock: {:?}",
+                listing.files
+            );
+            assert!(
+                !listing.truncated,
+                "the clock was reported as a cap on entries"
+            );
+        } else {
+            assert_eq!(listing.files, ["f.txt", "sub/f.txt"]);
+        }
+    }
+}
+
+/// Makes the directories it is given unopenable and puts their mode back when it is dropped, so a
+/// test that panics between the two does not leave a mode-000 directory for the scratch directory's
+/// cleanup to fail on.
+#[cfg(unix)]
+#[derive(Default)]
+struct LockedDirectories(Vec<std::path::PathBuf>);
+
+#[cfg(unix)]
+impl LockedDirectories {
+    /// Make `directory` unopenable, the way to see whether a walk opened it: a walk that does sets
+    /// `unreadable`. `false` where the process opens it anyway (a superuser), which leaves nothing
+    /// to observe; the directory is then left as it was.
+    fn lock(&mut self, directory: &std::path::Path) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(directory).unwrap();
+        self.0.push(directory.to_path_buf());
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o000)).unwrap();
+        std::fs::read_dir(directory).is_err()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for LockedDirectories {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        for directory in &self.0 {
+            std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o755)).ok();
+        }
+    }
+}
+
+/// The listing of `directory` narrowed by `pattern`, with the directories in `locked` made
+/// unopenable while it runs and restored after, even if the test panics, so a directory the walk
+/// opened shows as `unreadable`. `None` where the process opens a locked directory anyway.
+#[cfg(unix)]
+fn listing_beside_locked_directories(
+    scratch: &Scratch,
+    locked: &[&str],
+    directory: &str,
+    pattern: &str,
+) -> Option<bravebot_agent::workspace::Listing> {
+    let mut guard = LockedDirectories::default();
+    for name in locked {
+        if !guard.lock(&scratch.path.join(name)) {
+            return None;
+        }
+    }
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    Some(bounded_listing(
+        &workspace,
+        &[],
+        directory,
+        Some(pattern),
+        None,
+    ))
+}
+
+/// LIST-3: a pattern that starts with a literal directory prefix cannot match under another
+/// directory, so the walk does not open one. The directory the pattern names is listed, and a
+/// sibling that cannot be opened is not entered, so it does not set `unreadable`. The same tree
+/// under a pattern that does not start with a literal directory opens the sibling, which shows the
+/// locked directory is what the flag reads.
+///
+/// The regression it rejects: a walk that filters files only and so descends into every directory
+/// (a pattern naming one directory in a home directory still walking the whole home directory).
+#[cfg(unix)]
+#[test]
+fn a_pattern_naming_one_directory_opens_only_that_directory() {
+    let scratch = Scratch::new("list-prefix-prunes");
+    std::fs::create_dir_all(scratch.path.join(".somefolder/deep")).unwrap();
+    std::fs::write(scratch.path.join(".somefolder/a.txt"), "x").unwrap();
+    std::fs::write(scratch.path.join(".somefolder/deep/b.txt"), "x").unwrap();
+    std::fs::write(scratch.path.join("top.txt"), "x").unwrap();
+
+    let Some(pruned) =
+        listing_beside_locked_directories(&scratch, &["sibling"], ".", ".somefolder/**")
+    else {
+        return;
+    };
+    assert_eq!(
+        pruned.files,
+        [".somefolder/a.txt", ".somefolder/deep/b.txt"],
+        "the named directory was not listed whole"
+    );
+    assert!(
+        !pruned.unreadable,
+        "a directory the pattern cannot reach was opened"
+    );
+
+    let opened = listing_beside_locked_directories(&scratch, &["sibling"], ".", "*/a.txt").unwrap();
+    assert!(
+        opened.unreadable,
+        "a pattern that starts with a wildcard prunes nothing, so the locked sibling is opened"
+    );
+    assert_eq!(opened.files, [".somefolder/a.txt"]);
+}
+
+/// LIST-3: a segment with a wildcard in the prefix is followed exactly. `crates/agent-*/**` keeps
+/// `crates/agent-core` and prunes `crates/tui`, and a brace group keeps a directory for any of its
+/// alternatives. A prune that treated the first wildcard as the end of the prefix would open
+/// `crates/tui` too, and one that dropped every wildcard segment would skip `crates/agent-core`.
+#[cfg(unix)]
+#[test]
+fn a_wildcard_segment_and_a_brace_group_in_the_prefix_prune_exactly() {
+    let scratch = Scratch::new("list-prefix-wildcards");
+    std::fs::create_dir_all(scratch.path.join("crates/agent-core/src")).unwrap();
+    std::fs::write(scratch.path.join("crates/agent-core/src/lib.rs"), "x").unwrap();
+    std::fs::write(scratch.path.join("crates/agent-core/Cargo.toml"), "x").unwrap();
+    std::fs::create_dir_all(scratch.path.join("docs")).unwrap();
+    std::fs::write(scratch.path.join("docs/a.md"), "x").unwrap();
+
+    let Some(listing) = listing_beside_locked_directories(
+        &scratch,
+        &["crates/tui", "tests"],
+        ".",
+        "crates/agent-*/src/**",
+    ) else {
+        return;
+    };
+    assert_eq!(listing.files, ["crates/agent-core/src/lib.rs"]);
+    assert!(
+        !listing.unreadable,
+        "a directory no alternative reaches was opened"
+    );
+
+    // `crates/agent-x` is a name the wildcard segment can match, so it is opened.
+    let Some(listing) = listing_beside_locked_directories(
+        &scratch,
+        &["crates/agent-x"],
+        ".",
+        "crates/agent-*/src/**",
+    ) else {
+        return;
+    };
+    assert!(
+        listing.unreadable,
+        "a directory the wildcard segment matches was not opened"
+    );
+
+    // One alternative of the group reaches `docs`, the other `tests`: both are opened and `crates`
+    // is not.
+    let Some(listing) = listing_beside_locked_directories(
+        &scratch,
+        &["crates/tui", "tests"],
+        ".",
+        "{docs,tests}/**",
+    ) else {
+        return;
+    };
+    assert_eq!(listing.files, ["docs/a.md"]);
+    assert!(
+        listing.unreadable,
+        "`tests` is one alternative and was not opened"
+    );
+    let Some(listing) = listing_beside_locked_directories(
+        &scratch,
+        &["crates/tui", "tests"],
+        ".",
+        "{docs,other}/**",
+    ) else {
+        return;
+    };
+    assert!(
+        !listing.unreadable,
+        "a directory no brace alternative reaches was opened"
+    );
+}
+
+/// LIST-3: both readings of a pattern with a `/` prune. With `directory: "projects"` the rest of the
+/// path is written from `projects`, and from the workspace root it is written with `projects/` in
+/// front. A prune that read only the root-relative path would skip every directory under
+/// `projects` for `b/**`; one that read only the path below `projects` would skip them for
+/// `projects/b/**`.
+#[cfg(unix)]
+#[test]
+fn a_pattern_prunes_by_either_reading_of_it() {
+    let scratch = profiles_tree("list-prefix-readings");
+    for pattern in ["b/**", "projects/b/**"] {
+        let Some(listing) =
+            listing_beside_locked_directories(&scratch, &["projects/c"], "projects", pattern)
+        else {
+            return;
+        };
+        assert_eq!(
+            listing.files,
+            ["projects/b/other.json", "projects/b/profile.json"],
+            "{pattern}: the directory it names was not listed"
+        );
+        assert!(
+            !listing.unreadable,
+            "{pattern}: a sibling it cannot reach was opened"
+        );
+    }
+}
+
+/// LIST-3: a pattern with no `/` is about the file name at any depth, so no directory is skipped
+/// for it.
+#[cfg(unix)]
+#[test]
+fn a_pattern_with_no_slash_skips_no_directory() {
+    let scratch = profiles_tree("list-bare-pattern");
+    let Some(listing) =
+        listing_beside_locked_directories(&scratch, &["other/hidden"], ".", "profile.json")
+    else {
+        return;
+    };
+    assert!(
+        listing.unreadable,
+        "a bare name pattern skipped a directory it could match under"
+    );
+    assert_eq!(
+        listing.files,
+        [
+            "other/a/profile.json",
+            "projects/a/profile.json",
+            "projects/b/profile.json"
+        ]
+    );
+}
+
+/// LIST-6 with LIST-3: a directory that is not opened adds nothing to the count of links the walk
+/// met, since it met none of them. The links inside the named directory are counted.
+#[cfg(unix)]
+#[test]
+fn a_directory_skipped_for_the_pattern_does_not_add_its_links_to_the_count() {
+    let scratch = Scratch::new("list-prefix-links");
+    std::fs::create_dir_all(scratch.path.join("named")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("other")).unwrap();
+    std::fs::write(scratch.path.join("named/f.txt"), "x").unwrap();
+    std::os::unix::fs::symlink("named/f.txt", scratch.path.join("named/link")).unwrap();
+    std::os::unix::fs::symlink("../named", scratch.path.join("other/link-a")).unwrap();
+    std::os::unix::fs::symlink("../named", scratch.path.join("other/link-b")).unwrap();
+    let workspace = Workspace::new(&scratch.path).unwrap();
+
+    let narrow = bounded_listing(&workspace, &[], ".", Some("named/**"), None);
+    let wide = bounded_listing(&workspace, &[], ".", Some("*/f.txt"), None);
+
+    assert_eq!(narrow.files, ["named/f.txt"]);
+    assert_eq!(narrow.links, 1, "a link in a skipped directory was counted");
+    assert_eq!(wide.links, 3);
+}
+
+/// LIST-5 with LIST-3: skipping a directory the pattern cannot reach does not change which
+/// subdirectories a bounded walk takes or how many it leaves out. 205 sibling directories under the
+/// root and a pattern naming only the first still take 200 and leave 5 out, and the directories the
+/// walk stops at at its depth are the same as with no pattern. A prune placed before the count of
+/// subdirectories, or before the depth stop, would leave fewer of them.
+#[test]
+fn a_pattern_with_a_literal_prefix_does_not_change_which_directories_a_bounded_walk_takes() {
+    let scratch = Scratch::new("list-prefix-bounded");
+    make_subdirectories(&scratch.path, "d", 205);
+    std::fs::write(scratch.path.join("d0000/f.txt"), "x").unwrap();
+    let workspace = Workspace::new(&scratch.path).unwrap();
+
+    for depth in [1, 2] {
+        let without = bounded_listing(&workspace, &[], ".", None, Some(depth));
+        let with = bounded_listing(&workspace, &[], ".", Some("d0000/**"), Some(depth));
+        assert_eq!(
+            with.directories, without.directories,
+            "depth {depth}: the directories a bounded walk named changed"
+        );
+        if depth == 1 {
+            assert_eq!(with.directories.len(), 200);
+        }
+        assert_eq!(
+            with.partly_listed,
+            vec![(".".to_string(), 0, 5)],
+            "depth {depth}: the number of subdirectories left out changed"
+        );
+        assert_eq!(with.partly_listed, without.partly_listed);
+        assert_eq!(with.truncated, without.truncated);
+    }
+    let one = bounded_listing(&workspace, &[], ".", Some("d0000/**"), Some(2));
+    assert_eq!(one.files, ["d0000/f.txt"]);
+}
+
+/// LIST-3 with the rules: a directory a deny rule covers is not listed and not counted as left
+/// out, and a pattern naming it does not bring it back, while a pattern naming another directory
+/// lists that one.
+///
+/// This does not pin the order of the prune and the rules: both skip the directory, and the flag the
+/// rule sets (`withheld`) is carried by a search's result and not by a listing's, so no `Listing`
+/// differs between the two orders. What it rejects: a prune that lets a pattern override a rule, a
+/// prune that drops a directory the pattern names, and a covered directory counted as left out.
+#[test]
+fn a_rule_still_keeps_a_directory_a_pattern_names_out_of_a_listing() {
+    let scratch = Scratch::new("list-prefix-denied");
+    std::fs::create_dir_all(scratch.path.join("secrets")).unwrap();
+    std::fs::write(scratch.path.join("secrets/key.pem"), "x").unwrap();
+    std::fs::create_dir_all(scratch.path.join("open")).unwrap();
+    std::fs::write(scratch.path.join("open/f.txt"), "x").unwrap();
+    let workspace = Workspace::new(&scratch.path).unwrap();
+
+    let listing = bounded_listing(
+        &workspace,
+        &["Read(secrets/**)"],
+        ".",
+        Some("secrets/**"),
+        Some(3),
+    );
+    assert!(listing.files.is_empty(), "{:?}", listing.files);
+    assert!(listing.partly_listed.is_empty());
+
+    let listing = bounded_listing(
+        &workspace,
+        &["Read(secrets/**)"],
+        ".",
+        Some("open/**"),
+        Some(3),
+    );
+    assert_eq!(listing.files, ["open/f.txt"]);
+}
+
+/// SEARCH-9 beside LIST-4: only a listing's walk has a clock. A search whose budget is spent still
+/// walks the whole tree and reports every file it considered. The floor of files a search tries
+/// before its own clock is read (SEARCH-3) is larger than this tree, so both files are read and
+/// nothing is said about time. The regression it rejects: the listing's clock set in the walk both
+/// share, so a search is cut off at a different file on every run.
+#[test]
+fn a_search_walks_the_whole_tree_whatever_its_clock_says() {
+    let scratch = Scratch::new("search-walk-has-no-clock");
+    std::fs::create_dir(scratch.path.join("sub")).unwrap();
+    std::fs::write(scratch.path.join("sub/f.txt"), "needle\n").unwrap();
+    std::fs::write(scratch.path.join("f.txt"), "needle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path)
+        .unwrap()
+        .with_search_caps(None, Some(std::time::Duration::ZERO));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .unwrap();
+    let found = workspace
+        .grep(
+            &mut policy,
+            std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+            &Labelled::trusted(".".to_string()),
+            None,
+            true,
+            1,
+        )
+        .unwrap();
+    let proof = policy.authorise_content_release("test", "matches");
+    let found = found.declassify(&proof);
+
+    assert_eq!(found.considered, 2, "the walk was cut off by the clock");
+    assert!(!found.unvisited, "the walk was reported as cut by a cap");
 }
 
 /// A cap nobody configured leaves the built-in one in force, one cap at a time: a tree that needs

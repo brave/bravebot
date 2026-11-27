@@ -1854,7 +1854,17 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
                 .map_err(|e| e.to_string())?;
             let rendered = policy.render_in_place("list_files", &listing, |l| l.files.join("\n"));
             let note = policy.render_in_place("list_files", &listing, |l| {
-                crate::tools::tally(l.files.len(), "file", "files")
+                // Said on the line the person reads, since a slot holds no sentence of its own: a
+                // listing the clock stopped is the head of the walk and not the whole tree (LIST-4).
+                let incomplete = if l.timed_out {
+                    "; ran out of time, so the list is incomplete"
+                } else {
+                    ""
+                };
+                format!(
+                    "{}{incomplete}",
+                    crate::tools::tally(l.files.len(), "file", "files")
+                )
             });
             Ok((rendered, note, directory))
         }),
@@ -3374,6 +3384,12 @@ mod tests {
             decoy: &Manifest,
         ) -> String {
             let workspace = Workspace::new(root).expect("workspace");
+            note_in(&workspace, run, decoy)
+        }
+
+        /// [`note_under_the_lock_of`] over a workspace the caller built.
+        #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+        fn note_in(workspace: &Workspace, run: &Manifest, decoy: &Manifest) -> String {
             let config = Config::from_lookup(|key| {
                 match key {
                     bravebot_config::env_var::SIGNING_KEY => Some("test-signing-key"),
@@ -3401,7 +3417,7 @@ mod tests {
                 &egress,
                 None,
                 &mut policy,
-                &workspace,
+                workspace,
                 crate::findings::Recording::default(),
                 &mut SlotStore::new(),
                 &mut chat,
@@ -3472,6 +3488,33 @@ mod tests {
             let note = note_under_the_lock_of(&root, &listing("x", "*.rs"), &listing("y", "*.md"));
             let _ = std::fs::remove_dir_all(&root);
             assert_eq!(note, "2 files");
+        }
+
+        /// LIST-4: a list step whose walk ran out of time says on its line that the list is
+        /// incomplete, as the planner is told everywhere else. The regression it rejects: a plan
+        /// step that returns the head of a timed out walk with nothing to say so, which the person
+        /// reads as the whole directory.
+        #[test]
+        fn a_listing_step_that_ran_out_of_time_says_the_list_is_incomplete() {
+            let root = scratch("bravebot-manifest-list-clock");
+            std::fs::write(root.join("a.txt"), "a\n").unwrap();
+            std::fs::write(root.join("b.txt"), "b\n").unwrap();
+            let step = adopted(Draft::new(vec![
+                DraftStep::new("list_files")
+                    .with_text("directory", ".")
+                    .with_text("pattern", "")
+                    .with_text("out_slot", "files"),
+            ]));
+            let finished = Workspace::new(&root).unwrap();
+            let stopped = Workspace::new(&root).unwrap();
+            stopped.stop_listings_after(1);
+
+            let whole = note_in(&finished, &step, &step);
+            let cut = note_in(&stopped, &step, &step);
+            std::fs::remove_dir_all(&root).unwrap();
+
+            assert_eq!(whole, "2 files");
+            assert_eq!(cut, "1 file; ran out of time, so the list is incomplete");
         }
 
         /// Rejects a search that takes its pattern, directory or include from the step. The lock

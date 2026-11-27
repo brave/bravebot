@@ -171,9 +171,14 @@ pub struct Output {
     pub deferred: Option<Deferral>,
     /// The entries of a listing this call reserved, one reference each.
     pub entries: Option<Entries>,
-    /// Whether a cap cut the result short, so the turn can say so beside the reference it hands
-    /// over. Text inside a quarantined result reaches nobody who could act on it.
+    /// Whether a cap or a directory that could not be opened cut the result short, so the turn can
+    /// say so beside the reference it hands over. Text inside a quarantined result reaches nobody
+    /// who could act on it. A listing's clock is `timed_out` and not part of this.
     pub incomplete: bool,
+    /// Whether a listing's walk stopped at the time budget, beside the reference for the reason
+    /// `incomplete` is. Independent of `incomplete`: a listing both cut by a cap and stopped by the
+    /// clock has both set. A fact about the walk and never a name (LIST-4).
+    pub timed_out: bool,
     /// How many symbolic links the walk behind this result met and did not enter. A number and
     /// never a name, beside the reference for the reason `incomplete` is: a notice written into a
     /// quarantined body reaches nobody who could act on it.
@@ -1894,6 +1899,8 @@ struct Produced {
     /// written into `text` reaches the planner only when the planner may read `text` at all,
     /// which by default it may not.
     incomplete: bool,
+    /// Whether a listing's walk stopped at the time budget, as [`Output::timed_out`].
+    timed_out: bool,
     /// How many symbolic links the walk behind this result did not enter, as [`Output::links`].
     links: usize,
     /// The sentence for a pattern that selected no file, as [`Output::unmatched`].
@@ -2065,6 +2072,7 @@ impl Produced {
             deferred: None,
             entries: None,
             incomplete: false,
+            timed_out: false,
             links: 0,
             unmatched: None,
             paging: None,
@@ -2300,6 +2308,12 @@ impl Produced {
     /// Say the result was cut short by a cap, whoever ends up being allowed to read it.
     fn capped(mut self, incomplete: bool) -> Self {
         self.incomplete = incomplete;
+        self
+    }
+
+    /// Say a listing's walk stopped at the time budget, whoever ends up being allowed to read it.
+    fn timed_out(mut self, timed_out: bool) -> Self {
+        self.timed_out = timed_out;
         self
     }
 
@@ -2812,6 +2826,10 @@ pub(crate) fn search_links_clause(links: usize) -> String {
         if links == 1 { "it" } else { "them" }
     )
 }
+
+/// How a listing that ran out of time is narrowed, in the words both its body and the sentence
+/// beside a quarantined one end with. Fixed words and no name (LIST-4).
+pub(crate) const LISTING_NARROWING: &str = "narrow it with a directory, a pattern or a depth";
 
 /// What a listing says when its `pattern` selected no file. Fixed words, with the advice of
 /// [`reads_as_an_unsupported_glob`] where the pattern leans on syntax the matcher does not have.
@@ -3651,6 +3669,7 @@ fn output_of(
         deferred: produced.deferred,
         entries: produced.entries,
         incomplete: produced.incomplete,
+        timed_out: produced.timed_out,
         links: produced.links,
         unmatched: produced.unmatched,
         paging: produced.paging,
@@ -5997,18 +6016,25 @@ fn list_files<S: Sink>(
             // the same question `present` would ask a moment later.
             // Shape, not content, and released for the same reason as the count below: a planner
             // handed exactly the cap with nothing said about it reads a sample as the whole tree.
-            let (truncated, unreadable, links) = {
+            let (truncated, unreadable, links, timed_out) = {
                 let shaped = policy.render_in_place("list_files", &listing, |listing| {
-                    (listing.truncated, listing.unreadable, listing.links)
+                    (
+                        listing.truncated,
+                        listing.unreadable,
+                        listing.links,
+                        listing.timed_out,
+                    )
                 });
                 let proof = policy.authorise_display_release(
-                    "whether a listing hit its cap, left out a directory it could not open, or \
-                     did not enter symbolic links, and how many",
+                    "whether a listing hit its cap, ran out of time, left out a directory it \
+                     could not open, or did not enter symbolic links, and how many",
                 );
                 shaped.declassify(&proof)
             };
             // A listing missing a directory is as incomplete as a capped one, and the planner
-            // reads it the same way.
+            // reads it the same way. `incomplete` is the caps and the unreadable directory alone:
+            // the clock is its own fact, `timed_out`, with its own sentence, so a listing that a
+            // cap and the clock both cut says both and one that only the clock cut says no cap.
             let incomplete = truncated || unreadable;
 
             if !listing.label().is_trusted() {
@@ -6070,8 +6096,11 @@ fn list_files<S: Sink>(
                 return Produced::new(text, proposed_dir.clone(), note)
                     .of_content()
                     .capped(incomplete)
+                    .timed_out(timed_out)
                     .linked(links)
-                    .unmatched((had_pattern && files == 0).then_some(unmatched_note))
+                    // A listing that ran out of time did not look at the whole tree, so its empty
+                    // selection is not the pattern's doing and the time sentence says so instead.
+                    .unmatched((had_pattern && files == 0 && !timed_out).then_some(unmatched_note))
                     .with_entries(Entries {
                         origin: format!("an entry in \"{proposed_dir}\""),
                         paths,
@@ -6102,6 +6131,7 @@ fn list_files<S: Sink>(
                 ..Produced::new(rendered, proposed_dir, note)
                     .of_content()
                     .capped(incomplete)
+                    .timed_out(timed_out)
                     .linked(links)
             }
         }
@@ -6177,8 +6207,19 @@ fn render_listing<S: Sink>(
             unreadable: listing.unreadable,
             links: listing.links,
             partly_listed: Vec::new(),
+            timed_out: listing.timed_out,
         };
-        let mut body = if listing.files.is_empty() && listing.links > 0 {
+        // An empty walk that ran out of time says so in place of `(no files)`, which would read as
+        // an empty directory. Where links were met the sentence for them already says the directory
+        // is not known to be empty, and the time sentence follows it.
+        let empty_for_want_of_time =
+            listing.files.is_empty() && listing.timed_out && listing.links == 0;
+        let mut body = if empty_for_want_of_time {
+            format!(
+                "(no files were found before this listing ran out of time, so this does not say \
+                 the directory is empty; {LISTING_NARROWING})"
+            )
+        } else if listing.files.is_empty() && listing.links > 0 {
             // An empty listing beside links is not an empty directory: a skills
             // directory made only of links read as one, and the model went looking
             // elsewhere for files that were one step away.
@@ -6231,7 +6272,14 @@ fn render_listing<S: Sink>(
         } else {
             listing.files.join("\n")
         };
-        if had_pattern && selected_no_file {
+        if listing.timed_out && !empty_for_want_of_time {
+            body.push_str(&format!(
+                "\n\n(this listing ran out of time and is incomplete; {LISTING_NARROWING})"
+            ));
+        }
+        // Not said of a walk that ran out of time: it did not look at the whole tree, so the
+        // pattern selecting nothing is not what the empty answer is about.
+        if had_pattern && selected_no_file && !listing.timed_out {
             body.push_str(&format!("\n\n{unmatched_note}"));
         }
         if listing.unreadable {
@@ -8711,8 +8759,15 @@ pub(crate) fn read_output_cost(bytes: Option<usize>, cap: usize, beside: Beside)
     format!(
         " read_output returns all {bytes} bytes of it, about {} tokens, which stay in every later \
          request.{filter}",
-        bytes / 4
+        about_tokens(bytes)
     )
+}
+
+/// The approximate number of tokens `bytes` bytes come to: one for every four bytes, which is the
+/// figure `read_output_cost` and the sentence about `vet_content` both state. Derived from a size
+/// the slot states, so no byte of the content is read.
+pub(crate) fn about_tokens(bytes: usize) -> usize {
+    bytes / 4
 }
 
 /// The cost sentence for a quarantined slot, from the size it states.
@@ -16309,11 +16364,7 @@ fn search<S: Sink>(
                     body.push_str(&format!("\n\n({})", search_links_clause(found.links)));
                 }
                 if found.timed_out {
-                    body.push_str(&format!(
-                        "\n\n(this search ran out of time after {} files and did not read the \
-                         rest; narrow it with a directory or an include glob)",
-                        found.searched
-                    ));
+                    body.push_str(&search_time_note(found.searched));
                 }
                 if found.output.summarises() && (found.unvisited || found.timed_out) {
                     // Nothing in a list of paths or counts looks short, which is why it is said:
@@ -16438,6 +16489,21 @@ fn git_failure(mut said: String, e: &crate::workspace::WorkspaceError, running: 
         said.push_str(instead);
     }
     said
+}
+
+/// What a search that ran out of time tells the planner, written inside the body. It says how many
+/// files were opened, which the workspace counted, and names the setting that sets the time, as
+/// [`read_git_time_note`] does for a status. A directory or an include glob gives the search fewer
+/// files to open, and it is not offered as the whole remedy: the clock is wall time, so a search on a
+/// busy machine can stop again on the narrowed tree. Fixed words, the count and no name from the tree
+/// (SEARCH-3).
+fn search_time_note(searched: usize) -> String {
+    format!(
+        "\n\n(this search ran out of time after {searched} files and did not read the rest; \
+         a directory or an include glob gives it fewer files to read, but a busy machine can \
+         stop the narrowed search again, so raise search.maxSeconds in the settings to give a \
+         search more time)"
+    )
 }
 
 /// What a read_git answer that ran out of time tells the planner can narrow it. A status takes
@@ -18092,6 +18158,11 @@ mod tests {
             described.contains("symbolic link") && described.contains("says how many"),
             "list_files does not say links are not entered: {described}"
         );
+        // LIST-3, LIST-4: and that a walk stops at a time limit and how to narrow it.
+        assert!(
+            described.contains("time limit") && described.contains("narrows it"),
+            "list_files does not say a listing stops at a time limit: {described}"
+        );
         let searched = &offered
             .iter()
             .find(|t| t.function.name == "search")
@@ -19347,6 +19418,32 @@ mod tests {
                     "{tool}: read names '{forbidden}': {read}"
                 );
             }
+        }
+    }
+
+    /// VET-6. The `read` argument of `fetch_url` and of `web_search` says what a result may hold,
+    /// so a planner that asks to read a page it can tell is large is not left to find the cap out
+    /// from a reference.
+    ///
+    /// A wrong implementation keeps the wording that says only "too long for one result", which
+    /// names no figure, or states a figure other than the cap the turn runs under by default.
+    #[test]
+    fn the_read_argument_of_fetch_url_and_web_search_states_the_cap() {
+        let mut offered = the_table_without(&[]);
+        offer_web_search(&mut offered);
+        assert_eq!(OUTPUT_CAP, 16 * 1024, "the descriptions say 16 KiB");
+        for tool in ["fetch_url", "web_search"] {
+            let on_the_list = offered.iter().find(|offered| offered.function.name == tool);
+            assert!(on_the_list.is_some(), "{tool} is not on the list");
+            let read =
+                on_the_list.unwrap().function.parameters["properties"]["read"]["description"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
+            assert!(
+                read.contains("16 KiB") && !read.contains("too long for one result"),
+                "{tool}: read does not state the cap: {read}"
+            );
         }
     }
 

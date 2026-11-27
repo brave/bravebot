@@ -1995,8 +1995,11 @@ fn a_servers_answer_past_the_output_cap_stays_a_reference_when_the_call_asks_to_
     assert_eq!(checks_of_the_answer(&all), 0, "the answer was checked");
     let answer = the_answer_the_planner_got(&all);
     assert!(
-        !answer.contains(PAYLOAD) && answer.contains("longer than a result may hold"),
-        "the answer was not left out for its length: {answer}"
+        !answer.contains(PAYLOAD)
+            && answer.contains("longer than a result may hold (10 bytes)")
+            && answer.contains("vet_content costs about")
+            && !answer.contains("To read part of the page instead"),
+        "the answer was not left out for its length, with the cap and the cost, and no route for a page: {answer}"
     );
 }
 

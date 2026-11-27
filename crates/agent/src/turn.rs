@@ -4583,6 +4583,9 @@ where
                     .collect();
                 let capped =
                     sentences::listing_capped_note(output.incomplete, entries.at_the_cap, &cut);
+                // Beside the references for the same reason, so a listing that ran out of time
+                // does not reach the planner looking like the whole tree.
+                let timed_out = sentences::listing_timed_out_note(output.timed_out, " ");
                 // A count and no names, in the sentence every quarantined walk result shares.
                 let linked = sentences::links_note(&output.tool, output.links);
                 // The pattern's own sentence, which the tool wrote from the pattern the planner
@@ -4603,7 +4606,7 @@ where
                 let listed = |described: &str| {
                     format!(
                         "{TOOL_RESULT_PREFIX}{} could not be shown to you. Its {} entries are \
-             quarantined, one reference each.{capped}{linked}{unmatched}{read_instead}\n\n{described}",
+             quarantined, one reference each.{capped}{timed_out}{linked}{unmatched}{read_instead}\n\n{described}",
                         output.tool,
                         references.len(),
                     )
@@ -5217,6 +5220,9 @@ where
                         // like one that found everything there was.
                         let capped =
                             sentences::capped_note(&output.tool, output.incomplete, output.paging);
+                        // A listing that ran out of time did not stop at a cap, and has its own
+                        // sentence, said beside the cap's where both cut it.
+                        let timed_out = sentences::listing_timed_out_note(output.timed_out, "\n\n");
                         let linked = sentences::links_note(&output.tool, output.links);
                         // A listing that asked to read and was kept back is one reference, so the
                         // pattern's sentence the per-entry arm carries goes here (LIST-7). Only a
@@ -5246,13 +5252,15 @@ where
                         // back as a reference: said once, so it does not read as an unexplained
                         // quarantine. Nothing for a run, whose sentence is `run_advice`'s.
                         let not_returned = if a_run {
-                            ""
+                            String::new()
                         } else {
                             sentences::read_not_returned(
                                 output.read_asked,
                                 read_gate,
                                 reference.bytes,
                                 output_cap,
+                                &output.tool,
+                                plan.beside,
                             )
                         };
                         // Only where git ran in a directory whose repository read_git
@@ -5291,7 +5299,7 @@ where
                         );
                         let composed = |described: &str, advice: &str| {
                             format!(
-                                "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{described}{looked}{capped}{linked}{unmatched}{left_out}{respelled}{advice}{not_returned}{read_instead}{history}",
+                                "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{described}{looked}{capped}{timed_out}{linked}{unmatched}{left_out}{respelled}{advice}{not_returned}{read_instead}{history}",
                                 output.tool,
                             )
                         };
@@ -10722,6 +10730,23 @@ mod tests {
             cancel: &Cancel,
             confirmer: &mut (impl Confirmer + Send),
         ) -> Round {
+            take_as(
+                workspace,
+                calls,
+                &Task::new("look around"),
+                cancel,
+                confirmer,
+            )
+        }
+
+        /// [`take`] for a `task` the caller built.
+        fn take_as(
+            workspace: &Workspace,
+            calls: &[(&str, &str)],
+            task: &Task,
+            cancel: &Cancel,
+            confirmer: &mut (impl Confirmer + Send),
+        ) -> Round {
             let config = Config::from_lookup(|key| match key {
                 "SERVICES_KEY_AICHAT" => Some("test-key".into()),
                 "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
@@ -10740,7 +10765,7 @@ mod tests {
                 &config,
                 &Egress::new(),
                 workspace,
-                &Task::new("look around"),
+                task,
                 &mut Conversation::new(),
                 confirmer,
                 &mut reporter,
@@ -10893,6 +10918,159 @@ mod tests {
                 told[1]
             );
             let _ = std::fs::remove_dir_all(scratch);
+        }
+
+        /// LIST-4: a quarantined listing whose walk ran out of time says so beside its references,
+        /// since the body that would carry the sentence reaches nobody, and does not say the cap on
+        /// entries was reached. The regression it rejects: the clock carried only for a listing the
+        /// planner may read, so a quarantined sample reads as the whole directory. The directory is
+        /// distrusted so that the listing is quarantined, and holds two files so that the walk
+        /// has an entry left when the clock runs out.
+        #[test]
+        fn a_quarantined_listing_that_ran_out_of_time_says_so_beside_its_references() {
+            let (scratch, workspace) = workspace("together-listing-clock");
+            std::fs::write(scratch.join("m1/z.txt"), "z\n").unwrap();
+            workspace.stop_listings_after(1);
+
+            let round = take(
+                &workspace,
+                &[("list_files", r#"{"directory":"m1"}"#)],
+                &Cancel::new(),
+                &mut crate::confirm::ApproveWrites,
+            );
+
+            round.outcome.as_ref().unwrap();
+            let told = results(&round.requests[1]);
+            assert_eq!(told.len(), 1, "{told:?}");
+            assert!(
+                told[0].contains("quarantined, one reference each."),
+                "the names reached the planner, so this is not the quarantined case: {}",
+                told[0]
+            );
+            assert!(
+                told[0].contains(
+                    "The listing ran out of time before it had walked the whole tree and is \
+                     incomplete: narrow it with a directory, a pattern or a depth."
+                ),
+                "{}",
+                told[0]
+            );
+            assert!(
+                !told[0].contains("stopped at that many entries"),
+                "the clock was reported as the cap: {}",
+                told[0]
+            );
+            std::fs::remove_dir_all(scratch).unwrap();
+        }
+
+        /// A listing kept back after `read: true` is one reference, as the output cap forces here
+        /// without a check. Every call asks for a listing of `m1`, which the map distrusts.
+        fn kept_back_listing(
+            scratch_name: &str,
+            lay_out: impl FnOnce(&std::path::Path),
+            arguments: &str,
+            entries_before_the_clock: usize,
+        ) -> String {
+            let (scratch, workspace) = workspace(scratch_name);
+            lay_out(&scratch);
+            workspace.stop_listings_after(entries_before_the_clock);
+            let task = Task::new("look around")
+                .with_permission_mode(crate::PermissionMode::Bypass)
+                .with_output_cap(Some(8));
+
+            let round = take_as(
+                &workspace,
+                &[("list_files", arguments)],
+                &task,
+                &Cancel::new(),
+                &mut crate::confirm::ApproveWrites,
+            );
+
+            round.outcome.as_ref().unwrap();
+            let told = results(&round.requests[1]);
+            std::fs::remove_dir_all(scratch).unwrap();
+            assert_eq!(told.len(), 1, "{told:?}");
+            told.into_iter().next().unwrap_or_default()
+        }
+
+        /// LIST-4 beside VET-6: a listing the clock stopped, that asked to read and was kept back as
+        /// one reference, says it ran out of time and how to narrow it. The regression it rejects: the
+        /// clock's sentence left out of the kept-back arm, so a quarantined sample of a tree reads as
+        /// the whole of it.
+        #[test]
+        fn a_kept_back_listing_that_ran_out_of_time_says_so() {
+            let told = kept_back_listing(
+                "together-kept-clock",
+                |root| std::fs::write(root.join("m1/z.txt"), "z\n").unwrap(),
+                r#"{"directory":"m1","read":true}"#,
+                1,
+            );
+            assert!(
+                !told.contains("quarantined, one reference each."),
+                "the listing was handed over per entry, so this is not the kept-back arm: {told}"
+            );
+            assert!(
+                told.contains(
+                    "The listing ran out of time before it had walked the whole tree and is \
+                     incomplete: narrow it with a directory, a pattern or a depth."
+                ),
+                "{told}"
+            );
+            assert!(
+                !told.contains("stopped at a cap"),
+                "the clock was reported as a cap: {told}"
+            );
+        }
+
+        /// LIST-4 and LIST-6 beside VET-6: a kept-back listing that the clock stopped and that met
+        /// a symbolic link says both, so the link count is not lost to the time sentence. The
+        /// regression it rejects: one sentence replacing the other in the kept-back arm.
+        #[cfg(unix)]
+        #[test]
+        fn a_kept_back_listing_says_both_that_it_ran_out_of_time_and_that_it_met_a_link() {
+            let told = kept_back_listing(
+                "together-kept-clock-link",
+                |root| {
+                    std::fs::write(root.join("m1/z.txt"), "z\n").unwrap();
+                    std::os::unix::fs::symlink(root.join("m1/x.txt"), root.join("m1/a-link.txt"))
+                        .unwrap();
+                },
+                r#"{"directory":"m1","read":true}"#,
+                1,
+            );
+            assert!(told.contains("The listing ran out of time"), "{told}");
+            assert!(
+                told.contains("1 symbolic link was not entered"),
+                "the link count was dropped beside the clock: {told}"
+            );
+        }
+
+        /// LIST-4 and LIST-5 beside VET-6: a kept-back listing that a per-directory cap cut and the
+        /// clock then stopped says both. 202 files in `m1` pass the cap of 200 for one directory, and
+        /// the clock runs out before its subdirectory. The regression it rejects: the cap's sentence
+        /// dropped because the clock's was said.
+        #[test]
+        fn a_kept_back_listing_cut_by_a_cap_and_by_the_clock_says_both() {
+            let told = kept_back_listing(
+                "together-kept-cap-and-clock",
+                |root| {
+                    for n in 0..201 {
+                        std::fs::write(root.join(format!("m1/f{n:03}.txt")), "").unwrap();
+                    }
+                    std::fs::create_dir(root.join("m1/s")).unwrap();
+                    std::fs::write(root.join("m1/s/in.txt"), "").unwrap();
+                },
+                r#"{"directory":"m1","depth":2,"read":true}"#,
+                202,
+            );
+            assert!(
+                told.contains("The listing ran out of time"),
+                "the clock's sentence is missing: {told}"
+            );
+            assert!(
+                told.contains("stopped at a cap"),
+                "the cap's sentence was dropped because the clock also ran out: {told}"
+            );
         }
 
         /// The regression it rejects: a read hoisted over a call that writes. The write is a

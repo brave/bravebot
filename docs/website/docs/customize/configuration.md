@@ -1773,7 +1773,8 @@ The block layers per action the way `keybindings` does.
 { "search": { "maxFiles": 500000, "maxSeconds": 60 } }
 ```
 
-How many files a search may walk and how long it may spend opening them. Either may be **raised** as
+How many files a search may walk and how long it may spend opening them. `maxSeconds` is also how
+long a `list_files` walk may run, which opens no file. Either may be **raised** as
 well as lowered. The built-in caps are past what a repository people usually work in holds; a monorepo,
 a tree of generated sources, or a checkout on a network filesystem is where they are not, and there
 every search comes back partial. A partial search is the answer that reads like a complete one, which
@@ -1782,7 +1783,11 @@ is why this is worth setting.
 The two are independent, so naming one says nothing about the other in any layer. A cap of zero, or
 any value that is not a whole count, is absence and leaves the built-in cap in force rather than
 permitting a search that reads nothing. Raising a cap does not unbound a search: the walk still stops
-at `maxFiles`, the reading still stops at `maxSeconds`, and the match cap holds regardless of both. See
+at `maxFiles`, the reading still stops at `maxSeconds` once it has tried 1,000 files (the clock is not
+read before then, so a search under load still covers that many), and the match cap holds regardless
+of both. `maxSeconds` does not move that count.
+A search's walk is not stopped by the clock; a listing's walk is, and says so. A search that ran out
+of time names `maxSeconds` in its notice as the setting that gives it more time. See
 [`search`](../reference/tools.md#search).
 
 ### `vetting`

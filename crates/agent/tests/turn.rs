@@ -101255,7 +101255,8 @@ fn a_search_whose_clock_ran_out(
     std::fs::write(scratch.path.join("f.txt"), "needle\n").unwrap();
     let workspace = Workspace::new(&scratch.path)
         .expect("workspace")
-        .with_search_caps(None, Some(std::time::Duration::ZERO));
+        .with_search_caps(None, Some(std::time::Duration::ZERO))
+        .with_search_floor(0);
 
     let (endpoint, received) = serve_sequence(vec![
         tool_request_2("search", r#"{"pattern":"needle","directory":"."}"#),
@@ -101306,6 +101307,20 @@ fn a_search_that_ran_out_of_time_tells_the_model_it_did_not_read_the_rest() {
     assert!(
         !second.contains("did not reach the whole tree"),
         "the clock was reported as the cap on files: {second}"
+    );
+    // SEARCH-3: the notice names the setting that sets the time, and does not offer narrowing as
+    // the whole remedy, since a search narrowed on a busy machine can run out again.
+    assert!(
+        second.contains("raise search.maxSeconds in the settings"),
+        "the notice did not name the setting that sets the search time: {second}"
+    );
+    assert!(
+        second.contains("a busy machine can stop the narrowed search again"),
+        "the notice offered narrowing as if it could not time out again: {second}"
+    );
+    assert!(
+        !second.contains("narrow it with a directory or an include glob"),
+        "the notice kept the advice that narrowing alone fixes a timeout: {second}"
     );
 }
 
@@ -111836,8 +111851,10 @@ fn a_search_or_listing_that_asks_to_read_more_than_one_result_may_hold_keeps_it_
                 "{mode:?} {tool}: a result past the cap reached the planner: {after}"
             );
             assert!(
-                after.contains("It is longer than a result may hold"),
-                "{mode:?} {tool}: the result does not say why it was kept back: {after}"
+                after.contains("It is longer than a result may hold (8 bytes)")
+                    && after.contains("vet_content costs about")
+                    && !after.contains("To read part of the page instead"),
+                "{mode:?} {tool}: the result does not say why it was kept back, with the cap and the cost, and no route for a page: {after}"
             );
             assert_eq!(
                 walked.checks_made(),
@@ -112286,8 +112303,10 @@ fn a_fetch_that_asks_to_read_more_than_one_result_may_hold_keeps_the_page_and_sa
         );
         assert!(after.contains("ref:1"), "{mode:?}: no reference: {after}");
         assert!(
-            after.contains("It is longer than a result may hold"),
-            "{mode:?}: the result does not say why the page was left out: {after}"
+            after.contains("It is longer than a result may hold (64 bytes)")
+                && after.contains("vet_content costs about")
+                && after.contains("tokens, which stay in every later request"),
+            "{mode:?}: the result does not say why the page was left out, with the cap and the cost: {after}"
         );
         assert_eq!(
             fetched.checks_made(),
