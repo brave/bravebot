@@ -814,6 +814,53 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// TRUST-2. A backup path that climbs through a directory that is not there cannot be resolved,
+    /// so it cannot be keyed: it is reported refused, nothing is written, and the map is left as it
+    /// was. The fault this rejects is keying such a path by its spelling, which distrusts a name no
+    /// read of the file uses and writes the bytes where the path may land.
+    #[test]
+    fn a_backup_path_with_a_dotdot_that_cannot_be_resolved_is_refused() {
+        let root = crate::testutil::scratch_dir("rewind-dotdot-unresolved-root");
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("missing/../target.txt");
+        assert_eq!(
+            crate::workspace::destination(&path),
+            None,
+            "the fixture path resolves, so it does not reach the refusal"
+        );
+        let mut trusting = TrustStore::new(&root);
+        trusting.trust(".");
+        let mut current = trusting.clone();
+        let mut written = 0;
+        let refused = restore_with(
+            vec![Backup {
+                kept: false,
+                path: path.clone(),
+                was: Before::Bytes(b"original".to_vec()),
+                captured_trust: Integrity::Trusted,
+            }],
+            &mut current,
+            &trusting,
+            None,
+            alone,
+            |_, _| {
+                written += 1;
+                Ok(())
+            },
+        );
+        assert_eq!(refused, [path]);
+        assert_eq!(
+            written, 0,
+            "bytes were put back under a path with no landing"
+        );
+        assert_eq!(
+            current, trusting,
+            "the map was changed for a backup that was refused"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// Unwinding from an entered effect cannot leave the earlier grant over changed bytes.
     #[test]
     fn restore_distrusts_before_entering_the_effect() {
