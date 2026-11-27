@@ -559,9 +559,12 @@ impl Served {
                 info["inspection"] = json!(self.inspection);
                 Ok(info)
             }
-            _ => match self.names.get(&connection) {
-                Some(name) => self.bridge.dispatch_as(name, request),
-                None => self.bridge.dispatch(request),
+            _ => match (self.names.get(&connection), self.ceiling_of(connection)) {
+                // A connection held to a ceiling is a device's, which may not answer a question a
+                // device is not offered.
+                (Some(name), Some(_)) => self.bridge.dispatch_as_device(name, request),
+                (Some(name), None) => self.bridge.dispatch_as(name, request),
+                (None, _) => self.bridge.dispatch(request),
             },
         }
     }
@@ -2589,6 +2592,67 @@ mod tests {
         assert!(host.not_withheld(2, "s1", &reply(5)).is_ok());
         assert!(host.not_withheld(1, "s1", &reply(6)).is_ok());
         host.answers.clear();
+    }
+
+    /// A held connection's reply to a question it is not offered is refused even when the host has
+    /// recorded nothing withheld, as when the reply arrives before the view that withholds the
+    /// question is sent. The question stays waiting, and a connection held to no ceiling answers it.
+    #[test]
+    fn a_held_connections_reply_to_a_question_it_is_not_offered_is_refused_unrecorded() {
+        use crate::running::Running;
+        use crate::turn::{Question, Reply};
+        use bravebot_agent::confirm::Decision;
+        let (ceiling, _) = a_ceiling_and_a_wider_scope();
+        let directory = tempfile::tempdir().unwrap();
+        let mut host = Served::new(Setup {
+            workspaces: Vec::new(),
+            settings: None,
+            inspection: "refused",
+        });
+        let (answers, receiver) = std::sync::mpsc::channel();
+        let pending = Arc::new(Mutex::new(Some(Question {
+            id: 3,
+            kind: Kind::Write,
+            local_only: true,
+        })));
+        let handle = host.bridge.open_running_for_test(
+            directory.path(),
+            Running {
+                cancel: bravebot_core::cancel::Cancel::new(),
+                answers,
+                pending: Arc::clone(&pending),
+                target: 7,
+                finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                interjections: None,
+                actors: Default::default(),
+            },
+        );
+        host.sessions.insert(handle.clone(), None);
+        host.owners
+            .lock()
+            .unwrap()
+            .insert(handle.clone(), BTreeSet::from([1, 2]));
+        let _held = a_reading_client(&host.output, 1, &Answer::ALL, Some(ceiling));
+        let _free = a_reading_client(&host.output, 2, &Answer::ALL, None);
+        host.names.insert(1, "phone".into());
+        host.names.insert(2, "window".into());
+        let reply = Request {
+            id: 1,
+            method: "confirm.reply".into(),
+            params: json!({"session": handle, "request": 3, "decision": "approve"}),
+        };
+
+        let refused = host.dispatch(1, &Answer::ALL, &reply).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::NotAllowed);
+        assert!(receiver.try_recv().is_err(), "the answer reached the turn");
+        assert!(pending.lock().unwrap().is_some());
+
+        host.dispatch(2, &Answer::ALL, &reply).unwrap();
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(Reply::Write(Decision::Approve))
+        ));
+        host.responded();
     }
 
     /// Only a connection held to no ceiling, attached to the session, with the answer, and once the

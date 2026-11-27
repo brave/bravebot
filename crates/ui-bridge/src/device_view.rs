@@ -65,7 +65,7 @@ pub fn question_withheld(kind: &str, data: &Value) -> bool {
 }
 
 /// Whether a device is shown `row` only as a placeholder: a quarantined preview, an activity whose
-/// target came from content nobody vouched for, and a question it is not offered.
+/// output lines the agent marked as content nobody vouched for, and a question it is not offered.
 fn withheld(row: &Row) -> bool {
     match row.kind {
         RowKind::Quarantined => true,

@@ -831,13 +831,14 @@ fn an_approved_unconfined_run_tells_the_scope_watch_and_a_confined_one_does_not(
 /// Decision 19: a write whose body nobody vouched for is not shown to a device, so where no
 /// connection that is not a device can answer, it is refused before it is asked, with nothing shown
 /// and no question number used, rather than left waiting on a device that is not offered it. Where
-/// one can answer, and for a body somebody vouched for, it is asked as before.
+/// one can answer, and for a body somebody vouched for, it is asked as before. A write with the
+/// remark an isolated processor wrote is refused the same way, even with its body unmarked.
 #[test]
 #[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn an_untrusted_write_is_refused_unasked_where_only_a_device_could_answer_it() {
-    use bravebot_agent::confirm::{Intent, WriteRequest};
+    use bravebot_agent::confirm::{Intent, Remark, WriteRequest};
     use bravebot_agent::diff::Diff;
-    let a_write = |untrusted: bool| WriteRequest {
+    let a_write = |untrusted: bool, remarked: bool| WriteRequest {
         written_since_checkout: false,
         path: "notes.md".to_string(),
         contents: "new\n".to_string(),
@@ -845,17 +846,22 @@ fn an_untrusted_write_is_refused_unasked_where_only_a_device_could_answer_it() {
         diff: Diff::compute("", "new\n"),
         intent: Intent::Create,
         untrusted,
-        remark: None,
+        remark: remarked.then(|| Remark {
+            preview: vec!["a remark".into()],
+            lines: 1,
+            label: "(U,pub)".into(),
+        }),
         protected: false,
         credentials: Vec::new(),
         may_always: false,
         record: None,
         may_edit: false,
     };
-    for (untrusted, local, asked) in [
-        (true, false, false),
-        (true, true, true),
-        (false, false, true),
+    for (untrusted, remarked, local, asked) in [
+        (true, false, false, false),
+        (false, true, false, false),
+        (true, false, true, true),
+        (false, false, false, true),
     ] {
         let answerers = Answerers::default();
         let mut turn = a_turn(&answerers);
@@ -870,7 +876,8 @@ fn an_untrusted_write_is_refused_unasked_where_only_a_device_could_answer_it() {
             .answered_locally_by(Some(locally));
         let (done, decided) = mpsc::channel();
         std::thread::spawn(move || {
-            done.send(confirmer.confirm_write(&a_write(untrusted))).ok();
+            done.send(confirmer.confirm_write(&a_write(untrusted, remarked)))
+                .ok();
         });
         if asked {
             let shown = turn.the_question_shown_as("confirm.request");
@@ -886,7 +893,10 @@ fn an_untrusted_write_is_refused_unasked_where_only_a_device_could_answer_it() {
             let decision = decided
                 .recv_timeout(PATIENCE)
                 .expect("the write was left waiting");
-            assert!(!decision.approved(), "untrusted {untrusted}, local {local}");
+            assert!(
+                !decision.approved(),
+                "untrusted {untrusted}, remarked {remarked}, local {local}"
+            );
             assert!(turn.nothing_was_published(), "the question was shown");
             assert_eq!(turn.ids.load(Ordering::SeqCst), 0);
         }
@@ -1006,5 +1016,44 @@ fn a_redirected_fetch_is_refused_unasked_where_only_a_device_could_answer_it() {
                 "the redirected fetch was shown"
             );
         }
+    }
+}
+
+/// A device's answer to a question it is not offered is refused where the question is held, under
+/// the lock that registers it, so a reply that arrives before the host records the question as
+/// withheld still cannot answer it. The question stays waiting, and an answer from a connection
+/// that is not a device applies. A device's answer to a question it is offered applies.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_device_cannot_answer_a_question_it_is_not_offered_however_soon_it_replies() {
+    use crate::running::Answered;
+    for local_only in [true, false] {
+        let answerers = Answerers::default();
+        let turn = a_turn(&answerers);
+        *turn.running.pending.lock().expect("the lock") = Some(Question {
+            id: 1,
+            kind: Kind::Write,
+            local_only,
+        });
+        let mut consumed = false;
+        let from_device = turn.running.answer_from(
+            1,
+            Reply::Write(Decision::Approve),
+            crate::running::Replier::Device,
+            || consumed = true,
+        );
+        if local_only {
+            assert_eq!(from_device, Answered::NotOffered);
+            assert!(!consumed, "the refused answer was recorded");
+            assert!(turn.waiting().is_some(), "the question was consumed");
+            assert!(
+                turn.running.answer(1, Reply::Write(Decision::Approve)),
+                "a local answer was refused"
+            );
+        } else {
+            assert_eq!(from_device, Answered::Applied);
+            assert!(consumed);
+        }
+        assert!(turn.waiting().is_none());
     }
 }

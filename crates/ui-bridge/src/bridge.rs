@@ -334,6 +334,9 @@ pub struct Bridge {
     /// Asked whether a connection that is not a device can answer a question devices are not
     /// offered. None for a bridge with no device.
     locally: Option<crate::device_view::Locally>,
+    /// Who sent the request being dispatched. A device only for the duration of
+    /// [`Bridge::dispatch_as_device`].
+    replier: crate::running::Replier,
 }
 
 impl Bridge {
@@ -357,6 +360,7 @@ impl Bridge {
             background_reader: bravebot_session::listing::Reader::new(),
             scope_watch: None,
             locally: None,
+            replier: crate::running::Replier::Local,
         }
     }
 
@@ -449,6 +453,15 @@ impl Bridge {
         self.acting = Some(actor.to_string());
         let outcome = self.dispatch(request);
         self.acting = None;
+        outcome
+    }
+
+    /// As [`Bridge::dispatch_as`], for a device: its answer to a question a device is not offered is
+    /// refused ([`crate::device_view`]).
+    pub fn dispatch_as_device(&mut self, actor: &str, request: &Request) -> Result<Value, Failure> {
+        self.replier = crate::running::Replier::Device;
+        let outcome = self.dispatch_as(actor, request);
+        self.replier = crate::running::Replier::Local;
         outcome
     }
 
@@ -3725,7 +3738,7 @@ impl Bridge {
             ));
         }
         let acting = self.acting();
-        if running.answer_with(id, reply, || {
+        let answered = running.answer_from(id, reply, self.replier, || {
             // Noted before the worker is woken, so the entry that records the answer follows it.
             if let Some(client) = &self.acting {
                 running
@@ -3733,8 +3746,14 @@ impl Bridge {
                     .note(format!("client {client} answered question {id}"));
             }
             self.emitter.view_answered(&handle, id, acting);
-        }) {
+        });
+        if answered == crate::running::Answered::Applied {
             Ok(json!({}))
+        } else if answered == crate::running::Answered::NotOffered {
+            Err(Failure::new(
+                ErrorCode::NotAllowed,
+                "that question holds what nobody vouched for, so it is answered on the computer",
+            ))
         } else {
             // Unknown, or already used. An approval is single-use and bound to the one
             // write it was shown for, so this changes nothing rather than being retried.
@@ -4681,6 +4700,27 @@ impl Bridge {
         self.next_handle += 1;
         let handle = format!("s{}", self.next_handle);
         self.open.insert(handle.clone(), session);
+        handle
+    }
+
+    /// Open a session in `project` with `running` as its turn and its view started, for a test
+    /// outside this module that needs a turn waiting on a question.
+    #[cfg(test)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    pub(crate) fn open_running_for_test(&mut self, project: &Path, running: Running) -> String {
+        let handle = self.mint(Open {
+            running: Some(running),
+            ..Open::opened(
+                project.to_path_buf(),
+                State::fresh(TrustStore::new(project)),
+                true,
+                None,
+                false,
+            )
+        });
+        self.emitter
+            .start_view(&handle, true)
+            .expect("the view starts");
         handle
     }
 }

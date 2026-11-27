@@ -515,6 +515,25 @@ pub struct Started {
     pub actors: crate::turn::ActorNotes,
 }
 
+/// Who sent an answer: a connection that is not a device, or a device, which may not answer a
+/// question a device is not offered ([`crate::device_view`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Replier {
+    #[default]
+    Local,
+    Device,
+}
+
+/// What became of an answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answered {
+    Applied,
+    /// The question is unknown, already answered, or of another kind.
+    NotWaiting,
+    /// A device answered a question it is not offered, which stays waiting.
+    NotOffered,
+}
+
 impl Running {
     /// A turn or run beginning: a fresh stop, answer channel, question slot, finished flag and
     /// target. Nothing is reused from earlier work, since a reused stop could cancel work before
@@ -577,21 +596,42 @@ impl Running {
 
     /// Publish the consumed question before waking the worker that can ask the next one.
     pub fn answer_with(&self, request: u64, reply: Reply, consumed: impl FnOnce()) -> bool {
+        self.answer_from(request, reply, Replier::Local, consumed) == Answered::Applied
+    }
+
+    /// As [`Running::answer_with`], from `replier`. A device's answer to a
+    /// question only a connection that is not a device may answer is refused, under the lock that
+    /// registers the question, so it cannot land before the host has recorded the question as one
+    /// the device was not offered.
+    pub fn answer_from(
+        &self,
+        request: u64,
+        reply: Reply,
+        replier: Replier,
+        consumed: impl FnOnce(),
+    ) -> Answered {
         let Ok(mut pending) = self.pending.lock() else {
-            return false;
+            return Answered::NotWaiting;
         };
         let Some(question) = *pending else {
-            return false;
+            return Answered::NotWaiting;
         };
         if question.id != request || question.kind != reply.kind() {
-            return false;
+            return Answered::NotWaiting;
+        }
+        if question.local_only && replier == Replier::Device {
+            return Answered::NotOffered;
         }
         // Cleared here as well as in the confirmer, so a second reply racing the first
         // finds nothing to answer whichever of them gets the lock first.
         *pending = None;
         drop(pending);
         consumed();
-        self.answers.send(reply).is_ok()
+        if self.answers.send(reply).is_ok() {
+            Answered::Applied
+        } else {
+            Answered::NotWaiting
+        }
     }
 
     /// Whether the work has ended.

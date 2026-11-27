@@ -347,12 +347,12 @@ A connection held to a ceiling ([HOST-15](#HOST-15)) is how a paired device is t
 In each view it is sent, live or as a snapshot, these rows keep their id, turn, kind, event and resolution and have their content replaced with `{"withheld":true}`:
 
 - a quarantined preview;
-- a tool's activity the agent marked `untrusted`, whose target came from content nobody vouched for;
+- a tool's activity the agent marked `untrusted`, whose output lines are content nobody vouched for;
 - a question a device is not offered, whose placeholder also says `"answer":"on the computer"`.
 
 A device is offered a `confirm`, `run`, `fetch` or `ask` question, and not one of any other kind, which by what it is holds content nobody vouched for, such as a command's output or a file to vouch for. Nor is it offered one the agent marked `untrusted`, a write whose body came from such content, a write with an isolated processor's remark, which is always untrusted, or a fetch a redirect led to, whose address a remote server chose. Only the bridge's own row kind and question kind, a flag set to `true`, and whether the remark and the redirect are there decide this, and no text of a row is read.
 
-A question a device is not offered is also left out of what waits in the connection's view, and the connection's answer to it is refused with `not_allowed`. Such a write or fetch is put to the session only where a connection held to no ceiling can answer it, checked under the lock that registers the question, and is otherwise refused when it is asked, unshown and unnumbered, as a question nobody can answer is ([HOST-10](#HOST-10)). When the last connection held to no ceiling that could answer it leaves while it waits, it is refused and shown as resolved, so it does not wait on a device that is not shown it. A view that cannot be read as one is not sent to the connection, rather than sent whole. What the connection was not offered is forgotten when the session closes.
+A question a device is not offered is also left out of what waits in the connection's view, and the connection's answer to it is refused with `not_allowed`, by the bridge under the lock that holds the question, so an answer sent before the view that withholds the question arrives is refused too. Such a write or fetch is put to the session only where a connection held to no ceiling can answer it, checked under the lock that registers the question, and is otherwise refused when it is asked, unshown and unnumbered, as a question nobody can answer is ([HOST-10](#HOST-10)). When the last connection held to no ceiling that could answer it leaves while it waits, it is refused and shown as resolved, so it does not wait on a device that is not shown it. A view that cannot be read as one is not sent to the connection, rather than sent whole. What the connection was not offered is forgotten when the session closes.
 
 `verified-by: bravebot_ui_bridge::device_view::what_nobody_vouched_for_reaches_a_device_as_a_placeholder_in_its_place`
 `verified-by: bravebot_ui_bridge::device_view::a_question_nothing_marked_is_offered_to_a_device`
@@ -365,3 +365,6 @@ A question a device is not offered is also left out of what waits in the connect
 `verified-by: bravebot_ui_bridge::answering_tests::a_redirected_fetch_is_refused_unasked_where_only_a_device_could_answer_it`
 `verified-by: bravebot_ui_bridge::device_view::each_question_a_device_is_not_offered_is_withheld`
 `verified-by: bravebot_ui_bridge::host::a_closed_session_leaves_nothing_withheld_stopped_or_approved`
+`verified-by: bravebot_ui_bridge::host::a_held_connections_reply_to_a_question_it_is_not_offered_is_refused_unrecorded`
+`verified-by: bravebot_ui_bridge::control_tests::a_devices_reply_to_a_question_it_is_not_offered_is_refused_by_the_bridge`
+`verified-by: bravebot_ui_bridge::answering_tests::a_device_cannot_answer_a_question_it_is_not_offered_however_soon_it_replies`
