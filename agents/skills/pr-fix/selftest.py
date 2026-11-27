@@ -965,6 +965,54 @@ def test_a_failing_check_outranks_review_feedback_in_the_exit_code():
     assert code == 1 and "failed (failure): bad u" in out, (code, out)
 
 
+def check_with(looks, failed=0, answered=3):
+    """Run `check 7 --target t` while the review query answers each look with `looks(n)` for the n-th look,
+    the checks running until `answered` looks have been made, or a second has passed, and exiting with `failed`.
+    Returns the exit code, what was printed and how many looks were made."""
+    count, enough = [], threading.Event()
+
+    def feedback():
+        count.append(1)
+        if len(count) >= answered:
+            enough.set()
+        return looks(len(count))
+
+    def commands(tree, run, log):
+        enough.wait(1)
+        return failed
+
+    pr = SimpleNamespace(number=7, tree=Path("/nonexistent"))
+    with mock.patch.object(pr_fix, "POLL_SECONDS", 0.01), mock.patch.object(pr_fix, "rebase_dir", lambda tree: None), \
+            mock.patch.object(pr_fix.pr_worktree, "run_commands", commands), \
+            mock.patch.object(pr_fix, "run", gh(lambda *a, **k: None, feedback)):
+        code, out = quietly(pr_fix.check, pr, ["t"])
+    return code, out, len(count)
+
+
+def test_a_check_says_when_a_reviewer_writes_while_it_runs():
+    code, out, _ = check_with(lambda n: feedback_answer(500, 501) if n >= 2 else feedback_answer(500))
+    assert code == 3, (code, out)
+    assert "review feedback arrived while checking: 1 new comment(s)" in out and "comments 7" in out, out
+
+
+def test_a_failing_check_outranks_review_feedback_that_arrived_while_it_ran():
+    code, out, _ = check_with(lambda n: feedback_answer(review=900) if n >= 2 else feedback_answer(), failed=1)
+    assert code == 1 and "review feedback arrived while checking" in out, (code, out)
+
+
+def test_feedback_there_when_the_check_began_does_not_change_its_result():
+    code, out, looks = check_with(lambda n: feedback_answer(500, review=900))
+    assert code == 0 and "review feedback" not in out, (code, out)
+    assert looks >= 3, looks
+
+
+def test_a_look_github_refuses_while_a_check_runs_prints_nothing_and_is_skipped():
+    refused = SimpleNamespace(stdout="", stderr="HTTP 502", returncode=1)
+    code, out, _ = check_with(lambda n: refused if n in (1, 3) else feedback_answer(500) if n == 2 else feedback_answer(500, 501),
+                              answered=4)
+    assert code == 3 and "HTTP 502" not in out and "failed" not in out, (code, out)
+
+
 def test_feedback_is_the_unresolved_comments_and_the_latest_change_asking_review_of_each_reviewer():
     data = json.loads(feedback_answer(500, review=900).stdout)
     assert pr_fix.feedback_ids(data) == {("comment", 500), ("review", 900)}
