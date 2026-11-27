@@ -1117,20 +1117,28 @@ each by a number and by the word that names it:
   Vertex AI, or for a gateway a provider block names.
 - `chatgpt` signs in to a ChatGPT Plus or Pro account in a browser ([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)).
 - `xai` signs in to an xAI SuperGrok subscription with a code entered on any device ([XAI-7](xai-sign-in.md#XAI-7)).
+- `google` signs in to Gemini on Vertex AI with the Google Cloud CLI in a browser, asks for a project and
+  records it, and keeps no key ([BACKEND-74](backends.md#BACKEND-74)).
 
 A way that already holds a sign-in says so on its line. For Brave it is that a key is stored. For
 Bedrock it is shown where every account named has a usable session. For a gateway it is the ids keys are stored for, whether or not a block
 names them. For ChatGPT it is that a
 sign-in is stored, and for xAI what `auth status xai` says of it: when the access token expires, and that each
-token is sent to one host alone ([XAI-9](xai-sign-in.md#XAI-9)). The credential itself is never printed.
+token is sent to one host alone ([XAI-9](xai-sign-in.md#XAI-9)). For Google it is that the Google Cloud CLI
+gives an access token now, and only where a `google-vertex` block or `GOOGLE_CLOUD_PROJECT` names a project
+that a session signs in with the CLI. The CLI is asked for a token and never for a login or a browser, the
+list waits for it at most five seconds, and it is not started where no such project is configured. The
+credential itself is never printed.
 
 The answer is a number or a name, in any case. If nothing is typed, or the input ends, the command exits
 successfully having run nothing. An answer that names no listed way is refused with the argument
 status (CLI-6).
 
 `bravebot auth login <way>` runs that way without the list. A word that names no way, `leo` among
-them, is refused, and so is any word after `brave`, `bedrock`, `import`, `chatgpt` or `xai`. The list needs a terminal on stdin and on stderr. Without one, the
-command is refused with the argument status and the forms a script can type instead.
+them, is refused, and so is any word after `brave`, `bedrock`, `import`, `chatgpt`, `xai` or `google`. The list needs a terminal on stdin and on stderr. Without one, the
+command is refused with the argument status and the forms a script can type instead. The Google way
+needs a terminal as well, since the project is typed, and without one it is refused with the argument
+status.
 
 Each way is run by the function its own command runs, so `auth login import` prompts, refuses and
 writes where `import-providers` does. The Bedrock way signs in once per AWS profile: first the
@@ -1262,7 +1270,9 @@ In an incognito session the import way is refused by the check `import-providers
 words. The Brave way is refused before the key is asked for, with the failure status, because a
 premium key is kept on disk ([PREM-16](premium-credentials.md#PREM-16)). The Bedrock way is not
 refused. It records nothing, and says `BRAVEBOT_USE_BEDROCK=1` still has to be exported. The xAI way
-is refused before the code is asked for ([XAI-10](xai-sign-in.md#XAI-10)).
+is refused before the code is asked for ([XAI-10](xai-sign-in.md#XAI-10)). The Google way is refused
+before the project is asked for and before `gcloud` starts, with the failure status, since it records the
+project ([BACKEND-74](backends.md#BACKEND-74)).
 `bravebot auth logout brave` forgets the stored premium key, which still works at Brave's premium
 service until it is revoked there, and is allowed in an incognito session. `bravebot auth logout
 chatgpt` forgets the stored ChatGPT sign-in
@@ -1274,7 +1284,10 @@ status and names the ids that hold one. A word after the id is refused with the 
 is not repeated, as `login` does not repeat it ([CRED-24](credential-protection.md#CRED-24)). The
 file is removed with its last key. It says the key still works at the host its block names, or for a
 known service no block names the host compiled in for it, or for `google-vertex` with no block the host of express mode, until it is revoked there. The entry the
-sign-in recorded stays in settings, since forgetting a key changes no setting. `auth logout bedrock`
+sign-in recorded stays in settings, since forgetting a key changes no setting. `bravebot auth logout
+google` takes out the block `auth login google` recorded and asks whether to end the Google Cloud CLI's own
+sign-in, which it leaves in place unless a yes is typed ([BACKEND-75](backends.md#BACKEND-75)); it is allowed
+in an incognito session too. `auth logout bedrock`
 and
 `auth logout import` are refused and say what to run instead, since neither way keeps a credential
 of its own.
@@ -1323,7 +1336,8 @@ names the service are left as they are, because an entry the sign-in wrote would
 configure ([BACKEND-50](backends.md#BACKEND-50)). The window refuses the service where no entry
 names it because it has no questions for a project, and recording the express entry there would
 replace the choice the person would have made. Signing in to Google Cloud without a key is
-[BACKEND-65](backends.md#BACKEND-65) at request time, and this command does not start it.
+[BACKEND-65](backends.md#BACKEND-65) at request time, and this command does not start it. The Google way
+runs it and records the project instead ([BACKEND-74](backends.md#BACKEND-74)).
 
 The Brave key, the import and the gateway key are refused in an incognito session for the reason in
 [INCOG-7](incognito.md#INCOG-7): each writes to the directory this program owns. The AWS session is
@@ -1435,6 +1449,12 @@ and was told of none.
 `verified-by: bravebot_cli::running::auth_login_import_is_the_import_and_refuses_where_it_does`
 `verified-by: bravebot_cli::running::auth_login_gateway_is_refused_before_a_key_is_asked_for`
 `verified-by: bravebot_cli::running::auth_logout_gateway_forgets_the_key_named_in_an_incognito_session`
+`verified-by: bravebot_cli::auth::the_google_way_is_listed_by_number_and_word_and_names_gemini_and_the_cli`
+`verified-by: bravebot_cli::running::auth_login_list_shows_google_held_where_the_cli_gives_a_token`
+`verified-by: bravebot_cli::running::auth_login_google_signs_in_with_the_cli_and_records_the_project_and_no_key`
+`verified-by: bravebot_cli::running::auth_login_google_is_refused_without_a_terminal_and_while_incognito_before_the_cli_starts`
+`verified-by: bravebot_cli::running::auth_logout_google_removes_the_recorded_block_and_leaves_the_cli_sign_in`
+`verified-by: bravebot_cli::running::auth_logout_google_ends_the_cli_sign_in_only_on_a_yes`
 `verified-by: bravebot_cli::running::auth_status_and_logout_gateway_do_not_repeat_a_word_after_the_id`
 `verified-by: bravebot_cli::running::auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done`
 `verified-by: bravebot_cli::running::auth_logout_chatgpt_forgets_the_sign_in_and_only_that_one`
@@ -1619,9 +1639,9 @@ what it leaves out is permission: nothing is added to what the planner may do.
 <a id="CLI-23"></a>
 ### CLI-23: `auth status` says whether a sign-in is usable, and its exit status says it too
 
-`bravebot auth status [brave|bedrock|gateway [id]|chatgpt|xai]` reads what a turn reads, writes nothing, and
+`bravebot auth status [brave|bedrock|gateway [id]|chatgpt|xai|google]` reads what a turn reads, writes nothing, and
 prints one line per sign-in: `brave`, `bedrock` for the default AWS profile or `bedrock <profile>`,
-`gateway <id>`, `chatgpt` and `xai`. Each line is one of:
+`gateway <id>`, `chatgpt`, `xai` and `google`. Each line is one of:
 
 - **signed in**, with a detail. For Brave it is that a premium key is stored and is sent to Brave's
   premium service alone, and never the key. For an AWS account it is that the session gives
@@ -1629,12 +1649,15 @@ prints one line per sign-in: `brave`, `bedrock` for the default AWS profile or `
   is. For ChatGPT it is the instant the access token expires, and a token past it is still signed in, since
   the next request replaces it ([CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11)). For xAI it is the same instant, and
   that the access token is sent to `api.x.ai` alone and the refresh token to `auth.x.ai` alone
-  ([XAI-9](xai-sign-in.md#XAI-9)).
+  ([XAI-9](xai-sign-in.md#XAI-9)). For Google it is that the Google Cloud CLI gives an access token, asked
+  for with `gcloud auth application-default print-access-token`, and never the token or the account.
 - **not signed in**, with the way to sign in: no premium key is stored, or this machine has nowhere
-  to keep one, the AWS session has lapsed, or a gateway has no key.
+  to keep one, the AWS session has lapsed, a gateway has no key, or the Google Cloud CLI gives no token
+  (`bravebot auth login google`) or no `google-vertex` block or `GOOGLE_CLOUD_PROJECT` names a project it signs in.
 - **unusable**, with the reason and remedy, where signing in again does not fix it: a premium key
   file that cannot be read, which the line names; the AWS CLI missing or the profile unknown; a file of gateway keys that cannot be read; a ChatGPT or xAI
-  sign-in file that cannot be read or is another version's.
+  sign-in file that cannot be read or is another version's; the Google Cloud CLI missing, or one that does
+  not answer within twenty seconds.
 
 A gateway whose block names nowhere for a key to live needs none and is signed in. A known service
 no block names is asked about where it is named, and where no id is named, where a key is stored for
@@ -1654,7 +1677,7 @@ line says that the file the setting names gives no key and that storing a key wi
 nothing the file holds. A configuration
 that cannot be read is reported as unusable on the lines it blocks.
 
-With no way named, brave, bedrock, gateway, chatgpt and xai are asked about. The command exits 0 if any sign-in is usable, since
+With no way named, brave, bedrock, gateway, chatgpt, xai and google are asked about. The command exits 0 if any sign-in is usable, since
 nobody holds every way and a script asking whether bravebot can run is asking about the set. With a
 way named, it exits 0 only if every sign-in under it is usable. Otherwise it exits with the
 configuration status where a configuration could not be read, and the failure status
@@ -1668,6 +1691,12 @@ the refusal names that file as what decides them; where that layer names none it
 configuration status.
 
 It is allowed in an incognito session, since it writes nothing.
+
+The Google line asks the Google Cloud CLI for a token and never for a login, so it starts no browser, and it
+asks only where a `google-vertex` block or `GOOGLE_CLOUD_PROJECT` names a project with no key that resolves,
+the state in which a turn asks the CLI too ([BACKEND-65](backends.md#BACKEND-65)); with none, no program
+is started. A CLI that does not answer is reported as unusable after the wait. The `gateway google-vertex` line
+for a project block with no key is unchanged and does not ask the CLI.
 
 No line carries a credential, a token, an account id, or content from the workspace: only
 counts, ids the person wrote in settings, and fixed sentences
@@ -1701,6 +1730,11 @@ particular sign-in worked.
 `verified-by: bravebot_cli::running::auth_status_bedrock_asks_the_aws_cli_without_signing_in`
 `verified-by: bravebot_cli::auth::the_verdict_asks_all_of_a_named_way_and_any_of_the_rest`
 `verified-by: bravebot_cli::auth::a_lapsed_aws_session_is_not_signed_in_and_a_missing_cli_is_unusable`
+`verified-by: bravebot_cli::running::auth_status_google_asks_the_cli_for_a_token_without_signing_in`
+`verified-by: bravebot_cli::auth::a_google_line_is_a_fixed_sentence_naming_the_remedy_and_nothing_the_cli_wrote`
+`verified-by: bravebot_agent::accounts::the_google_cloud_sign_in_stands_as_the_cli_answers_and_only_where_a_turn_asks_it`
+`verified-by: bravebot_agent::accounts::a_google_cloud_cli_that_never_answers_is_reported_as_timed_out_and_one_that_does_as_it_did`
+`verified-by: bravebot_agent::accounts::the_google_cloud_cli_is_asked_only_where_its_row_is_asked_for_and_the_check_is_not_skipped`
 `verified-by: bravebot_cli::running::auth_status_chatgpt_reports_the_expiry_and_nothing_that_could_sign_a_request`
 `verified-by: bravebot_cli::xai_sign_in::auth_status_xai_reports_the_expiry_and_nothing_that_could_sign_a_request`
 

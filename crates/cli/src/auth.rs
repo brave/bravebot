@@ -11,12 +11,13 @@ use bravebot_agent::accounts::BedrockSwitch as Switch;
 #[cfg(test)]
 use bravebot_agent::accounts::write_keys;
 use bravebot_agent::accounts::{
-    self, BedrockCheck, ListError, Offer, aws_accounts, bedrock_config,
+    self, BedrockCheck, GoogleCheck, ListError, Offer, aws_accounts, bedrock_config,
 };
 use bravebot_agent::backend::Backend;
 #[cfg(test)]
 use bravebot_agent::backend::CredentialError;
 use bravebot_agent::confirm::Decision;
+use bravebot_agent::gcloud::{self, GcloudError, Signed};
 use bravebot_agent::home;
 use bravebot_agent::key_entry;
 use bravebot_config::bedrock::Tier;
@@ -29,6 +30,14 @@ use std::fmt::Display;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::Duration;
+
+/// How long the list of ways waits for the Google Cloud CLI to say whether it gives a token, so a
+/// CLI that hangs delays the list by this and no more.
+const GOOGLE_LIST_WAIT: Duration = Duration::from_secs(5);
+
+/// How long `auth status` waits for the same answer before it says the CLI did not answer.
+const GOOGLE_STATUS_WAIT: Duration = Duration::from_secs(20);
 
 /// A way to sign in, in the order the list shows them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,16 +48,18 @@ enum Way {
     Gateway,
     ChatGpt,
     Xai,
+    Google,
 }
 
 impl Way {
-    const ALL: [Way; 6] = [
+    const ALL: [Way; 7] = [
         Way::Brave,
         Way::Bedrock,
         Way::Import,
         Way::Gateway,
         Way::ChatGpt,
         Way::Xai,
+        Way::Google,
     ];
 
     /// The word that names this way on the command line. Not translated, because a script types it.
@@ -60,6 +71,7 @@ impl Way {
             Way::Gateway => "gateway",
             Way::ChatGpt => "chatgpt",
             Way::Xai => "xai",
+            Way::Google => "google",
         }
     }
 
@@ -79,6 +91,7 @@ impl Way {
             Way::Gateway => t!(auth_way_gateway, services = services()),
             Way::ChatGpt => t!(auth_way_chatgpt).to_string(),
             Way::Xai => t!(auth_way_xai).to_string(),
+            Way::Google => t!(auth_way_google).to_string(),
         }
     }
 }
@@ -90,6 +103,12 @@ fn services() -> String {
     let mut said: Vec<String> = known_ids().map(printable).collect();
     said.push(vertex);
     said.join(", ")
+}
+
+/// Whether stdin and stderr are both terminals, as `import-providers` asks for them: a question on
+/// a redirected stream is one nobody read.
+fn at_a_terminal() -> bool {
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
 }
 
 /// Run `bravebot auth <command>`.
@@ -118,11 +137,13 @@ fn refused_with_the_forms(message: impl std::fmt::Display) -> ExitCode {
         "bravebot auth login gateway [id]",
         "bravebot auth login chatgpt",
         "bravebot auth login xai",
+        "bravebot auth login google",
         "bravebot auth logout brave",
         "bravebot auth logout gateway [id]",
         "bravebot auth logout chatgpt",
         "bravebot auth logout xai",
-        "bravebot auth status [brave|bedrock|gateway [id]|chatgpt|xai]",
+        "bravebot auth logout google",
+        "bravebot auth status [brave|bedrock|gateway [id]|chatgpt|xai|google]",
     ] {
         said.push_str("\n  ");
         said.push_str(form);
@@ -143,7 +164,7 @@ fn login(args: &[String]) -> ExitCode {
     }
     // Both ends, as `import-providers` asks for them: a question on a redirected stream is one
     // nobody read, and a pipe on stdin would be answering for them.
-    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+    if !at_a_terminal() {
         return refused_with_the_forms(t!(auth_needs_a_terminal));
     }
     // Scoped, so the lock on stdin is released before the way runs: `import-providers` takes its
@@ -231,9 +252,22 @@ fn held(way: Way, directory: Option<&Path>) -> Option<String> {
             Standing::Unusable(_) => Some(t!(xai_held_unusable).to_string()),
             _ => None,
         },
+        // Asked only where a project is configured that the CLI signs in, with a time limit and
+        // no browser, so a list drawn on a machine that never used Google starts nothing.
+        Way::Google => google_held(accounts::google_cloud_now(GOOGLE_LIST_WAIT)),
         // The ids alone. Which host each key goes to is the provider block's to say.
         Way::Gateway => gateways_held(Keys::read(directory?)),
     }
+}
+
+/// What the Google line of the list says: that the Google Cloud CLI's sign-in is usable, and nothing
+/// where it is not or was not asked, since a list says what is held and `auth status google` says
+/// why something is not.
+fn google_held(row: accounts::Row) -> Option<String> {
+    worded(row)
+        .1
+        .usable()
+        .then(|| t!(auth_signed_in).to_string())
 }
 
 /// What the gateway line of the list says of the keys stored: every id one is stored for, whether or
@@ -249,7 +283,9 @@ fn gateways_held(stored: Result<Keys, keys::Unreadable>) -> Option<String> {
 /// Run one way with the arguments that followed its name.
 fn sign_in(way: Way, rest: &[String]) -> ExitCode {
     match way {
-        Way::Brave | Way::Bedrock | Way::Import | Way::ChatGpt | Way::Xai if !rest.is_empty() => {
+        Way::Brave | Way::Bedrock | Way::Import | Way::ChatGpt | Way::Xai | Way::Google
+            if !rest.is_empty() =>
+        {
             unexpected(way, &rest[0])
         }
         Way::Brave => crate::brave::login(),
@@ -257,6 +293,7 @@ fn sign_in(way: Way, rest: &[String]) -> ExitCode {
         Way::Import => crate::import::providers(&[]),
         Way::ChatGpt => crate::chatgpt::login(),
         Way::Xai => crate::xai::login(),
+        Way::Google => google(),
         Way::Gateway => match rest {
             [flag, ..] if flag.starts_with('-') => fail(
                 Ending::Argument,
@@ -545,7 +582,7 @@ fn gateway(named: Option<&str>) -> ExitCode {
         managed: &managed,
         named,
         // Both ends, as `import-providers` asks for them.
-        terminal: std::io::stdin().is_terminal() && std::io::stderr().is_terminal(),
+        terminal: at_a_terminal(),
         directory: directory.as_deref(),
         lookup: &|name| std::env::var(name).ok(),
     };
@@ -972,6 +1009,186 @@ fn record_kept(
     }
 }
 
+/// What the Google sign-in is handed besides the questions and the login.
+struct GoogleTask<'a> {
+    /// INCOG-7: the sign-in records a block, which a session that leaves nothing behind does not.
+    incognito: bool,
+    /// The gateways the configuration names, which include the Vertex AI service the environment
+    /// names where no block does.
+    providers: &'a [Provider],
+    managed: &'a Managed,
+    /// Whether stdin and stderr are both terminals.
+    terminal: bool,
+    /// Whether the Google Cloud CLI is on the usable part of `PATH`.
+    installed: bool,
+    /// The state directory, `None` where nothing may be written.
+    directory: Option<&'a Path>,
+    /// Where a variable the configuration reads is looked up.
+    lookup: &'a dyn Fn(&str) -> Option<String>,
+}
+
+/// What recording the sign-in does to the person's settings.
+enum Recording {
+    /// No block names `google-vertex`, so the block of this sign-in is added to the settings as they
+    /// were read before the login, and the write is refused where they changed since.
+    Add(Destination),
+    /// A block or the environment already configures the same project and location.
+    Already,
+    /// A block or the environment configures `google-vertex` another way, which is the person's.
+    Left,
+}
+
+/// `bravebot auth login google`: sign in to Google with the Google Cloud CLI, which is the sign-in a
+/// session makes before a turn (BACKEND-65), and record the project the requests go to.
+fn google() -> ExitCode {
+    let config = Config::from_env();
+    let providers = match key_entry::configured_gateways(&config) {
+        Ok(providers) => providers.to_vec(),
+        Err(problem) => return fail(Ending::Configuration, drawn_problem(problem)),
+    };
+    let managed = Managed::load();
+    let directory = home::writable();
+    let task = GoogleTask {
+        incognito: bravebot_core::incognito::engaged(),
+        providers: &providers,
+        managed: &managed,
+        // Both ends, as `import-providers` asks for them.
+        terminal: at_a_terminal(),
+        installed: gcloud::is_installed(),
+        directory: directory.as_deref(),
+        lookup: &|name| std::env::var(name).ok(),
+    };
+    sign_in_google(
+        &task,
+        || Prompting::new(std::io::stdin().lock(), std::io::stderr()),
+        |say| gcloud::sign_in_checked(say),
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    )
+    .code()
+}
+
+/// The sign-in of `bravebot auth login google`, over the places it reads and writes, so a test runs
+/// the whole of it: the project, the login and the block that names the project.
+///
+/// Every check that needs no answer is made before the project is asked for, and the project is
+/// checked before the login starts, so a refusal starts no program and writes nothing. The lines
+/// the Google Cloud CLI writes are untrusted, so they are drawn before they are shown, and nothing
+/// else it printed is repeated.
+fn sign_in_google<R: BufRead, W: Write>(
+    task: &GoogleTask<'_>,
+    open_questions: impl FnOnce() -> Prompting<R, W>,
+    login: impl FnOnce(&mut dyn FnMut(String)) -> Result<Signed, GcloudError>,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> Ending {
+    if task.incognito {
+        return refused(err, Ending::Failed, t!(auth_google_not_while_incognito));
+    }
+    let existing = task
+        .providers
+        .iter()
+        .find(|provider| provider.is_google_vertex());
+    // The layer replaces the blocks a person wrote, so one recorded in the person's file is not read.
+    if existing.is_none() && task.managed.gateways().is_some() {
+        return refused(
+            err,
+            Ending::Configuration,
+            t!(auth_google_managed, path = managed_path()),
+        );
+    }
+    if !task.terminal {
+        return refused(err, Ending::Argument, t!(auth_google_needs_a_terminal));
+    }
+    let Some(directory) = task.directory else {
+        return refused(err, Ending::Failed, t!(import_no_home));
+    };
+    if !task.installed {
+        return refused(err, Ending::Failed, t!(auth_google_not_installed));
+    }
+
+    // Asked once the checks that need no answer are made, and the lock on stdin is let go before the
+    // login starts.
+    let answered = open_questions().answer(t!(auth_google_project_question));
+    let project = match answered {
+        Some(project) if !project.is_empty() => project,
+        _ => return Ending::Done,
+    };
+    // The rule the endpoint is built under, so a project this accepts is one a session can reach.
+    let Ok(offer) = key_entry::google_cloud_offer(&project, "") else {
+        return refused(err, Ending::Argument, t!(auth_google_project_refused));
+    };
+    let settings = bravebot_config::user_settings_file(directory);
+    let recording = match existing {
+        Some(block)
+            if block.needs_google_cloud_token(task.lookup)
+                && block.base_url == offer.provider.base_url =>
+        {
+            Recording::Already
+        }
+        Some(_) => Recording::Left,
+        None => match with_block(&offer, &settings) {
+            Ok(destination) => Recording::Add(destination),
+            Err(problem) => {
+                return refused(
+                    err,
+                    Ending::Failed,
+                    t!(auth_google_cannot_record, problem = problem),
+                );
+            }
+        },
+    };
+
+    let signed = {
+        let mut show = |line: String| tell(&mut *out, printable(&line));
+        login(&mut show)
+    };
+    match signed {
+        Ok(Signed::Already) => tell(out, t!(auth_google_already_signed_in)),
+        Ok(Signed::Now) => tell(out, t!(auth_google_signed_in)),
+        // Not quoted: what the CLI printed can hold a token, a path or an account.
+        Err(GcloudError::NotInstalled) => {
+            return refused(err, Ending::Failed, t!(auth_google_not_installed));
+        }
+        Err(GcloudError::Refused { .. }) => {
+            return refused(err, Ending::Failed, t!(auth_google_failed));
+        }
+    }
+
+    match recording {
+        Recording::Already => tell(out, t!(auth_google_already_recorded)),
+        Recording::Left => tell(out, t!(auth_google_left)),
+        Recording::Add(destination) => match crate::import::write(&destination, unrecordable) {
+            Ok(()) => tell(
+                out,
+                t!(
+                    auth_google_recorded,
+                    file = shown(&settings),
+                    project = printable(&project),
+                    host = printable(offer.provider.host())
+                ),
+            ),
+            Err(problem) => {
+                return refused(
+                    err,
+                    Ending::Failed,
+                    t!(
+                        auth_google_not_recorded,
+                        entry = format!(
+                            r#""provider": {{"{}": {}}}"#,
+                            printable(offer.id()),
+                            offer.entry_text()
+                        ),
+                        file = shown(&settings),
+                        problem = problem
+                    ),
+                );
+            }
+        },
+    }
+    Ending::Done
+}
+
 /// The service the key is for, `None` where nothing was picked, or the refusal of an answer that
 /// names none of those listed.
 ///
@@ -1091,6 +1308,7 @@ fn status(args: &[String]) -> ExitCode {
                 Way::Gateway,
                 Way::ChatGpt,
                 Way::Xai,
+                Way::Google,
             ],
             None,
             false,
@@ -1139,12 +1357,20 @@ fn report(ways: &[Way], gateway_id: Option<&str>, named: bool) -> ExitCode {
         [Way::Gateway] => accounts::Which::Gateways(gateway_id.map(str::to_string)),
         [Way::ChatGpt] => accounts::Which::ChatGpt,
         [Way::Xai] => accounts::Which::Xai,
+        [Way::Google] => accounts::Which::GoogleCloud,
         _ => accounts::Which::All,
     };
-    // No time limit, so a slow AWS CLI is waited for as a turn would wait for it.
-    let inputs = accounts::Inputs::read(BedrockCheck::Check {
-        timeout: std::time::Duration::MAX,
-    });
+    // No time limit for AWS, so a slow AWS CLI is waited for as a turn would wait for it. The Google
+    // Cloud CLI is asked for a token and never to sign in, and a CLI that hangs is said not to have
+    // answered.
+    let inputs = accounts::Inputs::read(
+        BedrockCheck::Check {
+            timeout: std::time::Duration::MAX,
+        },
+        GoogleCheck::Check {
+            timeout: GOOGLE_STATUS_WAIT,
+        },
+    );
     let lines: Vec<Line> = match accounts::list(inputs, which) {
         Ok(rows) => rows.into_iter().map(worded).collect(),
         Err(refused) => {
@@ -1214,6 +1440,7 @@ fn worded(row: accounts::Row) -> Line {
         Of::Gateways => "gateway".to_string(),
         Of::ChatGpt => "chatgpt".to_string(),
         Of::Xai => "xai".to_string(),
+        Of::GoogleCloud => "google".to_string(),
     };
     let id = match &row.way {
         Of::Gateway { id } => printable(id),
@@ -1229,6 +1456,7 @@ fn worded(row: accounts::Row) -> Line {
             (Held::Account { expires }, Of::Xai) => t!(auth_status_xai_expires, expires = expires),
             (Held::Account { expires }, _) => t!(auth_status_chatgpt_expires, expires = expires),
             (Held::AwsSession, _) => t!(auth_status_bedrock_good).into(),
+            (Held::GoogleCloudToken, _) => t!(auth_status_google_good).into(),
         }
     };
     let why = |why: Why| -> String {
@@ -1248,8 +1476,8 @@ fn worded(row: accounts::Row) -> Line {
             (Why::BedrockLapsed, _) => t!(auth_status_bedrock_lapsed).into(),
             (Why::BedrockNoProfile, _) => t!(auth_status_bedrock_no_profile).into(),
             (Why::BedrockNoCli, _) => t!(auth_status_bedrock_no_cli).into(),
-            // A timeout and a skipped check are not reached: `status` always asks, and waits as
-            // long as the AWS CLI takes. Said as the nearest sentence this catalog has.
+            // A skipped check is not reached: `status` always asks. Said as the nearest sentence this
+            // catalog has.
             (Why::BedrockUndecodable | Why::BedrockTimedOut | Why::NotChecked, _) => {
                 t!(auth_status_bedrock_undecodable).into()
             }
@@ -1270,6 +1498,10 @@ fn worded(row: accounts::Row) -> Line {
                 id = id
             ),
             (Why::KeysUnreadable, _) => t!(auth_gateway_held_unreadable).into(),
+            (Why::GoogleCloudNoProject, _) => t!(auth_status_google_no_project).into(),
+            (Why::GoogleCloudLapsed, _) => t!(auth_status_google_lapsed).into(),
+            (Why::GoogleCloudNoCli, _) => t!(auth_status_google_no_cli).into(),
+            (Why::GoogleCloudTimedOut, _) => t!(auth_status_google_timed_out).into(),
         }
     };
     let standing = match row.standing {
@@ -1334,7 +1566,8 @@ fn listed<'n>(names: impl Iterator<Item = &'n str>) -> String {
 }
 
 /// `bravebot auth logout <way>`. The Brave key, a gateway, ChatGPT and xAI keep a credential of their
-/// own, so they are the ways signed out of here; the other two say where what they left is kept.
+/// own, so they are the ways signed out of here; Google takes out the block its sign-in recorded and
+/// leaves the Google Cloud CLI's own credentials; the other two say where what they left is kept.
 fn logout(args: &[String]) -> ExitCode {
     let Some((word, rest)) = args.split_first() else {
         return refused_with_the_forms(t!(auth_logout_needs_a_way));
@@ -1370,7 +1603,117 @@ fn logout(args: &[String]) -> ExitCode {
         Way::Gateway => forget_gateway(rest.first().map(String::as_str)),
         Way::ChatGpt => crate::chatgpt::logout(),
         Way::Xai => crate::xai::logout(),
+        Way::Google => google_logout(),
     }
+}
+
+/// `bravebot auth logout google`: take out the block `auth login google` recorded, then offer to end
+/// the Google Cloud CLI's own sign-in.
+///
+/// Allowed in an incognito session, as the other logouts are: it removes what an earlier sign-in
+/// recorded and adds nothing. The CLI's credentials are ended only on a yes typed at a terminal.
+fn google_logout() -> ExitCode {
+    let mut out = std::io::stdout();
+    let mut err = std::io::stderr();
+    let ending = forget_google(home::directory().as_deref(), &mut out, &mut err);
+    if ending != Ending::Done {
+        return ending.code();
+    }
+    // Both ends, as the sign-in asks for them: with no terminal nobody is there to say yes.
+    let askable = at_a_terminal();
+    revoke_google(
+        askable && gcloud::is_installed(),
+        || Prompting::new(std::io::stdin().lock(), std::io::stderr()),
+        gcloud::revoke,
+        &mut out,
+        &mut err,
+    )
+    .code()
+}
+
+/// The question that ends the Google Cloud CLI's sign-in, over the places it reads and writes so a
+/// test runs the whole of it.
+///
+/// Nothing is asked where `askable` is false, and `revoke` runs only on a yes: the credentials are
+/// shared with every program on the machine that reads them, and the end of the input, an empty
+/// answer and any other word leave them in place. What the CLI writes while it revokes is not
+/// shown, and a failure says it in fixed words.
+fn revoke_google<R: BufRead, W: Write>(
+    askable: bool,
+    open_questions: impl FnOnce() -> Prompting<R, W>,
+    revoke: impl FnOnce() -> Result<(), GcloudError>,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> Ending {
+    if !askable {
+        return Ending::Done;
+    }
+    let decision = open_questions().ask(&[], t!(auth_logout_google_revoke_question));
+    if decision != Decision::Approve {
+        tell(out, t!(auth_logout_google_revoke_declined));
+        return Ending::Done;
+    }
+    match revoke() {
+        Ok(()) => {
+            tell(out, t!(auth_logout_google_revoked));
+            Ending::Done
+        }
+        Err(_) => refused(err, Ending::Failed, t!(auth_logout_google_revoke_failed)),
+    }
+}
+
+/// What `logout google` does in `directory`, over the streams it writes to, so a test runs the whole
+/// of it.
+///
+/// The block is taken out only where it is still as sign-in writes it and no key is stored for the
+/// id, since a key stored for it is sent to that block. Nothing the Google Cloud CLI keeps is touched:
+/// the sentence says so and names how to end it, which [`revoke_google`] offers.
+fn forget_google(directory: Option<&Path>, out: &mut impl Write, err: &mut impl Write) -> Ending {
+    use key_entry::GoogleBlock;
+    let Some(directory) = directory else {
+        tell(out, t!(auth_logout_google_nothing));
+        return Ending::Done;
+    };
+    let settings = bravebot_config::user_settings_file(directory);
+    let key_stored = match Keys::read(directory) {
+        Ok(stored) => stored.get(GOOGLE_VERTEX_ID).is_some(),
+        Err(keys::Unreadable) => {
+            return refused(
+                err,
+                Ending::Failed,
+                t!(
+                    auth_gateway_keys_unreadable,
+                    path = shown(&keys::file(directory))
+                ),
+            );
+        }
+    };
+    match key_entry::forget_google_block(&settings, key_stored) {
+        Ok(GoogleBlock::Removed) => {
+            tell(out, t!(auth_logout_google_removed, file = shown(&settings)))
+        }
+        Ok(GoogleBlock::NotThere) => tell(out, t!(auth_logout_google_nothing)),
+        Ok(GoogleBlock::Left) => tell(
+            out,
+            t!(auth_logout_google_not_ours, file = shown(&settings)),
+        ),
+        Ok(GoogleBlock::LeftForTheKey) => tell(out, t!(auth_logout_google_key_stored)),
+        Err(accounts::SettingsNotWritten::Unwritable(why)) => {
+            return refused(err, Ending::Failed, unrecordable(why, &settings));
+        }
+        Err(accounts::SettingsNotWritten::Refused(problem)) => {
+            return refused(
+                err,
+                Ending::Failed,
+                t!(
+                    import_not_written,
+                    file = shown(&settings),
+                    problem = printable(&problem)
+                ),
+            );
+        }
+    }
+    Ending::Done
 }
 
 /// Forget the key stored for a gateway, which ends nothing at the service that issued it.
@@ -1840,11 +2183,13 @@ mod tests {
             ("4\n", Some(Way::Gateway)),
             ("5\n", Some(Way::ChatGpt)),
             ("6\n", Some(Way::Xai)),
+            ("7\n", Some(Way::Google)),
             ("brave\n", Some(Way::Brave)),
             ("bedrock\n", Some(Way::Bedrock)),
             ("gateway\n", Some(Way::Gateway)),
             ("ChatGPT\n", Some(Way::ChatGpt)),
             ("XAI\n", Some(Way::Xai)),
+            ("Google\n", Some(Way::Google)),
             ("  import  \n", Some(Way::Import)),
             ("Bedrock\n", Some(Way::Bedrock)),
             ("\n", None),
@@ -1857,7 +2202,7 @@ mod tests {
                 "{answers:?}: {said}"
             );
         }
-        for refused in ["0\n", "7\n", "aws\n", "leo\n"] {
+        for refused in ["0\n", "8\n", "aws\n", "leo\n", "gemini\n"] {
             let (said, picked) = asked(refused, &nothing_held);
             let complaint = picked.expect_err(refused);
             assert!(
@@ -4015,6 +4360,631 @@ mod tests {
         assert!(run.err.contains("past what bravebot reads"), "{}", run.err);
     }
 
+    /// CLI-18 and CLI-23's Google sign-in: what the Google way is given besides the project typed.
+    #[derive(Default)]
+    struct GoogleGiven<'a> {
+        /// The person's own settings file, which the configuration is read from too.
+        settings: Option<&'a str>,
+        /// The machine-level file.
+        managed: Option<&'a str>,
+        /// What is typed to the project question, a line each.
+        answers: &'a str,
+        /// Variables the process has exported.
+        exported: &'a [(&'a str, &'a str)],
+        /// Stdin or stderr is not a terminal.
+        no_terminal: bool,
+        /// No Google Cloud CLI is on the usable part of `PATH`.
+        not_installed: bool,
+        incognito: bool,
+        /// Text another program writes to the settings file while the login runs.
+        during_login: Option<&'a str>,
+    }
+
+    /// What the stand-in for the Google Cloud CLI does when the sign-in starts it.
+    enum Login {
+        /// Writes these lines and ends with a token given from then on.
+        Signs(&'static [&'static str]),
+        /// A token was given before any login, so no browser is opened.
+        HadAToken,
+        /// Writes these lines and ends without a token.
+        Fails(&'static [&'static str]),
+    }
+
+    /// What a run of the Google sign-in said and left behind.
+    struct GoogleRun {
+        ending: Ending,
+        out: String,
+        err: String,
+        asked: String,
+        /// How many times the stand-in was started.
+        started: usize,
+        /// Whether the settings file existed when the stand-in was started.
+        settings_before_login: Option<bool>,
+        directory: PathBuf,
+        _scratch: Scratch,
+    }
+
+    impl GoogleRun {
+        fn settings_text(&self) -> Option<String> {
+            std::fs::read_to_string(bravebot_config::user_settings_file(&self.directory)).ok()
+        }
+    }
+
+    /// Run the whole Google sign-in with no terminal and a stand-in for the Google Cloud CLI: the
+    /// project, the login and the block that names the project.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the fixture is built at the call and read here"
+    )]
+    fn google_in(name: &str, given: GoogleGiven<'_>, login: &Login) -> GoogleRun {
+        let scratch = Scratch::new(name);
+        let directory = scratch.0.join("state");
+        std::fs::create_dir_all(&directory).expect("a state directory");
+        if let Some(text) = given.settings {
+            std::fs::write(bravebot_config::user_settings_file(&directory), text)
+                .expect("settings");
+        }
+        let managed = match given.managed {
+            Some(text) => {
+                let file = scratch.0.join("managed.json");
+                std::fs::write(&file, text).expect("a machine-level file");
+                Managed::at(&file)
+            }
+            None => Managed::default(),
+        };
+        let exported = |name: &str| {
+            given
+                .exported
+                .iter()
+                .find(|(exported, _)| *exported == name)
+                .map(|(_, value)| value.to_string())
+        };
+        let providers = bravebot_config::gateways(
+            &Settings::parse(given.settings.unwrap_or("")),
+            &managed,
+            &exported,
+        );
+        let task = GoogleTask {
+            incognito: given.incognito,
+            providers: &providers,
+            managed: &managed,
+            terminal: !given.no_terminal,
+            installed: !given.not_installed,
+            directory: Some(&directory),
+            lookup: &exported,
+        };
+        let (mut out, mut err, mut asked) = (Vec::new(), Vec::new(), Vec::new());
+        let mut started = 0;
+        let mut settings_before_login = None;
+        let ending = sign_in_google(
+            &task,
+            || Prompting::new(given.answers.as_bytes(), &mut asked),
+            |say| {
+                started += 1;
+                settings_before_login =
+                    Some(bravebot_config::user_settings_file(&directory).exists());
+                if let Some(text) = given.during_login {
+                    std::fs::write(bravebot_config::user_settings_file(&directory), text)
+                        .expect("an edit during the login");
+                }
+                match login {
+                    Login::Signs(lines) => {
+                        lines.iter().for_each(|line| say((*line).to_string()));
+                        Ok(Signed::Now)
+                    }
+                    Login::HadAToken => Ok(Signed::Already),
+                    Login::Fails(lines) => {
+                        lines.iter().for_each(|line| say((*line).to_string()));
+                        Err(GcloudError::Refused {
+                            detail: "placeholder-gcloud-detail".to_string(),
+                        })
+                    }
+                }
+            },
+            &mut out,
+            &mut err,
+        );
+        let text = |bytes: Vec<u8>| String::from_utf8(bytes).expect("utf-8");
+        GoogleRun {
+            ending,
+            out: text(out),
+            err: text(err),
+            asked: text(asked),
+            started,
+            settings_before_login,
+            directory: directory.clone(),
+            _scratch: scratch,
+        }
+    }
+
+    const A_PROJECT: &str = "example-project-1";
+
+    /// A configuration whose `google-vertex` block names a project and no key.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_project_config() -> Config {
+        let mut config = Config::from_lookup(|name| match name {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-east-1".into()),
+            _ => None,
+        })
+        .expect("a configuration");
+        config.providers = Settings::parse(&format!(
+            r#"{{"provider": {{"google-vertex": {{"options": {{"project": "{A_PROJECT}"}}}}}}}}"#
+        ))
+        .providers()
+        .to_vec();
+        config
+    }
+
+    /// The Google way is listed by its number and its word, and its line names Google and Gemini and
+    /// says the Google Cloud CLI signs in. The list is asked with nothing held injected, so the line
+    /// says nothing is held; what the CLI's answer makes `google_held` say is checked below from the
+    /// row each answer gives, and CLI-18 says the real list asks the CLI for a token.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn the_google_way_is_listed_by_number_and_word_and_names_gemini_and_the_cli() {
+        let (said, _) = asked("\n", &nothing_held);
+        let number = Way::ALL
+            .iter()
+            .position(|way| *way == Way::Google)
+            .expect("listed")
+            + 1;
+        let line = said
+            .lines()
+            .find(|line| line.starts_with(&format!("  {number}. google")))
+            .unwrap_or_else(|| panic!("google is not listed by its number and word: {said}"));
+        for word in ["Google", "Gemini", "Google Cloud CLI"] {
+            assert!(line.contains(word), "{word} is not on the line: {line}");
+        }
+        assert!(!line.contains("signed in)"), "{line}");
+        assert_eq!(
+            google_held(accounts::google_cloud(
+                &Ok(a_project_config()),
+                |_| None,
+                || { accounts::GoogleAsked::Answered(Ok(())) }
+            )),
+            Some("signed in".to_string()),
+            "a project the CLI signs in, with a token, is held"
+        );
+        for (how, asked) in [
+            (
+                "lapsed",
+                accounts::GoogleAsked::Answered(Err(GcloudError::Refused {
+                    detail: String::new(),
+                })),
+            ),
+            (
+                "missing",
+                accounts::GoogleAsked::Answered(Err(GcloudError::NotInstalled)),
+            ),
+            ("hanging", accounts::GoogleAsked::TimedOut),
+        ] {
+            assert_eq!(
+                google_held(accounts::google_cloud(
+                    &Ok(a_project_config()),
+                    |_| None,
+                    || asked
+                )),
+                None,
+                "{how} is held"
+            );
+        }
+        assert_eq!(
+            google_held(accounts::google_cloud(
+                &Err(ConfigError::Missing("a variable")),
+                |_| None,
+                || panic!("no project is named, so the CLI is not asked")
+            )),
+            None
+        );
+        for answer in [
+            format!("{number}\n"),
+            "google\n".to_string(),
+            "GOOGLE\n".to_string(),
+        ] {
+            let (said, picked) = asked(&answer, &nothing_held);
+            assert_eq!(
+                picked.map(|picked| picked.map(|(way, _)| way)),
+                Ok(Some(Way::Google)),
+                "{answer:?}: {said}"
+            );
+        }
+    }
+
+    /// CLI-18 and BACKEND-65: the sign-in records `provider.google-vertex` with the project and
+    /// `global`, and no `env`, `apiKey`, `keyFile` or `baseURL`, once the login has ended. Read
+    /// back as a session reads it, the block takes the Google Cloud CLI's token and a key stored for
+    /// the id is not what authenticates it. The login is started after the project is asked for
+    /// and before the file is written.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_google_sign_in_records_the_project_block_after_the_login_and_keeps_no_key() {
+        let run = google_in(
+            "cli-auth-google-records",
+            GoogleGiven {
+                answers: &format!("{A_PROJECT}\n"),
+                settings: Some(r#"{"model": "opus"}"#),
+                ..GoogleGiven::default()
+            },
+            &Login::Signs(&["Go to the following link in your browser:"]),
+        );
+        assert_eq!(run.ending, Ending::Done, "{}", run.err);
+        assert_eq!(run.started, 1);
+        assert_eq!(
+            run.settings_before_login,
+            Some(true),
+            "the settings file was there before the login"
+        );
+        assert!(
+            run.asked.contains(t!(auth_google_project_question)),
+            "{}",
+            run.asked
+        );
+        assert!(run.out.contains("Go to the following link"), "{}", run.out);
+        let written = run.settings_text().expect("the settings file");
+        let value: serde_json::Value = serde_json::from_str(&written).expect("json");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "model": "opus",
+                "provider": {"google-vertex": {
+                    "options": {"project": A_PROJECT, "location": "global"}
+                }}
+            }),
+            "{written}"
+        );
+        assert!(!keys::file(&run.directory).exists(), "a key was stored");
+        let read = Settings::parse(&written).providers().to_vec();
+        assert_eq!(read.len(), 1, "{written}");
+        assert_eq!(read[0].host(), "aiplatform.googleapis.com");
+        assert!(
+            read[0].needs_google_cloud_token(|_| None),
+            "a session would not ask the Google Cloud CLI for a token"
+        );
+        assert!(
+            run.out.contains(A_PROJECT) && run.out.contains("settings.json"),
+            "{}",
+            run.out
+        );
+    }
+
+    /// CLI-18: the login is asked for once, before the settings file exists, so a sign-in that
+    /// ends without a token has recorded nothing. The login's own failure text is not quoted, and
+    /// the command exits with the failure status.
+    #[test]
+    fn a_failed_google_sign_in_records_nothing_and_quotes_nothing_the_cli_wrote() {
+        let run = google_in(
+            "cli-auth-google-fails",
+            GoogleGiven {
+                answers: &format!("{A_PROJECT}\n"),
+                ..GoogleGiven::default()
+            },
+            &Login::Fails(&["ERROR: cancelled"]),
+        );
+        assert_eq!(run.ending, Ending::Failed, "{}", run.err);
+        assert_eq!(run.started, 1);
+        assert_eq!(run.settings_before_login, Some(false));
+        assert_eq!(run.settings_text(), None, "settings were written");
+        assert!(!keys::file(&run.directory).exists());
+        assert!(run.err.contains("did not complete"), "{}", run.err);
+        for stream in [&run.err, &run.asked] {
+            assert!(!stream.contains("placeholder-gcloud-detail"), "{stream}");
+        }
+    }
+
+    /// BACKEND-9 and LAYER-3: each line the Google Cloud CLI writes is shown as it arrives with
+    /// its control characters drawn, so what it wrote cannot move the cursor or forge the lines
+    /// around it.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn each_line_the_google_cli_writes_is_shown_with_its_control_characters_drawn() {
+        let run = google_in(
+            "cli-auth-google-lines",
+            GoogleGiven {
+                answers: &format!("{A_PROJECT}\n"),
+                ..GoogleGiven::default()
+            },
+            &Login::Signs(&[
+                "first https://accounts.example.invalid/\u{1b}[2J",
+                "second\u{7}line",
+            ]),
+        );
+        assert_eq!(run.ending, Ending::Done, "{}", run.err);
+        assert!(
+            run.out.contains("first https://accounts.example.invalid/"),
+            "{}",
+            run.out
+        );
+        assert!(run.out.contains("second"), "{}", run.out);
+        assert!(
+            !run.out.contains('\u{1b}') && !run.out.contains('\u{7}'),
+            "{:?}",
+            run.out
+        );
+        assert!(
+            run.out.find("first").expect("first") < run.out.find("second").expect("second"),
+            "{}",
+            run.out
+        );
+    }
+
+    /// CLI-18 and BACKEND-49: a project the endpoint cannot be built from is refused with the
+    /// argument status before the Google Cloud CLI starts and before anything is written, by the
+    /// rule the endpoint is built under, and the value is not repeated. Nothing typed starts nothing.
+    #[test]
+    fn a_project_an_endpoint_cannot_be_built_from_is_refused_before_the_cli_starts() {
+        for project in [
+            "a/b",
+            "-project",
+            "my project",
+            "p@q",
+            "p?x",
+            "p#x",
+            "p\u{e9}",
+        ] {
+            let run = google_in(
+                "cli-auth-google-bad-project",
+                GoogleGiven {
+                    answers: &format!("{project}\n"),
+                    ..GoogleGiven::default()
+                },
+                &Login::Signs(&[]),
+            );
+            assert_eq!(run.ending, Ending::Argument, "{project:?}: {}", run.err);
+            assert_eq!(run.started, 0, "{project:?}: the CLI was started");
+            assert_eq!(
+                run.settings_text(),
+                None,
+                "{project:?}: settings were written"
+            );
+            assert!(
+                !run.err.contains(project),
+                "{project:?} was repeated: {}",
+                run.err
+            );
+        }
+        let run = google_in(
+            "cli-auth-google-no-project",
+            GoogleGiven {
+                answers: "\n",
+                ..GoogleGiven::default()
+            },
+            &Login::Signs(&[]),
+        );
+        assert_eq!(run.ending, Ending::Done, "{}", run.err);
+        assert_eq!(run.started, 0);
+        assert_eq!(run.settings_text(), None);
+        let run = google_in(
+            "cli-auth-google-input-ends",
+            GoogleGiven::default(),
+            &Login::Signs(&[]),
+        );
+        assert_eq!(run.ending, Ending::Done, "{}", run.err);
+        assert_eq!(run.started, 0);
+    }
+
+    /// CLI-18: every check that needs no answer refuses before the project is asked for and before
+    /// the Google Cloud CLI starts: no terminal and an incognito session with their own statuses,
+    /// a missing Google Cloud CLI naming how to get it, and a machine-level file that names
+    /// gateways and none of them google-vertex.
+    #[test]
+    fn the_google_sign_in_refuses_before_asking_or_starting_anything() {
+        let managed = r#"{"provider": {"work": {"options": {"baseURL": "https://gateway.work.example/v1"}}}}"#;
+        for (how, given, ending, said) in [
+            (
+                "no terminal",
+                GoogleGiven {
+                    no_terminal: true,
+                    ..GoogleGiven::default()
+                },
+                Ending::Argument,
+                "needs a terminal",
+            ),
+            (
+                "incognito",
+                GoogleGiven {
+                    incognito: true,
+                    ..GoogleGiven::default()
+                },
+                Ending::Failed,
+                "incognito",
+            ),
+            (
+                "no gcloud",
+                GoogleGiven {
+                    not_installed: true,
+                    ..GoogleGiven::default()
+                },
+                Ending::Failed,
+                "cloud.google.com/sdk/docs/install",
+            ),
+            (
+                "managed gateways",
+                GoogleGiven {
+                    managed: Some(managed),
+                    ..GoogleGiven::default()
+                },
+                Ending::Configuration,
+                "every user of this machine",
+            ),
+        ] {
+            let run = google_in(
+                "cli-auth-google-refused",
+                GoogleGiven {
+                    answers: &format!("{A_PROJECT}\n"),
+                    ..given
+                },
+                &Login::Signs(&[]),
+            );
+            assert_eq!(run.ending, ending, "{how}: {}", run.err);
+            assert!(run.err.contains(said), "{how}: {}", run.err);
+            assert_eq!(run.started, 0, "{how}: the CLI was started");
+            assert!(
+                run.asked.is_empty(),
+                "{how}: a question was put: {}",
+                run.asked
+            );
+            assert_eq!(run.settings_text(), None, "{how}: settings were written");
+        }
+    }
+
+    /// CLI-18: a token the Google Cloud CLI already gives is no reason to open a browser, and the
+    /// command says so, still asks for the project and records the block.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_google_cli_that_already_gives_a_token_opens_no_browser_and_still_records() {
+        let run = google_in(
+            "cli-auth-google-already",
+            GoogleGiven {
+                answers: &format!("{A_PROJECT}\n"),
+                ..GoogleGiven::default()
+            },
+            &Login::HadAToken,
+        );
+        assert_eq!(run.ending, Ending::Done, "{}", run.err);
+        assert!(run.out.contains("no browser was opened"), "{}", run.out);
+        assert!(run.settings_text().expect("recorded").contains(A_PROJECT));
+    }
+
+    /// CLI-18 and BACKEND-74: a block naming google-vertex is the person's. The same project at the
+    /// location `global`, with no key resolving, is recorded again by nothing and says so, whether a
+    /// block or `GOOGLE_CLOUD_PROJECT` names it; another project, the same project at another
+    /// location, a block naming a key, and the environment naming another project are left as they
+    /// are and said to be left. The Google Cloud CLI is still signed in. The regression it rejects is
+    /// reading the same project at another location as recorded already.
+    #[test]
+    fn a_google_vertex_block_already_there_is_left_as_it_is() {
+        let same = format!(
+            r#"{{"provider": {{"google-vertex": {{"options": {{"project": "{A_PROJECT}"}}}}}}}}"#
+        );
+        let other =
+            r#"{"provider": {"google-vertex": {"options": {"project": "another-project"}}}}"#;
+        let elsewhere = format!(
+            r#"{{"provider": {{"google-vertex": {{"options": {{"project": "{A_PROJECT}", "location": "us-east5"}}}}}}}}"#
+        );
+        let keyed = format!(
+            r#"{{"provider": {{"google-vertex": {{"env": ["A_VERTEX_KEY"], "options": {{"project": "{A_PROJECT}"}}}}}}}}"#
+        );
+        for (how, settings, exported, recorded_already) in [
+            ("same project", same.as_str(), &[][..], true),
+            ("another project", other, &[][..], false),
+            (
+                "same project at another location",
+                elsewhere.as_str(),
+                &[][..],
+                false,
+            ),
+            (
+                "a key variable that is not set",
+                keyed.as_str(),
+                &[][..],
+                true,
+            ),
+            (
+                "a key a variable gives",
+                keyed.as_str(),
+                &[("A_VERTEX_KEY", AN_EXPORTED_KEY)][..],
+                false,
+            ),
+            (
+                "the environment naming another project",
+                "{}",
+                &[("GOOGLE_CLOUD_PROJECT", "another-project")][..],
+                false,
+            ),
+            (
+                "the environment naming the same project",
+                "{}",
+                &[("GOOGLE_CLOUD_PROJECT", A_PROJECT)][..],
+                true,
+            ),
+        ] {
+            let run = google_in(
+                "cli-auth-google-existing",
+                GoogleGiven {
+                    answers: &format!("{A_PROJECT}\n"),
+                    settings: Some(settings),
+                    exported,
+                    ..GoogleGiven::default()
+                },
+                &Login::Signs(&[]),
+            );
+            let (said, not_said) = if recorded_already {
+                (t!(auth_google_already_recorded), t!(auth_google_left))
+            } else {
+                (t!(auth_google_left), t!(auth_google_already_recorded))
+            };
+            assert_eq!(run.ending, Ending::Done, "{how}: {}", run.err);
+            assert_eq!(run.started, 1, "{how}");
+            assert!(run.out.contains(said), "{how}: {}", run.out);
+            assert!(!run.out.contains(not_said), "{how}: {}", run.out);
+            assert_eq!(
+                run.settings_text().as_deref(),
+                Some(settings),
+                "{how}: the settings were written"
+            );
+        }
+    }
+
+    /// CLI-18: a settings file the block cannot be added to is found before the Google Cloud CLI
+    /// starts, so nobody signs in in a browser to be told the project cannot be recorded. A file that
+    /// holds a settings document and cannot be written afterwards is said with the entry to add.
+    #[test]
+    fn a_settings_file_that_cannot_take_the_block_is_found_before_the_cli_starts() {
+        for (how, settings) in [
+            ("not a document", "[1, 2]"),
+            (
+                "an entry that configures nothing",
+                r#"{"provider": {"google-vertex": 5}}"#,
+            ),
+        ] {
+            let run = google_in(
+                "cli-auth-google-unrecordable",
+                GoogleGiven {
+                    answers: &format!("{A_PROJECT}\n"),
+                    settings: Some(settings),
+                    ..GoogleGiven::default()
+                },
+                &Login::Signs(&[]),
+            );
+            assert_eq!(run.ending, Ending::Failed, "{how}: {}", run.err);
+            assert_eq!(run.started, 0, "{how}: the CLI was started");
+            assert_eq!(run.settings_text().as_deref(), Some(settings), "{how}");
+        }
+    }
+
+    /// BACKEND-74: the settings file is kept as it was read before the login. An edit made while the
+    /// browser sign-in runs is refused at the write, the file keeps what the other program wrote, and
+    /// the command says it could not record the block. The regression it rejects: a write that reads
+    /// the file again after the login, which merges the block into what was written meanwhile.
+    #[test]
+    fn a_settings_file_edited_while_the_google_login_runs_is_refused_and_left_as_written() {
+        let edited = r#"{"model": "another-model"}"#;
+        let run = google_in(
+            "cli-auth-google-edited-meanwhile",
+            GoogleGiven {
+                answers: &format!("{A_PROJECT}\n"),
+                settings: Some(r#"{"model": "opus"}"#),
+                during_login: Some(edited),
+                ..GoogleGiven::default()
+            },
+            &Login::Signs(&[]),
+        );
+        assert_eq!(run.ending, Ending::Failed, "{}", run.err);
+        assert_eq!(run.started, 1);
+        assert_eq!(run.settings_text().as_deref(), Some(edited));
+        assert!(
+            run.err.contains(&*t!(
+                auth_bedrock_settings_changed,
+                file = shown(&bravebot_config::user_settings_file(&run.directory))
+            )),
+            "{}",
+            run.err
+        );
+    }
+
     /// A directory of its own under the target directory, removed when the test ends.
     struct Scratch(std::path::PathBuf);
 
@@ -4035,9 +5005,199 @@ mod tests {
         }
     }
 
-    /// CLI-18 and STATE-1: the keys are written where the configuration reads them, readable by
-    /// this account alone, with no temporary left beside them, and forgetting the last one removes
-    /// the file.
+    /// CLI-18: what `logout google` says and does in a state directory. It takes out the block
+    /// sign-in recorded and says the Google Cloud CLI's own sign-in is untouched and how it is ended,
+    /// says so where there is nothing to take out, and leaves a block that is not as sign-in writes it,
+    /// or one a stored key is sent to, saying that it did. The regression it rejects is a logout that
+    /// removes any `google-vertex` block, or that says nothing about what the CLI keeps.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn logging_out_of_google_removes_the_recorded_block_and_says_the_cli_sign_in_stays() {
+        let recorded = r#"{"model": "opus", "provider": {"google-vertex": {"options": {"project": "example-project-1", "location": "global"}}}}"#;
+        let persons = r#"{"provider": {"google-vertex": {"env": ["A_VERTEX_KEY"], "options": {"project": "example-project-1"}}}}"#;
+        let logout = |name: &str, settings: Option<&str>, keys: bool| {
+            let scratch = Scratch::new(name);
+            let directory = scratch.0.join("state");
+            std::fs::create_dir_all(&directory).expect("a state directory");
+            let file = bravebot_config::user_settings_file(&directory);
+            if let Some(text) = settings {
+                std::fs::write(&file, text).expect("settings");
+            }
+            if keys {
+                write_keys(&directory, &placeholder_keys(&["google-vertex"])).expect("keys");
+            }
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let ending = forget_google(Some(&directory), &mut out, &mut err);
+            let text = |bytes: Vec<u8>| String::from_utf8(bytes).expect("utf-8");
+            (
+                ending,
+                text(out),
+                text(err),
+                std::fs::read_to_string(&file).ok(),
+            )
+        };
+
+        let (ending, out, err, left) = logout("cli-auth-google-logout", Some(recorded), false);
+        assert_eq!(ending, Ending::Done, "{err}");
+        assert!(
+            out.contains("no longer names a google-vertex project"),
+            "{out}"
+        );
+        assert!(
+            out.contains("gcloud auth application-default revoke"),
+            "{out}"
+        );
+        let value: serde_json::Value =
+            serde_json::from_str(&left.expect("the settings file")).expect("json");
+        assert_eq!(value, serde_json::json!({"model": "opus", "provider": {}}));
+
+        let (ending, out, _, left) = logout("cli-auth-google-logout-none", None, false);
+        assert_eq!(ending, Ending::Done);
+        assert!(out.contains("nothing was removed"), "{out}");
+        assert!(out.contains("revoke"), "{out}");
+        assert_eq!(left, None, "a settings file was made");
+
+        let (ending, out, _, left) = logout("cli-auth-google-logout-persons", Some(persons), false);
+        assert_eq!(ending, Ending::Done);
+        assert!(out.contains("was left as it is"), "{out}");
+        assert_eq!(left.as_deref(), Some(persons));
+
+        let (ending, out, _, left) = logout("cli-auth-google-logout-key", Some(recorded), true);
+        assert_eq!(ending, Ending::Done);
+        assert!(out.contains("a key is stored"), "{out}");
+        assert_eq!(left.as_deref(), Some(recorded));
+
+        let (ending, out, err, _) = logout("cli-auth-google-logout-spoilt", Some("[1]"), false);
+        assert_eq!(ending, Ending::Failed, "{out}{err}");
+        assert!(out.is_empty(), "{out}");
+
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(forget_google(None, &mut out, &mut err), Ending::Done);
+        assert!(
+            String::from_utf8(out)
+                .expect("utf-8")
+                .contains("nothing was removed")
+        );
+    }
+
+    /// CLI-18: the question that ends the Google Cloud CLI's own sign-in. Only a yes runs the revoke,
+    /// so the end of the input, an empty line and any other word leave credentials that every program
+    /// on the machine reads in place; nothing is asked where nobody can answer; and a failed revoke
+    /// says so in fixed words without what the CLI wrote. The regression it rejects is a logout that
+    /// revokes without a yes, or that reads the end of the input as one.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_cli_sign_in_is_ended_only_on_a_yes_typed_at_a_terminal() {
+        let run = |askable: bool, typed: &str, revoke: Result<(), GcloudError>| {
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let mut asked = Vec::new();
+            let mut revoked = 0;
+            let ending = revoke_google(
+                askable,
+                || Prompting::new(std::io::Cursor::new(typed.as_bytes().to_vec()), &mut asked),
+                || {
+                    revoked += 1;
+                    revoke
+                },
+                &mut out,
+                &mut err,
+            );
+            let text = |bytes: Vec<u8>| String::from_utf8(bytes).expect("utf-8");
+            (
+                ending,
+                text(out),
+                text(err),
+                String::from_utf8(asked).expect("utf-8"),
+                revoked,
+            )
+        };
+
+        let (ending, out, err, asked, revoked) = run(true, "y\n", Ok(()));
+        assert_eq!(ending, Ending::Done, "{err}");
+        assert_eq!(revoked, 1);
+        assert!(
+            asked.contains("End the Google Cloud CLI's sign-in"),
+            "{asked}"
+        );
+        assert!(out.contains("were revoked"), "{out}");
+
+        for typed in ["", "\n", "n\n", "maybe\n"] {
+            let (ending, out, _, asked, revoked) = run(true, typed, Ok(()));
+            assert_eq!(ending, Ending::Done, "{typed:?}");
+            assert_eq!(revoked, 0, "{typed:?} revoked the sign-in");
+            assert!(
+                asked.contains("End the Google Cloud CLI's sign-in"),
+                "{typed:?}"
+            );
+            assert!(out.contains("left in place"), "{typed:?}: {out}");
+        }
+
+        let (ending, out, err, asked, revoked) = run(false, "y\n", Ok(()));
+        assert_eq!(ending, Ending::Done);
+        assert_eq!(
+            (revoked, out.as_str(), err.as_str(), asked.as_str()),
+            (0, "", "", "")
+        );
+
+        let (ending, out, err, _, revoked) = run(
+            true,
+            "y\n",
+            Err(GcloudError::Refused {
+                detail: "placeholder-cli-detail".to_string(),
+            }),
+        );
+        assert_eq!(ending, Ending::Failed);
+        assert_eq!(revoked, 1);
+        assert!(err.contains("did not complete"), "{err}");
+        assert!(
+            !format!("{out}{err}").contains("placeholder-cli-detail"),
+            "{out}{err}"
+        );
+    }
+
+    /// CLI-23: each standing of the Google Cloud CLI's sign-in is one fixed sentence on a line named
+    /// `google`, that names `bravebot auth login google` where signing in is the remedy and carries
+    /// nothing the CLI wrote. The regression it rejects is a line that quotes the CLI's refusal, which
+    /// can name an account, a path or hold a token.
+    #[test]
+    fn a_google_line_is_a_fixed_sentence_naming_the_remedy_and_nothing_the_cli_wrote() {
+        use bravebot_agent::accounts::{Held as Has, Row, Standing as Of, Way as For, Why};
+        let said = |standing| {
+            let (name, standing) = worded(Row {
+                way: For::GoogleCloud,
+                standing,
+                stored: false,
+            });
+            format!("{name}: {}", standing.said())
+        };
+        let good = said(Of::SignedIn(Has::GoogleCloudToken));
+        let lapsed = said(Of::NotSignedIn(Why::GoogleCloudLapsed));
+        let no_project = said(Of::NotSignedIn(Why::GoogleCloudNoProject));
+        let no_cli = said(Of::Unusable(Why::GoogleCloudNoCli));
+        let timed_out = said(Of::Unusable(Why::GoogleCloudTimedOut));
+        assert!(good.starts_with("google: signed in: "), "{good}");
+        assert!(lapsed.starts_with("google: not signed in: "), "{lapsed}");
+        assert!(
+            no_project.starts_with("google: not signed in: "),
+            "{no_project}"
+        );
+        assert!(no_cli.starts_with("google: unusable: "), "{no_cli}");
+        assert!(timed_out.starts_with("google: unusable: "), "{timed_out}");
+        for remedy in [&lapsed, &no_project] {
+            assert!(remedy.contains("bravebot auth login google"), "{remedy}");
+        }
+        for line in [&good, &no_cli, &timed_out] {
+            assert!(!line.contains("auth login"), "{line}");
+        }
+        assert!(no_cli.contains("gcloud"), "{no_cli}");
+        let mut all = [good, lapsed, no_project, no_cli, timed_out];
+        all.sort();
+        let mut distinct = all.to_vec();
+        distinct.dedup();
+        assert_eq!(distinct.len(), all.len(), "two standings share a sentence");
+    }
+
+    /// CLI-18 and CLI-23: stored keys are written private and read back.
     #[test]
     fn stored_keys_are_written_private_and_read_back() {
         let scratch = Scratch::new("cli-auth-gateway-keys");

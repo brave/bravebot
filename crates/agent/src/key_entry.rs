@@ -244,6 +244,20 @@ pub fn google_vertex_offer(project: &str, location: &str) -> Result<Offer<'stati
     Offer::google_vertex(Some(project), location).ok_or(VertexFault::Project)
 }
 
+/// The Vertex AI offer for a project the Google Cloud CLI signs in
+/// ([BACKEND-65](../../../docs/specs/backends.md#BACKEND-65)), which no key goes with.
+///
+/// The project and location are held to the rules the endpoint is built under
+/// ([`google_vertex_offer`]), and the project has to be given: no project is express mode, which
+/// takes a key and not this sign-in. Nothing typed for the location is `global`, which is where a
+/// block that names none is reached.
+pub fn google_cloud_offer(project: &str, location: &str) -> Result<Offer<'static>, VertexFault> {
+    if project.is_empty() {
+        return Err(VertexFault::Project);
+    }
+    google_vertex_offer(project, location)
+}
+
 /// Why no block naming a known service's id can be added to the person's settings.
 #[derive(Debug)]
 pub enum BlockError {
@@ -266,6 +280,66 @@ pub fn with_block(offer: &Offer<'_>, settings: &Path) -> Result<Destination, Blo
     // Past the size the settings reader reads, which a destination says only once it is asked.
     destination.text().map_err(BlockError::Unwritable)?;
     Ok(destination)
+}
+
+/// What taking the block `bravebot auth login google` recorded out of the person's settings did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GoogleBlock {
+    /// The block was there as sign-in writes it, and is gone.
+    Removed,
+    /// No block names `google-vertex`.
+    NotThere,
+    /// A block names it that sign-in did not write as it is, so it is the person's and is left.
+    Left,
+    /// The block is as sign-in writes it and a key is stored for the id, so the block is what a
+    /// session sends that key to and is left.
+    LeftForTheKey,
+}
+
+/// Whether `entry` is what `bravebot auth login google` records: `options` holding the project and
+/// `"location": "global"` and nothing else, so no `env`, `apiKey`, `keyFile`, `baseURL` or header.
+/// A block with anything else in it, or another location, is one a person wrote or edited.
+pub fn is_recorded_google_block(entry: &serde_json::Map<String, serde_json::Value>) -> bool {
+    let Some(options) = entry
+        .get("options")
+        .and_then(serde_json::Value::as_object)
+        .filter(|_| entry.len() == 1)
+    else {
+        return false;
+    };
+    options.len() == 2
+        && options.get("location").and_then(serde_json::Value::as_str) == Some("global")
+        && options
+            .get("project")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(bravebot_config::provider::is_vertex_project)
+}
+
+/// Take the block sign-in with the Google Cloud CLI recorded out of the settings at `settings`,
+/// where it is still as it was recorded and no key is stored for it (`key_stored`).
+///
+/// Nothing is written where there is no block or where it is left, and a missing file is not made.
+pub fn forget_google_block(
+    settings: &Path,
+    key_stored: bool,
+) -> Result<GoogleBlock, SettingsNotWritten> {
+    use bravebot_config::provider::GOOGLE_VERTEX_ID;
+    let mut destination = Destination::open(settings).map_err(SettingsNotWritten::Unwritable)?;
+    if !destination.holds_gateway(GOOGLE_VERTEX_ID) {
+        return Ok(GoogleBlock::NotThere);
+    }
+    let recorded = destination
+        .gateway_entry(GOOGLE_VERTEX_ID)
+        .is_some_and(is_recorded_google_block);
+    if !recorded {
+        return Ok(GoogleBlock::Left);
+    }
+    if key_stored {
+        return Ok(GoogleBlock::LeftForTheKey);
+    }
+    destination.remove_gateway(GOOGLE_VERTEX_ID);
+    write_settings(&destination)?;
+    Ok(GoogleBlock::Removed)
 }
 
 /// Why the block for a known service was not recorded.
@@ -402,6 +476,41 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(keys::file(&unreadable)).expect("read"),
             "not json"
+        );
+    }
+
+    /// BACKEND-49 and BACKEND-65: the offer for a project the Google Cloud CLI signs in states the
+    /// project and `global` for an empty location, and is refused for no project, which is express
+    /// mode and takes a key. It refuses what the endpoint refuses, so no second copy of the rule can
+    /// accept a value the endpoint cannot be built from.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_google_cloud_offer_needs_a_project_the_endpoint_can_be_built_from() {
+        let offer = google_cloud_offer("example-project-1", "").expect("offered");
+        assert_eq!(
+            offer.entry,
+            *serde_json::json!({"options": {"project": "example-project-1", "location": "global"}})
+                .as_object()
+                .expect("an object")
+        );
+        assert_eq!(offer.provider.host(), "aiplatform.googleapis.com");
+        assert!(offer.provider.needs_google_cloud_token(|_| None));
+        let regional = google_cloud_offer("example-project-1", "us-east5").expect("offered");
+        assert_eq!(
+            regional.provider.host(),
+            "us-east5-aiplatform.googleapis.com"
+        );
+        assert_eq!(google_cloud_offer("", "").err(), Some(VertexFault::Project));
+        for project in ["a/b", "-p", "p q", "p@q", "p?x", "p#x"] {
+            assert_eq!(
+                google_cloud_offer(project, "").err(),
+                Some(VertexFault::Project),
+                "{project:?}"
+            );
+        }
+        assert_eq!(
+            google_cloud_offer("example-project-1", "US").err(),
+            Some(VertexFault::Location)
         );
     }
 
@@ -657,5 +766,85 @@ mod tests {
         );
         let found = ready(&vertex, &inputs(&named, Some(&directory))).expect("ready");
         assert!(found.offer.is_some_and(|offer| !offer.unconfigured));
+    }
+
+    /// CLI-18: taking out the block `auth login google` recorded removes it where it is still as
+    /// written, and only then. A block with a key variable, another host, another location, a header
+    /// or any other field is the person's, and so is one a key is stored for; each is left
+    /// byte for byte, as is a settings file with no block, and a file that is not a document is
+    /// refused untouched. The regression it rejects is removing whatever block names `google-vertex`,
+    /// which deletes what a person wrote.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_block_google_sign_in_recorded_is_taken_out_only_where_it_is_still_as_recorded() {
+        let recorded = r#"{"model": "opus", "provider": {"other": {}, "google-vertex": {"options": {"project": "example-project-1", "location": "global"}}}}"#;
+        let directory = scratch("forget-google");
+        let file = user_settings_file(&directory);
+        std::fs::write(&file, recorded).expect("written");
+        assert_eq!(
+            forget_google_block(&file, false).expect("removed"),
+            GoogleBlock::Removed
+        );
+        let left: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&file).expect("read")).expect("json");
+        assert_eq!(
+            left,
+            serde_json::json!({"model": "opus", "provider": {"other": {}}})
+        );
+        assert_eq!(
+            forget_google_block(&file, false).expect("nothing"),
+            GoogleBlock::NotThere
+        );
+
+        for (how, entry) in [
+            (
+                "a key variable",
+                r#"{"env": ["GOOGLE_API_KEY"], "options": {"project": "example-project-1", "location": "global"}}"#,
+            ),
+            (
+                "another location",
+                r#"{"options": {"project": "example-project-1", "location": "us-east5"}}"#,
+            ),
+            (
+                "another host",
+                r#"{"options": {"project": "example-project-1", "location": "global", "baseURL": "https://proxy.example.invalid/v1"}}"#,
+            ),
+            (
+                "a key file",
+                r#"{"options": {"project": "example-project-1", "location": "global", "keyFile": "/k"}}"#,
+            ),
+            ("express mode", "{}"),
+            (
+                "a project an endpoint cannot be built from",
+                r#"{"options": {"project": "a/b", "location": "global"}}"#,
+            ),
+            ("not a block", "5"),
+        ] {
+            let text = format!(r#"{{"provider": {{"google-vertex": {entry}}}}}"#);
+            std::fs::write(&file, &text).expect("written");
+            assert_eq!(
+                forget_google_block(&file, false).expect(how),
+                GoogleBlock::Left,
+                "{how}"
+            );
+            assert_eq!(std::fs::read_to_string(&file).expect("read"), text, "{how}");
+        }
+
+        std::fs::write(&file, recorded).expect("written");
+        assert_eq!(
+            forget_google_block(&file, true).expect("left"),
+            GoogleBlock::LeftForTheKey
+        );
+        assert_eq!(std::fs::read_to_string(&file).expect("read"), recorded);
+
+        std::fs::write(&file, "[1, 2]").expect("written");
+        assert!(forget_google_block(&file, false).is_err());
+        assert_eq!(std::fs::read_to_string(&file).expect("read"), "[1, 2]");
+        let missing = directory.join("nothing").join("settings.json");
+        assert_eq!(
+            forget_google_block(&missing, false).expect("nothing"),
+            GoogleBlock::NotThere
+        );
+        assert!(!missing.exists(), "a file was made to take nothing out of");
     }
 }

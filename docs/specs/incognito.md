@@ -210,6 +210,11 @@ was signed in once and never again, so the refusal comes before anything is aske
 removing a stored secret leaves less behind rather than more, which is the direction this mode
 points.
 
+Signing in to Google with `bravebot auth login google` is refused the same way, before the project is asked
+for and before the Google Cloud CLI starts, since it records the project in the person's settings
+([BACKEND-74](backends.md#BACKEND-74)). `bravebot auth logout google` and `bravebot auth status google` are
+allowed ([BACKEND-75](backends.md#BACKEND-75), [CLI-23](cli.md#CLI-23)).
+
 `verified-by: bravebot_cli::running::import_providers_is_refused_while_incognito`
 `verified-by: bravebot_cli::running::auth_login_brave_is_refused_where_a_key_cannot_be_typed_or_kept`
 `verified-by: bravebot_cli::running::auth_logout_brave_forgets_the_key_and_only_that_one`
@@ -221,6 +226,10 @@ points.
 `verified-by: bravebot_cli::xai_sign_in::auth_login_xai_is_refused_before_a_code_is_asked_for_where_it_cannot_be_done`
 `verified-by: bravebot_cli::xai_sign_in::auth_logout_xai_forgets_the_sign_in_and_only_that_one`
 `verified-by: bravebot_ui_bridge::key_entry_tests::a_key_is_refused_in_order_before_it_is_typed`
+`verified-by: bravebot_cli::running::auth_login_google_is_refused_without_a_terminal_and_while_incognito_before_the_cli_starts`
+`verified-by: bravebot_cli::auth::the_google_sign_in_refuses_before_asking_or_starting_anything`
+`verified-by: bravebot_cli::running::auth_logout_google_removes_the_recorded_block_and_leaves_the_cli_sign_in`
+`verified-by: bravebot_cli::running::auth_status_google_asks_the_cli_for_a_token_without_signing_in`
 
 <a id="INCOG-8"></a>
 ### INCOG-8: what the mode does not cover, and says so

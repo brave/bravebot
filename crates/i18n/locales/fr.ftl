@@ -1056,10 +1056,36 @@ auth-way-import = Un service de modèle de Claude Code, opencode, Ollama, LM Stu
 auth-way-gateway = Une clé pour { $services } ou pour une passerelle nommée par un bloc provider des réglages, saisie ici et gardée par bravebot
 auth-way-chatgpt = Un compte ChatGPT Plus ou Pro, auquel se connecter dans un navigateur
 auth-way-xai = Un abonnement SuperGrok de xAI, auquel se connecter avec un code saisi sur n'importe quel appareil
+auth-way-google = Google, pour Gemini sur Vertex AI, auquel se connecter avec la CLI Google Cloud dans un navigateur et un projet nommé ici, sans clé gardée par bravebot
 auth-gateway-held = une clé enregistrée pour { $ids }
 auth-gateway-held-unreadable = le fichier des clés de passerelle ne peut pas être lu
 auth-way-held = { $description } ({ $status })
 auth-signed-in = connecté
+auth-google-not-while-incognito =
+    une session incognito n'écrit rien sur le disque, et se connecter à Google enregistre le projet dans les réglages : lancez bravebot auth login google sans --incognito
+auth-google-managed =
+    { $path } nomme les passerelles pour tous les utilisateurs de cette machine et aucune n'est google-vertex, donc un projet enregistré dans vos réglages ne serait pas lu
+auth-google-needs-a-terminal =
+    le projet se tape dans un terminal, donc bravebot auth login google a besoin d'un terminal
+auth-google-not-installed =
+    la CLI Google Cloud (gcloud) est introuvable : installez-la depuis https://cloud.google.com/sdk/docs/install et relancez bravebot auth login google, ou utilisez une clé d'API Google avec bravebot auth login gateway google-vertex
+auth-google-project-question = Projet Google Cloud où l'API Vertex AI est activée, ou rien pour arrêter :
+auth-google-project-refused =
+    ce n'est pas un identifiant de projet Google Cloud : il contient des lettres, des chiffres, _, ., : et -, et commence par une lettre ou un chiffre ; la CLI Google Cloud n'a pas été lancée et rien n'a été enregistré
+auth-google-cannot-record =
+    le projet ne peut pas être enregistré, donc la CLI Google Cloud n'a pas été lancée : { $problem }
+auth-google-signed-in = connecté à Google avec la CLI Google Cloud
+auth-google-already-signed-in = la CLI Google Cloud fournit déjà un jeton d'accès, donc aucun navigateur n'a été ouvert
+auth-google-failed =
+    la connexion avec la CLI Google Cloud n'a pas abouti, donc rien n'a été enregistré ; relancez bravebot auth login google
+auth-google-recorded =
+    { $file } nomme désormais { $project } sous provider.google-vertex : les sessions lancées à partir de maintenant atteignent { $host } avec le jeton d'accès de la CLI Google Cloud et sans clé
+auth-google-already-recorded =
+    google-vertex nomme déjà ce projet à l'emplacement global et prend le jeton d'accès de la CLI Google Cloud, donc rien n'a été enregistré
+auth-google-left =
+    google-vertex est déjà configuré par un bloc provider ou une variable, et pas pour ce projet à l'emplacement global avec le jeton d'accès de la CLI Google Cloud, donc il a été laissé tel quel et une session utilise ce que cette configuration nomme
+auth-google-not-recorded =
+    la connexion a fonctionné, et aucune session ne l'utilise tant qu'un bloc provider ne nomme pas le projet : ajoutez { $entry } à { $file } ({ $problem })
 auth-which-way = Laquelle ? Tapez son numéro ou son nom, ou rien pour arrêter :
 auth-not-a-listed-way = { $answer } n'est pas l'une des façons listées
 auth-no-aws-account =
@@ -1160,7 +1186,23 @@ auth-status-not-all-usable = une connexion demandée n'est pas utilisable
 auth-status-brave-held = une clé premium est enregistrée et n'est envoyée qu'au service premium de Brave
 auth-status-brave-none = aucune clé premium n'est enregistrée ; lancez bravebot auth login brave
 auth-status-brave-nowhere = cette machine n'a nulle part où garder une clé, donc aucune n'est enregistrée
-auth-status-import = bravebot auth login import écrit des réglages et ne garde aucune connexion, donc il n'y a rien à demander : nommez brave, bedrock, gateway, chatgpt ou xai
+auth-logout-google-removed =
+    { $file } ne nomme plus de projet google-vertex, donc les sessions n'utilisent plus le jeton d'accès de la CLI Google Cloud ; la connexion de la CLI fonctionne encore tant qu'elle n'est pas terminée avec gcloud auth application-default revoke
+auth-logout-google-nothing =
+    aucun bloc google-vertex enregistré par bravebot auth login google n'est là, donc rien n'a été retiré ; la connexion de la CLI Google Cloud n'est pas terminée ici, et gcloud auth application-default revoke la termine
+auth-logout-google-not-ours =
+    le bloc google-vertex de { $file } n'est pas celui qu'écrit bravebot auth login google, il a donc été laissé tel quel ; la connexion de la CLI Google Cloud n'est pas terminée ici, et gcloud auth application-default revoke la termine
+auth-logout-google-key-stored =
+    une clé est enregistrée pour google-vertex et le bloc est l'endroit où une session l'envoie, donc le bloc a été laissé tel quel ; bravebot auth logout gateway google-vertex oublie la clé
+auth-logout-google-revoke-question =
+    Terminer aussi la connexion de la CLI Google Cloud ? Tous les programmes de cette machine qui utilisent ses identifiants par défaut de l'application cessent de fonctionner tant que gcloud auth application-default login n'est pas relancé.
+auth-logout-google-revoked =
+    les identifiants par défaut de l'application de la CLI Google Cloud ont été révoqués ; bravebot auth login google permet de se reconnecter
+auth-logout-google-revoke-declined =
+    la connexion de la CLI Google Cloud a été laissée en place
+auth-logout-google-revoke-failed =
+    gcloud auth application-default revoke n'a pas abouti, donc la connexion de la CLI Google Cloud peut encore être en place ; lancez bravebot auth status google pour vérifier
+auth-status-import = bravebot auth login import écrit des réglages et ne garde aucune connexion, donc il n'y a rien à demander : nommez brave, bedrock, gateway, chatgpt, xai ou google
 auth-status-gateway-none = aucune clé de passerelle n'est enregistrée ; lancez bravebot auth login gateway
 auth-status-gateway-none-stored = aucune clé n'est enregistrée pour { $id } ; lancez bravebot auth login gateway { $id }
 auth-status-gateway-unrecorded =
@@ -1187,6 +1229,11 @@ auth-status-bedrock-lapsed = la session AWS a expiré : lancez `bravebot auth lo
 auth-status-bedrock-no-profile = l'AWS CLI n'a aucun profil de ce nom : nommez-en un qu'elle connaît dans les réglages
 auth-status-bedrock-no-cli = l'AWS CLI n'est pas installée, et les identifiants Bedrock viennent d'elle
 auth-status-bedrock-undecodable = l'AWS CLI a répondu par quelque chose qui n'est pas un identifiant
+auth-status-google-good = la CLI Google Cloud donne un jeton d'accès, qu'une session envoie à l'hôte Vertex AI du projet que google-vertex nomme et à aucun autre hôte
+auth-status-google-no-project = aucun bloc google-vertex ne nomme de projet auquel la CLI Google Cloud puisse se connecter ; lancez bravebot auth login google
+auth-status-google-lapsed = la CLI Google Cloud ne donne aucun jeton d'accès ; lancez bravebot auth login google
+auth-status-google-no-cli = la CLI Google Cloud (gcloud) n'est pas installée, et le jeton d'accès du projet vient d'elle
+auth-status-google-timed-out = la CLI Google Cloud n'a pas répondu à temps
 chatgpt-not-while-incognito = se connecter enregistre un jeton sur le disque, ce qu'une session incognito ne fera pas
 chatgpt-needs-a-terminal =
     se connecter à ChatGPT affiche une adresse à ouvrir et attend le navigateur, donc bravebot auth login chatgpt a besoin d'un terminal sur la sortie d'erreur standard
@@ -5006,6 +5053,7 @@ gcloud-refused = La CLI Google Cloud n'a donné aucun jeton d'accès ({ $detail 
 gcloud-no-token = la réponse n'était pas un jeton
 gcloud-no-reason = la CLI Google Cloud n'a donné aucune raison
 gcloud-login-incomplete = la connexion n'a pas abouti
+gcloud-revoke-incomplete = la révocation n'a pas abouti
 doctor-gateway-token-google-cloud = aucun requis (la CLI Google Cloud fournit un jeton d'accès)
 schedule-usage = schedule accepte add, list, remove, pause, resume et clear avec un numéro, pending avec ou sans numéro, run-now avec un numéro, ou history avec ou sans numéro
 schedule-add-usage = schedule add accepte --cron et cinq champs entre guillemets, --prompt et le texte, et peut y ajouter --dir et un répertoire, --scheduler et crontab, launchd ou systemd, --deliver-to et le chemin absolu d'un programme, et --accept-edits ou --dangerously-skip-permissions

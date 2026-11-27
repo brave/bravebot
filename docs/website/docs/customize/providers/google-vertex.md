@@ -28,7 +28,7 @@ it, no question is asked and no entry is written. `bravebot auth login` lists th
 Google Vertex AI, and [Signing in](../signing-in.md#gemini-on-google-vertex-ai) describes the rest,
 including `auth status` and `auth logout`. The sign-in stores a key and does not choose a model: name one
 as `google-vertex/google/gemini-2.5-flash`. It does not start `gcloud`, so a project signed in with Google
-Cloud credentials is set up as [below](#signing-in-with-google-cloud-credentials-instead-of-a-key).
+Cloud credentials is set up with [`bravebot auth login google`](#signing-in-with-google-cloud-credentials-instead-of-a-key).
 
 ## Reaching it by writing the block
 
@@ -71,11 +71,30 @@ on the built-in list is named with the id in front, as `google-vertex/google/gem
 ## Signing in with Google Cloud credentials instead of a key
 
 A project whose organisation disallows API keys is reached with the Google Cloud CLI's Application
-Default Credentials. State a `project`, name no key, and sign in once:
+Default Credentials. This needs [`gcloud`](https://cloud.google.com/sdk/docs/install), a Google Cloud
+project that has the Vertex AI API enabled, and a role on it that may call the API, such as Vertex AI User.
+No key is stored. Sign in and record the project with:
 
 ```sh
-gcloud auth application-default login
+bravebot auth login google
 ```
+
+It asks for the project at the terminal, runs `gcloud auth application-default login` and shows the address
+and code the CLI prints, then adds the block below to `~/.bravebot/settings.json` with `location` set to
+`global`. A project that holds a character a project id cannot hold is refused before `gcloud` starts, and a
+sign-in that fails or is cancelled records nothing. Where `gcloud` already gives a token, no browser opens.
+Where a block or `GOOGLE_CLOUD_PROJECT` already configures the service, the file is left as it is and the
+command says so. It is refused in an incognito session, since it writes the settings, and without a
+terminal, since the project is typed. [Signing in](../signing-in.md#google) has the full description.
+
+`bravebot auth status google` says whether `gcloud` gives a token without starting a sign-in, and exits 0
+only if it does. `bravebot auth logout google` removes the block the sign-in wrote, only where it still holds
+exactly that, and leaves the Google Cloud CLI's sign-in in place. Other programs on the machine read the same
+credentials, so it asks at a terminal whether to end them too, and only a yes runs
+`gcloud auth application-default revoke --quiet`. A script ends them with `gcloud auth application-default
+revoke`.
+
+The block, which you can also write by hand after running `gcloud auth application-default login`:
 
 ```json
 {

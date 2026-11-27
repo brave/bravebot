@@ -1722,6 +1722,21 @@ impl Destination {
         }
     }
 
+    /// The entry under `provider` for `id`, where it is a block of fields.
+    pub fn gateway_entry(&self, id: &str) -> Option<&Map<String, Value>> {
+        self.root.0.get("provider")?.get(id)?.as_object()
+    }
+
+    /// Take the entry under `provider` for `id` out, and say whether there was one. A `provider`
+    /// block left with no entry is left in the file as an empty block, which the settings reader reads
+    /// as naming nothing.
+    pub fn remove_gateway(&mut self, id: &str) -> bool {
+        match self.root.0.get_mut("provider") {
+            Some(Value::Object(entries)) => entries.remove(id).is_some(),
+            _ => false,
+        }
+    }
+
     /// Name the model, where the file names none.
     pub fn add_model(&mut self, model: &str) {
         if !self.holds_model() {

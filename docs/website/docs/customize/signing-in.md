@@ -21,12 +21,15 @@ Ways to sign in to a model service:
   4. gateway  A key for openrouter, openai, anthropic, google-vertex (Gemini on Google Vertex AI) or a gateway a provider block in settings names, typed here and kept by bravebot
   5. chatgpt  A ChatGPT Plus or Pro account, signed in to in a browser
   6. xai      An xAI SuperGrok subscription, signed in to with a code entered on any device
+  7. google   Google, for Gemini on Vertex AI, signed in to with the Google Cloud CLI in a browser and a project named here, with no key kept by bravebot
 Which one? Type its number or its name, or nothing to stop:
 ```
 
 A way that already holds a sign-in says so at the end of its line. For xAI that is what `auth status xai` says:
 when the access token expires, that it is sent to `api.x.ai` alone, and that the refresh token is sent to
-`auth.x.ai` alone.
+`auth.x.ai` alone. For Google it is `(signed in)`, shown where the Google Cloud CLI gives an access token for
+a project your settings name; drawing the list asks the CLI for a token and never starts a sign-in or a
+browser, and waits at most five seconds for it.
 
 Each way is the command it was before, run for you:
 
@@ -38,12 +41,13 @@ Each way is the command it was before, run for you:
 | `gateway` | nothing before it: the key used to go in a variable or a settings file | [below](#gateway) |
 | `chatgpt` | nothing before it: a sign-in in a browser | [ChatGPT](providers/chatgpt.md) |
 | `xai` | no other command: a sign-in with a code entered on any device | [below](#xai) |
+| `google` | nothing before it: the Google Cloud CLI's sign-in, run for you, and the project recorded | [below](#google) |
 
 A script names the way, so nothing is asked: `bravebot auth login brave`,
 `bravebot auth login bedrock`, `bravebot auth login import`, `bravebot auth login chatgpt`,
-`bravebot auth login xai`. With no way named and no terminal to ask on, the command is refused and
-prints these forms. `brave` and `gateway` are the exception, since the key is typed at the terminal and
-never given on the command line. `chatgpt` shows an address to open and waits for the browser, and `xai`
+`bravebot auth login xai`, `bravebot auth login google`. With no way named and no terminal to ask on, the command is refused and
+prints these forms. `brave`, `gateway` and `google` are the exception, since the key or the project is typed at the
+terminal and never given on the command line. `chatgpt` shows an address to open and waits for the browser, and `xai`
 shows an address and a code and waits for them to be used, so each needs a terminal on standard error.
 
 **Brave** asks for a premium key without showing it and keeps it in `~/.bravebot/brave-key.json`. If a
@@ -108,6 +112,53 @@ an account whose models could not be listed are refused, with the forms that nam
 the access token expires, that it is sent to `api.x.ai` alone and that the refresh token is sent to `auth.x.ai`
 alone, and `bravebot doctor` names
 the sign-in and says what would end each token. See [xAI](providers/xai.md).
+
+## Google
+
+`google` signs in to Gemini on Google Vertex AI with the Google Cloud CLI, so no key is stored. It needs
+[`gcloud`](https://cloud.google.com/sdk/docs/install) installed, a terminal, a Google Cloud project that has the
+Vertex AI API enabled, and a role on it that may call the API, such as Vertex AI User:
+
+```
+$ bravebot auth login google
+Google Cloud project that has the Vertex AI API enabled, or nothing to stop: example-project-1
+Go to the following link in your browser: https://accounts.google.com/o/oauth2/auth?...
+signed in to Google with the Google Cloud CLI
+/home/you/.bravebot/settings.json names example-project-1 under provider.google-vertex now, so sessions started from now on reach aiplatform.googleapis.com with the Google Cloud CLI's access token and no key
+```
+
+The command checks everything that needs no answer first: that you are not in an incognito session, that
+`gcloud` is installed (it says where to get it if not), that a terminal is there, and that the settings file can
+take the block. It then asks for the project. A project holds letters, digits, `_`, `.`, `:` and `-` and starts
+with a letter or a digit. Anything else is refused with exit status 2, without being repeated, before `gcloud`
+starts. Typing nothing stops without running anything.
+
+It then runs `gcloud auth application-default login`, the sign-in a session makes before a turn when the CLI
+gives no token, and shows each line the CLI writes as it arrives, so the address to open appears while the CLI
+waits. Where the CLI already gives a token it opens no browser and says so. A sign-in that fails or is
+cancelled records nothing, exits 1 and says so in one fixed sentence; what the CLI wrote after the lines already
+shown is not repeated.
+
+Once the sign-in is made, `~/.bravebot/settings.json` gains
+`"provider": {"google-vertex": {"options": {"project": "<project>", "location": "global"}}}` and no key, variable
+or file. No location is asked for. Edit `location` in the block to reach another one. The settings you had are
+kept. Where a `google-vertex` block already names the same project and no key, nothing is written and the
+command says so. Where a block or `GOOGLE_CLOUD_PROJECT` configures the service another way, the file is left as
+it is and the command says so.
+
+The next session answers a `google-vertex/google/...` model with the CLI's token and no key, as
+[Google Vertex AI](providers/google-vertex.md#signing-in-with-google-cloud-credentials-instead-of-a-key) says.
+`bravebot auth status google` asks the CLI for a token, never for a sign-in, and exits 0 only if it gives one.
+It says not signed in where no block or variable names a project, and unusable where `gcloud` is missing or
+does not answer within twenty seconds. The token and the account are never printed.
+
+`bravebot auth logout google` removes the block `auth login google` wrote, only where it still holds exactly
+that, and leaves any other `google-vertex` block, and a block a stored key is sent to, as they are. It does not end
+the CLI's sign-in by default, because other programs on the machine read the same Application Default
+Credentials, and it says the sign-in still works. At a terminal it then asks whether to end it too. Only a yes
+runs `gcloud auth application-default revoke --quiet`, and any other answer leaves the credentials in place. In a
+script the command asks nothing and runs nothing, so `gcloud auth application-default revoke` is the way to end it
+there.
 
 ## Gateway
 
@@ -201,8 +252,9 @@ is not exported and `GOOGLE_CLOUD_PROJECT` or the `env` block of settings names 
 
 Storing the key does not choose a model. Name one as `google-vertex/google/gemini-2.5-flash` in the
 `model` key or after `--model`. [Google Vertex AI](providers/google-vertex.md) lists the models
-bravebot offers and says how a project is reached with Google Cloud credentials instead of a key.
-`bravebot auth login` does not start `gcloud`.
+bravebot offers and says how a project is reached with Google Cloud credentials instead of a key,
+which [`bravebot auth login google`](#google) does for you.
+`bravebot auth login gateway` does not start `gcloud`.
 
 `bravebot auth logout gateway google-vertex` forgets the key and names the host it still works at until
 it is revoked: the one the entry in settings states, and `aiplatform.googleapis.com` where none does.
@@ -230,15 +282,15 @@ bravebot auth status brave
 ```
 
 prints whether a premium key is stored, and exits 0 only if one is, so a script can test it. `bedrock`,
-`gateway [id]`, `chatgpt` and `xai` ask about the others. `gateway openai` says whether a
+`gateway [id]`, `chatgpt`, `xai` and `google` ask about the others. `gateway openai` says whether a
 session would send a key for `openai`, and a key stored for it with no block naming it is reported
 as not signed in. With no way named it asks about all of them and exits 0 if any is usable. See [the
 reference](../reference/cli.md#auth).
 
 ## In an incognito session
 
-In an [incognito session](../using/incognito.md), `brave`, `import`, `gateway`, `chatgpt` and `xai` are
-refused, since each keeps something in bravebot's own directory.
+In an [incognito session](../using/incognito.md), `brave`, `import`, `gateway`, `chatgpt`, `xai` and `google` are
+refused, since each keeps something in bravebot's own directory, and `google` records the project in your settings.
 `bedrock` is allowed: the AWS CLI keeps that session, and a session in this mode signs in to it as
 well. It writes nothing to settings, so `BRAVEBOT_USE_BEDROCK=1` still has to be exported. Forgetting a
-premium key or a gateway key and signing out of ChatGPT or xAI are allowed.
+premium key or a gateway key, signing out of ChatGPT, xAI or Google, and `auth status` are allowed.

@@ -1070,7 +1070,7 @@ impl Disposition {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
     Missing(&'static str),
     Empty(&'static str),
