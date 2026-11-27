@@ -1642,11 +1642,14 @@ that never started did. Where the session would accept `'unconfined': true`
 ([SANDBOX-29](#SANDBOX-29)), it names that request, which the person is asked about for that one
 line every time, and the mode `off` through `/sandbox off` or `--sandbox off` where the
 administrator allows it; elsewhere it names neither. A program inside a `$(...)` that is refused
-for want of confinement, or could not be started, is not told this way: in the foreground the line
-is told that the command substitution did not produce a value and that the line may have run in
-part, in the background that the line did not start, the routes are not named, and the refusal
-earns no request for no sandbox. [#4018](https://github.com/brave/bravebot/issues/4018) tracks
-telling it as a program that was not started. The one way a program is started with no profile is
+for want of confinement is told this way too, with the `before` of the line that read the
+substitution rather than the substitution's own pipeline: what else of the line may have run is
+read off the processes that had started before the `$(...)` itself, not off anything inside it. A
+program inside a `$(...)` that could not be started at all, because it is missing or the system
+refused to start it, is not told this way: in the foreground the line is told that the command
+substitution did not produce a value and that the line may have run in part, in the background
+that the line did not start, the routes are not named, and the refusal earns no request for no
+sandbox. The one way a program is started with no profile is
 the mode `off` ([SANDBOX-22](#SANDBOX-22)), which a person chose by name in their own settings or on
 the command line, and which a window never reads.
 
@@ -4326,10 +4329,9 @@ none to add to.
   stopped the line and whether a program was refused for want of confinement, and nothing a program
   printed is read. A line stopped at its deadline or by the person, a line that ran with no sandbox
   and a line moved to the background after it started earn nothing. A program refused for want of
-  confinement inside a `$(...)` earns nothing either ([SANDBOX-17](#SANDBOX-17),
-  [#4018](https://github.com/brave/bravebot/issues/4018)). A line whose own redirection leaves the
-  workspace is accepted without one, since the sandbox refuses it before anything runs and so no
-  run can fail at it.
+  confinement inside a `$(...)` earns a request the same as one outside it
+  ([SANDBOX-17](#SANDBOX-17)). A line whose own redirection leaves the workspace is accepted
+  without one, since the sandbox refuses it before anything runs and so no run can fail at it.
 - **Recorded.** The `sandbox` gate's detail names `unconfined` for that run, where it names the
   session's mode for every other ([TRACE-1](trace.md#TRACE-1)).
 - The desktop window draws a card for it that says the line runs with no sandbox and that no answer
@@ -4391,6 +4393,10 @@ refuse the path.
 `verified-by: bravebot_cli::plain::a_run_asking_to_be_unconfined_is_asked_about_as_unconfined`
 `verified-by: bravebot_ui_bridge::wire::a_run_request_says_when_the_line_was_asked_to_run_with_no_sandbox`
 `verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/unconfined-run.test.mjs renders a run card for a line asked to run with no sandbox and holds that it draws the bridge's unconfinedNote verbatim in a warning the approval waits on, draws the not-sandboxed and not-remembered sentences, and offers no Trust command and output button, and that a card without the flag draws none of these; make check-ui runs it)`
+`verified-by: bravebot_agent::exec::started_before_recurses_through_a_substitution_to_the_notconfined_it_wraps`
+`verified-by: bravebot_agent::exec::started_before_recurses_through_a_substitution_nested_two_deep`
+`verified-by: bravebot_agent::tools::a_notconfined_inside_a_substitution_is_worded_the_same_as_one_outside_it`
+`verified-by: bravebot_agent::tools::not_confined_within_sees_through_a_substitution_to_the_notconfined_it_wraps`
 
 <a id="SANDBOX-32"></a>
 ### SANDBOX-32: a person may remember a reviewed prefix for an unconfined line, for programs on a hand-written list only
