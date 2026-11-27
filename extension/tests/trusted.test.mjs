@@ -567,11 +567,13 @@ test("the activity log keeps the group, the tool, the outcome and the origin of 
       { group: "input-trusted", tool: "drag_element", outcome: "ran", origins: [NEWS] },
     ],
   );
-  const stored = JSON.stringify(chrome.local[ACTIVITY_KEY]);
+  // The time is a millisecond clock reading, whose digits can be any of the words below.
+  const stored = JSON.stringify(chrome.local[ACTIVITY_KEY].map(({ time, ...rest }) => rest));
   for (const word of ["4111", "Card number", "Trash", "token", "frag", "front", "textbox", "Ada"]) {
     assert.ok(!stored.includes(word), `the log holds ${word}`);
   }
   assert.deepEqual(Object.keys(entries[0]).sort(), ["group", "origins", "outcome", "time", "tool"]);
+  assert.equal(typeof entries[0].time, "number");
 });
 
 test("a call that is refused is logged as refused with the origin, and the group's tools are logged though the group is off", async () => {
