@@ -146,6 +146,8 @@ pub fn draft<S: Sink>(
         count: 0,
         skip: 0,
         messages: false,
+        offset: None,
+        limit: None,
         since: None,
         until: None,
         beside: crate::tools::Beside::every(),

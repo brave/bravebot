@@ -31,10 +31,11 @@ documented-by: docs/website/docs/reference/tools.md
 
 Reading a repository's history from the files under its `.git`, and its status from those and the
 working tree, without starting git. `query`,
-`repository`, `revision`, `path`, `pattern`, `since`, `until`, `count`, `skip` and `messages` are
-routing: the first names which question is asked, the next four name which repository, which
-commits, which files and which lines it is asked about, and the rest bound what a log, a list of
-tags or a search lists and how much of each it prints.
+`repository`, `revision`, `path`, `pattern`, `since`, `until`, `count`, `skip`, `offset`, `limit`
+and `messages` are routing: the first names which question is asked, the next four name which
+repository, which commits, which files and which lines it is asked about, and the rest bound what a
+log, a list of tags or a search lists, which lines of a file a show prints, and how much of each it
+prints.
 The only content argument is the `why` every
 tool takes ([TOOL-5](tool-surface.md#TOOL-5)). The result is
 the answer, or a reference where a path it showed is untrusted. What it shows is scanned for
@@ -54,7 +55,10 @@ authored, its author and its subject, as `git log --format='%h %ad %an %s' --dat
 --abbrev=10` prints them, and asked for messages, the rest of each message beneath its line
 ([GIT-12](#GIT-12)).
 `show` prints a commit with its message and its diff as `git show` does, a tag with its message and
-then its commit, and `<revision>:<path>` as the file or directory stood at that revision. `diff`
+then its commit, and `<revision>:<path>` as the file or directory stood at that revision. A show of
+a file prints its lines from `offset`, counting from 1, and at most `limit` of them, and those lines
+are scanned for credentials from the line of the file they start at. An `offset` past the file's
+last line prints a sentence giving the number of lines the file has. `diff`
 compares two commits' trees as `git diff` prints them. How far apart a file's changes lie does not
 count against matching its two sides line by line. That takes at most four million steps, a step
 being one comparison of two lines or one line read, and a search for a shortest edit is given up
@@ -94,6 +98,7 @@ and `sh`; nothing calls it, and [SANDBOX-30](../sandboxing.md#SANDBOX-30) record
 `verified-by: bravebot_agent::git::log_lists_commits_newest_first_one_line_each`
 `verified-by: bravebot_agent::git::show_prints_a_commit_its_message_and_its_diff_as_git_does`
 `verified-by: bravebot_agent::git::show_lists_a_directory_and_prints_a_file_at_a_revision`
+`verified-by: bravebot_agent::git::a_show_of_a_file_prints_the_lines_asked_for_with_their_own_numbers`
 `verified-by: bravebot_agent::git::diff_compares_two_commits_as_git_diff_prints_them`
 `verified-by: bravebot_agent::git::edits_far_apart_in_a_long_file_are_two_hunks`
 `verified-by: bravebot_agent::git::a_stretch_that_cannot_be_lined_up_is_named_by_its_lines`
@@ -244,7 +249,9 @@ A word off the list is refused and the planner is told to use `run`, where the t
 `HEAD^@` or `@{upstream}` among them, is refused by name, and a query given the other shape of revision, one where it takes
 two or two where it takes one, is told which query takes it. A status given a revision is told to
 use diff. A pattern given to anything but search, a search given none, an empty one or one that is
-not a regular expression, and a list of tags given a path are each refused by name.
+not a regular expression, and a list of tags given a path are each refused by name. `offset` or
+`limit` given to anything but a show of a file at a revision is refused by name, and so is either
+one given to a show of a commit, a tag, a directory or a submodule.
 
 **Why.** A guess answers a question the planner did not ask as though it had. `HEAD^@` read as the
 forms this reader knows is `HEAD^`, so it would come back as a confident answer to something else.
@@ -257,6 +264,8 @@ A pattern or a path dropped without a word is the same guess: a log with its pat
 `verified-by: bravebot_agent::git::revision_syntax_read_git_does_not_implement_is_refused_by_name`
 `verified-by: bravebot_agent::git::a_query_given_the_wrong_shape_of_revision_says_which_query_takes_it`
 `verified-by: bravebot_agent::git::a_pattern_is_for_search_alone_and_tags_take_no_path`
+`verified-by: bravebot_agent::git::offset_and_limit_are_for_a_show_of_a_file_alone`
+`verified-by: bravebot_agent::turn::read_git_shows_the_lines_of_a_file_a_call_asks_for`
 
 <a id="GIT-6"></a>
 ### GIT-6: `since` and `until` are whole days in UTC
@@ -356,35 +365,55 @@ from the one git would, and the rules were held against files it did not read.
 A log lists 20 commits, a list of tags 20 tags and a search 20 lines unless the planner names a
 count, and never more than 200. An answer holds at most 2,000 lines and each line at most 2,000
 characters, and a page of a log with messages holds at most 20,000 bytes ([GIT-12](#GIT-12)). A
-file past 1 MiB is described by its size, read from the object's header alone, and
-not searched. A diff reads a file up to 4 MiB: it compares only the lines between the first line
+show of a file is held to the same bound whatever its `limit`: a `limit` past 2,000 is read as
+2,000, a `limit` of 0 as 1 and an `offset` of 0 as 1. A file past 1 MiB is described by its size,
+read from the object's header alone, and not searched, and a show given an `offset` or a `limit`
+does not print part of it. A diff reads a file up to 4 MiB: it compares only the lines between the
+first line
 that differs and the last, so a one-line change in a file of 1.6 MB prints its hunk at the line
 numbers the file has. A side past 4 MiB is described by its size and not diffed. A higher cap for
 a diff only, over the region the sides differ in, was chosen over a cap of the region alone
 because finding the region reads both sides whole, so a bound on what a diff holds has to be on
 the size of a side, and 4 MiB holds the sides, their escaped copies and one entry per line of the
 region. An answer stops at the search deadline. An answer cut
-by any of these says it was cut, and one that was not makes no such claim. A status that stops at the
+by any of these says it was cut, and one that was not makes no such claim. A show of a file that
+stopped with lines left names the `offset` that prints the next of them. A show of a file that
+shortened a line past 2,000 characters says that a line longer than 2,000 characters was shortened,
+also where it names the `offset`, and names `run` with `git show`, which prints the line whole, only
+where the turn's list holds `run` ([TOOL-6](tool-surface.md#TOOL-6)). `read_file` holds a line to
+the same width, and `offset` and `limit` choose lines and not part of one, so neither is named for
+it. Each of these is written inside the answer's body. The sentence on any other
+cut or late answer names only arguments its question takes: a show of a commit a path, a directory
+at a revision a directory inside it, a file at a revision `offset` and `limit`, a diff a path or a
+range, a list of tags a count, and a search a path or a count. A status that stops at the
 deadline says it can be narrowed with a path and that `search.maxSeconds` sets the deadline, and names
 `git status` through `run` where the turn holds `run`. It does not suggest a range or a count, which a
 status does not take. The description of a file
-past the size cap, in a diff, a show of a commit and a search as in a show of a file, names what can
-still read it from the tools the turn's list holds: `read_file`
-on the working copy, `run`, both, or neither ([TOOL-6](tool-surface.md#TOOL-6)). The words depend
+past the size cap, in a diff, a show of a commit and a show of a file, names what can still read
+it from the tools the turn's list holds: `read_file`
+on the working copy, `run`, both, or neither ([TOOL-6](tool-surface.md#TOOL-6)). In a search it
+names what can still search it: the `search` tool on the working copy, which reads a file of any
+size, `run`, both, or neither. The words depend
 on the turn's list and the size in the header, never on a byte of the file.
 
 **Why.** A repository's history is as large as the repository, and a planner handed part of it as
-though it were the whole draws conclusions from what is missing.
+though it were the whole draws conclusions from what is missing. The 1 MiB cap holds for a ranged
+show and for a search because a blob is stored compressed as a whole, loose or packed, so printing
+or searching any part of it costs inflating all of it.
 
 `verified-by: bravebot_agent::git::a_log_that_reaches_its_count_stops_and_says_it_was_cut`
 `verified-by: bravebot_agent::git::an_answer_past_its_lines_or_a_line_past_its_width_is_cut`
 `verified-by: bravebot_agent::git::a_file_past_the_size_cap_is_described_by_its_size`
+`verified-by: bravebot_agent::git::a_show_given_offset_or_limit_prints_no_part_of_a_file_past_the_size_cap`
 `verified-by: bravebot_agent::git::a_changed_line_in_a_file_past_the_size_cap_is_diffed_at_its_own_line_numbers`
 `verified-by: bravebot_agent::git::a_change_in_the_middle_of_a_large_file_keeps_its_line_numbers`
 `verified-by: bravebot_agent::git::a_large_file_added_deleted_or_binary_is_diffed_as_a_small_one_is`
 `verified-by: bravebot_agent::git::the_notes_for_a_file_past_the_diff_and_search_caps_name_only_the_tools_the_turn_holds`
 `verified-by: bravebot_agent::git::a_read_out_of_time_says_so`
 `verified-by: bravebot_agent::tools::tests::delegate_offers::a_status_out_of_time_names_what_narrows_a_status_and_a_log_keeps_its_advice`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_stopped_answer_names_only_the_arguments_its_question_takes`
+`verified-by: bravebot_agent::git::a_show_of_a_file_is_held_to_its_lines_at_every_bound_of_offset_and_limit`
+`verified-by: bravebot_agent::turn::read_git_shows_the_lines_of_a_file_a_call_asks_for`
 `verified-by: bravebot_agent::git::a_listing_or_a_diff_that_fills_the_answer_says_it_was_cut_only_when_more_was_left`
 `verified-by: bravebot_agent::turn::a_log_lists_twenty_commits_unasked_and_never_more_than_two_hundred`
 `verified-by: bravebot_agent::git::a_message_over_a_page_of_bytes_is_shown_as_far_as_it_fits`
@@ -561,7 +590,7 @@ widen a tool nobody asked to widen.
 `pattern` matches, as `git grep -n` prints them: `path:line:text`, with the text following the
 colon byte for byte, in the order git lists the tree, with a binary file that matches named
 rather than printed and a file past the size cap described by its size and, where the turn holds
-`read_file` or `run`, by what can read it ([GIT-9](#GIT-9)). A path narrows it to
+the `search` tool or `run`, by what can search it ([GIT-9](#GIT-9)). A path narrows it to
 that file or the files beneath it. A symbolic link and a submodule are not searched, as
 `git grep` over a tree searches neither. The pattern is written as `file_grep`'s is
 ([SEARCH-1](search.md#SEARCH-1)).
@@ -581,6 +610,7 @@ in anything other than the lines it printed would repeat or skip one on the next
 `verified-by: bravebot_agent::turn::a_search_that_read_a_distrusted_file_is_quarantined_matched_or_not`
 `verified-by: bravebot_agent::turn::what_a_distrusted_blob_holds_changes_a_searchs_counts_and_nothing_else`
 `verified-by: bravebot_agent::turn::the_skip_a_cut_read_git_search_offers_stays_inside_a_distrusted_blobs_body`
+`verified-by: bravebot_agent::turn::the_offset_a_cut_show_of_a_distrusted_file_offers_stays_inside_its_body`
 `verified-by: bravebot_agent::workspace::a_search_pattern_is_held_to_trusted_public_before_anything_is_read`
 `verified-by: bravebot_agent::git::search_lists_the_lines_a_pattern_matches_at_a_revision_as_git_grep_does`
 `verified-by: bravebot_agent::git::a_search_prints_an_indented_line_with_exactly_the_indentation_the_file_has`

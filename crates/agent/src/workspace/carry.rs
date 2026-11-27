@@ -319,6 +319,8 @@ impl Workspace {
                 count: crate::git::DEFAULT_COUNT,
                 skip: 0,
                 messages: false,
+                offset: None,
+                limit: None,
                 pattern: None,
                 since: None,
                 until: None,

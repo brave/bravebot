@@ -304,23 +304,138 @@ fn read_git_names_run_only_where_the_delegate_holds_one() {
 fn a_status_out_of_time_names_what_narrows_a_status_and_a_log_keeps_its_advice() {
     use crate::git::Query;
 
-    let with_run = read_git_time_note(Query::Status, true);
+    let with_run = read_git_time_note(Query::Status, None, true);
     assert!(with_run.contains("this status is partial"), "{with_run}");
     assert!(with_run.contains("search.maxSeconds"), "{with_run}");
     assert!(with_run.contains("use run with git status"), "{with_run}");
     assert!(!with_run.contains("range"), "{with_run}");
     assert!(!with_run.contains("count"), "{with_run}");
 
-    let without_run = read_git_time_note(Query::Status, false);
+    let without_run = read_git_time_note(Query::Status, None, false);
     assert!(without_run.contains("search.maxSeconds"), "{without_run}");
     assert!(!without_run.contains("run"), "{without_run}");
 
-    let log = read_git_time_note(Query::Log, true);
+    let log = read_git_time_note(Query::Log, None, true);
     assert!(
         log.contains("narrow it with a path, a range or a smaller count"),
         "{log}"
     );
     assert!(!log.contains("search.maxSeconds"), "{log}");
+}
+
+/// GIT-9. The sentence on an answer that stopped short names only arguments its question takes:
+/// a cut show of a file names the offset that prints the next of its lines, and a show of a
+/// commit or a directory is told nothing about a range or a count, which a show does not take,
+/// whether it stopped at the cap or at the deadline. A show of a file cut only by a line past
+/// 2,000 characters says the line was shortened and names `run` only where the turn holds it,
+/// since `offset` and `limit` cannot print the rest of one line; one that also stopped with lines
+/// left says both.
+#[test]
+fn a_stopped_answer_names_only_the_arguments_its_question_takes() {
+    use crate::git::{Answer, Query, Showed};
+
+    let file = Answer {
+        cut: true,
+        next_line: Some(2001),
+        showed: Some(Showed::File),
+        ..Answer::default()
+    };
+    let said = read_git_stopped_note(Query::Show, &file, true);
+    assert!(said.contains("ask again with offset 2001"), "{said}");
+    assert!(!said.contains("shortened"), "{said}");
+
+    let long_line = Answer {
+        cut: true,
+        shortened: true,
+        showed: Some(Showed::File),
+        ..Answer::default()
+    };
+    let with_run = read_git_stopped_note(Query::Show, &long_line, true);
+    assert!(
+        with_run.contains("a line longer than 2,000 characters was shortened")
+            && with_run.contains("run with git show prints it whole"),
+        "{with_run}"
+    );
+    assert!(!with_run.contains("offset"), "{with_run}");
+    let without_run = read_git_stopped_note(Query::Show, &long_line, false);
+    assert!(
+        without_run.contains("a line longer than 2,000 characters was shortened"),
+        "{without_run}"
+    );
+    assert!(!without_run.contains("run"), "{without_run}");
+    assert!(!without_run.contains("offset"), "{without_run}");
+
+    let both = read_git_stopped_note(
+        Query::Show,
+        &Answer {
+            next_line: Some(7),
+            ..long_line.clone()
+        },
+        true,
+    );
+    assert!(
+        both.contains("ask again with offset 7")
+            && both.contains("a line longer than 2,000 characters was shortened"),
+        "{both}"
+    );
+
+    for showed in [Showed::File, Showed::Tree, Showed::Commit] {
+        let capped = Answer {
+            cut: true,
+            showed: Some(showed),
+            ..Answer::default()
+        };
+        let late = Answer {
+            timed_out: true,
+            showed: Some(showed),
+            ..Answer::default()
+        };
+        for said in [
+            read_git_stopped_note(Query::Show, &capped, true),
+            read_git_stopped_note(Query::Show, &late, true),
+        ] {
+            assert!(!said.is_empty(), "{showed:?}");
+            assert!(!said.contains("range"), "{showed:?}: {said}");
+            assert!(!said.contains("count"), "{showed:?}: {said}");
+        }
+    }
+    let file_late = read_git_stopped_note(
+        Query::Show,
+        &Answer {
+            timed_out: true,
+            showed: Some(Showed::File),
+            ..Answer::default()
+        },
+        true,
+    );
+    assert!(file_late.contains("offset and limit"), "{file_late}");
+    let commit_capped = read_git_stopped_note(
+        Query::Show,
+        &Answer {
+            cut: true,
+            showed: Some(Showed::Commit),
+            ..Answer::default()
+        },
+        true,
+    );
+    assert!(
+        commit_capped.contains("narrow it with a path"),
+        "{commit_capped}"
+    );
+
+    for (query, refused) in [
+        (Query::Diff, "count"),
+        (Query::Tags, "path"),
+        (Query::Search, "range"),
+    ] {
+        let capped = Answer {
+            cut: true,
+            ..Answer::default()
+        };
+        let said = read_git_stopped_note(query, &capped, true);
+        assert!(!said.contains(refused), "{query:?}: {said}");
+    }
+    assert!(read_git_stopped_note(Query::Show, &Answer::default(), true).is_empty());
 }
 
 /// GIT-8. read_git declines a `.git` that is a file, and the description says so in a turn

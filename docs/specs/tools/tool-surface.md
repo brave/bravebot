@@ -41,7 +41,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`list_files`](list-files.md) | `directory`, `pattern`, `depth`, `read` | none | the paths, or a reference per entry |
 | [`search`](search.md) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context`, `output`, `read` | none | matching lines, files or counts, or a reference |
 | [`repo_map`](repo-map.md) | `directory`, `budget` | none | the map text, from files a person vouched for |
-| [`read_git`](read-git.md) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | the answer, or a reference |
+| [`read_git`](read-git.md) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `offset`, `limit`, `messages`, `since`, `until` | none | the answer, or a reference |
 | [`lsp`](lsp.md) | `operation`, `path`, `line`, `character`, `query` | none | locations, with their text shown or referenced |
 | [`write_file`](write-file.md) | `path`, `path_ref`, `contents_ref` | `contents` | confirmation |
 | [`edit_file`](edit-file.md) | `path`, `path_ref`, `replace_all`, `cell`, `cell_action`, `cell_type` | `old_text`, `new_text`, `edits` | confirmation |
@@ -244,8 +244,9 @@ sentence on git history names `read_git`, and the account of an ended job names 
 `read_file`, only where the list holds them. The notes that start a job, move a line to the
 background and remind a later turn of a kept job name `job_output` only where the list holds it,
 and keep the sentence not to start the job again. The note on a file past the size cap that
-`read_git` shows, in a file, a diff, a show of a commit or a search, names `read_file` and `run`, and the heading over the files it could not compare
-names `run`, each only where the list holds them. The refusal of an empty `old_text` names
+`read_git` shows, in a file, a diff or a show of a commit, names `read_file` and `run`, in a search
+names `search` and `run`, the note on a line a show of a file shortened names `run`, and the heading
+over the files it could not compare names `run`, each only where the list holds them. The refusal of an empty `old_text` names
 `write_file`, the refusal of an untrusted file by `edit_file` names `write_file`, `run` and
 `read_file` ([EDIT-2](edit-file.md#EDIT-2)), the refusal of an editor names `edit_file`, the
 refusal of `read_output` for a
@@ -401,6 +402,7 @@ without naming a tool to fetch them with.
 `verified-by: bravebot_agent::git::the_note_for_a_file_past_the_size_cap_names_only_the_tools_the_turn_holds`
 `verified-by: bravebot_agent::git::the_notes_for_a_file_past_the_diff_and_search_caps_name_only_the_tools_the_turn_holds`
 `verified-by: bravebot_agent::git::the_not_compared_heading_names_run_only_where_the_turn_holds_it`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_stopped_answer_names_only_the_arguments_its_question_takes`
 `verified-by: bravebot_agent::replace::the_empty_pattern_refusal_names_write_file_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::cmdline::the_refusal_of_an_editor_names_edit_file_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::confine::tests::no_sentence_names_request_path_where_the_list_lacks_it`

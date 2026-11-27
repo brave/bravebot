@@ -12727,6 +12727,8 @@ fn log_of(repository: &Labelled<String>) -> bravebot_agent::workspace::GitQuesti
         count: bravebot_agent::git::DEFAULT_COUNT,
         skip: 0,
         messages: false,
+        offset: None,
+        limit: None,
         since: None,
         until: None,
         beside: bravebot_agent::tools::Beside::every(),

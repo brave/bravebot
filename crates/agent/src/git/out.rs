@@ -70,6 +70,10 @@ pub(super) struct Out<'w> {
     pub(super) every_untracked: bool,
     /// From [`Request::beside`].
     pub(super) beside: crate::tools::Beside,
+    /// Set by a show of a file, for [`Answer::next_line`](super::Answer::next_line).
+    pub(super) next_line: Option<usize>,
+    /// Set by a show, for [`Answer::showed`](super::Answer::showed).
+    pub(super) showed: Option<super::Showed>,
 }
 
 impl Out<'_> {
@@ -97,6 +101,21 @@ impl Out<'_> {
         }
     }
 
+    /// What can still search a file a search passes over for its size, as [`Out::instead`] says
+    /// what can read one: the `search` tool on the working copy, which reads a file of any size,
+    /// and `run`, each only where the turn's list holds it.
+    pub(super) fn search_instead(&self) -> &'static str {
+        match (
+            self.beside.holds(crate::tools::Named::Search),
+            self.beside.holds(crate::tools::Named::Run),
+        ) {
+            (true, true) => "; use the search tool on the working copy, or run",
+            (true, false) => "; use the search tool on the working copy",
+            (false, true) => "; use run",
+            (false, false) => "",
+        }
+    }
+
     /// Whether another entry fits. One that does not is what makes a full answer a cut one.
     pub(super) fn room(&mut self) -> bool {
         if self.text.full() {
@@ -115,6 +134,8 @@ pub(super) struct Text {
     pub(super) around: String,
     pub(super) lines: usize,
     pub(super) cut: bool,
+    /// Whether a line was shortened at [`MAX_LINE_CHARS`].
+    pub(super) shortened: bool,
 }
 
 impl Text {
@@ -128,6 +149,7 @@ impl Text {
         let (end, shortened) = Self::end_of(line);
         if shortened {
             self.cut = true;
+            self.shortened = true;
         }
         self.body.push_str(&line[..end]);
         if shortened {

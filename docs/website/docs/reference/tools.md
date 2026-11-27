@@ -16,7 +16,7 @@ that is merely carried.
 | [`list_files`](#list_files) | `directory`, `pattern`, `depth`, `read` | none | no |
 | [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context`, `output`, `read` | none | no |
 | [`repo_map`](#repo_map) | `directory`, `budget` | none | no |
-| [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
+| [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `offset`, `limit`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, unless the path is vouched for and the contents are trusted** |
 | [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all`, `cell`, `cell_action`, `cell_type` | `old_text`, `new_text`, `edits` | **yes, unless the path is vouched for** |
@@ -411,6 +411,8 @@ working tree, **without starting git**.
 | `pattern` | `search` only, and required there: the regular expression to look for, matched against each line |
 | `count` | commits a `log` lists, tags a `tags` lists or lines a `search` prints: 20 unless given, at most 200 |
 | `skip` | `log`, `tags` and `search`: how many to pass over before listing, as `git log --skip` does |
+| `offset` | `show` of `<revision>:<path>` naming a file only: the line to start at, counting from 1 |
+| `limit` | `show` of `<revision>:<path>` naming a file only: the most lines to print, 2000 unless given, at most 2000 |
 | `messages` | `log` only: print each commit's whole message beneath its line |
 | `since`, `until` | `log` only: whole days in UTC, written `YYYY-MM-DD`, both ends included |
 
@@ -421,7 +423,9 @@ holds whole commits. A page with `messages` also stops at 20,000 bytes. A single
 that is shown as far as its whole lines fit and marked as cut, and the next `skip` moves past it.
 `show` prints a commit
 with its message and diff, a tag with its message and then its commit, or a file or directory at a
-revision. `diff` compares two commits. Two edits far apart in a file show as two hunks, and a one-line change in a file of up to 4 MiB prints its hunk at the line numbers the file has. A side past 4 MiB, and a file past 1 MiB that a `search` would read, is described by its size and named with `read_file` on the working copy and `run`, each only where the session holds it. Where a stretch of a file cannot be lined up, the answer says which line ranges differ and gives the lines removed and added as upper limits. A merge is shown without a diff and says which diff to ask for.
+revision. A file is printed from `offset` for at most `limit` lines, and one that stopped with lines
+left names the `offset` that prints the next of them. `offset` and `limit` given to any other
+question are refused. `diff` compares two commits. Two edits far apart in a file show as two hunks, and a one-line change in a file of up to 4 MiB prints its hunk at the line numbers the file has. A side past 4 MiB is described by its size and named with `read_file` on the working copy and `run`, and a file past 1 MiB that a `search` would read is described by its size and named with the `search` tool on the working copy and `run`, each only where the session holds it. Where a stretch of a file cannot be lined up, the answer says which line ranges differ and gives the lines removed and added as upper limits. A merge is shown without a diff and says which diff to ask for.
 `tags` lists tags newest version first, as `git tag --sort=-v:refname` does, and given a revision
 only those it reaches, as `--merged` does. `search` prints the lines `pattern` matches in the files
 at a revision, as `git grep -n` does. Both page with `skip` as a log does.

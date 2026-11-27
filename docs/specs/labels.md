@@ -1127,7 +1127,9 @@ arrives at all.
   a blob in it holds the bytes of the working-tree file it was committed from, which may be a path
   the map distrusts. A `search` tests each line of such a blob against the pattern, a `diff`
   compares both sides of it to decide the hunks and whether the two are too different to compare,
-  and `show` checks whether it is binary to choose between a description and its text. The
+  and `show` checks whether it is binary to choose between a description and its text, and counts
+  its lines to decide where a show from an `offset` or up to a `limit` stops, whether lines are
+  left after it, and whether the `offset` is past the file's end. The
   comparison is in `bravebot-agent`, which is the driver too ([LABEL-4](#LABEL-4)). Where every
   path an answer shows is vouched for, the bytes are trusted and the comparison is the case
   [LABEL-5](#LABEL-5) allows. The rest of this entry is about an answer that also shows a path
@@ -1146,8 +1148,10 @@ arrives at all.
     them for a read of it.
   - **Make the answer report itself incomplete.** By filling a cap, or by making the walk run to
     its deadline, or a diff run to its bound of four million steps. The planner is told the answer
-    is incomplete and nothing else: the skip that lists the next page is printed inside the
-    quarantined body, so unlike the search's offset it does not reach the planner.
+    is incomplete and nothing else: the skip that lists the next page, the offset that prints the
+    next lines of a cut show of a file, and the line count a show from an offset past the file's
+    end gives, are each printed inside the quarantined body, so unlike the search's offset none of
+    them reaches the planner.
   - **Tell the planner by a count whether the pattern it chose matched.** The line count of a
     search over a single distrusted blob is one number the blob decided.
   - **Choose which matches or hunks fall on which page, and make one of their own files print
@@ -1158,7 +1162,7 @@ arrives at all.
   recorded before its blob is read and each asked under every name its file or directory has (the
   names are the file system's, found from names and metadata and never from a blob's bytes,
   [TRUST-4](trust-map.md#TRUST-4)), any destination, any argument of a later call, and a line of the
-  blob. The pattern, the path and the skip are the
+  blob. The pattern, the path, the skip, the offset and the limit are the
   planner's own arguments and no byte of a blob reaches them. This entry cannot take the search's
   wording that the result is labelled "before any file is opened" or that which files the walk
   reaches is never decided by a byte of a file. `read_git` labels an answer after the walk has
@@ -1173,7 +1177,7 @@ arrives at all.
   that crate is the driver as well.
 
   The two claims the entry rests on, that only the counts and the incomplete notice follow what the
-  blob holds and that the skip stays in the body, are pinned under
+  blob holds and that the skip and a show's continuing offset stay in the body, are pinned under
   [GIT-14](tools/read-git.md#GIT-14).
 
 - **The seventh is the text-or-binary decision on a read of a file nobody vouched for.** For a path
